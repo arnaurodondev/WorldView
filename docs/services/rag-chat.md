@@ -98,11 +98,21 @@ older callers only read `narrative` while newer surfaces render the
 }
 ```
 
-**Render contract (frontend):** when `sections` is non-empty the UI renders
-`headline` + structured cards (`<MorningBriefCard>`, `<InstrumentAISubheader>`).
-When `sections == []` it falls back to rendering `narrative` through
-`<MarkdownContent>` — graceful degradation so older cached briefs keep working
-unchanged (R11: never break wire format).
+**Render contract (frontend):** the three brief surfaces consume different
+fields of `BriefingResponse`:
+
+| Surface | Reads | Renders via |
+|---------|-------|-------------|
+| `<MorningBriefCard>` (dashboard, expanded) | `headline` + `summary` + `sections[]` + `citations[]` if `sections.length > 0`; otherwise `narrative` | structured 3-row layout *or* `<MarkdownContent>` fallback |
+| `<InstrumentAISubheader>` (instrument page header) | `narrative` only | `<MarkdownContent size="compact">` |
+| `<IntelligenceTab>` brief block (instrument page) | `narrative` only | `<MarkdownContent size="comfortable">` |
+
+The two instrument surfaces deliberately ignore `sections`/`headline` —
+in tight column layouts the structured-cards form is too tall.  Backend
+keeps emitting the structured fields so a future deepening of those
+surfaces (phase 2) is purely a frontend swap.  When the backend emits
+`sections == []` (or only `narrative`), every surface still works
+unchanged — R11: never break wire format.
 
 ### SSE Streaming Events (POST /api/v1/chat/stream)
 

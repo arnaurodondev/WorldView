@@ -157,6 +157,43 @@ async def test_list_markets_missing_price_defaults_to_empty_dict() -> None:
     assert prices == {}
 
 
+# ── PLAN-0049 T-C-3-03: category filter (F-QAC-06 fix) ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_markets_forwards_category_to_repo() -> None:
+    """Execute forwards category= to the repo port verbatim.
+
+    F-QAC-06: the category filter is the user-visible feature of T-C-3-03.
+    Without this assertion the SQL filter could be silently dropped by a
+    refactor and no existing test would catch it (the gateway proxy contract
+    tests stop one layer above the SQL).
+    """
+    uow = _make_uow(markets=[], total=0)
+    uc = ListPredictionMarketsUseCase(uow)
+
+    await uc.execute(status="open", category="politics")
+
+    call_kwargs = uow.prediction_markets_read.list_markets.call_args.kwargs
+    assert call_kwargs["category"] == "politics"
+
+
+@pytest.mark.asyncio
+async def test_list_markets_omits_category_when_not_provided() -> None:
+    """Default execute() passes category=None — no filter applied at the SQL layer.
+
+    F-QAC-06: pins the default-arg contract so a future signature change that
+    swaps the default to "" or "all" trips the test.
+    """
+    uow = _make_uow(markets=[], total=0)
+    uc = ListPredictionMarketsUseCase(uow)
+
+    await uc.execute(status="open")
+
+    call_kwargs = uow.prediction_markets_read.list_markets.call_args.kwargs
+    assert call_kwargs["category"] is None
+
+
 # ── GetPredictionMarketUseCase ────────────────────────────────────────────────
 
 

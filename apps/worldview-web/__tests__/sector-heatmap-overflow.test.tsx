@@ -9,15 +9,22 @@
  * representative widths (1024/1440/1920px), the rendered tile container's
  * scrollWidth must NEVER exceed clientWidth (= no horizontal overflow).
  *
- * WHY scrollWidth ≤ clientWidth: in jsdom the layout engine doesn't compute
- * real geometry, but the property is still set on every element by jsdom's
- * stub layout. We assert that the inner flex container hasn't escaped the
- * outer ``overflow-hidden`` box — proxy for "no visible overflow" without
- * a true browser layout pass. (E2E catches the actual visual case.)
+ * F-QAC-03 fix: the prior version asserted ``scrollWidth ≤ clientWidth`` —
+ * but in jsdom both default to 0 and the layout engine never computes
+ * geometry, so the assertion was a tautology (0 ≤ 0) that would have green-
+ * lit any regression. We replaced it with structural invariant assertions:
+ * the widget root carries ``overflow-hidden``; the inner flex container
+ * uses ``flex-wrap`` + the post-fix gap class; all 11 tiles are present.
+ * A regression that drops ``overflow-hidden`` or restores the wider
+ * ``gap-1``/``gap-px`` class trips these assertions immediately. Real
+ * pixel overflow continues to be guarded by the Playwright stabilization
+ * spec which runs in a real browser.
  *
- * SCOPE: 2 specs:
- *   1. The widget itself does not overflow at three viewports.
- *   2. The flex tile container (inner div) does not exceed its parent.
+ * SCOPE: 4 specs:
+ *   1-3. At three trader viewports, the widget renders all 11 tiles inside
+ *        an overflow-hidden parent.
+ *   4.  The inner flex container uses the post-fix gap class (``gap-0.5``)
+ *        not the pre-fix ``gap-1`` that caused the bug.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -105,51 +112,51 @@ describe("SectorHeatmapWidget — overflow guard at trader viewports (B-2-03)", 
   // worldview is designed for. B-2-03 originally reproduced at 1280, so 1024
   // is intentionally below that to keep the test honest.
   it.each([1024, 1440, 1920])(
-    "treemap container does not overflow its parent at %ipx viewport",
+    "renders all 11 sector tiles inside an overflow-hidden container at %ipx viewport",
     async (width) => {
       simulateViewport(width);
 
-      const { container, findAllByRole } = render(
+      const { findAllByLabelText } = render(
         <SectorHeatmapWidget />,
         { wrapper: ({ children }) => wrap(children) },
       );
 
-      // Wait for the 11 sector tiles to render — each is a <button>.
-      // (PopoverTrigger renders the trigger as a button.)
-      await findAllByRole("button");
+      // F-QAC-03 fix: query by sector aria-label suffix (specific to the
+      // sector tiles) rather than role=button — the latter also matches
+      // the period-selector buttons (1D/1W/1M) and the matrix would never
+      // hit 11.  Each tile's aria-label ends with "sector, ...".
+      const tiles = await findAllByLabelText(/ sector,/i);
+      expect(tiles.length).toBe(11);
 
-      // The widget root has overflow-hidden — find it by querying the
-      // outermost ``flex flex-col h-full`` div that we render inside.
-      const widgetRoot = container.firstElementChild as HTMLElement | null;
-      expect(widgetRoot).not.toBeNull();
-
-      // jsdom's default clientWidth/scrollWidth are 0 — that's our happy path:
-      // both equal means no overflow. We assert scrollWidth ≤ clientWidth as
-      // the contract; a bug causing inner content to push wider would set
-      // scrollWidth > clientWidth.
-      expect(widgetRoot!.scrollWidth).toBeLessThanOrEqual(widgetRoot!.clientWidth);
+      // Assert the structural invariant the bug fix put in place — the
+      // widget MUST be wrapped by something that carries
+      // ``overflow-hidden`` so any sub-pixel overflow is clipped instead
+      // of escaping the cell border. Walk up from a tile to confirm.
+      const sampleTile = tiles[0] as HTMLElement;
+      const overflowHiddenAncestor = sampleTile.closest(".overflow-hidden");
+      expect(overflowHiddenAncestor).not.toBeNull();
     },
   );
 
-  it("inner tile flex container is contained by the widget root", async () => {
-    // WHY this dual-assertion: the widget root's overflow-hidden guarantees the
-    // user-visible region. But the inner ``flex flex-wrap`` container is the
-    // ACTUAL source of the bug (it's the one whose tiles were pushing past).
-    // Asserting on it as well pins the bug at the right layer.
+  it("inner tile container uses the post-fix ``gap-0.5`` class (not the pre-fix ``gap-1``)", async () => {
+    // F-QAC-03 fix: pin the exact Tailwind class the B-2-03 fix shipped.
+    // The original bug was ``gap-1`` (4px) accumulating sub-pixel rounding
+    // across 11 flex children → last tile pushed past the 1px terminal seam.
+    // The fix tightened the gap to ``gap-0.5`` (2px). A regression that
+    // restores the wider gap trips the negative assertion below.
     simulateViewport(1440);
 
-    const { container, findAllByRole } = render(
+    const { container, findAllByLabelText } = render(
       <SectorHeatmapWidget />,
       { wrapper: ({ children }) => wrap(children) },
     );
 
-    await findAllByRole("button");
+    await findAllByLabelText(/ sector,/i);
 
-    // The ``flex-wrap`` container is the only element with class containing
-    // both "flex-wrap" and "gap-0.5" — query specifically.
     const tileContainer = container.querySelector(".flex-wrap");
     expect(tileContainer).not.toBeNull();
     const tileEl = tileContainer as HTMLElement;
-    expect(tileEl.scrollWidth).toBeLessThanOrEqual(tileEl.clientWidth);
+    expect(tileEl.className).toMatch(/\bgap-0\.5\b/);
+    expect(tileEl.className).not.toMatch(/\bgap-1\b/);
   });
 });

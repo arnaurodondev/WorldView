@@ -173,12 +173,20 @@ describe("RecentAlerts — PLAN-0049 T-D-4-04 fallback ladder + deep-links", () 
 
     await waitFor(() => {
       const text = document.body.textContent ?? "";
-      // No standalone "LOW signal" / "MEDIUM alert" / etc. anywhere.
-      expect(text).not.toMatch(/^(LOW|MEDIUM|HIGH|CRITICAL)\s+(signal|alert)$/m);
+      // F-QAC-10 fix: dropped the dead ``^...$`` regex that never matched
+      // (textContent is a flat concatenated string with no ``\n``, so the
+      // ``m`` flag had nothing to anchor against). The substring checks
+      // below are the actual contract — any of these four strings
+      // appearing anywhere in the rendered tree is the F-D-006 bug.
       expect(text).not.toContain("LOW signal");
       expect(text).not.toContain("MEDIUM signal");
       expect(text).not.toContain("HIGH signal");
       expect(text).not.toContain("CRITICAL signal");
+      // Same for "alert" suffix variants the bug also produced.
+      expect(text).not.toContain("LOW alert");
+      expect(text).not.toContain("MEDIUM alert");
+      expect(text).not.toContain("HIGH alert");
+      expect(text).not.toContain("CRITICAL alert");
     });
   });
 

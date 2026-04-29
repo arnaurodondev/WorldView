@@ -245,9 +245,17 @@ test.describe("PLAN-0049 stabilization — SnapTrade v4 callback parity", () => 
     const token = buildFakeToken();
     await mockAuth(page, token);
 
-    // Stub the activation endpoint so the page transitions into "success".
-    await page.route("**/api/v1/brokerage-connections/*/callback**", (route) =>
-      route.fulfill({
+    // F-QAC-04 fix: track whether the page actually CALLED the upstream
+    // callback endpoint with a v4-shaped query (carries connection_id but
+    // NOT authorizationId/userId/sessionId). Without this, the test would
+    // green-light a regression where the page never sends the request and
+    // simply lingers in the loading state.
+    let callbackHit = false;
+    let callbackUrl = "";
+    await page.route("**/api/v1/brokerage-connections/*/callback**", (route, request) => {
+      callbackHit = true;
+      callbackUrl = request.url();
+      return route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
@@ -258,8 +266,8 @@ test.describe("PLAN-0049 stabilization — SnapTrade v4 callback parity", () => 
           last_synced_at: null,
           created_at: "2026-04-29T00:00:00Z",
         }),
-      }),
-    );
+      });
+    });
     await page.route("**/api/v1/**", (route) =>
       route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
     );
@@ -278,13 +286,22 @@ test.describe("PLAN-0049 stabilization — SnapTrade v4 callback parity", () => 
       page.getByText(/Missing required callback parameters/i),
     ).not.toBeVisible({ timeout: 5000 });
 
-    // Positive assertion: success OR loading/in-progress UI. We accept
-    // either — the activation may resolve quickly or remain in the
-    // loading state momentarily depending on dev-server timing. Both are
-    // valid "the v4 path didn't error out" outcomes.
+    // F-QAC-04 fix: tightened to require the success UI specifically (not
+    // the in-progress loading state which would false-pass even if the page
+    // never reached the callback endpoint).
     await expect(
-      page.getByText(/connected successfully|Activating your brokerage/i),
+      page.getByText(/connected successfully/i),
     ).toBeVisible({ timeout: 10000 });
+
+    // F-QAC-04 fix: positively verify the page did call the callback
+    // endpoint with the v4-shaped query string. ``connection_id`` must be
+    // present (forwarded) and ``authorizationId``/``userId``/``sessionId``
+    // must be absent (since they were absent in the inbound URL).
+    expect(callbackHit).toBe(true);
+    expect(callbackUrl).toContain("connection_id=snap-auth-xyz");
+    expect(callbackUrl).not.toContain("authorizationId=");
+    expect(callbackUrl).not.toContain("userId=");
+    expect(callbackUrl).not.toContain("sessionId=");
   });
 });
 
