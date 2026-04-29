@@ -181,6 +181,15 @@ function ArticleRow({ article }: { article: RankedArticle }) {
     }
   }
 
+  // F-QA2-02 fix: gate the row's interactivity affordances on the SAFE-URL
+  // predicate, not on the bare presence of a URL. A javascript:/data:/file:
+  // URL is truthy but the click handler silently no-ops post-F-QA-02; without
+  // this gate, keyboard users would tab into the row and Enter would do
+  // nothing — a confusing dead-zone in the focus order. Now an unsafe URL
+  // makes the row fully non-interactive (no role=button, no tabIndex, no
+  // hover cursor) so SR + keyboard users skip it entirely.
+  const isInteractive = isSafeNewsUrl(article.url);
+
   return (
     // WHY h-[22px]: §0 Terminal Quality Rules mandate 22px data rows
     // WHY cursor-pointer + hover:bg-muted/30: signals interactivity to the user;
@@ -189,19 +198,23 @@ function ArticleRow({ article }: { article: RankedArticle }) {
     // WHY transition-colors: instant color shift feels snappy in a terminal UI;
     // duration is omitted so it uses the global transition-colors default (150ms).
     <div
-      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30"
-      onClick={handleClick}
-      role="button"
+      className={`flex h-[22px] items-center gap-1.5 px-2 transition-colors ${
+        isInteractive ? "cursor-pointer hover:bg-muted/30" : ""
+      }`}
+      onClick={isInteractive ? handleClick : undefined}
+      role={isInteractive ? "button" : undefined}
       // WHY tabIndex + onKeyDown: keyboard accessibility — traders using keyboard
       // navigation can Tab to each row and press Enter/Space to open the article.
-      tabIndex={article.url ? 0 : undefined}
+      tabIndex={isInteractive ? 0 : undefined}
       onKeyDown={(e) => {
-        if (article.url && (e.key === "Enter" || e.key === " ")) {
+        if (isInteractive && (e.key === "Enter" || e.key === " ")) {
           e.preventDefault();
           handleClick();
         }
       }}
-      aria-label={article.title ? `Open article: ${article.title}` : undefined}
+      aria-label={
+        isInteractive && article.title ? `Open article: ${article.title}` : undefined
+      }
     >
 
       {/* Impact dot indicator — 4 dots, filled/empty based on score */}

@@ -65,7 +65,13 @@ def members_payload() -> dict:
 
 @pytest.fixture
 def news_payload() -> dict:
-    """One article touching each member; AAPL article has higher impact."""
+    """One article touching each member; AAPL article has higher impact.
+
+    F-QA2-01 fix: fixtures now match S6's actual `RankedArticleResponse`
+    contract — single `primary_entity_id`, NOT a `entity_ids` list. The
+    prior list-shape fixture happened to make tests pass while the
+    composer was reading a non-existent field, masking a production bug.
+    """
     # Iso 8601 with timezone — within 24h cutoff (current logic uses datetime.now).
     from datetime import UTC, datetime, timedelta
 
@@ -78,7 +84,7 @@ def news_payload() -> dict:
                 "url": "https://news.example/aapl",
                 "published_at": recent,
                 "ticker": "AAPL",
-                "entity_ids": ["e-aapl"],
+                "primary_entity_id": "e-aapl",
                 "market_impact_score": 0.9,
             },
             {
@@ -87,7 +93,7 @@ def news_payload() -> dict:
                 "url": "https://news.example/msft",
                 "published_at": recent,
                 "ticker": "MSFT",
-                "entity_ids": ["e-msft"],
+                "primary_entity_id": "e-msft",
                 "market_impact_score": 0.4,
             },
             # Article touching neither member — must NOT appear in biggest_news.
@@ -97,7 +103,7 @@ def news_payload() -> dict:
                 "url": "https://news.example/oth",
                 "published_at": recent,
                 "ticker": "GOOG",
-                "entity_ids": ["e-goog"],
+                "primary_entity_id": "e-goog",
                 "market_impact_score": 1.0,
             },
         ]
@@ -367,6 +373,44 @@ async def test_insights_member_without_entity_id_does_not_falsely_alert(
 
 
 @pytest.mark.asyncio
+async def test_insights_accepts_legacy_entity_ids_list(
+    authed_app, authed_mock_clients, members_payload, alerts_payload
+) -> None:
+    """F-QA2-01 belt-and-braces: the composer also accepts a legacy
+    `entity_ids: list[str]` shape so a future schema change introducing
+    multi-entity articles flows through without a gateway change."""
+    from datetime import UTC, datetime, timedelta
+
+    recent = (datetime.now(tz=UTC) - timedelta(hours=2)).isoformat()
+    legacy_news = {
+        "articles": [
+            {
+                "article_id": "art-legacy",
+                "title": "Legacy multi-entity article",
+                "url": "https://news.example/legacy",
+                "published_at": recent,
+                "ticker": "AAPL",
+                "entity_ids": ["e-aapl", "e-msft"],
+                "market_impact_score": 0.85,
+            }
+        ]
+    }
+    _wire_clients(authed_mock_clients, members_payload, legacy_news, alerts_payload)
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/watchlists/wl-1/insights",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+    body = resp.json()
+    aapl = next(m for m in body["movers"] if m["ticker"] == "AAPL")
+    msft = next(m for m in body["movers"] if m["ticker"] == "MSFT")
+    assert aapl["news_count_24h"] == 1
+    assert msft["news_count_24h"] == 1
+    assert aapl["top_news_title"] == "Legacy multi-entity article"
+
+
+@pytest.mark.asyncio
 async def test_insights_handles_malformed_published_at(
     authed_app, authed_mock_clients, members_payload, alerts_payload
 ) -> None:
@@ -380,7 +424,7 @@ async def test_insights_handles_malformed_published_at(
                 "url": "https://news.example.com/x",
                 "published_at": "not-an-iso-date",
                 "ticker": "AAPL",
-                "entity_ids": ["e-aapl"],
+                "primary_entity_id": "e-aapl",
                 "market_impact_score": 0.5,
             }
         ]
