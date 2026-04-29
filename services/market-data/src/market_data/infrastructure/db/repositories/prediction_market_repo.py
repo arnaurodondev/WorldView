@@ -82,6 +82,7 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
                 resolution_status=market.resolution_status,
                 resolved_answer=market.resolved_answer,
                 market_slug=market.market_slug,
+                category=market.category,
             )
             .on_conflict_do_update(
                 index_elements=["market_id"],
@@ -96,6 +97,12 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
                     # if the Gamma API added it after initial ingestion. Always take the
                     # newest non-null value. COALESCE keeps existing slug if new one is null.
                     "market_slug": text("COALESCE(EXCLUDED.market_slug, prediction_markets.market_slug)"),
+                    # F-QAC-02 fix: same COALESCE policy as market_slug — once a
+                    # category is recorded for a market we never blank it back
+                    # to NULL on a subsequent poll that didn't include the field.
+                    # Polymarket's Gamma API may surface category on event
+                    # metadata refreshes that arrive after the initial ingest.
+                    "category": text("COALESCE(EXCLUDED.category, prediction_markets.category)"),
                     "updated_at": text("now()"),
                 },
             )
@@ -110,6 +117,7 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
                 PredictionMarketModel.resolution_status,
                 PredictionMarketModel.resolved_answer,
                 PredictionMarketModel.market_slug,
+                PredictionMarketModel.category,
                 PredictionMarketModel.created_at,
                 PredictionMarketModel.updated_at,
             )

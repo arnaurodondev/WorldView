@@ -29,6 +29,11 @@ class PredictionMarketSummaryResponse(BaseModel):
     # WHY default None: added in migration 009; existing rows return null until
     # the consumer repopulates them on the next poll cycle.
     market_slug: str | None = None
+    # F-QAC-07 fix (PLAN-0049 T-C-3-03): expose `category` on the wire so
+    # frontends can render category badges per row, not just filter on it.
+    # Default None matches migration 010 (nullable column, no server_default)
+    # — existing rows surface as `category: null` until adapter backfills.
+    category: str | None = None
 
 
 class PredictionMarketDetailResponse(PredictionMarketSummaryResponse):

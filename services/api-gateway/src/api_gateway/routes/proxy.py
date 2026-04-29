@@ -422,17 +422,12 @@ async def list_prediction_markets(
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
-    # WHY copy request.query_params then overlay ``category``: passing
-    # ``params={"category": ..., **dict(request.query_params)}`` would let
-    # an unsanitised duplicate ``category=`` from the client clobber the
-    # parsed value. Build the dict explicitly so the FastAPI-validated
-    # ``category`` argument is the canonical source of truth.
+    # F-QAC-09 fix: forward all query params verbatim. The explicit
+    # ``category`` parameter declaration above exists purely so OpenAPI
+    # documents it for type-generators; FastAPI parses ``category`` from
+    # the same query string that backs ``request.query_params``, so the
+    # values cannot disagree.
     forwarded: dict[str, Any] = dict(request.query_params)
-    if category is not None:
-        forwarded["category"] = category
-    else:
-        # Strip if present-but-blank so upstream sees a clean param set.
-        forwarded.pop("category", None)
     resp = await clients.market_data.get(
         "/api/v1/prediction-markets",
         params=forwarded,

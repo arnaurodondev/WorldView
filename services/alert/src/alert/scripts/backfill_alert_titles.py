@@ -53,18 +53,19 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import asyncpg  # type: ignore[import-untyped]
+
 from alert.application.use_cases.alert_fanout import (
     _compose_alert_title,
     _derive_signal_label,
 )
 from alert.domain.enums import AlertSeverity, AlertType
-
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -219,8 +220,30 @@ async def _run(database_url: str, *, dry_run: bool) -> tuple[int, int]:
     # tag if present so operators can paste either DSN flavour.
     cleaned = database_url.replace("postgresql+asyncpg://", "postgresql://")
 
-    conn = await asyncpg.connect(cleaned)
+    # F-QAC-12 fix: tag connection so operators can identify the script in
+    # pg_stat_activity / kill it cleanly if it runs away on a huge table.
+    # command_timeout=300 means a single statement (the SELECT batch or
+    # UPDATE batch) won't hang the script forever on a deadlocked row.
+    conn = await asyncpg.connect(
+        cleaned,
+        server_settings={"application_name": "alert-backfill-titles"},
+        command_timeout=300,
+    )
     try:
+        # F-QAC-01 fix (CRITICAL): asyncpg does NOT auto-decode JSONB by
+        # default — it returns the raw text representation as a `str`.
+        # Without this codec registration, every row's `payload` would be
+        # a string and `payload.get(...)` would raise AttributeError, get
+        # swallowed by the per-row try/except, and the script would silently
+        # log thousands of `derive_error` lines while updating zero rows.
+        # The codec converts JSONB → dict on read and dict → JSONB on write
+        # using the std-lib `json` module (no external deps).
+        await conn.set_type_codec(
+            "jsonb",
+            encoder=json.dumps,
+            decoder=json.loads,
+            schema="pg_catalog",
+        )
         initial_null = await _count_null_titles(conn)
         logger.info("backfill_alert_titles.start", rows_with_null_title=initial_null, dry_run=dry_run)
 
@@ -229,6 +252,11 @@ async def _run(database_url: str, *, dry_run: bool) -> tuple[int, int]:
 
         rows_seen = 0
         rows_updated = 0
+        # F-QAC-11 fix: track an explicit threshold rather than relying on
+        # `rows_seen % _PROGRESS_EVERY < _BATCH_SIZE` which only works when
+        # _PROGRESS_EVERY is an exact multiple of _BATCH_SIZE. Self-corrects
+        # if either constant is later tuned.
+        next_progress_threshold = _PROGRESS_EVERY
 
         while True:
             batch = await _fetch_batch(conn, _BATCH_SIZE)
@@ -259,13 +287,17 @@ async def _run(database_url: str, *, dry_run: bool) -> tuple[int, int]:
 
             # Progress log every 10k rows (or on the very first batch so
             # operators see *something* quickly on small tables).
-            if rows_seen == len(batch) or rows_seen % _PROGRESS_EVERY < _BATCH_SIZE:
+            if rows_seen == len(batch) or rows_seen >= next_progress_threshold:
                 logger.info(
                     "backfill_alert_titles.progress",
                     rows_seen=rows_seen,
                     rows_updated=rows_updated,
                     rows_remaining=max(0, initial_null - rows_seen),
                 )
+                # Advance threshold past the current rows_seen — handles the
+                # case where one batch jumps over multiple progress windows.
+                while next_progress_threshold <= rows_seen:
+                    next_progress_threshold += _PROGRESS_EVERY
 
         logger.info(
             "backfill_alert_titles.complete",

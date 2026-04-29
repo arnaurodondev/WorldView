@@ -120,6 +120,7 @@ async def list_prediction_markets(
             resolution_status=market.resolution_status,
             resolved_answer=market.resolved_answer,
             market_slug=market.market_slug,
+            category=market.category,
             updated_at=market.updated_at,
         )
         for market, prices, volume in pairs
@@ -193,6 +194,7 @@ async def get_prediction_market(
         resolution_status=market.resolution_status,
         resolved_answer=market.resolved_answer,
         market_slug=market.market_slug,
+        category=market.category,
         updated_at=market.updated_at,
         created_at=market.created_at,
     )
