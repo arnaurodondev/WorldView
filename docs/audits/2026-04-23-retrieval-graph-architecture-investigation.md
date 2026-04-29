@@ -1,9 +1,19 @@
 # Investigation Report: Retrieval, Graph Generation & Graph Traversal Architecture Audit
 
+> **⚠ SUPERSEDED 2026-04-30** — by `docs/audits/2026-04-30-retrieval-graph-architecture-revised.md`. Several material claims in this document are factually wrong or out-of-date as of 2026-04-30:
+> - Embedding model is now `BAAI/bge-large-en-v1.5` via DeepInfra, not nomic-embed-text (changed 2026-04-27)
+> - Deep-extraction LLM is `meta-llama/Meta-Llama-3.1-8B-Instruct`, not Qwen2.5-7B (changed 2026-04-27)
+> - Intent classifier is DeepInfra Llama-3.1-8B, not Qwen2.5:3b
+> - Reranker is Cohere `rerank-english-v3.0` primary + BGE fallback, not BGE primary
+> - The "production-grade entity resolution" framing is **wrong**: 7 of 11 GLiNER classes have zero canonical seeds; 66% of documents have zero resolved entities; the `entity_id_by_ref`/`_build_raw_relations` boundary silently drops ~100% of LLM extractions for those documents (F-CRIT-07 in 04-29 deep-dive); `mention_resolutions` and `llm_usage_log` audit tables are empty.
+> - The "evidence-backed graph materialization" framing is **wrong**: production rows in `relations` = 18 (all hand-seeded 2026-04-24); `relation_evidence`, `relation_summaries`, AGE shadow graph all have 0 rows.
+>
+> The architectural roadmap (BM25 + RRF, knowledge compilation, eval framework, Cypher activation, ontology) is still directionally correct and feeds PLAN-0057 (Phase 1) + PLAN-0058 (Phase 2 + 3). Read the revised audit for the current picture.
+
 **Date**: 2026-04-23
 **Investigator**: Claude (investigation skill)
 **Severity**: MEDIUM (no production outage — architectural gap analysis)
-**Status**: Root causes identified — improvement roadmap produced
+**Status**: SUPERSEDED 2026-04-30 — see header
 **External References**: Karpathy LLM Wiki Gist, Elastic IR Reference
 
 ---
