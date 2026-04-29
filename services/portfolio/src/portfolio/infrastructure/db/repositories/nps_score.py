@@ -6,9 +6,10 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 
+from common.time import utc_now  # type: ignore[import-untyped]
 from portfolio.application.ports.feedback import NPSScoreRecord, NPSScoreRepo
 from portfolio.domain.errors import NPSRateLimitError
 from portfolio.infrastructure.db.models.nps_score import NPSScoreModel
@@ -83,10 +84,6 @@ class SqlAlchemyNPSScoreRepo(NPSScoreRepo):
         *,
         days: int = 30,
     ) -> tuple[int, int, int]:
-        from sqlalchemy import case
-
-        from common.time import utc_now  # type: ignore[import-untyped]
-
         cutoff = utc_now() - timedelta(days=days)
         # WHY CASE WHEN: sums 1 for matching rows, 0 otherwise, in a single
         # SELECT — cheaper than three separate queries with WHERE.

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 import structlog
-from pydantic import AliasChoices, Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -122,6 +122,24 @@ class Settings(BaseSettings):
     log_json: bool = True
     log_format: str = "json"
     otlp_endpoint: str = ""
+
+    # F-Q2-02: validate at settings load so a misconfigured tenant id fails
+    # the service startup loud-and-clear instead of producing a 500 on the
+    # first ``GET /api/v1/feedback/submissions/anonymous`` request. The route
+    # parses this with ``UUID(...)`` which throws ValueError; raising at load
+    # time gives operators a stack trace they can act on.
+    @field_validator("feedback_anonymous_tenant_id")
+    @classmethod
+    def _validate_anonymous_tenant_id(cls, v: str) -> str:
+        from uuid import UUID
+
+        try:
+            UUID(v)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(
+                f"PORTFOLIO_FEEDBACK_ANONYMOUS_TENANT_ID must be a valid UUID, got {v!r}: {exc}",
+            ) from exc
+        return v
 
     @model_validator(mode="after")
     def _warn_default_db_credentials(self) -> Settings:
