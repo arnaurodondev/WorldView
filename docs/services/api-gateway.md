@@ -157,6 +157,7 @@ preferable to all-or-nothing for dashboard widgets.
 | DELETE | `/v1/watchlists/{id}` | Delete watchlist | Yes |
 | POST | `/v1/watchlists/{id}/members` | Add entity to watchlist | Yes |
 | DELETE | `/v1/watchlists/{id}/members/{entity_id}` | Remove entity from watchlist | Yes |
+| GET | `/v1/watchlists/{id}/insights` | Composite insights: `{members_count, movers[{ticker, price, change_pct, news_count, alert_active}], sectors, news, alerts}`. `movers` sorted by `|change_pct|` DESC. Prices sourced from `/internal/v1/price/{iid}` (PriceSnapshot — includes 1D change). Cache-Control max-age=60. PLAN-0050 Wave B / QA iter-1 F-Q1-02. | Yes |
 
 ### Brokerage Connection Endpoints (→ S1 Portfolio, PRD-0022)
 

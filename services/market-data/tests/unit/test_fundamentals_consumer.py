@@ -807,3 +807,193 @@ async def test_fundamentals_consumer_description_none_for_empty_string() -> None
 
     outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
     assert outbox_payload["description"] is None
+
+
+# ── F-Q1-03: instrument_fundamentals_snapshot continuous UPSERT ─────────────
+
+
+@pytest.mark.asyncio
+async def test_consumer_calls_upsert_fundamentals_snapshot_on_highlights() -> None:
+    """F-Q1-03 regression: consumer calls _upsert_fundamentals_snapshot when
+    highlights data is present in the payload.
+
+    WHY mock _upsert_fundamentals_snapshot (not upsert_snapshot):
+    The protected method is the seam between process_message and the DB write.
+    Mocking it avoids needing a live SQLAlchemy session while still verifying
+    that process_message invokes the snapshot path.
+    """
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.fundamentals.upsert_highlights = AsyncMock()
+
+    payload = {"highlights": {"EarningsShare": 6.42, "RevenueTTM": 385_000_000_000.0}}
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+
+    # Patch the protected method so we can assert it was invoked without a live DB
+    snapshot_calls: list[tuple[str, dict]] = []
+
+    async def _capture_snapshot(uow: object, instrument_id: str, payload: dict) -> None:
+        snapshot_calls.append((instrument_id, payload))
+
+    consumer._upsert_fundamentals_snapshot = _capture_snapshot  # type: ignore[method-assign]
+    await consumer.process_message(None, _make_message(), {})
+
+    # _upsert_fundamentals_snapshot was called once with the instrument id
+    assert len(snapshot_calls) == 1
+    called_iid, called_payload = snapshot_calls[0]
+    assert called_iid == "instr-fund-001"
+    assert called_payload.get("highlights", {}).get("EarningsShare") == pytest.approx(6.42)
+
+
+@pytest.mark.asyncio
+async def test_consumer_snapshot_failure_does_not_propagate() -> None:
+    """F-Q1-03: snapshot UPSERT failure is best-effort — does not raise or
+    dead-letter the Kafka message."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.fundamentals.upsert_highlights = AsyncMock()
+
+    payload = {"highlights": {"EarningsShare": 6.42}}
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+
+    async def _raise_snapshot(uow: object, instrument_id: str, payload: dict) -> None:
+        raise RuntimeError("DB connection lost")
+
+    consumer._upsert_fundamentals_snapshot = _raise_snapshot  # type: ignore[method-assign]
+
+    # Must NOT raise — snapshot failure is best-effort
+    await consumer.process_message(None, _make_message(), {})
+
+
+# ── Unit tests for fundamentals_snapshot_writer helpers ─────────────────────
+
+
+def test_most_recent_financial_row_prefers_yearly() -> None:
+    """_most_recent_financial_row returns the most-recent yearly entry."""
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import _most_recent_financial_row
+
+    data = {
+        "yearly": {
+            "2022-12-31": {"operatingCashFlow": 100.0},
+            "2023-12-31": {"operatingCashFlow": 200.0},
+        },
+        "quarterly": {
+            "2024-09-30": {"operatingCashFlow": 50.0},
+        },
+    }
+    row = _most_recent_financial_row(data)
+    assert row == {"operatingCashFlow": 200.0}
+
+
+def test_most_recent_financial_row_falls_back_to_quarterly() -> None:
+    """_most_recent_financial_row falls back to quarterly when yearly is empty."""
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import _most_recent_financial_row
+
+    data = {
+        "yearly": {},
+        "quarterly": {
+            "2024-06-30": {"operatingCashFlow": 40.0},
+            "2024-09-30": {"operatingCashFlow": 55.0},
+        },
+    }
+    row = _most_recent_financial_row(data)
+    assert row == {"operatingCashFlow": 55.0}
+
+
+def test_most_recent_financial_row_empty_input() -> None:
+    """_most_recent_financial_row returns {} for None/empty/non-dict input."""
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import _most_recent_financial_row
+
+    assert _most_recent_financial_row(None) == {}
+    assert _most_recent_financial_row({}) == {}
+    assert _most_recent_financial_row({"yearly": {}, "quarterly": {}}) == {}
+    assert _most_recent_financial_row("not a dict") == {}
+
+
+def test_derive_fundamentals_snapshot_full_data() -> None:
+    """derive_fundamentals_snapshot computes all 10 fields from a complete dataset."""
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import derive_fundamentals_snapshot
+
+    snap = derive_fundamentals_snapshot(
+        highlights={
+            "EarningsShare": 6.42,
+            "RevenueTTM": 400_000_000_000.0,
+            "EBITDA": 120_000_000_000.0,
+        },
+        cash_flow={
+            "operatingCashFlow": 110_000_000_000.0,
+            "capitalExpenditures": -10_000_000_000.0,
+        },
+        income={
+            "ebit": 100_000_000_000.0,
+            "interestExpense": -2_000_000_000.0,
+        },
+        balance={
+            "netDebt": 60_000_000_000.0,
+        },
+        technicals={
+            "Beta": 1.25,
+            "AverageVolume": 80_000_000,
+        },
+    )
+
+    assert snap["eps_ttm"] == pytest.approx(6.42)
+    assert snap["beta"] == pytest.approx(1.25)
+    assert snap["avg_volume_30d"] == 80_000_000
+    assert snap["operating_cash_flow"] == pytest.approx(110e9)
+    assert snap["capex"] == pytest.approx(10e9)  # stored as absolute value
+    assert snap["free_cash_flow"] == pytest.approx(100e9)
+    assert snap["fcf_margin"] == pytest.approx(100e9 / 400e9)
+    assert snap["interest_coverage"] == pytest.approx(100e9 / 2e9)
+    assert snap["net_debt_to_ebitda"] == pytest.approx(60e9 / 120e9)
+    assert snap["credit_rating"] is None  # always NULL — EODHD does not provide it
+
+
+def test_derive_fundamentals_snapshot_missing_data_returns_nones() -> None:
+    """derive_fundamentals_snapshot returns None for all derived fields when data is empty."""
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import derive_fundamentals_snapshot
+
+    snap = derive_fundamentals_snapshot(
+        highlights={},
+        cash_flow={},
+        income={},
+        balance={},
+        technicals={},
+    )
+
+    assert snap["eps_ttm"] is None
+    assert snap["beta"] is None
+    assert snap["avg_volume_30d"] is None
+    assert snap["operating_cash_flow"] is None
+    assert snap["capex"] is None
+    assert snap["free_cash_flow"] is None
+    assert snap["fcf_margin"] is None
+    assert snap["interest_coverage"] is None
+    assert snap["net_debt_to_ebitda"] is None
+    assert snap["credit_rating"] is None
+
+
+def test_derive_fundamentals_snapshot_null_semantics_na_strings() -> None:
+    """'N/A' and empty string values are coerced to None, not 0.0."""
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import derive_fundamentals_snapshot
+
+    snap = derive_fundamentals_snapshot(
+        highlights={"EarningsShare": "N/A", "RevenueTTM": ""},
+        cash_flow={},
+        income={},
+        balance={},
+        technicals={"Beta": "-"},
+    )
+
+    assert snap["eps_ttm"] is None
+    assert snap["beta"] is None

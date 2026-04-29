@@ -353,6 +353,8 @@ All consumers extend `BaseKafkaConsumer[dict]` from `libs/messaging`. They:
 5. Upsert the instrument record and update `has_ohlcv / has_quotes / has_fundamentals` flag.
 6. Emit `InstrumentCreated` or `InstrumentUpdated` domain events to the outbox.
 
+**FundamentalsConsumer snapshot UPSERT (PLAN-0050 QA iter-1 F-Q1-03)**: After processing all sections, `FundamentalsConsumer` calls `_upsert_fundamentals_snapshot()` which derives all 10 snapshot metrics from the section JSONB data already in `payload` and UPSERTs one row into `instrument_fundamentals_snapshot`. This makes the snapshot table eventually consistent with each fundamentals ingest cycle — no separate backfill run is needed for continuously-ingested instruments. The helper logic lives in `infrastructure/db/fundamentals_snapshot_writer.py`. The call is best-effort: any exception is logged as a warning and does not dead-letter the Kafka message.
+
 **Quote NULL semantics (D-004)**: `Quote.bid`, `.ask`, `.last`, `.volume` are `Decimal | None` / `int | None`. `NULL` means "no data available"; `Decimal("0")` means "zero trading activity". `CanonicalQuote.from_dict()` and the quote repo both preserve `None` — no coercion to zero.
 
 The UoW is accessed via `self._current_uow` which is set by the base class before
@@ -699,6 +701,35 @@ Each table stores one period-specific snapshot of one fundamentals section:
 **Consistency model**: Upserted in the same transaction as section writes (transactionally consistent for processed records). Snapshot sections use last-write-wins at date-level granularity. If `upsert_metrics` raises after a section write, the exception propagates to the caller's transaction manager for rollback.
 
 **Screening semantics**: `POST /fundamentals/screen` uses the **latest** `as_of_date` per instrument for each metric filter. All filters combine with AND logic. Each filter may optionally specify a `sector` (matched against `instruments.sector`); specifying sector on any filter restricts results to that sector.
+
+**Authoritative screener metric names** (PLAN-0051 Wave B, T-B-2-01 — frontend MUST use these names verbatim in `POST /fundamentals/screen` requests):
+
+| UI category | UI label | Metric name (use exactly) | Unit | Source section |
+|---|---|---|---|---|
+| Valuation | P/E (TTM) | `pe_ratio` | ratio | `valuation_ratios` / `highlights` |
+| Valuation | P/B | `pb_ratio` | ratio | `valuation_ratios` |
+| Valuation | P/S (TTM) | `price_sales_ttm` | ratio | `valuation_ratios` |
+| Valuation | Forward P/E | `forward_pe` | ratio | `valuation_ratios` |
+| Valuation | EV / EBITDA | `enterprise_value_ebitda` | ratio | `valuation_ratios` |
+| Valuation | Dividend yield | `dividend_yield` | decimal (0.015 = 1.5%) | `highlights` |
+| Profitability | ROE (TTM) | `roe_ttm` | decimal | `highlights` |
+| Profitability | ROA (TTM) | `roa_ttm` | decimal | `highlights` |
+| Profitability | Operating margin (TTM) | `operating_margin_ttm` | decimal | `highlights` |
+| Profitability | Net (profit) margin | `profit_margin` | decimal | `highlights` |
+| Growth | Quarterly revenue growth YoY | `quarterly_revenue_growth_yoy` | decimal | `highlights` |
+| Growth | Quarterly earnings growth YoY | `quarterly_earnings_growth_yoy` | decimal | `highlights` |
+| Cap | Market capitalization | `market_capitalization` | USD | `highlights` |
+| Risk | Beta | `beta` | ratio | `technicals_snapshot` |
+
+**Documented gaps** (PLAN-0051 T-B-2-01) — frontend renders these inputs as `disabled` with a "Backend pending" badge; fix tracked in `docs/audits/2026-04-29-screener-metric-gap.md`:
+
+- **Gross margin** — only `gross_profit_ttm` and `revenue_ttm` are extracted. The ratio is not stored. Future work: derive in `backfill_fundamental_metrics.py`.
+- **Debt / Equity** — only `long_term_debt` and `total_equity` are stored. Ratio not stored.
+- **Current ratio** — only `total_current_assets` and `total_current_liabilities` are stored. Ratio not stored.
+- **Technical filters** (RSI, distance from 52W high/low, volume vs 30d avg, above 50d MA) — not in `fundamental_metrics`. Some live in `instrument_fundamentals_snapshot` (`avg_volume_30d`, `beta`); others (RSI, MA50, 52W range) require a new extractor or live computation from OHLCV. Frontend applies these as **client-side post-fetch filters** until a server endpoint exists.
+- **News & signals filters** (news velocity 7d, controversy score, recent earnings, insider activity) — fields live in S6 / S7 (signals + knowledge graph); a composed S9 endpoint would be required. Frontend stubs them as client-side TODOs.
+
+**Seed mismatch** (`_seed_fields()` in `app.py`): the 12 names seeded into `screen_field_metadata` (e.g. `revenue_usd`, `return_on_equity`, `dividend_yield_pct`, `market_cap_usd`) **do not match** the metric names actually populated by `metric_extractor.py`. Frontend ignores the seeded names and uses the extractor's truth column above. Fixing the seed is in the audit's remediation list.
 
 **Timeseries date validation**: `start_date > end_date` returns HTTP 422 with a descriptive error before querying the DB.
 

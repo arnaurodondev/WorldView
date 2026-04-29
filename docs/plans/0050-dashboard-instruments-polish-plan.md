@@ -182,3 +182,33 @@ Waves B, C, D, E are independent → parallelizable across multiple worktrees.
 
 - **Wave C** (drawing tools) is highest-risk: persistence + WebGL interaction is non-trivial. Allocate full 22h. Fall back to indicators-only if drawing tools slip.
 - **Wave D** depends on EODHD data quality — some fields may not be available on all instruments. Treat NULL gracefully.
+
+---
+
+## Ship Checklist (QA iter-1 operator notes — F-Q1-01)
+
+These steps must be completed before merging to `main` or deploying to staging.
+
+### API Gateway (S9)
+
+- [ ] **F-Q1-02 / change_pct**: `GET /v1/watchlists/{id}/insights` now fetches price via `/internal/v1/price/{iid}` (PriceSnapshot endpoint). Verify `movers[*].change_pct` is non-null on a live watchlist after a full market-data seed cycle.
+- [ ] **F-Q1-13 / mover sort**: `movers` are returned sorted by `|change_pct|` descending. Confirm the highest-magnitude mover is first in the response.
+- [ ] **Smoke test**: `GET /v1/watchlists/{id}/insights` returns HTTP 200 with `members_count > 0` and `movers` array populated.
+
+### Market Data (S3)
+
+- [ ] **F-Q1-03 / snapshot ingestion**: After re-triggering a fundamentals fetch (or running `python scripts/backfill_fundamentals.py`), confirm `SELECT count(*) FROM instrument_fundamentals_snapshot` returns > 0 rows in `market_data` DB.
+- [ ] **Continuous path**: Publish a `market.dataset.fetched` event with `dataset_type=fundamentals` via Kafka UI; verify FundamentalsConsumer logs `fundamentals_consumer.snapshot_upserted` and the row appears in `instrument_fundamentals_snapshot`.
+- [ ] **Smoke test**: `GET /internal/v1/fundamentals/{instrument_id}/snapshot` returns non-null values for `eps_ttm` and/or `beta`.
+
+### NLP Pipeline (S6)
+
+- [ ] **F-Q1-07 / sentiment**: Verify `document_source_metadata.sentiment` is populated (not NULL) for articles scored after this deploy. SQL: `SELECT sentiment, count(*) FROM document_source_metadata WHERE llm_scored_at > now() - interval '1h' GROUP BY 1`.
+- [ ] **Prompt regression**: Confirm ArticleRelevanceScoringWorker logs no `relevance_scoring.parse_error` entries (indicates LLM returning malformed JSON). Response shape: `{"score": float, "reason": "…", "sentiment": "positive"|"negative"|"neutral"|"mixed"}`.
+- [ ] **Smoke test**: `GET /v1/news/top` via S9 returns articles with `sentiment` field set.
+
+### General
+
+- [ ] All unit tests pass: `python -m pytest services/api-gateway/tests services/market-data/tests/unit services/nlp-pipeline/tests/unit -v`
+- [ ] Ruff + mypy clean across changed services
+- [ ] `TRACKING.md` updated to mark affected waves as complete

@@ -14,6 +14,10 @@ Verifies:
 8. weighted_return_1d averages only members with quotes (skips loading rows).
 9. Cache-Control header set with private + max-age=60.
 10. Empty watchlist returns the documented shape with zero counts.
+11. (F-Q1-02) Quotes come from PriceSnapshot (/internal/v1/price/{iid})
+    returning price + price_change_pct; not from legacy QuoteResponse.
+12. (F-Q1-13) Movers sorted by |change_pct| DESC so gainers/losers split
+    always shows the most-moved instruments first.
 """
 
 from __future__ import annotations
@@ -117,7 +121,12 @@ def alerts_payload() -> dict:
 
 
 def _wire_clients(authed_mock_clients, members, news, alerts, *, quotes=None, overviews=None) -> None:
-    """Wire the four downstream clients with the per-path mocks."""
+    """Wire the four downstream clients with the per-path mocks.
+
+    F-Q1-02: quotes dict is now keyed by iid and values use PriceSnapshot shape:
+      { "price": float|None, "price_change_pct": float|None }
+    The mock intercepts /internal/v1/price/{iid} — not the legacy /api/v1/quotes/{iid}.
+    """
 
     async def _portfolio_get(path: str, **_kwargs):
         if "/api/v1/watchlists/" in path and path.endswith("/members"):
@@ -125,7 +134,9 @@ def _wire_clients(authed_mock_clients, members, news, alerts, *, quotes=None, ov
         return _resp(404, {"detail": "not-found"})
 
     async def _market_data_get(path: str, **_kwargs):
-        if path.startswith("/api/v1/quotes/"):
+        # F-Q1-02: insights now calls /internal/v1/price/{iid} (PriceSnapshot) instead
+        # of the legacy /api/v1/quotes/{iid} (QuoteResponse without change_pct).
+        if path.startswith("/internal/v1/price/"):
             iid = path.rsplit("/", 1)[-1]
             return _resp(200, (quotes or {}).get(iid, {}))
         if path.startswith("/api/v1/instruments/"):
@@ -167,9 +178,11 @@ async def test_insights_requires_auth(app, mock_clients) -> None:
 async def test_insights_happy_path_composes_all_signals(
     authed_app, authed_mock_clients, members_payload, news_payload, alerts_payload
 ) -> None:
+    # F-Q1-02: quotes now use PriceSnapshot shape (price, price_change_pct)
+    # rather than legacy QuoteResponse (last, bid, ask — no change_pct).
     quotes = {
-        "i-aapl": {"last": 200.0, "change_pct": 1.5},
-        "i-msft": {"last": 410.0, "change_pct": -0.5},
+        "i-aapl": {"price": "200.0", "price_change_pct": "1.5"},
+        "i-msft": {"price": "410.0", "price_change_pct": "-0.5"},
     }
     overviews = {
         "i-aapl": {"gics_sector": "Information Technology"},
@@ -200,11 +213,11 @@ async def test_insights_happy_path_composes_all_signals(
     aapl = next(m for m in body["movers"] if m["ticker"] == "AAPL")
     msft = next(m for m in body["movers"] if m["ticker"] == "MSFT")
 
-    # Per-member quote + sector enrichment
-    assert aapl["price"] == 200.0
-    assert aapl["change_pct"] == 1.5
+    # Per-member quote + sector enrichment (F-Q1-02: price from PriceSnapshot)
+    assert aapl["price"] == pytest.approx(200.0)
+    assert aapl["change_pct"] == pytest.approx(1.5)
     assert aapl["sector"] == "Information Technology"
-    assert msft["price"] == 410.0
+    assert msft["price"] == pytest.approx(410.0)
     assert msft["sector"] == "Information Technology"
 
     # News + alert linkage
@@ -223,6 +236,11 @@ async def test_insights_happy_path_composes_all_signals(
     assert body["sectors"] == [
         {"sector": "Information Technology", "count": 2, "weight": 1.0},
     ]
+
+    # F-Q1-13: movers must be sorted by |change_pct| DESC.
+    # AAPL (+1.5%) has higher abs than MSFT (-0.5%), so AAPL must come first.
+    assert body["movers"][0]["ticker"] == "AAPL"
+    assert body["movers"][1]["ticker"] == "MSFT"
 
 
 @pytest.mark.asyncio
@@ -257,7 +275,8 @@ async def test_insights_weighted_return_skips_loading_rows(
     where only one symbol has loaded — the dashboard would briefly read green
     for an unknown reason. The spec is "skip rows without quotes".
     """
-    quotes = {"i-aapl": {"last": 200.0, "change_pct": 2.0}}  # MSFT missing
+    # F-Q1-02: PriceSnapshot shape (price, price_change_pct), not legacy QuoteResponse
+    quotes = {"i-aapl": {"price": "200.0", "price_change_pct": "2.0"}}  # MSFT missing
     _wire_clients(authed_mock_clients, members_payload, news_payload, alerts_payload, quotes=quotes)
 
     transport = ASGITransport(app=authed_app)
@@ -360,7 +379,8 @@ async def test_insights_member_without_entity_id_does_not_falsely_alert(authed_a
         members,
         {"articles": []},
         alerts,
-        quotes={"i-x": {"last": 1.0, "change_pct": 0.0}},
+        # F-Q1-02: PriceSnapshot shape
+        quotes={"i-x": {"price": "1.0", "price_change_pct": "0.0"}},
         overviews={"i-x": {"gics_sector": "Energy"}},
     )
 
@@ -461,8 +481,9 @@ async def test_insights_degrades_on_news_failure(
         return _resp(200, members_payload)
 
     async def _market_data_get(path: str, **_kwargs):
-        if path.startswith("/api/v1/quotes/"):
-            return _resp(200, {"last": 100.0, "change_pct": 1.0})
+        # F-Q1-02: insights now calls /internal/v1/price/{iid} (PriceSnapshot shape)
+        if path.startswith("/internal/v1/price/"):
+            return _resp(200, {"price": "100.0", "price_change_pct": "1.0"})
         return _resp(200, {"gics_sector": "Information Technology"})
 
     async def _nlp_get(path: str, **_kwargs):
@@ -490,3 +511,117 @@ async def test_insights_degrades_on_news_failure(
     for m in body["movers"]:
         assert m["news_count_24h"] == 0
         assert m["top_news_title"] is None
+
+
+# ── F-Q1-02 regression: price comes from PriceSnapshot, not legacy QuoteResponse ──
+
+
+@pytest.mark.asyncio
+async def test_insights_uses_price_snapshot_endpoint(
+    authed_app, authed_mock_clients, members_payload, news_payload, alerts_payload
+) -> None:
+    """F-Q1-02 regression: the composer must call /internal/v1/price/{iid}
+    (PriceSnapshot) to get change_pct, NOT /api/v1/quotes/{iid} (QuoteResponse).
+
+    The legacy QuoteResponse has no change_pct field — reading it always returns
+    None, breaking the gainers/losers split and weighted_return_1d aggregate.
+    PriceSnapshot exposes price_change_pct as an authoritative signed % change.
+    """
+    # Provide PriceSnapshot-shaped responses with non-null price_change_pct.
+    # If the code called the legacy /api/v1/quotes/ path, these mocks would
+    # return 404 (that path is not wired) and change_pct would be null.
+    quotes = {
+        "i-aapl": {"price": "193.50", "price_change_pct": "2.3"},
+        "i-msft": {"price": "415.00", "price_change_pct": "-1.1"},
+    }
+    _wire_clients(
+        authed_mock_clients,
+        members_payload,
+        news_payload,
+        alerts_payload,
+        quotes=quotes,
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/watchlists/wl-1/insights",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    # Both members must have non-null change_pct (proves PriceSnapshot was called)
+    for m in body["movers"]:
+        assert m["change_pct"] is not None, f"change_pct is null for {m['ticker']} — PriceSnapshot endpoint not used"
+
+    aapl = next(m for m in body["movers"] if m["ticker"] == "AAPL")
+    msft = next(m for m in body["movers"] if m["ticker"] == "MSFT")
+    assert aapl["price"] == pytest.approx(193.50)
+    assert aapl["change_pct"] == pytest.approx(2.3)
+    assert msft["change_pct"] == pytest.approx(-1.1)
+
+    # weighted_return_1d must also be non-null since both members have change_pct
+    assert body["weighted_return_1d"] is not None
+
+
+# ── F-Q1-13: movers sorted by |change_pct| DESC ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_insights_movers_sorted_by_absolute_change_pct(
+    authed_app, authed_mock_clients, news_payload, alerts_payload
+) -> None:
+    """F-Q1-13 regression: movers array must be sorted by |change_pct| DESC.
+
+    The widget renders top-N gainers and losers from this list — if it were
+    returned in insertion order (watchlist member order), the most volatile
+    names might not appear in top-5 slots.
+    """
+    # Three members with varying absolute change magnitudes.
+    members = {
+        "members": [
+            # Insertion order: low → mid → high.  After sorting: high → mid → low.
+            {"instrument_id": "i-low", "entity_id": "e-low", "ticker": "LOW", "name": "Low Mover"},
+            {"instrument_id": "i-mid", "entity_id": "e-mid", "ticker": "MID", "name": "Mid Mover"},
+            {"instrument_id": "i-high", "entity_id": "e-high", "ticker": "HIGH", "name": "High Mover"},
+        ]
+    }
+    quotes = {
+        "i-low": {"price": "10.0", "price_change_pct": "0.5"},  # |0.5|
+        "i-mid": {"price": "20.0", "price_change_pct": "-2.0"},  # |2.0|
+        "i-high": {"price": "30.0", "price_change_pct": "5.0"},  # |5.0| — biggest mover
+    }
+
+    async def _portfolio_get(path: str, **_kwargs):
+        return _resp(200, members)
+
+    async def _market_data_get(path: str, **_kwargs):
+        if path.startswith("/internal/v1/price/"):
+            iid = path.rsplit("/", 1)[-1]
+            return _resp(200, quotes.get(iid, {}))
+        return _resp(200, {})
+
+    async def _nlp_get(_path: str, **_kwargs):
+        return _resp(200, {"articles": []})
+
+    async def _alert_get(_path: str, **_kwargs):
+        return _resp(200, {"alerts": []})
+
+    authed_mock_clients.portfolio.get = AsyncMock(side_effect=_portfolio_get)
+    authed_mock_clients.market_data.get = AsyncMock(side_effect=_market_data_get)
+    authed_mock_clients.nlp_pipeline.get = AsyncMock(side_effect=_nlp_get)
+    authed_mock_clients.alert.get = AsyncMock(side_effect=_alert_get)
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/watchlists/wl-sort/insights",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    tickers = [m["ticker"] for m in body["movers"]]
+    # HIGH (|5.0|) → MID (|2.0|) → LOW (|0.5|)
+    assert tickers == ["HIGH", "MID", "LOW"], f"Expected [HIGH, MID, LOW] sorted by |change_pct| DESC, got {tickers}"
