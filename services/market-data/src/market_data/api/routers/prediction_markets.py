@@ -23,12 +23,15 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from market_data.api.dependencies import (
+    get_count_prediction_market_categories_uc,
     get_list_prediction_markets_uc,
     get_prediction_market_history_uc,
     get_prediction_market_uc,
 )
 from market_data.api.schemas.prediction_markets import (
+    CategoryCountResponse,
     OutcomePriceResponse,
+    PredictionMarketCategoriesResponse,
     PredictionMarketDetailResponse,
     PredictionMarketHistoryResponse,
     PredictionMarketsListResponse,
@@ -36,6 +39,7 @@ from market_data.api.schemas.prediction_markets import (
     SnapshotPointResponse,
 )
 from market_data.application.use_cases.query_prediction_markets import (
+    CountPredictionMarketCategoriesUseCase,
     GetPredictionMarketHistoryUseCase,
     GetPredictionMarketUseCase,
     ListPredictionMarketsUseCase,
@@ -126,6 +130,44 @@ async def list_prediction_markets(
         for market, prices, volume in pairs
     ]
     return PredictionMarketsListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+# ── Categories (literal path — registered before any /{market_id} routes) ────
+
+
+@router.get(
+    "/prediction-markets/categories",
+    response_model=PredictionMarketCategoriesResponse,
+)
+async def get_prediction_market_categories(
+    uc: Annotated[
+        CountPredictionMarketCategoriesUseCase,
+        Depends(get_count_prediction_market_categories_uc),
+    ] = ...,  # type: ignore[assignment]
+) -> PredictionMarketCategoriesResponse:
+    """Return per-category counts of currently-open prediction markets.
+
+    PLAN-0053 T-C-3-05.
+
+    WHY a dedicated endpoint (rather than aggregating in the list endpoint):
+    the dashboard needs the counts even when the user has applied a category
+    filter — at which point the list endpoint only returns rows for that
+    category. A separate endpoint stays cheap (single GROUP BY query) and
+    keeps the list endpoint shape stable.
+
+    Response shape mirrors the rest of the API:
+        ``{"items": [{"category": "macro", "count": 12}, ...], "total": 87}``
+
+    ``category`` may be ``null`` for legacy rows. Frontend typically treats
+    NULL as "uncategorized" or hides it.
+    """
+    pairs = await uc.execute()
+    items = [CategoryCountResponse(category=cat, count=count) for cat, count in pairs]
+    # WHY total = sum: the GROUP BY already gives us the per-category counts;
+    # summing locally avoids a second SQL round-trip and stays consistent
+    # with the per-category numbers above.
+    total = sum(count for _cat, count in pairs)
+    return PredictionMarketCategoriesResponse(items=items, total=total)
 
 
 # ── History (/{market_id}/history — registered before /{market_id}) ──────────

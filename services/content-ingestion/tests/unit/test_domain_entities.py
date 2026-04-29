@@ -287,3 +287,56 @@ class TestPredictionMarketFetchResult:
         raw.pop("tags", None)
         result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
         assert result.category is None
+
+    # ── PLAN-0053 T-C-3-04 regression: extended category normalization ────────
+
+    def test_from_gamma_response_category_normalized_top_level(self) -> None:
+        """Top-level category like "Cryptocurrency" normalizes to canonical "crypto"."""
+        raw = self._gamma_raw(category="Cryptocurrency")
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+        assert result.category == "crypto"
+
+    def test_from_gamma_response_category_walks_entire_tag_list(self) -> None:
+        """When the FIRST tag is unmapped but a LATER tag matches the map, use the later tag.
+
+        Pre-T-C-3-04 behaviour took only the first tag verbatim, producing "other"
+        buckets when Polymarket put a fine-grained tag (e.g. "FOMC") before a
+        coarse one. Now the walker scans every tag for a known mapping.
+        """
+        raw = self._gamma_raw()
+        raw.pop("category", None)
+        # First tag has no map entry; second tag normalizes to "macro".
+        raw["tags"] = ["XYZUnknownTag", "FOMC"]
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+        assert result.category == "macro"
+
+    def test_from_gamma_response_category_title_keyword_fallback(self) -> None:
+        """No tag map hit → title-keyword heuristic picks up "Fed" → "macro"."""
+        raw = self._gamma_raw(question="Will the Fed cut rates by 50bps in March?")
+        raw.pop("category", None)
+        raw["tags"] = ["XYZ", "ABC"]  # neither maps; not in title heuristics
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+        assert result.category == "macro"
+
+    def test_from_gamma_response_category_fallback_keeps_raw_first_tag(self) -> None:
+        """Final fallback: when nothing maps and title has no keywords, keep raw first tag.
+
+        This preserves backward-compat for callers querying by raw category strings
+        (e.g. niche topics like "Awards") while still benefiting from the
+        normalization map for the canonical 4 buckets.
+        """
+        raw = self._gamma_raw(question="Sphere question without finance words")
+        raw.pop("category", None)
+        raw["tags"] = ["RandomTopic", "Other"]
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+        # First tag, lower-cased, preserved as the raw category.
+        assert result.category == "randomtopic"
+
+    def test_from_gamma_response_category_dict_tags_walked(self) -> None:
+        """Dict-shaped tags also walked entirely, not just the first."""
+        raw = self._gamma_raw()
+        raw.pop("category", None)
+        raw["tags"] = [{"label": "ZZZUnmapped"}, {"label": "DeFi"}]
+        result = PredictionMarketFetchResult.from_gamma_response(raw, _utc_now())
+        # "DeFi" maps to crypto in the normalization table.
+        assert result.category == "crypto"

@@ -533,6 +533,20 @@ class PredictionMarketRepository(ABC):
         Forward-compatible: callers tolerating ``None`` continue to work.
         """
 
+    @abstractmethod
+    async def count_open_by_category(self) -> list[tuple[str | None, int]]:
+        """Return ``[(category, count), ...]`` for all currently-open markets.
+
+        PLAN-0053 T-C-3-05. ``category`` may be NULL — frontends typically
+        bucket NULL into "uncategorized" or skip it. Counts are computed over
+        ``WHERE resolution_status = 'open'`` so unresolved or cancelled
+        markets are excluded.
+
+        Order: descending by count (highest first). Forward-compatible: a
+        new Polymarket category lights up automatically — no code changes
+        needed because we don't validate the enum.
+        """
+
 
 class PredictionMarketSnapshotRepository(ABC):
     """Port for prediction market snapshot (hypertable) operations."""
