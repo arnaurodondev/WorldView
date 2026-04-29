@@ -57,9 +57,16 @@ export function ExposureBreakdown({ portfolioId }: ExposureBreakdownProps) {
   });
 
   // ── Loading skeleton ────────────────────────────────────────────────────
+  // PLAN-0053 T-A-1-02 (BP-291): the parent wrapper in PortfolioAnalyticsSection
+  // applies ``min-h-[200px] bg-card`` to keep layout stable across data states.
+  // Using ``h-full`` here previously stretched the skeleton container to fill
+  // the full 200px black panel, leaving ~160px of empty dark space at the top
+  // of the page — the user-reported "black widget overlay". Removing h-full
+  // lets the skeleton items stack to their natural height (~40px); the parent
+  // still reserves 200px for the loaded card.
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-2 h-full">
+      <div className="flex flex-col gap-2">
         <Skeleton className="h-4 w-32" />
         <Skeleton className="h-6 w-24" />
         <Skeleton className="h-3 w-full" />

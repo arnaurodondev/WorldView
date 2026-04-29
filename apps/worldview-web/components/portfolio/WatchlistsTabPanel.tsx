@@ -29,7 +29,7 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Search, X, Loader2, Trash2, Plus, MoreHorizontal, Pencil } from "lucide-react";
-import { createGateway } from "@/lib/gateway";
+import { createGateway, GatewayError } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
@@ -192,8 +192,12 @@ function WatchlistMemberRow({
             e.stopPropagation();
             onDelete(member.entity_id);
           }}
+          title="Remove from watchlist"
           className={cn(
-            "opacity-0 group-hover/row:opacity-100 transition-opacity",
+            // PLAN-0053 T-A-1-05: button was opacity-0 by default; users couldn't
+            // discover it without random hovering. Surface at low opacity so it's
+            // visible but not visually loud; raise to full on row hover.
+            "opacity-30 group-hover/row:opacity-100 transition-opacity",
             "h-5 w-5 flex items-center justify-center rounded-[2px]",
             "text-muted-foreground hover:text-negative hover:bg-negative/10",
             isDeleting && "opacity-50 cursor-not-allowed",
@@ -349,16 +353,43 @@ function AddSymbolBar({
       setSearchQuery("");
       setDebouncedQuery("");
       setShowDropdown(false);
+      setAddErrorMsg(null);
       onAdded();
     },
-    // WHY surface error: previously the mutation failed silently when the
-    // backend rejected an unknown entity_id. The dropdown now shows the
-    // server-side error message under the result list (rendered below).
+    onError: (err) => {
+      // PLAN-0053 T-A-1-04: differentiate add-flow errors so users know whether
+      // the symbol already exists, isn't found, or the server is having trouble.
+      // Previously a single generic message was shown for every failure mode.
+      if (err instanceof GatewayError) {
+        if (err.status === 409) {
+          setAddErrorMsg("Already in this watchlist");
+        } else if (err.status === 404) {
+          setAddErrorMsg("Symbol not found — try the full ticker (e.g. AAPL)");
+        } else if (err.status >= 500) {
+          setAddErrorMsg("Server error — please try again");
+        } else {
+          setAddErrorMsg(err.message || "Failed to add");
+        }
+      } else {
+        setAddErrorMsg("Failed to add — please try again");
+      }
+    },
   });
 
+  // PLAN-0053 T-A-1-04: typed error message keyed off GatewayError.status.
+  const [addErrorMsg, setAddErrorMsg] = useState<string | null>(null);
+
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
-    setSearchQuery(e.target.value);
-    setShowDropdown(e.target.value.length > 0);
+    // PLAN-0053 T-A-1-04 (tier-1): S3 instrument search currently queries
+    // ``symbol.ilike()`` + ``exchange.ilike()`` only — never the company
+    // ``name`` field. As a result "apple" matches nothing while "AAPL" works.
+    // Tier-2 (Wave B) adds ``name`` to the SQL search; this tier-1 fix
+    // auto-uppercases the input so users typing "aapl" / "msft" in any case
+    // hit the ticker index reliably.
+    const upper = e.target.value.toUpperCase();
+    setSearchQuery(upper);
+    setShowDropdown(upper.length > 0);
+    setAddErrorMsg(null);
   }
 
   function handleClear() {
@@ -381,7 +412,7 @@ function AddSymbolBar({
           onFocus={() => {
             if (searchQuery.length > 0) setShowDropdown(true);
           }}
-          placeholder="Add ticker or company…"
+          placeholder="Add ticker (e.g. AAPL)…"
           className="flex-1 bg-transparent font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/60"
           aria-label="Search to add instrument"
           role="combobox"
@@ -413,8 +444,14 @@ function AddSymbolBar({
           className="absolute left-2 right-2 top-full z-50 mt-0.5 overflow-hidden rounded-[2px] border border-border bg-card"
         >
           {!hasResults && debouncedQuery.length > 0 ? (
+            // PLAN-0053 T-A-1-04: empty-state hint nudges users toward the
+            // ticker symbol when their query (often the company name) misses.
             <div className="px-3 py-2 text-[11px] text-muted-foreground">
-              No instruments found for &quot;{debouncedQuery}&quot;
+              No results for &quot;{debouncedQuery}&quot;.
+              <br />
+              <span className="text-[10px] text-muted-foreground/80">
+                Try the stock ticker (e.g. AAPL for Apple).
+              </span>
             </div>
           ) : (
             results.map((result) => (
@@ -443,9 +480,9 @@ function AddSymbolBar({
             ))
           )}
 
-          {addMutation.isError && (
+          {addMutation.isError && addErrorMsg && (
             <div className="border-t border-border px-2 py-1 text-[10px] text-negative">
-              Failed to add — check if already in watchlist.
+              {addErrorMsg}
             </div>
           )}
         </div>

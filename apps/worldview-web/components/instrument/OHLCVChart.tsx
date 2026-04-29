@@ -48,7 +48,7 @@
 // WHY "use client": uses useEffect (DOM manipulation for chart init),
 // useRef (chart instance), useState (timeframe + toolbar controls).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -292,15 +292,31 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   const volMA20Ref = useRef<ISeriesApi<"Line"> | null>(null);             // Volume MA20 (volume pane)
   const vwapLineRef = useRef<ISeriesApi<"Line"> | null>(null);            // VWAP anchored (main pane, vol submenu)
 
+  // PLAN-0053 T-A-1-01: stabilise placeholderData reference. A fresh object
+  // literal on every render makes React Query return a new `data` reference,
+  // which re-fires the data-update effect (line ~711, dep `data?.bars`),
+  // which calls setVolumeProfileBuckets, which re-renders → infinite loop
+  // (manifests as the chart auto-scrolling into the past). useMemo keeps the
+  // placeholder reference stable across renders so the effect only fires when
+  // the actual bars array changes.
+  const memoizedPlaceholder = useMemo(() => {
+    if (initialBars && timeframe === "1D") {
+      return {
+        instrument_id: instrumentId,
+        ticker: "",
+        timeframe: "1D" as const,
+        bars: initialBars,
+      };
+    }
+    return undefined;
+  }, [initialBars, timeframe, instrumentId]);
+
   const { data, isLoading } = useQuery({
     queryKey: ["ohlcv", instrumentId, timeframe],
     queryFn: () => createGateway(accessToken).getOHLCV(instrumentId, { timeframe }),
     enabled: !!accessToken && !!instrumentId,
     staleTime: 60_000, // WHY 1min: OHLCV bars don't change within the same candle period
-    // WHY placeholderData: show the 1D bars from CompanyOverview immediately
-    placeholderData: initialBars && timeframe === "1D"
-      ? { instrument_id: instrumentId, ticker: "", timeframe: "1D", bars: initialBars }
-      : undefined,
+    placeholderData: memoizedPlaceholder,
   });
 
   // ── Load annotations from IndexedDB on mount / instrumentId change ─────────

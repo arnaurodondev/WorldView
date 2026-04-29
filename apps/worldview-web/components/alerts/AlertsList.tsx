@@ -112,6 +112,10 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
   // to render a small "(local only)" badge so the user understands the
   // ACK won't sync across devices until the backend ships.
   const [localOnlyIds, setLocalOnlyIds] = useState<Set<string>>(new Set());
+  // PLAN-0053 T-A-1-08: surfaces ACK/snooze backend failures to the user via
+  // a transient inline banner. Without this, optimistic-update rollback was
+  // invisible (the alert just "snapped back") and users blamed the UI.
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // ── ACK state — set of acknowledged alert_ids ──────────────────────────────
   // WHY lazy initialiser for localStorage: avoids reading localStorage on every
@@ -225,12 +229,29 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
       // Fire-and-forget backend sync. We don't await so the click handler
       // remains synchronous (matching the parent's expected signature).
       void alertActions.ack(alertId).then((res) => {
+        // PLAN-0053 T-A-1-08: rollback the optimistic ACK if the backend
+        // genuinely failed (5xx / network). Previously the localStorage stayed
+        // dirty while the DB was still pending — multi-device divergence on
+        // page refresh. ``localOnly`` (404 fallback) is treated as a success
+        // signal because the user's intent is captured on this device.
         if (res.localOnly) {
           setLocalOnlyIds((prev) => {
             const next = new Set(prev);
             next.add(alertId);
             return next;
           });
+        } else if (!res.ok) {
+          setAcknowledged((prev) => {
+            const next = new Set(prev);
+            next.delete(alertId);
+            try {
+              localStorage.setItem(LS_ACK_KEY, JSON.stringify([...next]));
+            } catch { /* ignore */ }
+            return next;
+          });
+          setActionError(res.error || "Failed to acknowledge alert");
+          // Auto-dismiss the inline error after 4 seconds.
+          window.setTimeout(() => setActionError(null), 4000);
         }
       });
     },
@@ -288,12 +309,27 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
         return next;
       });
       void alertActions.snooze(alertId, until).then((res) => {
+        // PLAN-0053 T-A-1-08: rollback snooze on backend failure (mirrors handleAck).
         if (res.localOnly) {
           setLocalOnlyIds((prev) => {
             const next = new Set(prev);
             next.add(alertId);
             return next;
           });
+        } else if (!res.ok) {
+          setSnoozed((prev) => {
+            const next = new Map(prev);
+            next.delete(alertId);
+            try {
+              localStorage.setItem(
+                LS_SNOOZE_KEY,
+                JSON.stringify(Object.fromEntries(next)),
+              );
+            } catch { /* ignore */ }
+            return next;
+          });
+          setActionError(res.error || "Failed to snooze alert");
+          window.setTimeout(() => setActionError(null), 4000);
         }
       });
     },
@@ -370,6 +406,23 @@ export function AlertsList({ selectedId = null }: AlertsListProps = {}) {
 
   return (
     <div>
+
+      {/* ── Action error banner (PLAN-0053 T-A-1-08) ──────────────────────── */}
+      {actionError && (
+        <div
+          role="alert"
+          className="mb-1 flex h-7 items-center justify-between border-b border-negative/40 bg-negative/10 px-2 text-[11px] text-negative"
+        >
+          <span>{actionError}</span>
+          <button
+            onClick={() => setActionError(null)}
+            aria-label="Dismiss error"
+            className="text-negative/70 hover:text-negative"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* ── All-clear state ───────────────────────────────────────────────── */}
       {!hasActiveAlerts && acknowledgedAlerts.length === 0 && (
