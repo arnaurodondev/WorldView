@@ -140,22 +140,38 @@ export function PortfolioAnalyticsSection({
             <InlineEmptyState message="No equity history yet — snapshots accumulate over trading days." />
           </div>
         ) : (
-          <div className="col-span-12 lg:col-span-8 min-h-[200px] bg-card border border-border rounded-[2px] p-2">
+          <div className="col-span-12 lg:col-span-8 min-h-[200px] bg-card border border-border rounded-[2px] p-2 flex items-center justify-center">
             {/* F-P-003: thread the optional controlled period down. When
                 the parent page lifted state, this synchronises the chart
-                with whatever else is reading the period upstream. */}
-            <EquityCurveChart
-              portfolioId={portfolioId}
-              period={period}
-              onPeriodChange={onPeriodChange}
-            />
+                with whatever else is reading the period upstream.
+                F-DP1-16: ``flex items-center justify-center`` on the
+                outer panel guarantees that any inner empty/error state
+                rendered by EquityCurveChart vertically centers in the
+                full 200px, matching the exposure cell's behaviour. */}
+            <div className="w-full h-full">
+              <EquityCurveChart
+                portfolioId={portfolioId}
+                period={period}
+                onPeriodChange={onPeriodChange}
+              />
+            </div>
           </div>
         )}
 
         {/* Exposure breakdown — compact panel with the same min-height as
-            the chart so the row's vertical alignment stays clean. */}
-        <div className="col-span-12 lg:col-span-4 min-h-[200px] bg-card border border-border rounded-[2px] p-2">
-          <ExposureBreakdown portfolioId={portfolioId} />
+            the chart so the row's vertical alignment stays clean.
+            F-DP1-16 (audit 2026-04-29): added ``flex items-center
+            justify-center`` so when the child ExposureBreakdown enters
+            its empty/error branch (which renders a centered
+            InlineEmptyState), the OUTER panel also centers the content
+            vertically. Pre-fix the child centered itself but the panel
+            still rendered as a tall ``min-h-[200px] bg-card`` rectangle
+            — the same "big black box on bg-card page" anti-pattern the
+            equity-curve cell already mitigates above. */}
+        <div className="col-span-12 lg:col-span-4 min-h-[200px] bg-card border border-border rounded-[2px] p-2 flex items-center justify-center">
+          <div className="w-full">
+            <ExposureBreakdown portfolioId={portfolioId} />
+          </div>
         </div>
       </div>
 
