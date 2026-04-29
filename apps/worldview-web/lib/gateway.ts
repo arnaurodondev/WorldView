@@ -1950,6 +1950,34 @@ export function createGateway(token?: string | null) {
     },
 
     /**
+     * getPredictionMarketCategories — per-category counts of currently-open markets
+     *
+     * PLAN-0053 T-C-3-05. Powers the dashboard filter pills (e.g.
+     * `[All 87] [Macro 12] [Politics 8]`) and the empty-state explainer
+     * ("No markets in this category right now (only X macro markets available)").
+     *
+     * WHY a separate endpoint (instead of computing client-side from the list):
+     * the list endpoint is paginated + filtered; the counts must reflect the
+     * FULL universe of open markets so the pills aren't empty when the user
+     * has applied a filter. A single GROUP BY query on the backend is cheap
+     * and stays out-of-band of the list query's pagination.
+     *
+     * Response is forward-compatible: a new Polymarket category lights up the
+     * UI automatically without a code change (the pill row renders any
+     * category the API returns, mapping known buckets to localized labels and
+     * passing unknowns through as-is).
+     */
+    async getPredictionMarketCategories(): Promise<{
+      items: Array<{ category: string | null; count: number }>;
+      total: number;
+    }> {
+      return apiFetch<{
+        items: Array<{ category: string | null; count: number }>;
+        total: number;
+      }>(`/v1/signals/prediction-markets/categories`, { token: t });
+    },
+
+    /**
      * getPredictionMarketHistory — time-series of yes-probability snapshots
      *
      * WHY THIS EXISTS (PLAN-0048 D-2): the dashboard PredictionMarketsWidget

@@ -227,6 +227,35 @@ class PgPredictionMarketRepository(PredictionMarketRepository):
         ]
         return pairs, total
 
+    async def count_open_by_category(self) -> list[tuple[str | None, int]]:
+        """Return ``[(category, count), ...]`` for currently-open markets.
+
+        PLAN-0053 T-C-3-05.  Single ``GROUP BY category`` query with
+        ``WHERE resolution_status = 'open'`` — uses the existing index on
+        resolution_status from migration 005 to avoid a sequential scan.
+        """
+        # WHY ORDER BY count DESC: frontend pills render highest-count buckets
+        # first so the most useful filters are visually prominent.
+        # WHY LOWER(category): PLAN-0049 T-C-3-03 stores categories lower-cased
+        # at write time, but defensive in case any historical row escaped the
+        # adapter normalisation. NULL stays NULL through LOWER (no coercion).
+        # WHY ``open_count`` (and not ``count``): ``Row.count`` shadows the
+        # built-in ``tuple.count`` method on SQLAlchemy Row, breaking attribute
+        # access (mypy flags it as "object is callable"). Aliasing to
+        # ``open_count`` sidesteps the collision while keeping the SQL clear.
+        result = await self._session.execute(
+            text(
+                """
+                SELECT LOWER(category) AS category, COUNT(*) AS open_count
+                FROM prediction_markets
+                WHERE resolution_status = 'open'
+                GROUP BY LOWER(category)
+                ORDER BY open_count DESC
+                """
+            )
+        )
+        return [(row.category, int(row.open_count)) for row in result.fetchall()]
+
 
 class PgPredictionMarketSnapshotRepository(PredictionMarketSnapshotRepository):
     """SQLAlchemy-backed implementation of PredictionMarketSnapshotRepository."""

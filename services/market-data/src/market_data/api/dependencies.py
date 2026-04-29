@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         GetOHLCVRangeUseCase,
     )
     from market_data.application.use_cases.query_prediction_markets import (
+        CountPredictionMarketCategoriesUseCase,
         GetPredictionMarketHistoryUseCase,
         GetPredictionMarketUseCase,
         ListPredictionMarketsUseCase,
@@ -248,6 +249,17 @@ def get_prediction_market_history_uc(
     from market_data.application.use_cases.query_prediction_markets import GetPredictionMarketHistoryUseCase
 
     return GetPredictionMarketHistoryUseCase(uow)
+
+
+def get_count_prediction_market_categories_uc(
+    uow: ReadOnlyUnitOfWork = Depends(get_read_uow),
+) -> CountPredictionMarketCategoriesUseCase:
+    """PLAN-0053 T-C-3-05 — categories endpoint dependency."""
+    from market_data.application.use_cases.query_prediction_markets import (
+        CountPredictionMarketCategoriesUseCase,
+    )
+
+    return CountPredictionMarketCategoriesUseCase(uow)
 
 
 # ── Period aggregation use case deps ─────────────────────────────────────────

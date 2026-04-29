@@ -95,6 +95,25 @@ class GetPredictionMarketUseCase:
         return market, prices, volume_24h
 
 
+class CountPredictionMarketCategoriesUseCase:
+    """Return per-category counts for currently-open prediction markets.
+
+    PLAN-0053 T-C-3-05. Powers the frontend filter pills (e.g.
+    ``[All 87] [Macro 12] [Politics 8] [Sports 5] [Crypto 41]``) and the
+    empty-state message that explains how many markets exist in a given
+    bucket.
+
+    R27: depends on ``ReadOnlyUnitOfWork`` because this is a pure read.
+    """
+
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
+        self._uow = uow
+
+    async def execute(self) -> list[tuple[str | None, int]]:
+        """Return ``[(category, count), ...]`` ordered by count desc."""
+        return await self._uow.prediction_markets_read.count_open_by_category()
+
+
 class GetPredictionMarketHistoryUseCase:
     """Return time-series snapshots for a market within an optional date range.
 
