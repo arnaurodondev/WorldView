@@ -1708,17 +1708,23 @@ export function createGateway(token?: string | null) {
     /**
      * snoozeAlert — temporarily mute an alert until a given timestamp.
      *
-     * PLAN-0051 Wave D new endpoint. Sends ISO-8601 UTC datetime as
-     * `snooze_until`. Snoozed alerts re-appear in the Active list once the
-     * timestamp is in the past. Returning the canonical row lets the UI
-     * paint the de-emphasised state immediately.
+     * PLAN-0051 Wave D new endpoint. Sends ISO-8601 UTC datetime as the
+     * `until` field — this is the canonical contract pinned by the S10
+     * SnoozeAlertRequest Pydantic schema (`services/alert/.../schemas.py`).
+     * QA iter1 C-1: an earlier draft sent `snooze_until` which the backend
+     * rejected with 422 — the contract is `until`, not `snooze_until`.
+     * Snoozed alerts re-appear in the Active list once the timestamp is in
+     * the past. Returning the canonical row lets the UI paint the
+     * de-emphasised state immediately.
      */
     snoozeAlert(alertId: string, until: Date): Promise<Alert> {
       return apiFetch<Alert>(
         `/v1/alerts/${encodeURIComponent(alertId)}/snooze`,
         {
           method: "PATCH",
-          body: { snooze_until: until.toISOString() },
+          // WHY `until` (not `snooze_until`): pinned by SnoozeAlertRequest in
+          // services/alert/src/alert/api/schemas.py. See QA-iter1 C-1.
+          body: { until: until.toISOString() },
           token: t,
         },
       );
@@ -1744,7 +1750,12 @@ export function createGateway(token?: string | null) {
       // WHY explicit list (not Object.entries spread): keeps the query-param
       // shape stable & easy to grep when debugging which filters arrived.
       if (params.status) entries.push(["status", params.status]);
-      if (params.severity) entries.push(["severity", params.severity]);
+      // WHY toLowerCase: the frontend AlertSeverity type uses uppercase tokens
+      // ("HIGH", "LOW", …) for display, but the backend Pydantic enum is
+      // lowercase ("high", "low", …). Sending uppercase produces a 422 from
+      // S10 (QA-iter1 C-2). We normalise here so the UI layer never has to
+      // think about the wire shape.
+      if (params.severity) entries.push(["severity", params.severity.toLowerCase()]);
       if (params.from) entries.push(["from", params.from]);
       if (params.to) entries.push(["to", params.to]);
       if (params.entity_id) entries.push(["entity_id", params.entity_id]);

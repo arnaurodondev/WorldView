@@ -70,6 +70,24 @@ class AlertRepositoryPort(ABC):
     ) -> list[Alert]:
         """Return alerts in tenant history matching filters, newest first."""
 
+    @abstractmethod
+    async def count_history(
+        self,
+        tenant_id: UUID,
+        *,
+        status: str = "all",
+        severity: AlertSeverity | None = None,
+        entity_id: UUID | None = None,
+        from_dt: datetime | None = None,
+        to_dt: datetime | None = None,
+    ) -> int:
+        """Return the count of alerts in tenant history matching the filters.
+
+        Used to back canonical pagination — the API needs the universe size to
+        decide whether more pages exist (QA-iter1 C-3). Mirrors the same
+        WHERE-clause semantics as ``list_history`` (sans LIMIT/OFFSET).
+        """
+
 
 class PendingAlertRepositoryPort(ABC):
     """Port for pending alert operations."""

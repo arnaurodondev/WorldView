@@ -38,6 +38,24 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
 
+    async def list_by_ids(self, instrument_ids: list[UUID]) -> list[InstrumentRef]:
+        """Batch fetch -- single SELECT instead of N+1 round trips.
+
+        QA-iter1 MIN-4: GetRealizedPnLUseCase previously did
+        ``await uow.instruments.get(iid)`` in a loop -- for a 5-year portfolio
+        touching 200 instruments that's 200 sequential queries on the read
+        replica. ``WHERE id = ANY(:ids)`` collapses that to one query.
+        """
+        if not instrument_ids:
+            return []
+        # WHY ``in_(instrument_ids)``: SQLAlchemy translates this to
+        # ``id = ANY(ARRAY[…])`` on PostgreSQL — index-friendly and cheaper
+        # than chained ORs.
+        result = await self._session.execute(
+            select(InstrumentModel).where(InstrumentModel.id.in_(instrument_ids)),
+        )
+        return [self._to_entity(r) for r in result.scalars()]
+
     async def get_by_symbol_exchange(self, symbol: str, exchange: str) -> InstrumentRef | None:
         result = await self._session.execute(
             select(InstrumentModel).where(

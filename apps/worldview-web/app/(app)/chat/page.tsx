@@ -529,7 +529,38 @@ export default function ChatPage() {
   // ── Entity context from URL param ─────────────────────────────────────────
   const searchParams = useSearchParams();
   const entityIdFromUrl = searchParams.get("entity_id");
-  const [entityTicker] = useState<string | null>(entityIdFromUrl);
+
+  // QA-iter1 MAJ-5: ?entity_id= carries a UUID, not a ticker. The earlier
+  // draft displayed it verbatim, producing strings like "What's the latest
+  // news on 2c8e3a7f-…?". We resolve UUID → ticker via the company-overview
+  // endpoint (which accepts an instrument_id OR an entity_id and returns the
+  // canonical ticker). If the value isn't a UUID we fall through to using
+  // the raw string as the "ticker" (legacy behaviour, used by tests today).
+  const looksLikeUuid =
+    !!entityIdFromUrl &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      entityIdFromUrl,
+    );
+  const { data: resolvedEntity } = useQuery({
+    queryKey: ["chat-entity-resolve", entityIdFromUrl],
+    // Only fetch when the URL value parses as a UUID — otherwise we already
+    // have a usable label and would waste a round-trip.
+    enabled: !!accessToken && looksLikeUuid,
+    queryFn: () =>
+      createGateway(accessToken).getCompanyOverview(entityIdFromUrl as string),
+    staleTime: 5 * 60_000,
+  });
+  // Resolved ticker (UUID-resolved when possible) OR the raw URL value when
+  // it wasn't a UUID OR null when there's no entity context.
+  const entityTicker = useMemo<string | null>(() => {
+    if (!entityIdFromUrl) return null;
+    if (looksLikeUuid) {
+      // Wait for the resolve to complete; fall back to null until then so
+      // we don't briefly flash "What's the latest news on 2c8e3a7f-…".
+      return resolvedEntity?.instrument?.ticker ?? null;
+    }
+    return entityIdFromUrl;
+  }, [entityIdFromUrl, looksLikeUuid, resolvedEntity]);
 
   // ── Thread list state ──────────────────────────────────────────────────────
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);

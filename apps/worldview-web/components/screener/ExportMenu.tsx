@@ -39,9 +39,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+// QA-iter1 MIN-3: only CSV is statically imported — it has zero deps that
+// blow up bundle size. PDF (~600KB jspdf + autotable) and Excel (~120KB
+// write-excel-file) are dynamic-imported per click so screener users who
+// only export CSV never pay for the other formats.
 import { exportToCsv, type CsvColumn } from "@/lib/csv-export";
-import { exportToXlsx, type XlsxColumn } from "@/lib/xlsx-export";
-import { exportToPdf, type PdfColumn } from "@/lib/pdf-export";
+import type { XlsxColumn } from "@/lib/xlsx-export";
+import type { PdfColumn } from "@/lib/pdf-export";
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -110,6 +114,9 @@ export function ExportMenu<T>({
   }
 
   async function handleXlsx() {
+    // QA-iter1 MIN-3: dynamic-import write-excel-file only when the user
+    // actually clicks Excel — keeps the eager bundle CSV-only.
+    const { exportToXlsx } = await import("@/lib/xlsx-export");
     const xlsxColumns: XlsxColumn<T>[] = columns.map((c) => ({
       header: c.header,
       accessor: c.accessor,
@@ -117,7 +124,10 @@ export function ExportMenu<T>({
     await exportToXlsx({ rows, columns: xlsxColumns, filenameStem: stem });
   }
 
-  function handlePdf() {
+  async function handlePdf() {
+    // QA-iter1 MIN-3: jspdf + autotable is the largest export dep (~600KB).
+    // Dynamic-import on click means CSV-only users never download it.
+    const { exportToPdf } = await import("@/lib/pdf-export");
     const pdfColumns: PdfColumn<T>[] = columns.map((c) => ({
       header: c.header,
       accessor: c.accessor,

@@ -85,6 +85,12 @@ function scoreToClasses(score: number): { bg: string; outline: string; label: st
  * Each segment is an anchor link. Clicking scrolls the matching [N] marker in
  * the message body into view (when present). The native browser title= on the
  * anchor doubles as an accessibility tooltip for keyboard / screen-reader users.
+ *
+ * QA-iter1 MIN-1: with >25 citations the old `flex-1` segments collapsed below
+ * 2px each — a noisy rainbow with no scannable structure. We now apply
+ * ``min-w-[8px]`` per segment AND allow the row to wrap to a second line when
+ * width runs out (``flex-wrap``). 8px is the smallest size where the colour
+ * coding is still legible against a dark background.
  */
 export function CitationBar({ citations, anchorPrefix }: CitationBarProps) {
   if (citations.length === 0) return null;
@@ -94,7 +100,11 @@ export function CitationBar({ citations, anchorPrefix }: CitationBarProps) {
       // WHY role=group + aria-label: assistive tech announces this as a unit.
       role="group"
       aria-label="Citation confidence"
-      className="mt-2 flex items-stretch gap-px"
+      // WHY flex-wrap (not horizontal scroll): for >25 citations a wrap reads
+      // as "another row of segments below" which mirrors how dense citation
+      // lists are presented in PDF reports. Horizontal scroll would hide the
+      // long tail entirely until the user scrolls the bar — easy to miss.
+      className="mt-2 flex flex-wrap items-stretch gap-px"
     >
       {citations.map((c, i) => {
         const score = c.relevance_score ?? 0;
@@ -129,8 +139,12 @@ export function CitationBar({ citations, anchorPrefix }: CitationBarProps) {
               // marker into view if it's been scrolled out.
               target.scrollIntoView({ behavior: "smooth", block: "nearest" });
             }}
+            // QA-iter1 MIN-1: ``min-w-[8px]`` keeps each segment legible even
+            // when the bar is overcrowded. Combined with ``flex-wrap`` on the
+            // parent, surplus segments overflow to a second row instead of
+            // collapsing to invisible slivers.
             className={cn(
-              "h-1.5 flex-1 rounded-[2px]",
+              "h-1.5 min-w-[8px] flex-1 rounded-[2px]",
               bg,
               outline,
               "transition-shadow hover:ring-1 focus:ring-1 focus:outline-none",

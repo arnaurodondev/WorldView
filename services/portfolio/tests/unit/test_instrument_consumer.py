@@ -29,6 +29,10 @@ class FakeInstrumentRepository(InstrumentRepository):
     async def get(self, instrument_id):
         return None
 
+    async def list_by_ids(self, instrument_ids):
+        # QA-iter1 MIN-4 — never used by this consumer test suite, return empty.
+        return []
+
     async def get_by_symbol_exchange(self, symbol, exchange):
         return None
 

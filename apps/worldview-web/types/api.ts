@@ -909,9 +909,21 @@ export interface Alert {
 
 export interface AlertsResponse {
   alerts: Alert[];
+  /**
+   * Total universe count matching the filters (NOT the page-row count).
+   * Pinned by S10's `AlertHistoryResponse.total` after QA-iter1 C-3 fix.
+   * Frontends use `rows.length < total` (or `has_more`) to render "Load more".
+   */
   total: number;
   offset: number;
   limit: number;
+  /**
+   * Optional server-computed convenience flag — true iff `offset + alerts.length
+   * < total`. The History tab prefers `has_more` when present and falls back
+   * to deriving from total. Marked optional because PendingAlertsResponse
+   * (which shares this shape) does not yet emit it.
+   */
+  has_more?: boolean;
 }
 
 /**

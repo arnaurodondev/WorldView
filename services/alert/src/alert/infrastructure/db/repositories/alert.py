@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from alert.domain.entities import Alert
@@ -156,6 +156,58 @@ class AlertRepository:
         stmt = stmt.order_by(AlertModel.created_at.desc()).limit(limit).offset(offset)
         rows = (await self._session.execute(stmt)).scalars().all()
         return [self._to_entity(r) for r in rows]
+
+    async def count_history(
+        self,
+        tenant_id: UUID,
+        *,
+        status: str = "all",
+        severity: AlertSeverity | None = None,
+        entity_id: UUID | None = None,
+        from_dt: datetime | None = None,
+        to_dt: datetime | None = None,
+    ) -> int:
+        """Return the universe count for a tenant's filtered history.
+
+        Mirrors the WHERE composition of ``list_history`` exactly (sans
+        LIMIT/OFFSET) so pagination math (universe = count_history) lines up
+        with the rows returned by the next page's list_history call.
+        QA-iter1 C-3: the route used to derive ``has_more`` from the page row
+        count, which never set the flag for "fits-in-one-page" universes —
+        the new ``total`` is the canonical filtered universe.
+        """
+        now = utc_now()
+        stmt = select(func.count(AlertModel.alert_id)).where(AlertModel.tenant_id == tenant_id)
+
+        if status == "active":
+            stmt = stmt.where(
+                AlertModel.acknowledged_at.is_(None),
+                or_(
+                    AlertModel.snooze_until.is_(None),
+                    AlertModel.snooze_until < now,
+                ),
+            )
+        elif status == "acknowledged":
+            stmt = stmt.where(AlertModel.acknowledged_at.is_not(None))
+        elif status == "snoozed":
+            stmt = stmt.where(
+                AlertModel.acknowledged_at.is_(None),
+                AlertModel.snooze_until.is_not(None),
+                AlertModel.snooze_until >= now,
+            )
+        # else "all" — no extra filter
+
+        if severity is not None:
+            stmt = stmt.where(AlertModel.severity == str(severity))
+        if entity_id is not None:
+            stmt = stmt.where(AlertModel.entity_id == entity_id)
+        if from_dt is not None:
+            stmt = stmt.where(AlertModel.created_at >= from_dt)
+        if to_dt is not None:
+            stmt = stmt.where(AlertModel.created_at <= to_dt)
+
+        result = await self._session.execute(stmt)
+        return int(result.scalar_one() or 0)
 
     @staticmethod
     def _to_entity(row: AlertModel) -> Alert:

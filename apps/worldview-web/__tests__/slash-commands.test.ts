@@ -42,6 +42,17 @@ describe("slash-commands.parseInput", () => {
     expect(parseInput("/quote   ")).toBeNull();
   });
 
+  it("/quote with a non-alphabetic-leading ticker returns null (QA-iter1 NIT-2)", () => {
+    // QA-iter1 NIT-2: a literal "0" or "12345" is not a real ticker — the
+    // parser used to accept it and the gateway 404'd downstream. Now we
+    // return null so the chat falls back to the LLM, which gives the user
+    // a more helpful response than a broken card.
+    expect(parseInput("/quote 0")).toBeNull();
+    expect(parseInput("/quote 12345")).toBeNull();
+    // But valid tickers (letter-leading) still parse.
+    expect(parseInput("/quote BRK.B")?.kind).toBe("quote");
+  });
+
   it("/portfolio with or without args returns the portfolio kind", () => {
     expect(parseInput("/portfolio")?.kind).toBe("portfolio");
     expect(parseInput("/portfolio main")?.kind).toBe("portfolio");

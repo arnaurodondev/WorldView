@@ -559,3 +559,79 @@ class TestGetRealizedPnLUseCase:
                 ),
                 uow,
             )
+
+    async def test_breakdown_uses_batch_instrument_fetch(self) -> None:
+        """QA-iter1 MIN-4: instrument lookup must be a single batch call.
+
+        The previous impl called ``await uow.instruments.get(iid)`` per
+        contributing instrument -- N+1 round-trips on the read replica.
+        We now call ``list_by_ids`` once and the per-row ``get`` MUST NOT
+        be invoked. Pin both behaviours: ``list_by_ids`` called exactly
+        once with all ids, AND ``get`` not called from the breakdown loop.
+        """
+        from unittest.mock import AsyncMock
+
+        owner = uuid4()
+        tenant = uuid4()
+        uow = FakeUnitOfWork()
+        p = _make_portfolio(owner_id=owner, tenant_id=tenant)
+        await uow.portfolios.save(p)
+
+        # Build 3 different instruments with disposals in window.
+        symbols = ["AAPL", "MSFT", "GOOG"]
+        for sym in symbols:
+            inst = _make_instrument(symbol=sym)
+            await uow.instruments.upsert(inst)
+            await uow.transactions.save(
+                _tx(
+                    portfolio_id=p.id,
+                    tenant_id=tenant,
+                    instrument_id=inst.id,
+                    ttype=TransactionType.BUY,
+                    qty="10",
+                    price="100",
+                    executed_at=datetime(2026, 1, 1, tzinfo=UTC),
+                ),
+            )
+            await uow.transactions.save(
+                _tx(
+                    portfolio_id=p.id,
+                    tenant_id=tenant,
+                    instrument_id=inst.id,
+                    ttype=TransactionType.SELL,
+                    qty="10",
+                    price="120",
+                    executed_at=datetime(2026, 3, 1, tzinfo=UTC),
+                ),
+            )
+
+        # Spy on the instruments repo BEFORE running the use case.
+        original_list_by_ids = uow.instruments.list_by_ids  # type: ignore[attr-defined]
+        list_spy = AsyncMock(side_effect=original_list_by_ids)
+        uow.instruments.list_by_ids = list_spy  # type: ignore[attr-defined]
+        get_spy = AsyncMock(side_effect=uow.instruments.get)
+        uow.instruments.get = get_spy  # type: ignore[attr-defined]
+
+        uc = GetRealizedPnLUseCase()
+        result = await uc.execute(
+            GetRealizedPnLQuery(
+                portfolio_id=p.id,
+                owner_id=owner,
+                tenant_id=tenant,
+                from_date=datetime(2026, 1, 1, tzinfo=UTC).date(),
+                to_date=datetime(2026, 12, 31, tzinfo=UTC).date(),
+            ),
+            uow,
+        )
+        assert len(result.breakdown_by_instrument) == 3
+
+        # Must be called exactly once with ALL 3 ids in a single batch.
+        list_spy.assert_awaited_once()
+        passed_ids = list(list_spy.await_args.args[0])
+        assert len(passed_ids) == 3
+
+        # And the per-instrument ``get`` MUST NOT be called from the
+        # breakdown loop -- that was the old N+1 path.
+        get_spy.assert_not_called()
+        # Sanity-check the use case ran end-to-end.
+        assert result.total_realized > 0

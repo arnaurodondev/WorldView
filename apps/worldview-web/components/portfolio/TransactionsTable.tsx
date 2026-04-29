@@ -77,6 +77,41 @@ type CurrencyFilter = "ALL" | "USD" | "EUR";
 // extra wrapping divs) and produces nicer accessibility output.
 const VIRTUALISATION_THRESHOLD = 200;
 
+/**
+ * COLUMN_WIDTHS — single source of truth for both the static <table> header
+ * and each per-row mini-<table> in the virtualised path. QA-iter1 MAJ-4: the
+ * earlier impl left both <colgroup>s empty, so columns sized to content per-row
+ * and the right-aligned numerics drifted out of alignment with the header.
+ *
+ * WHY percentages (not pixels): the wrapping container has a fluid width;
+ * percentages keep the proportions identical regardless of the panel size.
+ * The seven columns (Date | Type | Ticker | Qty | Price | Total | Fee) sum
+ * to 100% — the header and each virtualised row use the SAME array.
+ */
+const COLUMN_WIDTHS: readonly string[] = [
+  "16%", // Date — wide enough for "Apr 29, 2026  16:30"
+  "8%", // Type badge
+  "10%", // Ticker
+  "12%", // Qty
+  "14%", // Price
+  "20%", // Total
+  "20%", // Fee
+];
+
+/**
+ * ColGroup — render the shared column template. Used identically by the
+ * header table and every virtualised row mini-table so widths line up.
+ */
+function ColGroup() {
+  return (
+    <colgroup>
+      {COLUMN_WIDTHS.map((w, i) => (
+        <col key={i} style={{ width: w }} />
+      ))}
+    </colgroup>
+  );
+}
+
 // Row height in pixels — must match the <tr h-[22px]> below or virtualised
 // rows visually disagree with the unvirtualised ones during dev.
 const ROW_PX = 22;
@@ -449,15 +484,13 @@ export function TransactionsTable({
         // that full width so columns align with the header table.
         style={{ ...style, width: "100%" }}
         className="border-collapse text-[11px] table-fixed"
+        // QA-iter1 MAJ-4: the row table uses the same shared <ColGroup/> as
+        // the header so percentage column widths are identical and right-
+        // aligned numerics line up. data-testid lets tests sample a row to
+        // diff its computed widths against the header's.
+        data-testid="transactions-virtual-row"
       >
-        <colgroup>
-          {/* Same column widths as the static header — width:auto everywhere
-              except the right-aligned numerics which we let the renderer size
-              naturally; in practice the header table establishes the widths
-              and these row tables match because table-fixed inherits them
-              proportionally. We rely on the wrapping div's width to be
-              identical to the header div. */}
-        </colgroup>
+        <ColGroup />
         <tbody>{renderTxRow(tx, undefined)}</tbody>
       </table>
     );
@@ -613,7 +646,15 @@ export function TransactionsTable({
 
       {/* ── Table ───────────────────────────────────────────────────────── */}
       <div className="overflow-auto">
-        <table className="w-full border-collapse text-[11px]">
+        <table
+          // QA-iter1 MAJ-4: ``table-fixed`` + shared <ColGroup/> pin column
+          // widths so virtualised row mini-tables align with the header.
+          // ``data-testid="transactions-header"`` exposes a stable handle
+          // for the alignment regression test.
+          data-testid="transactions-header"
+          className="w-full border-collapse text-[11px] table-fixed"
+        >
+          <ColGroup />
           <thead className="sticky top-0 bg-card z-10">
             <tr className="h-[22px] border-b border-border">
               <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-left font-normal">

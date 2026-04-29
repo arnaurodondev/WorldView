@@ -85,6 +85,11 @@ function parseQuote(args: string): ParsedCommand | null {
   if (!ticker) return null;
   // Reject anything with whitespace — multiple tickers is a future feature.
   if (/\s/.test(ticker)) return null;
+  // QA-iter1 NIT-2: tickers MUST start with a letter. Without this guard
+  // ``/quote 0`` parses successfully and the gateway 404s on the literal
+  // string "0". Falling through to the LLM (return null) gives the user
+  // a more helpful response.
+  if (!/^[A-Z]/.test(ticker)) return null;
   return { kind: "quote", params: { ticker } };
 }
 

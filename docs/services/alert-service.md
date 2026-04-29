@@ -282,10 +282,17 @@ Paginated, tenant-scoped alert history. Read-only — uses `ReadOnlyUnitOfWork` 
 - `snoozed` — `snooze_until IS NOT NULL AND snooze_until >= NOW() AND acknowledged_at IS NULL`
 - `all` — no status filter
 
-**Response** (200): `{ alerts: AlertResponse[], total, limit, offset, has_more }` where
-`has_more` is `len(alerts) == limit` (clients can use it to render "Load more").
+**Response** (200): `{ alerts: AlertResponse[], total, limit, offset, has_more }` where:
+- `total` is the **universe count** of all rows matching the same filters (NOT the page-row count). Computed via a separate `count(*)` query that mirrors `list_history`'s WHERE clause exactly. QA-iter1 C-3 changed the semantics from page-size to universe so the frontend's `rows.length < total` test (and the "Load more" affordance) actually works.
+- `has_more` is `offset + len(alerts) < total` (server-derived for client convenience).
+
 Tenant filter is enforced server-side from the JWT-derived `tenant_id` —
 clients cannot override.
+
+**Wire contract**:
+- `severity` query param MUST be lowercase (`high`, not `HIGH`) — backend `AlertSeverity` is a lowercase StrEnum (QA-iter1 C-2).
+- Snooze body field is `until` (NOT `snooze_until`) — `SnoozeAlertRequest.until: datetime` (QA-iter1 C-1).
+- ACK and snooze on rows with `tenant_id IS NULL` return `forbidden` (NOT `ok`) — symmetric with the read path which excludes NULL-tenant rows from tenant-scoped queries (QA-iter1 MAJ-1).
 
 ### WebSocket /api/v1/alerts/stream
 Real-time alert stream pushed to connected users.
