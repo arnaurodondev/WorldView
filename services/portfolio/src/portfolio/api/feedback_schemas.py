@@ -15,9 +15,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Literal
+from urllib.parse import urlparse
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 # Literal types — single source of truth for enum-style validation.
 FeedbackKind = Literal["bug", "feature_request", "ux", "design", "other"]
@@ -47,6 +48,28 @@ class FeedbackSubmissionCreate(BaseModel):
     email: EmailStr | None = None
     page_url: str | None = Field(default=None, max_length=2048)
     user_agent: str | None = Field(default=None, max_length=512)
+
+    @field_validator("screenshot_url")
+    @classmethod
+    def _validate_screenshot_url(cls, v: str | None) -> str | None:
+        """F-Q1-08: reject ``javascript:`` / ``data:`` / non-https URLs.
+
+        ``screenshot_url`` is rendered by the admin UI; without scheme
+        validation a user could store ``javascript:alert(...)`` and trigger
+        XSS on admin view. We require https-only as a v1 mitigation; a
+        host-allow-list (must match ``settings.feedback_s3_bucket``) is a
+        follow-up once the pre-signed PUT upload route exists.
+        """
+        if v is None:
+            return None
+        if len(v) > 2048:
+            raise ValueError("screenshot_url too long")
+        parsed = urlparse(v)
+        if parsed.scheme != "https":
+            raise ValueError("screenshot_url must use https")
+        if not parsed.netloc:
+            raise ValueError("screenshot_url must include a host")
+        return v
 
 
 class FeedbackSubmissionResponse(BaseModel):

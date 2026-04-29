@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -35,14 +35,47 @@ class SqlAlchemyNPSScoreRepo(NPSScoreRepo):
         try:
             await self._session.flush()
         except IntegrityError as exc:
-            # Partial unique index uq_nps_scores_tenant_user_30d — one score
-            # per (tenant, user) per 30 days. Map to a domain-level rate-limit
-            # error so the API can return 409.
-            if "uq_nps_scores_tenant_user_30d" in str(exc.orig):
-                raise NPSRateLimitError(
-                    f"User {record.user_id} already submitted an NPS score in the last 30 days"
-                ) from exc
-            raise
+            # Belt-and-suspenders: rate limit is enforced primarily in
+            # SubmitNPSScoreUseCase (SELECT-then-INSERT). This branch covers
+            # the tiny race window where two requests slip past the SELECT
+            # under READ COMMITTED. Currently no DB-level unique constraint
+            # exists (now() is not IMMUTABLE → cannot live in an index
+            # predicate), so this is mostly defensive.
+            raise NPSRateLimitError(
+                f"User {record.user_id} already submitted an NPS score in the last 30 days",
+            ) from exc
+
+    async def find_recent_by_user(
+        self,
+        tenant_id: UUID,
+        user_id: UUID,
+        since: datetime,
+    ) -> NPSScoreRecord | None:
+        # Backed by the composite index ix_nps_scores_user_recent
+        # (tenant_id, user_id, created_at DESC) — limit 1 for an
+        # index-only lookup.
+        result = await self._session.execute(
+            select(NPSScoreModel)
+            .where(
+                NPSScoreModel.tenant_id == tenant_id,
+                NPSScoreModel.user_id == user_id,
+                NPSScoreModel.created_at >= since,
+            )
+            .order_by(NPSScoreModel.created_at.desc())
+            .limit(1),
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            return None
+        return NPSScoreRecord(
+            id=row.id,
+            tenant_id=row.tenant_id,
+            user_id=row.user_id,
+            score=row.score,
+            comment=row.comment,
+            surface=row.surface,
+            created_at=row.created_at,
+        )
 
     async def aggregate(
         self,

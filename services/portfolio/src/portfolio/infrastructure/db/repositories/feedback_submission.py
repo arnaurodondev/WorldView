@@ -8,6 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 
+from common.time import utc_now  # type: ignore[import-untyped]
 from portfolio.application.ports.feedback import (
     FeedbackSubmissionRecord,
     FeedbackSubmissionRepo,
@@ -132,8 +133,6 @@ class SqlAlchemyFeedbackSubmissionRepo(FeedbackSubmissionRepo):
         if assigned_to is not None:
             row.assigned_to = assigned_to
         # Bump updated_at via Python so callers see fresh value without a re-fetch.
-        from common.time import utc_now  # type: ignore[import-untyped]
-
         row.updated_at = utc_now()
         await self._session.flush()
         return self._to_record(row)

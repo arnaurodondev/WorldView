@@ -137,6 +137,27 @@ def authed_app(settings):
 
 
 @pytest.fixture
+def authed_app_with_rsa(settings):
+    """Like ``authed_app`` but with the RSA signing key wired into app.state.
+
+    Use this fixture when a test needs to inspect the actual ``X-Internal-JWT``
+    forwarded by ``_auth_headers`` (e.g. F-Q1-02 admin role propagation).
+    Without RSA keys, the gateway falls back to reading the inbound
+    ``X-Internal-JWT`` header — which tests don't send.
+    """
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+    application, _ = _build_app(settings, inject_user_from_bearer=True)
+    application.state.rsa_private_key = load_pem_private_key(
+        _PRIVATE_PEM.encode(),
+        password=None,
+        backend=default_backend(),
+    )
+    application.state.rsa_kid = "test-kid"
+    return application
+
+
+@pytest.fixture
 def mock_clients(app):
     return app.state.clients
 
@@ -144,6 +165,11 @@ def mock_clients(app):
 @pytest.fixture
 def authed_mock_clients(authed_app):
     return authed_app.state.clients
+
+
+@pytest.fixture
+def rsa_authed_mock_clients(authed_app_with_rsa):
+    return authed_app_with_rsa.state.clients
 
 
 @pytest.fixture

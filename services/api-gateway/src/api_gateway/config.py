@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     # Valid values: "development", "staging", "production"
     app_env: str = "development"
 
+    # F-Q1-02: dev-only admin allow-list. When ``app_env != "production"``,
+    # any dev-login email matching one of these (comma-separated) values
+    # gets ``role=admin`` in the issued internal JWT so admin endpoints
+    # are reachable from the demo frontend without a real Zitadel role
+    # provider. In production, role MUST come from the OIDC payload.
+    dev_admin_emails: str = ""
+
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "api-gateway"
     log_level: str = "INFO"

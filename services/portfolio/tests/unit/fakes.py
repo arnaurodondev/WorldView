@@ -896,7 +896,9 @@ class FakeNPSScoreRepo(NPSScoreRepo):
         self._store: list[NPSScoreRecord] = []
 
     async def add(self, record: NPSScoreRecord) -> None:
-        # Mirror the partial-unique 30-day index — reject duplicates.
+        # The use case enforces the 30-day rate limit via find_recent_by_user,
+        # but we mirror the belt-and-suspenders behaviour of the SQL repo:
+        # if a duplicate slips through, raise NPSRateLimitError.
         cutoff = _utc_now() - _timedelta(days=30)
         for existing in self._store:
             if (
@@ -908,6 +910,21 @@ class FakeNPSScoreRepo(NPSScoreRepo):
                     f"User {record.user_id} already submitted NPS within 30 days",
                 )
         self._store.append(record)
+
+    async def find_recent_by_user(
+        self,
+        tenant_id: UUID,
+        user_id: UUID,
+        since: datetime,
+    ) -> NPSScoreRecord | None:
+        matches = [
+            r for r in self._store if r.tenant_id == tenant_id and r.user_id == user_id and r.created_at >= since
+        ]
+        if not matches:
+            return None
+        # Most recent first — matches the SQL ORDER BY created_at DESC LIMIT 1.
+        matches.sort(key=lambda r: r.created_at, reverse=True)
+        return matches[0]
 
     async def aggregate(
         self,
@@ -1006,8 +1023,12 @@ class FakeFeatureVoteRepo(FeatureVoteRepo):
         self._store.append(record)
         return True
 
-    async def has_voted(self, feature_request_id: UUID, user_id: UUID) -> bool:
-        return any(v.feature_request_id == feature_request_id and v.user_id == user_id for v in self._store)
+    async def has_voted(self, feature_request_id: UUID, user_id: UUID, tenant_id: UUID) -> bool:
+        # F-Q1-09: tenant_id MUST be filtered (mirrors SQL repo).
+        return any(
+            v.feature_request_id == feature_request_id and v.user_id == user_id and v.tenant_id == tenant_id
+            for v in self._store
+        )
 
 
 class FakeMicroSurveyRepo(MicroSurveyRepo):

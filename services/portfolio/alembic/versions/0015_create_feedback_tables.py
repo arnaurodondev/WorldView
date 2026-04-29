@@ -18,6 +18,16 @@ Idempotency:
     The ``upgrade()`` function uses an inspector check so re-applying
     the migration on a dev DB that already created the tables is a
     no-op (matches BP-128 dev-rebuild contract).
+
+NPS rate limit (F-Q1-01 fix):
+    The original migration tried a partial unique index with
+    ``WHERE created_at > now() - INTERVAL '30 days'`` but Postgres
+    rejects ``now()`` in index predicates (must be IMMUTABLE). We now
+    enforce the 30-day-per-(tenant,user) rate limit in the use case
+    layer (SubmitNPSScoreUseCase) via a SELECT-then-INSERT, backed by
+    a non-unique composite index for fast lookup. The repository keeps
+    a try/except IntegrityError → NPSRateLimitError mapping in case
+    a race slips through (belt-and-suspenders, harmless if redundant).
 """
 
 from __future__ import annotations
@@ -34,9 +44,10 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-# Index name for the partial-unique NPS spam guard. Pulled out so the
-# downgrade path can drop it cleanly.
-_NPS_PARTIAL_INDEX = "uq_nps_scores_tenant_user_30d"
+# Composite index name for the NPS rate-limit lookup. The 30-day predicate
+# is enforced in the use case layer, not the index (now() is not IMMUTABLE
+# in Postgres → cannot live in an index predicate).
+_NPS_RECENT_INDEX = "ix_nps_scores_user_recent"
 
 
 def _table_exists(inspector: sa.Inspector, name: str) -> bool:
@@ -135,16 +146,16 @@ def upgrade() -> None:
             "nps_scores",
             ["tenant_id", sa.text("created_at DESC")],
         )
-        # Partial unique index — one NPS row per (tenant, user) within the
-        # rolling 30-day window. WHY raw SQL: SQLAlchemy can't express
-        # ``WHERE created_at > now() - INTERVAL '30 days'`` portably; this
-        # mirrors migration 0014's pattern.
-        op.execute(
-            f"""
-            CREATE UNIQUE INDEX IF NOT EXISTS {_NPS_PARTIAL_INDEX}
-            ON nps_scores (tenant_id, user_id)
-            WHERE created_at > now() - INTERVAL '30 days'
-            """,
+        # Non-unique composite index for the use-case-layer rate-limit lookup
+        # (SubmitNPSScoreUseCase queries
+        # ``WHERE tenant_id=:tid AND user_id=:uid AND created_at > :cutoff``
+        # and short-circuits with NPSRateLimitError if any row matches).
+        # See module docstring for why we don't enforce this at the index level.
+        op.create_index(
+            _NPS_RECENT_INDEX,
+            "nps_scores",
+            ["tenant_id", "user_id", sa.text("created_at DESC")],
+            unique=False,
         )
 
     # ── 3. feature_requests ────────────────────────────────────────────────────
@@ -281,6 +292,6 @@ def downgrade() -> None:
     op.execute("DROP TABLE IF EXISTS micro_survey_responses")
     op.execute("DROP TABLE IF EXISTS feature_votes")
     op.execute("DROP TABLE IF EXISTS feature_requests")
-    op.execute(f"DROP INDEX IF EXISTS {_NPS_PARTIAL_INDEX}")
+    op.execute(f"DROP INDEX IF EXISTS {_NPS_RECENT_INDEX}")
     op.execute("DROP TABLE IF EXISTS nps_scores")
     op.execute("DROP TABLE IF EXISTS feedback_submissions")

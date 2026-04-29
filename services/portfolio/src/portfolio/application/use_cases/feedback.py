@@ -15,6 +15,7 @@ because:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -32,6 +33,7 @@ from portfolio.application.ports.feedback import (
 from portfolio.domain.errors import (
     FeatureRequestNotFoundError,
     FeedbackSubmissionNotFoundError,
+    NPSRateLimitError,
 )
 from portfolio.security.pii_redaction import redact, redact_json
 
@@ -157,7 +159,10 @@ class CreateFeedbackSubmissionUseCase:
         #   * console_logs — captured browser logs (often contain Bearer tokens)
         # We do NOT redact the explicit email field — it's a structured field
         # the user knowingly typed in for follow-up contact.
-        redacted_description = redact(cmd.description) or ""
+        # description is required (min_length=10 in the schema), so redact()
+        # never returns None — narrow the type via assert for mypy.
+        redacted_description = redact(cmd.description)
+        assert redacted_description is not None
         redacted_console_logs = redact_json(cmd.console_logs) if cmd.console_logs is not None else None
 
         now = utc_now()
@@ -248,6 +253,18 @@ class DeleteFeedbackSubmissionUseCase:
 
 class SubmitNPSScoreUseCase:
     async def execute(self, cmd: SubmitNPSScoreCommand, uow: UnitOfWork) -> NPSScoreRecord:
+        # F-Q1-01: enforce the 30-day-per-(tenant,user) rate limit at the
+        # application layer. The original migration used a partial-unique
+        # index with ``WHERE created_at > now() - INTERVAL '30 days'`` but
+        # Postgres rejects non-IMMUTABLE functions in index predicates.
+        # SELECT-then-INSERT has a tiny race window — the repo's add() also
+        # maps IntegrityError → NPSRateLimitError as belt-and-suspenders.
+        cutoff = utc_now() - timedelta(days=30)
+        existing = await uow.nps_scores.find_recent_by_user(cmd.tenant_id, cmd.user_id, cutoff)
+        if existing is not None:
+            raise NPSRateLimitError(
+                f"User {cmd.user_id} already submitted an NPS score in the last 30 days",
+            )
         # Redact comment before persist — users sometimes paste auth headers
         # into "what could we improve" boxes.
         redacted_comment = redact(cmd.comment)
@@ -260,7 +277,6 @@ class SubmitNPSScoreUseCase:
             surface=cmd.surface,
             created_at=utc_now(),
         )
-        # Repository raises NPSRateLimitError on partial-unique-index conflict.
         await uow.nps_scores.add(record)
         await uow.commit()
         return record
@@ -319,9 +335,11 @@ class ListFeatureRequestsUseCase:
         # has_voted check is one query per item — small N (≤50) keeps this
         # acceptable; if it becomes a hot path, batch into a single
         # ``WHERE feature_request_id = ANY(...)``.
+        # F-Q1-09: pass tenant_id so a user belonging to multiple tenants
+        # cannot probe vote state in the *other* tenant via crafted ids.
         result: list[tuple[FeatureRequestRecord, bool]] = []
         for r in records:
-            voted = await uow.feature_votes.has_voted(r.id, viewer_user_id)
+            voted = await uow.feature_votes.has_voted(r.id, viewer_user_id, query.tenant_id)
             result.append((r, voted))
         return result, total
 
@@ -333,14 +351,17 @@ class CreateFeatureRequestUseCase:
         uow: UnitOfWork,
     ) -> FeatureRequestRecord:
         now = utc_now()
+        # Title and description are user-supplied free text; redact in case
+        # anyone pastes a token into the feature description. description is
+        # required (min_length=1 in the schema) so redact() never returns None.
+        redacted_description = redact(cmd.description)
+        assert redacted_description is not None
         record = FeatureRequestRecord(
             id=new_uuid7(),
             tenant_id=cmd.tenant_id,
             created_by_user_id=cmd.user_id,
             title=cmd.title,
-            # Title and description are user-supplied free text; redact in
-            # case anyone pastes a token into the feature description.
-            description=redact(cmd.description) or "",
+            description=redacted_description,
             status="proposed",
             category=cmd.category,
             vote_count=0,
@@ -374,21 +395,18 @@ class UpsertFeatureVoteUseCase:
                 created_at=utc_now(),
             ),
         )
-        # Always recompute vote_count — even if the vote was a duplicate
-        # (idempotent path), the denorm column may have drifted.
+        # F-Q1-06: refresh_vote_count is now a single atomic UPDATE that
+        # both reads count(feature_votes) and writes the denorm column in
+        # one statement, eliminating the lost-update race window. Refresh
+        # always — even on duplicate inserts — so any prior drift heals.
         new_count = await uow.feature_requests.refresh_vote_count(cmd.feature_request_id)
         await uow.commit()
-        # Re-fetch so the response carries the updated count.
+        # Re-fetch so the response carries the updated count. The atomic
+        # UPDATE just ran, so the re-fetch is guaranteed to see the new
+        # value — no drift-compensation branch needed.
         refreshed = await uow.feature_requests.get(cmd.feature_request_id, cmd.tenant_id)
-        # Refresh always finds the row (we just verified above) — assert + use
-        # ``new_count`` as a safety belt if the re-fetch is somehow stale.
-        assert refreshed is not None
-        if refreshed.vote_count != new_count:
-            # Very unlikely (same transaction), but synthesise a consistent
-            # record rather than risk returning stale data to the client.
-            from dataclasses import replace
-
-            refreshed = replace(refreshed, vote_count=new_count)
+        assert refreshed is not None  # we just verified the row exists above
+        assert refreshed.vote_count == new_count
         return refreshed, True
 
 

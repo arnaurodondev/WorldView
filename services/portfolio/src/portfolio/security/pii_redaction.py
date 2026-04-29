@@ -18,6 +18,13 @@ Pattern philosophy:
     alpha-numeric string) are a UX cost; false negatives (a secret in
     plaintext) are a security incident.
 
+    Specifically the Bearer pattern is intentionally aggressive — any
+    16+ char alphanumeric string after ``Bearer `` is redacted. Pages
+    that legitimately contain Bearer-token examples (API docs, support
+    walkthroughs) should expect over-redaction; rendering tooling that
+    needs the literal example must escape the keyword (e.g. ``B&#x65;arer``)
+    or move the example out of free-text fields. (F-Q1-10.)
+
     Each redaction replaces the matched substring with
     ``[REDACTED:<KIND>]`` where KIND identifies the pattern that
     fired. This keeps the redacted text readable to support staff

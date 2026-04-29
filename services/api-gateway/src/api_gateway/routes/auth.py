@@ -661,6 +661,15 @@ async def dev_login(request: Request) -> Response:
         )
 
     # ── Issue an internal JWT for the demo user ───────────────────────────
+    # F-Q1-02: derive role from PORTFOLIO/API_GATEWAY_DEV_ADMIN_EMAILS when
+    # the demo user's email matches. This is the dev/local-only path that
+    # makes admin endpoints reachable from the demo frontend; in production,
+    # OIDC carries the real role and ``app_env="production"`` short-circuits
+    # this entire endpoint above.
+    dev_admin_emails_raw: str = getattr(settings, "dev_admin_emails", "") or ""
+    admin_emails = {e.strip().lower() for e in dev_admin_emails_raw.split(",") if e.strip()}
+    role = "admin" if _DEV_EMAIL.lower() in admin_emails else "user"
+
     from api_gateway.jwt_utils import issue_user_jwt
 
     access_token = issue_user_jwt(
@@ -669,6 +678,7 @@ async def dev_login(request: Request) -> Response:
         oidc_sub=_DEV_SUB,
         private_key=private_key,
         kid=kid,
+        role=role,
     )
 
     # ── Cache demo user identity in Valkey (same as real login) ───────────

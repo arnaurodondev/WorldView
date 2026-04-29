@@ -52,12 +52,17 @@ def _auth_headers(request: Request) -> dict[str, str]:
     private_key = getattr(request.app.state, "rsa_private_key", None)
     kid = getattr(request.app.state, "rsa_kid", None)
     if user is not None and private_key is not None and kid is not None:
+        # F-Q1-02: forward the role claim from the OIDC/dev-login payload
+        # into the internal JWT. Without this, every admin endpoint on every
+        # backend service returned 403 because the role defaulted to "user".
+        role = user.get("role") or "user"
         token = issue_user_jwt(
             user_id=user.get("user_id", ""),
             tenant_id=user.get("tenant_id", ""),
             oidc_sub=user.get("sub", ""),
             private_key=private_key,
             kid=kid,
+            role=role,
         )
         return {"X-Internal-JWT": token}
     # Fallback: read the pre-issued JWT (tests without RSA keys / system routes)
@@ -235,6 +240,27 @@ async def delete_thread(thread_id: str, request: Request) -> Any:
     resp = await clients.rag_chat.delete(
         f"/api/v1/threads/{thread_id}",
         headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.patch("/threads/{thread_id}")
+async def update_thread(thread_id: str, request: Request) -> Any:
+    """Proxy PATCH /v1/threads/{thread_id} → S8 PATCH /api/v1/threads/{thread_id}.
+
+    PLAN-0051 Wave E / T-E-5-06.
+
+    Used by the chat UI to rename a thread inline (double-click on the
+    sidebar title). Body is forwarded unchanged so future patchable fields
+    don't require a gateway change.
+    """
+    body = await request.body()
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.rag_chat.patch(
+        f"/api/v1/threads/{thread_id}",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
@@ -2536,6 +2562,25 @@ async def feedback_list_submissions(request: Request) -> Response:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+@router.get("/feedback/submissions/anonymous")
+async def feedback_list_anonymous_submissions(request: Request) -> Response:
+    """F-Q1-04: admin-only proxy — list submissions made by unauthenticated users.
+
+    Defined BEFORE ``/feedback/submissions/{submission_id}`` so the literal
+    "anonymous" segment wins over the UUID parameter.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    qs = request.url.query
+    target = "/api/v1/feedback/submissions/anonymous"
+    if qs:
+        target = f"{target}?{qs}"
+    resp = await clients.portfolio.get(target, headers=headers)
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 @router.get("/feedback/submissions/{submission_id}")
 async def feedback_get_submission(submission_id: str, request: Request) -> Response:
     if not getattr(request.state, "user", None):
@@ -2564,7 +2609,12 @@ async def feedback_update_submission(submission_id: str, request: Request) -> Re
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
-@router.delete("/feedback/submissions/{submission_id}", status_code=200)
+@router.delete(
+    "/feedback/submissions/{submission_id}",
+    status_code=204,
+    response_class=Response,
+    response_model=None,
+)
 async def feedback_delete_submission(submission_id: str, request: Request) -> Response:
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -2574,6 +2624,11 @@ async def feedback_delete_submission(submission_id: str, request: Request) -> Re
         f"/api/v1/feedback/submissions/{submission_id}",
         headers=headers,
     )
+    # F-Q1-13: 204 carries no body — omit ``media_type`` so we don't ship
+    # a Content-Type header on an empty response. Only attach JSON media
+    # type when the backend actually returned a body (e.g. 4xx errors).
+    if resp.status_code == 204:
+        return Response(status_code=204)
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
@@ -2643,6 +2698,28 @@ async def feedback_vote_feature(feature_request_id: str, request: Request) -> Re
     resp = await clients.portfolio.post(
         f"/api/v1/feedback/features/{feature_request_id}/vote",
         headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.patch("/feedback/features/{feature_request_id}")
+async def feedback_update_feature(feature_request_id: str, request: Request) -> Response:
+    """F-Q1-05: admin-only PATCH proxy for feature roadmap status updates.
+
+    Without this proxy, admins could not move a feature through the
+    proposed → planned → in_progress → shipped lifecycle from the
+    frontend. The portfolio route already existed; only the gateway
+    forwarder was missing.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.patch(
+        f"/api/v1/feedback/features/{feature_request_id}",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 

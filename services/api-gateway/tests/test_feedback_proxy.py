@@ -226,3 +226,111 @@ async def test_patch_beta_enrollment_proxy(authed_app, authed_mock_clients) -> N
     assert resp.status_code == 200
     target = authed_mock_clients.portfolio.patch.call_args[0][0]
     assert target == "/api/v1/feedback/beta-program/enrollment"
+
+
+# ── F-Q1-05: missing PATCH /feedback/features/{id} proxy ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_patch_feature_proxy(authed_app, authed_mock_clients) -> None:
+    """F-Q1-05: admins must be able to PATCH a feature's status from the
+    frontend (move proposed → planned → in_progress → shipped)."""
+    authed_mock_clients.portfolio.patch = AsyncMock(return_value=_mock_response(200, b'{"id":"x"}'))
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.patch(
+            "/v1/feedback/features/feat-1",
+            json={"status": "planned"},
+            headers=_bearer(_ADMIN_PAYLOAD),
+        )
+    assert resp.status_code == 200
+    target = authed_mock_clients.portfolio.patch.call_args[0][0]
+    assert target == "/api/v1/feedback/features/feat-1"
+
+
+@pytest.mark.asyncio
+async def test_patch_feature_proxy_requires_auth(app, mock_clients) -> None:
+    """The proxy itself enforces auth (401 without Bearer)."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.patch(
+            "/v1/feedback/features/feat-1",
+            json={"status": "planned"},
+        )
+    assert resp.status_code == 401
+    mock_clients.portfolio.patch.assert_not_called()
+
+
+# ── F-Q1-04: anonymous submissions admin proxy ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_anonymous_submissions_proxy(authed_app, authed_mock_clients) -> None:
+    """F-Q1-04: admin proxy for ``/feedback/submissions/anonymous``."""
+    authed_mock_clients.portfolio.get = AsyncMock(
+        return_value=_mock_response(200, b'{"items":[],"total":0}'),
+    )
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/feedback/submissions/anonymous",
+            headers=_bearer(_ADMIN_PAYLOAD),
+        )
+    assert resp.status_code == 200
+    target = authed_mock_clients.portfolio.get.call_args[0][0]
+    assert target.startswith("/api/v1/feedback/submissions/anonymous")
+
+
+# ── F-Q1-02: admin role propagation through internal JWT ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_admin_role_propagated_in_internal_jwt(
+    authed_app_with_rsa,
+    rsa_authed_mock_clients,
+) -> None:
+    """F-Q1-02: when the gateway issues a fresh internal JWT for a user
+    whose OIDC payload carries ``role=admin``, the JWT MUST carry
+    ``role=admin`` so the backend can authorize admin-only endpoints.
+
+    Without this fix every admin endpoint returned 403 because
+    ``issue_user_jwt`` hardcoded ``role: "user"``.
+    """
+    rsa_authed_mock_clients.portfolio.patch = AsyncMock(return_value=_mock_response(200, b"{}"))
+    transport = ASGITransport(app=authed_app_with_rsa)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.patch(
+            "/v1/feedback/submissions/abc-123",
+            json={"status": "triaged"},
+            headers=_bearer(_ADMIN_PAYLOAD),
+        )
+    # Inspect the X-Internal-JWT forwarded to the backend.
+    call_kwargs = rsa_authed_mock_clients.portfolio.patch.call_args.kwargs
+    fwd_headers = call_kwargs.get("headers") or {}
+    internal_jwt = fwd_headers.get("X-Internal-JWT")
+    assert internal_jwt, "Expected X-Internal-JWT to be forwarded"
+    # Decode without signature verification — only the role claim is asserted.
+    payload = jwt.decode(internal_jwt, options={"verify_signature": False})
+    assert payload.get("role") == "admin"
+
+
+@pytest.mark.asyncio
+async def test_user_role_propagated_in_internal_jwt(
+    authed_app_with_rsa,
+    rsa_authed_mock_clients,
+) -> None:
+    """Counterpart to F-Q1-02: a non-admin's role is forwarded as ``user``."""
+    rsa_authed_mock_clients.portfolio.post = AsyncMock(return_value=_mock_response(201, b"{}"))
+    transport = ASGITransport(app=authed_app_with_rsa)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/v1/feedback/features",
+            json={"title": "X", "description": "Y"},
+            headers=_bearer(),
+        )
+    call_kwargs = rsa_authed_mock_clients.portfolio.post.call_args.kwargs
+    fwd_headers = call_kwargs.get("headers") or {}
+    internal_jwt = fwd_headers.get("X-Internal-JWT")
+    assert internal_jwt
+    payload = jwt.decode(internal_jwt, options={"verify_signature": False})
+    assert payload.get("role") == "user"
