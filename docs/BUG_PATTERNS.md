@@ -7697,3 +7697,87 @@ if (isLoading) return <div className="flex flex-col gap-2">{skeletons}</div>
 - When the parent uses `min-h-*`, the child's loading skeleton should NOT use `h-full`. Only the loaded data branch (where content fills the panel intentionally) should use `h-full`.
 - During code review, flag any `if (isLoading) return <div className="... h-full">` inside a component whose parent uses `min-h-*`.
 - Snapshot tests at scroll position 0 during loading are the cheapest catch.
+
+## BP-292 — Prompt/Lookup Mismatch: LLM Outputs Reference Values Absent from Post-Parse Lookup
+
+**Category**: LLM pipelines / prompt design
+**Severity**: CRITICAL (silent end-to-end output destruction)
+**Affected areas**: Any pipeline where an LLM is given a list of valid values in the prompt and the post-parse code looks values up in a dict that is built from a *subset* of that list
+**First seen**: 2026-04-30 (revised audit; root pattern of F-CRIT-07 in news-pipeline deep-dive 2026-04-29)
+
+**Symptoms**:
+- Producer-side log shows the LLM emits non-empty structured output (relations, claims, citations, tool calls) referring to values from the list given in the prompt.
+- Consumer-side / post-parse output array is empty or substantially smaller than what the LLM produced.
+- No exceptions, no error logs — the silent drop happens inside a `continue` / `dict.get(...) is None` branch.
+- All dashboards green; downstream tables remain empty.
+
+**Root Cause**:
+The prompt advertises a vocabulary V₁ (e.g., "you may use any of these entity mentions: A, B, C, D"). The post-parse code builds a lookup table V₂ ⊆ V₁ (e.g., only mentions whose entity resolution succeeded), and silently drops every reference the LLM emits to a value in V₁ \ V₂. The LLM is doing exactly what it was asked to do; the code has a contract bug.
+
+Concrete worldview instance: `services/nlp-pipeline/.../article_consumer.py:793-796` builds `entity_id_by_ref` from `m.resolved_entity_id IS NOT NULL`, while `deep_extraction.py` advertised every mention text (resolved + unresolved). `_build_raw_relations` `continue`s silently when `entity_id_by_ref.get(ref) is None`, dropping ~100% of relations on the 66% of documents with zero resolved entities.
+
+**Fix**:
+Two-step structural fix (not "log a warning"):
+1. **Make V₁ = V₂ at construction**: only put values in the prompt that the lookup will know how to resolve. For unresolved entities, generate a provisional ID *before* the prompt is built (e.g., insert into `provisional_entity_queue`) and pass that ID through.
+2. **Make drift impossible to silence**: replace `continue` with a structured error that emits a Prometheus counter (`*_contract_violation_total{reason}`) and either raises or routes to a quarantine table. Add a CI test that constructs a known prompt/lookup pair, induces drift, and asserts the counter increments.
+
+**Prevention**:
+- Whenever a prompt template includes a `{list_of_valid_values}` placeholder, the same code path should produce the post-parse lookup. They MUST share a source.
+- Add an end-to-end yield gauge (e.g., `kg_extraction_yield = persisted / extracted`) so silent drops cannot hide.
+- Code review: any `if x.get(ref) is None: continue` inside a parser of LLM output is suspect — prove the lookup is exhaustive.
+- See R28 (proposed): "Pipeline boundary contracts must round-trip through a contract test that fails on silent drops."
+
+## BP-293 — Producer-Side `resolved_only` Lookup Destroys End-to-End Output Without Error Signal
+
+**Category**: NLP pipelines / Kafka-boundary design
+**Severity**: CRITICAL (specific instance of BP-292 at the S6→S7 boundary)
+**Affected areas**: `services/nlp-pipeline/src/nlp_pipeline/infrastructure/messaging/consumers/article_consumer.py` and any consumer that emits enriched events to a downstream service
+**First seen**: 2026-04-30 (F-CRIT-07 in news-pipeline deep-dive)
+
+**Symptoms**:
+- `nlp.article.enriched.v1` events show `relation_count > 0` (count of LLM output) but `raw_relations` array length is 0 or much smaller.
+- S7 graph materializes 0 production relations despite `relation_evidence_raw` consumer running healthily.
+- `relation_summaries`, `relation_contradiction_links`, `claim` tables stay empty for days/weeks.
+- Producer log says "extraction success: relations=6, claims=3"; consumer log says "raw_relations: 0".
+
+**Root Cause**:
+Same as BP-292 specialised to the S6 producer side: `_build_raw_relations(extraction.relations, entity_id_by_ref)` skips relations whose endpoints are not in the resolved-only lookup; the prompt fed the LLM both resolved and unresolved mentions; the parser cannot map unresolved-mention-references back to UUIDs.
+
+**Fix**:
+- Switch to a provisional-ID flow: Block 9 (entity resolution) creates a `provisional_entity_queue` row for any mention without a canonical, returning a UUID. Block 10 (deep extraction) prompt uses canonical-or-provisional UUIDs as the reference vocabulary. `entity_id_by_ref` is the union of canonical IDs and provisional queue IDs. See PLAN-0058 Wave A task A-1.
+- Update `_build_raw_relations` to raise `KGContractViolation` instead of `continue` when a ref is unknown.
+- Emit `nlp_kg_contract_violation_total{reason}` Prometheus counter.
+- Add `kg_extraction_yield` histogram (= persisted / extracted per article).
+
+**Prevention**:
+- Any boundary between an LLM extractor and a downstream graph materialiser MUST have an extraction-yield gauge.
+- Treat empty downstream tables as a P1 alert if upstream metrics show non-empty extraction.
+- See PLAN-0057 Wave A and PLAN-0058 (out-of-scope for runtime fix; but the eval framework in Wave C catches this class of regression structurally).
+
+## BP-294 — Schema-Defined Audit Table Never Written: Hardcoded `usage_logger=None` / Missing `*_repo.add_batch()`
+
+**Category**: Observability / persistence
+**Severity**: CRITICAL (pipeline becomes opaque; cost-blind LLM spend; no auditability)
+**Affected areas**: Any worker that takes a `usage_logger` (or similar) constructor parameter; any Block-N consumer that has an audit-trail repository wired into its UoW but does not call `.add()` / `.add_batch()`
+**First seen**: 2026-04-30 (F-CRIT-02, F-CRIT-03 in news-pipeline deep-dive)
+
+**Symptoms**:
+- The audit/log table exists in the schema and a repository class exists for it.
+- Production row count for the audit table is **zero** despite the parent operation running thousands of times.
+- Code search for the repo's `.add()` / `.add_batch()` call returns no live call sites (only tests).
+- Worker constructors accept `usage_logger=None` (or similar) and the call site never injects the real adapter.
+
+**Root Cause**:
+Two distinct anti-patterns that produce the same symptom:
+1. **`usage_logger=None` default left in production**: a constructor accepts `usage_logger: LLMUsageLogger | None = None` and the production wiring forgot to inject `LLMUsageLogger(...)`. All downstream `if self._logger: self._logger.log(...)` branches are dead. Worldview instance: 3 workers in `services/nlp-pipeline/` and `services/knowledge-graph/.../infrastructure/workers/` had `usage_logger=None` hardcoded (F-CRIT-03; `llm_usage_log` table empty across 18,695 LLM calls).
+2. **Repo wired into UoW but never called**: `mention_resolution_repo` is in the UoW (`uow.mr_repo`) but the `article_consumer` never calls `await uow.mr_repo.add_batch(rows)` after Block 9 (entity resolution) — F-CRIT-02; `mention_resolutions` empty across 18,695 mentions.
+
+**Fix**:
+- Wire `LLMUsageLogger` (or analogue) at composition root; never let the production constructor default to `None`. If `None` is necessary for tests, use `Optional[LLMUsageLogger]` with a `NullLLMUsageLogger` fallback that records nothing but satisfies the call shape — making "zero rows" structurally observable.
+- Audit each repo in each UoW: if it has an `add()` method, grep for live call sites; if there are none outside tests, that's a missing write.
+- Add a startup smoke test: after first ingest, assert that `audit_table_row_count > 0` within the SLO window.
+
+**Prevention**:
+- Code review: flag any production `Optional[X] = None` default on a logger / audit repo.
+- CI test: instrument each pipeline boundary with a "this audit table must have at least one row after the smoke fixture" assertion.
+- See R28 (proposed): pipeline boundary contracts must include audit-table write coverage.
