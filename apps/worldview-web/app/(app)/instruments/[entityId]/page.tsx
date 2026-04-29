@@ -44,12 +44,10 @@ import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { FundamentalsTab } from "@/components/instrument/FundamentalsTab";
 import { IntelligenceTab } from "@/components/instrument/IntelligenceTab";
+import { NewsTab } from "@/components/instrument/NewsTab";
 import { CompactInstrumentHeader } from "@/components/instrument/CompactInstrumentHeader";
 import { InstrumentAISubheader } from "@/components/instrument/InstrumentAISubheader";
 import { OverviewLayout } from "@/components/instrument/OverviewLayout";
-import { ArticleCard } from "@/components/news/ArticleCard";
-import { InlineEmptyState } from "@/components/data/InlineEmptyState";
-import { Button } from "@/components/ui/button";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -59,19 +57,10 @@ export default function InstrumentDetailPage() {
   // WHY decodeURIComponent: entity_id from URL may be percent-encoded
   const entityId = decodeURIComponent(params.entityId as string);
   const { accessToken } = useAuth();
-  const [newsOffset, setNewsOffset] = useState(0);
-
   // ── Controlled tab state ───────────────────────────────────────────────────
   // WHY controlled Tabs (not defaultValue): OverviewLayout's "More news" button
   // needs to programmatically switch to the News tab. Controlled Tabs allow this.
   const [activeTab, setActiveTab] = useState("overview");
-
-  // ── News client-side filters ───────────────────────────────────────────────
-  // WHY client-side filters (not server-side params): the News tab already fetches
-  // all 20 articles. Filtering client-side avoids a new query on each filter change.
-  const [newsDateFilter, setNewsDateFilter] = useState<"all" | "today" | "week" | "month">("all");
-  // WHY no sentiment filter state: RankedArticle (S6 shape) does not include sentiment field.
-  // Sentiment filter removed from UI until S6 surfaces it. See TODO in filteredArticles.
 
   // ── Fetch CompanyOverview — composite endpoint ─────────────────────────────
   // WHY pass entityId as instrumentId to getCompanyOverview:
@@ -85,10 +74,6 @@ export default function InstrumentDetailPage() {
     staleTime: 5 * 60_000,
   });
 
-  // WHY constant (not inline 20): pagination limit is referenced in both the
-  // queryFn and the "Load more" condition — a single source of truth prevents drift.
-  const NEWS_PAGE_SIZE = 20;
-
   const instrument = overview?.instrument;
 
   // WHY kgEntityId derived before guards and queries: The URL segment (`entityId`) may
@@ -99,20 +84,9 @@ export default function InstrumentDetailPage() {
   // ADR-F-12: entity_id ≠ instrument_id; all KG endpoints require entity_id.
   const kgEntityId = instrument?.entity_id ?? entityId;
 
-  // ── Fetch entity news for the News tab ────────────────────────────────────
-  const { data: newsResp, isLoading: newsLoading, isError: newsError } = useQuery({
-    queryKey: ["entity-news", kgEntityId, newsOffset],
-    queryFn: () =>
-      createGateway(accessToken).getEntityNews(kgEntityId, {
-        limit: NEWS_PAGE_SIZE,
-        offset: newsOffset,
-        // WHY display_relevance_score: S6 endpoint accepts "display_relevance_score"
-        // or "published_at". The old value "relevance" was a legacy S5 param name.
-        order_by: "display_relevance_score",
-      }),
-    enabled: !!accessToken && !!kgEntityId,
-    staleTime: 2 * 60_000,
-  });
+  // WHY news fetch moved to NewsTab: PLAN-0050 Wave E extracted all news tab
+  // logic into components/instrument/NewsTab.tsx. The page no longer owns the
+  // news query or filter state — NewsTab handles fetching, filtering, and rendering.
 
   // ── Page loading state ─────────────────────────────────────────────────────
   if (overviewLoading && !overview) {
@@ -143,30 +117,6 @@ export default function InstrumentDetailPage() {
   }
 
   const fund = overview?.fundamentals;
-
-  // ── Apply news client-side filters ────────────────────────────────────────
-  // WHY filter after fetch: newsResp contains up to 20 articles already fetched.
-  // Applying date/sentiment filters client-side avoids a new S9 query on each change.
-  // WHY RankedArticle shape: getEntityNews returns RankedArticle[] (S6 ranked shape)
-  // which has published_at: string | null and no sentiment field.
-  const filteredArticles = (newsResp?.articles ?? []).filter((article) => {
-    // Date filter — guard against null published_at (possible in RankedArticle)
-    if (newsDateFilter !== "all") {
-      if (!article.published_at) return false;
-      const now = Date.now();
-      const published = new Date(article.published_at).getTime();
-      const ageMs = now - published;
-      if (newsDateFilter === "today" && ageMs > 24 * 60 * 60 * 1000) return false;
-      if (newsDateFilter === "week" && ageMs > 7 * 24 * 60 * 60 * 1000) return false;
-      if (newsDateFilter === "month" && ageMs > 30 * 24 * 60 * 60 * 1000) return false;
-    }
-    // WHY sentiment filter disabled for RankedArticle: RankedArticle does not
-    // include a sentiment field (unlike the legacy Article type). The UI still
-    // shows the sentiment dropdown for UX consistency; when sentiment filter is
-    // applied, all articles pass (no false negatives from missing field).
-    // TODO: add sentiment to RankedArticle when S6 surfaces it in the endpoint.
-    return true;
-  });
 
   return (
     <div className="flex min-h-0 flex-col">
@@ -208,14 +158,9 @@ export default function InstrumentDetailPage() {
           {/* WHY compact tabs: bloomberg-style — tabs are small, content area is large */}
           <TabsTrigger value="overview" className="text-xs">Overview</TabsTrigger>
           <TabsTrigger value="fundamentals" className="text-xs">Fundamentals</TabsTrigger>
-          <TabsTrigger value="news" className="text-xs">
-            News
-            {newsResp?.total != null && (
-              <span className="ml-1 font-mono tabular-nums text-muted-foreground">
-                {newsResp.total}
-              </span>
-            )}
-          </TabsTrigger>
+          {/* WHY no count badge: PLAN-0050 — NewsTab manages its own data fetch.
+              The article count is shown in the NewsTab filter toolbar. */}
+          <TabsTrigger value="news" className="text-xs">News</TabsTrigger>
           <TabsTrigger value="intelligence" className="text-xs">Intelligence</TabsTrigger>
         </TabsList>
 
@@ -249,80 +194,12 @@ export default function InstrumentDetailPage() {
         </TabsContent>
 
         {/* ── News tab ─────────────────────────────────────────────────────── */}
+        {/* WHY NewsTab component (was inline JSX): PLAN-0050 Wave E extracts all
+            news tab logic into a dedicated component with sentiment/impact pills,
+            time-grouping, source filter, and sort. The page now only handles
+            tab routing; NewsTab owns data fetching, filtering, and rendering. */}
         <TabsContent value="news" className="mt-0 flex-1 overflow-auto">
-          {/* ── Filter bar ─────────────────────────────────────────────────── */}
-          {/* WHY client-side filters: the news list is already fetched (20 articles).
-              Filtering client-side avoids a new S9 query on each filter change.
-              WHY h-9 filter bar (not p-2): compact terminal controls height. */}
-          <div className="flex items-center gap-2 px-3 h-9 border-b border-border">
-            {/* Date range filter */}
-            <select
-              value={newsDateFilter}
-              onChange={(e) => setNewsDateFilter(e.target.value as typeof newsDateFilter)}
-              className="h-7 bg-background border border-border rounded-[2px] text-[11px] font-mono px-2 text-foreground"
-            >
-              <option value="all">All time</option>
-              <option value="today">Today</option>
-              <option value="week">Past week</option>
-              <option value="month">Past month</option>
-            </select>
-
-            {/* Article count after filtering */}
-            <span className="font-mono text-[10px] tabular-nums text-muted-foreground ml-auto">
-              {filteredArticles.length} articles
-            </span>
-          </div>
-
-          <div className="divide-y divide-border/30">
-            {newsLoading && !newsResp ? (
-              // WHY px-3 py-2 (was p-4): compact skeleton rows at terminal row height
-              Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="px-3 py-2">
-                  <Skeleton className="mb-1.5 h-3.5 w-3/4" />
-                  <Skeleton className="h-3 w-1/2" />
-                </div>
-              ))
-            ) : newsError ? (
-              // WHY separate error state (not reusing empty state): failed fetch ≠ no
-              // articles — user needs to know it's a network issue, not empty data.
-              <InlineEmptyState
-                message="Failed to load news. Please try again."
-                className="px-3"
-              />
-            ) : filteredArticles.length === 0 ? (
-              // WHY InlineEmptyState (was p-6 text-sm): terminal compact inline message
-              <InlineEmptyState
-                message="No news articles match the current filters."
-                className="px-3"
-              />
-            ) : (
-              <>
-                {filteredArticles.map((article) => (
-                  // WHY px-3 py-2 (was px-4 py-3): tighter outer padding; ArticleCard
-                  // already has its own internal p-3 — double-padding wastes space.
-                  <div key={article.article_id} className="px-3 py-2">
-                    <ArticleCard article={article} />
-                  </div>
-                ))}
-
-                {/* Pagination: load more */}
-                {newsResp && newsOffset + NEWS_PAGE_SIZE < newsResp.total && (
-                  // WHY Button variant="outline" size="sm" (was plain button):
-                  // styled button communicates interactivity more clearly than plain text
-                  <div className="px-3 py-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setNewsOffset((o) => o + NEWS_PAGE_SIZE)}
-                      className="h-7 text-xs"
-                    >
-                      Load more articles
-                    </Button>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+          <NewsTab entityId={kgEntityId} />
         </TabsContent>
 
         {/* ── Intelligence tab ─────────────────────────────────────────────── */}

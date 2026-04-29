@@ -59,8 +59,8 @@ All routes are prefixed with `/v1` (main), `/v1/auth` (auth), or `/internal`.
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
 | GET | `/v1/news/relevant` | Most relevant articles (all sources) | No |
-| GET | `/v1/news/top` | Top-scored articles (PRD-0026) | No |
-| GET | `/v1/news/entity/{entity_id}` | Articles for a specific entity | Yes |
+| GET | `/v1/news/top` | Top-scored articles (PRD-0026); response includes `sentiment` (positive/negative/neutral/mixed/null) and `impact_score` (FLOAT 0-1/null) per article (PLAN-0050 Wave E) | No |
+| GET | `/v1/news/entity/{entity_id}` | Articles for a specific entity; same `sentiment` + `impact_score` fields (PLAN-0050 Wave E) | Yes |
 
 ### Chat & Conversation Endpoints (→ S8 RAG/Chat)
 
@@ -139,6 +139,9 @@ preferable to all-or-nothing for dashboard widgets.
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
 | GET | `/v1/portfolios` | List portfolios | Yes |
+| GET | `/v1/portfolios/{id}/value-history` | Equity-curve snapshots (PLAN-0046 / T-46-5-01) | Yes |
+| GET | `/v1/portfolios/{id}/exposure` | Invested / cash / leverage breakdown (PLAN-0046 / T-46-5-02) | Yes |
+| GET | `/v1/portfolios/{id}/realized-pnl` | Realised P&L (FIFO, PLAN-0051 / T-A-1-04). Forwards `from`/`to`. Adds `Cache-Control: max-age=300` on 200. | Yes |
 | GET | `/v1/holdings/{portfolio_id}` | Holdings for a portfolio | Yes |
 | GET | `/v1/transactions` | List transactions (API-004: `portfolio_id` forwarded as `X-Portfolio-ID` header, not query param) | Yes |
 | POST | `/v1/transactions` | Create transaction | Yes |

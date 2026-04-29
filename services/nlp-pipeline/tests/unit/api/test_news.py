@@ -70,6 +70,93 @@ def _make_signals_app(repo_mock: AsyncMock) -> FastAPI:
 # ---------------------------------------------------------------------------
 
 
+class TestSentimentImpactFields:
+    """PLAN-0050 Wave E: sentiment + impact_score fields forwarded through the API."""
+
+    @pytest.mark.asyncio
+    async def test_sentiment_positive_included_in_response(self) -> None:
+        """sentiment='positive' from DTO appears in the JSON response."""
+        article = RankedArticleData(
+            article_id=_DOC_ID,
+            title="Earnings beat expectations",
+            url="https://example.com",
+            published_at=_NOW,
+            source_type="news",
+            source_name="Reuters",
+            routing_tier="DEEP",
+            routing_score=0.8,
+            market_impact_score=0.72,
+            llm_relevance_score=0.65,
+            display_relevance_score=0.70,
+            day_t0_score=0.72,
+            day_t1_score=None,
+            day_t2_score=None,
+            day_t5_score=None,
+            sentiment="positive",
+            impact_score=0.72,
+        )
+        repo = _make_news_repo(articles=[article], total=1)
+        app = _make_news_app(repo)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/v1/news/top")
+
+        assert response.status_code == 200
+        data = response.json()
+        art = data["articles"][0]
+        assert art["sentiment"] == "positive"
+        assert art["impact_score"] == pytest.approx(0.72, abs=1e-4)
+
+    @pytest.mark.asyncio
+    async def test_sentiment_null_when_not_scored(self) -> None:
+        """sentiment=None from DTO → JSON null (not missing key)."""
+        article = _ranked_article(0.5)  # no sentiment/impact_score
+        repo = _make_news_repo(articles=[article], total=1)
+        app = _make_news_app(repo)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/v1/news/top")
+
+        assert response.status_code == 200
+        data = response.json()
+        art = data["articles"][0]
+        # WHY check key presence (not just truthiness): Pydantic serialises None as null.
+        # Ensuring the key is present guarantees the frontend can destructure it safely.
+        assert "sentiment" in art
+        assert art["sentiment"] is None
+        assert "impact_score" in art
+        assert art["impact_score"] is None
+
+    @pytest.mark.asyncio
+    async def test_all_sentiment_values_serialise_correctly(self) -> None:
+        """All 4 sentiment enum values serialise to their string literals."""
+        for sentiment_val in ("positive", "negative", "neutral", "mixed"):
+            article = RankedArticleData(
+                article_id=_DOC_ID,
+                title="Title",
+                url="https://example.com",
+                published_at=_NOW,
+                source_type="news",
+                source_name="Reuters",
+                routing_tier="DEEP",
+                routing_score=0.5,
+                market_impact_score=None,
+                llm_relevance_score=None,
+                display_relevance_score=0.3,
+                day_t0_score=None,
+                day_t1_score=None,
+                day_t2_score=None,
+                day_t5_score=None,
+                sentiment=sentiment_val,
+                impact_score=None,
+            )
+            repo = _make_news_repo(articles=[article], total=1)
+            app = _make_news_app(repo)
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                response = await client.get("/api/v1/news/top")
+
+            assert response.status_code == 200, f"Failed for sentiment={sentiment_val!r}"
+            assert response.json()["articles"][0]["sentiment"] == sentiment_val
+
+
 class TestGetTopNewsEndpoint:
     @pytest.mark.asyncio
     async def test_get_top_news_returns_200(self) -> None:

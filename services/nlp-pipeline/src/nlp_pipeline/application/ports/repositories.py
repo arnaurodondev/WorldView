@@ -274,6 +274,12 @@ class RankedArticleData:
     # Only populated by the global top-news query (Flow C); None for entity queries.
     primary_entity_id: UUID | None = field(default=None)
     primary_entity_symbol: str | None = field(default=None)
+    # PLAN-0050 Wave E: article-level signals for News-tab pills.
+    # sentiment: one of "positive" | "negative" | "neutral" | "mixed"; null until scored.
+    # impact_score: MAX(day_t0, day_t1) from article_impact_windows convenience column;
+    #               null until price-impact windows computed.
+    sentiment: str | None = field(default=None)
+    impact_score: float | None = field(default=None)
 
 
 # ── News query port ───────────────────────────────────────────────────────────

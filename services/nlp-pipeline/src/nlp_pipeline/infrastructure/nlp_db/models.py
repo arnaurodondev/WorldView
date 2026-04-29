@@ -231,6 +231,11 @@ class DocumentSourceMetadataModel(Base):
     # PRD-0026 §6.4: LLM relevance scoring columns (nullable; migration 0009)
     llm_relevance_score: Mapped[Decimal | None] = mapped_column(sa.Numeric(6, 4), nullable=True)
     llm_scored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # PLAN-0050 Wave E: sentiment + impact_score for News-tab pills (migration 0011).
+    # Both nullable — null until ArticleRelevanceScoringWorker/PriceImpactLabellingWorker run.
+    # sentiment values: "positive" | "negative" | "neutral" | "mixed"
+    sentiment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    impact_score: Mapped[Decimal | None] = mapped_column(sa.Numeric(6, 4), nullable=True)
 
 
 class EmbeddingPendingModel(Base):

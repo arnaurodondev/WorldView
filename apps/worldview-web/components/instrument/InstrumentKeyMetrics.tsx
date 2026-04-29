@@ -28,12 +28,19 @@
  * DESIGN REFERENCE: PLAN-0041 §T-C-1-02
  */
 
-// WHY no "use client": pure display component — no hooks, no browser APIs.
-// Props flow in from OverviewLayout which is already "use client".
+// WHY "use client": uses useQuery to fetch the fundamentals snapshot (EPS TTM,
+// Beta, Avg Volume). Adding the snapshot fetch here keeps the parent OverviewLayout
+// as a pure layout component that doesn't need to know about S3 endpoints.
+"use client";
 
+import { useQuery } from "@tanstack/react-query";
+import { createGateway } from "@/lib/gateway";
+import { useAuth } from "@/hooks/useAuth";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- WHY: false positive; DataTimestamp is used inside conditional JSX at the snapshot footer (line ~294). ESLint's TypeScript plugin misses usage inside {condition && (...<DataTimestamp/>...)} patterns in some Next.js versions.
+import { DataTimestamp } from "@/components/ui/data-timestamp";
 import { formatMarketCap, formatRatio, formatPercent } from "@/lib/utils";
 import { WeekRangeBar } from "@/components/instrument/52WeekRangeBar";
-import type { Fundamentals, Instrument } from "@/types/api";
+import type { Fundamentals, FundamentalsSnapshot, Instrument } from "@/types/api";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -86,6 +93,27 @@ export function OverviewSidebarMetrics({
   instrument,
   currentPrice,
 }: OverviewSidebarMetricsProps) {
+  const { accessToken } = useAuth();
+
+  // ── Snapshot query (EPS TTM, Beta, Avg Volume) ────────────────────────────
+  // WHY fetch here (not in parent): OverviewLayout is a pure layout orchestrator
+  // that passes down pre-fetched CompanyOverview data. The snapshot is a separate
+  // S3 endpoint (instrument_fundamentals_snapshot table) populated by the nightly
+  // backfill script. Fetching here keeps the parent clean and lets this component
+  // degrade gracefully if the snapshot is unavailable.
+  // WHY optional chaining on instrument_id: fundamentals may be null while loading.
+  const instrumentId = fundamentals?.instrument_id;
+  const { data: snapshot } = useQuery<FundamentalsSnapshot>({
+    queryKey: ["fundamentals-snapshot", instrumentId],
+    queryFn: () => createGateway(accessToken).getFundamentalsSnapshot(instrumentId!),
+    // WHY enabled guard: skip query if instrument_id or token is not yet available
+    // (CompanyOverview hasn't loaded yet). The ! in queryFn is safe here because
+    // enabled prevents execution when instrumentId is falsy.
+    enabled: !!accessToken && !!instrumentId,
+    // WHY 10min stale: snapshot is populated by a nightly backfill; very stale-tolerant
+    staleTime: 10 * 60_000,
+  });
+
   // ── Color helpers ──────────────────────────────────────────────────────────
   // WHY inline helpers (not imported): these thresholds are specific to this component's
   // display context. Sharing with FundamentalsTab would couple two unrelated UI zones.
@@ -156,13 +184,18 @@ export function OverviewSidebarMetrics({
         valueClass={peClass(fundamentals?.forward_pe ?? null)}
       />
 
-      {/* ── Row 4: EPS — placeholder until earnings history section wired ─── */}
-      {/* WHY show placeholder: keeps 12-row structure consistent; analysts expect
-          EPS in this panel. Wave D-3 will wire real EPS from earnings history. */}
+      {/* ── Row 4: EPS (TTM) — from instrument_fundamentals_snapshot (PLAN-0050 Wave D) ── */}
+      {/* WHY snapshot (not earnings history): the snapshot pre-computes eps_ttm from
+          EODHD Highlights at backfill time — one fast lookup vs. summing quarterly
+          earnings records. Null = not yet backfilled or ETF with no EPS. */}
       <MetricRow
         label="EPS (TTM)"
-        value="—"
-        valueClass="text-muted-foreground"
+        value={snapshot?.eps_ttm != null ? `$${snapshot.eps_ttm.toFixed(2)}` : "—"}
+        valueClass={
+          snapshot?.eps_ttm != null
+            ? snapshot.eps_ttm >= 0 ? "text-positive" : "text-negative"
+            : "text-muted-foreground"
+        }
       />
 
       {/* ── Row 5: Dividend Yield — green >3% income threshold ───────────── */}
@@ -176,11 +209,19 @@ export function OverviewSidebarMetrics({
         }
       />
 
-      {/* ── Row 6: Beta — placeholder until TechnicalSnapshot wired (D-3) ── */}
+      {/* ── Row 6: Beta — from instrument_fundamentals_snapshot (PLAN-0050 Wave D) ── */}
+      {/* WHY snapshot: beta is extracted from EODHD Technicals at backfill time.
+          <1 = less volatile than market (green), >1.5 = significantly more volatile (amber). */}
       <MetricRow
         label="BETA"
-        value="—"
-        valueClass="text-muted-foreground"
+        value={snapshot?.beta != null ? snapshot.beta.toFixed(2) : "—"}
+        valueClass={
+          snapshot?.beta != null
+            ? snapshot.beta > 1.5 ? "text-warning"
+            : snapshot.beta < 1.0 ? "text-positive"
+            : "text-foreground"
+            : "text-muted-foreground"
+        }
       />
 
       {/* ── Row 7: ROE — >15% green, <0% red ────────────────────────────── */}
@@ -213,11 +254,13 @@ export function OverviewSidebarMetrics({
         />
       </div>
 
-      {/* ── Row 10: Avg Volume — placeholder until ShareStatistics wired ─── */}
+      {/* ── Row 10: Avg Volume — from instrument_fundamentals_snapshot (PLAN-0050 Wave D) ── */}
+      {/* WHY snapshot: avg_volume_30d extracted from EODHD Technicals/ShareStatistics
+          at backfill time. Formatted with B/M/K suffix same as market cap for consistency. */}
       <MetricRow
         label="AVG VOLUME"
-        value="—"
-        valueClass="text-muted-foreground"
+        value={snapshot?.avg_volume_30d != null ? formatMarketCap(snapshot.avg_volume_30d) : "—"}
+        valueClass={snapshot?.avg_volume_30d != null ? "text-foreground" : "text-muted-foreground"}
       />
 
       {/* ── Row 11: Sector ────────────────────────────────────────────────── */}
@@ -235,6 +278,27 @@ export function OverviewSidebarMetrics({
         value={formatPercent(fundamentals?.daily_return ?? null)}
         valueClass={returnClass(fundamentals?.daily_return ?? null)}
       />
+
+      {/* ── T-D-4-05: DataTimestamp footer ───────────────────────────────── */}
+      {/* WHY show "as of" timestamp: analysts need to know how stale the snapshot
+          data is. The backfill runs nightly, so the data is typically 0–24 hours old.
+          Showing the timestamp builds trust and avoids confusion when markets move
+          but EPS/Beta hasn't updated (expected behaviour, not a bug).
+          WHY only when snapshot.updated_at is available: no timestamp if the instrument
+          hasn't been backfilled yet (snapshot is null or updated_at is null). */}
+      {snapshot?.updated_at != null && (
+        <div className="px-2 py-1 border-t border-border/30 flex items-center gap-1">
+          {/* "as of" label — 9px, dimmer than regular muted text */}
+          <span className="text-[9px] text-muted-foreground/50 uppercase tracking-[0.06em]">
+            as of
+          </span>
+          <DataTimestamp
+            timestamp={snapshot.updated_at}
+            format="absolute"
+            className="text-[9px] text-muted-foreground/60"
+          />
+        </div>
+      )}
     </div>
   );
 }

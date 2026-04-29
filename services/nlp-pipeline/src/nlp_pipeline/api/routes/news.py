@@ -47,6 +47,10 @@ def _to_response(item: object) -> RankedArticleResponse:
         )
         if any_window
         else None,
+        # PLAN-0050 Wave E: forward sentiment and impact_score from the DTO.
+        # These are null until the scoring workers process the article.
+        sentiment=item.sentiment,  # type: ignore[attr-defined]
+        impact_score=item.impact_score,  # type: ignore[attr-defined]
     )
 
 

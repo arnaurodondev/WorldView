@@ -179,6 +179,12 @@ class DocumentSourceMetadata:
     # PRD-0026: LLM relevance scoring (populated by ArticleRelevanceScoringWorker)
     llm_relevance_score: Decimal | None = None  # 0.0-1.0; null until scored
     llm_scored_at: datetime | None = None  # UTC; null until scored
+    # PLAN-0050 Wave E: article-level sentiment + aggregated impact score.
+    # sentiment: one of "positive" | "negative" | "neutral" | "mixed"; null until scored.
+    # impact_score: convenience copy of MAX(day_t0, day_t1) from article_impact_windows;
+    #               null until PriceImpactLabellingWorker computes impact windows.
+    sentiment: str | None = None
+    impact_score: Decimal | None = None
 
 
 @dataclass(frozen=True)

@@ -144,6 +144,48 @@ export interface Fundamentals {
   updated_at: string; // ISO 8601 UTC
 }
 
+/**
+ * FundamentalsSnapshot — flat one-row snapshot of 10 derived metrics.
+ *
+ * WHY SEPARATE FROM Fundamentals: The main Fundamentals type is assembled by
+ * S9 from EODHD highlights/technicals JSONB sections (market cap, P/E, margins).
+ * This snapshot type comes from the instrument_fundamentals_snapshot table which
+ * is populated by the backfill script — it pre-computes derived metrics (FCF,
+ * interest coverage, net debt/EBITDA) that would require multi-section joins at
+ * query time.  Keeping them separate avoids mutating the existing Fundamentals
+ * type (forward-compat rule R11) and lets the two endpoints evolve independently.
+ *
+ * All fields are nullable: NULL → "—" in the UI (data not yet backfilled or
+ * genuinely unavailable for this instrument — e.g. ETFs with no cash flow statements).
+ *
+ * Source: S9 GET /v1/fundamentals/{id}/snapshot → S3 /api/v1/fundamentals/{id}/snapshot
+ * PLAN-0050 Wave D (T-D-4-04)
+ */
+export interface FundamentalsSnapshot {
+  instrument_id: string;
+  // EPS trailing twelve months from EODHD Highlights
+  eps_ttm: number | null;
+  // Market beta (52-week vs S&P 500) from EODHD Technicals
+  beta: number | null;
+  // 30-day average daily volume from EODHD Technicals/ShareStatistics
+  avg_volume_30d: number | null;
+  // Cash flow statement (most recent annual)
+  operating_cash_flow: number | null;
+  capex: number | null;
+  // Derived: free_cash_flow = operating_cash_flow - |capex|
+  free_cash_flow: number | null;
+  // Derived: fcf_margin = free_cash_flow / revenue (null if revenue = 0)
+  fcf_margin: number | null;
+  // Derived: interest_coverage = ebit / interest_expense
+  interest_coverage: number | null;
+  // Derived: net_debt_to_ebitda = (total_debt - cash) / ebitda
+  net_debt_to_ebitda: number | null;
+  // Credit rating string (e.g. "A+", "BBB-") — always null until a credit data provider is integrated
+  credit_rating: string | null;
+  // ISO 8601 UTC timestamp of the last backfill run that produced this row
+  updated_at: string | null;
+}
+
 // ── Fundamentals Section Records (S3 raw format) ────────────────────────────
 //
 // WHY separate from Fundamentals: The main Fundamentals type represents the
@@ -368,6 +410,14 @@ export interface RankedArticle {
   primary_entity_id: string | null;       // top entity for this article (global feed only)
   primary_entity_symbol: string | null;   // ticker of top entity (global feed only)
   impact_windows: ImpactWindows | null;   // null when OHLCV data not yet available
+  // PLAN-0050 Wave E: article-level sentiment + aggregated impact score.
+  // sentiment: categorical signal from ArticleRelevanceScoringWorker.
+  //   null for LIGHT-tier articles (skipped) or articles not yet processed.
+  //   "positive" | "negative" | "neutral" | "mixed"
+  // impact_score: convenience copy of MAX(day_t0, day_t1) from price-impact windows.
+  //   null until PriceImpactLabellingWorker computes windows (< 25h old articles).
+  sentiment: "positive" | "negative" | "neutral" | "mixed" | null;
+  impact_score: number | null;            // 0.0–1.0; null until price windows computed
 }
 
 /**
@@ -657,6 +707,54 @@ export interface RiskMetricsResponse {
     n_returns: number;
     lookback_days: number;
   };
+}
+
+// ── Realized P&L (PLAN-0051 T-A-1-04 / T-A-1-05) ──────────────────────────
+
+/**
+ * One realized-P&L line item, one per closed lot (FIFO).
+ *
+ * WHY a flat structure (not nested by instrument): the backend already
+ * computes the per-instrument breakdown server-side, so the frontend can
+ * simply render the array. Grouping client-side would force the tooltip
+ * component to re-aggregate on every tile-hover render.
+ */
+export interface RealizedPnLBreakdownItem {
+  instrument_id: string;
+  ticker: string;
+  /** Sum of FIFO realized P&L across all SELL fills against this instrument. */
+  realized: number;
+  /** SELL count contributing to this row — useful for "X lots realized" UX. */
+  count: number;
+}
+
+/**
+ * GET /v1/portfolios/{portfolio_id}/realized-pnl response.
+ *
+ * WHY long_term / short_term split: holding period > 365 days qualifies for
+ * long-term capital-gains tax treatment in most jurisdictions. Traders use
+ * this split to estimate after-tax realized P&L without a manual lot-by-lot
+ * audit. The backend computes holding period at SELL time using the FIFO lot
+ * acquired_at — the frontend only renders.
+ */
+export interface RealizedPnLResponse {
+  portfolio_id: string;
+  /** Inclusive lower bound applied to SELL.executed_at; "YYYY-MM-DD". */
+  from: string;
+  /** Inclusive upper bound applied to SELL.executed_at; "YYYY-MM-DD". */
+  to: string;
+  /** Sum of all realized P&L within [from, to]. */
+  total_realized: number;
+  /** Subset of `total_realized` from lots held > 365 days at sale time. */
+  realized_long_term: number;
+  /** Subset of `total_realized` from lots held ≤ 365 days at sale time. */
+  realized_short_term: number;
+  /** Number of SELL transactions that contributed to the total. */
+  count: number;
+  /** Per-instrument breakdown (newest-first by `realized` desc). */
+  breakdown_by_instrument: RealizedPnLBreakdownItem[];
+  /** Currency of the totals (matches portfolio.currency). */
+  currency: string;
 }
 
 // ── Watchlist ──────────────────────────────────────────────────────────────

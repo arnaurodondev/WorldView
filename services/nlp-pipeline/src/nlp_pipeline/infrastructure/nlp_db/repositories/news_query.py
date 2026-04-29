@@ -83,6 +83,8 @@ counts AS (
            dsm.source_type,
            dsm.source_name,
            dsm.llm_relevance_score,
+           dsm.sentiment,
+           dsm.impact_score,
            rd.composite_score                                AS routing_score,
            COALESCE(rd.final_routing_tier, rd.routing_tier) AS routing_tier,
            ami.day_t0_score,
@@ -148,6 +150,8 @@ _ENTITY_ARTICLES_SQL = (
        dsm.source_type,
        dsm.source_name,
        dsm.llm_relevance_score,
+       dsm.sentiment,
+       dsm.impact_score,
        rd.composite_score                                AS routing_score,
        COALESCE(rd.final_routing_tier, rd.routing_tier) AS routing_tier,
        aw.day_t0_score,
@@ -198,6 +202,10 @@ def _row_to_ranked_article(row: Any, *, include_primary_entity: bool = True) -> 
         day_t5_score=float(row.day_t5_score) if row.day_t5_score is not None else None,
         primary_entity_id=row.primary_entity_id if include_primary_entity else None,
         primary_entity_symbol=row.primary_entity_symbol if include_primary_entity else None,
+        # PLAN-0050 Wave E: sentiment + impact_score from document_source_metadata.
+        # hasattr guard: safe against test mocks that don't stub these columns yet.
+        sentiment=row.sentiment if hasattr(row, "sentiment") else None,
+        impact_score=float(row.impact_score) if hasattr(row, "impact_score") and row.impact_score is not None else None,
     )
 
 
