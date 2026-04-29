@@ -127,6 +127,12 @@ class FakeInstrumentRepo(InstrumentRepository):
     async def get(self, instrument_id):
         return self._instrument if self._instrument and self._instrument.id == instrument_id else None
 
+    async def list_by_ids(self, instrument_ids):
+        # QA-iter1 MIN-4 — single-instrument fake; return list.
+        if self._instrument and self._instrument.id in instrument_ids:
+            return [self._instrument]
+        return []
+
     async def get_by_symbol_exchange(self, symbol, exchange):
         return None
 

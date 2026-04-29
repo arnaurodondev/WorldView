@@ -283,7 +283,7 @@ async def list_alert_history(
             detail="Invalid status: must be active|acknowledged|snoozed|all",
         )
 
-    alerts = await uc.execute(
+    alerts, total = await uc.execute(
         tenant_id,
         status=status,
         severity=severity_filter,
@@ -294,15 +294,17 @@ async def list_alert_history(
         offset=offset,
     )
 
+    # WHY total is the universe (not page size): QA-iter1 C-3 — the frontend
+    # computes ``hasMore = rows.length < total`` to decide whether to render
+    # "Load more". With page-size semantics that condition is always False
+    # and pagination was unreachable. ``has_more`` is now derived consistently
+    # from offset + page rows vs the universe size.
     return AlertHistoryResponse(
         alerts=[_alert_to_response(a) for a in alerts],
-        total=len(alerts),
+        total=total,
         limit=limit,
         offset=offset,
-        # ``has_more`` is a heuristic: when we receive exactly ``limit`` rows,
-        # there *might* be another page. The frontend can use it to decide
-        # whether to render a "Load more" button without a separate count(*).
-        has_more=len(alerts) == limit,
+        has_more=offset + len(alerts) < total,
     )
 
 

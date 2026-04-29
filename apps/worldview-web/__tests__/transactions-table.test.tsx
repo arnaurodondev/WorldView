@@ -328,4 +328,34 @@ describe("TransactionsTable — virtualisation", () => {
     // Mocked FixedSizeList synchronously renders all rows
     expect(screen.getByTestId("virtual-mock")).toBeInTheDocument();
   });
+
+  it("virtualised row uses identical column widths to the header (QA-iter1 MAJ-4)", () => {
+    // QA-iter1 MAJ-4 regression: with > VIRTUALISATION_THRESHOLD rows the
+    // virtualised mini-tables previously had an empty <colgroup>, so columns
+    // sized to content per-row and right-aligned numerics misaligned with
+    // the header. We pin the contract by asserting both tables render the
+    // same <col style="width: …%"> sequence.
+    const many: Transaction[] = Array.from({ length: 250 }, (_, i) =>
+      tx({ transaction_id: `tx-${i}`, ticker: `T${i}`, executed_at: `2026-04-${String((i % 28) + 1).padStart(2, "0")}T00:00:00Z` }),
+    );
+    render(<TransactionsTable transactions={many} />);
+
+    const header = screen.getByTestId("transactions-header") as HTMLTableElement;
+    const virtualRows = screen.getAllByTestId("transactions-virtual-row") as HTMLTableElement[];
+    expect(virtualRows.length).toBeGreaterThan(0);
+
+    // Extract the widths from the header's <col> elements.
+    const headerCols = Array.from(header.querySelectorAll("colgroup > col"));
+    expect(headerCols.length).toBeGreaterThan(0);
+    const headerWidths = headerCols.map((c) => (c as HTMLElement).style.width);
+
+    // Sample the first virtual row and compare widths element-by-element.
+    const sampleRow = virtualRows[0];
+    const rowCols = Array.from(sampleRow.querySelectorAll("colgroup > col"));
+    const rowWidths = rowCols.map((c) => (c as HTMLElement).style.width);
+
+    expect(rowWidths).toEqual(headerWidths);
+    // Sanity: ensure no width is empty — that would mean we forgot to set them.
+    headerWidths.forEach((w) => expect(w).not.toBe(""));
+  });
 });

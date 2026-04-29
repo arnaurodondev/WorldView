@@ -60,6 +60,29 @@ describe("CitationBar — DOM rendering", () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it("renders 50 citations with min-w-[8px] segments and flex-wrap (QA-iter1 MIN-1)", () => {
+    // QA-iter1 MIN-1: with >25 citations the previous flex-1 layout produced
+    // ~1px-wide segments. We pin the contract that every segment carries the
+    // ``min-w-[8px]`` class so colour-coding stays legible, and the parent
+    // wraps to a second row instead of squashing.
+    const cites = Array.from({ length: 50 }, (_, i) =>
+      C(String(i + 1), (i % 10) / 10),
+    );
+    render(<CitationBar citations={cites} anchorPrefix="cite-many" />);
+
+    const segments = screen.getAllByRole("link");
+    expect(segments.length).toBe(50);
+    // Each segment must carry the min-width Tailwind class — proving no
+    // segment can collapse below 8px.
+    segments.forEach((seg) => {
+      expect(seg.className).toMatch(/min-w-\[8px\]/);
+    });
+    // The wrapping <div role="group"> must be flex-wrap so the surplus
+    // segments overflow to another row instead of being squashed.
+    const group = segments[0].parentElement;
+    expect(group?.className).toMatch(/flex-wrap/);
+  });
+
   it("clicking a segment with no matching anchor calls preventDefault", () => {
     const cites = [C("1", 0.85)];
     render(<CitationBar citations={cites} anchorPrefix="missing-anchor" />);

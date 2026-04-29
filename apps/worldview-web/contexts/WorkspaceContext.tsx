@@ -64,6 +64,27 @@ export type PanelType =
   | "brief"
   | "chat";
 
+/**
+ * SUPPORTED_PANEL_TYPES — runtime mirror of the PanelType union.
+ *
+ * QA-iter1 MIN-2: used by ``migrateV1`` to drop panels whose type was
+ * removed from the catalogue — without this, legacy v1 configs with a stale
+ * type rendered as empty placeholders (``default:`` branch in
+ * WorkspacePanelContainer). Keep this set in lockstep with the union above.
+ */
+const SUPPORTED_PANEL_TYPES: ReadonlySet<PanelType> = new Set<PanelType>([
+  "chart",
+  "watchlist",
+  "screener",
+  "alerts",
+  "fundamentals",
+  "news",
+  "graph",
+  "portfolio",
+  "brief",
+  "chat",
+]);
+
 /** A single panel within a workspace row */
 export interface WorkspacePanel {
   /** Stable per-panel ID — React key + resize state key */
@@ -211,10 +232,30 @@ function migrateV1(): WorkspaceConfig[] | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
-    // WHY shallow validation: v1 is structurally compatible with v2 (we only added
-    // optional `panelSizes`). A deep type-narrow is overkill — broken entries are
-    // caught by the consumer's defensive rendering.
-    return parsed as WorkspaceConfig[];
+    // QA-iter1 MIN-2: prune panels whose type was removed from the catalogue.
+    // Without this, legacy v1 configs with a stale panel type render as an
+    // empty cell (``default:`` branch in WorkspacePanelContainer). We log a
+    // single warning to console so users diagnosing "where did my panel go"
+    // have a breadcrumb.
+    let droppedCount = 0;
+    const cleaned = (parsed as WorkspaceConfig[]).map((ws) => ({
+      ...ws,
+      rows: ws.rows.map((row) => ({
+        ...row,
+        panels: row.panels.filter((p) => {
+          if (SUPPORTED_PANEL_TYPES.has(p.type)) return true;
+          droppedCount += 1;
+          return false;
+        }),
+      })),
+    }));
+    if (droppedCount > 0 && typeof console !== "undefined") {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[workspace.migrateV1] dropped ${droppedCount} panel(s) with unsupported types`,
+      );
+    }
+    return cleaned;
   } catch {
     return null;
   }

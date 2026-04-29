@@ -173,6 +173,40 @@ describe("createGateway() — POST body", () => {
     expect(body.filters[0].field).toBe("pe_ratio");
     expect(body.sort_by).toBe("market_cap");
   });
+
+  it("snoozeAlert sends body shape {until: <iso>} (QA-iter1 C-1)", async () => {
+    // Pin the wire contract: backend SnoozeAlertRequest expects `until`,
+    // not `snooze_until`. An earlier draft sent the wrong field name and
+    // every snooze request 422'd. This is a contract test — it MUST live
+    // close to the gateway because the bug is at the wire boundary.
+    const spy = mockFetch(200, { alert_id: "a1" });
+    const gw = createGateway("token");
+    const future = new Date(Date.now() + 60 * 60 * 1000);
+    await gw.snoozeAlert("alert-1", future);
+
+    const calledInit = (spy.mock.calls[0] as [string, RequestInit])[1];
+    expect(calledInit?.method).toBe("PATCH");
+    const body = JSON.parse(calledInit?.body as string) as Record<string, unknown>;
+    // Canonical wire field name.
+    expect(body.until).toBe(future.toISOString());
+    // Negative assertion: the old (broken) field name MUST NOT appear.
+    expect(body.snooze_until).toBeUndefined();
+  });
+
+  it("getAlertHistory lowercases severity before sending (QA-iter1 C-2)", async () => {
+    // Pin the severity wire contract: backend AlertSeverity enum is
+    // lowercase ("low"/"medium"/"high"/"critical") even though the
+    // frontend AlertSeverity TS type is uppercase for display. Sending
+    // uppercase produces a 422.
+    const spy = mockFetch(200, { alerts: [], total: 0, offset: 0, limit: 50 });
+    const gw = createGateway("token");
+    await gw.getAlertHistory({ severity: "HIGH" });
+
+    const calledUrl = (spy.mock.calls[0] as [string, unknown])[0] as string;
+    expect(calledUrl).toContain("severity=high");
+    // Negative: the literal uppercase must NOT have leaked through.
+    expect(calledUrl).not.toContain("severity=HIGH");
+  });
 });
 
 // ── Error handling ────────────────────────────────────────────────────────

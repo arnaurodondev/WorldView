@@ -18,12 +18,16 @@ vi.mock("next/navigation", () => ({
   useSearchParams: vi.fn(() => new URLSearchParams()),
 }));
 
+// QA-iter1 NIT-3 / MAJ-5: the test now passes a real UUID and mocks
+// getCompanyOverview so the chat page can resolve UUID → ticker.
+const overviewMock = vi.fn();
 vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => ({
     getThreads: vi.fn().mockResolvedValue([]),
     getThread: vi.fn(),
     deleteThread: vi.fn(),
     updateThread: vi.fn(),
+    getCompanyOverview: overviewMock,
   })),
   GatewayError: class extends Error {
     constructor(public status: number, msg: string) {
@@ -59,23 +63,48 @@ async function renderChat() {
 beforeEach(() => {
   uuidCounter = 0;
   vi.clearAllMocks();
+  overviewMock.mockReset();
 });
 
 describe("Context-aware starters", () => {
-  it("renders 4 entity-tailored questions when entity_id is present", async () => {
+  it("renders 4 entity-tailored questions after resolving UUID → ticker (QA-iter1 MAJ-5)", async () => {
+    // QA-iter1 MAJ-5 + NIT-3: the previous version of this test passed a
+    // ticker as `entity_id=AAPL` which masked the bug — the production
+    // flow always passes a UUID. We now pass a real UUID and mock
+    // getCompanyOverview to return the canonical ticker.
     const { useSearchParams } = await import("next/navigation");
+    const realUuid = "0190abcd-1234-7abc-8def-0123456789ab";
     vi.mocked(useSearchParams).mockReturnValue(
-      new URLSearchParams("entity_id=AAPL") as ReturnType<
+      new URLSearchParams(`entity_id=${realUuid}`) as ReturnType<
         typeof import("next/navigation").useSearchParams
       >,
     );
+    overviewMock.mockResolvedValue({
+      instrument: {
+        instrument_id: realUuid,
+        entity_id: realUuid,
+        ticker: "AAPL",
+        name: "Apple Inc.",
+        exchange: "NASDAQ",
+        currency: "USD",
+        gics_sector: null,
+        gics_industry: null,
+        isin: null,
+        country: null,
+        description: null,
+      },
+      quote: null,
+      fundamentals: null,
+      ohlcv: null,
+    });
 
     await renderChat();
 
     // Click new chat to land on the empty thread + starters
     fireEvent.click(screen.getByRole("button", { name: /start new chat/i }));
 
-    // All 4 entity questions present (with the ticker baked in)
+    // All 4 entity questions present (with the RESOLVED ticker baked in,
+    // not the raw UUID).
     await waitFor(() => {
       expect(
         screen.getByText("What's the latest news on AAPL?"),
@@ -88,6 +117,10 @@ describe("Context-aware starters", () => {
     expect(
       screen.getByText("How does AAPL compare to its peers?"),
     ).toBeInTheDocument();
+    // Negative assertion: the raw UUID must NEVER appear inside a starter.
+    expect(
+      screen.queryByText(new RegExp(realUuid, "i")),
+    ).not.toBeInTheDocument();
   });
 
   it("falls back to generic starters when no entity_id param", async () => {

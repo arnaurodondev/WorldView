@@ -169,6 +169,19 @@ class InstrumentRepository(ABC):
     async def get(self, instrument_id: UUID) -> InstrumentRef | None: ...
 
     @abstractmethod
+    async def list_by_ids(self, instrument_ids: list[UUID]) -> list[InstrumentRef]:
+        """Batch fetch instruments by ID. Order is NOT guaranteed.
+
+        QA-iter1 MIN-4: GetRealizedPnLUseCase used to call ``get(iid)`` once
+        per instrument in the breakdown -- N+1 round trips on the read replica
+        (>200 sequential queries for long-history portfolios). The batch
+        version returns the same data in a single SELECT ... WHERE id = ANY(...).
+
+        Missing IDs are silently dropped (callers must handle the gap).
+        """
+        ...
+
+    @abstractmethod
     async def get_by_symbol_exchange(self, symbol: str, exchange: str) -> InstrumentRef | None: ...
 
     @abstractmethod

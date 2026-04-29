@@ -230,6 +230,10 @@ class FakeInstrumentRepository(InstrumentRepository):
     async def get(self, instrument_id: UUID) -> InstrumentRef | None:
         return self._store.get(instrument_id)
 
+    async def list_by_ids(self, instrument_ids: list[UUID]) -> list[InstrumentRef]:
+        # QA-iter1 MIN-4 — batch fetch (mirrors the SqlAlchemy impl).
+        return [self._store[i] for i in instrument_ids if i in self._store]
+
     async def get_by_symbol_exchange(self, symbol: str, exchange: str) -> InstrumentRef | None:
         for inst in self._store.values():
             if inst.symbol == symbol and inst.exchange == exchange:

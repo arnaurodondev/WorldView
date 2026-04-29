@@ -209,3 +209,85 @@ class TestDeleteThreadUseCase:
 
         mock_gauge.labels.assert_called_once_with(tenant_id=str(_TENANT_ID))
         mock_gauge.labels.return_value.dec.assert_called_once()
+
+
+# ── UpdateThreadUseCase ───────────────────────────────────────────────────────
+
+
+class TestUpdateThreadUseCase:
+    """QA-iter1 MAJ-3: PATCH /threads/{id} with empty body must NOT clear title.
+
+    The earlier draft passed ``title=None`` straight through to
+    ``threads.update_title`` which wrote NULL into the persisted column.
+    The use case now short-circuits the no-op path.
+    """
+
+    async def test_empty_patch_body_preserves_title_no_update(self) -> None:
+        """When ``title is None`` (e.g. PATCH {}), the existing thread is returned unchanged."""
+        from rag_chat.application.use_cases.update_thread import UpdateThreadUseCase
+
+        existing = _make_thread()
+        uow = _make_mock_uow()
+        # ``threads.get`` returns the existing thread on the no-op path.
+        uow.threads.get = AsyncMock(return_value=existing)
+        # ``update_title`` MUST NOT be called when title is None.
+        uow.threads.update_title = AsyncMock()
+
+        uc = UpdateThreadUseCase()
+        result = await uc.execute(
+            uow,
+            thread_id=_THREAD_ID,
+            user_id=_USER_ID,
+            tenant_id=_TENANT_ID,
+            title=None,
+        )
+
+        # Negative assertion: no UPDATE happened.
+        uow.threads.update_title.assert_not_awaited()
+        # commit also skipped — no write means nothing to flush.
+        uow.commit.assert_not_awaited()
+        # Returns the unchanged entity for the API to round-trip.
+        assert result is existing
+
+    async def test_empty_patch_body_unknown_thread_raises(self) -> None:
+        """Even on the no-op path, a thread the user doesn't own must 404."""
+        from rag_chat.application.use_cases.update_thread import UpdateThreadUseCase
+        from rag_chat.domain.errors import ThreadNotFoundError
+
+        uow = _make_mock_uow()
+        uow.threads.get = AsyncMock(return_value=None)  # ownership filter rejected
+        uow.threads.update_title = AsyncMock()
+
+        uc = UpdateThreadUseCase()
+        with pytest.raises(ThreadNotFoundError):
+            await uc.execute(
+                uow,
+                thread_id=_THREAD_ID,
+                user_id=_USER_ID,
+                tenant_id=_TENANT_ID,
+                title=None,
+            )
+
+        uow.threads.update_title.assert_not_awaited()
+        uow.commit.assert_not_awaited()
+
+    async def test_non_empty_title_does_update_and_commits(self) -> None:
+        """When title is provided, the use case calls update_title + commits."""
+        from rag_chat.application.use_cases.update_thread import UpdateThreadUseCase
+
+        renamed = _make_thread()
+        uow = _make_mock_uow()
+        uow.threads.update_title = AsyncMock(return_value=renamed)
+
+        uc = UpdateThreadUseCase()
+        result = await uc.execute(
+            uow,
+            thread_id=_THREAD_ID,
+            user_id=_USER_ID,
+            tenant_id=_TENANT_ID,
+            title="New Title",
+        )
+
+        uow.threads.update_title.assert_awaited_once()
+        uow.commit.assert_awaited_once()
+        assert result is renamed

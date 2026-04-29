@@ -45,6 +45,26 @@ class UpdateThreadUseCase:
         tenant_id: UUID,
         title: str | None,
     ) -> ConversationThread:
+        # QA-iter1 MAJ-3: short-circuit when the patch is a no-op.
+        # ``UpdateThreadRequest.title`` defaults to None (forward-compat for
+        # future patch fields), so a literal empty body `{}` would fall
+        # through and clear the persisted title to NULL. We treat title=None
+        # as "do not modify" and re-fetch the unchanged thread so the API
+        # response shape stays consistent (ThreadDetailResponse with messages).
+        if title is None:
+            from rag_chat.domain.errors import ThreadNotFoundError
+
+            existing = await uow.threads.get(thread_id, user_id, tenant_id)
+            if existing is None:
+                raise ThreadNotFoundError(f"Thread {thread_id} not found or access denied")
+            logger.info(  # type: ignore[no-any-return]
+                "thread_rename_noop",
+                thread_id=str(thread_id),
+                user_id=str(user_id),
+                reason="title_omitted",
+            )
+            return existing
+
         # WHY one UPDATE atomic with ownership filter (see repo): no TOCTOU window.
         thread = await uow.threads.update_title(
             thread_id=thread_id,

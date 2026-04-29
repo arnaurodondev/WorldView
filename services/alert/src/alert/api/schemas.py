@@ -158,7 +158,14 @@ class AlertHistoryResponse(BaseModel):
     """Paginated list of alerts in a tenant's history."""
 
     alerts: list[AlertResponse]
-    total: int  # count of items in this page (not the universe — clients can use ``has_more``)
+    # ``total`` is the universe count for the filtered tenant history (every
+    # row matching the same filters), NOT the page size. Frontends use
+    # ``rows.length < total`` to detect more-pages-available. QA-iter1 C-3
+    # changed this from page-size semantics to universe semantics so the
+    # "Load more" affordance actually appears.
+    total: int
     limit: int
     offset: int
+    # ``has_more`` is computed as ``offset + len(alerts) < total`` server-side
+    # so the client can render "Load more" without re-deriving it.
     has_more: bool

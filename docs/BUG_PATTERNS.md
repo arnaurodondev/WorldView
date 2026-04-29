@@ -7606,6 +7606,44 @@ Orchestration logic that needs the routing cache or UoW factory belongs in the *
 - In multi-process services (R22), never assume the API process has the same wired dependencies as the scheduler or worker processes.
 
 
+## BP-276 — Wire field naming MUST be pinned by an end-to-end contract test
+
+**Category**: API contract / frontend-backend integration
+**Severity**: CRITICAL when a feature ships with the mismatch (request 422s every time)
+**Affected areas**: Any frontend gateway method that POSTs/PATCHes a JSON body or builds query params from typed enums; any S9-proxied endpoint where the canonical Pydantic schema lives in a different repo from the frontend
+**First seen**: 2026-04-29 (PLAN-0051 QA iter1 — C-1 snooze body, C-2 severity case, C-3 pagination total semantics)
+
+**Symptoms**:
+- Frontend integration test passes (component-level mock matches the frontend's own assumptions about the wire shape).
+- Backend unit test passes (Pydantic schema is correct on its own).
+- Live request 422s with `Field required: <X>` or `Invalid value: must be <enum members>`.
+- "Load more" never appears in pagination because `rows.length < total` is always False.
+- The bug is invisible to type-checking because `apiFetch<T>(...)` types the **response**, not the request body.
+
+**Root Cause**:
+A wire-shape mismatch between the frontend gateway and the backend Pydantic schema. Common patterns:
+1. **Field rename**: backend declares `until: datetime`, frontend sends `{snooze_until: ...}` (C-1).
+2. **Case mismatch**: backend `StrEnum` lowercase, frontend TS literal type uppercase, query string built from the literal (C-2).
+3. **Pagination semantics**: backend ``total`` is a per-page row count; frontend computes `hasMore = rows.length < total` and the affordance never appears (C-3).
+
+**Fix**:
+For each (gateway method ↔ Pydantic schema) pair, add **one Vitest** that asserts the request body / query string built by the gateway, and **one pytest** that pins the schema's required fields and enum values. The Vitest captures the bug at the wire boundary; the pytest prevents the schema drifting underneath.
+
+```ts
+// gateway.test.ts — pins the wire body shape
+const spy = mockFetch(200, {});
+await gw.snoozeAlert("a-1", new Date(...));
+const body = JSON.parse((spy.mock.calls[0][1] as RequestInit).body as string);
+expect(body.until).toBeDefined();           // canonical
+expect(body.snooze_until).toBeUndefined();  // negative — bug regression
+```
+
+**Prevention**:
+- For every new gateway method that takes a body or builds query params, write the contract test BEFORE the integration test. The latter is too coarse — it tests "the UI eventually shows X" not "the wire shape is exactly Y".
+- When a backend schema renames or case-folds a field, grep the frontend repo for the OLD name and update both sides plus the contract test in one PR. Do NOT add a Pydantic alias as a "compat" shim — that just postpones the cleanup and lets the next refactor regress silently.
+- Pagination shape (`total` semantics, `has_more` flag, cursor vs offset) MUST be documented in the schema docstring and asserted in both Vitest and pytest. The frontend "Load more" affordance is the canary — if it never appears in QA, the bug is in the pair.
+
+
 ## BP-275 — Kafka `MemberIdRequiredException` On First JoinGroup (Cosmetic)
 
 **Category**: Kafka / startup race
