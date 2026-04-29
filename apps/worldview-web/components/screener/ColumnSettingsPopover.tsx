@@ -36,8 +36,8 @@
 // WHY "use client": uses useState for local edit buffer, dispatches drag
 // events, and reads/writes localStorage via the columns helpers.
 
-import { useState } from "react";
-import { Settings2, GripVertical, RotateCcw } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Settings2, GripVertical, RotateCcw, Check } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -57,20 +57,44 @@ export interface ColumnSettingsPopoverProps {
   columns: ScreenerColumn[];
   /** Called whenever the user changes columns; parent persists + re-renders table. */
   onChange: (next: ScreenerColumn[]) => void;
+  /**
+   * PLAN-0053 T-F-6-07: when true, the sparkline column is currently
+   * suppressed because the loaded result set exceeds the 200-row threshold.
+   * The popover renders an inline explainer so the user understands why
+   * their visible-checked sparkline column isn't drawing in the table.
+   */
+  sparklineSuppressed?: boolean;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function ColumnSettingsPopover({ columns, onChange }: ColumnSettingsPopoverProps) {
+export function ColumnSettingsPopover({
+  columns,
+  onChange,
+  sparklineSuppressed = false,
+}: ColumnSettingsPopoverProps) {
   // WHY a local "dragging index" state: HTML5 DnD APIs are stateful in the
   // DOM but React doesn't know about it. Tracking the source index lets us
   // compute the splice on drop without touching dataTransfer.
   const [dragIdx, setDragIdx] = useState<number | null>(null);
 
+  // PLAN-0053 T-F-6-06: "Saved" inline-tick state. Flipped to true on each
+  // change; auto-cleared after 1.5s so the indicator doesn't permanently
+  // stick around. WHY a state flag (not always-on): "your prefs are auto-
+  // saved" is implicit — flashing the tick gives positive confirmation
+  // without cluttering the popover when nothing has changed recently.
+  const [savedTick, setSavedTick] = useState(false);
+  useEffect(() => {
+    if (!savedTick) return;
+    const handle = window.setTimeout(() => setSavedTick(false), 1500);
+    return () => window.clearTimeout(handle);
+  }, [savedTick]);
+
   function handleToggle(idx: number) {
     const next = columns.map((c, i) => (i === idx ? { ...c, visible: !c.visible } : c));
     onChange(next);
     saveColumnPrefs(next);
+    setSavedTick(true);
   }
 
   function handleDragStart(idx: number, e: React.DragEvent<HTMLLIElement>) {
@@ -99,11 +123,13 @@ export function ColumnSettingsPopover({ columns, onChange }: ColumnSettingsPopov
     setDragIdx(null);
     onChange(next);
     saveColumnPrefs(next);
+    setSavedTick(true);
   }
 
   function handleReset() {
     const fresh = resetColumnPrefs();
     onChange(fresh);
+    setSavedTick(true);
   }
 
   return (
@@ -120,8 +146,20 @@ export function ColumnSettingsPopover({ columns, onChange }: ColumnSettingsPopov
       </PopoverTrigger>
       <PopoverContent align="end" className="w-64 p-2">
         <div className="flex items-center justify-between mb-1 px-1">
-          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
+          <span className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
             Columns
+            {/* PLAN-0053 T-F-6-06: inline ✓ Saved. WHY aria-live=polite: the
+                tick is short-lived, but a screen reader user benefits from a
+                spoken "Saved" cue when their preference is persisted. */}
+            {savedTick && (
+              <span
+                className="flex items-center gap-0.5 text-[10px] uppercase tracking-[0.06em] text-positive"
+                aria-live="polite"
+              >
+                <Check className="h-3 w-3" aria-hidden />
+                Saved
+              </span>
+            )}
           </span>
           <button
             type="button"
@@ -133,6 +171,19 @@ export function ColumnSettingsPopover({ columns, onChange }: ColumnSettingsPopov
             Reset
           </button>
         </div>
+        {/* PLAN-0053 T-F-6-07: sparkline auto-disable explainer.
+            WHY at top (above the list): users notice the explanation as they
+            open the popover. Mounting it next to the specific sparkline row
+            would require row-targeted styling and a dynamic position lookup. */}
+        {sparklineSuppressed && (
+          <p
+            role="note"
+            className="mb-1 rounded-[2px] border border-warning/40 bg-warning/5 px-1.5 py-1 text-[10px] leading-snug text-warning/90"
+          >
+            Sparklines hidden for &gt;200 rows. Apply more filters or load fewer to
+            re-enable.
+          </p>
+        )}
         <ul role="list" aria-label="Column visibility and order">
           {columns.map((col, idx) => (
             <li

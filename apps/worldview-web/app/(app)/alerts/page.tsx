@@ -32,7 +32,7 @@
 // WHY "use client": useSearchParams (tab deep-linking), useQuery (data fetching),
 // useState (category filter). Tabs from shadcn/ui uses Radix state (client runtime).
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { BellRing, Newspaper, TrendingUp } from "lucide-react";
@@ -68,6 +68,67 @@ const CATEGORIES = [
 ] as const;
 
 type NewsCategory = (typeof CATEGORIES)[number];
+
+/**
+ * NEWS_CATEGORY_LS_KEY — localStorage key for category persistence (T-F-6-02).
+ *
+ * WHY persist: institutional users typically have a vertical focus
+ * ("M&A desk", "macro analyst"). Re-selecting their preferred category every
+ * page visit is friction; persisting the choice across sessions matches
+ * Bloomberg Terminal's "remember my last view" convention.
+ */
+const NEWS_CATEGORY_LS_KEY = "alerts-news-category";
+
+/**
+ * isValidCategory — type-guard for the persisted value (T-F-6-02).
+ *
+ * WHY guard: if a future release renames categories, the stored value may
+ * point to a deleted entry — silently fall back to "All" instead of leaving
+ * the rail with no active chip.
+ */
+function isValidCategory(v: unknown): v is NewsCategory {
+  return typeof v === "string" && (CATEGORIES as readonly string[]).includes(v);
+}
+
+/**
+ * useStickyCategory — useState replacement that reads / writes localStorage.
+ *
+ * WHY a hook (not inline useEffect): both NewsFeedTab and TopTodayTab hold
+ * their own activeCategory state. Centralising the persistence pattern keeps
+ * the two tabs consistent and prevents bugs where one persists but the other
+ * doesn't (which would surprise users when switching tabs).
+ *
+ * WHY one shared key (`alerts-news-category`): the user almost always wants
+ * the same category in both News Feed and Top Today (their interest doesn't
+ * change between the two surfaces). Sharing the key gives "set once, applies
+ * everywhere on this page" semantics.
+ */
+function useStickyCategory(): [NewsCategory, (cat: NewsCategory) => void] {
+  // WHY lazy initialiser: localStorage.getItem runs once on mount, not on
+  // every render. SSR safety: typeof window guard avoids ReferenceError when
+  // Next.js statically analyses the module.
+  const [category, setCategory] = useState<NewsCategory>(() => {
+    if (typeof window === "undefined") return "All";
+    try {
+      const raw = window.localStorage.getItem(NEWS_CATEGORY_LS_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return isValidCategory(parsed) ? parsed : "All";
+    } catch {
+      return "All";
+    }
+  });
+
+  // Sync writes back to localStorage on every change. WHY effect (not inside
+  // setCategory): keeps the writes idempotent and away from the render path.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(NEWS_CATEGORY_LS_KEY, JSON.stringify(category));
+    } catch { /* ignore quota / private mode */ }
+  }, [category]);
+
+  return [category, setCategory];
+}
 
 /**
  * CATEGORY_KEYWORDS — heuristic keyword sets for client-side article filtering.
@@ -303,9 +364,10 @@ function CategoryFilterRail({ active, onChange }: CategoryFilterRailProps) {
  * trigger unnecessary re-fetches.
  */
 function NewsFeedTab({ accessToken }: TabProps) {
-  // WHY local category state: filter resets naturally on tab switch —
-  // expected UX for a real-time alert feed.
-  const [activeCategory, setActiveCategory] = useState<NewsCategory>("All");
+  // PLAN-0053 T-F-6-02: persisted via useStickyCategory. The legacy comment
+  // below referred to the deliberate reset-on-tab-switch behaviour — that
+  // contract has been replaced by the persistence requirement.
+  const [activeCategory, setActiveCategory] = useStickyCategory();
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["news-relevant"],
@@ -380,7 +442,8 @@ function NewsFeedTab({ accessToken }: TabProps) {
  * without requiring the user to change the time window manually.
  */
 function TopTodayTab({ accessToken }: TabProps) {
-  const [activeCategory, setActiveCategory] = useState<NewsCategory>("All");
+  // PLAN-0053 T-F-6-02: persisted via useStickyCategory (shared with NewsFeedTab).
+  const [activeCategory, setActiveCategory] = useStickyCategory();
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["news-top-today", { hours: 72, limit: 20 }],

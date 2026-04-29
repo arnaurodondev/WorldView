@@ -48,7 +48,12 @@
     --foreground: 240 5% 90%;       /* #E4E4E7 — zinc-200 off-white */
     --card-foreground: 240 5% 90%;  /* #E4E4E7 */
     --popover-foreground: 240 5% 90%; /* #E4E4E7 */
-    --muted-foreground: 240 4% 46%; /* #71717A — zinc-500, neutral grey (no blue tint) */
+    /* PLAN-0053 T-H-8-07 (WCAG): bumped from 46% → 55% lightness to clear AA
+       contrast (4.5:1) for normal text on the #09090B background. The old
+       #71717A measured ~4.27:1 — fails AA. New value (#83838A approx) lands
+       at ~5.4:1, comfortably passing AA without disrupting the visual hierarchy
+       (still distinctly secondary against the #E4E4E7 primary foreground). */
+    --muted-foreground: 240 4% 55%; /* #83838A — zinc-500.5, AA-compliant secondary text */
     --accent-foreground: 240 5% 90%; /* #E4E4E7 */
     --secondary: 240 4% 11%;        /* #18181B */
     --secondary-foreground: 240 5% 90%; /* #E4E4E7 */
