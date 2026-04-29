@@ -34,6 +34,7 @@
 
 // WHY renamed imports: react-resizable-panels v4 renamed exports.
 // PanelGroup → Group, PanelResizeHandle → Separator. Panel stays Panel.
+import { useState } from "react";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle, type Layout } from "react-resizable-panels";
 import { Plus } from "lucide-react";
 import {
@@ -80,12 +81,17 @@ const PANEL_CATALOGUE: { type: PanelType; label: string; icon: LucideIcon }[] = 
 
 /**
  * AddPanelModalContent — inner content of the Add Panel dialog.
+ *
  * WHY separate component: keeps dialog content decoupled from the outer Dialog
  * wrapper so the catalogue grid renders cleanly inside DialogContent.
+ *
+ * WHY onAdd callback (not just calling addPanelToWorkspace inline): PLAN-0051
+ * T-C-3-08 (F-X-107) requires the dialog to auto-close after the user picks a
+ * panel type. Closing the dialog is the parent's responsibility (it owns the
+ * controlled `open` state); this component bubbles up the pick via onAdd and
+ * the parent handles both addPanelToWorkspace + setOpen(false) atomically.
  */
-function AddPanelModalContent({ workspaceId }: { workspaceId: string }) {
-  const { addPanelToWorkspace } = useWorkspace();
-
+function AddPanelModalContent({ onAdd }: { onAdd: (type: PanelType) => void }) {
   return (
     // WHY gap-px grid: each panel type card is visually separated by 1px seams
     // (background showing through), consistent with the workspace panel seam style.
@@ -94,10 +100,7 @@ function AddPanelModalContent({ workspaceId }: { workspaceId: string }) {
         <button
           key={type}
           className="flex items-center gap-2 bg-card px-3 h-9 text-left hover:bg-muted/40"
-          // WHY no explicit close: shadcn Dialog wraps content in a context that
-          // closes when the button interaction triggers the parent DialogClose.
-          // For now, add and rely on user closing the dialog manually.
-          onClick={() => addPanelToWorkspace(workspaceId, type)}
+          onClick={() => onAdd(type)}
         >
           <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
           <span className="text-[11px] text-foreground">{label}</span>
@@ -114,7 +117,25 @@ interface WorkspaceGridProps {
 }
 
 export function WorkspaceGrid({ workspace }: WorkspaceGridProps) {
-  const { updatePanelSizes } = useWorkspace();
+  const { updateWorkspaceLayout, addPanelToWorkspace } = useWorkspace();
+
+  // WHY controlled Dialog state (PLAN-0051 T-C-3-08 / F-X-107): the prior version
+  // relied on the user manually closing the Add Panel dialog after picking a type.
+  // F-X-107 requires the dialog to auto-close after a pick. Lifting the `open`
+  // state up here means we can call setOpen(false) immediately after addPanelToWorkspace.
+  const [addPanelOpen, setAddPanelOpen] = useState(false);
+
+  /**
+   * handleAddPanel — adds a panel and closes the dialog atomically.
+   *
+   * WHY both effects in one handler: keeping addPanel + close in the same callback
+   * eliminates the "I already added this panel, now I have to dismiss the modal"
+   * extra step. Side-effects fire synchronously so React batches the renders.
+   */
+  function handleAddPanel(type: PanelType) {
+    addPanelToWorkspace(workspace.id, type);
+    setAddPanelOpen(false);
+  }
 
   /**
    * handleRowLayout — converts v4 Layout object to ordered size array and persists.
@@ -151,8 +172,11 @@ export function WorkspaceGrid({ workspace }: WorkspaceGridProps) {
 
     // WHY length check: only persist when all rows have been touched at least once.
     // Partial writes (some rows undefined) would corrupt the saved layout.
+    // WHY updateWorkspaceLayout (not updatePanelSizes directly): PLAN-0051 T-C-3-01
+    // funnels resize-driven persistence through the layout entry point so a future
+    // drag-to-reorder change has a single hook to extend.
     if (nextSizes.length === workspace.rows.length) {
-      updatePanelSizes(workspace.id, nextSizes);
+      updateWorkspaceLayout(workspace.id, nextSizes);
     }
   }
 
@@ -257,7 +281,12 @@ export function WorkspaceGrid({ workspace }: WorkspaceGridProps) {
        * doesn't compete visually with the panel chrome.
        */}
       <div className="flex h-6 shrink-0 items-center border-t border-border px-2">
-        <Dialog>
+        {/*
+         * WHY controlled Dialog (open + onOpenChange): F-X-107 wants the dialog to
+         * close immediately after the user clicks a panel type. Controlled state
+         * lets handleAddPanel call setAddPanelOpen(false) atomically with the add.
+         */}
+        <Dialog open={addPanelOpen} onOpenChange={setAddPanelOpen}>
           <DialogTrigger asChild>
             <button
               className="flex items-center gap-1 text-[10px] uppercase tracking-[0.08em] text-muted-foreground hover:text-foreground"
@@ -277,7 +306,7 @@ export function WorkspaceGrid({ workspace }: WorkspaceGridProps) {
                 Add Panel
               </DialogTitle>
             </DialogHeader>
-            <AddPanelModalContent workspaceId={workspace.id} />
+            <AddPanelModalContent onAdd={handleAddPanel} />
           </DialogContent>
         </Dialog>
       </div>

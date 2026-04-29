@@ -252,7 +252,10 @@ CREATE TABLE dead_letter_queue (
 --   PLAN-0050 QA iter-1 F-Q1-07: sentiment was extended in ArticleRelevanceScoringWorker
 --   prompt; the worker now writes sentiment alongside score in every UPDATE.
 -- impact_score: populated by PriceImpactLabellingWorker (nullable — null until price
---   windows are computed).
+--   windows are computed). Written atomically with article_impact_windows rows in the
+--   same DB transaction (Phase 3 of the worker). Derivation: max(abs(impact_score))
+--   across all computed windows for that article, already normalized [0,1]. WHY max:
+--   reflects the strongest price-movement signal from any entity/window combination.
 -- Both columns exposed in GET /api/v1/news/top and GET /api/v1/entities/{id}/articles.
 ALTER TABLE document_source_metadata
     ADD COLUMN sentiment    TEXT         CHECK (sentiment IN ('positive','negative','neutral','mixed')),
@@ -361,7 +364,7 @@ Key tables S6 writes to:
 | NLPPipelineOutboxDispatcher | `infrastructure/messaging/outbox/dispatcher_main.py` | Polls `outbox_events`, produces to Kafka |
 | WatchlistEventConsumer | `infrastructure/messaging/consumers/watchlist_consumer_main.py` | Maintains Valkey `nlp:v1:watched_entities` SET |
 | EmbeddingRetryWorker | `infrastructure/workers/embedding_retry_worker.py` (via dispatcher_main) | Re-embeds failed pending entries with backoff |
-| **PriceImpactLabellingWorker** | `workers/price_impact_labelling_worker.py` | Retroactively labels articles with OHLCV price-impact scores every 4h |
+| **PriceImpactLabellingWorker** | `workers/price_impact_labelling_worker.py` | Retroactively labels articles with OHLCV price-impact scores every 4h. Phase 3 writes `article_impact_windows` rows AND updates `document_source_metadata.impact_score` in the same DB transaction (PLAN-0050 QA iter-2 F-Q2-02). |
 | **UnresolvedResolutionWorker** | `infrastructure/workers/unresolved_resolution_worker.py` (spawned in `app.py` lifespan) | Two-phase re-resolution of UNRESOLVED entity mentions: Phase 1 = free cascade re-run (Block 9 logic); Phase 2 = Qwen2.5:3b LLM classification (entity_created or noise); stale-lock recovery on startup. Controlled by `NLP_PIPELINE_UNRESOLVED_RESOLUTION_ENABLED` (default: true, interval: 30 min). |
 
 ## Internal Modules

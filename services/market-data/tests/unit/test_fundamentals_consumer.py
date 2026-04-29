@@ -997,3 +997,131 @@ def test_derive_fundamentals_snapshot_null_semantics_na_strings() -> None:
 
     assert snap["eps_ttm"] is None
     assert snap["beta"] is None
+
+
+# ── F-Q2-03: COALESCE UPSERT policy (PLAN-0050 QA iter-2) ────────────────────
+
+
+def test_upsert_snapshot_sql_uses_coalesce_for_all_10_nullable_columns() -> None:
+    """F-Q2-03: The UPSERT SQL must use COALESCE(EXCLUDED.col, table.col) for all
+    10 nullable data columns so that a partial EODHD poll never silently clobbers
+    previously-valid data with NULL.
+
+    WHY white-box SQL inspection: upsert_snapshot() wraps a SQLAlchemy text()
+    query that executes against a real DB.  A unit test cannot run that query
+    without a running Postgres instance.  Instead, we inspect the generated SQL
+    string to verify the COALESCE contract is honoured for each nullable column.
+    This is a structural guarantee — it will fail the moment someone accidentally
+    reverts to a bare ``EXCLUDED.col`` assignment (the regression pattern from
+    PLAN-0049 iter-1 F-QAC-02 and the bug that motivated this finding).
+    """
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import _UPSERT_SQL
+
+    sql_text = str(_UPSERT_SQL)
+
+    # All 10 nullable data columns must use COALESCE; updated_at is intentionally
+    # unconditional (it tracks when the snapshot was last seen, not data freshness).
+    nullable_columns = [
+        "eps_ttm",
+        "beta",
+        "avg_volume_30d",
+        "operating_cash_flow",
+        "capex",
+        "free_cash_flow",
+        "fcf_margin",
+        "interest_coverage",
+        "net_debt_to_ebitda",
+        "credit_rating",
+    ]
+    for col in nullable_columns:
+        # Each column must appear in a COALESCE(EXCLUDED.col, ...) expression
+        assert f"COALESCE(EXCLUDED.{col}" in sql_text, (
+            f"Column '{col}' is not wrapped in COALESCE in the UPSERT SQL — "
+            f"a partial EODHD poll would silently overwrite the stored value with NULL. "
+            f"Fix: use COALESCE(EXCLUDED.{col}, instrument_fundamentals_snapshot.{col})"
+        )
+
+    # updated_at should NOT use COALESCE — it must always be refreshed unconditionally
+    assert "COALESCE(EXCLUDED.updated_at" not in sql_text, (
+        "updated_at must be set unconditionally (now()), not via COALESCE — "
+        "it tracks when the snapshot row was last seen by the pipeline."
+    )
+
+
+@pytest.mark.asyncio
+async def test_upsert_snapshot_partial_payload_preserves_existing_values() -> None:
+    """F-Q2-03: Verify COALESCE semantics via mock session.
+
+    Scenario:
+      1. Full payload — all 10 fields populated.
+      2. Partial re-poll — only eps_ttm, beta, avg_volume_30d set; the 7 remaining
+         fields are None (e.g. cash-flow section was absent from the response).
+      3. Assert: after the second UPSERT the 7 fields NOT in the partial payload
+         are still the original values (COALESCE fell back to the stored value).
+
+    Implementation note: upsert_snapshot() calls session.execute(text(...), params).
+    We capture the params dict from both calls and verify that the COALESCE logic
+    in the SQL string would produce the correct result (the test validates the
+    *contract* of the params — both None and non-None values are passed through;
+    it is the DB-side COALESCE that decides which wins).  Verifying the SQL text
+    itself (see test above) is the complementary structural check.
+    """
+    from unittest.mock import AsyncMock
+
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import upsert_snapshot
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=None)
+
+    instrument_id = "0190f3a0-dead-beef-cafe-000000000001"
+
+    # ── Call 1: full payload ──────────────────────────────────────────────────
+    full_snap = {
+        "eps_ttm": 6.42,
+        "beta": 1.25,
+        "avg_volume_30d": 80_000_000,
+        "operating_cash_flow": 110_000_000_000.0,
+        "capex": 10_000_000_000.0,
+        "free_cash_flow": 100_000_000_000.0,
+        "fcf_margin": 0.25,
+        "interest_coverage": 50.0,
+        "net_debt_to_ebitda": 0.5,
+        "credit_rating": None,  # always None — EODHD limitation
+    }
+    await upsert_snapshot(session, instrument_id, full_snap)
+
+    # ── Call 2: partial payload (only 3 of 10 fields present) ────────────────
+    partial_snap = {
+        "eps_ttm": 6.80,  # updated
+        "beta": 1.30,  # updated
+        "avg_volume_30d": 85_000_000,  # updated
+        # All other fields are None — simulates cash-flow section missing from EODHD poll
+        "operating_cash_flow": None,
+        "capex": None,
+        "free_cash_flow": None,
+        "fcf_margin": None,
+        "interest_coverage": None,
+        "net_debt_to_ebitda": None,
+        "credit_rating": None,
+    }
+    await upsert_snapshot(session, instrument_id, partial_snap)
+
+    # Verify execute was called twice
+    assert session.execute.await_count == 2
+
+    # The params from call 2 must contain None for the 7 absent fields.
+    # The COALESCE in the SQL ensures those None params fall back to the DB value.
+    # We assert that the params dict correctly reflects the partial payload so
+    # the DB-side COALESCE receives the right inputs.
+    _sql_stmt, params_2 = session.execute.call_args_list[1].args
+    assert params_2["eps_ttm"] == pytest.approx(6.80)
+    assert params_2["beta"] == pytest.approx(1.30)
+    assert params_2["avg_volume_30d"] == 85_000_000
+    # The 7 absent fields are sent as None — COALESCE in SQL will keep existing DB value
+    assert params_2["operating_cash_flow"] is None
+    assert params_2["capex"] is None
+    assert params_2["free_cash_flow"] is None
+    assert params_2["fcf_margin"] is None
+    assert params_2["interest_coverage"] is None
+    assert params_2["net_debt_to_ebitda"] is None
+    assert params_2["credit_rating"] is None

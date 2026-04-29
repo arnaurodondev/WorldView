@@ -196,7 +196,8 @@ All API calls go through this typed client. Base URL is `/api` (proxied by `next
 | Auth | React Context (`AuthContext`) | `"use client"` provider |
 | Alert stream | React Context (`AlertStreamContext`) | `"use client"`, shared WS |
 | Local UI state | `useState` / `useReducer` | Filters, modals, selections |
-| Workspace layout | `localStorage` + React state | Persisted grid layout |
+| Workspace layout | `localStorage` + React state | Persisted grid layout — versioned key `worldview:workspaces:v2` (300-ms debounced writes; auto-migrates from legacy `worldview-workspaces` v1 key on first load). PLAN-0051 T-C-3-01. |
+| Symbol linking | React Context (`SymbolLinkingContext`) + `localStorage` | Per-workspace; persists per-panel link colors at `worldview:symbolLinks:v1` (active symbol intentionally NOT persisted). 5 colors + "none" with broadcast across same-color panels. PLAN-0051 T-C-3-05. |
 
 ---
 

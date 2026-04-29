@@ -396,3 +396,167 @@ class TestRunForever:
             )
 
         assert call_count >= 2, "Worker should have run at least 2 cycles"
+
+
+# ── F-Q2-02: document_source_metadata.impact_score writer ────────────────────
+#
+# These tests verify that run_once() now ALSO writes a headline impact_score to
+# document_source_metadata in the same atomic commit as the article_impact_windows
+# rows (PLAN-0050 QA iter-2 finding F-Q2-02).
+
+
+class TestDsmImpactScoreWriter:
+    @pytest.mark.asyncio
+    async def test_run_once_updates_dsm_impact_score_after_upsert_batch(self) -> None:
+        """F-Q2-02: After writing to article_impact_windows, run_once() issues an UPDATE
+        to document_source_metadata.impact_score in the same DB session/transaction.
+
+        The impact_score value is max(abs(impact_score)) across all windows for the article.
+        """
+        repo = AsyncMock()
+        repo.get_articles_needing_windows = AsyncMock(return_value=[(_DOC_ID, _ENTITY_ID, "AAPL", _PUBLISHED_AT_OLD)])
+        repo.upsert_batch = AsyncMock()
+
+        bar = _make_bar(open_="100.00", close="103.00")  # 3% gain → impact_score > 0
+        client = AsyncMock()
+        client.get_ohlcv = AsyncMock(return_value=bar)
+
+        # Capture session.execute calls to verify the DSM UPDATE is issued
+        session = AsyncMock()
+        session.commit = AsyncMock()
+        session.execute = AsyncMock(return_value=None)
+
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=session)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+
+        factory = MagicMock()
+        factory.return_value = ctx
+
+        # We need two separate session factory calls: Phase 1 (read) + Phase 3 (write).
+        # _make_session_factory gives only one session; patch both via a counter.
+        call_count = 0
+        read_session = AsyncMock()
+        read_session.commit = AsyncMock()
+
+        async def _multi_session_enter(*args: object) -> AsyncMock:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Phase 1 (read session) — no execute calls needed here because
+                # ArticleImpactWindowRepository is patched below
+                return read_session
+            # Phase 3 (write session)
+            return session
+
+        async def _multi_session_exit(*args: object) -> bool:
+            return False
+
+        ctx.__aenter__ = _multi_session_enter
+        ctx.__aexit__ = _multi_session_exit
+        factory.return_value = ctx
+
+        with patch(_PATCH_PATH, return_value=repo):
+            worker = PriceImpactLabellingWorker(factory, client, cycle_seconds=1)
+            count = await worker.run_once()
+
+        # Windows were produced (at least day_t0 for an article 200h old)
+        assert count >= 1
+        # Phase 3 session.execute must have been called for the DSM UPDATE
+        # (once per unique article_id in the batch = once for _DOC_ID)
+        assert session.execute.await_count >= 1, (
+            "F-Q2-02: session.execute was never called — document_source_metadata.impact_score "
+            "is not being updated. run_once() must call _update_dsm_impact_scores() in Phase 3."
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_dsm_impact_scores_uses_max_abs_impact(self) -> None:
+        """F-Q2-02: _update_dsm_impact_scores() picks max(abs(impact_score)) per article.
+
+        Given two windows for the same article with impact_score 0.30 and 0.55,
+        the UPDATE to document_source_metadata must use 0.55.
+        """
+        from decimal import Decimal
+        from unittest.mock import AsyncMock
+        from uuid import uuid4
+
+        from nlp_pipeline.infrastructure.workers.price_impact_labelling_worker import (
+            _update_dsm_impact_scores,
+        )
+
+        article_id = uuid4()
+
+        # Build two minimal ArticleImpactWindow mocks (avoid constructing full domain objects)
+        w1 = MagicMock()
+        w1.article_id = article_id
+        w1.impact_score = Decimal("0.30")
+
+        w2 = MagicMock()
+        w2.article_id = article_id
+        w2.impact_score = Decimal("0.55")
+
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=None)
+
+        await _update_dsm_impact_scores(session, [w1, w2])
+
+        # One UPDATE call (one unique article_id)
+        assert session.execute.await_count == 1
+
+        # The impact_score passed to the UPDATE must be 0.55 (the maximum)
+        _sql, params = session.execute.call_args.args
+        assert params["impact_score"] == Decimal(
+            "0.55"
+        ), f"Expected impact_score=0.55 (max of 0.30 and 0.55) but got {params['impact_score']}"
+        assert params["doc_id"] == article_id
+
+    @pytest.mark.asyncio
+    async def test_update_dsm_impact_scores_groups_by_article(self) -> None:
+        """F-Q2-02: _update_dsm_impact_scores() issues one UPDATE per unique article_id.
+
+        Two articles in the batch must produce two separate UPDATE statements.
+        """
+        from decimal import Decimal
+        from uuid import uuid4
+
+        from nlp_pipeline.infrastructure.workers.price_impact_labelling_worker import (
+            _update_dsm_impact_scores,
+        )
+
+        article_1 = uuid4()
+        article_2 = uuid4()
+
+        w1 = MagicMock()
+        w1.article_id = article_1
+        w1.impact_score = Decimal("0.40")
+
+        w2 = MagicMock()
+        w2.article_id = article_2
+        w2.impact_score = Decimal("0.70")
+
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=None)
+
+        await _update_dsm_impact_scores(session, [w1, w2])
+
+        # Two UPDATE calls — one per article
+        assert session.execute.await_count == 2
+
+        # Extract doc_ids from both calls
+        doc_ids_written = {call.args[1]["doc_id"] for call in session.execute.call_args_list}
+        assert article_1 in doc_ids_written
+        assert article_2 in doc_ids_written
+
+    @pytest.mark.asyncio
+    async def test_update_dsm_impact_scores_noop_on_empty_list(self) -> None:
+        """F-Q2-02: _update_dsm_impact_scores() is a no-op when windows list is empty."""
+        from nlp_pipeline.infrastructure.workers.price_impact_labelling_worker import (
+            _update_dsm_impact_scores,
+        )
+
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=None)
+
+        await _update_dsm_impact_scores(session, [])
+
+        session.execute.assert_not_awaited()

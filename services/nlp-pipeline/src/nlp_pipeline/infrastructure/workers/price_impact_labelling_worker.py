@@ -27,6 +27,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from sqlalchemy import text
+
 from nlp_pipeline.domain.enums import DataQuality, WindowType
 from nlp_pipeline.domain.models import ArticleImpactWindow
 from nlp_pipeline.infrastructure.nlp_db.repositories.impact_window import ArticleImpactWindowRepository
@@ -117,10 +119,35 @@ class PriceImpactLabellingWorker:
         if not all_windows:
             return 0
 
-        # ── Phase 3 — Write: upsert all windows in a fresh session ────────────
+        # ── Phase 3 — Write: upsert windows AND update impact_score headline ──
+        #
+        # F-Q2-02 (PLAN-0050 QA iter-2): document_source_metadata.impact_score
+        # was never populated — PriceImpactLabellingWorker only wrote to
+        # article_impact_windows, leaving the convenience column permanently NULL.
+        # The GET /v1/news/top endpoint reads document_source_metadata.impact_score
+        # directly (avoids a JOIN to article_impact_windows on every request), so
+        # NULL there meant the News-tab impact pills never rendered.
+        #
+        # Derivation rationale: we take max(abs(impact_score)) across ALL windows
+        # and ALL entities for a given article, then normalise to [0, 1].
+        # WHY max(abs(...)): impact_score in article_impact_windows is already
+        # normalised to [0, 1] by ArticleImpactWindow.compute() (cap applied).
+        # The article-level headline score should reflect the strongest price-
+        # movement signal regardless of direction, so we use the maximum absolute
+        # value across all window/entity pairs.  No further normalisation is needed
+        # because each individual impact_score is already in [0, 1].
+        #
+        # WHY same transaction: if the windows write commits but the DSM update
+        # fails, the next cycle would see no missing windows for those articles and
+        # never retry — leaving impact_score NULL forever.  Committing both writes
+        # atomically prevents that divergence.
         async with self._nlp_sf() as session:
             repo = ArticleImpactWindowRepository(session)
             await repo.upsert_batch(all_windows)
+
+            # Derive per-article headline impact_score and write to DSM
+            await _update_dsm_impact_scores(session, all_windows)
+
             await session.commit()
 
         logger.info(  # type: ignore[no-any-return]
@@ -292,3 +319,70 @@ class PriceImpactLabellingWorker:
         if bar.open <= Decimal("0"):
             return None
         return (bar.low - bar.open) / bar.open * Decimal("100")
+
+
+# ── Module-level helper: write headline impact_score to document_source_metadata ──
+
+
+# F-Q2-02 (PLAN-0050 QA iter-2): raw SQL UPDATE for the DSM convenience column.
+#
+# WHY text() not ORM: document_source_metadata is owned by nlp_pipeline's ORM
+# model (DocumentSourceMetadataModel) but the PriceImpactLabellingWorker lives
+# in the infrastructure.workers package, which should not import the full ORM
+# model hierarchy just to issue a single UPDATE.  Using text() keeps the coupling
+# minimal and matches the existing pattern in ArticleImpactWindowRepository's
+# get_articles_needing_windows() (also raw SQL).
+#
+# The UPDATE is per-article (WHERE doc_id = :doc_id) and is issued once per
+# unique article_id in the current batch.  Calling this inside the same
+# async_sessionmaker context as upsert_batch() ensures both writes are committed
+# atomically (same session → same transaction).
+_DSM_UPDATE_SQL = text("""
+    UPDATE document_source_metadata
+    SET impact_score = :impact_score
+    WHERE doc_id = :doc_id
+""")
+
+
+async def _update_dsm_impact_scores(
+    session: AsyncSession,
+    windows: list[ArticleImpactWindow],
+) -> None:
+    """Write a headline impact_score to document_source_metadata for each article.
+
+    Derivation: max(impact_score) across all computed windows and all entities
+    for a given article.
+
+    WHY max(impact_score):
+      - impact_score in article_impact_windows is already normalised to [0, 1]
+        by ArticleImpactWindow.compute() (the normalisation_cap_pct is applied
+        at compute-time, so values are capped and scaled).
+      - The "headline" article-level signal should reflect the *strongest*
+        price-movement event associated with the article, regardless of which
+        entity or window triggered it.
+      - We do NOT average because a single highly-impactful entity dominates
+        the narrative; averaging would dilute it against unrelated mentions.
+      - abs() is redundant here because impact_score is always >= 0 after
+        ArticleImpactWindow.compute() clamps delta_pct / cap_pct to [0, 1].
+        We call abs() defensively in case future callers produce negative values.
+
+    Called in Phase 3 of run_once() — inside the same session as upsert_batch()
+    so both writes are committed atomically.
+    """
+    if not windows:
+        return
+
+    # Group windows by article_id and find max impact_score per article
+    per_article: dict[UUID, Decimal] = {}
+    for w in windows:
+        current_max = per_article.get(w.article_id, Decimal("0"))
+        per_article[w.article_id] = max(current_max, abs(w.impact_score))
+
+    for doc_id, score in per_article.items():
+        await session.execute(
+            _DSM_UPDATE_SQL,
+            {
+                "doc_id": doc_id,
+                "impact_score": score,
+            },
+        )

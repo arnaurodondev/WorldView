@@ -227,16 +227,38 @@ _UPSERT_SQL = text("""
         now()
     )
     ON CONFLICT (instrument_id) DO UPDATE SET
-        eps_ttm             = EXCLUDED.eps_ttm,
-        beta                = EXCLUDED.beta,
-        avg_volume_30d      = EXCLUDED.avg_volume_30d,
-        operating_cash_flow = EXCLUDED.operating_cash_flow,
-        capex               = EXCLUDED.capex,
-        free_cash_flow      = EXCLUDED.free_cash_flow,
-        fcf_margin          = EXCLUDED.fcf_margin,
-        interest_coverage   = EXCLUDED.interest_coverage,
-        net_debt_to_ebitda  = EXCLUDED.net_debt_to_ebitda,
-        credit_rating       = EXCLUDED.credit_rating,
+        -- F-Q2-03 (PLAN-0050 QA iter-2): COALESCE keeps previously-valid data intact
+        -- when a partial EODHD re-poll is missing some sections (e.g. no cash-flow
+        -- section → operating_cash_flow, capex, free_cash_flow, fcf_margin would all
+        -- be NULL in the new payload).  Plain EXCLUDED.col would silently clobber the
+        -- stored value with NULL — a data-loss regression on every partial refresh.
+        --
+        -- Policy: "prefer the incoming value; fall back to existing if incoming is NULL"
+        -- This is the same COALESCE pattern used for prediction_markets.market_slug
+        -- (PLAN-0049 iter-1 F-QAC-02) and for document_source_metadata title/url.
+        --
+        -- updated_at is intentionally unconditional — it tracks when the snapshot was
+        -- last *seen* by the ingest pipeline, not when any data field changed.
+        eps_ttm             = COALESCE(EXCLUDED.eps_ttm,
+                               instrument_fundamentals_snapshot.eps_ttm),
+        beta                = COALESCE(EXCLUDED.beta,
+                               instrument_fundamentals_snapshot.beta),
+        avg_volume_30d      = COALESCE(EXCLUDED.avg_volume_30d,
+                               instrument_fundamentals_snapshot.avg_volume_30d),
+        operating_cash_flow = COALESCE(EXCLUDED.operating_cash_flow,
+                               instrument_fundamentals_snapshot.operating_cash_flow),
+        capex               = COALESCE(EXCLUDED.capex,
+                               instrument_fundamentals_snapshot.capex),
+        free_cash_flow      = COALESCE(EXCLUDED.free_cash_flow,
+                               instrument_fundamentals_snapshot.free_cash_flow),
+        fcf_margin          = COALESCE(EXCLUDED.fcf_margin,
+                               instrument_fundamentals_snapshot.fcf_margin),
+        interest_coverage   = COALESCE(EXCLUDED.interest_coverage,
+                               instrument_fundamentals_snapshot.interest_coverage),
+        net_debt_to_ebitda  = COALESCE(EXCLUDED.net_debt_to_ebitda,
+                               instrument_fundamentals_snapshot.net_debt_to_ebitda),
+        credit_rating       = COALESCE(EXCLUDED.credit_rating,
+                               instrument_fundamentals_snapshot.credit_rating),
         updated_at          = now()
 """)
 

@@ -259,8 +259,9 @@ describe("WorkspacePage — panel type labels (terminal quality)", () => {
 
   it("renders color group chip button for each panel", () => {
     render(<WorkspacePage />, { wrapper: makeWrapper() });
-    // WHY check aria-label: color chip buttons have aria-label="Set symbol group color"
-    const chips = screen.getAllByRole("button", { name: /set symbol group color/i });
+    // WHY check aria-label: PLAN-0051 T-C-3-05 introduces SymbolLinkColorPicker which
+    // labels each dot button "Symbol link group: <Color>". Match that pattern.
+    const chips = screen.getAllByRole("button", { name: /symbol link group:/i });
     // Day Trading workspace has 4 panels — at least 4 color chips
     expect(chips.length).toBeGreaterThanOrEqual(4);
   });
