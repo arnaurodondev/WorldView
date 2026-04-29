@@ -200,15 +200,17 @@ describe("ScreenerPage — structure", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders all 12 column headers with ALL CAPS text", () => {
+  it("renders all 13 column headers with ALL CAPS text", () => {
     render(<ScreenerPage />, { wrapper: makeWrapper() });
     // WHY check columnheader role: ScreenerTable sets role="columnheader" on
     // each header div for screen reader accessibility.
+    // PLAN-0051: a 13th SPARK (sparkline) column was added in parallel by the
+    // mini-chart task; this test count is the canonical authoritative number.
     const headers = screen.getAllByRole("columnheader");
-    expect(headers.length).toBe(12);
+    expect(headers.length).toBe(13);
 
     // WHY spot-check specific headers: verifies no columns were silently dropped
-    // or renamed during the 12-column rewrite.
+    // or renamed during the rewrite.
     expect(screen.getByRole("columnheader", { name: /ticker/i })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /name/i })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /sector/i })).toBeInTheDocument();
@@ -388,5 +390,85 @@ describe("ScreenerPage — column sort", () => {
     await user.click(tickerHeader); // none
 
     expect(tickerHeader).toHaveAttribute("aria-sort", "none");
+  });
+});
+
+// ── ScreenerPage — PLAN-0051 Wave B Part 1 ────────────────────────────────────
+//
+// WHY THESE TESTS: Wave B Part 1 expands the filter bar to FIVE collapsible
+// sections (Valuation, Profitability, Growth, Leverage, Technical, News & Signals)
+// and adds "X of Y" result count + Load More pagination. These tests verify the
+// new structure renders correctly without regressing existing behaviour.
+
+describe("ScreenerPage — Wave B filter sections (PLAN-0051)", () => {
+  it("renders all six filter sections after the panel is opened", async () => {
+    const user = userEvent.setup();
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+
+    await user.click(screen.getByRole("button", { name: /toggle screener filters/i }));
+
+    // Each section's header is rendered as a button (clickable to expand/collapse).
+    // We assert every section name is present so a future rename or accidental
+    // removal triggers a test failure.
+    expect(screen.getByRole("button", { name: /valuation/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /profitability/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /growth/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /leverage/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /technical/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /news & signals/i })).toBeInTheDocument();
+  });
+
+  it("Valuation section is expanded by default and shows P/E inputs", async () => {
+    const user = userEvent.setup();
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+
+    await user.click(screen.getByRole("button", { name: /toggle screener filters/i }));
+
+    // P/E (TTM) min input — the Valuation section is open by default so this
+    // should be visible without further clicks. Distinguishes "Wave B is wired"
+    // from "Wave B is just imported but not rendered".
+    expect(screen.getByLabelText(/p\/e .*ttm.*minimum/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/p\/e .*ttm.*maximum/i)).toBeInTheDocument();
+  });
+
+  it("Leverage filters are disabled with backend-pending hint", async () => {
+    const user = userEvent.setup();
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+
+    await user.click(screen.getByRole("button", { name: /toggle screener filters/i }));
+    // Expand the Leverage section to reach the inputs
+    await user.click(screen.getByRole("button", { name: /leverage/i }));
+
+    // Both Debt/Equity and Current Ratio inputs are documented gaps in the
+    // T-B-2-01 audit — they must be disabled until the backend derives the ratio.
+    const debtMin = screen.getByLabelText(/debt\/equity minimum/i) as HTMLInputElement;
+    expect(debtMin).toBeDisabled();
+    const currentMin = screen.getByLabelText(/current ratio minimum/i) as HTMLInputElement;
+    expect(currentMin).toBeDisabled();
+  });
+
+  it("active filter count badge appears when a Valuation min is entered", async () => {
+    const user = userEvent.setup();
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+
+    await user.click(screen.getByRole("button", { name: /toggle screener filters/i }));
+    const peMin = screen.getByLabelText(/p\/e .*ttm.*minimum/i);
+    await user.type(peMin, "10");
+
+    // The Valuation section header now shows aria-label including "1 active filter"
+    // (per Section sub-component rules in ScreenerFilterBar.tsx).
+    expect(screen.getByLabelText(/1 active filter in valuation/i)).toBeInTheDocument();
+  });
+});
+
+describe("ScreenerPage — Wave B result count (PLAN-0051 T-B-2-08)", () => {
+  it("shows total match count when loaded equals total", async () => {
+    render(<ScreenerPage />, { wrapper: makeWrapper() });
+    // Mock returns total=2 and 2 rows — no "X of Y" formatting, just total
+    await waitFor(() => {
+      // "2 match" — ALL CAPS uppercase per design system, but the text content
+      // is lowercase before CSS uppercase transform; we just match the substring.
+      expect(screen.getByLabelText(/result count/i).textContent).toMatch(/2.*match/i);
+    });
   });
 });

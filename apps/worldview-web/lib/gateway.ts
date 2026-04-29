@@ -399,6 +399,107 @@ export function createGateway(token?: string | null) {
     },
 
     /**
+     * getBatchOhlcvBars — fetch recent OHLCV bars for many instruments at once.
+     *
+     * WHY THIS EXISTS (PLAN-0051 T-B-2-09): the screener renders an inline
+     * 30-day sparkline per row. N parallel /v1/ohlcv calls would mean 50+
+     * round-trips for a default page — way too slow. This batch endpoint is
+     * one round-trip for up to ~100 instruments (PLAN-0049 T-A-1-05).
+     *
+     * WHY a 404 fallback to per-instrument calls: if a deployment drifts and
+     * the batch endpoint is missing, the screener still works at degraded
+     * performance instead of breaking entirely.
+     *
+     * RESPONSE SHAPE: { results: [{ instrument_id, bars: OHLCVBar[] }, ...] }
+     */
+    async getBatchOhlcvBars(params: {
+      instrument_ids: string[];
+      timeframe?: string;
+      limit?: number;
+    }): Promise<{ results: Array<{ instrument_id: string; bars: OHLCVResponse["bars"] }> }> {
+      // WHY normalize lowercase: S3 enum values are lowercase ("1d"/"1h"). The
+      // single-instrument getOHLCV does the same normalization.
+      const tf = (params.timeframe ?? "1d").toLowerCase();
+      const body = {
+        requests: params.instrument_ids.map((id) => ({
+          instrument_id: id,
+          timeframe: tf,
+          limit: params.limit ?? 30,
+        })),
+      };
+
+      try {
+        const raw = await apiFetch<{
+          results: Array<{
+            instrument_id: string;
+            items: Array<{
+              bar_date: string;
+              open: string;
+              high: string;
+              low: string;
+              close: string;
+              volume: number | null;
+            }>;
+          }>;
+        }>("/v1/quotes/bars/batch", {
+          method: "POST",
+          body,
+          token: t,
+        });
+        return {
+          results: (raw.results ?? []).map((r) => ({
+            instrument_id: r.instrument_id,
+            bars: (r.items ?? []).map((item) => ({
+              timestamp: item.bar_date,
+              open: parseFloat(item.open),
+              high: parseFloat(item.high),
+              low: parseFloat(item.low),
+              close: parseFloat(item.close),
+              volume: item.volume ?? 0,
+            })),
+          })),
+        };
+      } catch (err) {
+        // WHY only 404: missing endpoint → degrade. Other errors propagate.
+        if (err instanceof GatewayError && err.status === 404) {
+          // WHY inline (not this.getOHLCV): destructured calls would lose `this`.
+          const limit = params.limit ?? 30;
+          const tfNorm = params.timeframe ?? "1D";
+          const tfPath = tfNorm === "1M" ? "1M" : tfNorm.toLowerCase();
+          const results = await Promise.all(
+            params.instrument_ids.map(async (id) => {
+              try {
+                const raw = await apiFetch<{
+                  items: Array<{
+                    bar_date: string;
+                    open: string;
+                    high: string;
+                    low: string;
+                    close: string;
+                    volume: number | null;
+                  }>;
+                }>(`/v1/ohlcv/${encodeURIComponent(id)}?timeframe=${tfPath}`, { token: t });
+                const bars = (raw.items ?? []).slice(-limit).map((item) => ({
+                  timestamp: item.bar_date,
+                  open: parseFloat(item.open),
+                  high: parseFloat(item.high),
+                  low: parseFloat(item.low),
+                  close: parseFloat(item.close),
+                  volume: item.volume ?? 0,
+                }));
+                return { instrument_id: id, bars };
+              } catch {
+                return { instrument_id: id, bars: [] };
+              }
+            }),
+          );
+          return { results };
+        }
+        throw err;
+      }
+    },
+
+    /**
      * getFundamentals — all fundamental metrics for an instrument
      * Used by Instrument Detail → Fundamentals tab
      */

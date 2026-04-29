@@ -384,6 +384,28 @@ For data-heavy tables with multiple discrete filters (Transactions, Screener res
 
 Single-format export (CSV today; XLSX/PDF dropdown is screener-only — see PLAN-0051 T-B-2-07). Same chrome as the Clear filters pill: `h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-border rounded-[2px] text-muted-foreground hover:text-foreground hover:border-foreground`. Implementation: `lib/csv-export.ts` (papaparse + Blob download with UTF-8 BOM for Excel compatibility).
 
+### 6.5c Multi-Format Export Dropdown (PLAN-0051 T-B-2-07)
+
+When a surface needs more than CSV: wrap a `Download` icon trigger with shadcn `DropdownMenu`. Items use lucide icons (`FileText` / `FileSpreadsheet` / `FileImage`) and 11px font. Filename pattern is always `<base>-YYYYMMDD-HHmm.<ext>` (sortable in any file manager, local-time stamp). Reference: `components/screener/ExportMenu.tsx`.
+
+| Format | Library | Pinned version | CVE status |
+|--------|---------|----------------|-----------|
+| CSV | papaparse | 5.5.3 | clean |
+| Excel (.xlsx) | write-excel-file (`/browser`) | 4.0.4 | clean — replaces SheetJS (CVEs) |
+| PDF | jspdf + jspdf-autotable | 4.2.1 + 5.0.7 | clean — 2.x and 3.x had FreeText / HTML injection CVEs |
+
+### 6.5d Column Settings Popover (PLAN-0051 T-B-2-06)
+
+⚙ icon button (`Settings2` from lucide, h-7 w-7) anchors a 16rem popover with a checkbox-per-column list and HTML5 native drag-reorder (no extra lib). Each row uses `cursor-move` + `GripVertical` icon. Reset button restores `DEFAULT_COLUMNS` and clears localStorage. Persistence: `lib/screener-columns.ts` (key `worldview:screenerColumns:v1`, stores only `{key, visible}` so code-side label/align changes always win). Reference: `components/screener/ColumnSettingsPopover.tsx`.
+
+### 6.5e Inline Sparkline (PLAN-0051 T-B-2-09)
+
+Pure SVG, 18px tall, full column width via `preserveAspectRatio="none"`. No chart library — Lightweight Charts (~150KB) and Recharts (heavy React tree) are overkill for a 30-point line. Stroke colour: `var(--positive)` if last close > first close, `var(--negative)` if less, `var(--muted-foreground)` if equal. Empty state: dashed grey center line so row height stays stable. Data fetched in batch via `POST /v1/quotes/bars/batch` with 5-min `staleTime` (daily bars update at most once per trading day). Reference: `components/screener/MiniChart.tsx` + `hooks/useScreenerSparklines.ts`.
+
+### 6.5f Saved Configurations Dialog (PLAN-0051 T-B-2-05)
+
+shadcn `Dialog` with `Tabs` for Save/Load. Save tab: text input + Save button (disabled when empty). Load tab: scrollable list of `<DataTimestamp>`-stamped rows with Load + Trash buttons; Trash always passes through `window.confirm` because localStorage deletes are unrecoverable. Persistence: `lib/saved-screens.ts` (key `worldview:savedScreens:v1`, UUIDv4 client-side ids via `crypto.randomUUID()`). Reference: `components/screener/SavedScreensDialog.tsx`.
+
 ### 6.5c Totals Row
 
 Render OUTSIDE the table when virtualisation may be active (FixedSizeList rejects `<tr>` children with `position: absolute`). Pattern: a 28 px tall flex row with `border-t-2 border-border bg-card`, label "Totals" in 10 px ALL CAPS muted, then per-bucket `<span>label <span className="text-foreground">value</span></span>` pairs. Each value carries a `data-testid` for unit testing.

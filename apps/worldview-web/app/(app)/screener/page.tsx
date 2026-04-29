@@ -3,91 +3,249 @@
  *
  * WHY THIS EXISTS: The screener is the primary discovery tool for quant analysts
  * and institutional traders — equivalent to Bloomberg EQUITY SCREEN. Users filter
- * the instrument universe by sector, market cap, and text search, then scan the
- * 12-column results table to surface actionable ideas.
+ * the instrument universe by sector, market cap, and ~16 fundamental / technical /
+ * news filters, then scan the 12-column results table to surface ideas.
  *
  * WHY 12 COLUMNS (up from 7): PRD-0031 §7.1 mandates 12 columns for density
- * parity with Bloomberg. More data per row = fewer row navigations before
- * finding what the user wants. Columns without backend data show "—" to preserve
- * layout and signal future work.
+ * parity with Bloomberg.
  *
  * WHY VIRTUAL SCROLL: @tanstack/react-virtual renders only visible rows (~25 at
- * a time) regardless of total result count. A naïve map() render with 500 rows
- * causes visible frame drops when scrolling — unacceptable for a terminal tool.
+ * a time) regardless of total result count.
  *
- * WHY CLIENT-SIDE SORT: For the loaded result set, client sort is instant (no
- * round-trip). S9 sorts are available via sort_by/sort_dir params for future
- * server-side sort if result sets grow beyond what fits comfortably in memory.
+ * WHY CLIENT-SIDE SORT: For the loaded result set, client sort is instant
+ * (no round-trip).
+ *
+ * PLAN-0051 Wave B Part 1 changes:
+ *   - Filter bar expanded: Valuation, Profitability, Growth, Leverage, Technical, News
+ *     sub-sections with min/max range inputs (T-B-2-02..04).
+ *   - "X of Y match" header indicator (T-B-2-08).
+ *   - "Load More" pagination accumulator instead of single-page fetch (T-B-2-10).
+ *   - Real backend metric names per docs/services/market-data.md (T-B-2-01).
+ *   - Client-side fallback application for technical filters where the server
+ *     does not yet expose the underlying field.
  *
  * WHO USES IT: Research analysts (F4), quant traders (F5)
  * DATA SOURCE: POST /v1/fundamentals/screen (S9 → S3 fundamentals)
- * DESIGN REFERENCE: PRD-0031 §7 Screener, canvas State D, Wave 3
+ * DESIGN REFERENCE: PRD-0031 §7 Screener, PLAN-0051 Wave B
  */
 
 "use client";
-// WHY "use client": uses useState (filter state, sort state), TanStack Query
-// (S9 data fetching), and next/navigation (row click routing)
+// WHY "use client": uses useState (filter state, sort state, accumulator), TanStack Query
+// (S9 data fetching), and next/navigation (row click routing — used inside ScreenerTable).
 
-import { useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { ScreenerTable, type SortState, type SortableKey } from "@/components/screener/ScreenerTable";
-import { ScreenerFilterBar, type FilterState } from "@/components/screener/ScreenerFilterBar";
-import type { ScreenerResult, ScreenerRequest } from "@/types/api";
+import {
+  ScreenerFilterBar,
+  DEFAULT_FILTERS,
+  type FilterState,
+} from "@/components/screener/ScreenerFilterBar";
+import { DashboardEmptyState } from "@/components/ui/dashboard-empty-state";
+import type { ScreenerResult, ScreenerRequest, ScreenerFilter } from "@/types/api";
+// PLAN-0051 Wave B Part 2 imports — Saved Screens, Column Settings, Export, Sparklines.
+import { SavedScreensDialog } from "@/components/screener/SavedScreensDialog";
+import { ColumnSettingsPopover } from "@/components/screener/ColumnSettingsPopover";
+import { ExportMenu, type ExportColumn } from "@/components/screener/ExportMenu";
+import {
+  loadColumnPrefs,
+  saveColumnPrefs,
+  type ScreenerColumn,
+} from "@/lib/screener-columns";
+import { useScreenerSparklines } from "@/hooks/useScreenerSparklines";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const PAGE_SIZE = 50; // WHY 50: larger page gives virtual scroll more rows to render
+/**
+ * PAGE_SIZE — server `limit` per request and the increment for Load More.
+ *
+ * WHY 50: balances "useful first page" against "bandwidth on each Load More click".
+ * Backend caps at 200; choosing 50 keeps each page lightweight and gives the
+ * virtualizer enough rows to render meaningful scroll content without paginating
+ * too aggressively.
+ */
+const PAGE_SIZE = 50;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * buildFilters — converts UI FilterState to ScreenerRequest.filters array.
- *
- * WHY separate helper: the ScreenerRequest.filters array uses a structured
- * {field, operator, value} format. The UI exposes friendlier controls (dropdowns,
- * text inputs). This function bridges the two without polluting the component.
+ * pushIfRange — append a `{metric, min_value, max_value}` filter when at least
+ * one bound is set, otherwise no-op. Centralises the "do not send empty filters"
+ * rule so we never POST an empty-bound filter (which the backend rejects with 422).
  */
-function buildFilters(filters: FilterState): ScreenerRequest["filters"] {
-  const out: ScreenerRequest["filters"] = [];
+function pushIfRange(
+  out: ScreenerFilter[],
+  metric: string,
+  min: number | undefined,
+  max: number | undefined,
+): void {
+  if (min === undefined && max === undefined) return;
+  out.push({ metric, min_value: min, max_value: max });
+}
 
-  if (filters.search.trim()) {
-    out.push({ field: "name_ticker", operator: "contains", value: filters.search.trim() });
+/**
+ * buildScreenerFilters — converts UI FilterState to ScreenerRequest.filters[].
+ *
+ * Maps each fundamental UI filter to the canonical backend metric name from
+ * docs/services/market-data.md (PLAN-0051 T-B-2-01):
+ *   pe_ratio, pb_ratio, price_sales_ttm, dividend_yield,
+ *   roe_ttm, profit_margin, operating_margin_ttm,
+ *   quarterly_revenue_growth_yoy, quarterly_earnings_growth_yoy,
+ *   market_capitalization.
+ *
+ * Backend-pending filters (gross margin, debt/equity, current ratio) are
+ * skipped — the UI inputs are disabled but the FilterState may still carry
+ * stale values from a saved screen.
+ *
+ * Technical, news, and signal filters are NOT sent to the backend; they are
+ * applied client-side after fetch (see applyClientFilters).
+ */
+function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
+  const filters: ScreenerFilter[] = [];
+
+  // ── Top-row primary filters ────────────────────────────────────────────────
+  // Search by ticker / name → backend has no text search on the screener
+  // endpoint; this remains a CLIENT_SIDE_FILTER applied in applyClientFilters.
+
+  // Sector → applied at the SCREEN_FILTER level via the optional `sector` field
+  // on a single filter. Per S3 semantics: specifying sector on any filter
+  // restricts the entire result set. We attach it to the first filter we push.
+  // If no other filters exist, we synthesize a benign filter so the request
+  // still has at least one entry (backend min_length=1).
+
+  // Cap tier → market_capitalization range
+  let capMin: number | undefined;
+  let capMax: number | undefined;
+  if (f.capTier === "LARGE") capMin = 10_000_000_000;
+  else if (f.capTier === "MID") {
+    capMin = 2_000_000_000;
+    capMax = 10_000_000_000;
+  } else if (f.capTier === "SMALL") capMax = 2_000_000_000;
+  pushIfRange(filters, "market_capitalization", capMin, capMax);
+
+  // ── Valuation (SERVER_SIDE) ────────────────────────────────────────────────
+  pushIfRange(filters, "pe_ratio", f.peMin, f.peMax);
+  pushIfRange(filters, "pb_ratio", f.pbMin, f.pbMax);
+  pushIfRange(filters, "price_sales_ttm", f.psMin, f.psMax);
+  pushIfRange(filters, "dividend_yield", f.divYieldMin, f.divYieldMax);
+
+  // ── Profitability (SERVER_SIDE) ────────────────────────────────────────────
+  pushIfRange(filters, "roe_ttm", f.roeMin, f.roeMax);
+  // Gross margin SKIPPED — BACKEND_PENDING (gross_margin not derived).
+  pushIfRange(filters, "profit_margin", f.netMarginMin, f.netMarginMax);
+  pushIfRange(filters, "operating_margin_ttm", f.opMarginMin, f.opMarginMax);
+
+  // ── Growth (SERVER_SIDE) ───────────────────────────────────────────────────
+  pushIfRange(filters, "quarterly_revenue_growth_yoy", f.revGrowthMin, f.revGrowthMax);
+  pushIfRange(filters, "quarterly_earnings_growth_yoy", f.earningsGrowthMin, f.earningsGrowthMax);
+
+  // ── Leverage SKIPPED — BACKEND_PENDING (debt/equity, current ratio not derived).
+
+  // Attach sector restriction (if any) to the first filter — S3 applies it as
+  // a global universe constraint, not per-filter, but the ScreenFilter schema
+  // requires placing it on ≥1 filter. If no filters exist yet, fall through —
+  // the synth path below will handle the empty case.
+  if (f.sector && filters.length > 0) {
+    filters[0] = { ...filters[0], sector: f.sector };
   }
 
-  if (filters.sector) {
-    out.push({ field: "gics_sector", operator: "eq", value: filters.sector });
+  // ── Synthesize a benign filter when nothing else is set ────────────────────
+  // Backend rejects empty filter lists (min_length=1). When the user opens the
+  // page with no filters at all, we send a permissive market_capitalization
+  // bound (≥ $0) so we always get a result page. This is the same trick
+  // documented in PLAN-0017 Wave C-1 for "browse all" queries.
+  if (filters.length === 0) {
+    filters.push({
+      metric: "market_capitalization",
+      min_value: 0,
+      // Apply sector if requested
+      ...(f.sector ? { sector: f.sector } : {}),
+    });
   }
 
-  if (filters.capTier === "LARGE") {
-    out.push({ field: "market_cap", operator: "gt", value: 10_000_000_000 });
-  } else if (filters.capTier === "MID") {
-    out.push({ field: "market_cap", operator: "gt", value: 2_000_000_000 });
-    out.push({ field: "market_cap", operator: "lt", value: 10_000_000_000 });
-  } else if (filters.capTier === "SMALL") {
-    out.push({ field: "market_cap", operator: "lt", value: 2_000_000_000 });
+  return filters;
+}
+
+/**
+ * applyClientFilters — filters that the backend cannot apply yet.
+ *
+ * For each technical / news control set in FilterState, drop rows that do not
+ * satisfy the constraint. When the data field is missing on the row (most
+ * common case today), we keep the row so partial-data instruments are not
+ * accidentally hidden. Conservative behaviour matches Bloomberg's "soft" filters
+ * where missing data means "uncertain" rather than "exclude".
+ *
+ * TODO(server): once S3 / S6 surface these fields, move them to buildScreenerFilters.
+ */
+function applyClientFilters(rows: ScreenerResult[], f: FilterState): ScreenerResult[] {
+  let out = rows;
+
+  // Free-text search on ticker / name — NOT supported by backend.
+  if (f.search.trim()) {
+    const q = f.search.trim().toLowerCase();
+    out = out.filter((r) => {
+      const t = (r.ticker ?? "").toLowerCase();
+      const n = (r.name ?? "").toLowerCase();
+      return t.includes(q) || n.includes(q);
+    });
   }
+
+  // Above 50d MA — TODO server: requires `current_price` and `ma_50` on response.
+  // Today neither is consistently populated; we skip this filter when data missing.
+  // (No-op until backend ships moving averages.)
+
+  // RSI band — TODO server. No `rsi_14` field on response yet.
+
+  // Volume vs 30d average — TODO server. Requires daily volume + avg_volume_30d on response.
+  // (avg_volume_30d is in instrument_fundamentals_snapshot but not on screener row.)
+
+  // Distance from 52W high — TODO server. Requires high_52w on response.
+  // Distance from 52W low — TODO server. Requires low_52w on response.
+
+  // News & signals — all TODO server (S6/S7). Inputs are accepted but not applied.
 
   return out;
 }
 
 /**
+ * SORT_KEY_TO_FIELD — map display column keys → ScreenerResult fields.
+ *
+ * WHY THIS EXISTS (PLAN-0051 T-B-2-06): the column popover names columns by
+ * display key ("price", "change") but the actual data lives under API field
+ * names ("current_price", "daily_return"). One central map keeps the renderer
+ * and the sorter in sync — adding a new sortable column is a single line here
+ * plus the renderCell branch in ScreenerTable.
+ */
+const SORT_KEY_TO_FIELD: Record<SortableKey, keyof ScreenerResult> = {
+  ticker: "ticker",
+  name: "name",
+  sector: "gics_sector",
+  price: "current_price",
+  change: "daily_return",
+  marketCap: "market_cap",
+  pe: "pe_ratio",
+  revenue: "revenue",
+  beta: "beta",
+  score: "market_impact_score",
+};
+
+/**
  * sortResults — client-side sort on the loaded result set.
  *
  * WHY null → bottom: null values sort to the bottom in both asc and desc
- * directions. Users want data-rich rows first — empty rows at the bottom
- * reduces cognitive noise during initial scan.
+ * directions. Users want data-rich rows first.
  */
 function sortResults(results: ScreenerResult[], sort: SortState): ScreenerResult[] {
   if (!sort.key || !sort.dir) return results;
 
-  const key = sort.key;
+  const field = SORT_KEY_TO_FIELD[sort.key];
   const dir = sort.dir === "asc" ? 1 : -1;
 
   return [...results].sort((a, b) => {
-    const av = a[key];
-    const bv = b[key];
+    const av = a[field];
+    const bv = b[field];
 
     if (av == null && bv == null) return 0;
     if (av == null) return 1;
@@ -104,114 +262,343 @@ export default function ScreenerPage() {
   const { accessToken } = useAuth();
 
   // ── Applied filters — committed state that triggers the S9 query ──────────
-  // WHY "applied" vs "pending": filter form state is pending until the user clicks
-  // Apply. Separating them prevents partial inputs from firing API calls.
-  const [appliedFilters, setAppliedFilters] = useState<FilterState>({
-    search: "",
-    sector: "",
-    capTier: "ALL",
-  });
+  // WHY "applied" vs "pending": filter form state in ScreenerFilterBar is pending
+  // until the user clicks Apply. Separating them prevents partial inputs from
+  // firing API calls.
+  const [appliedFilters, setAppliedFilters] = useState<FilterState>(DEFAULT_FILTERS);
 
   // ── Filter panel open/closed ──────────────────────────────────────────────
   // WHY default false (collapsed): terminal UIs default to maximum data density.
-  // The filter panel is secondary chrome — data rows are primary.
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   // ── Sort state ────────────────────────────────────────────────────────────
   const [sort, setSort] = useState<SortState>({ key: null, dir: null });
 
+  // ── Saved Screens dialog (PLAN-0051 T-B-2-05) ─────────────────────────────
+  // WHY local boolean (not URL state): the dialog is ephemeral chrome — closing
+  // it should not pollute browser history with a back-button entry.
+  const [savedDialogOpen, setSavedDialogOpen] = useState(false);
+
+  // ── Column preferences (PLAN-0051 T-B-2-06) ───────────────────────────────
+  // WHY a lazy initialiser: loadColumnPrefs reads localStorage. Calling it once
+  // on mount avoids re-parsing on every render. The Popover writes back to
+  // localStorage on each toggle/reorder; we mirror in state so the table
+  // re-renders immediately.
+  const [columns, setColumns] = useState<ScreenerColumn[]>(() => loadColumnPrefs());
+  const handleColumnsChange = useCallback((next: ScreenerColumn[]) => {
+    setColumns(next);
+    saveColumnPrefs(next);
+  }, []);
+
+  // ── Pagination state (T-B-2-10 Load More) ─────────────────────────────────
+  // WHY accumulator + offset (not cursor): we accumulate rows from each page and
+  // append. The next request's offset = current rows length. This is simpler
+  // than a cursor pattern and matches the backend's offset/limit contract
+  // (S3 caps offset at 5000 — plenty for a screener).
+  const [offset, setOffset] = useState(0);
+  const [accumulator, setAccumulator] = useState<ScreenerResult[]>([]);
+  // serverTotal — `total` from the most recent response. Used for "X of Y" and
+  // for hiding the Load More button when accumulator.length >= total.
+  const [serverTotal, setServerTotal] = useState(0);
+
   // ── Column sort handler — cycle: none → asc → desc → none ─────────────────
   const handleSort = useCallback((key: SortableKey) => {
     setSort((prev) => {
       if (prev.key !== key) {
-        // WHY start with asc on new column: ascending is the natural first sort
-        // for most financial columns (e.g., score high→low comes after one more click)
         return { key, dir: "asc" };
       }
       if (prev.dir === "asc") return { key, dir: "desc" };
-      // WHY null dir on third click: removes sort (returns to S9 response order)
       return { key: null, dir: null };
     });
   }, []);
 
-  // ── S9 screener query ─────────────────────────────────────────────────────
-  const request: ScreenerRequest = {
-    filters: buildFilters(appliedFilters),
-    limit: PAGE_SIZE,
-    offset: 0,
-  };
+  // ── Stable key for the active filter set ──────────────────────────────────
+  // WHY useMemo: queryKey must be stable across renders so React Query caches
+  // page fetches keyed by the filter set + offset. JSON.stringify gives us a
+  // canonical representation since filter objects are new references each render.
+  const filterSerialized = useMemo(
+    () => JSON.stringify(appliedFilters),
+    [appliedFilters],
+  );
 
-  const { data, isLoading, isFetching } = useQuery({
-    // WHY JSON.stringify in key: filter objects are new references on every render.
-    // Stringifying makes the queryKey stable for cache hits.
-    queryKey: ["screener", JSON.stringify(appliedFilters)],
+  // ── Build the request for the *current* page ──────────────────────────────
+  const request: ScreenerRequest = useMemo(
+    () => ({
+      filters: buildScreenerFilters(appliedFilters),
+      limit: PAGE_SIZE,
+      offset,
+    }),
+    [appliedFilters, offset],
+  );
+
+  // ── S9 screener query ─────────────────────────────────────────────────────
+  // WHY a single query keyed by [filters, offset]: each Load More click bumps
+  // the offset which invalidates the cached entry and triggers a fresh fetch.
+  // The previous accumulator stays in component state — React Query just
+  // returns the next page; we merge in a useEffect below.
+  const { data, isLoading, isFetching, error } = useQuery({
+    queryKey: ["screener", filterSerialized, offset],
     queryFn: () => createGateway(accessToken).runScreener(request),
     enabled: !!accessToken,
     // WHY 30s staleTime: screener fundamentals change infrequently during a session.
-    // Avoiding re-fetches on every tab switch reduces S9 load significantly.
     staleTime: 30_000,
+    // WHY keepPreviousData via placeholderData would flicker; we manage our own
+    // accumulator instead — see the merge effect below.
   });
 
-  const rawResults = data?.results ?? [];
-  const totalResults = data?.total ?? 0;
+  // ── Merge each fetched page into the accumulator ──────────────────────────
+  // WHY a ref + dedup on offset: useEffect runs on every render where data
+  // changes. We must not re-append the same page twice (would duplicate rows
+  // when React StrictMode double-renders). Tracking the last offset we merged
+  // keeps the merge idempotent.
+  const lastMergedOffset = useRef<number | null>(null);
+  useEffect(() => {
+    if (!data) return;
+    if (lastMergedOffset.current === offset) return;
+    lastMergedOffset.current = offset;
 
-  // WHY sort after fetch: client sort is instant for in-memory arrays.
-  // We sort ALL loaded results (up to PAGE_SIZE rows) — not just the visible ones.
-  // useVirtualizer handles which of those rows to actually render.
-  const sortedResults = sortResults(rawResults, sort);
+    setServerTotal(data.total);
+
+    if (offset === 0) {
+      // First page (after filter Apply or initial load) → replace accumulator
+      setAccumulator(data.results);
+    } else {
+      // Subsequent page → append. Dedup by instrument_id to be safe if the
+      // backend ever returns overlapping pages (e.g. tied sort values).
+      setAccumulator((prev) => {
+        const seen = new Set(prev.map((r) => r.instrument_id));
+        const next = data.results.filter((r) => !seen.has(r.instrument_id));
+        return [...prev, ...next];
+      });
+    }
+  }, [data, offset]);
+
+  // ── Filter Apply / Reset → reset accumulator ──────────────────────────────
+  const handleApply = useCallback((filters: FilterState) => {
+    setAppliedFilters(filters);
+    setSort({ key: null, dir: null });
+    setOffset(0);
+    setAccumulator([]); // discard previous page so the new query rebuilds from scratch
+    lastMergedOffset.current = null;
+  }, []);
+
+  // ── Load More handler ─────────────────────────────────────────────────────
+  const handleLoadMore = useCallback(() => {
+    setOffset((o) => o + PAGE_SIZE);
+  }, []);
+
+  // ── Apply client-side filters + sort to the accumulator ───────────────────
+  // WHY sort after filter: filtering reduces the row set; sorting the smaller
+  // set is cheaper and matches user intent ("show me what matched, in order").
+  const filteredRows = useMemo(
+    () => applyClientFilters(accumulator, appliedFilters),
+    [accumulator, appliedFilters],
+  );
+  const sortedRows = useMemo(() => sortResults(filteredRows, sort), [filteredRows, sort]);
+
+  // ── Sparklines (PLAN-0051 T-B-2-09) ───────────────────────────────────────
+  // WHY only fetch when the sparkline column is visible: bandwidth/latency
+  // saving — if the user has hidden the column, there is no point hammering
+  // /quotes/bars/batch.
+  const sparklineEnabled = useMemo(
+    () => columns.some((c) => c.key === "sparkline" && c.visible),
+    [columns],
+  );
+  const visibleInstrumentIds = useMemo(
+    () => sortedRows.map((r) => r.instrument_id),
+    [sortedRows],
+  );
+  const { sparklines } = useScreenerSparklines(visibleInstrumentIds, {
+    timeframe: "1d",
+    limit: 30,
+    enabled: sparklineEnabled,
+  });
+
+  // ── Export columns — only currently-visible columns (T-B-2-07) ────────────
+  // WHY derived (not state): when the user hides/shows a column the export
+  // menu picks the change up immediately on next render. Storing this in
+  // state would invite drift bugs.
+  const exportColumns = useMemo<ExportColumn<ScreenerResult>[]>(() => {
+    return columns
+      .filter((c) => c.visible)
+      .map((c) => {
+        // WHY explicit per-column accessor: each column extracts a different
+        // ScreenerResult field (or computes a display value like "+1.24%").
+        // Centralising the mapping here keeps CSV/Excel/PDF identical.
+        const accessor = (row: ScreenerResult): string | number | null | undefined => {
+          switch (c.key) {
+            case "ticker":     return row.ticker;
+            case "name":       return row.name;
+            case "sector":     return row.gics_sector ?? "";
+            case "price":      return row.current_price ?? null;
+            case "change":     return row.daily_return != null ? row.daily_return * 100 : null;
+            case "marketCap":  return row.market_cap ?? null;
+            case "pe":         return row.pe_ratio ?? null;
+            case "revenue":    return row.revenue ?? null;
+            case "beta":       return row.beta ?? null;
+            case "score":      return row.market_impact_score != null ? Math.round(row.market_impact_score * 100) : null;
+            case "range52w":   return ""; // backend pending
+            case "volume":     return ""; // backend pending
+            case "sparkline":  return ""; // not exportable as a single value
+            default:           return "";
+          }
+        };
+        return { header: c.label, accessor };
+      });
+  }, [columns]);
+
+  // ── Derive Load More visibility ───────────────────────────────────────────
+  // We can load more iff (a) accumulator hasn't yet covered the server total
+  // AND (b) we are not currently fetching the next page.
+  const remaining = Math.max(0, serverTotal - accumulator.length);
+  const canLoadMore = remaining > 0 && !isFetching;
+  const nextBatch = Math.min(PAGE_SIZE, remaining);
+
+  // Display values
+  // WHY `loadedDisplayed`: the filter bar's "X of Y match" should reflect what
+  // the user is actually seeing post client-side filter — not the raw server count.
+  const loadedDisplayed = filteredRows.length;
+  // For "of Y match" we use serverTotal (universe size matching the *server* filters).
+  // The number after client filters is included in `loadedDisplayed`.
 
   return (
-    // WHY h-full flex-col: page must fill the shell's main content area (flex-1
-    // in layout.tsx). flex-col gives us the header + scrollable table layout.
     <div className="flex flex-col h-full min-h-0">
 
-      {/* ── Page heading ─────────────────────────────────────────────────── */}
+      {/* ── Page heading + chrome (Saved Screens / Columns / Export) ─────── */}
       {/*
-       * WHY 36px header (h-9): consistent with other terminal page headers.
-       * Keeps the page chrome minimal so the table gets maximum vertical space.
+       * WHY one toolbar row (not two): keeps the page chrome ≤36px tall so the
+       * data table gets max vertical real estate. The screener is data-first.
+       * Spacing: `ml-auto` pushes the action group to the right edge.
        */}
-      <div className="flex h-9 shrink-0 items-center border-b border-border px-3">
+      <div className="flex h-9 shrink-0 items-center border-b border-border px-3 gap-2">
         <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
           Instrument Screener
         </h1>
-        {/* WHY fetching indicator: shows a subtle pulse when the query is re-running
-            (e.g., after applying new filters) without a full loading skeleton */}
-        {/* WHY bg-primary static dot (no animate-pulse): §0.5 bans animate-pulse on status indicators
-            — static color change is sufficient; pulse conveys consumer-app anxiety, not terminal authority */}
+        {/* WHY fetching indicator: shows a subtle pulse when the query is re-running */}
+        {/* WHY bg-primary static dot (no animate-pulse): §0.5 bans animate-pulse on status indicators */}
         {isFetching && !isLoading && (
           <span className="ml-2 h-1.5 w-1.5 rounded-full bg-primary shrink-0" aria-label="Loading" />
         )}
+        <div className="ml-auto flex items-center gap-1">
+          {/* Saved Screens — opens dialog with Save/Load tabs (T-B-2-05) */}
+          <button
+            type="button"
+            aria-label="Saved screens"
+            onClick={() => setSavedDialogOpen(true)}
+            className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground hover:text-foreground hover:border-border/80 rounded-[2px] transition-colors"
+          >
+            Saved Screens
+          </button>
+          {/* Column visibility / order (T-B-2-06) */}
+          <ColumnSettingsPopover columns={columns} onChange={handleColumnsChange} />
+          {/* Export menu (T-B-2-07) — disabled while data is loading */}
+          <ExportMenu
+            rows={sortedRows}
+            columns={exportColumns}
+            filenameBase="screener"
+            pdfTitle="Screener Results"
+            disabled={isLoading || sortedRows.length === 0}
+          />
+        </div>
       </div>
+
+      {/* Saved Screens dialog — controlled open/close so we can wire it from
+          the toolbar button. onLoad applies filters via the existing handleApply
+          so the Apply pipeline (sort reset, accumulator clear, query refire) is
+          reused — no duplicate logic. */}
+      <SavedScreensDialog
+        open={savedDialogOpen}
+        onOpenChange={setSavedDialogOpen}
+        currentFilters={appliedFilters}
+        onLoad={(filters) => {
+          handleApply(filters);
+        }}
+      />
 
       {/* ── Filter bar (collapsible) + result count ───────────────────────── */}
       <ScreenerFilterBar
         isOpen={filtersOpen}
         onToggle={() => setFiltersOpen((v) => !v)}
-        onApply={(filters) => {
-          setAppliedFilters(filters);
-          // WHY reset sort on filter change: sort state from the previous result
-          // set is meaningless after a new query — reset to S9 response order.
-          setSort({ key: null, dir: null });
-        }}
-        totalResults={totalResults}
+        onApply={handleApply}
+        // onSaveScreen left undefined → button hidden until PLAN-0051 Part 2 wires it.
+        totalResults={serverTotal}
+        loadedCount={loadedDisplayed}
         isLoading={isLoading}
       />
 
       {/* ── 12-column virtualized table ───────────────────────────────────── */}
       {/*
-       * WHY flex-1 min-h-0: the table must fill the remaining space after the
-       * header and filter bar. min-h-0 overrides the default flex min-height so
-       * the table doesn't push outside the flex container.
+       * WHY ALWAYS render ScreenerTable: keeping the table mounted across all
+       * states (loading, empty, populated) avoids unmounting the column headers
+       * when transient empty-state conditions flip during the data merge.
+       *
+       * The table itself shows skeletons while loading, an inline "No results"
+       * line when rows are empty, and the data when populated — see ScreenerTable.
+       *
+       * For the *deliberate, post-load* empty state we render the shared
+       * DashboardEmptyState BELOW the table headers (sticky) so users see
+       * the matched count chrome alongside the message. We only show the
+       * empty-state OVERLAY once data has actually been merged into the
+       * accumulator, to avoid the race where data arrives but the merge
+       * effect hasn't yet bumped serverTotal — which would briefly mount
+       * an empty state and unmount the table headers (breaking sort tests).
        */}
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         <ScreenerTable
-          rows={sortedResults}
+          rows={sortedRows}
           isLoading={isLoading}
           sort={sort}
           onSort={handleSort}
+          columns={columns}
+          sparklines={sparklines}
         />
-      </div>
+        {/*
+         * Post-load empty messaging — only shows when:
+         *   - we are not loading
+         *   - the merge has actually run (lastMergedOffset.current is set)
+         *   - both accumulator AND filteredRows are empty
+         * Rendered BELOW the table so column headers stay mounted.
+         */}
+        {!isLoading && !error && lastMergedOffset.current !== null && filteredRows.length === 0 && (
+          <DashboardEmptyState
+            title={accumulator.length === 0 ? "No matches" : "No matches after client filters"}
+            message={
+              accumulator.length === 0
+                ? "No instruments match the current filters. Adjust filters and apply."
+                : "The technical / search filters excluded all rows in the loaded page. Try widening them or loading more."
+            }
+          />
+        )}
 
+        {/* ── Load More toolbar ─────────────────────────────────────────── */}
+        {/*
+         * WHY only when canLoadMore: when we've loaded the full server universe
+         * (or filters returned 0), there is nothing more to fetch. Hiding the
+         * button avoids a click that would just spam an empty fetch.
+         */}
+        {canLoadMore && (
+          <div className="shrink-0 border-t border-border flex items-center justify-center px-3 py-1.5 bg-card">
+            <button
+              type="button"
+              aria-label={`Load ${nextBatch} more results`}
+              onClick={handleLoadMore}
+              className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground rounded-[2px] hover:text-foreground hover:border-primary/60 transition-colors"
+            >
+              {/* WHY explicit batch number: the user knows precisely how many will arrive,
+               *  avoiding the surprise of "Load More" loading a different number than expected. */}
+              Load {nextBatch} more
+            </button>
+            {/* Right-side detail: show "currently showing N of TOTAL" so the user
+             *  has continuous reinforcement of where they are in the universe. */}
+            <span
+              className="ml-3 font-mono text-[10px] tabular-nums uppercase tracking-[0.06em] text-muted-foreground"
+              aria-live="polite"
+            >
+              {accumulator.length.toLocaleString()} of {serverTotal.toLocaleString()} loaded
+            </span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

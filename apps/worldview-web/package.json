@@ -50,6 +50,8 @@
     "cmdk": "1.0.4",
     "graphology": "0.26.0",
     "graphology-layout-forceatlas2": "0.10.1",
+    "jspdf": "4.2.1",
+    "jspdf-autotable": "5.0.7",
     "lightweight-charts": "4.2.3",
     "lucide-react": "0.454.0",
     "next": "15.5.15",
@@ -65,7 +67,8 @@
     "remark-gfm": "4.0.0",
     "sigma": "3.0.2",
     "tailwind-merge": "2.5.5",
-    "tailwindcss-animate": "1.0.7"
+    "tailwindcss-animate": "1.0.7",
+    "write-excel-file": "4.0.4"
   },
   "devDependencies": {
     "@playwright/test": "1.59.1",

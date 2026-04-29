@@ -464,10 +464,28 @@ export interface ScreenerField {
   description: string | null;
 }
 
+/**
+ * ScreenerFilter — a single filter clause sent to POST /v1/fundamentals/screen.
+ *
+ * WHY both shapes are accepted (PLAN-0051):
+ *   - Legacy `{field, operator, value}` form (used by older call sites).
+ *   - PLAN-0051 Wave B `{metric, min_value, max_value, sector}` form (range
+ *     filters with optional sector restriction). The backend's actual schema
+ *     is the metric/min/max form; the legacy form is being phased out.
+ *
+ * All keys are optional so a single TS interface covers both shapes; runtime
+ * code is responsible for sending one or the other coherently.
+ */
 export interface ScreenerFilter {
-  field: string;
-  operator: string;
-  value: number | string | string[];
+  // Legacy form
+  field?: string;
+  operator?: string;
+  value?: number | string | string[];
+  // Range form (PLAN-0051 Wave B)
+  metric?: string;
+  min_value?: number;
+  max_value?: number;
+  sector?: string;
 }
 
 export interface ScreenerRequest {

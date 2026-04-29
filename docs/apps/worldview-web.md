@@ -140,7 +140,7 @@ apps/worldview-web/
 | `/(app)/dashboard` | Dashboard | Yes | Briefings, portfolio, alerts, movers, heatmap |
 | `/(app)/workspace` | Workspace | Yes | User-configurable multi-panel grid |
 | `/(app)/instruments/[entityId]` | Instrument Detail | Yes | OHLCV, fundamentals, graph, news |
-| `/(app)/screener` | Screener | Yes | `POST /v1/fundamentals/screen` (PLAN-0051 Wave B: collapsible Valuation/Profitability/Growth/Leverage/Technical/News sections; "X of Y match" header; Load More pagination accumulator; client-side fallback for technical filters; metric names per `docs/services/market-data.md`; gaps documented in `docs/audits/2026-04-29-screener-metric-gap.md`) |
+| `/(app)/screener` | Screener | Yes | `POST /v1/fundamentals/screen` (PLAN-0051 Wave B: collapsible Valuation/Profitability/Growth/Leverage/Technical/News sections; "X of Y match" header; Load More pagination accumulator; client-side fallback for technical filters; metric names per `docs/services/market-data.md`; gaps documented in `docs/audits/2026-04-29-screener-metric-gap.md`. **Wave B Part 2:** Saved Screens dialog (localStorage CRUD via `lib/saved-screens.ts`); Column Settings popover (visibility + drag-reorder + Reset, persisted via `lib/screener-columns.ts`); Export menu (CSV via `lib/csv-export.ts` / Excel via `lib/xlsx-export.ts` write-excel-file 4.0.4 / PDF via `lib/pdf-export.ts` jspdf 4.2.1 + jspdf-autotable 5.0.7); inline 30-day SVG sparklines via `components/screener/MiniChart.tsx` powered by `hooks/useScreenerSparklines.ts` consuming `POST /v1/quotes/bars/batch` with 5-min `staleTime` and 50-id chunking) |
 | `/(app)/portfolio` | Portfolio | Yes | Portfolios, holdings, transactions |
 | `/(app)/alerts` | Alerts & News | Yes | Pending alerts + top news |
 | `/(app)/chat` | Chat | Yes | SSE `/v1/chat/stream` |
@@ -163,7 +163,7 @@ All API calls go through this typed client. Base URL is `/api` (proxied by `next
 /api/v1/portfolios → API_GATEWAY_URL/v1/portfolios → S1 Portfolio
 ```
 
-**42 typed methods** covering: auth (4), instruments/market data (5), knowledge graph (2), news (3), screener (2), portfolio (5), watchlists (6), alerts (2), chat (5), prediction markets (1), dashboard (5), search (1), AI signals (1).
+**43 typed methods** covering: auth (4), instruments/market data (6 — adds `getBatchOhlcvBars` for screener sparklines, PLAN-0051 T-B-2-09), knowledge graph (2), news (3), screener (2), portfolio (5), watchlists (6), alerts (2), chat (5), prediction markets (1), dashboard (5), search (1), AI signals (1).
 
 #### Portfolio methods
 
