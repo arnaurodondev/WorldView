@@ -252,6 +252,40 @@ export function GlobalSearch() {
                 </CommandEmpty>
               )}
 
+              {/*
+                ── Global commands (PLAN-0053 Wave G T-G-7-05) ──────────────
+                Always-visible Commands group so power users can hit ⌘K and
+                select "Feedback" without leaving the keyboard. Dispatches
+                a custom event the FeedbackButton mounted in the layout
+                listens for. Custom event keeps GlobalSearch decoupled from
+                the modal's open state.
+              */}
+              <CommandGroup heading="Commands">
+                <CommandItem
+                  value="cmd:feedback"
+                  onSelect={() => {
+                    setOpen(false);
+                    setQuery("");
+                    if (typeof window !== "undefined") {
+                      window.dispatchEvent(new CustomEvent("worldview:open-feedback"));
+                    }
+                  }}
+                  onClick={() => {
+                    setOpen(false);
+                    setQuery("");
+                    if (typeof window !== "undefined") {
+                      window.dispatchEvent(new CustomEvent("worldview:open-feedback"));
+                    }
+                  }}
+                  className="cursor-pointer"
+                >
+                  <div className="flex w-full items-center gap-2">
+                    <span className="text-xs text-foreground">Send feedback</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground">⌘?</span>
+                  </div>
+                </CommandItem>
+              </CommandGroup>
+
               {/* ── Search results ───────���───────────────────────────────── */}
               {!showRecent && (
                 <>

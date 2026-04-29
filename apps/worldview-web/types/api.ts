@@ -1222,3 +1222,180 @@ export interface PaginationParams {
   limit?: number;
   offset?: number;
 }
+
+// ── Feedback subsystem (PLAN-0053 Wave G) ─────────────────────────────────
+//
+// WHY THIS LIVES HERE: Mirrors the Pydantic schemas declared in
+// services/portfolio/src/portfolio/api/feedback_schemas.py. The gateway
+// serialises/deserialises these directly — every field name and union
+// member matches the backend. If you change a value here, change the
+// backend at the same time.
+//
+// SECURITY: `console_logs` is `unknown` (not `any`) so consumers must
+// narrow before reading. The backend redacts secrets server-side; the UI
+// must NEVER display raw `console_logs` without sanitising further.
+
+/** Feedback kind — must match backend Literal in feedback_schemas.py. */
+export type FeedbackKind = "bug" | "feature_request" | "ux" | "design" | "other";
+
+/** Severity bucket for bug reports — null for non-bug submissions. */
+export type FeedbackSeverity = "low" | "medium" | "high" | "critical";
+
+/** Lifecycle status of a feedback submission (admin-managed). */
+export type FeedbackStatus =
+  | "open"
+  | "triaged"
+  | "in_progress"
+  | "resolved"
+  | "closed"
+  | "duplicate";
+
+/** Lifecycle status of a feature request (public roadmap). */
+export type FeatureStatus =
+  | "proposed"
+  | "planned"
+  | "in_progress"
+  | "shipped"
+  | "rejected";
+
+/** Micro-survey reaction enum — matches backend SurveyResponse Literal. */
+export type SurveyResponse = "positive" | "negative" | "neutral";
+
+/**
+ * FeedbackSubmission — full server-side shape for `/v1/feedback/submissions`.
+ *
+ * WHY user_id can be null: anonymous submissions are allowed (the user
+ * supplies an `email` instead). See PRD audit Section 5: "Open Question 2 —
+ * Anonymous submissions allowed (with email)".
+ */
+export interface FeedbackSubmission {
+  id: string;
+  tenant_id: string;
+  user_id: string | null;
+  email: string | null;
+  kind: FeedbackKind;
+  severity: FeedbackSeverity | null;
+  description: string;
+  // WHY unknown (not any): the backend stores arbitrary JSON-serialisable
+  // log entries. Consumers must explicitly narrow before rendering.
+  console_logs: unknown | null;
+  screenshot_url: string | null;
+  page_url: string | null;
+  user_agent: string | null;
+  status: FeedbackStatus;
+  tags: string[];
+  assigned_to: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Request body shape for POST /v1/feedback/submissions. */
+export interface FeedbackSubmissionPayload {
+  kind: FeedbackKind;
+  severity?: FeedbackSeverity | null;
+  /** Required: 10-5000 chars (enforced by backend Pydantic validator). */
+  description: string;
+  console_logs?: unknown;
+  screenshot_url?: string | null;
+  email?: string | null;
+  page_url?: string | null;
+  user_agent?: string | null;
+}
+
+/** Admin-only PATCH body — partial update of mutable fields. */
+export interface FeedbackSubmissionUpdate {
+  status?: FeedbackStatus;
+  tags?: string[];
+  assigned_to?: string | null;
+}
+
+/** Filters for GET /v1/feedback/submissions. */
+export interface FeedbackSubmissionFilters {
+  /** When true: list ONLY the caller's own submissions (user-facing view). */
+  mine?: boolean;
+  status?: FeedbackStatus;
+  kind?: FeedbackKind;
+  limit?: number;
+  offset?: number;
+}
+
+/** Backend list-response wrapper — matches FeedbackListResponse Pydantic schema. */
+export interface FeedbackListResponse {
+  items: FeedbackSubmission[];
+  total: number;
+}
+
+/** NPS submission record returned by POST /v1/feedback/nps. */
+export interface NPSScore {
+  id: string;
+  score: number;
+  created_at: string;
+}
+
+/** Body of POST /v1/feedback/nps. */
+export interface NPSPayload {
+  /** 0-10 inclusive (backend rejects out-of-range). */
+  score: number;
+  comment?: string | null;
+  /** Trigger surface tag for analytics ("post_sync", "post_first_alert", …). */
+  surface?: string | null;
+}
+
+/** Aggregate NPS metrics returned by GET /v1/feedback/nps/aggregate (admin-only). */
+export interface NPSAggregate {
+  promoter_count: number;
+  passive_count: number;
+  detractor_count: number;
+  /** -100..100 standard NPS formula = %promoters - %detractors. */
+  nps_score: number;
+  sample_size: number;
+  period_days: number;
+}
+
+/** Feature-request shape — matches FeatureRequestResponse Pydantic schema. */
+export interface FeatureRequest {
+  id: string;
+  title: string;
+  description: string;
+  status: FeatureStatus;
+  category: string | null;
+  vote_count: number;
+  is_public: boolean;
+  created_at: string;
+  updated_at: string;
+  /** Per-viewer flag — `true` if the current user has voted on this row. */
+  has_voted: boolean;
+}
+
+/** Body of POST /v1/feedback/features. */
+export interface FeatureRequestPayload {
+  /** 1-200 chars. */
+  title: string;
+  /** 1-5000 chars. */
+  description: string;
+  category?: string | null;
+}
+
+/** Filters for GET /v1/feedback/features. */
+export interface FeatureRequestFilters {
+  status?: FeatureStatus;
+  category?: string | null;
+  limit?: number;
+  offset?: number;
+}
+
+/** Vote response — current count + viewer's vote state. */
+export interface FeatureVoteResponse {
+  feature_request_id: string;
+  vote_count: number;
+  has_voted: boolean;
+}
+
+/** Body of POST /v1/feedback/micro-survey. */
+export interface MicroSurveyPayload {
+  /** Survey identifier — 1-100 chars (e.g. "dashboard_helpful"). */
+  survey_key: string;
+  response: SurveyResponse;
+  /** Optional free-text follow-up — ≤ 2000 chars. */
+  comment?: string | null;
+}
