@@ -437,7 +437,12 @@ export function NewsTab({ entityId }: NewsTabProps) {
     <div className="flex flex-col">
 
       {/* ── Filter + sort toolbar ─────────────────────────────────────────── */}
-      {/* WHY h-9 (not p-2): compact terminal controls — exact 36px height. */}
+      {/* WHY h-9 (not p-2): compact terminal controls — exact 36px height.
+          T-F-6-13 (news date filter ARIA label): no date-range filter control
+          was added in Wave E — the current toolbar contains only a source filter
+          and a sort dropdown. Both have appropriate aria-label attributes.
+          Finding closed: date filter is a deferred UX enhancement (no D-ticket
+          exists for it yet). The existing controls already meet ARIA standards. */}
       <div className="flex items-center gap-2 border-b border-border px-3 h-9 shrink-0">
 
         {/* Source filter dropdown — lists unique source_name values */}

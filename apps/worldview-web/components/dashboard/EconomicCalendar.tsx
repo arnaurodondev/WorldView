@@ -57,8 +57,9 @@ export function EconomicCalendar() {
       </div>
 
       {/* ── Loading state ──────────────────────────────────────────────── */}
+      {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-1) */}
       {isLoading && (
-        <div className="flex-1 space-y-2 px-2 pt-1">
+        <div className="flex-1 space-y-2 px-3 py-2">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="flex gap-2">
               <Skeleton className="h-5 w-12" style={{ animationDelay: `${i * 50}ms` }} />
@@ -73,7 +74,8 @@ export function EconomicCalendar() {
       {/* WHY muted (not destructive red): backend service offline is not a user error.
           Muted text avoids making the dashboard look broken. */}
       {isError && (
-        <p className="flex-1 px-2 pt-1 text-sm text-muted-foreground">
+        // T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-1)
+        <p className="flex-1 px-3 py-2 text-sm text-muted-foreground">
           Economic calendar unavailable — events will appear once macro data is ingested.
         </p>
       )}
@@ -83,8 +85,9 @@ export function EconomicCalendar() {
           is caused by data not yet being ingested — not a calendar with no events.
           A clear message sets correct expectations: the API is functional but the
           economic event data stream hasn't populated yet. */}
+      {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-2) */}
       {!isLoading && !isError && events.length === 0 && (
-        <div className="flex-1 flex flex-col gap-0.5 px-2 pt-2">
+        <div className="flex-1 flex flex-col gap-0.5 px-3 py-2">
           <p className="text-xs text-muted-foreground">No upcoming economic events scheduled.</p>
           <p className="text-[10px] text-muted-foreground/60">
             Economic events populate as market calendar data is ingested.

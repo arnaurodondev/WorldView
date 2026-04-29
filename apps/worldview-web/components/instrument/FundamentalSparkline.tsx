@@ -44,8 +44,12 @@ interface FundamentalSparklineProps {
   /** Additional className for the root wrapper */
   className?: string;
   /**
-   * When true, renders the first and last as_of_date as x-axis labels.
-   * Default false — labels add vertical space; omit for dense sidebar use.
+   * When true, renders:
+   *   - X-axis: first and last as_of_date (YYYY-MM) as year-tick labels below the sparkline
+   *   - Y-axis: min and max values right-aligned alongside the SVG chart
+   *
+   * Default false — labels add vertical space and horizontal space; omit for dense sidebar use.
+   * T-F-6-07: year ticks (x-axis) + right Y-axis added in this wave.
    */
   showAxis?: boolean;
 }
@@ -83,6 +87,31 @@ function buildPolylinePoints(values: number[], height: number): string {
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(" ");
+}
+
+/**
+ * formatYAxisLabel — compact representation of a numeric value for the Y-axis tick.
+ *
+ * WHY compact formatting: the right Y-axis sits in a ~28px wide column alongside the SVG.
+ * Full numbers like "2800000" are unreadable at text-[8px]. Using K/M/B suffixes and
+ * limiting to 3 significant figures keeps the label scannable at small size.
+ *
+ * T-F-6-07: new helper introduced for the right Y-axis (was not needed before).
+ */
+function formatYAxisLabel(value: number): string {
+  // WHY handle zero explicitly: Math.abs(0) < 1000 so the fallback branch runs, fine.
+  // But toFixed(1) on 0 = "0.0" which is wordier than just "0" — special-case it.
+  if (value === 0) return "0";
+
+  const abs = Math.abs(value);
+  // WHY 3 significant digits for all branches: enough precision to see "2.80T" vs
+  // "2.75T" without overflowing the 28px column. toPrecision(3) handles leading zeros.
+  if (abs >= 1_000_000_000) return `${(value / 1_000_000_000).toPrecision(3)}B`;
+  if (abs >= 1_000_000)     return `${(value / 1_000_000).toPrecision(3)}M`;
+  if (abs >= 1_000)         return `${(value / 1_000).toPrecision(3)}K`;
+  // For small values (ratios like P/E = 28.5, margins = 0.44), use 2 decimal places.
+  // WHY parseFloat(toFixed(...)): removes trailing zeros ("28.50" → "28.5").
+  return String(parseFloat(value.toFixed(2)));
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -152,33 +181,80 @@ export function FundamentalSparkline({
   const firstDate = points.find((p) => p.value_numeric != null)?.as_of_date ?? "";
   const lastDate = [...points].reverse().find((p) => p.value_numeric != null)?.as_of_date ?? "";
 
+  // ── Y-axis values (T-F-6-07: right-side Y-axis) ──────────────────────────
+  // WHY min + max only (not full Y-axis grid): in a 48px-tall sparkline there is no
+  // room for intermediate ticks. Showing max at the top and min at the bottom gives
+  // analysts the full value range without cluttering the compact chart.
+  const minVal = Math.min(...numericValues);
+  const maxVal = Math.max(...numericValues);
+  const yMaxLabel = formatYAxisLabel(maxVal);
+  const yMinLabel = formatYAxisLabel(minVal);
+
   return (
     <div className={`w-full ${className}`}>
-      {/* ── SVG sparkline — viewBox: 0 0 100 HEIGHT keeps proportions constant ── */}
-      {/* WHY preserveAspectRatio none: we want the SVG to stretch to fill the
-          container width while keeping the fixed height — standard sparkline behaviour. */}
-      <svg
-        viewBox={`0 0 100 ${height}`}
-        width="100%"
-        height={height}
-        preserveAspectRatio="none"
-        aria-hidden="true"
-      >
-        {/* WHY currentColor + className on <svg>: lets the stroke inherit the
-            Tailwind text color class applied to the SVG element, avoiding
-            hardcoded hex values in SVG attributes. */}
-        <polyline
-          points={polylinePoints}
-          fill="none"
-          className={`stroke-current ${trendClass}`}
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          vectorEffect="non-scaling-stroke" // WHY: keeps 1.5px stroke regardless of viewBox scale
-        />
-      </svg>
+      {/* ── Sparkline row: SVG (flex-1) + right Y-axis (fixed 28px) ─────────
+          WHY flex (not block): aligns the SVG and the Y-axis column horizontally.
+          The Y-axis is only rendered when showAxis=true; when false the SVG fills
+          the full container width as before, keeping the loading/non-axis states
+          pixel-identical to the original behaviour. */}
+      <div className={showAxis ? "flex items-stretch" : undefined}>
 
-      {/* ── Optional x-axis labels — first and last date ──────────────────── */}
+        {/* ── SVG sparkline — viewBox: 0 0 100 HEIGHT keeps proportions constant ── */}
+        {/* WHY preserveAspectRatio none: we want the SVG to stretch to fill the
+            container width while keeping the fixed height — standard sparkline behaviour. */}
+        {/* WHY width="100%" inside flex child: the flex-1 parent handles sizing;
+            the SVG still needs an explicit width attribute so it doesn't collapse to 0. */}
+        <svg
+          viewBox={`0 0 100 ${height}`}
+          width="100%"
+          height={height}
+          preserveAspectRatio="none"
+          aria-hidden="true"
+          className={showAxis ? "flex-1" : undefined}
+        >
+          {/* WHY currentColor + className on <svg>: lets the stroke inherit the
+              Tailwind text color class applied to the SVG element, avoiding
+              hardcoded hex values in SVG attributes. */}
+          <polyline
+            points={polylinePoints}
+            fill="none"
+            className={`stroke-current ${trendClass}`}
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke" // WHY: keeps 1.5px stroke regardless of viewBox scale
+          />
+        </svg>
+
+        {/* ── T-F-6-07: Right Y-axis — max at top, min at bottom ───────────── */}
+        {/* WHY justify-between on a flex-col: pushes max label to the top of the
+            SVG height and min label to the bottom without needing absolute positioning.
+            WHY w-[28px] shrink-0: "999M" (4 chars × ~6px) = ~24px; 28px gives 4px
+            breathing room and keeps all labels left-edge aligned regardless of digits.
+            WHY tabular-nums: ensures digit widths are consistent so "88.5" and "12.0"
+            appear the same width — avoids jitter as the metric selector changes. */}
+        {showAxis && (
+          <div
+            className="flex flex-col justify-between shrink-0 w-[28px] ml-0.5"
+            style={{ height: `${height}px` }}
+            aria-hidden="true"
+          >
+            {/* Max value — top of the Y range */}
+            <span className="font-mono text-[8px] tabular-nums text-muted-foreground leading-none">
+              {yMaxLabel}
+            </span>
+            {/* Min value — bottom of the Y range */}
+            <span className="font-mono text-[8px] tabular-nums text-muted-foreground leading-none">
+              {yMinLabel}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* ── Optional x-axis labels — year ticks: first and last YYYY-MM date ─ */}
+      {/* T-F-6-07: these are the "year ticks" for the x-axis.
+          WHY YYYY-MM (not full ISO): the sidebar column is ~220px wide after the
+          Y-axis column; "2024-01" (7 chars at 9px mono) fits cleanly at both ends. */}
       {showAxis && (firstDate || lastDate) && (
         <div className="flex justify-between mt-0.5">
           <span className="font-mono text-[9px] text-muted-foreground">

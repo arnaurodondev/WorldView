@@ -91,14 +91,15 @@ export function PortfolioNewsWidget() {
       )}
 
       {/* ── Error / empty state ────────────────────────────────────────────── */}
+      {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2) */}
       {isError && (
-        <div className="flex-1 px-2">
+        <div className="flex-1 px-3 py-2">
           <InlineEmptyState message="No recent news" />
         </div>
       )}
 
       {!isLoading && !isError && articles.length === 0 && (
-        <div className="flex-1 px-2">
+        <div className="flex-1 px-3 py-2">
           <InlineEmptyState message="No recent news" />
         </div>
       )}

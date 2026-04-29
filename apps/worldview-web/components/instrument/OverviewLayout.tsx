@@ -136,7 +136,12 @@ export function OverviewLayout({
 
         {/* ── Right column: scrollable sidebar ────────────────────────────── */}
         {/* WHY overflow-y-auto: sidebar content (12 metrics + 2 sparklines) may
-            exceed the chart height. Independent scroll preserves the chart view. */}
+            exceed the chart height. Independent scroll preserves the chart view.
+            T-F-6-16 (sidebar scroll unification): this single overflow-y-auto on the
+            column wrapper IS the unified scroll block. Neither OverviewSidebarMetrics
+            nor SparklinePanel define their own overflow classes — both render as
+            normal flow content that the parent scroll container scrolls as one unit.
+            The "unified scroll" requirement is already satisfied; no change needed. */}
         <div className="flex flex-col overflow-y-auto">
 
           {/* Zone 3: Key Metrics panel — 12+ rows */}

@@ -89,14 +89,51 @@ export default function InstrumentDetailPage() {
   // news query or filter state — NewsTab handles fetching, filtering, and rendering.
 
   // ── Page loading state ─────────────────────────────────────────────────────
+  // T-F-6-12: Skeleton expanded to match the 9-section instrument page layout.
+  // WHY 9 sections: FundamentalsTab has 9 sections (Valuation, Profitability,
+  // Growth, Dividends, Balance Sheet, 52-Week Range, Debt & Credit, Cash Flow
+  // + the full-width Analyst Consensus strip above the grid). The skeleton
+  // must visually match the loaded layout so there's no jarring reflow.
   if (overviewLoading && !overview) {
     return (
-      // WHY p-3 space-y-3 (was p-6 space-y-4): standard terminal panel padding
+      // WHY p-3: standard terminal panel padding (12px) applied consistently
+      // across all pages — avoids the default browser spacing resetting on load.
       <div className="space-y-3 p-3">
+        {/* Section 1 (implicit): Compact instrument header — 56px / 2×28px */}
+        {/* WHY h-6 + h-10: represents the two-row CompactInstrumentHeader:
+            top row (back button + ticker) and bottom row (name + price strip). */}
         <Skeleton className="h-6 w-48" />
         <Skeleton className="h-10 w-72" />
-        {/* WHY h-[280px]: matches OHLCVChart CHART_HEIGHT constant (Wave C-2) */}
+
+        {/* Section 2 (implicit): AI Subheader strip — single collapsed row */}
+        <Skeleton className="h-5 w-full" />
+
+        {/* Section 3 (implicit): Tab navigation row */}
+        <Skeleton className="h-7 w-64" />
+
+        {/* Section 4: OHLCVChart — the primary price chart fills most of the viewport */}
+        {/* WHY h-[280px]: matches OHLCVChart CHART_HEIGHT constant defined in Wave C-2.
+            Using the exact same height prevents a height jump when the chart mounts. */}
         <Skeleton className="h-[280px] w-full" />
+
+        {/* Sections 5–9: Fundamentals grid — 5 rows of 2-column section skeletons.
+            WHY grid grid-cols-2 gap-2: mirrors the actual FundamentalsTab layout
+            (grid-cols-2 on ≤lg, grid-cols-3 on ≥lg). The skeleton uses 2-col to
+            represent the minimum: Valuation + Profitability, Growth + Dividends,
+            Balance Sheet + 52-Week Range, Debt & Credit + Cash Flow, and the
+            full-width Analyst Consensus strip. */}
+        <div className="grid grid-cols-2 gap-2">
+          {/* Section 5: Valuation */}
+          <Skeleton className="h-[88px] w-full" />
+          {/* Section 6: Profitability */}
+          <Skeleton className="h-[88px] w-full" />
+          {/* Section 7: Growth (YoY) */}
+          <Skeleton className="h-[66px] w-full" />
+          {/* Section 8: Dividends */}
+          <Skeleton className="h-[66px] w-full" />
+          {/* Section 9: Balance Sheet — spans both columns for the 52-Week Range bar */}
+          <Skeleton className="col-span-2 h-[44px] w-full" />
+        </div>
       </div>
     );
   }

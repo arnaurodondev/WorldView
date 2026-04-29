@@ -91,7 +91,8 @@ export function AiSignalsWidget() {
     return (
       <div className="flex h-full flex-col bg-background">
         <WidgetHeader />
-        <div className="flex-1 px-2">
+        {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2) */}
+        <div className="flex-1 px-3 py-2">
           <InlineEmptyState message="Signals failed to load — check connection" />
         </div>
       </div>
@@ -105,7 +106,8 @@ export function AiSignalsWidget() {
     return (
       <div className="flex h-full flex-col bg-background">
         <WidgetHeader />
-        <div className="flex-1 px-2">
+        {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2) */}
+        <div className="flex-1 px-3 py-2">
           <InlineEmptyState message="No signals yet — processing articles…" />
         </div>
       </div>
