@@ -237,6 +237,173 @@ class ContentIngestionTask:
 # ── Prediction Market entities ─────────────────────────────────────────────────
 
 
+# PLAN-0053 T-C-3-04: category normalization map.
+# WHY this lives here (and not on the consumer/adapter): the canonical category
+# is part of the domain DTO — a market's category is a property of the data, not
+# of any specific provider. Keeping the normalisation pure-domain means consumers,
+# tests, and the API layer all see the same buckets without duplication.
+#
+# Each entry maps a lowercase Polymarket tag/category (the dictionary key) to
+# one of our four canonical frontend buckets ("politics" | "crypto" | "sports" |
+# "macro").  Tags not appearing here fall through to the title-keyword heuristic.
+# Order is irrelevant — lookup is direct dict access.
+_CATEGORY_NORMALIZATION_MAP: dict[str, str] = {
+    # Politics
+    "politics": "politics",
+    "pol": "politics",
+    "election": "politics",
+    "elections": "politics",
+    "2024 election": "politics",
+    "2024 elections": "politics",
+    "us election": "politics",
+    "us politics": "politics",
+    "president": "politics",
+    "presidential": "politics",
+    "trump": "politics",
+    "biden": "politics",
+    # Crypto / DeFi
+    "crypto": "crypto",
+    "cryptocurrency": "crypto",
+    "defi": "crypto",
+    "bitcoin": "crypto",
+    "btc": "crypto",
+    "ethereum": "crypto",
+    "eth": "crypto",
+    "solana": "crypto",
+    "sol": "crypto",
+    # Sports — Polymarket tags individual leagues frequently.
+    "sports": "sports",
+    "nba": "sports",
+    "nfl": "sports",
+    "nhl": "sports",
+    "mlb": "sports",
+    "soccer": "sports",
+    "football": "sports",
+    "champions league": "sports",
+    "world cup": "sports",
+    "olympics": "sports",
+    # Macro / Economy
+    "macro": "macro",
+    "macroeconomics": "macro",
+    "economy": "macro",
+    "economics": "macro",
+    "fed": "macro",
+    "fomc": "macro",
+    "inflation": "macro",
+    "cpi": "macro",
+    "interest rates": "macro",
+    "rates": "macro",
+    "tariffs": "macro",
+    "tariff": "macro",
+}
+
+
+# Title-keyword heuristic — used when no tag maps cleanly. Mirrors the frontend
+# ``categorize()`` function so server- and client-side classification agree on
+# the same set of titles. Order matters: macro is checked first so a "Fed cuts
+# rates AND BTC > 100k" market is tagged macro (correct call for finance UX).
+_TITLE_HEURISTIC_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "macro",
+        (
+            "fed",
+            "rate",
+            "inflation",
+            "gdp",
+            "cpi",
+            "unemployment",
+            "recession",
+            "fomc",
+            "payroll",
+            "pce",
+            "treasury",
+            "yield",
+            "deficit",
+            "tariff",
+            "economic",
+            "fiscal",
+            "monetary",
+            "pmi",
+        ),
+    ),
+    (
+        "politics",
+        (
+            "election",
+            "president",
+            "presidential",
+            "senate",
+            "congress",
+            "vote",
+            "primary",
+            "governor",
+            "supreme court",
+            "impeach",
+        ),
+    ),
+    (
+        "sports",
+        (
+            "nba",
+            "nfl",
+            "mlb",
+            "nhl",
+            "superbowl",
+            "super bowl",
+            "world cup",
+            "olympics",
+            "champion",
+            "f1",
+            "fifa",
+            "uefa",
+        ),
+    ),
+    (
+        "crypto",
+        (
+            "bitcoin",
+            "ethereum",
+            "btc",
+            "eth",
+            "crypto",
+            "solana",
+            "sol",
+            "altcoin",
+        ),
+    ),
+)
+
+
+def _normalize_category(raw: str) -> str | None:
+    """Map a raw Polymarket tag/category string to a canonical bucket or None.
+
+    PLAN-0053 T-C-3-04. Returns one of {"politics", "crypto", "sports", "macro"}
+    when the tag matches our normalisation table, else None to signal "unmapped"
+    (caller should fall back to title-keyword heuristics or keep the raw tag).
+    """
+    key = raw.strip().lower()
+    if not key:
+        return None
+    return _CATEGORY_NORMALIZATION_MAP.get(key)
+
+
+def _categorize_by_title(title: str) -> str | None:
+    """Heuristic: assign a canonical category based on title keywords.
+
+    PLAN-0053 T-C-3-04 — fallback when no tag maps cleanly. Mirrors the
+    frontend's ``categorize()`` so client and server stay in sync. Returns
+    None when no keyword matches; caller decides what to do (keep raw tag,
+    leave NULL, etc).
+    """
+    text = title.strip().lower()
+    if not text:
+        return None
+    for canonical, keywords in _TITLE_HEURISTIC_RULES:
+        if any(kw in text for kw in keywords):
+            return canonical
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class OutcomeSnapshot:
     """A single binary outcome of a prediction market (e.g. "Yes" or "No").
@@ -381,22 +548,49 @@ class PredictionMarketFetchResult:
         # or a ``tags`` list of plain strings.  We accept either shape and fall back to
         # the first non-empty tag when ``category`` is absent.  None preserves existing
         # DB values via the consumer's COALESCE upsert.
+        #
+        # PLAN-0053 T-C-3-04: extended categorization. The previous logic took the
+        # FIRST tag verbatim — which produced 60%+ "other" buckets because Polymarket
+        # tags individual events ("NBA", "FOMC", "Bitcoin") rather than coarse buckets.
+        # We now:
+        #   1. Walk the ENTIRE tag list (not just the first), trying to map any to
+        #      one of our 4 canonical buckets via _CATEGORY_NORMALIZATION_MAP.
+        #   2. Fall back to title-keyword heuristics when no tag maps cleanly.
+        #   3. Last-resort: keep the first non-empty raw tag (preserves backward-
+        #      compat for callers querying by raw category names like "elections").
         raw_category: Any = raw.get("category")
         category: str | None = None
         if isinstance(raw_category, str) and raw_category.strip():
-            category = raw_category.strip().lower()
+            normalized = _normalize_category(raw_category)
+            category = normalized if normalized is not None else raw_category.strip().lower()
         else:
             tags_raw = raw.get("tags") or []
+            collected_tags: list[str] = []
             if isinstance(tags_raw, list):
                 for tag in tags_raw:
                     if isinstance(tag, str) and tag.strip():
-                        category = tag.strip().lower()
-                        break
-                    if isinstance(tag, dict):
+                        collected_tags.append(tag.strip())
+                    elif isinstance(tag, dict):
                         label = tag.get("label") or tag.get("name") or ""
                         if isinstance(label, str) and label.strip():
-                            category = label.strip().lower()
-                            break
+                            collected_tags.append(label.strip())
+
+            # First pass: walk every tag looking for one that maps cleanly.
+            for tag in collected_tags:
+                normalized = _normalize_category(tag)
+                if normalized is not None:
+                    category = normalized
+                    break
+
+            # Second pass: title-keyword heuristic if no tag matched.
+            if category is None:
+                title_text = raw.get("question") or raw.get("title") or ""
+                if isinstance(title_text, str) and title_text:
+                    category = _categorize_by_title(title_text)
+
+            # Third pass: keep raw first tag verbatim (existing behaviour).
+            if category is None and collected_tags:
+                category = collected_tags[0].lower()
 
         return cls(
             source_type=SourceType.POLYMARKET,

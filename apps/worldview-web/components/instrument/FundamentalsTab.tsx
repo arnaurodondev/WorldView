@@ -147,6 +147,29 @@ function getMarginClass(
   return "text-warning";
 }
 
+// ── Per-ticker missing-value placeholder (PLAN-0053 T-C-3-03) ────────────────
+//
+// WHY a dedicated component: NULL snapshot fields are common (EODHD doesn't
+// always populate cash-flow values for ADRs / smaller-caps). Showing a bare
+// "—" gives the user no signal about WHY — they'd reasonably wonder if the
+// page is broken. This component renders "—" with a hover tooltip that
+// distinguishes "missing for this ticker" from "globally unavailable" (the
+// latter renders as "n/a" — see credit_rating handling below).
+//
+// WHY native `title` attribute (not a shadcn Tooltip): keeps the component
+// dependency-free and works under SSR without hydration friction. The text
+// is read by screen readers and standard browser hover.
+function MissingValue() {
+  return (
+    <span
+      className="cursor-help text-muted-foreground"
+      title="Not available for this ticker"
+    >
+      —
+    </span>
+  );
+}
+
 // ── Metric row sub-component ──────────────────────────────────────────────────
 
 /**
@@ -306,6 +329,37 @@ export function FundamentalsTab({
     );
   }
 
+  // ── PLAN-0053 T-C-3-03: coverage-aware rendering ─────────────────────────
+  // Compute the % of NULL fields in the snapshot (the 10 frontend-displayed
+  // metrics: eps_ttm, beta, avg_volume_30d, operating_cash_flow, capex,
+  // free_cash_flow, fcf_margin, interest_coverage, net_debt_to_ebitda,
+  // credit_rating). When >30% are NULL we render a banner explaining that
+  // EODHD has limited coverage for this specific ticker.  WHY 30%: the
+  // threshold above which the page reads as "mostly empty" rather than
+  // "a few gaps" — confirmed visually in Wave A QA.
+  const SNAPSHOT_FIELDS = [
+    "eps_ttm",
+    "beta",
+    "avg_volume_30d",
+    "operating_cash_flow",
+    "capex",
+    "free_cash_flow",
+    "fcf_margin",
+    "interest_coverage",
+    "net_debt_to_ebitda",
+    "credit_rating",
+  ] as const;
+  // WHY snapshot guard: when the snapshot query is in flight (snapshot=undefined)
+  // we skip the coverage banner entirely — we don't want to flash "limited
+  // coverage" while the data is still loading.
+  const nullFieldCount = snapshot
+    ? SNAPSHOT_FIELDS.filter((f) => snapshot[f as keyof FundamentalsSnapshot] == null).length
+    : 0;
+  const coverageRatio = snapshot ? nullFieldCount / SNAPSHOT_FIELDS.length : 0;
+  // WHY > 0.3 (not >=): a ticker with exactly 30% nulls (3/10) is borderline;
+  // we only flag tickers that are MEANINGFULLY incomplete (4+ nulls).
+  const showCoverageBanner = snapshot != null && coverageRatio > 0.3;
+
   // ── Render metrics grid ────────────────────────────────────────────────────
   // WHY grid-cols-[1fr_280px] (Wave D-2): Two-column layout — left content column
   // (scrollable metrics + charts + tables) + right 280px sidebar (market position,
@@ -315,6 +369,23 @@ export function FundamentalsTab({
     <div className="grid grid-cols-[1fr_280px] min-h-0">
       {/* ── LEFT COLUMN: scrollable fundamentals content ──────────────────── */}
       <div className="overflow-y-auto border-r border-border">
+        {/* ── PLAN-0053 T-C-3-03: coverage banner ───────────────────────────
+            Surfaces a one-line warning when >30% of snapshot fields are NULL
+            for this specific ticker — typically because EODHD has limited
+            data coverage (smaller-caps, ADRs, recent IPOs). Helps the user
+            distinguish "system is slow" from "this ticker just doesn't have
+            full data". The Alpha Vantage fallback (T-C-3-02) reduces this
+            for eps_ttm + beta but doesn't cover the cash-flow fields. */}
+        {showCoverageBanner && (
+          <div
+            role="status"
+            className="border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-[11px] text-warning"
+          >
+            <span className="font-mono uppercase tracking-wider text-[10px] mr-2">⚠ Limited coverage</span>
+            Coverage for this ticker is limited ({nullFieldCount} of {SNAPSHOT_FIELDS.length} key
+            metrics unavailable from current data providers).
+          </div>
+        )}
         {/* ── Full-width sections ABOVE the grid ──────────────────────────────
             WHY above the grid (not in it): Analyst Consensus and Revenue Trend
             are macro-level summaries that should appear before the detail metrics.
@@ -520,7 +591,7 @@ export function FundamentalsTab({
                 {formatPercent(fund.daily_return)}
               </span>
             ) : (
-              <span className="text-muted-foreground">—</span>
+              <MissingValue />
             )}
           </MetricRow>
         </Section>
@@ -542,7 +613,7 @@ export function FundamentalsTab({
                 {formatRatio(snapshot.interest_coverage)}x
               </span>
             ) : (
-              <span className="text-muted-foreground">—</span>
+              <MissingValue />
             )}
           </MetricRow>
 
@@ -558,20 +629,30 @@ export function FundamentalsTab({
                 {formatRatio(snapshot.net_debt_to_ebitda)}x
               </span>
             ) : (
-              <span className="text-muted-foreground">—</span>
+              <MissingValue />
             )}
           </MetricRow>
 
           {/* Credit Rating: S&P/Moody's credit rating string (e.g. "A+", "BBB-").
               Always null until a credit data provider is integrated — EODHD does not
-              expose ratings via their standard fundamentals API. */}
+              expose ratings via their standard fundamentals API.
+              PLAN-0053 T-C-3-03: render "n/a" (not "—") with an explainer tooltip so
+              users distinguish "globally unavailable" from "missing for this ticker".
+              The "n/a" form is conventional in financial data tools for "not
+              applicable / not exposed by data source" — distinct from "—" which
+              means "we expected this value but it's missing for this row". */}
           <MetricRow label="Credit Rating">
             {snapshot?.credit_rating != null ? (
               <span className="text-foreground font-mono text-[11px]">
                 {snapshot.credit_rating}
               </span>
             ) : (
-              <span className="text-muted-foreground">—</span>
+              <span
+                className="cursor-help text-muted-foreground"
+                title="Limited coverage — credit ratings not available from current data provider"
+              >
+                n/a
+              </span>
             )}
           </MetricRow>
         </Section>
@@ -591,7 +672,7 @@ export function FundamentalsTab({
                 {formatMarketCap(snapshot.operating_cash_flow)}
               </span>
             ) : (
-              <span className="text-muted-foreground">—</span>
+              <MissingValue />
             )}
           </MetricRow>
 
@@ -604,7 +685,7 @@ export function FundamentalsTab({
                 {formatMarketCap(Math.abs(snapshot.capex))}
               </span>
             ) : (
-              <span className="text-muted-foreground">—</span>
+              <MissingValue />
             )}
           </MetricRow>
 
@@ -615,7 +696,7 @@ export function FundamentalsTab({
                 {formatMarketCap(snapshot.free_cash_flow)}
               </span>
             ) : (
-              <span className="text-muted-foreground">—</span>
+              <MissingValue />
             )}
           </MetricRow>
 
@@ -627,7 +708,7 @@ export function FundamentalsTab({
                 {formatPercent(snapshot.fcf_margin)}
               </span>
             ) : (
-              <span className="text-muted-foreground">—</span>
+              <MissingValue />
             )}
           </MetricRow>
         </Section>
