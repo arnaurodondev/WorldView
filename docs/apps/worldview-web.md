@@ -198,6 +198,10 @@ All API calls go through this typed client. Base URL is `/api` (proxied by `next
 | Local UI state | `useState` / `useReducer` | Filters, modals, selections |
 | Workspace layout | `localStorage` + React state | Persisted grid layout — versioned key `worldview:workspaces:v2` (300-ms debounced writes; auto-migrates from legacy `worldview-workspaces` v1 key on first load). PLAN-0051 T-C-3-01. |
 | Symbol linking | React Context (`SymbolLinkingContext`) + `localStorage` | Per-workspace; persists per-panel link colors at `worldview:symbolLinks:v1` (active symbol intentionally NOT persisted). 5 colors + "none" with broadcast across same-color panels. PLAN-0051 T-C-3-05. |
+| Workspace chart | `WorkspaceChartWidget` (lightweight-charts 4.2.3) | Panel-sized OHLCV candle chart with 5 timeframes (1D/1W/1M/3M/1Y), Midnight Pro palette, ResizeObserver-driven sizing. Renders an empty state when no symbol is linked; renders an error banner with retry on fetch failure. PLAN-0051 T-C-3-03. |
+| Workspace fundamentals | `WorkspaceFundamentalsWidget` | Compact 6-row fundamentals table (Market Cap / P/E TTM / P/B / Div Yield / ROE / Beta). Reuses `getFundamentals` + `getFundamentalsSnapshot`. PLAN-0051 T-C-3-04. |
+| Workspace templates | `lib/workspace-templates.ts` + `NewFromTemplateDialog` | 5 starter layouts (Day Trader, Research, Swing Trader, News Junkie, Investor) instantiated via the "+ Template" button. Each template's panel types are validated against `PanelType` at test time (`__tests__/workspace-templates.test.tsx`). PLAN-0051 T-C-3-06. |
+| Workspace share-via-URL | `lib/workspace-share.ts` + `ShareWorkspaceDialog` | Encode the active workspace as a URL-safe base64 token in `?config=…`. 4096-char cap; oversize layouts surface an error banner. On page mount, `?config=…` is decoded, persisted as a new tab named "Imported: …", and the page reloads. PLAN-0051 T-C-3-07. |
 
 ---
 
