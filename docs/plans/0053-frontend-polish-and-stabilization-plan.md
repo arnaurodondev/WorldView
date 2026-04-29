@@ -396,7 +396,9 @@ Also fix typography: ticker symbol bold-white (`font-bold text-foreground`); pri
 
 ---
 
-# Wave B — Watchlist Backend + Holdings Widget Catalog
+# Wave B — Watchlist Backend + Holdings Widget Catalog ⚠️ PARTIAL
+
+**Status (2026-04-30)**: T-B-2-01 (S3 search by name + pg_trgm) and T-B-2-02 (frontend uppercase rollback) complete — fixes the BLOCKING "apple → no results" bug end-to-end. T-B-2-03..06 (Holdings Movers / Cash / Activity / Dividend widgets) deferred to follow-up sessions; they are net-new components (~10h UI work) and not user-blocking now that the watchlist add-flow works.
 
 **Goal**: Complete the watchlist add-flow fix at the backend layer (search by name) + replace the under-utilized WatchlistMovers widget with HoldingsMovers + ship 3 high-value Holdings widgets.
 **Depends on**: A

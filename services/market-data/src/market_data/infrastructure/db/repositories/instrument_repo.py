@@ -87,10 +87,16 @@ class PgInstrumentRepository(InstrumentRepository):
         if query:
             escaped = self._escape_like(query)
             pattern = f"%{escaped}%"
+            # PLAN-0053 T-B-2-01: extend ILIKE search to the company ``name``
+            # field. Previously the search clause was ``symbol`` + ``exchange``
+            # only — so queries like "apple" returned 0 rows. Adding ``name``
+            # (with a pg_trgm GIN index from migration 0011) lets users search
+            # by company name reliably.
             conditions.append(
                 or_(
                     InstrumentModel.symbol.ilike(pattern, escape="\\"),
                     InstrumentModel.exchange.ilike(pattern, escape="\\"),
+                    InstrumentModel.name.ilike(pattern, escape="\\"),
                 )
             )
         if has_ohlcv is not None:
@@ -125,10 +131,16 @@ class PgInstrumentRepository(InstrumentRepository):
         if query:
             escaped = self._escape_like(query)
             pattern = f"%{escaped}%"
+            # PLAN-0053 T-B-2-01: extend ILIKE search to the company ``name``
+            # field. Previously the search clause was ``symbol`` + ``exchange``
+            # only — so queries like "apple" returned 0 rows. Adding ``name``
+            # (with a pg_trgm GIN index from migration 0011) lets users search
+            # by company name reliably.
             conditions.append(
                 or_(
                     InstrumentModel.symbol.ilike(pattern, escape="\\"),
                     InstrumentModel.exchange.ilike(pattern, escape="\\"),
+                    InstrumentModel.name.ilike(pattern, escape="\\"),
                 )
             )
         if has_ohlcv is not None:
