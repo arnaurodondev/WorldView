@@ -47,6 +47,7 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/fundamentals/{instrument_id}/institutional-holders` | Institutional holders | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/fund-holders` | Fund holders | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/insider-transactions-snapshot` | Insider transactions snapshot | — |
+| GET | `/api/v1/fundamentals/{instrument_id}/snapshot` | Pre-computed derived metrics snapshot — returns one flat row from `instrument_fundamentals_snapshot` table (eps_ttm, beta, avg_volume_30d, operating_cash_flow, capex, free_cash_flow, fcf_margin, interest_coverage, net_debt_to_ebitda, credit_rating, updated_at). Always 200 — all fields null for un-backfilled instruments. PLAN-0050 Wave D. | — |
 | GET | `/api/v1/fundamentals/timeseries` | Metric timeseries — query params: `instrument_id`, `metric`, `start_date`, `end_date`, `period_type`, `limit`. Returns 422 if `start_date > end_date`. | — |
 | POST | `/api/v1/fundamentals/screen` | Screen instruments by metric thresholds (AND logic) — JSON body: `filters[]` (each filter may include `metric`, `min_value`, `max_value`, `period_type`, `sector`), `limit` (default 50, max 200), `offset` (max 5000), `sort_by` (metric name, `ticker`, or `name`; validated whitelist — SQL injection guard), `sort_order` (`asc`/`desc`). Response includes `ticker`, `name`, `exchange`, `sector` fields + `total` (COUNT(*) OVER()). | — |
 | GET | `/api/v1/fundamentals/metrics/{instrument_id}` | List available metric names for an instrument | — |
@@ -193,6 +194,26 @@ CREATE INDEX ix_fundamental_metrics_metric_date
     ON fundamental_metrics (metric, as_of_date);
 CREATE INDEX ix_fundamental_metrics_instrument_metric
     ON fundamental_metrics (instrument_id, metric, as_of_date);
+
+-- PLAN-0050 Wave D: One-row-per-instrument pre-computed snapshot of 10 derived metrics.
+-- Populated by: services/market-ingestion/scripts/backfill_fundamentals.py (nightly UPSERT).
+-- Purpose: avoids multi-section JSONB joins at query time for InstrumentKeyMetrics + FundamentalsTab.
+-- Note: credit_rating is always NULL (EODHD does not expose S&P/Moody's ratings).
+CREATE TABLE instrument_fundamentals_snapshot (
+    instrument_id       UUID PRIMARY KEY REFERENCES instruments(id) ON DELETE CASCADE,
+    eps_ttm             NUMERIC(18, 6) NULL,
+    beta                NUMERIC(10, 6) NULL,
+    avg_volume_30d      BIGINT NULL,
+    operating_cash_flow NUMERIC(24, 2) NULL,
+    capex               NUMERIC(24, 2) NULL,
+    free_cash_flow      NUMERIC(24, 2) NULL,
+    fcf_margin          NUMERIC(10, 6) NULL,
+    interest_coverage   NUMERIC(12, 4) NULL,
+    net_debt_to_ebitda  NUMERIC(12, 4) NULL,
+    credit_rating       VARCHAR(10) NULL,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ix_fundamentals_snapshot_updated_at ON instrument_fundamentals_snapshot (updated_at);
 
 -- PRD-0019: Polymarket prediction markets
 CREATE TABLE prediction_markets (

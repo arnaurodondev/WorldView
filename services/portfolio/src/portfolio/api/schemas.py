@@ -527,3 +527,49 @@ class ExposureResponse(BaseModel):
     @field_serializer("invested", "cash", "gross_exposure_pct", "net_exposure_pct", "leverage")
     def serialize_decimal(self, v: Decimal) -> str:
         return _fmt_decimal(v)
+
+
+# ── PLAN-0051 Wave A — Realised P&L (T-A-1-04) ────────────────────────────────
+
+
+class RealizedPnLBreakdownItem(BaseModel):
+    """Per-instrument totals row inside the realised-P&L response.
+
+    ``ticker``/``name`` come from the local instruments cache. They stay
+    ``None`` for instruments not yet mirrored locally; the frontend renders
+    "—" in that case (mirrors the holdings list behaviour).
+    """
+
+    instrument_id: UUID
+    ticker: str | None = None
+    name: str | None = None
+    realized: Decimal
+
+    @field_serializer("realized")
+    def serialize_realized(self, v: Decimal) -> str:
+        return _fmt_decimal(v)
+
+
+class RealizedPnLResponse(BaseModel):
+    """``GET /v1/portfolios/{id}/realized-pnl`` response.
+
+    ``total_realized = realized_long_term + realized_short_term`` always
+    holds (computed server-side). ``count`` is the number of SELL
+    transactions that landed inside the date window, NOT the number of
+    chunks matched against open lots.
+
+    Decimals are 8-dp strings on the wire to match the rest of the API.
+    """
+
+    total_realized: Decimal
+    realized_long_term: Decimal
+    realized_short_term: Decimal
+    count: int
+    breakdown_by_instrument: list[RealizedPnLBreakdownItem]
+    currency: str
+    from_date: date
+    to_date: date
+
+    @field_serializer("total_realized", "realized_long_term", "realized_short_term")
+    def serialize_decimal(self, v: Decimal) -> str:
+        return _fmt_decimal(v)

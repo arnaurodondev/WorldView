@@ -312,6 +312,18 @@ class FakeTransactionRepository(TransactionRepository):
         total = len(items)
         return items[offset : offset + limit], total
 
+    async def list_all_for_portfolio_asc(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+    ) -> list[Transaction]:
+        items = [t for t in self._store.values() if t.portfolio_id == portfolio_id and t.tenant_id == tenant_id]
+        # Mirror the SQL ORDER BY exactly so unit tests faithfully reproduce
+        # the production walk order; ``created_at`` breaks ties when two trades
+        # land on the same timestamp (very common with backfills).
+        items.sort(key=lambda t: (t.executed_at, t.created_at))
+        return items
+
     async def save(self, transaction: Transaction) -> None:
         self._store[transaction.id] = transaction
 

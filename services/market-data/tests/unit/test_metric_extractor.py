@@ -385,9 +385,23 @@ def test_partial_keys_extracts_only_present() -> None:
 # ── Uncatalogued sections ──────────────────────────────────────────────────────
 
 
-def test_uncatalogued_section_returns_empty() -> None:
-    """Sections not in the catalog produce no rows regardless of data content."""
+def test_technicals_snapshot_in_catalog_produces_beta_row() -> None:
+    """TECHNICALS_SNAPSHOT is now catalogued (PLAN-0050 Wave D) — Beta + avg_volume_30d
+    are extracted for the fundamentals screener and snapshot backfill.
+    WHY updated (not deleted): R19 — fix implementation, never delete tests.
+    Previously TECHNICALS_SNAPSHOT was uncatalogued; after adding beta/avg_volume_30d
+    to _METRIC_CATALOG it produces rows.  The test now asserts the new correct behaviour."""
     rows = _call(FundamentalsSection.TECHNICALS_SNAPSHOT, {"Beta": 1.2, "RSI": 55.0})
+    # Beta should be extracted; RSI is not in the catalog so it is dropped
+    metrics = {r.metric for r in rows}
+    assert "beta" in metrics
+    assert "rsi" not in metrics  # RSI not in catalog
+
+
+def test_uncatalogued_section_returns_empty_earnings_trend() -> None:
+    """Sections not in the catalog produce no rows regardless of data content.
+    Uses EARNINGS_TREND which remains uncatalogued (forward estimates, not screener metrics)."""
+    rows = _call(FundamentalsSection.EARNINGS_TREND, {"earningsEstimate": 1.5})
     assert rows == []
 
 

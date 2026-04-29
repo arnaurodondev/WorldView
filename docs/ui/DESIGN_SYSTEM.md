@@ -362,6 +362,29 @@ fmt.format(1_230_000_000) // "1.2B"
 - Cell padding: `px-2 py-1` (vs default `px-4 py-3`)
 - Use `CompactTable` wrapper component
 
+### 6.5a Filter Bar Pattern (PLAN-0051 Wave A)
+
+For data-heavy tables with multiple discrete filters (Transactions, Screener results, Alerts history). Pinned to a single row above the table; wraps to 2 rows on narrow panels via `flex-wrap`.
+
+**Layout invariants**:
+- Wrapper: `flex flex-wrap h-auto items-center gap-1 gap-y-1 border-b border-border px-2 py-1 shrink-0`
+- All inputs share the same chrome via a single `INPUT_CLS` constant: `h-6 px-2 text-[11px] font-mono bg-card border border-border rounded-[2px] focus:border-primary focus:ring-1 focus:ring-primary/30`
+- Native `<input type="date">` for date pickers (no custom Combobox), `<datalist>` for ticker autocomplete (zero JS, native a11y), `<select>` for enum filters (≤ 5 options).
+- Min/Max amount: two `<input type="number" inputMode="decimal">` side by side.
+- Free-text search: 200 ms debounce.
+- "Clear filters" pill (10 px ALL CAPS) only visible when at least one filter is active.
+- Row count `{filtered.length} / {transactions.length}` always pushed to the right with `ml-auto`.
+
+**Reference component**: `apps/worldview-web/components/portfolio/TransactionsTable.tsx`
+
+### 6.5b Inline Export Button
+
+Single-format export (CSV today; XLSX/PDF dropdown is screener-only — see PLAN-0051 T-B-2-07). Same chrome as the Clear filters pill: `h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-border rounded-[2px] text-muted-foreground hover:text-foreground hover:border-foreground`. Implementation: `lib/csv-export.ts` (papaparse + Blob download with UTF-8 BOM for Excel compatibility).
+
+### 6.5c Totals Row
+
+Render OUTSIDE the table when virtualisation may be active (FixedSizeList rejects `<tr>` children with `position: absolute`). Pattern: a 28 px tall flex row with `border-t-2 border-border bg-card`, label "Totals" in 10 px ALL CAPS muted, then per-bucket `<span>label <span className="text-foreground">value</span></span>` pairs. Each value carries a `data-testid` for unit testing.
+
 ### 6.9 Heat Map / HeatCell Pattern (NEW — ADR-F-14)
 
 For percentage-change values in tables and sector heat tiles:

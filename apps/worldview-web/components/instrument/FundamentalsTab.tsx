@@ -47,7 +47,7 @@ import {
   formatRelativeTime,
   priceChangeClass,
 } from "@/lib/utils";
-import type { Fundamentals, Instrument } from "@/types/api";
+import type { Fundamentals, FundamentalsSnapshot, Instrument } from "@/types/api";
 import { AnalystConsensusStrip } from "@/components/instrument/AnalystConsensusStrip";
 import { RevenueTrendSparklines } from "@/components/instrument/RevenueTrendSparklines";
 import { WeekRangeBar } from "@/components/instrument/52WeekRangeBar";
@@ -248,6 +248,22 @@ export function FundamentalsTab({
     // WHY 5min stale: fundamentals update once/day; no need to refetch aggressively
     staleTime: 5 * 60_000,
     placeholderData: initialData ?? undefined,
+  });
+
+  // WHY separate snapshot query: The 10 derived metrics (eps_ttm, beta, avg_volume_30d,
+  // FCF, interest coverage, net_debt_to_ebitda, etc.) are stored in the
+  // instrument_fundamentals_snapshot table and served from a dedicated S3 endpoint.
+  // They are NOT part of the main Fundamentals response (which comes from EODHD
+  // highlights/technicals JSONB sections). Keeping them separate allows the main
+  // fundamentals data to continue loading even if the snapshot hasn't been backfilled.
+  // WHY no error handling / loading guard: snapshot failures are non-fatal — the
+  // component renders gracefully with "—" for any null/missing snapshot fields.
+  const { data: snapshot } = useQuery<FundamentalsSnapshot>({
+    queryKey: ["fundamentals-snapshot", instrumentId],
+    queryFn: () => createGateway(accessToken).getFundamentalsSnapshot(instrumentId),
+    enabled: !!accessToken && !!instrumentId,
+    // WHY 10min stale: snapshot is updated by a nightly backfill; very stale-tolerant.
+    staleTime: 10 * 60_000,
   });
 
   // ── Loading state ──────────────────────────────────────────────────────────
@@ -513,17 +529,37 @@ export function FundamentalsTab({
             WHY add this section: debt sustainability is a key risk signal.
             Interest coverage and Net Debt/EBITDA are the primary screens used
             by credit analysts to assess default risk.
-            WHY most fields show "—": these fields are not yet in the Fundamentals
-            type. debt_to_equity is available and shown with directional coloring. */}
+            Fields sourced from instrument_fundamentals_snapshot (backfilled nightly).
+            Null means: data not yet backfilled OR genuinely unavailable for this
+            instrument (e.g. ETFs with no income statements). PLAN-0050 Wave D. */}
         <Section title="Debt &amp; Credit">
-          {/* Interest Coverage: not in type — show pending */}
+          {/* Interest Coverage: ebit / interest_expense — >3x = safe (green), <1.5x = distress (red).
+              A ratio below 1.0 means the company cannot cover interest from operating income.
+              WHY getMarginClass (not getMetricClass): higher coverage = safer = green (higher is better). */}
           <MetricRow label="Interest Coverage">
-            <span className="text-muted-foreground">—</span>
+            {snapshot?.interest_coverage != null ? (
+              <span className={getMarginClass(snapshot.interest_coverage, 3.0, 1.5)}>
+                {formatRatio(snapshot.interest_coverage)}x
+              </span>
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            )}
           </MetricRow>
 
-          {/* Net Debt/EBITDA: not in type — show pending */}
+          {/* Net Debt/EBITDA: lower is better — <2x conservative (green), >4x = leveraged (red).
+              Negative value means net cash (no net debt) — always green. */}
           <MetricRow label="Net Debt / EBITDA">
-            <span className="text-muted-foreground">—</span>
+            {snapshot?.net_debt_to_ebitda != null ? (
+              <span className={
+                snapshot.net_debt_to_ebitda < 0
+                  ? "text-positive"
+                  : getMetricClass(snapshot.net_debt_to_ebitda, 2.0, 4.0)
+              }>
+                {formatRatio(snapshot.net_debt_to_ebitda)}x
+              </span>
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            )}
           </MetricRow>
 
           {/* Debt/Equity: green <1.0, amber 1.0-2.0, red >2.0 */}
@@ -533,9 +569,17 @@ export function FundamentalsTab({
             </span>
           </MetricRow>
 
-          {/* Credit Rating: not in type — show pending */}
+          {/* Credit Rating: S&P/Moody's credit rating string (e.g. "A+", "BBB-").
+              Always null until a credit data provider is integrated — EODHD does not
+              expose ratings via their standard fundamentals API. */}
           <MetricRow label="Credit Rating">
-            <span className="text-muted-foreground">—</span>
+            {snapshot?.credit_rating != null ? (
+              <span className="text-foreground font-mono text-[11px]">
+                {snapshot.credit_rating}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            )}
           </MetricRow>
         </Section>
 
@@ -543,27 +587,55 @@ export function FundamentalsTab({
             WHY add this section: cash flow metrics are the most manipulation-
             resistant fundamentals (earnings can be smoothed; cash flows are real).
             FCF margin is Warren Buffett's preferred screening metric.
-            WHY all fields show "—": cash flow statement data is not yet in the
-            Fundamentals type. A future S3/S9 wave will add these fields. */}
+            Fields sourced from instrument_fundamentals_snapshot (backfilled nightly
+            from EODHD cash flow statements). PLAN-0050 Wave D. */}
         <Section title="Cash Flow">
-          {/* Operating Cash Flow: not in type */}
+          {/* Operating Cash Flow: cash generated from operations (before capex).
+              Raw dollar value — large-cap companies have OCF in billions. */}
           <MetricRow label="Operating CF">
-            <span className="text-muted-foreground">—</span>
+            {snapshot?.operating_cash_flow != null ? (
+              <span className={snapshot.operating_cash_flow >= 0 ? "text-positive" : "text-negative"}>
+                {formatMarketCap(snapshot.operating_cash_flow)}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            )}
           </MetricRow>
 
-          {/* Capital Expenditures: not in type */}
+          {/* CapEx: stored as negative value from EODHD (cash outflow). Display absolute value
+              with red coloring (it's a cost, but normal — only extreme capex relative to OCF is bad).
+              WHY formatMarketCap: same dollar-suffix format as market cap (B/M/K). */}
           <MetricRow label="CapEx">
-            <span className="text-muted-foreground">—</span>
+            {snapshot?.capex != null ? (
+              <span className="text-foreground">
+                {formatMarketCap(Math.abs(snapshot.capex))}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            )}
           </MetricRow>
 
-          {/* Free Cash Flow: not in type */}
+          {/* Free Cash Flow: operating_cash_flow - |capex|. Positive = value-generative. */}
           <MetricRow label="Free Cash Flow">
-            <span className="text-muted-foreground">—</span>
+            {snapshot?.free_cash_flow != null ? (
+              <span className={snapshot.free_cash_flow >= 0 ? "text-positive" : "text-negative"}>
+                {formatMarketCap(snapshot.free_cash_flow)}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            )}
           </MetricRow>
 
-          {/* FCF Margin: not in type */}
+          {/* FCF Margin: free_cash_flow / revenue. >15% = strong (green), <5% = thin (amber), <0% = burning cash (red).
+              WHY getMarginClass: higher FCF margin = more value generated = green (higher is better). */}
           <MetricRow label="FCF Margin">
-            <span className="text-muted-foreground">—</span>
+            {snapshot?.fcf_margin != null ? (
+              <span className={getMarginClass(snapshot.fcf_margin, 0.15, 0.05)}>
+                {formatPercent(snapshot.fcf_margin)}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            )}
           </MetricRow>
         </Section>
       </div>

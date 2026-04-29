@@ -25,6 +25,7 @@ from market_data.infrastructure.db.models.fundamentals import (
     TechnicalsSnapshotModel,
     ValuationRatiosModel,
 )
+from market_data.infrastructure.db.models.fundamentals_snapshot import InstrumentFundamentalsSnapshotModel
 from market_data.infrastructure.db.models.infrastructure import (
     FailedTaskModel,
     IngestionEventModel,
@@ -55,6 +56,7 @@ __all__ = [
     "IngestionEventModel",
     "InsiderTransactionsSnapshotModel",
     "InstitutionalHoldersModel",
+    "InstrumentFundamentalsSnapshotModel",
     "InstrumentModel",
     "OHLCVBarModel",
     "OutboxEventModel",

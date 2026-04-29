@@ -163,7 +163,15 @@ All API calls go through this typed client. Base URL is `/api` (proxied by `next
 /api/v1/portfolios → API_GATEWAY_URL/v1/portfolios → S1 Portfolio
 ```
 
-**41 typed methods** covering: auth (4), instruments/market data (5), knowledge graph (2), news (3), screener (2), portfolio (4), watchlists (6), alerts (2), chat (5), prediction markets (1), dashboard (5), search (1), AI signals (1).
+**42 typed methods** covering: auth (4), instruments/market data (5), knowledge graph (2), news (3), screener (2), portfolio (5), watchlists (6), alerts (2), chat (5), prediction markets (1), dashboard (5), search (1), AI signals (1).
+
+#### Portfolio methods
+
+- `getPortfolios()` → `Portfolio[]` — list portfolios for the authenticated user.
+- `createPortfolio(name, currency?)` → `Portfolio` — create a manually-managed portfolio (S9 injects owner_user_id from JWT).
+- `getHoldings(portfolioId)` → `HoldingsResponse` — current open positions with server-side P&L snapshot.
+- `getTransactions(portfolioId, params?)` → `TransactionsResponse` — paginated, newest-first transaction history.
+- `getRealizedPnL(portfolioId, from?, to?)` → `RealizedPnLResponse` *(PLAN-0051 T-A-1-04 / T-A-1-05)* — FIFO-computed realized P&L over a date window. Returns `total_realized`, `realized_long_term`, `realized_short_term`, `count`, and `breakdown_by_instrument`. Used by `useRealizedPnL` (`hooks/useRealizedPnL.ts`) which the Portfolio KPI Strip consumes; falls back to a client-side approximation with an "(approx)" badge when the endpoint is unavailable.
 
 ### Real-Time Patterns
 

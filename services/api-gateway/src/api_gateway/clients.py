@@ -615,7 +615,7 @@ async def get_watchlist_insights(
 
     members_raw, news_raw, alerts_raw = await asyncio.gather(
         _members(),
-        # 30 articles is enough to find a few hits for a typical 5–25-ticker
+        # 30 articles is enough to find a few hits for a typical 5-25-ticker
         # watchlist while staying within the S6 endpoint's healthy range.
         _safe_get(clients.nlp_pipeline, "nlp-pipeline", "/api/v1/news/top", params={"limit": 30}),
         _safe_get(clients.alert, "alert", "/api/v1/alerts/pending", params={"limit": 50}),
@@ -641,7 +641,7 @@ async def get_watchlist_insights(
     async def _overview(iid: str) -> dict[str, Any]:
         # Just the instrument record gives us GICS sector — the per-member
         # `getCompanyOverview` would also fetch fundamentals + OHLCV which we
-        # don't need here. Saves ~3× the per-member load.
+        # don't need here. Saves ~3x the per-member load.
         return await _safe_get(clients.market_data, "market-data", f"/api/v1/instruments/{iid}")
 
     quote_results, overview_results = await asyncio.gather(
@@ -760,9 +760,7 @@ async def get_watchlist_insights(
     # actually got a live quote. Members without a quote do not contribute
     # (treating them as 0 would lie about the watchlist's day).
     contributing = [m["change_pct"] for m in movers_out if m["change_pct"] is not None]
-    weighted_return_1d: float | None = (
-        sum(contributing) / len(contributing) if contributing else None
-    )
+    weighted_return_1d: float | None = sum(contributing) / len(contributing) if contributing else None
 
     # Sector breakdown — count of members in each GICS bucket. The widget
     # renders this as a stacked horizontal mini-bar so we return both count
@@ -773,10 +771,7 @@ async def get_watchlist_insights(
         sector_counts[s] = sector_counts.get(s, 0) + 1
     total_with_sector = sum(sector_counts.values()) or 1
     sectors_out: list[dict[str, Any]] = sorted(
-        (
-            {"sector": s, "count": c, "weight": c / total_with_sector}
-            for s, c in sector_counts.items()
-        ),
+        ({"sector": s, "count": c, "weight": c / total_with_sector} for s, c in sector_counts.items()),
         key=lambda x: cast("int", x["count"]),
         reverse=True,
     )
@@ -798,9 +793,7 @@ async def get_watchlist_insights(
         deduped.append(art)
     biggest_news_article = max(
         deduped,
-        key=lambda a: float(
-            a.get("market_impact_score") or a.get("display_relevance_score") or 0.0
-        ),
+        key=lambda a: float(a.get("market_impact_score") or a.get("display_relevance_score") or 0.0),
         default=None,
     )
     biggest_news_out: dict[str, Any] | None = None

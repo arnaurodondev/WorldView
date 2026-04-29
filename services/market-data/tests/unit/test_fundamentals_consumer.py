@@ -445,9 +445,19 @@ async def test_consumer_calls_upsert_metrics_for_valuation_ratios() -> None:
 
 
 @pytest.mark.asyncio
-async def test_consumer_does_not_call_upsert_metrics_for_uncatalogued_section() -> None:
-    """Sections not in the metric catalog (e.g. technicals_snapshot) do not
-    trigger a fundamental_metrics.upsert_metrics call."""
+async def test_consumer_calls_upsert_metrics_for_technicals_snapshot() -> None:
+    """TECHNICALS_SNAPSHOT is now catalogued (PLAN-0050 Wave D — beta + avg_volume_30d
+    added to _METRIC_CATALOG).  The consumer MUST call upsert_metrics when it
+    processes a technicals_snapshot payload that contains 'Beta'.
+
+    WHY UPDATED (not deleted): R19 — fix implementation, never delete tests.
+    The old assertion (upsert_metrics NOT called) was correct when TECHNICALS_SNAPSHOT
+    was uncatalogued.  After adding it to the catalog the test name and assertion
+    must reflect the new behaviour.
+
+    WHY technicals_snapshot in the catalog: beta and avg_volume_30d are used by
+    the screener; they must be materialised into fundamental_metrics for that
+    to work.  The snapshot backfill also reads them from there."""
     instrument = _make_instrument()
     mock_uow = AsyncMock()
     mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
@@ -461,8 +471,8 @@ async def test_consumer_does_not_call_upsert_metrics_for_uncatalogued_section() 
     consumer = _make_consumer(mock_uow, mock_storage)
     await consumer.process_message(None, _make_message(), {})
 
-    # upsert_metrics should NOT have been called (empty rows → skipped)
-    mock_uow.fundamental_metrics.upsert_metrics.assert_not_awaited()
+    # upsert_metrics MUST be called — Beta maps to "beta" in the catalog
+    mock_uow.fundamental_metrics.upsert_metrics.assert_awaited()
 
 
 @pytest.mark.asyncio

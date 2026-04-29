@@ -88,6 +88,7 @@ All routes are prefixed with `/v1` (main), `/v1/auth` (auth), or `/internal`.
 | GET | `/v1/fundamentals/{instrument_id}/earnings-trend` | Forward EPS/revenue analyst estimates → S3 `/earnings-trend` | Yes |
 | GET | `/v1/fundamentals/{instrument_id}/earnings-annual-trend` | Annual earnings projections → S3 `/earnings-annual-trend` | Yes |
 | GET | `/v1/fundamentals/{instrument_id}/splits-dividends` | Stock splits and dividend history → S3 `/splits-dividends` | Yes |
+| GET | `/v1/fundamentals/{instrument_id}/snapshot` | Pre-computed derived metrics snapshot (eps_ttm, beta, avg_volume_30d, FCF, interest coverage, net_debt_to_ebitda, credit_rating) → S3 `instrument_fundamentals_snapshot` table. Always 200 — all fields null for un-backfilled instruments. PLAN-0050 Wave D. | Yes |
 | POST | `/v1/fundamentals/screen` | Dynamic screener | No |
 | GET | `/v1/fundamentals/screen/fields` | Available screener fields | No |
 | GET | `/v1/fundamentals/timeseries` | Fundamental timeseries | No |

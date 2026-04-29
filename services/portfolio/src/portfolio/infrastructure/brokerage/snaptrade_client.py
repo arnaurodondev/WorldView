@@ -376,6 +376,28 @@ class SnapTradeClient:
             item_amount = item.get("amount") if hasattr(item, "get") else getattr(item, "amount", None)
             item_fee = item.get("fee") if hasattr(item, "get") else getattr(item, "fee", None)
 
+            # ── PLAN-0051 / T-A-1-06 — F-P-010 ──────────────────────────────
+            # When the broker tags a row as DIVIDEND but ships an empty /
+            # zero / negative ``amount`` we lose all dividend income for that
+            # payout (the UI renders "$0.00" because there is nothing to
+            # display). Surface this as a structured warning BEFORE we
+            # persist the activity — we deliberately don't drop the row
+            # because (a) it might still carry useful metadata for the
+            # transactions table and (b) silently dropping rows is exactly
+            # the bug class we want to detect, not introduce. The warning
+            # gives operators / log-search a stable signal to triage
+            # missing-amount payouts.
+            parsed_amount = _parse_optional_decimal(item_amount)
+            normalised_type = str(item_type or "").upper()
+            if normalised_type in ("DIVIDEND", "DIV") and (parsed_amount is None or parsed_amount <= 0):
+                logger.warning(
+                    "snaptrade_dividend_missing_amount",
+                    snaptrade_transaction_id=str(item_id or ""),
+                    symbol=symbol_str,
+                    currency=currency_str,
+                    item_amount=item_amount,
+                )
+
             activities.append(
                 SnapTradeActivity(
                     snaptrade_transaction_id=str(item_id or ""),
@@ -386,7 +408,7 @@ class SnapTradeClient:
                     currency=currency_str,
                     executed_at=_parse_trade_date(str(item_trade_date) if item_trade_date else None),
                     brokerage_name=str(item_institution) if item_institution else None,
-                    amount=_parse_optional_decimal(item_amount),
+                    amount=parsed_amount,
                     fee=_parse_optional_decimal(item_fee),
                 ),
             )

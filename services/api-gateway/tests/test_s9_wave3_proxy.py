@@ -579,3 +579,124 @@ async def test_top_movers_period_invalid_returns_400(authed_app, authed_mock_cli
         )
 
     assert resp.status_code == 400
+
+
+# ── Fundamentals snapshot proxy (PLAN-0050 Wave D T-D-4-04) ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_snapshot_requires_auth(app, mock_clients) -> None:
+    """GET /v1/fundamentals/{id}/snapshot without auth → 401."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/fundamentals/some-instrument-id/snapshot")
+
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_snapshot_proxies_to_s3(authed_app, authed_mock_clients) -> None:
+    """GET /v1/fundamentals/{id}/snapshot → S3 /api/v1/fundamentals/{id}/snapshot.
+
+    WHY: The snapshot endpoint returns the 10 pre-computed derived metrics from
+    the instrument_fundamentals_snapshot table.  S9 proxies it without transformation.
+    The endpoint must return 200 even when all fields are null (instrument not yet
+    backfilled) — never 404.
+    """
+    snapshot_payload = {
+        "instrument_id": "aapl-uuid-001",
+        "eps_ttm": 6.11,
+        "beta": 1.29,
+        "avg_volume_30d": 56000000,
+        "operating_cash_flow": 110543000000.0,
+        "capex": 11455000000.0,
+        "free_cash_flow": 99088000000.0,
+        "fcf_margin": 0.2513,
+        "interest_coverage": 30.37,
+        "net_debt_to_ebitda": 0.77,
+        "credit_rating": None,
+        "updated_at": "2026-04-29T02:00:00Z",
+    }
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, json.dumps(snapshot_payload).encode()),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/fundamentals/aapl-uuid-001/snapshot",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["instrument_id"] == "aapl-uuid-001"
+    assert body["eps_ttm"] == pytest.approx(6.11)
+    assert body["beta"] == pytest.approx(1.29)
+    assert body["avg_volume_30d"] == 56_000_000
+    assert body["free_cash_flow"] == pytest.approx(99_088_000_000.0)
+    assert body["credit_rating"] is None
+    # Verify S3 was called with the correct path
+    authed_mock_clients.market_data.get.assert_called_once()
+    call_args = authed_mock_clients.market_data.get.call_args
+    assert "snapshot" in call_args[0][0]  # path contains "snapshot"
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_snapshot_all_null_fields(authed_app, authed_mock_clients) -> None:
+    """GET /v1/fundamentals/{id}/snapshot returns 200 with all-null fields when
+    no snapshot exists.  Frontend renders '—' for nulls — never a 404 error.
+
+    WHY test this: instruments that have never been through the backfill (e.g.
+    newly-listed stocks, ETFs with no cash flow statements) will have the endpoint
+    return a valid 200 with all null fields.  This is the expected behaviour as per
+    the API design in T-D-4-04 and the S3 /snapshot implementation.
+    """
+    all_null_payload = {
+        "instrument_id": "new-etf-uuid",
+        "eps_ttm": None,
+        "beta": None,
+        "avg_volume_30d": None,
+        "operating_cash_flow": None,
+        "capex": None,
+        "free_cash_flow": None,
+        "fcf_margin": None,
+        "interest_coverage": None,
+        "net_debt_to_ebitda": None,
+        "credit_rating": None,
+        "updated_at": None,
+    }
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, json.dumps(all_null_payload).encode()),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/fundamentals/new-etf-uuid/snapshot",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["instrument_id"] == "new-etf-uuid"
+    # All derived metric fields null
+    for field in ("eps_ttm", "beta", "avg_volume_30d", "free_cash_flow", "credit_rating"):
+        assert body[field] is None, f"Expected {field} to be null"
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_snapshot_downstream_error_forwarded(authed_app, authed_mock_clients) -> None:
+    """GET /v1/fundamentals/{id}/snapshot when S3 returns 500 → 500 forwarded to client."""
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(500, b'{"detail": "Internal Server Error"}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/fundamentals/aapl-uuid-001/snapshot",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 500
