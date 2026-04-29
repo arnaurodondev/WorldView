@@ -27,7 +27,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { formatRelativeTime } from "@/lib/utils";
-import { getNewsLinkTarget } from "@/hooks/useNewsLinkTarget";
+import { getNewsLinkTarget, isSafeNewsUrl } from "@/hooks/useNewsLinkTarget";
 import type { RankedArticle } from "@/types/api";
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -164,15 +164,20 @@ function ArticleRow({ article }: { article: RankedArticle }) {
   // URL (e.g. article is from an internal source without a public URL), we
   // silently no-op rather than navigating to "#" or throwing an error.
   function handleClick() {
-    if (!article.url) return;
+    // F-QA-02 fix: validate URL scheme before navigating. React's automatic
+    // `javascript:` href sanitisation does NOT apply to imperative APIs like
+    // window.location.href / window.open. We accept ONLY http(s) — anything
+    // else (javascript:, data:, file:, vbscript:, missing) is silently dropped
+    // so a malformed/malicious URL from S6 cannot execute in the user session.
+    if (!isSafeNewsUrl(article.url)) return;
     // PLAN-0050 T-F-6-20: honour the user's tab-target preference. Default is
     // "new-tab" (the prior hardcoded behaviour) so existing users see no change
     // unless they opt in via Settings → Appearance.
     const pref = getNewsLinkTarget();
     if (pref === "same-tab") {
-      window.location.href = article.url;
+      window.location.href = article.url!;
     } else {
-      window.open(article.url, "_blank", "noopener,noreferrer");
+      window.open(article.url!, "_blank", "noopener,noreferrer");
     }
   }
 

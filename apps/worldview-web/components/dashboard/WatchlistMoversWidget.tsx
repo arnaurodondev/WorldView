@@ -48,7 +48,7 @@ import { useRouter } from "next/navigation";
 import { Bell, Newspaper } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-import { useNewsLinkTarget, newsLinkAttrs } from "@/hooks/useNewsLinkTarget";
+import { useNewsLinkTarget, newsLinkAttrs, isSafeNewsUrl } from "@/hooks/useNewsLinkTarget";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { DashboardEmptyState } from "@/components/ui/dashboard-empty-state";
@@ -471,6 +471,7 @@ export function WatchlistMoversWidget() {
                 key={`g-${m.instrumentId}`}
                 mover={m}
                 side="gainer"
+                showEnrichmentBadges={period === "1D"}
                 onClick={() => router.push(`/instruments/${m.instrumentId}`)}
               />
             ))}
@@ -490,6 +491,7 @@ export function WatchlistMoversWidget() {
                 key={`l-${m.instrumentId}`}
                 mover={m}
                 side="loser"
+                showEnrichmentBadges={period === "1D"}
                 onClick={() => router.push(`/instruments/${m.instrumentId}`)}
               />
             ))}
@@ -524,6 +526,15 @@ export function WatchlistMoversWidget() {
 interface WatchlistMoverRowProps {
   mover: WatchlistMover;
   side: "gainer" | "loser";
+  /**
+   * F-QA-07 fix: gate the row-level enrichment badges (newspaper count + alert
+   * dot) on period === "1D". The insights endpoint sources these from the
+   * 24h news window and current pending alerts, both of which are 1D
+   * semantics. Showing them next to a 1W or 1M change_pct would mislead
+   * the user ("AAPL up 12% this month" with a "3" badge that's actually
+   * 24h news count).
+   */
+  showEnrichmentBadges: boolean;
   onClick: () => void;
 }
 
@@ -540,12 +551,20 @@ interface WatchlistMoverRowProps {
  * Tabular-nums + font-mono on price and change% keeps columns aligned
  * across rows even when the digit count varies (e.g. $9.99 vs $192.50).
  */
-function WatchlistMoverRow({ mover, side, onClick }: WatchlistMoverRowProps) {
+function WatchlistMoverRow({
+  mover,
+  side,
+  showEnrichmentBadges,
+  onClick,
+}: WatchlistMoverRowProps) {
   // Build the aria-label so SR users hear ticker + state badges in one pass
   // (instead of the dot + icon being unlabelled and silent).
+  // F-QA-07: only enumerate badges when they're actually rendered.
   const badgeBits: string[] = [];
-  if (mover.hasActiveAlert) badgeBits.push("active alert");
-  if (mover.newsCount24h > 0) badgeBits.push(`${mover.newsCount24h} recent news`);
+  if (showEnrichmentBadges && mover.hasActiveAlert) badgeBits.push("active alert");
+  if (showEnrichmentBadges && mover.newsCount24h > 0) {
+    badgeBits.push(`${mover.newsCount24h} recent news`);
+  }
   const ariaLabel = `Open ${mover.ticker} instrument page${badgeBits.length ? `; ${badgeBits.join(", ")}` : ""}`;
 
   return (
@@ -564,19 +583,23 @@ function WatchlistMoverRow({ mover, side, onClick }: WatchlistMoverRowProps) {
     >
       {/* PLAN-0050 T-B-2-05: active-alert dot — 6px destructive when there
           is at least one pending alert tagged to this member's entity_id.
-          aria-hidden because the row's aria-label already enumerates the
-          alert state textually for AT users. */}
-      {mover.hasActiveAlert ? (
-        <span
-          className="h-[6px] w-[6px] shrink-0 rounded-full bg-destructive"
-          aria-hidden="true"
-          title="Active alert"
-        />
-      ) : (
-        // Reserve the slot so ticker columns align across rows even when
-        // a row has no dot — otherwise the slot collapses and tickers
-        // shift left by 8px on rows with alerts.
-        <span className="h-[6px] w-[6px] shrink-0" aria-hidden="true" />
+          F-QA-07: rendered ONLY on 1D period (the alert flag is a 1D snapshot
+          from the insights endpoint). On 1W/1M we skip both the dot and its
+          reserved slot — the row layout still aligns because every row in
+          that period drops the slot uniformly. */}
+      {showEnrichmentBadges && (
+        mover.hasActiveAlert ? (
+          <span
+            className="h-[6px] w-[6px] shrink-0 rounded-full bg-destructive"
+            aria-hidden="true"
+            title="Active alert"
+          />
+        ) : (
+          // Reserve the slot so ticker columns align across rows even when
+          // a row has no dot — otherwise the slot collapses and tickers
+          // shift left by 8px on rows with alerts.
+          <span className="h-[6px] w-[6px] shrink-0" aria-hidden="true" />
+        )
       )}
 
       {/* Ticker — fixed slot for column alignment across rows */}
@@ -593,12 +616,11 @@ function WatchlistMoverRow({ mover, side, onClick }: WatchlistMoverRowProps) {
       </span>
 
       {/* PLAN-0050 T-B-2-04: news-of-the-day icon with badge count.
-          Renders only when news_count_24h > 0. Tooltip shows the top-news
-          title so users can decide whether to click before navigating.
-          WHY render in-row (not out of row): the user is scanning the
-          gainers list and asking "did this move because of news?" — the
-          icon next to the % change answers that without leaving the row. */}
-      {mover.newsCount24h > 0 && (
+          Renders only when news_count_24h > 0 AND showEnrichmentBadges.
+          F-QA-07: gated on 1D — the count is from the 24h window. Tooltip
+          shows the top-news title so users can decide whether to click
+          before navigating. */}
+      {showEnrichmentBadges && mover.newsCount24h > 0 && (
         <span
           className="flex shrink-0 items-center gap-0.5 text-warning"
           title={mover.topNewsTitle ?? `${mover.newsCount24h} recent`}
@@ -750,7 +772,10 @@ function BiggestNewsRow({ news }: BiggestNewsRowProps) {
   // Defaults to new-tab so existing users see no change.
   const [target] = useNewsLinkTarget();
   const linkAttrs = newsLinkAttrs(target);
-  if (!news.url || !news.title) return null;
+  // F-QA-02 fix: defence-in-depth on the article URL. React's <a href>
+  // sanitisation already blocks `javascript:` — the explicit safety check
+  // here means a future imperative refactor cannot reintroduce the hole.
+  if (!news.url || !news.title || !isSafeNewsUrl(news.url)) return null;
   return (
     <a
       href={news.url}

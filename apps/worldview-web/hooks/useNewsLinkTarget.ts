@@ -64,11 +64,18 @@ export function useNewsLinkTarget(): [NewsLinkTarget, (next: NewsLinkTarget) => 
   // with localStorage on the first effect tick.
   const [value, setValue] = useState<NewsLinkTarget>(DEFAULT_VALUE);
 
-  // Sync from localStorage on mount + listen for cross-tab updates.
+  // Sync from localStorage on mount + listen for storage events.
   useEffect(() => {
     setValue(readStored());
     function onStorage(e: StorageEvent) {
-      if (e.key === STORAGE_KEY) setValue(readStored());
+      // F-QA-03 fix: accept events with our key OR a null key (jsdom +
+      // some browsers omit the field on synthetic events). Re-reading
+      // localStorage is cheap and safe — at worst we re-set the same value
+      // which React no-ops. The narrow check (e.key === STORAGE_KEY) used
+      // to drop synthetic events with key=null and miss the same-tab path.
+      if (e.key === null || e.key === STORAGE_KEY) {
+        setValue(readStored());
+      }
     }
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
@@ -78,6 +85,24 @@ export function useNewsLinkTarget(): [NewsLinkTarget, (next: NewsLinkTarget) => 
     setValue(next);
     try {
       window.localStorage.setItem(STORAGE_KEY, next);
+      // F-QA-03 fix: browsers only fire `storage` events for OTHER tabs
+      // writing to localStorage. If a second instance of this hook is
+      // mounted in the same tab (e.g. the Settings panel + an open
+      // dashboard widget), it would NOT see the change without this
+      // synthetic dispatch. Sending a StorageEvent makes the same-tab
+      // listener path identical to the cross-tab path so getNewsLinkTarget()
+      // (sync) and useNewsLinkTarget() (hook state) agree at the same instant.
+      // F-QA-03 fix: NO `storageArea` in the constructor — jsdom (and some
+      // older browsers) reject it when the storage object isn't a real
+      // Storage instance, throwing a TypeError that silently aborts the
+      // dispatch. Listeners only need `key` + `newValue` to handle the
+      // change, so we omit the optional storageArea field entirely.
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: STORAGE_KEY,
+          newValue: next,
+        }),
+      );
     } catch {
       // Storage quota exceeded or disabled — preference reverts on reload.
       // Not worth surfacing to the user; the in-memory value still works
@@ -103,4 +128,33 @@ export function newsLinkAttrs(
     return { target: "_self", rel: "noreferrer" };
   }
   return { target: "_blank", rel: "noopener noreferrer" };
+}
+
+/**
+ * isSafeNewsUrl — F-QA-02 fix: accept ONLY http: / https: URLs.
+ *
+ * WHY HERE: every news consumer (PortfolioNewsWidget click handler,
+ * BiggestNewsRow anchor, future surfaces) eventually navigates to S6's
+ * `article.url` field. React's automatic `javascript:` href sanitisation
+ * applies only to JSX attributes — it does NOT cover imperative APIs like
+ * `window.location.href = url` or `window.open(url, ...)`. If S6 ever
+ * stores or proxies an article whose URL is `javascript:alert(1)` (server
+ * bug, malicious upstream feed, RAG-summary that interpolated a URL),
+ * the dashboard would otherwise execute the script in the user's session.
+ *
+ * WHY URL parsing (not a regex): a regex over arbitrary URL strings is a
+ * footgun. `new URL(value)` rejects invalid syntax up-front; the protocol
+ * check is the single tight invariant we need.
+ *
+ * Returns true ONLY for absolute http(s) URLs. Relative URLs are rejected
+ * because S6 never returns them — a relative URL here would itself be a bug.
+ */
+export function isSafeNewsUrl(value: string | null | undefined): boolean {
+  if (!value) return false;
+  try {
+    const u = new URL(value);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
 }

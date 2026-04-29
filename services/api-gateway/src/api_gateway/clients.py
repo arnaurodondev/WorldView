@@ -597,8 +597,24 @@ async def get_watchlist_insights(
     # alerts are watchlist-agnostic until we know the member set, so we can
     # speculatively fetch the global lists in the same window. We filter by
     # member identity once members resolves.
+    #
+    # F-QA-01 fix: members MUST use _checked_get (not _safe_get). S1 enforces
+    # ownership on /watchlists/{id}/members — a 403/404 from S1 means "this is
+    # not your watchlist (or it doesn't exist)". The prior _safe_get swallowed
+    # those errors and returned an empty 200, which is BOTH a correctness bug
+    # (user sees their own watchlist as empty) AND a contract leak (the
+    # gateway silently overrides S1's permission decision). Best-effort policy
+    # is correct only for ENRICHMENT sub-calls (news/alerts/quotes/overviews).
+    async def _members() -> dict[str, Any]:
+        return await _checked_get(
+            clients.portfolio,
+            "portfolio",
+            f"/api/v1/watchlists/{watchlist_id}/members",
+            headers=_h(),
+        )
+
     members_raw, news_raw, alerts_raw = await asyncio.gather(
-        _safe_get(clients.portfolio, "portfolio", f"/api/v1/watchlists/{watchlist_id}/members"),
+        _members(),
         # 30 articles is enough to find a few hits for a typical 5–25-ticker
         # watchlist while staying within the S6 endpoint's healthy range.
         _safe_get(clients.nlp_pipeline, "nlp-pipeline", "/api/v1/news/top", params={"limit": 30}),
@@ -716,7 +732,12 @@ async def get_watchlist_insights(
                 "price": float(last) if last is not None else None,
                 "change_pct": float(change_pct) if change_pct is not None else None,
                 "news_count_24h": len(member_news),
-                "has_active_alert": eid in alerts_by_entity,
+                # F-QA-06 fix: defensive against an empty-string entity_id
+                # accidentally matching all members without an entity_id. The
+                # alerts_by_entity build already filters falsy keys, but the
+                # explicit `bool(eid)` guard means a future regression that
+                # lets "" through cannot reintroduce the false-positive.
+                "has_active_alert": bool(eid) and eid in alerts_by_entity,
                 "top_news_title": (top_news or {}).get("title"),
                 "top_news_url": (top_news or {}).get("url"),
             }

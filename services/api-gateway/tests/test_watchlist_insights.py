@@ -302,6 +302,105 @@ async def test_insights_sets_cache_control_header(
 
 
 @pytest.mark.asyncio
+async def test_insights_propagates_s1_auth_error(
+    authed_app, authed_mock_clients, news_payload, alerts_payload
+) -> None:
+    """F-QA-05/F-QA-01 regression: S1 returns 403 → gateway returns 403.
+
+    The prior _safe_get(members) silently turned auth errors into an empty
+    200, hiding ownership violations. The fix uses _checked_get for the
+    members fanout so S1's permission decision propagates through the gateway.
+    """
+
+    async def _portfolio_get(path: str, **_kwargs):
+        if "/api/v1/watchlists/" in path and path.endswith("/members"):
+            return _resp(403, {"detail": "not your watchlist"})
+        return _resp(404, {"detail": "not-found"})
+
+    async def _other(_path: str, **_kwargs):
+        return _resp(200, {})
+
+    authed_mock_clients.portfolio.get = AsyncMock(side_effect=_portfolio_get)
+    authed_mock_clients.market_data.get = AsyncMock(side_effect=_other)
+    authed_mock_clients.nlp_pipeline.get = AsyncMock(side_effect=_other)
+    authed_mock_clients.alert.get = AsyncMock(side_effect=_other)
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/watchlists/wl-someone-else/insights",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+    # The gateway must NOT mask S1's 403 as an empty 200. Status passes through.
+    assert resp.status_code == 403, resp.text
+
+
+@pytest.mark.asyncio
+async def test_insights_member_without_entity_id_does_not_falsely_alert(
+    authed_app, authed_mock_clients
+) -> None:
+    """F-QA-05/F-QA-06 regression: a member with no entity_id must NOT match
+    an alert payload that happens to carry an empty-string entity_id."""
+    members = {
+        "members": [
+            # No entity_id (e.g. unresolved or non-equity instrument).
+            {"instrument_id": "i-x", "ticker": "X", "name": "X Co", "entity_id": None},
+        ]
+    }
+    # Defensive: an alert with an empty-string entity_id should not match.
+    alerts = {"alerts": [{"alert_id": "a-1", "entity_id": "", "severity": "high"}]}
+    _wire_clients(
+        authed_mock_clients, members, {"articles": []}, alerts,
+        quotes={"i-x": {"last": 1.0, "change_pct": 0.0}},
+        overviews={"i-x": {"gics_sector": "Energy"}},
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/watchlists/wl-1/insights",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+    body = resp.json()
+    assert body["movers"][0]["has_active_alert"] is False
+    assert body["alerts_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_insights_handles_malformed_published_at(
+    authed_app, authed_mock_clients, members_payload, alerts_payload
+) -> None:
+    """F-QA-05 coverage: malformed published_at strings must NOT crash the
+    composer; the article is treated as in-window so it still appears."""
+    news = {
+        "articles": [
+            {
+                "article_id": "art-bad",
+                "title": "Bad date article",
+                "url": "https://news.example.com/x",
+                "published_at": "not-an-iso-date",
+                "ticker": "AAPL",
+                "entity_ids": ["e-aapl"],
+                "market_impact_score": 0.5,
+            }
+        ]
+    }
+    _wire_clients(authed_mock_clients, members_payload, news, alerts_payload)
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/watchlists/wl-1/insights",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    aapl = next(m for m in body["movers"] if m["ticker"] == "AAPL")
+    # Malformed date is treated as in-window — the article counts.
+    assert aapl["news_count_24h"] == 1
+    assert aapl["top_news_title"] == "Bad date article"
+
+
+@pytest.mark.asyncio
 async def test_insights_degrades_on_news_failure(
     authed_app, authed_mock_clients, members_payload, alerts_payload
 ) -> None:
