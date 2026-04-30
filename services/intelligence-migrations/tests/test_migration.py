@@ -679,3 +679,111 @@ def test_entity_aliases_unique_allows_distinct_entities(conn: sa.engine.Connecti
             {"eid": str(eid)},
         )
     conn.rollback()
+
+
+# ── PLAN-0057 A-3: canonical-seed bootstrap (F-CRIT-10) ──────────────────────
+
+
+def test_seed_canonicals_F_CRIT_10_present_per_class(conn: sa.engine.Connection) -> None:
+    """Migration 0009 seeds at least the expected minimum count per entity_type."""
+    expected_min = {
+        "currency": 30,
+        "regulatory_body": 20,
+        "government_body": 20,
+        "index": 25,
+        "commodity": 20,
+        "macroeconomic_indicator": 25,
+        "location": 25,
+        "person": 15,
+        "financial_institution": 5,
+    }
+    for etype, mn in expected_min.items():
+        row = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM canonical_entities "
+                "WHERE entity_type = :t AND metadata ->> 'seed_source' = 'F-CRIT-10'"
+            ),
+            {"t": etype},
+        ).scalar_one()
+        assert row >= mn, f"{etype}: expected >= {mn}, got {row}"
+
+
+def test_seed_canonicals_have_descriptions(conn: sa.engine.Connection) -> None:
+    """Every F-CRIT-10 seed has a non-empty description in metadata."""
+    missing = conn.execute(
+        text(
+            "SELECT canonical_name FROM canonical_entities "
+            "WHERE metadata ->> 'seed_source' = 'F-CRIT-10' "
+            "AND (metadata ->> 'description' IS NULL OR length(metadata ->> 'description') < 20)"
+        )
+    ).fetchall()
+    assert not missing, f"Seeded canonicals missing/short descriptions: {[r[0] for r in missing]}"
+
+
+def test_seed_canonicals_have_at_least_one_exact_alias(conn: sa.engine.Connection) -> None:
+    """Every F-CRIT-10 seed has at least 1 EXACT alias (matches own name)."""
+    missing = conn.execute(
+        text(
+            "SELECT ce.canonical_name FROM canonical_entities ce "
+            "WHERE ce.metadata ->> 'seed_source' = 'F-CRIT-10' "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM entity_aliases ea "
+            "  WHERE ea.entity_id = ce.entity_id AND ea.alias_type = 'EXACT' AND ea.is_active"
+            ")"
+        )
+    ).fetchall()
+    assert not missing, f"Seeded canonicals without EXACT alias: {[r[0] for r in missing]}"
+
+
+def test_seed_canonicals_have_two_embedding_state_rows(conn: sa.engine.Connection) -> None:
+    """Every F-CRIT-10 seed has exactly 2 entity_embedding_state rows
+    (definition + narrative). financial_instrument's third view is N/A here
+    because none of the F-CRIT-10 seeds are financial_instrument type.
+    """
+    rows = conn.execute(
+        text(
+            "SELECT ce.entity_id, COUNT(ees.view_type) "
+            "FROM canonical_entities ce "
+            "LEFT JOIN entity_embedding_state ees ON ees.entity_id = ce.entity_id "
+            "WHERE ce.metadata ->> 'seed_source' = 'F-CRIT-10' "
+            "GROUP BY ce.entity_id"
+        )
+    ).fetchall()
+    assert rows, "Expected F-CRIT-10 seeds with embedding_state rows"
+    for entity_id, n_views in rows:
+        assert n_views == 2, f"{entity_id}: expected 2 views, got {n_views}"
+
+
+def test_seed_currency_has_iso_code_metadata(conn: sa.engine.Connection) -> None:
+    """Currencies carry an ``iso_code`` metadata field (sanity-check for downstream UI)."""
+    missing = conn.execute(
+        text(
+            "SELECT canonical_name FROM canonical_entities "
+            "WHERE entity_type = 'currency' AND metadata ->> 'seed_source' = 'F-CRIT-10' "
+            "AND metadata ->> 'iso_code' IS NULL"
+        )
+    ).fetchall()
+    assert not missing, f"Currency seeds missing iso_code: {[r[0] for r in missing]}"
+
+
+def test_seed_round_trip_idempotent(conn: sa.engine.Connection) -> None:
+    """Re-applying the data via the same INSERT pattern is idempotent."""
+    before = conn.execute(
+        text("SELECT COUNT(*) FROM canonical_entities WHERE metadata ->> 'seed_source' = 'F-CRIT-10'")
+    ).scalar_one()
+    # Exercise the ON CONFLICT DO NOTHING path with a known-existing entity_id.
+    eid = conn.execute(
+        text("SELECT entity_id FROM canonical_entities WHERE metadata ->> 'seed_source' = 'F-CRIT-10' LIMIT 1")
+    ).scalar_one()
+    conn.execute(
+        text(
+            "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type, metadata) "
+            "VALUES (:eid, 'Re-attempt', 'currency', '{\"seed_source\":\"F-CRIT-10\"}'::jsonb) "
+            "ON CONFLICT (entity_id) DO NOTHING"
+        ),
+        {"eid": eid},
+    )
+    after = conn.execute(
+        text("SELECT COUNT(*) FROM canonical_entities WHERE metadata ->> 'seed_source' = 'F-CRIT-10'")
+    ).scalar_one()
+    assert before == after
