@@ -23,7 +23,16 @@ from portfolio.domain.entities.instrument import InstrumentRef
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _CONSUMER_GROUP = "portfolio-instrument-sync"
-_TOPICS = ["market.instrument.created", "market.instrument.updated"]
+# PLAN-0057 Wave D-2: subscribe to BOTH the new ``market.instrument.discovered.v1``
+# event (which fires when ohlcv/quotes consumers first see an instrument) and the
+# enrichment events (``market.instrument.created`` from fundamentals_consumer +
+# ``market.instrument.updated`` for capability-flag changes).  All three carry an
+# ``entity_id`` field so the consumer code below works uniformly across them.
+_TOPICS = [
+    "market.instrument.discovered.v1",
+    "market.instrument.created",
+    "market.instrument.updated",
+]
 
 
 # Canonical Avro schemas at repo root/infra/kafka/schemas/
@@ -108,10 +117,13 @@ class InstrumentEventConsumer(BaseKafkaConsumer[None]):
             )
             return
 
+        # PLAN-0057 Wave D-2: ``market.instrument.discovered.v1`` may set
+        # ``exchange`` to null in the Avro payload (provider-not-supplied).
+        # InstrumentRef.exchange is non-nullable, so coalesce to "" here.
         instrument = InstrumentRef(
             id=instrument_id,
-            symbol=value.get("symbol", ""),
-            exchange=value.get("exchange", ""),
+            symbol=value.get("symbol") or "",
+            exchange=value.get("exchange") or "",
             name=value.get("name"),
             currency=value.get("currency"),
             asset_class=value.get("asset_class"),

@@ -69,6 +69,43 @@ class InstrumentCreated(DomainEvent):
 
 
 @dataclass(frozen=True)
+class InstrumentDiscovered(DomainEvent):
+    """Emitted when an instrument is first observed during OHLCV/Quotes ingestion.
+
+    PLAN-0057 Wave D-2: This event replaces ``InstrumentCreated`` in the
+    OHLCV/Quotes path because at that stage we only know ``symbol`` and
+    ``exchange`` (no real ``name`` from EODHD fundamentals).  Producing
+    ``market.instrument.created`` with ``name=None`` previously caused
+    placeholder canonicals like ``Instrument-019dbbdb...`` (audit
+    finding F-CRIT-12).
+
+    Consumers:
+      * Portfolio (S2) — materialises ``InstrumentRef`` immediately so the
+        portfolio service can reference the instrument.
+      * Knowledge-graph (S7) — creates a *lightweight* canonical entity with
+        ``canonical_name = symbol`` and
+        ``metadata.needs_fundamentals_enrichment = true``.  The existing
+        ``InstrumentEntityConsumer`` upserts the real name and rich aliases
+        later when ``market.instrument.created`` arrives from the
+        fundamentals consumer.
+
+    ``market.instrument.created`` is now produced ONLY by
+    ``fundamentals_consumer`` and is gated on having a real ``Name`` from
+    EODHD.
+
+    Published to topic ``market.instrument.discovered.v1``.
+    """
+
+    event_type: ClassVar[str] = "market.instrument.discovered"
+    schema_version: ClassVar[int] = 1
+
+    instrument_id: str = ""
+    symbol: str = ""
+    # ``exchange`` is nullable in the Avro schema — provider may not always supply.
+    exchange: str | None = None
+
+
+@dataclass(frozen=True)
 class InstrumentUpdated(DomainEvent):
     """Emitted when an existing instrument's capability flags change.
 

@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     topic_portfolio_events: str = "portfolio.events.v1"
 
     # Kafka topics (consumed)
+    # PLAN-0057 Wave D-2: ``topic_instrument_discovered`` is the new
+    # lightweight event emitted by ohlcv/quotes consumers when an instrument
+    # is first observed (no fundamentals yet).  ``topic_instrument_created``
+    # is now restricted to the fundamentals_consumer enrichment path (real
+    # EODHD ``Name`` always present).  The instrument consumer subscribes to
+    # all three so InstrumentRef materialises as soon as we see the symbol.
+    topic_instrument_discovered: str = "market.instrument.discovered.v1"
     topic_instrument_created: str = "market.instrument.created"
     topic_instrument_updated: str = "market.instrument.updated"
     consumer_group_instrument: str = "portfolio-instrument-sync"

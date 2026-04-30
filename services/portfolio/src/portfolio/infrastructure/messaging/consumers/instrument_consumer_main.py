@@ -46,7 +46,14 @@ async def main() -> None:
     consumer_config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=settings.consumer_group_instrument,
-        topics=[settings.topic_instrument_created, settings.topic_instrument_updated],
+        topics=[
+            # PLAN-0057 Wave D-2: discovered.v1 is the new lightweight event
+            # that fires BEFORE fundamentals enrichment, so we materialise
+            # InstrumentRef as soon as ohlcv/quotes consumers see the symbol.
+            settings.topic_instrument_discovered,
+            settings.topic_instrument_created,
+            settings.topic_instrument_updated,
+        ],
     )
     consumer = InstrumentEventConsumer(consumer_config, write_factory)
 
