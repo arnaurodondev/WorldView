@@ -2,9 +2,9 @@
 id: PLAN-0057
 prd: docs/audits/2026-04-29-investigation-news-pipeline-quality-deep-dive.md
 title: "News-Intelligence Pipeline Quality Repair — Implementation Plan"
-status: in-progress
+status: completed
 created: 2026-04-30
-updated: 2026-04-30
+updated: 2026-05-01
 plans: 6
 waves: 24
 tasks: 0
@@ -1010,7 +1010,8 @@ if not synthesised_name:
 
 ## 9. Sub-Plan E — Config + Worker Wiring
 
-### Wave E-1: MarketDataClient internal-JWT (F-MAJOR-02)
+### Wave E-1: MarketDataClient internal-JWT (F-MAJOR-02) ✅
+**Status**: **DONE** — 2026-05-01 · approach revised from HS256 minting to forwarding a real RS256 JWT obtained from S9 `POST /v1/auth/dev-login` (superior — no shared signing key, identical verification path to user-initiated requests). `MarketDataClient` mints + caches token via `_get_internal_jwt` with a 240 s lock-protected TTL, sends `X-Internal-JWT` header on every OHLCV call, and falls back to unauthenticated request on token-mint failure. `price_impact_labelling_worker` constructs the client with `settings.api_gateway_url`. 4 new unit tests (mints+sets header, caches across calls, gateway-down fallback, no-gateway-url backward-compat); 10 total market_data_client tests pass; ruff + mypy clean.
 **Estimated effort**: 3-4 hours
 
 #### Tasks
@@ -1095,7 +1096,8 @@ Prod: cap at $200/mo, key from sealed secret.
 
 ---
 
-### Wave E-4: EmbeddingRetryWorker entry point + lifespan (F-MAJOR-05)
+### Wave E-4: EmbeddingRetryWorker entry point + lifespan (F-MAJOR-05) ✅
+**Status**: **DONE** — 2026-05-01 · new `nlp_pipeline.workers.embedding_retry_worker_main` entry point with SIGTERM-aware run loop and per-startup `count_abandoned` log; `nlp-pipeline-embedding-retry-worker` registered in `infra/compose/docker-compose.yml`; new Alembic migration `0016_add_last_attempted_at_to_embedding_pending.py` (idempotent `ADD COLUMN IF NOT EXISTS`); `EmbeddingPendingRepository.mark_failure` stamps `last_attempted_at = now()`; new `EmbeddingPendingRepository.count_abandoned`; worker emits `embedding_retry_abandoned` warning when `retry_count + 1 >= _MAX_RETRIES`; 4 new unit tests (mark_failure stamp + count_abandoned + abandoned-log emission/non-emission); 617 nlp-pipeline unit tests pass; 14 DDL alignment tests pass; ruff + mypy clean. **Note**: standalone process per R22 — no FastAPI lifespan integration (the plan's lifespan hint was superseded by R22).
 **Estimated effort**: 2-3 hours
 
 #### Tasks
@@ -1116,7 +1118,8 @@ Prod: cap at $200/mo, key from sealed secret.
 
 ---
 
-### Wave E-5: entity_embedding_state startup repair (F-MAJOR-06)
+### Wave E-5: entity_embedding_state startup repair (F-MAJOR-06) ✅
+**Status**: **DONE** — 2026-05-01 · new `embedding_state_repair.repair_missing_embedding_state` worker scans canonicals via keyset pagination and asks `EntityEmbeddingStateRepository.ensure_rows_exist` for each row gap; idempotent (`ON CONFLICT DO NOTHING`); wired into KG FastAPI lifespan after session factories build; 5 unit tests cover non-company/instrument/already-present/idempotent/pagination paths; ruff + mypy clean; 678 KG unit tests pass.
 **Estimated effort**: 1-2 hours
 
 #### Tasks
@@ -1138,7 +1141,8 @@ Prod: cap at $200/mo, key from sealed secret.
 
 **Trigger**: only ship if A-3 + C-2/C-3 surface new entity_type/alias_type values that the frontend currently can't render.
 
-### Wave F-1: Entity-detail page entity_type variants
+### Wave F-1: Entity-detail page entity_type variants ✅
+**Status**: **DONE** — 2026-05-01 · new `apps/worldview-web/lib/entity-types.ts` central palette covering all 13 canonical entity types (financial_instrument, sector, industry_group, industry, technology_theme, currency, regulatory_body, government_body, location, person, financial_institution, commodity, macroeconomic_indicator, index) plus legacy aliases (company/event/topic), each with hex colour + tailwind badge class + lucide icon + layout variant; `EntityGraph.tsx` rewired to consume `ENTITY_TYPE_COLOR_MAP` and the legend is now data-driven (renders only types present in the graph payload); 7 new vitest specs pin the contract; existing `instrument-graph.test.tsx` legend test updated to match the new data-driven behaviour; full vitest suite 1063 tests pass; TypeScript clean.
 **Depends on**: T-A-3-02
 **Estimated effort**: 3-4 hours
 
@@ -1147,7 +1151,8 @@ Prod: cap at $200/mo, key from sealed secret.
 - T-F-1-02: e2e snapshot tests for each new type
 - T-F-1-03: update `apps/worldview-web/__tests__/...`
 
-### Wave F-2: Alias-pill rendering
+### Wave F-2: Alias-pill rendering ✅
+**Status**: **DONE** — 2026-05-01 · new `apps/worldview-web/lib/alias-types.ts` defines design tokens for every alias_type (EXACT, TICKER, PRIMARY_TICKER, EXCHANGE_TICKER, NAME, ISIN, CUSIP, FIGI, LEI) with stable sort priority — primary identifiers render before names render before reference identifiers; new `AliasPill` component (`components/entity/AliasPill.tsx`) renders a single (alias_type, value) pair with colour + label, monospace tabular numerals, max-width truncation, full value in `title` for hover; `sortAliasesByType` helper preserves stable order while sinking unknown types to the tail; 10 vitest specs cover token contract + sort invariants + AliasPill rendering paths; full vitest suite 1063 pass; TypeScript clean.
 **Depends on**: T-C-3-02
 **Estimated effort**: 2 hours
 

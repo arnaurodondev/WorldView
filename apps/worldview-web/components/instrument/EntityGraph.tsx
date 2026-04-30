@@ -37,13 +37,13 @@ import type { EntityGraph as EntityGraphData } from "@/types/api";
 // Using hex directly (not Tailwind classes) because sigma reads node attributes — not CSS.
 // WHY #FFD60A for company: Bloomberg trading yellow — updated from old amber (#E8A317)
 // which clashed with the Midnight Pro dark terminal palette.
-const NODE_TYPE_COLORS: Record<string, string> = {
-  company: "#FFD60A", // Bloomberg yellow (#FFD60A) — publicly traded entities
-  person:  "#26A69A", // teal-500 — executives, board members
-  event:   "#F59E0B", // amber-500 — macro events, earnings releases
-  topic:   "#818CF8", // indigo-400 — themes, sectors, concepts
-  default: "#6B7585", // muted-foreground (#6B7585) — unknown / unclassified entity types
-};
+// PLAN-0057 Wave F-1: delegate to the central entity-type palette so the graph,
+// badges, and any future entity-detail page share one colour vocabulary.  The
+// previous 4-way map (company/person/event/topic) silently rendered the 9 new
+// canonical types (currency/regulator/location/…) in default grey.
+import { ENTITY_TYPE_COLOR_MAP } from "@/lib/entity-types";
+
+const NODE_DEFAULT_COLOR = "#6B7585";
 
 // ── Tooltip state types ───────────────────────────────────────────────────────
 
@@ -192,7 +192,7 @@ function GraphLoader({ data, centerEntityId }: GraphLoaderProps) {
       // node.size from API is an importance score: ≥2 = direct neighbor tier.
       const baseSize = isCenter ? 20 : (node.size ?? 1) >= 2 ? 10 : 7;
 
-      const color = NODE_TYPE_COLORS[node.type] ?? NODE_TYPE_COLORS.default;
+      const color = ENTITY_TYPE_COLOR_MAP[node.type] ?? NODE_DEFAULT_COLOR;
 
       graph.addNode(node.id, {
         label: node.label,
@@ -313,17 +313,30 @@ function EdgeTooltipPanel({ tooltip }: { tooltip: EdgeTooltip }) {
 // main canvas area unobstructed. backdrop-blur-sm softens the legend against
 // complex graph backgrounds.
 
-function GraphLegend() {
+// PLAN-0057 Wave F-1: legend now reflects ONLY the entity types present in
+// the current graph data so analysts aren't shown 13+ swatches when most
+// graphs only have 4-5.  Unknown types surface in the default grey so the
+// missing type is visible rather than silently absent.
+function GraphLegend({ data }: { data: EntityGraphData }) {
+  const visibleTypes = React.useMemo(() => {
+    const seen = new Set<string>();
+    for (const node of data.nodes) seen.add(node.type);
+    return Array.from(seen);
+  }, [data.nodes]);
+
   return (
     <div className="absolute bottom-2 left-2 z-10 flex flex-wrap gap-2 rounded-[2px] border border-border/40 bg-card/80 px-2 py-1 backdrop-blur-sm">
-      {Object.entries(NODE_TYPE_COLORS)
-        .filter(([k]) => k !== "default") // WHY exclude default: "default" is not a real entity type
-        .map(([type, color]) => (
+      {visibleTypes.map((type) => {
+        const color = ENTITY_TYPE_COLOR_MAP[type] ?? NODE_DEFAULT_COLOR;
+        // PLAN-0057 types are snake_case — pretty-print for the legend.
+        const label = type.replace(/_/g, " ");
+        return (
           <div key={type} className="flex items-center gap-1">
             <div className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
-            <span className="text-[9px] capitalize text-muted-foreground">{type}</span>
+            <span className="text-[9px] capitalize text-muted-foreground">{label}</span>
           </div>
-        ))}
+        );
+      })}
     </div>
   );
 }
@@ -418,7 +431,7 @@ export function EntityGraph({ data, centerEntityId }: EntityGraphProps) {
         {edgeTooltip && <EdgeTooltipPanel tooltip={edgeTooltip} />}
 
         {/* Legend — bottom-left corner */}
-        <GraphLegend />
+        <GraphLegend data={data} />
 
         {/* Controls hint — top-right corner, very small opacity text */}
         <div className="absolute right-2 top-2 z-10 rounded-[2px] border border-border/40 bg-card/80 px-2 py-1 backdrop-blur-sm">

@@ -154,9 +154,13 @@ describe("EntityGraph", () => {
     expect(screen.getByText(/Click to navigate/)).toBeInTheDocument();
   });
 
-  it("renders legend with all entity type labels", () => {
-    // WHY: the legend is a key visual element — analysts need to know what
-    // each color represents. Verify all 4 entity types appear in the legend.
+  it("renders legend reflecting only entity types present in the data", () => {
+    // PLAN-0057 Wave F-1: the legend is now data-driven so it doesn't show
+    // 13+ swatches when most graphs have 4–5 types.  MOCK_GRAPH_DATA carries
+    // company / person / event nodes (no `topic`) so the legend should mirror
+    // that exact set.  This is the post-F-1 contract; the previous "show every
+    // type from the static palette" behaviour over-rendered swatches and
+    // implied the graph contained types it didn't.
     render(
       <EntityGraph data={MOCK_GRAPH_DATA} centerEntityId="ent-001" />,
     );
@@ -164,7 +168,8 @@ describe("EntityGraph", () => {
     expect(screen.getByText("company")).toBeInTheDocument();
     expect(screen.getByText("person")).toBeInTheDocument();
     expect(screen.getByText("event")).toBeInTheDocument();
-    expect(screen.getByText("topic")).toBeInTheDocument();
+    // `topic` is NOT in MOCK_GRAPH_DATA so the legend must not show it.
+    expect(screen.queryByText("topic")).not.toBeInTheDocument();
   });
 
   it("does not render 'default' in legend", () => {

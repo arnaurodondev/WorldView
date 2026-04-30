@@ -195,3 +195,51 @@ class TestMarkFailure:
         params = call_args[0][1]
         assert params["pending_id"] == str(pending_id)
         assert params["backoff"] == 120.0
+
+    @pytest.mark.asyncio
+    async def test_mark_failure_stamps_last_attempted_at(self) -> None:
+        """PLAN-0057 Wave E-4: mark_failure must also write last_attempted_at = now()."""
+        pending_id = uuid.uuid4()
+        session = _make_session()
+        session.execute = AsyncMock(return_value=MagicMock())
+        repo = EmbeddingPendingRepository(session)
+
+        await repo.mark_failure(pending_id, backoff_seconds=60.0)
+
+        sql_text = str(session.execute.call_args[0][0])
+        # The column lives behind a SET clause; presence is what we verify since
+        # a missing assignment was the regression that the migration guards against.
+        assert "last_attempted_at" in sql_text
+        assert "now()" in sql_text
+
+
+class TestCountAbandoned:
+    @pytest.mark.asyncio
+    async def test_returns_count_of_rows_at_or_above_max_retries(self) -> None:
+        """count_abandoned must filter retry_count >= max_retries and return scalar."""
+        session = _make_session()
+        scalar_result = MagicMock()
+        scalar_result.scalar_one.return_value = 7
+        session.execute = AsyncMock(return_value=scalar_result)
+        repo = EmbeddingPendingRepository(session)
+
+        count = await repo.count_abandoned(max_retries=5)
+
+        assert count == 7
+        session.execute.assert_called_once()
+        sql_text = str(session.execute.call_args[0][0])
+        assert "COUNT(*)" in sql_text.upper()
+        assert "retry_count >= :max_retries" in sql_text
+        assert session.execute.call_args[0][1] == {"max_retries": 5}
+
+    @pytest.mark.asyncio
+    async def test_returns_zero_when_no_abandoned_rows(self) -> None:
+        session = _make_session()
+        scalar_result = MagicMock()
+        scalar_result.scalar_one.return_value = 0
+        session.execute = AsyncMock(return_value=scalar_result)
+        repo = EmbeddingPendingRepository(session)
+
+        count = await repo.count_abandoned()
+
+        assert count == 0
