@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from contracts.canonical.quotes import CanonicalQuote  # type: ignore[import-untyped]
 from market_data.domain.entities import Instrument, Quote, Security
-from market_data.domain.events import InstrumentCreated, InstrumentUpdated
+from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
@@ -207,16 +207,19 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
                 flags=InstrumentFlags(has_quotes=True),
             )
             instrument = await uow.instruments.upsert(instrument)
-            created_event = InstrumentCreated(
+            # PLAN-0057 Wave D-2: emit ``market.instrument.discovered.v1`` instead
+            # of ``market.instrument.created`` here.  See the matching block in
+            # ``ohlcv_consumer.py`` for the rationale (F-CRIT-12: prevent
+            # placeholder canonicals like ``Instrument-019dbbdb...``).
+            discovered_event = InstrumentDiscovered(
                 instrument_id=instrument.id,
-                security_id=instrument.security_id,
                 symbol=symbol,
-                exchange=exchange,
+                exchange=exchange or None,
             )
             await uow.outbox_events.create(
-                event_type=created_event.event_type,
-                topic=EVENT_TOPIC_MAP[created_event.event_type],
-                payload=event_to_outbox_payload(created_event),
+                event_type=discovered_event.event_type,
+                topic=EVENT_TOPIC_MAP[discovered_event.event_type],
+                payload=event_to_outbox_payload(discovered_event),
             )
         elif not instrument.flags.has_quotes:
             updated_flags = InstrumentFlags(

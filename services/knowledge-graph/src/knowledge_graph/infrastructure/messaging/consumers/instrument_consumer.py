@@ -5,6 +5,11 @@ Consumes: ``market.instrument.created``.
 
 Processing:
   1. Create canonical_entity from instrument metadata.
+     PLAN-0057 Wave D-2: if a placeholder canonical already exists (created
+     by InstrumentDiscoveredConsumer with metadata.needs_fundamentals_enrichment
+     = true), UPDATE it with the real EODHD ``Name``/``ISIN``/description and
+     clear the flag — then proceed with rich alias enrichment as if the
+     canonical were brand new.
   2. Insert mechanical aliases: ticker, exchange:ticker, canonical_name, ISIN.
   3. Call ExtractionClient (FallbackChainClient) for LLM-generated supplementary
      aliases.  Collision check: reject alias if it belongs to a different entity.
@@ -20,6 +25,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
+from sqlalchemy import text
+
+from common.time import to_iso8601, utc_now  # type: ignore[import-untyped]
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     BaseKafkaConsumer,
     ConsumerConfig,
@@ -28,6 +36,15 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
 )
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
+
+
+def _utc_iso_now() -> str:
+    """Return the current UTC time as an ISO-8601 string.  Used to stamp
+    ``metadata.enriched_at`` on the canonical_entity when transitioning from
+    a discovered placeholder to an enriched record (PLAN-0057 Wave D-2).
+    """
+    return to_iso8601(utc_now())
+
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -166,32 +183,83 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
             alias_repo = EntityAliasRepository(session)
             emb_repo = EntityEmbeddingStateRepository(session)
 
-            # Idempotency: check if entity already created for this instrument
+            # Idempotency / UPSERT-after-discover (PLAN-0057 Wave D-2):
+            # If a placeholder canonical exists (created earlier by
+            # InstrumentDiscoveredConsumer with
+            # metadata.needs_fundamentals_enrichment = true), UPDATE it with
+            # the real EODHD Name/ISIN/description and clear the flag.  Then
+            # FALL THROUGH to the alias-enrichment block — every rich alias
+            # (NAME / ISIN / CUSIP / FIGI / LEI / PRIMARY_TICKER / LLM) needs
+            # to be inserted exactly once on the create-OR-discovery path.
+            # If the canonical exists AND is NOT a placeholder, we treat it
+            # as a true replay and re-trigger missing definition embeddings
+            # only (the BP-124 path).
             existing = await entity_repo.get(instrument_id)
+            entity_id: UUID
             if existing:
-                entity_id_existing: UUID = existing["entity_id"]  # type: ignore[assignment]
-                # Re-trigger embedding if entity exists but definition embedding is absent.
-                # This handles replay after a crash between entity creation (step 4) and
-                # embedding (step 5) — fixes BP-124.
-                if description and self._def_worker:
-                    emb_row = await emb_repo.get(entity_id_existing, VIEW_DEFINITION)
-                    if emb_row is None or emb_row.get("model_id") is None:
-                        await session.commit()  # flush any reads
-                        await self._def_worker.refresh_for_entity(entity_id_existing, description)
-                logger.debug(  # type: ignore[no-any-return]
-                    "instrument_consumer_already_exists",
-                    instrument_id=str(instrument_id),
+                metadata_existing = existing.get("metadata") or {}
+                needs_enrichment = isinstance(metadata_existing, dict) and bool(
+                    metadata_existing.get("needs_fundamentals_enrichment")
                 )
-                return
+                if needs_enrichment:
+                    # Lightweight canonical → real one.  We use raw SQL (not the
+                    # repo) because CanonicalEntityRepository is read-mostly and
+                    # this very specific UPDATE shape is not part of its API.
+                    # The metadata jsonb minus key '-' operator removes the
+                    # ``needs_fundamentals_enrichment`` flag while preserving the
+                    # ``source`` and ``discovered_at`` audit fields.
+                    await session.execute(
+                        text("""
+UPDATE canonical_entities
+SET
+    canonical_name = :canonical_name,
+    isin           = COALESCE(:isin, isin),
+    metadata       = (COALESCE(metadata, '{}'::jsonb) - 'needs_fundamentals_enrichment')
+                     || jsonb_build_object('enriched_at', :enriched_at)
+WHERE entity_id = :entity_id
+  AND metadata->>'needs_fundamentals_enrichment' = 'true'
+"""),
+                        {
+                            "entity_id": str(instrument_id),
+                            "canonical_name": canonical_name,
+                            "isin": str(isin) if isin else None,
+                            "enriched_at": _utc_iso_now(),
+                        },
+                    )
+                    # Continue to step 2 (alias enrichment) using existing entity_id
+                    entity_id = instrument_id
+                else:
+                    entity_id_existing: UUID = existing["entity_id"]  # type: ignore[assignment]
+                    # Re-trigger embedding if entity exists but definition embedding
+                    # is absent — handles replay after a crash between entity creation
+                    # (step 4) and embedding (step 5).  Fixes BP-124.
+                    if description and self._def_worker:
+                        emb_row = await emb_repo.get(entity_id_existing, VIEW_DEFINITION)
+                        if emb_row is None or emb_row.get("model_id") is None:
+                            await session.commit()  # flush any reads
+                            await self._def_worker.refresh_for_entity(entity_id_existing, description)
+                    logger.debug(  # type: ignore[no-any-return]
+                        "instrument_consumer_already_exists",
+                        instrument_id=str(instrument_id),
+                    )
+                    return
+            else:
+                # Step 1: Create canonical entity (pristine path — no prior discovery).
+                entity_id = await self._create_new_canonical(
+                    entity_repo,
+                    canonical_name=canonical_name,
+                    ticker=ticker,
+                    isin=isin,
+                    exchange=exchange,
+                )
 
-            # Step 1: Create canonical entity
-            entity_id = await entity_repo.create(  # type: ignore[attr-defined]
-                canonical_name=canonical_name,
-                entity_type="financial_instrument",
-                ticker=str(ticker) if ticker else None,
-                isin=str(isin) if isin else None,
-                exchange=str(exchange) if exchange else None,
-            )
+            # Continue with steps 2..5 below for BOTH the brand-new path and the
+            # UPSERT-after-discover path so that the rich alias suite is inserted
+            # exactly once.  The remaining code is intentionally unchanged from the
+            # original create-only flow — per-alias inserts are wrapped in SAVEPOINTs
+            # already, so re-running them on a discovered entity is safe (the partial
+            # UNIQUE index added by Wave A-2 dedupes EXACT/TICKER aliases the
+            # discovered consumer already inserted).
 
             # Step 2: Mechanical aliases — use SAVEPOINTs so that a collision on one
             # alias rolls back only that nested transaction and leaves the outer session
@@ -285,6 +353,32 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
             instrument_id=str(instrument_id),
             entity_id=str(entity_id),
             canonical_name=canonical_name,
+        )
+
+    async def _create_new_canonical(
+        self,
+        entity_repo: Any,
+        *,
+        canonical_name: str,
+        ticker: Any,
+        isin: Any,
+        exchange: Any,
+    ) -> UUID:
+        """Insert a brand-new canonical_entity (pristine create path).
+
+        Extracted into a helper so process_message can share Steps 2..5 with the
+        UPSERT-after-discover path (PLAN-0057 Wave D-2).  The repo's create()
+        auto-generates an entity_id via gen_random_uuid(); the discovered path
+        already wrote a row with entity_id = instrument_id, so this branch is
+        only reached when no prior discovery happened (e.g. backfills that hit
+        fundamentals_consumer first).
+        """
+        return await entity_repo.create(  # type: ignore[no-any-return]
+            canonical_name=canonical_name,
+            entity_type="financial_instrument",
+            ticker=str(ticker) if ticker else None,
+            isin=str(isin) if isin else None,
+            exchange=str(exchange) if exchange else None,
         )
 
     async def _add_llm_aliases(

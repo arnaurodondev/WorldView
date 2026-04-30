@@ -32,6 +32,7 @@ from pathlib import Path
 from contracts.canonical.article import CanonicalArticle
 from contracts.canonical.entity import CanonicalEntity
 from contracts.canonical.fundamentals import CanonicalFundamentals
+from contracts.canonical.instrument_discovered import CanonicalInstrumentDiscovered
 from contracts.canonical.ohlcv import CanonicalOHLCVBar
 from contracts.canonical.quotes import CanonicalQuote
 from contracts.canonical.sentiment import CanonicalSentiment
@@ -265,6 +266,97 @@ class TestCanonicalQuoteFieldPresence:
         d = self._make_quote().to_dict()
         for key in ("symbol", "exchange", "bid", "ask", "last", "volume", "timestamp", "schema_version"):
             assert key in d
+
+
+class TestCanonicalInstrumentDiscoveredAvroAlignment:
+    """CanonicalInstrumentDiscovered ↔ market.instrument.discovered.v1.avsc.
+
+    PLAN-0057 Wave D-2.  This event is small (10 fields) so we hold the model
+    and the Avro schema to *exact* field-by-field alignment — every Avro
+    field must appear in the model's ``to_dict()`` output, and no extra keys
+    may appear in ``to_dict()`` that are not in the schema.
+
+    We also assert alignment between the producer-side dataclass
+    (``market_data.domain.events.InstrumentDiscovered``) and the Avro schema
+    so a dropped field on either side fails this test loudly.  The
+    market-data import is conditional — ``libs/contracts`` tests sometimes
+    run in isolation without the service package on ``sys.path``; we
+    ``pytest.skip`` rather than fail in that case.
+    """
+
+    def _make_discovered(self) -> CanonicalInstrumentDiscovered:
+        return CanonicalInstrumentDiscovered(
+            event_id="018f3a85-b39f-7a78-bf2a-1f03523ad9cf",
+            occurred_at="2026-04-30T12:00:00Z",
+            instrument_id="018f3a85-b39f-7a78-bf2a-1f03523ad9d0",
+            symbol="AAPL",
+            exchange="NASDAQ",
+            entity_id="018f3a85-b39f-7a78-bf2a-1f03523ad9d0",
+            correlation_id=None,
+            causation_id=None,
+        )
+
+    def test_avro_schema_field_set_matches_model(self) -> None:
+        """Every Avro field is in to_dict(); no unexpected keys in to_dict()."""
+        schema = _load_avsc("market.instrument.discovered.v1.avsc")
+        avro_fields = {f["name"] for f in schema["fields"]}
+        d = self._make_discovered().to_dict()
+        # to_dict() exposes ALL Avro fields including envelope fields.
+        missing = avro_fields - set(d.keys())
+        assert not missing, f"to_dict() missing Avro fields: {missing}"
+        unexpected = set(d.keys()) - avro_fields
+        assert not unexpected, f"to_dict() has fields not in schema: {unexpected}"
+
+    def test_avro_schema_has_required_data_fields(self) -> None:
+        """Spot-check the schema has the data fields documented in the plan."""
+        schema = _load_avsc("market.instrument.discovered.v1.avsc")
+        avro_fields = {f["name"] for f in schema["fields"]}
+        for field_name in ("instrument_id", "symbol", "exchange"):
+            assert field_name in avro_fields
+
+    def test_nullable_fields_have_null_default(self) -> None:
+        """All optional fields default to null (forward-compat per BP-126)."""
+        schema = _load_avsc("market.instrument.discovered.v1.avsc")
+        fields_by_name = {f["name"]: f for f in schema["fields"]}
+        for field_name in ("exchange", "entity_id", "correlation_id", "causation_id"):
+            assert fields_by_name[field_name]["default"] is None
+            assert fields_by_name[field_name]["type"] == ["null", "string"]
+
+    def test_from_dict_to_dict_round_trip(self) -> None:
+        """from_dict(to_dict(x)) preserves the payload."""
+        original = self._make_discovered()
+        round_tripped = CanonicalInstrumentDiscovered.from_dict(original.to_dict())
+        assert round_tripped == original
+
+    def test_producer_dataclass_aligns_with_avro(self) -> None:
+        """``InstrumentDiscovered`` (market-data domain) field-by-field == Avro schema."""
+        try:
+            from market_data.domain.events import InstrumentDiscovered  # type: ignore[import-not-found]
+        except ImportError:
+            import pytest
+
+            pytest.skip("market-data package not on sys.path in this test environment")
+
+        import dataclasses
+
+        schema = _load_avsc("market.instrument.discovered.v1.avsc")
+        avro_fields = {f["name"] for f in schema["fields"]}
+
+        # InstrumentDiscovered has ClassVar event_type/schema_version (not dataclass
+        # fields) and dataclass fields: event_id, occurred_at, correlation_id,
+        # causation_id (from DomainEvent base) + instrument_id, symbol, exchange
+        # (subclass).
+        dc_field_names = {f.name for f in dataclasses.fields(InstrumentDiscovered)}
+        # event_type / schema_version are ClassVars (injected by dispatcher);
+        # entity_id is NOT a dataclass field — ``event_to_outbox_payload`` synthesises
+        # ``entity_id = instrument_id`` for M-017 stability before serialisation.
+        envelope_classvars = {"event_type", "schema_version"}
+        synthesised = {"entity_id"}
+        missing_in_dc = (avro_fields - envelope_classvars - synthesised) - dc_field_names
+        assert not missing_in_dc, f"InstrumentDiscovered missing Avro fields: {missing_in_dc}"
+        # Ensure both ClassVars are declared on the class
+        assert InstrumentDiscovered.event_type == "market.instrument.discovered"
+        assert InstrumentDiscovered.schema_version == 1
 
 
 class TestCanonicalFundamentalsFieldPresence:

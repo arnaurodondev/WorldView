@@ -10,6 +10,7 @@ from contracts.canonical.ingestion import (
     CanonicalStoredArticleEvent,
     CanonicalWatchlistEvent,
 )
+from contracts.canonical.instrument_discovered import CanonicalInstrumentDiscovered
 from contracts.canonical.ohlcv import CanonicalOHLCVBar
 from contracts.canonical.quotes import CanonicalQuote
 from contracts.canonical.sentiment import CanonicalSentiment
@@ -53,6 +54,7 @@ __all__ = [
     "CanonicalEnrichedArticleEvent",
     "CanonicalEntity",
     "CanonicalFundamentals",
+    "CanonicalInstrumentDiscovered",
     "CanonicalOHLCVBar",
     "CanonicalQuote",
     "CanonicalRawArticleEvent",
