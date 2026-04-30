@@ -58,6 +58,15 @@ import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { useAlertStream } from "@/contexts/AlertStreamContext";
 import { createGateway } from "@/lib/gateway";
 import { usePortfolioMetrics } from "@/hooks/usePortfolioMetrics";
+// PLAN-0059-C C-4: corruption-safe localStorage wrapper. Replaces six
+// hand-rolled `typeof window === "undefined"` guards + `parseInt` + NaN-fallback
+// branches in this file. Stored values are validated on read; corrupt values
+// fall back to the default instead of crashing or producing NaN widths.
+import {
+  safeStorage,
+  isBoolean,
+  isFiniteNumber,
+} from "@/lib/storage/safe-storage";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -125,39 +134,29 @@ export default function AppLayout({ children }: AppLayoutProps) {
     requestAnimationFrame(() => askAiButtonRef.current?.focus());
   }, []);
 
-  // WHY lazy initializer: reads localStorage once at mount, not on every render.
-  // True (expanded) is the default so first-time users see the full labeled sidebar.
-  // typeof window guard makes this safe during Next.js SSR pre-render.
-  const [sidebarExpanded, setSidebarExpanded] = useState<boolean>(() => {
-    if (typeof window === "undefined") return true;
-    const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY);
-    // WHY null check: first visit has no stored value — default to expanded (true)
-    return stored === null ? true : stored === "true";
-  });
+  // PLAN-0059-C C-4: safeStorage handles SSR + corruption-fallback in one line.
+  // Lazy initializer still used so the read happens once at mount, not on every
+  // render. True (expanded) is the default so first-time users see full labels.
+  const [sidebarExpanded, setSidebarExpanded] = useState<boolean>(() =>
+    safeStorage.get(SIDEBAR_STORAGE_KEY, isBoolean, true),
+  );
 
   /**
    * WHY persist the drag width separately from the expanded boolean:
    * If the user drags to 280px, collapses, then re-expands, they expect to return
    * to 280px — not reset to 220px. Storing width independently achieves this.
-   * The lazy initializer reads localStorage once at mount (SSR-safe with typeof guard).
+   * isFiniteNumber rejects NaN/Infinity so a corrupt value can't produce a
+   * zero-width sidebar (BP-180-class corruption-safety).
    */
-  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
-    if (typeof window === "undefined") return DEFAULT_SIDEBAR_WIDTH;
-    const stored = localStorage.getItem(SIDEBAR_WIDTH_KEY);
-    if (stored === null) return DEFAULT_SIDEBAR_WIDTH;
-    const parsed = parseInt(stored, 10);
-    // WHY NaN guard: if the stored value is corrupt (e.g. "undefined") parseInt
-    // returns NaN — fall back to the default to avoid a zero-width sidebar.
-    return isNaN(parsed) ? DEFAULT_SIDEBAR_WIDTH : parsed;
-  });
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() =>
+    safeStorage.get(SIDEBAR_WIDTH_KEY, isFiniteNumber, DEFAULT_SIDEBAR_WIDTH),
+  );
 
   // Persist sidebar state whenever the user toggles it
   function handleSidebarToggle() {
     setSidebarExpanded((prev) => {
       const next = !prev;
-      if (typeof window !== "undefined") {
-        localStorage.setItem(SIDEBAR_STORAGE_KEY, String(next));
-      }
+      safeStorage.set(SIDEBAR_STORAGE_KEY, next);
       return next;
     });
   }
@@ -167,14 +166,12 @@ export default function AppLayout({ children }: AppLayoutProps) {
    *
    * WHY persist on every move (not just mouseup): if the page refreshes or the tab
    * is closed mid-drag, the last stored width is still close to the final position.
-   * The performance cost is negligible — localStorage.setItem is synchronous but
-   * O(1) and does not cause a React re-render on its own.
+   * The performance cost is negligible — JSON.stringify of a number is O(1) and
+   * does not cause a React re-render on its own.
    */
   function handleSidebarResize(w: number) {
     setSidebarWidth(w);
-    if (typeof window !== "undefined") {
-      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(w));
-    }
+    safeStorage.set(SIDEBAR_WIDTH_KEY, w);
   }
 
   useEffect(() => {

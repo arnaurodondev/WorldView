@@ -39,6 +39,9 @@ import { MiniChart } from "./MiniChart";
 import { cn } from "@/lib/utils";
 import type { ScreenerResult, OHLCVBar } from "@/types/api";
 import { DEFAULT_COLUMNS, type ScreenerColumn } from "@/lib/screener-columns";
+// PLAN-0059-C C-5: replaced local formatCap with the canonical formatCompact.
+// `adaptive: true` reproduces the previous 1-decimal style (.toFixed(1)).
+import { formatCompact } from "@/lib/format";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -65,13 +68,15 @@ export type SortableKey =
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** formatCap — abbreviated market cap / revenue (e.g. 2.3T, 450B, 8.5M) */
+/**
+ * formatCap — abbreviated market cap / revenue (e.g. 2.3T, 450B, 8.5M).
+ *
+ * PLAN-0059-C C-5: now delegates to the canonical formatCompact with
+ * `adaptive: true` so the screener keeps its dense single-decimal look
+ * (e.g. "2.3T" not "2.34T"). The local-helper version was deleted.
+ */
 function formatCap(val: number | null | undefined): string {
-  if (val == null) return "—";
-  if (val >= 1e12) return `${(val / 1e12).toFixed(1)}T`;
-  if (val >= 1e9)  return `${(val / 1e9).toFixed(1)}B`;
-  if (val >= 1e6)  return `${(val / 1e6).toFixed(1)}M`;
-  return val.toFixed(0);
+  return formatCompact(val, { adaptive: true, maxDecimals: 1 });
 }
 
 /**

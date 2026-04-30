@@ -15,6 +15,18 @@
 
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+// PLAN-0059-C C-5: financial number formatters now live in lib/format.ts.
+// This module re-exports them under their legacy names so existing call
+// sites (lib/utils.ts has been imported in 100+ files) keep working with
+// no change. New code should import from "@/lib/format" directly.
+import {
+  formatCompact,
+  formatCompactCurrency,
+  formatPrice as formatPriceCanonical,
+  formatPercent as formatPercentCanonical,
+  formatPercentUnsigned as formatPercentUnsignedCanonical,
+  formatRatio as formatRatioCanonical,
+} from "@/lib/format";
 
 /**
  * cn — Conditional Tailwind class name utility (shadcn/ui standard)
@@ -29,62 +41,24 @@ export function cn(...inputs: ClassValue[]): string {
 
 // ── Financial number formatters ──────────────────────────────────────────
 
-/**
- * formatPrice — format a price with 2 decimal places in USD
- *
- * WHY 2 decimals: Standard for US equities. Not configurable per component
- * because inconsistent decimals confuse finance users scanning multiple panels.
- * Exception: crypto uses formatCryptoPrice() below.
- */
-export function formatPrice(value: number | null | undefined): string {
-  if (value == null) return "—";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
-}
+// PLAN-0059-C C-5: financial formatters now delegate to lib/format.ts.
+// Public names below are unchanged so the 100+ existing call sites keep
+// working. New code should import from "@/lib/format" instead.
 
-/**
- * formatPriceCompact — abbreviated price for tight spaces (TopBar index tickers)
- * e.g., $4,892.34 → "$4,892.34" but $12,345,678 → "$12.35M"
- */
-export function formatPriceCompact(value: number | null | undefined): string {
-  if (value == null) return "—";
-  if (Math.abs(value) >= 1_000_000_000) {
-    return `$${(value / 1_000_000_000).toFixed(2)}B`;
-  }
-  if (Math.abs(value) >= 1_000_000) {
-    return `$${(value / 1_000_000).toFixed(2)}M`;
-  }
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
-}
+export const formatPrice = (value: number | null | undefined): string =>
+  formatPriceCanonical(value, "USD");
 
-/**
- * formatPercent — format a percentage change with sign prefix
- *
- * WHY sign prefix: Finance users need to instantly distinguish gain/loss
- * without looking at color (accessibility + speed scanning).
- * e.g., 0.0234 → "+2.34%", -0.0112 → "-1.12%"
- */
-export function formatPercent(
+export const formatPriceCompact = (value: number | null | undefined): string =>
+  formatCompactCurrency(value, "USD");
+
+export const formatPercent = (
   value: number | null | undefined,
   decimals = 2,
-): string {
-  if (value == null) return "—";
-  const sign = value >= 0 ? "+" : "";
-  return `${sign}${(value * 100).toFixed(decimals)}%`;
-}
+): string => formatPercentCanonical(value, decimals);
 
 /**
- * formatPercentDirect — same as formatPercent but value is already in percentage
- * e.g., 2.34 → "+2.34%"  (used when API returns % not decimal)
+ * formatPercentDirect — same shape as formatPercent but for already-percentage
+ * inputs (API returns 2.34 meaning 2.34%, not 0.0234).
  */
 export function formatPercentDirect(
   value: number | null | undefined,
@@ -95,65 +69,21 @@ export function formatPercentDirect(
   return `${sign}${value.toFixed(decimals)}%`;
 }
 
-/**
- * formatPercentUnsigned — format a percentage WITHOUT a sign prefix.
- *
- * WHY THIS EXISTS: formatPercent always prepends "+" for positives because it
- * is intended for P&L / change percentages where direction carries meaning.
- * For non-directional ratios — allocation shares ("Equity 100.00%"), portfolio
- * weights, position sizes — a leading "+" is a CATEGORY ERROR. It implies the
- * share has gained 100%, not that it represents 100% of the portfolio.
- *
- * USAGE: weights, allocation shares, percentage-of-total displays.
- * For directional values (P&L %, daily change %), keep using formatPercent.
- *
- * F-307 fix (PLAN-0048 QA iter-1): allocation panel was showing "+100.00%"
- * for a single-asset-type portfolio.
- */
-export function formatPercentUnsigned(
+export const formatPercentUnsigned = (
   value: number | null | undefined,
   decimals = 2,
-): string {
-  if (value == null) return "—";
-  return `${(value * 100).toFixed(decimals)}%`;
-}
+): string => formatPercentUnsignedCanonical(value, decimals);
 
-/**
- * formatVolume — compact volume notation for table cells
- * e.g., 1234567 → "1.23M", 987654321 → "987.65M"
- */
-export function formatVolume(value: number | null | undefined): string {
-  if (value == null) return "—";
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(0)}K`;
-  return value.toFixed(0);
-}
+export const formatVolume = (value: number | null | undefined): string =>
+  formatCompact(value);
 
-/**
- * formatMarketCap — compact market cap for screener + fundamentals
- * e.g., 2450000000000 → "$2.45T"
- */
-export function formatMarketCap(value: number | null | undefined): string {
-  if (value == null) return "—";
-  if (value >= 1_000_000_000_000)
-    return `$${(value / 1_000_000_000_000).toFixed(2)}T`;
-  if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`;
-  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
-  return formatPrice(value);
-}
+export const formatMarketCap = (value: number | null | undefined): string =>
+  formatCompactCurrency(value, "USD");
 
-/**
- * formatRatio — PE ratio, price/book, etc. — 2 decimals, no suffix, no $ sign
- * e.g., 24.567 → "24.57x"
- */
-export function formatRatio(
+export const formatRatio = (
   value: number | null | undefined,
   suffix = "x",
-): string {
-  if (value == null) return "—";
-  return `${value.toFixed(2)}${suffix}`;
-}
+): string => formatRatioCanonical(value, suffix);
 
 /**
  * formatDate — compact date for table cells
@@ -228,8 +158,14 @@ export function priceChangeClass(
   neutralClass = "text-muted-foreground",
 ): string {
   if (value == null) return neutralClass;
-  if (value > 0) return "text-positive";  // hsl(var(--positive)) = #26A69A
-  if (value < 0) return "text-negative";  // hsl(var(--negative)) = #EF5350
+  // PLAN-0059 W0 fix F-017 (2026-04-30): updated stale hex annotations.
+  // After Wave A token surgery: --positive = #00D26A (institutional green,
+  // AAA 9.18:1) and --negative = #FF3B5C (urgent red, AA 6.83:1). The semantic
+  // class names (text-positive / text-negative) resolve via CSS vars so the
+  // hex values shift automatically with the theme — these comments are
+  // documentation only.
+  if (value > 0) return "text-positive";  // hsl(var(--positive)) = #00D26A
+  if (value < 0) return "text-negative";  // hsl(var(--negative)) = #FF3B5C
   return neutralClass;
 }
 

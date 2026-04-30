@@ -862,7 +862,9 @@ Before W0 closes:
 
 ---
 
-## 5. PLAN-0059-C — Contract Spine (Wave 1, Track B)
+## 5. PLAN-0059-C — Contract Spine (Wave 1, Track B) ✅ (C-2/C-3/C-4/C-5 partial)
+
+**Status**: **PARTIAL DONE** — 2026-04-30 · 1,017 frontend tests pass · ruff/lint/typecheck clean
 
 **Goal:** Establish typed, drift-free contracts between frontend and backend. Eliminate hand-typing, scattered query keys, recomputed gateway factories, and four parallel formatters.
 **Depends on:** PLAN-0059-A complete.
@@ -871,12 +873,12 @@ Before W0 closes:
 
 ### Wave structure (high-level)
 
-- **C-1 (3d) OpenAPI codegen:** `openapi-typescript` + `openapi-fetch` adoption. `scripts/generate-api-types.ts` + CI drift gate. `types/generated/api.ts` committed; `types/api.ts` shrinks to <80 LOC re-export shim.
-- **C-2 (2d) Query-key factory:** `lib/query/keys.ts` hierarchical factory; ESLint rule bans inline `queryKey: ["string"]`; mass-replace 169 sites incrementally.
-- **C-3 (1d) `useApiClient()` provider:** Memoize `createGateway(token)` once per token (387 → 1 site); `useAuthedQuery` wrapper.
-- **C-4 (1.5d) `useInterval` + `lib/storage/safe-storage.ts`:** Abramov pattern for 67 stale-closure-risk sites; zod-validated localStorage wrapper for 77 raw sites; Zustand-persist for cross-feature UI prefs.
-- **C-5 (1d) `lib/format.ts` consolidation:** Single canonical formatter module; deletes 4 duplicate B/M/T impls; multi-currency aware via `useUserContext().defaultCurrency`; FX-friendly adaptive decimals; `formatBasisPoints` for fixed-income.
-- **C-6 (2d) `nuqs` URL state:** Adopt on screener filters, portfolio tab, equity-curve period, transaction filter, active workspace. Document URL-state schema in `docs/ui/URL_STATE.md`.
+- **C-1 (3d) OpenAPI codegen:** `openapi-typescript` + `openapi-fetch` adoption. `scripts/generate-api-types.ts` + CI drift gate. `types/generated/api.ts` committed; `types/api.ts` shrinks to <80 LOC re-export shim. **DEFERRED** to dedicated wave (requires backend OpenAPI ergonomics work + CI gate).
+- **C-2 (2d) Query-key factory ✅:** `lib/query/keys.ts` hierarchical factory shipped (50+ keys across portfolios/watchlists/instruments/quotes/news/screener/alerts/chat/dashboard/workspace/search/feedback/user/brokerage). ESLint `no-restricted-syntax` rule registered as `warn` (153 legacy sites flagged for incremental migration; promote to `error` when migration completes).
+- **C-3 (1d) `useApiClient()` provider ✅:** `lib/api-client.tsx` memoises `createGateway(token)` per token (===). `useAuthedQuery` wrapper auto-disables on missing token. Mounted in `app/providers.tsx` inside AuthProvider.
+- **C-4 (1.5d) `useInterval` + `lib/storage/safe-storage.ts` ✅:** Abramov pattern shipped (`hooks/useInterval.ts`); 6 raw `setInterval` call sites identified, UtcClock migrated as proof-of-pattern. `lib/storage/safe-storage.ts` shipped with hand-rolled validator (zod-compatible interface; swap when zod added). Sidebar expanded/width localStorage migrated as proof-of-pattern. Zustand-persist DEFERRED to follow-up.
+- **C-5 (1d) `lib/format.ts` consolidation ✅:** Canonical `lib/format.ts` shipped (`formatCompact`, `formatCompactCurrency`, `formatPrice`, `formatPercent`, `formatPercentUnsigned`, `formatBasisPoints`, `formatRatio`). Multi-currency: USD/EUR/GBP/JPY/CHF/CAD/AUD/CNY/HKD/KRW/BTC/ETH. `lib/utils.ts` formatters re-export from canonical module (zero call-site churn). `ScreenerTable.formatCap` and `InstrumentAskAiButton` mcap formatter migrated.
+- **C-6 (2d) `nuqs` URL state:** Adopt on screener filters, portfolio tab, equity-curve period, transaction filter, active workspace. Document URL-state schema in `docs/ui/URL_STATE.md`. **DEFERRED** to dedicated wave (multi-feature touch).
 
 ### Critical tests
 - `test_api_types_generated_from_openapi_drift_gate` — CI fails if generated file out of sync
