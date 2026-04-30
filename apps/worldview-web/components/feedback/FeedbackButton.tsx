@@ -20,15 +20,13 @@
 
 import { useEffect, useState } from "react";
 import { MessageCircle } from "lucide-react";
-import { useAuth } from "@/hooks/useAuth";
 import { FeedbackModal } from "./FeedbackModal";
 
 export function FeedbackButton() {
-  // PLAN-0053 QA-iter1 F-010: useAuth retained for future surface-tagging
-  // (e.g., showing user email pre-filled when authed) but no longer gates
-  // visibility — anonymous feedback is first-class.
-  // Note: useAuth() result not destructured because we don't currently use it.
-  useAuth();
+  // PLAN-0053 QA-iter1 F-010 + iter2 F-003: anonymous feedback is first-class
+  // — the modal collects an email when unauthed, so the button renders for
+  // every visitor. We removed the previous bare ``useAuth();`` call (a code
+  // smell that did nothing) — the modal owns its own auth lookup.
   const [open, setOpen] = useState(false);
 
   // Keyboard shortcut: cmd/ctrl + ? (Shift+/ on most layouts).

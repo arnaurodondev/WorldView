@@ -112,8 +112,12 @@ export function RealizedPnLChart({ portfolioId }: RealizedPnLChartProps) {
     <div className="flex flex-col bg-background" data-testid="realized-pnl-chart">
       {/* Header — title + period buttons + total readout */}
       <div className="flex h-7 shrink-0 items-center justify-between border-b border-border px-2">
-        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+        <span
+          className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground"
+          title="Backend currently returns period totals only — chart shows the cumulative bracket (start → end). Per-day series will land in a follow-up plan."
+        >
           REALIZED P&L
+          <sup className="ml-0.5 text-[8px] text-muted-foreground/70">ⓘ</sup>
         </span>
 
         <div className="flex gap-px">

@@ -11,15 +11,15 @@
  * Screenshots can leak sensitive info; the user must explicitly press
  * "Capture screenshot" — we never auto-capture.
  *
- * HOW THE OUTPUT IS PASSED ON: We expose a `data:image/png;base64,…` URL
- * via the `onCapture` callback. The parent FeedbackModal stores it in
- * local state and forwards it as `screenshot_url` ONLY IF the backend
- * accepts data: URLs. The backend currently rejects non-https URLs
- * (feedback_schemas.py validator), so the modal must POST the data URI to
- * a presigned-URL upload route OR drop it. Until that upload route ships
- * (a future wave), we surface the preview but DO NOT include the URL in
- * the submission — the screenshot is treated as best-effort context that
- * the user can copy from the preview if they want.
+ * HOW THE OUTPUT IS PASSED ON (updated by PLAN-0053 QA-iter1 F-003):
+ * We expose a `data:image/png;base64,…` URL via the `onCapture` callback.
+ * The parent FeedbackModal forwards it inside the JSON `console_logs`
+ * column (NOT `screenshot_url`, which the backend validates as HTTPS-
+ * only). The data URI is capped at 1MB before send; larger captures are
+ * dropped with a `screenshot_data_uri_truncated: true` flag so operators
+ * can see the user attempted a screenshot. When a presigned-S3 upload
+ * route lands (future wave) we will switch to that and use the proper
+ * `screenshot_url` field.
  *
  * BLUR TOOL (V1 LITE): Approved spec calls for a blur tool. A full
  * canvas-based redaction editor is out of scope here. This component
@@ -177,15 +177,27 @@ export function ScreenshotCapture({ onCapture, hasCapture }: ScreenshotCapturePr
 
       {/* Preview — small thumbnail; clicking expands to full size in a new tab. */}
       {preview && (
-        <a
-          href={preview}
-          target="_blank"
-          rel="noreferrer"
-          className="mt-2 inline-flex items-center gap-1 text-[10px] text-muted-foreground underline hover:text-foreground"
-        >
-          <Eye className="h-3 w-3" />
-          Open full preview
-        </a>
+        <div className="mt-2 flex flex-col gap-1">
+          <a
+            href={preview}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-[10px] text-muted-foreground underline hover:text-foreground"
+          >
+            <Eye className="h-3 w-3" />
+            Open full preview
+          </a>
+          {/* PLAN-0053 QA-iter2 F-iter2-004: warn the user when the capture
+              exceeds the 1MB JSON column cap and will be dropped server-side.
+              The data URI base64-bloats by ~33% so the threshold here is
+              conservative (1.4MB raw → ~1.05MB encoded). */}
+          {preview.length > 1_048_576 && (
+            <p className="text-[10px] text-warning">
+              ⚠ Screenshot is over 1MB and will not be sent. Try capturing
+              a narrower view or disabling the blur filter.
+            </p>
+          )}
+        </div>
       )}
 
       {error && (
