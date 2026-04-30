@@ -43,13 +43,13 @@ interface State {
 }
 
 export class EntityGraphErrorBoundary extends Component<Props, State> {
-  state: State = { hasError: false, message: null };
+  override state: State = { hasError: false, message: null };
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, message: error.message };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo): void {
+  override componentDidCatch(error: Error, info: ErrorInfo): void {
     // WHY console.error (not a Sentry/structured logger here): the frontend
     // does not yet wire a client telemetry sink (ADR-F-XX deferred). When
     // it does, this is the single place to forward graph crashes.
@@ -59,7 +59,7 @@ export class EntityGraphErrorBoundary extends Component<Props, State> {
 
   reset = () => this.setState({ hasError: false, message: null });
 
-  render() {
+  override render() {
     if (this.state.hasError) {
       return (
         <div

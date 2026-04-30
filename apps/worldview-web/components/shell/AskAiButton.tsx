@@ -70,8 +70,9 @@ export const AskAiButton = forwardRef<HTMLButtonElement, AskAiButtonProps>(
         // WHY ring + bg shift on isOpen: the floating panel is fixed bottom-right
         // so users lose the visual link back to the trigger; a faint ring keeps
         // the button visually "lit" while the panel is open.
-        className={`flex h-6 items-center gap-1 rounded-[2px] border border-amber-500/30 bg-amber-500/15 px-1.5 text-[11px] font-semibold text-amber-300 transition-colors hover:bg-amber-500/25 hover:text-amber-200 ${
-          isOpen ? "ring-1 ring-amber-400/60" : ""
+        // PLAN-0059 W0 F-VISUAL-022: --accent-ai violet (was amber-* defaults)
+        className={`flex h-6 items-center gap-1 rounded-[2px] border border-[hsl(var(--accent-ai)/0.30)] bg-[hsl(var(--accent-ai)/0.15)] px-1.5 text-[11px] font-semibold text-[hsl(var(--accent-ai))] transition-colors hover:bg-[hsl(var(--accent-ai)/0.25)] ${
+          isOpen ? "ring-1 ring-[hsl(var(--accent-ai)/0.60)]" : ""
         }`}
         aria-label="Open AI assistant"
         aria-pressed={isOpen}

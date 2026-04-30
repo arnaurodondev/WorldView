@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLAN-0059 W0 F-VISUAL-NEW-C — Apple touch icon (180x180 base).
+  Same mark as icon.svg, scaled. Used by iOS home-screen save.
+  No transparent background (iOS adds rounded corners + shadow itself).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" shape-rendering="crispEdges">
+  <rect width="180" height="180" fill="#09090B" />
+  <!-- 4x4 grid scaled to 180px, 32px cells, 8px gaps, 12px outer margin -->
+  <g fill="#27272A">
+    <rect x="12"  y="12"  width="32" height="32" />
+    <rect x="52"  y="12"  width="32" height="32" />
+    <rect x="92"  y="12"  width="32" height="32" />
+    <rect x="12"  y="52"  width="32" height="32" />
+    <rect x="52"  y="52"  width="32" height="32" />
+    <rect x="92"  y="52"  width="32" height="32" />
+    <rect x="132" y="52"  width="32" height="32" />
+    <rect x="12"  y="92"  width="32" height="32" />
+    <rect x="52"  y="92"  width="32" height="32" />
+    <rect x="92"  y="92"  width="32" height="32" />
+    <rect x="132" y="92"  width="32" height="32" />
+    <rect x="12"  y="132" width="32" height="32" />
+    <rect x="52"  y="132" width="32" height="32" />
+    <rect x="92"  y="132" width="32" height="32" />
+    <rect x="132" y="132" width="32" height="32" />
+  </g>
+  <!-- Accent yellow cell, top-right -->
+  <rect x="132" y="12" width="32" height="32" fill="#FFD60A" />
+</svg>

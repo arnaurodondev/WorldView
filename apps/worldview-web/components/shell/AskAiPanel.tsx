@@ -224,12 +224,12 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
       {/* ── Header ─────────────────────────────────────── */}
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <div className="flex items-center gap-2">
-          {/* WHY amber icon container (not primary yellow): amber = "AI-powered" visual
-              signal across the entire app. Primary yellow (#FFD60A) is reserved for data
-              CTAs (Buy, drill-down, etc.). Amber marks AI-generated or AI-interactive
-              elements, creating a consistent "this is AI" semantic throughout the UI. */}
-          <div className="flex h-5 w-5 items-center justify-center rounded-[2px] bg-amber-500/20 ring-1 ring-amber-500/30">
-            <Bot className="h-3 w-3 text-amber-400" />
+          {/* PLAN-0059 W0 F-VISUAL-022: --accent-ai violet (was amber-500/400).
+              WHY violet: universal industry AI color (Anthropic, OpenAI, Copilot, Notion AI).
+              Amber was bypassing the token system (Tailwind default) and conflicted with
+              --warning amber. Primary yellow (#FFD60A) remains reserved for data CTAs. */}
+          <div className="flex h-5 w-5 items-center justify-center rounded-[2px] bg-[hsl(var(--accent-ai)/0.20)] ring-1 ring-[hsl(var(--accent-ai)/0.30)]">
+            <Bot className="h-3 w-3 text-[hsl(var(--accent-ai))]" />
           </div>
           <span className="text-xs font-semibold text-foreground">Ask AI</span>
         </div>
@@ -300,19 +300,16 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
           // WHY rounded-[2px] (was rounded-md): terminal 2px radius rule
           className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
         />
-        {/* WHY amber bg (not primary yellow): amber is the "AI action" accent color.
-            Primary yellow is used for data CTAs; amber exclusively marks AI triggers.
-            WHY text-black: amber-500 (#F59E0B) has high luminance — black text reaches
-            ~8:1 contrast ratio (WCAG AAA) whereas white text would only achieve ~2.5:1.
-            WHY gap-1.5 + px-3 + "Send" label: an icon-only square button at h-8 w-8
-            is hard to spot as a CTA when the textarea fills most of the row. Adding a
-            text label with the icon makes the action clearly affordant without making
-            the button oversized. */}
+        {/* PLAN-0059 W0 F-VISUAL-022: --accent-ai violet bg (was amber-500/90).
+            WHY text-white: --accent-ai (#A855F7) has medium luminance — white reaches
+            ~5:1 contrast (AA) whereas black on violet is harder to read at 14px+ weight.
+            WHY explicit disabled tokens (was disabled:opacity-40): F-VISUAL-027 fix —
+            opacity dimming yields sub-AA contrast. Explicit tokens desaturate, not vanish. */}
         <Button
           size="sm"
           onClick={() => void handleSend()}
           disabled={!query.trim() || isStreaming}
-          className="h-8 shrink-0 gap-1.5 border-0 bg-amber-500/90 px-3 text-xs font-semibold text-black hover:bg-amber-400 disabled:opacity-40"
+          className="h-8 shrink-0 gap-1.5 border-0 bg-[hsl(var(--accent-ai)/0.90)] px-3 text-xs font-semibold text-white hover:bg-[hsl(var(--accent-ai))] disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))]"
           aria-label="Send message"
         >
           <Send className="h-3 w-3" />

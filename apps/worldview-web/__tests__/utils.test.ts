@@ -175,26 +175,66 @@ describe("priceChangeClass()", () => {
 });
 
 // ── heatCellColor() ─────────────────────────────────────────────────────
+//
+// PLAN-0059 W0 F-VISUAL-003 fix: heatCellColor() now derives all colors from
+// CSS variables (hsl(var(--positive))) instead of hardcoded hex literals from
+// the retired Bloomberg Dark palette. Test assertions updated accordingly:
+//   - Old: #26A69A (TradingView teal), #EF5350 (Material Red 400), #1A2030 (blue-tinted)
+//   - New: hsl(var(--positive)), hsl(var(--negative)), hsl(var(--surface-2))
+// The CSS-variable form is canonical now — at runtime it resolves to whichever
+// values the active theme defines (after PLAN-0059 W0 token surgery: institutional
+// green #00D26A and urgent red #FF3B5C). See app/globals.css and lib/utils.ts.
 
 describe("heatCellColor()", () => {
-  it("returns neutral colors for zero change", () => {
+  it("returns neutral surface-2 background for zero change (no longer blue-tinted)", () => {
     const result = heatCellColor(0);
-    expect(result.background).toBe("#1A2030");
+    expect(result.background).toBe("hsl(var(--surface-2))");
+    expect(result.color).toBe("hsl(var(--muted-foreground))");
   });
 
-  it("returns positive teal for large gain", () => {
+  it("uses --positive token color for large gain (institutional green at runtime)", () => {
     const result = heatCellColor(3);
-    expect(result.color).toBe("#26A69A");
+    expect(result.color).toBe("hsl(var(--positive))");
+    // Background uses 32% alpha at the strongest step — verifies the 7-step scale top tier
+    expect(result.background).toBe("hsl(var(--positive) / 0.32)");
   });
 
-  it("returns negative red for large loss", () => {
+  it("uses --negative token color for large loss (urgent red at runtime)", () => {
     const result = heatCellColor(-3);
-    expect(result.color).toBe("#EF5350");
+    expect(result.color).toBe("hsl(var(--negative))");
+    expect(result.background).toBe("hsl(var(--negative) / 0.32)");
   });
 
-  it("returns neutral for null", () => {
+  it("returns surface-2 neutral for null (no data)", () => {
     const result = heatCellColor(null);
-    expect(result.background).toBe("#1A2030");
+    expect(result.background).toBe("hsl(var(--surface-2))");
+    expect(result.color).toBe("hsl(var(--muted-foreground))");
+  });
+
+  it("never returns retired Bloomberg Dark palette hex values", () => {
+    // PLAN-0059 W0 regression guard — these hex literals were forbidden by
+    // app/globals.css:11 but the function held them until this fix.
+    const FORBIDDEN_HEX = [
+      "#1A2030",
+      "#0A2E28",
+      "#0A2420",
+      "#0E201C",
+      "#251218",
+      "#300E12",
+      "#3D0A0E",
+      "#26A69A", // TradingView teal — replaced by --positive
+      "#EF5350", // Material Red 400 — replaced by --negative
+      "#4DB6AC",
+      "#6B7585",
+      "#EF9A9A",
+    ];
+    for (const pct of [-3, -2, -1, 0, 1, 2, 3]) {
+      const result = heatCellColor(pct);
+      for (const hex of FORBIDDEN_HEX) {
+        expect(result.background.toUpperCase()).not.toContain(hex.toUpperCase());
+        expect(result.color.toUpperCase()).not.toContain(hex.toUpperCase());
+      }
+    }
   });
 });
 

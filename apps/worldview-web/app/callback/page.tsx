@@ -110,7 +110,9 @@ const ERROR_COPY: Record<CallbackErrorType, CallbackErrorCopy> = {
 // Backwards-compat alias: existing tests assert on ERROR_MESSAGES[type] strings.
 // Map the new title+description into the legacy single-string shape so old
 // assertions keep passing while new tests can opt into the richer copy.
-const ERROR_MESSAGES: Record<CallbackErrorType, string> = Object.fromEntries(
+// Exported so __tests__/wave-fh-polish.test.tsx can assert on the messages
+// without having to dynamically import the page module.
+export const ERROR_MESSAGES: Record<CallbackErrorType, string> = Object.fromEntries(
   Object.entries(ERROR_COPY).map(([k, v]) => [k, `${v.title}. ${v.description}`]),
 ) as Record<CallbackErrorType, string>;
 

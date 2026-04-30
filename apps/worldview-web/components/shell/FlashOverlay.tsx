@@ -56,13 +56,13 @@ class AlertErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundar
     return { hasError: true };
   }
 
-  componentDidCatch(error: Error): void {
+  override componentDidCatch(error: Error): void {
     // In production, this would go to an error tracking service (Sentry/Glitchtip)
     // For now, log to console so the dev can see the malformed alert
     console.error("[FlashOverlay] Render error — possibly malformed alert payload:", error);
   }
 
-  render() {
+  override render() {
     if (this.state.hasError) {
       // WHY still show something: better to show a degraded overlay than nothing.
       // The user still needs to know a critical alert fired.

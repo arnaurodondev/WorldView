@@ -45,7 +45,7 @@ import type { FeatureRequest, FeatureStatus } from "@/types/api";
 const STATUS_COLOR: Record<FeatureStatus, string> = {
   proposed: "bg-muted text-muted-foreground",
   planned: "bg-blue-500/10 text-blue-400",
-  in_progress: "bg-amber-500/10 text-amber-400",
+  in_progress: "bg-warning/10 text-warning",
   shipped: "bg-emerald-500/10 text-emerald-400",
   rejected: "bg-destructive/10 text-destructive",
 };
@@ -102,7 +102,7 @@ export default function FeedbackPublicPage() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Feature roadmap</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Vote for features you'd like to see, or suggest something new.
+          Vote for features you&apos;d like to see, or suggest something new.
         </p>
       </header>
 

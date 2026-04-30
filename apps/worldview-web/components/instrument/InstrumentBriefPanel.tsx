@@ -85,7 +85,7 @@ export function InstrumentBriefPanel({ entityId }: InstrumentBriefPanelProps) {
       <div className="border-b border-border/40 px-4 py-2">
         <div className="flex items-start gap-2">
           {/* Sparkles icon placeholder */}
-          <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-amber-500/60" aria-hidden="true" />
+          <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-[hsl(var(--accent-ai)/0.60)]" aria-hidden="true" />
           <div className="flex-1 space-y-1.5">
             <Skeleton className="h-3 w-full" style={{ animationDelay: "0ms" }} />
             <Skeleton className="h-3 w-4/5" style={{ animationDelay: "50ms" }} />
@@ -103,7 +103,7 @@ export function InstrumentBriefPanel({ entityId }: InstrumentBriefPanelProps) {
 
     return (
       <div className="flex items-center gap-2 border-b border-border/40 px-4 py-2">
-        <Sparkles className="h-3 w-3 shrink-0 text-amber-500/40" aria-hidden="true" />
+        <Sparkles className="h-3 w-3 shrink-0 text-[hsl(var(--accent-ai)/0.40)]" aria-hidden="true" />
         <p className="flex-1 text-xs text-muted-foreground">
           {is503
             ? "Brief generating… check back in a moment."
@@ -153,13 +153,13 @@ export function InstrumentBriefPanel({ entityId }: InstrumentBriefPanelProps) {
     // The brief is contextual header content, not a tab's body content.
     <div className="border-b border-border/40 px-4 py-2">
       <div className="flex items-start gap-2">
-        {/* Amber sparkle icon — signals AI-generated content */}
-        <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" aria-hidden="true" />
+        {/* PLAN-0059 W0 F-VISUAL-022: violet sparkle icon — signals AI-generated content (was amber) */}
+        <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-[hsl(var(--accent-ai))]" aria-hidden="true" />
 
         <div className="min-w-0 flex-1">
           {/* Stale warning — show before the content if brief is old */}
           {isStale && (
-            <span className="mr-2 text-[10px] text-amber-400">
+            <span className="mr-2 text-[10px] text-warning">
               (outdated —{" "}
               <button
                 onClick={() => void refetch()}

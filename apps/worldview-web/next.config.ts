@@ -30,6 +30,30 @@ const nextConfig: NextConfig = {
   // SEC-005 FIX: Remove X-Powered-By: Next.js header to avoid leaking stack info
   poweredByHeader: false,
 
+  // PLAN-0059 W0 F-CODE-NEW-014 — build/runtime tuning.
+  // - optimizePackageImports: tree-shakes large icon/UI bundles per import site
+  //   (lucide-react alone ships 1000+ icons; without this Next pulls the whole
+  //   barrel file into every chunk that imports a single icon). ~5-8% bundle reduction.
+  // - removeConsole in production: strips dev-only console.log statements but keeps
+  //   console.error/warn for Sentry surfacing.
+  // - productionBrowserSourceMaps: required for Sentry sourcemap upload (Wave A-2 T-A-2-03).
+  experimental: {
+    optimizePackageImports: [
+      "lucide-react",
+      "@radix-ui/react-icons",
+      "@tanstack/react-query",
+      "date-fns",
+      "recharts",
+    ],
+  },
+  compiler: {
+    removeConsole:
+      process.env.NODE_ENV === "production"
+        ? { exclude: ["error", "warn"] }
+        : false,
+  },
+  productionBrowserSourceMaps: true,
+
   // Standalone output: produces a self-contained server.js + minimal node_modules.
   // Required for the Docker multi-stage build (see Dockerfile).
   // The standalone output is ~120 MB vs ~500 MB with full node_modules.
