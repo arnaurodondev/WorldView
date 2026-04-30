@@ -128,6 +128,7 @@ LIMIT 1
         canonical_name: str,
         entity_type: str,
         *,
+        entity_id: UUID | None = None,
         isin: str | None = None,
         ticker: str | None = None,
         exchange: str | None = None,
@@ -142,33 +143,68 @@ LIMIT 1
         own canonical name. Idempotent via the
         ``uidx_entity_aliases_entity_norm_type`` partial UNIQUE index added by
         migration 0008 (Wave A-2).
+
+        PLAN-0057 QA-iter1 F-DS-03 / F-DATA-04 / F-ARCH-06: callers may pass an
+        explicit ``entity_id`` to preserve cross-service stable IDs (M-017).
+        For instruments, the canonical's ``entity_id`` MUST equal the
+        ``instrument_id`` so portfolio's InstrumentRef.id and KG's canonical
+        line up across replays. When omitted we let the column default
+        (``gen_random_uuid()``) generate one, which is appropriate for
+        non-instrument entities (e.g. provisional canonicals) where there is
+        no upstream stable ID.
+
+        PLAN-0057 QA-iter1 F-DS-05 / F-DATA-07: the self-alias INSERT runs
+        inside a SAVEPOINT so a collision against the legacy cross-entity
+        ``uidx_entity_aliases_normalized`` index (different conflict target
+        than the per-entity index referenced by ON CONFLICT) does not abort
+        the outer transaction and roll back the canonical we just created.
         """
         import json
 
-        result = await self._session.execute(
-            text("""
+        params: dict[str, object | None] = {
+            "canonical_name": canonical_name,
+            "entity_type": entity_type,
+            "isin": isin,
+            "ticker": ticker,
+            "exchange": exchange,
+            "metadata": json.dumps(metadata) if metadata else None,
+        }
+        if entity_id is not None:
+            sql = """
+INSERT INTO canonical_entities
+    (entity_id, canonical_name, entity_type, isin, ticker, exchange, metadata)
+VALUES (:entity_id, :canonical_name, :entity_type, :isin, :ticker, :exchange, :metadata)
+ON CONFLICT (entity_id) DO NOTHING
+RETURNING entity_id
+"""
+            params["entity_id"] = str(entity_id)
+        else:
+            sql = """
 INSERT INTO canonical_entities (canonical_name, entity_type, isin, ticker, exchange, metadata)
 VALUES (:canonical_name, :entity_type, :isin, :ticker, :exchange, :metadata)
 RETURNING entity_id
-"""),
-            {
-                "canonical_name": canonical_name,
-                "entity_type": entity_type,
-                "isin": isin,
-                "ticker": ticker,
-                "exchange": exchange,
-                "metadata": json.dumps(metadata) if metadata else None,
-            },
-        )
+"""
+        result = await self._session.execute(text(sql), params)
         row = result.fetchone()
-        entity_id = UUID(str(row[0]))  # type: ignore[index]
+        if row is None:
+            # ON CONFLICT (entity_id) DO NOTHING fired — caller supplied an
+            # entity_id that already exists. Return it; the self-alias INSERT
+            # below is itself idempotent.
+            assert entity_id is not None  # invariant: only ON CONFLICT path with entity_id
+            resolved_entity_id = entity_id
+        else:
+            resolved_entity_id = UUID(str(row[0]))
 
         # ── EXACT self-alias (PLAN-0057 C-5 / Fix-B.2) ────────────────────────
         # Note: ON CONFLICT target matches the partial UNIQUE index installed by
         # migration 0008 — we MUST repeat the index's WHERE clause for Postgres
-        # to use the partial-index path.
-        await self._session.execute(
-            text("""
+        # to use the partial-index path. SAVEPOINT-wrap so a cross-entity EXACT
+        # collision against the legacy ``uidx_entity_aliases_normalized`` index
+        # cannot poison the outer transaction.
+        try:
+            async with self._session.begin_nested():
+                await self._session.execute(
+                    text("""
 INSERT INTO entity_aliases
     (entity_id, alias_text, normalized_alias_text, alias_type, is_active, source)
 VALUES (:eid, :alias, :norm, 'EXACT', true, 'canonical_entity_create')
@@ -176,10 +212,16 @@ ON CONFLICT (entity_id, normalized_alias_text, alias_type)
 WHERE is_active = true
 DO NOTHING
 """),
-            {
-                "eid": str(entity_id),
-                "alias": canonical_name,
-                "norm": canonical_name.lower().strip(),
-            },
-        )
-        return entity_id
+                    {
+                        "eid": str(resolved_entity_id),
+                        "alias": canonical_name,
+                        "norm": canonical_name.lower().strip(),
+                    },
+                )
+        except Exception:  # noqa: S110 — cross-entity EXACT collision is recoverable
+            # The canonical was successfully created and the cross-entity EXACT
+            # alias just couldn't be inserted; that's an acceptable degraded
+            # state (the canonical is reachable by entity_id, just not by
+            # exact-alias text match against this exact spelling).
+            pass
+        return resolved_entity_id

@@ -2,6 +2,7 @@
   "type": "record",
   "name": "InstrumentCreatedV3",
   "namespace": "com.worldview.market",
+  "aliases": ["InstrumentCreatedV2"],
   "doc": "Emitted by S3 (market-data) when a new instrument is discovered during market data materialization. S1 (portfolio) syncs local instrument ref. S7 (knowledge-graph) creates a canonical entity node with definition embedding and a rich set of aliases (NAME / ISIN / CUSIP / FIGI / LEI / PRIMARY_TICKER). schema_version=3 (PLAN-0057 Wave C-1) adds the four EODHD identifier fields cusip, figi, lei, primary_ticker — all nullable with default null for BACKWARD compatibility with v2 producers.",
   "fields": [
     {"name": "event_id", "type": "string"},

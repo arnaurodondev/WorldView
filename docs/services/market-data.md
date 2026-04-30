@@ -86,8 +86,19 @@ or articles, perform NLP processing, manage portfolios.
 
 | Topic | Event Type | Key |
 |-------|-----------|-----|
-| `market.instrument.created` | `InstrumentCreated` | `instrument_id` |
+| `market.instrument.created` | `InstrumentCreated` (v3) | `instrument_id` |
 | `market.instrument.updated` | `InstrumentUpdated` | `instrument_id` |
+| `market.instrument.discovered.v1` | `InstrumentDiscovered` | `instrument_id` |
+
+PLAN-0057 Wave D-2: ohlcv/quotes consumers emit `market.instrument.discovered.v1`
+on first-seen symbols (lightweight: just `instrument_id` + `symbol` + `exchange`).
+fundamentals_consumer emits the rich `market.instrument.created` (v3, schema with
+the four EODHD identifier fields cusip / figi / lei / primary_ticker — all
+nullable + null defaults for forward-compat) on every False→True transition of
+`has_fundamentals`, gated on the presence of a real EODHD `Name`. KG subscribes
+to both topics: discovered.v1 seeds a placeholder canonical, created promotes it
+to a fully-named, alias-rich, embedding-backed canonical via the
+UPSERT-after-discover branch in `InstrumentEntityConsumer`.
 
 ---
 
@@ -515,8 +526,9 @@ are auto-populated at construction time.
 
 | Class | `event_type` | `schema_version` | Payload Fields | Trigger |
 |-------|-------------|-----------------|----------------|---------|
-| `InstrumentCreated` | `market.instrument.created` | 1 | `instrument_id`, `security_id`, `symbol`, `exchange` | First-seen instrument |
-| `InstrumentUpdated` | `market.instrument.updated` | 1 | `instrument_id`, `symbol`, `exchange`, `has_ohlcv`, `has_quotes`, `has_fundamentals` | Capability flags change |
+| `InstrumentCreated` | `market.instrument.created` | 3 | `instrument_id`, `security_id`, `symbol`, `exchange`, `name`, `description`, `isin`, `cusip`, `figi`, `lei`, `primary_ticker` | Fundamentals materialised — first time `has_fundamentals` flips True with a real EODHD `Name`. v3 adds the four EODHD identifier fields (PLAN-0057 Wave C-1). |
+| `InstrumentUpdated` | `market.instrument.updated` | 1 | `instrument_id`, `symbol`, `exchange`, `has_ohlcv`, `has_quotes`, `has_fundamentals` | Capability flag transitions OTHER than first-fundamentals. |
+| `InstrumentDiscovered` | `market.instrument.discovered.v1` | 1 | `instrument_id`, `symbol`, `exchange`, `entity_id` (= instrument_id) | OHLCV / Quotes saw a previously-unknown symbol; KG seeds a lightweight placeholder canonical from this event (PLAN-0057 Wave D-2). |
 
 ### Usage Example
 

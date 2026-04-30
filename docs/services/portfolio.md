@@ -241,6 +241,17 @@ The S3 PUT itself is out of scope for Wave D — only the schema field `screensh
 |-------|---------------|------------|-----------------|
 | `market.instrument.created` | `portfolio-instrument-sync` | `InstrumentCreated` | `event_id` via `idempotency` table |
 | `market.instrument.updated` | `portfolio-instrument-sync` | `InstrumentUpdated` | `event_id` via `idempotency` table |
+| `market.instrument.discovered.v1` | `portfolio-instrument-sync` | `InstrumentDiscovered` | `event_id` via `idempotency` table |
+
+PLAN-0057 Wave D-2: portfolio's `InstrumentEventConsumer` subscribes to all
+three instrument topics in one consumer group. Discovered events seed an
+`InstrumentRef` with `name=None` (fundamentals not yet resolved); the
+subsequent `InstrumentCreated` event carries the EODHD enrichment and is
+processed via the same `idempotency` table (different `event_id`s) so the
+ref's `name` / `isin` / `cusip` / `figi` / `lei` / `primary_ticker` fields
+are populated on second arrival. Consumers of `InstrumentRef` should treat
+`name` as best-effort because an instrument seen only via discovered.v1
+(no fundamentals yet) keeps `name=None` until the next fundamentals refresh.
 
 ---
 

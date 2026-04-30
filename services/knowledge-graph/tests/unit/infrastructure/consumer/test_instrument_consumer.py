@@ -588,3 +588,250 @@ class TestInstrumentConsumerC4LLMPromptCaller:
         assert "Apple Inc." in extraction_input.prompt
         # context= is now empty (description moved into the prompt itself).
         assert extraction_input.context == ""
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0057 Wave D-2 + QA-iter1 — UPSERT-after-discover branch
+# ---------------------------------------------------------------------------
+#
+# When the lightweight ``InstrumentDiscoveredConsumer`` has already seeded a
+# placeholder canonical (entity_id = instrument_id, canonical_name = symbol,
+# metadata.needs_fundamentals_enrichment = true), the rich
+# ``InstrumentEntityConsumer`` must:
+#   1. UPDATE the existing canonical (NOT create a new row), promoting the
+#      placeholder to a fully-named canonical and clearing the flag.
+#   2. Fall through to the alias-enrichment block so the rich alias suite
+#      (NAME / TICKER / ISIN / CUSIP / FIGI / LEI / PRIMARY_TICKER / LLM)
+#      lands on the same entity_id.
+#
+# The original commit message claimed these tests existed; QA-iter1 F-QA-03
+# discovered they were missing.  These are the regression tests for that gap
+# AND the F-DATA-01 fix that switched ``value.get("ticker")`` →
+# ``value.get("symbol")`` so TICKER aliases are inserted off the schema's
+# real field name.
+
+
+def _build_consumer_with_existing_placeholder() -> tuple[Any, list[dict[str, Any]], Any, Any, Any, Any]:
+    """Variant of ``_build_consumer_with_alias_capture`` whose ``entity_repo.get``
+    returns a placeholder canonical that needs UPSERT-after-discover.
+
+    Also captures every ``session.execute(text(...), params)`` call so we can
+    assert that the UPDATE SQL fired and create() did NOT.
+    """
+    from knowledge_graph.infrastructure.messaging.consumers.instrument_consumer import (
+        InstrumentEntityConsumer,
+    )
+
+    from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+
+    config = ConsumerConfig(
+        bootstrap_servers="localhost:9092",
+        group_id="kg-instrument-test",
+        topics=["market.instrument.created"],
+    )
+
+    captured_aliases: list[dict[str, Any]] = []
+    captured_sql: list[tuple[str, dict[str, Any]]] = []
+
+    session = AsyncMock()
+
+    async def _execute(stmt: Any, params: dict[str, Any] | None = None) -> Any:
+        captured_sql.append((str(stmt), params or {}))
+        result = MagicMock()
+        result.fetchone = MagicMock(return_value=None)
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    session.commit = AsyncMock()
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=nested_cm)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
+
+    session_cm = AsyncMock()
+    session_cm.__aenter__ = AsyncMock(return_value=session)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+    sf = MagicMock()
+    sf.return_value = session_cm
+
+    entity_repo = AsyncMock()
+    placeholder = {
+        "entity_id": _INSTRUMENT_ID,  # F-DS-03 invariant: entity_id == instrument_id
+        "canonical_name": "AAPL",  # placeholder seeded by discovered_consumer
+        "entity_type": "financial_instrument",
+        "ticker": None,
+        "exchange": None,
+        "isin": None,
+        "metadata": {
+            "needs_fundamentals_enrichment": True,
+            "source": "ohlcv_consumer",
+            "discovered_at": "2026-04-29T00:00:00Z",
+        },
+    }
+    entity_repo.get = AsyncMock(return_value=placeholder)
+    entity_repo.create = AsyncMock(return_value=_ENTITY_ID)  # MUST NOT be called
+
+    alias_repo = AsyncMock()
+
+    async def _capture_alias(
+        entity_id: Any,
+        alias_text: str,
+        normalized: str,
+        alias_type: str,
+        source: str | None = None,
+    ) -> Any:
+        captured_aliases.append(
+            {
+                "entity_id": entity_id,
+                "alias_text": alias_text,
+                "normalized": normalized,
+                "alias_type": alias_type,
+                "source": source,
+            },
+        )
+        return uuid4()
+
+    alias_repo.insert = AsyncMock(side_effect=_capture_alias)
+    alias_repo.find_exact = AsyncMock(return_value=None)
+    alias_repo.get_for_entity = AsyncMock(return_value=[])
+
+    emb_repo = AsyncMock()
+    emb_repo.ensure_rows_exist = AsyncMock()
+    emb_repo.get = AsyncMock(return_value=None)
+
+    llm_client = AsyncMock()
+    llm_client.extract = AsyncMock(return_value=None)
+
+    consumer = InstrumentEntityConsumer(
+        config=config,
+        session_factory=sf,
+        llm_client=llm_client,
+        definition_worker=None,
+    )
+    return consumer, captured_aliases, captured_sql, entity_repo, alias_repo, emb_repo
+
+
+class TestInstrumentEntityConsumerUpsertAfterDiscover:
+    """PLAN-0057 Wave D-2 — F-QA-03 regression coverage."""
+
+    def test_existing_placeholder_triggers_update_not_create(self) -> None:
+        """When the canonical already exists with
+        ``metadata.needs_fundamentals_enrichment=true``, the consumer must run
+        the UPDATE SQL and MUST NOT call ``entity_repo.create()``.
+        """
+        consumer, _aliases, sql, entity_repo, alias_repo, emb_repo = _build_consumer_with_existing_placeholder()
+
+        msg = {
+            "event_id": str(uuid4()),
+            "instrument_id": str(_INSTRUMENT_ID),
+            "name": "Apple Inc.",
+            "symbol": "AAPL",
+            "exchange": "NASDAQ",
+            "isin": "US0378331005",
+        }
+        _run_with_repos(consumer, msg, entity_repo, alias_repo, emb_repo)
+
+        # create() never called — placeholder was promoted in place.
+        entity_repo.create.assert_not_called()
+        # The UPDATE SQL fired with the expected canonical name.
+        update_calls = [(s, p) for s, p in sql if "UPDATE canonical_entities" in s]
+        assert len(update_calls) == 1
+        _stmt, params = update_calls[0]
+        assert params["entity_id"] == str(_INSTRUMENT_ID)
+        assert params["canonical_name"] == "Apple Inc."
+        assert params["isin"] == "US0378331005"
+        # The flag-clearing happens via the SQL's `metadata - 'needs_fundamentals_enrichment'`
+        # operator; we assert that the SQL text contains it (closes F-QA-07
+        # mock-fidelity gap).
+        assert "needs_fundamentals_enrichment" in update_calls[0][0]
+
+    def test_upsert_path_still_inserts_full_alias_suite(self) -> None:
+        """The UPSERT-after-discover path must still emit every mechanical alias
+        the create-path emits (EXACT, TICKER, exchange:TICKER, ISIN, NAME if
+        appropriate, CUSIP/FIGI/LEI/PRIMARY_TICKER).
+        """
+        consumer, aliases, _sql, entity_repo, alias_repo, emb_repo = _build_consumer_with_existing_placeholder()
+
+        msg = {
+            "event_id": str(uuid4()),
+            "instrument_id": str(_INSTRUMENT_ID),
+            "name": "Apple Inc.",
+            "symbol": "AAPL",
+            "exchange": "NASDAQ",
+            "isin": "US0378331005",
+            "cusip": "037833100",
+            "figi": "BBG000B9XRY4",
+            "lei": "HWUPKR0MPOU8FGXBT394",
+            "primary_ticker": "AAPL.US",
+        }
+        _run_with_repos(consumer, msg, entity_repo, alias_repo, emb_repo)
+
+        types = {a["alias_type"] for a in aliases}
+        assert "EXACT" in types  # canonical Apple Inc.
+        assert "TICKER" in types  # AAPL via F-DATA-01 fix (uses symbol)
+        assert "ISIN" in types
+        assert "CUSIP" in types
+        assert "FIGI" in types
+        assert "LEI" in types
+        assert "PRIMARY_TICKER" in types
+        # All aliases are pinned to the placeholder's entity_id (= instrument_id).
+        for alias in aliases:
+            assert alias["entity_id"] == _INSTRUMENT_ID
+
+    def test_upsert_path_uses_symbol_field_for_ticker_alias(self) -> None:
+        """PLAN-0057 QA-iter1 F-DATA-01 regression: the consumer MUST read
+        ``value.get("symbol")`` (the schema's real field) for the TICKER
+        alias, not the historic-but-nonexistent ``value.get("ticker")``.
+        """
+        consumer, aliases, _sql, entity_repo, alias_repo, emb_repo = _build_consumer_with_existing_placeholder()
+
+        msg = {
+            "event_id": str(uuid4()),
+            "instrument_id": str(_INSTRUMENT_ID),
+            "name": "Apple Inc.",
+            "symbol": "AAPL",  # the only ticker source per the Avro schema
+            "exchange": "NASDAQ",
+            # NO "ticker" key — verifies that the legacy fallback is not the
+            # only path.
+        }
+        _run_with_repos(consumer, msg, entity_repo, alias_repo, emb_repo)
+
+        ticker_aliases = [a for a in aliases if a["alias_type"] == "TICKER"]
+        assert ticker_aliases, "TICKER alias must be inserted off `symbol`"
+        # AAPL plus exchange-prefixed NASDAQ:AAPL
+        ticker_text = {a["alias_text"] for a in ticker_aliases}
+        assert "AAPL" in ticker_text
+        assert "NASDAQ:AAPL" in ticker_text
+
+    def test_existing_non_placeholder_skips_update_and_alias_block(self) -> None:
+        """PLAN-0057 QA-iter1: a true replay (canonical exists and is NOT a
+        placeholder) must hit the BP-124 fast-path and return early — no
+        UPDATE, no alias inserts, no create().
+        """
+        consumer, aliases, sql, entity_repo, alias_repo, emb_repo = _build_consumer_with_existing_placeholder()
+        # Override entity_repo.get to return a non-placeholder canonical.
+        entity_repo.get = AsyncMock(
+            return_value={
+                "entity_id": _ENTITY_ID,
+                "canonical_name": "Apple Inc.",
+                "entity_type": "financial_instrument",
+                "ticker": "AAPL",
+                "exchange": "NASDAQ",
+                "isin": "US0378331005",
+                "metadata": {},
+            },
+        )
+
+        msg = {
+            "event_id": str(uuid4()),
+            "instrument_id": str(_INSTRUMENT_ID),
+            "name": "Apple Inc.",
+            "symbol": "AAPL",
+            "isin": "US0378331005",
+        }
+        _run_with_repos(consumer, msg, entity_repo, alias_repo, emb_repo)
+
+        entity_repo.create.assert_not_called()
+        update_calls = [(s, p) for s, p in sql if "UPDATE canonical_entities" in s]
+        assert update_calls == []
+        assert aliases == []  # alias block was skipped via early return

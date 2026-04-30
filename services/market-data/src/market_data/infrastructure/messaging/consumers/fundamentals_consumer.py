@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from market_data.domain.entities import FundamentalsRecord, Instrument, Security
 from market_data.domain.enums import FundamentalsSection, PeriodType
-from market_data.domain.events import InstrumentCreated, InstrumentUpdated
+from market_data.domain.events import InstrumentCreated
 from market_data.domain.value_objects import InstrumentFlags
 from market_data.infrastructure.db.fundamentals_snapshot_writer import (
     _most_recent_financial_row,
@@ -30,6 +31,15 @@ if TYPE_CHECKING:
     from storage.interface import ObjectStorage  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)
+
+# PLAN-0057 QA-iter1 F-SEC-01: format regexes for the EODHD identifier suite
+# extracted by ``_g`` below. Module-scoped so they compile once and avoid the
+# per-message function-local recompile (also keeps ruff N806 happy).
+_CUSIP_RE_PAT = re.compile(r"^[A-Z0-9]{9}$")
+_FIGI_RE_PAT = re.compile(r"^[A-Z0-9]{12}$")
+_LEI_RE_PAT = re.compile(r"^[A-Z0-9]{20}$")
+_PRIMARY_TICKER_RE_PAT = re.compile(r"^[A-Z0-9.\-:]{1,20}$")
+_ISIN_RE_PAT = re.compile(r"^[A-Z0-9]{12}$")
 
 
 # Walk up the directory tree to find infra/kafka/schemas/ — works both in development
@@ -299,32 +309,81 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
         general = payload.get("company_profile") or {}
 
         def _g(key: str) -> str | None:
-            """Return ``general[key]`` only if it is a non-empty string.
+            """Return ``general[key]`` only if it is a non-empty *string* value.
 
             EODHD sometimes returns empty strings or unrelated falsy values for
             optional identifiers; we coerce all of those to ``None`` so the
             downstream Avro union[null, string] is emitted correctly and S7 /
             S1 don't materialise empty-string aliases.
+
+            PLAN-0057 QA-iter1 F-SEC-01 / F-QA-02: only accept genuine string
+            inputs. Non-string types (numbers, booleans, lists, dicts) are
+            rejected to avoid the ``str([1,2,3]).strip() == "[1, 2, 3]"``
+            class of poison-alias bugs and to keep blast radius bounded if
+            EODHD's response shape mutates.
             """
             if not isinstance(general, dict):
                 return None
             value = general.get(key)
-            if value is None:
+            if not isinstance(value, str):
                 return None
-            text_value = str(value).strip()
+            text_value = value.strip()
             return text_value or None
 
-        company_name: str | None = _g("Name")
-        company_isin: str | None = _g("ISIN")
-        company_description: str | None = _g("Description")
-        # Wave C-2 additions — all nullable, all flow through to S7 alias suite.
-        company_cusip: str | None = _g("CUSIP")
-        company_figi: str | None = _g("OpenFigi")  # EODHD calls it "OpenFigi", schema calls it "figi"
-        company_lei: str | None = _g("LEI")
-        company_primary_ticker: str | None = _g("PrimaryTicker")
+        # PLAN-0057 QA-iter1 F-SEC-01: format-validate the EODHD identifiers.
+        # An attacker controlling the EODHD response (or an EODHD response shape
+        # bug) can otherwise inject arbitrary alias text into the entity
+        # resolution graph. CUSIP/FIGI/LEI have well-defined formats; we reject
+        # anything that doesn't match. Names/descriptions are length-bounded
+        # because they are truncated downstream anyway. Regex constants are
+        # defined at module scope (see file top) and referenced here.
+        def _vfmt(value: str | None, regex: re.Pattern[str], field: str) -> str | None:
+            if value is None:
+                return None
+            up = value.upper()
+            if not regex.fullmatch(up):
+                logger.warning(
+                    "fundamentals_invalid_identifier",
+                    field=field,
+                    value=value[:64],  # bound log payload
+                    symbol=symbol,
+                )
+                return None
+            return up
 
-        # Resolve or create instrument
+        def _bound(value: str | None, max_len: int) -> str | None:
+            if value is None:
+                return None
+            return value[:max_len]
+
+        company_name: str | None = _bound(_g("Name"), 500)
+        company_isin: str | None = _vfmt(_g("ISIN"), _ISIN_RE_PAT, "isin")
+        company_description: str | None = _bound(_g("Description"), 4000)
+        # Wave C-2 additions — all nullable, all flow through to S7 alias suite.
+        company_cusip: str | None = _vfmt(_g("CUSIP"), _CUSIP_RE_PAT, "cusip")
+        # EODHD calls it "OpenFigi", schema calls it "figi"
+        company_figi: str | None = _vfmt(_g("OpenFigi"), _FIGI_RE_PAT, "figi")
+        company_lei: str | None = _vfmt(_g("LEI"), _LEI_RE_PAT, "lei")
+        company_primary_ticker: str | None = _vfmt(_g("PrimaryTicker"), _PRIMARY_TICKER_RE_PAT, "primary_ticker")
+
+        # Resolve or create instrument.
+        #
+        # PLAN-0057 QA-iter1 F-DS-02 / F-DATA-02 / F-DS-07: ``market.instrument.created``
+        # MUST be emitted on every False→True transition of ``has_fundamentals``,
+        # not only when the instrument row is freshly inserted. In the dominant
+        # production ordering (ohlcv/quotes arrive before fundamentals), the
+        # instrument already exists with ``has_fundamentals=False`` and the
+        # legacy elif branch emitted only ``InstrumentUpdated`` — KG never
+        # received the enrichment payload, so the placeholder canonical seeded
+        # by InstrumentDiscoveredConsumer (Wave D-2) stayed un-enriched
+        # forever and the rich alias suite (NAME / CUSIP / FIGI / LEI /
+        # PRIMARY_TICKER) was never inserted.
+        #
+        # We additionally gate the emission on a real EODHD ``Name`` — without
+        # one, KG's ``synthesised_name`` path would re-create the placeholder
+        # state we are trying to escape.
         instrument: Instrument | None = await uow.instruments.find_by_symbol_exchange(symbol, exchange)
+        is_first_fundamentals = instrument is None or not instrument.flags.has_fundamentals
         if instrument is None:
             security = await uow.securities.upsert(Security(name=symbol))
             instrument = Instrument(
@@ -334,24 +393,6 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
                 flags=InstrumentFlags(has_fundamentals=True),
             )
             instrument = await uow.instruments.upsert(instrument)
-            created_event = InstrumentCreated(
-                instrument_id=instrument.id,
-                security_id=instrument.security_id,
-                symbol=symbol,
-                exchange=exchange,
-                name=company_name,
-                isin=company_isin,
-                description=company_description,
-                cusip=company_cusip,
-                figi=company_figi,
-                lei=company_lei,
-                primary_ticker=company_primary_ticker,
-            )
-            await uow.outbox_events.create(
-                event_type=created_event.event_type,
-                topic=EVENT_TOPIC_MAP[created_event.event_type],
-                payload=event_to_outbox_payload(created_event),
-            )
         elif not instrument.flags.has_fundamentals:
             updated_flags = InstrumentFlags(
                 has_ohlcv=instrument.flags.has_ohlcv,
@@ -359,20 +400,39 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
                 has_fundamentals=True,
             )
             await uow.instruments.update_flags(instrument.id, updated_flags)
-            updated_event = InstrumentUpdated(
-                instrument_id=instrument.id,
-                symbol=symbol,
-                exchange=exchange,
-                has_ohlcv=instrument.flags.has_ohlcv,
-                has_quotes=instrument.flags.has_quotes,
-                has_fundamentals=True,
-                fields_updated=("has_fundamentals",),
-            )
-            await uow.outbox_events.create(
-                event_type=updated_event.event_type,
-                topic=EVENT_TOPIC_MAP[updated_event.event_type],
-                payload=event_to_outbox_payload(updated_event),
-            )
+
+        if is_first_fundamentals:
+            if company_name and company_name.strip():
+                created_event = InstrumentCreated(
+                    instrument_id=instrument.id,
+                    security_id=instrument.security_id,
+                    symbol=symbol,
+                    exchange=exchange,
+                    name=company_name,
+                    isin=company_isin,
+                    description=company_description,
+                    cusip=company_cusip,
+                    figi=company_figi,
+                    lei=company_lei,
+                    primary_ticker=company_primary_ticker,
+                )
+                await uow.outbox_events.create(
+                    event_type=created_event.event_type,
+                    topic=EVENT_TOPIC_MAP[created_event.event_type],
+                    payload=event_to_outbox_payload(created_event),
+                )
+            else:
+                # No real Name — defer enrichment publication to a later
+                # fundamentals refresh (FundamentalsRefreshWorker re-runs).
+                # KG canonical (if seeded by discovered.v1) stays in
+                # placeholder state until that next refresh provides a real
+                # company name.
+                logger.warning(
+                    "fundamentals_skipped_no_name",
+                    instrument_id=str(instrument.id),
+                    symbol=symbol,
+                    exchange=exchange,
+                )
 
         # instrument.id is used as security_id in FundamentalsRecord
         instrument_id = instrument.id
