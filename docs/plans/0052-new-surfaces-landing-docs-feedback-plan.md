@@ -13,25 +13,44 @@ Ship three new product surfaces:
 2. **Documentation hub** at `/docs` — MDX-driven, full sidebar nav, cmd-K search
 3. **Feedback system** — multi-channel (in-app modal, NPS, micro-surveys, beta program, public roadmap, admin dashboard)
 
-## Wave A — Landing Page Redesign (~24h)
+## Wave A — Landing Page Redesign (~24h) ✅
+
+**Status**: **DONE** — 2026-05-01 · 25 landing tests pass (1046 total) · ruff/lint + typecheck + production build clean (9.97 kB landing page, 125 kB First Load JS)
 
 **Goal**: Replace current minimal landing at `/` with 11-section marketing experience.
 
 **Tasks**:
-- **T-A-1-01** (impl, M) — `<HeroSection>`: tagline + tagline + 2 CTAs + animated terminal mock
-- **T-A-1-02** (impl, S) — `<LiveDataStrip>`: 4-6 mock tickers with pulsing live-dot
-- **T-A-1-03** (impl, S) — `<SectorHeatmapPreview>`: 6-tile static SPDR snapshot with 7-step gradient
-- **T-A-1-04** (impl, S) — `<DifferentiatorsSection>`: 3-column grid (News Intelligence / Knowledge Graph / Multi-source Aggregation)
-- **T-A-1-05** (impl, M) — `<WorkflowSection>`: 4-step Discover → Analyze → Track → Act with screenshots/animations
-- **T-A-1-06** (impl, M) — `<AIDemoSection>`: example question + citation box mockup + grounded answer
-- **T-A-1-07** (impl, M) — `<ComparisonTable>`: Worldview vs Bloomberg vs IBKR vs TradingView vs Finviz feature parity
-- **T-A-1-08** (impl, S) — `<TrustBadges>`: data source attributions
-- **T-A-1-09** (impl, M) — `<PricingTiers>`: 3 tiers (Free / Pro / Enterprise) with annual/monthly toggle
-- **T-A-1-10** (impl, S) — `<Testimonials>`: placeholder thesis case studies
-- **T-A-1-11** (impl, S) — `<FAQAccordion>`: 8-10 hardcoded Q&A
-- **T-A-1-12** (impl, S) — `<Footer>`: docs link, status, security, legal, social
-- **T-A-1-13** (test) — Playwright accessibility + responsive snapshot tests at 1920/1280/768/480px
-- **T-A-1-14** (config) — Meta tags + JSON-LD Organization + sitemap.xml
+- **T-A-1-01** ✅ (impl, M) — `<HeroSection>`: tagline + 2 CTAs + animated terminal mock with macOS chrome + LIVE dot
+- **T-A-1-02** ✅ (impl, S) — `<LiveDataStrip>`: 6 mock tickers (SPY/QQQ/VIX/BTC/TLT/GLD) with pulsing live-dot
+- **T-A-1-03** ✅ (impl, S) — `<SectorHeatmapPreview>`: 6-tile SPDR snapshot using shared `heatCellColor` 7-step gradient
+- **T-A-1-04** ✅ (impl, S) — `<DifferentiatorsSection>`: 3-column News / KG / Multi-source aggregation
+- **T-A-1-05** ✅ (impl, M) — `<WorkflowSection>`: ordered list Discover → Analyze → Track → Act with step badges + connector line
+- **T-A-1-06** ✅ (impl, M) — `<AIDemoSection>`: example NVDA question + cited grounded answer + 3-citation Sources box
+- **T-A-1-07** ✅ (impl, M) — `<ComparisonTable>`: Worldview vs Bloomberg / IBKR / TradingView / Finviz, 8 features + price row
+- **T-A-1-08** ✅ (impl, S) — `<TrustBadges>`: 5 data sources with role labels + trademark disclaimer
+- **T-A-1-09** ✅ (impl, M) — `<PricingTiers>`: Free / Pro / Enterprise + monthly/annual toggle (default annual −17%)
+- **T-A-1-10** ✅ (impl, S) — `<Testimonials>`: 3 persona scenarios (no fake customer quotes — honest framing)
+- **T-A-1-11** ✅ (impl, S) — `<FAQAccordion>`: 10 hardcoded Q&A with shadcn Accordion (radix-accordion wrapper added)
+- **T-A-1-12** ✅ (impl, S) — `<Footer>`: 5-column nav (Brand / Product / Resources / Company / Legal) + status badge
+- **T-A-1-13** ✅ (test) — Vitest unit tests (25) + Playwright `e2e/landing.spec.ts` (responsive 1920/1280/768/480, JSON-LD, sitemap, robots)
+- **T-A-1-14** ✅ (config) — JSON-LD Organization + WebSite + FAQPage in `app/page.tsx`; `app/sitemap.ts` + `app/robots.ts`
+
+**Files added**:
+- `apps/worldview-web/components/landing/{HeroSection,LiveDataStrip,SectorHeatmapPreview,DifferentiatorsSection,WorkflowSection,AIDemoSection,ComparisonTable,TrustBadges,PricingTiers,Testimonials,FAQAccordion,Footer,LandingNav,FinalCTA}.tsx`
+- `apps/worldview-web/components/ui/accordion.tsx`
+- `apps/worldview-web/app/sitemap.ts`
+- `apps/worldview-web/app/robots.ts`
+- `apps/worldview-web/__tests__/landing.test.tsx`
+- `apps/worldview-web/e2e/landing.spec.ts`
+
+**Files modified**:
+- `apps/worldview-web/app/page.tsx` — composed sections + JSON-LD
+
+**Validation**:
+- [x] pnpm typecheck — clean
+- [x] pnpm lint — no errors in landing/* (only pre-existing PLAN-0059-C queryKey migration warnings)
+- [x] pnpm test — 1046/1046 pass (97 files), 25 new landing tests
+- [x] pnpm build — production build green; static pre-render of all 25 routes including /sitemap.xml + /robots.txt
 
 **Depends_on**: PLAN-0049 complete
 **Effort**: 24h
