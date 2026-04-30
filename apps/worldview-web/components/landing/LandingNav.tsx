@@ -27,6 +27,16 @@ export function LandingNav() {
       aria-label="Primary"
       className="sticky top-0 z-40 border-b border-border/40 bg-background/85 backdrop-blur-md"
     >
+      {/* Skip-to-main link — WCAG 2.4.1. Visually hidden until keyboard focus
+          lands on it; then becomes a regular focusable button at the top of
+          the nav. Targets `#hero` (the first content section). Added in
+          PLAN-0052 Wave A QA iter-1. */}
+      <a
+        href="#hero"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-50 focus:rounded-[2px] focus:bg-primary focus:px-3 focus:py-1.5 focus:font-mono focus:text-[11px] focus:font-semibold focus:text-primary-foreground focus:shadow-md"
+      >
+        Skip to main content
+      </a>
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-6 px-6 py-3 lg:px-8">
         {/* Brand mark — always returns to landing root */}
         <Link

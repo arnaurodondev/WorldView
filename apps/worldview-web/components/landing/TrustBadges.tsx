@@ -19,12 +19,17 @@ const SOURCES = [
 export function TrustBadges() {
   return (
     <section
-      aria-label="Trusted data sources"
+      aria-labelledby="trustbadges-heading"
       className="border-b border-border/40 bg-background"
     >
       <div className="mx-auto max-w-7xl px-6 py-12 lg:px-8 lg:py-14">
+        {/* Visually-hidden h2 for the document outline; visible kicker
+            text follows below. Added in PLAN-0052 Wave A QA iter-1. */}
+        <h2 id="trustbadges-heading" className="sr-only">
+          Data sources and integrations
+        </h2>
         <p className="mb-6 text-center font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground/70">
-          Data sources & integrations
+          Data sources &amp; integrations
         </p>
 
         <div className="flex flex-wrap items-center justify-center gap-x-10 gap-y-5">

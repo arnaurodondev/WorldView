@@ -111,7 +111,10 @@ export function HeroSection() {
 
           {/* Sub-CTA explainer — short risk-reduction copy under the CTAs.
               Conversion best practice: address the "what's the catch?" thought. */}
-          <p className="mt-5 text-xs text-muted-foreground/70">
+          {/* QA iter-1 (a11y M3): bumped opacity from /70 → default
+              text-muted-foreground for AA contrast on this informational
+              sub-CTA copy. */}
+          <p className="mt-5 text-xs text-muted-foreground">
             No credit card · 5-minute setup · Connect EODHD or use sample data
           </p>
         </div>
@@ -131,12 +134,17 @@ export function HeroSection() {
           />
 
           <div className="relative overflow-hidden rounded-[3px] border border-border/60 bg-card shadow-2xl">
-            {/* macOS-style window chrome — tells the user "this is an app" */}
+            {/* macOS-style window chrome — tells the user "this is an app".
+                WHY semantic tokens (not raw HSL): PLAN-0059 token-compliance
+                policy forbids raw hex/HSL outside JSON-LD. The dots map to
+                destructive/primary/positive which all carry the right
+                semantic and visual weight for a window-chrome cue. Fixed in
+                PLAN-0052 Wave A QA iter-1 (design audit M1). */}
             <div className="flex items-center gap-2 border-b border-border/50 bg-muted/30 px-3 py-2">
               <div className="flex gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-full bg-[hsl(0_60%_55%)]" />
-                <span className="h-2.5 w-2.5 rounded-full bg-[hsl(40_80%_55%)]" />
-                <span className="h-2.5 w-2.5 rounded-full bg-[hsl(140_50%_50%)]" />
+                <span className="h-2.5 w-2.5 rounded-full bg-destructive/70" />
+                <span className="h-2.5 w-2.5 rounded-full bg-primary/70" />
+                <span className="h-2.5 w-2.5 rounded-full bg-positive/70" />
               </div>
               <span className="ml-3 font-mono text-[10px] uppercase tracking-wider text-muted-foreground/60">
                 worldview · workspace
