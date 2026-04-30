@@ -82,3 +82,28 @@ VALUES
     ('0195daad-b01a-701a-801a-00000000001a', 'Equity Real Estate Investment Trusts (REITs)',     'industry_group'),
     ('0195daad-b01b-701b-801b-00000000001b', 'Real Estate Management & Development',             'industry_group')
 ON CONFLICT (entity_id) DO NOTHING;
+
+-- ─── PLAN-0057 C-5 (T-C-5-03): EXACT self-alias rows ──────────────────────────
+--
+-- Every sector + industry_group canonical needs an EXACT alias row whose text
+-- equals the canonical name so Stage-1 alias-exact resolution in the NLP
+-- pipeline can match e.g. "Health Care" → entity_id directly. Without this
+-- the resolver would need a name-fallback path (which Wave A makes optional).
+--
+-- Idempotent via the partial UNIQUE index ``uidx_entity_aliases_entity_norm_type``
+-- installed by migration 0008 (Wave A-2). Re-running this seed is safe.
+--
+-- We restrict the SELECT to the exact pre-generated entity_id namespace
+-- (0195daad-a0xx / 0195daad-b0xx) so we do not accidentally touch unrelated
+-- canonical rows that may have been inserted by a later seed.
+
+INSERT INTO entity_aliases (entity_id, alias_text, normalized_alias_text, alias_type, is_active, source)
+SELECT entity_id, canonical_name, lower(canonical_name), 'EXACT', true, '003_seed'
+FROM canonical_entities
+WHERE entity_type IN ('sector', 'industry_group')
+  AND (
+        entity_id::text LIKE '0195daad-a0%'  -- the 11 sector rows above
+     OR entity_id::text LIKE '0195daad-b0%'  -- the 27 industry_group rows above
+  )
+ON CONFLICT (entity_id, normalized_alias_text, alias_type) WHERE is_active = true
+DO NOTHING;

@@ -869,6 +869,82 @@ def test_entity_aliases_pre_clean_actually_dedups(conn: sa.engine.Connection) ->
     conn.rollback()
 
 
+# ── PLAN-0057 C-5 (T-C-5-03) — sector seed self-aliases ──────────────────────
+#
+# These tests apply seeds/003_seed_sector_entities.sql in-test (the file is a
+# free-standing seed script — not wired into Alembic — so we read it from disk
+# and execute it against the migrated test DB) and assert that every sector
+# and industry_group canonical row has at least 1 active EXACT alias whose
+# alias_text matches its own canonical_name.
+
+
+def _read_seed_003_sql() -> str:
+    """Read the seed file from the package; located at intelligence-migrations/seeds/003_*.sql."""
+    import os
+
+    seed_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "seeds",
+        "003_seed_sector_entities.sql",
+    )
+    with open(os.path.abspath(seed_path), encoding="utf-8") as f:
+        return f.read()
+
+
+def test_seed_003_sector_canonicals_have_exact_self_alias(conn: sa.engine.Connection) -> None:
+    """PLAN-0057 C-5 (T-C-5-03): every sector + industry_group canonical seeded
+    by 003_seed_sector_entities.sql gains an EXACT alias_text == canonical_name
+    via the appended INSERT … SELECT block.
+    """
+    # Apply the seed file. ON CONFLICT DO NOTHING makes this idempotent w.r.t.
+    # existing canonical rows; the appended alias INSERT also uses ON CONFLICT.
+    conn.execute(text(_read_seed_003_sql()))
+
+    missing = conn.execute(
+        text(
+            """
+SELECT ce.canonical_name
+FROM canonical_entities ce
+WHERE ce.entity_type IN ('sector', 'industry_group')
+  AND (ce.entity_id::text LIKE '0195daad-a0%' OR ce.entity_id::text LIKE '0195daad-b0%')
+  AND NOT EXISTS (
+        SELECT 1 FROM entity_aliases ea
+        WHERE ea.entity_id = ce.entity_id
+          AND ea.alias_type = 'EXACT'
+          AND ea.is_active
+          AND lower(ea.alias_text) = lower(ce.canonical_name)
+  )
+"""
+        )
+    ).fetchall()
+    assert not missing, f"Sector/industry_group canonicals missing EXACT self-alias: {[r[0] for r in missing]}"
+    conn.rollback()
+
+
+def test_seed_003_sector_self_alias_idempotent(conn: sa.engine.Connection) -> None:
+    """PLAN-0057 C-5: re-running 003_seed_sector_entities.sql does not create
+    duplicate alias rows — the ON CONFLICT clause on the partial UNIQUE index
+    `uidx_entity_aliases_entity_norm_type` short-circuits.
+    """
+    seed_sql = _read_seed_003_sql()
+
+    # First application
+    conn.execute(text(seed_sql))
+    count_before = conn.execute(
+        text("SELECT COUNT(*) FROM entity_aliases WHERE source = '003_seed' AND alias_type = 'EXACT' AND is_active")
+    ).scalar_one()
+    assert count_before > 0, "Expected the seed to insert at least one '003_seed' EXACT alias"
+
+    # Second application (idempotent re-run)
+    conn.execute(text(seed_sql))
+    count_after = conn.execute(
+        text("SELECT COUNT(*) FROM entity_aliases WHERE source = '003_seed' AND alias_type = 'EXACT' AND is_active")
+    ).scalar_one()
+    assert count_after == count_before, f"Re-run created duplicates: {count_before} → {count_after}"
+    conn.rollback()
+
+
 def test_seed_canonicals_downgrade_purges_f_crit_10(conn: sa.engine.Connection) -> None:
     """F-MINOR-04 follow-up: verify the migration 0009 downgrade SQL
     (DELETE WHERE metadata->>'seed_source' = 'F-CRIT-10') actually purges

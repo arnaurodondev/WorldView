@@ -809,6 +809,22 @@ def seed_intelligence_db(conn_intel, instrument_map: dict[str, str], *, reset: b
         )
         print(f"    {inst['ticker']}: {'inserted' if cur.rowcount else 'already exists'}")
 
+        # PLAN-0057 C-5 (T-C-5-02): EXACT self-alias for the canonical name —
+        # ensures Stage-1 alias-exact resolution can match the seeded canonical
+        # against its own name (otherwise we would only have a TICKER alias
+        # below, which can't satisfy a query like "Apple Inc."). Idempotent via
+        # uidx_entity_aliases_entity_norm_type (partial UNIQUE on is_active=true).
+        cur.execute(
+            """
+            INSERT INTO entity_aliases
+              (entity_id, alias_text, normalized_alias_text, alias_type, is_active, source, created_at)
+            VALUES (%s::uuid, %s, %s, 'EXACT', true, 'seed_demo_self', %s)
+            ON CONFLICT (entity_id, normalized_alias_text, alias_type) WHERE is_active = true
+            DO NOTHING
+            """,
+            (inst["entity_id"], inst["name"], inst["name"].lower().strip(), now_ts),
+        )
+
     # ── 2. Additional KG theme/industry entities ────────────────────────────────
     print("  Seeding KG theme entities...")
     for ent in KG_EXTRA_ENTITIES:
@@ -830,6 +846,24 @@ def seed_intelligence_db(conn_intel, instrument_map: dict[str, str], *, reset: b
             ),
         )
         print(f"    {ent['canonical_name']}: {'inserted' if cur.rowcount else 'already exists'}")
+
+        # PLAN-0057 C-5 (T-C-5-02): EXACT self-alias for theme/industry canonical
+        # so Stage-1 alias-exact resolution covers it. Idempotent.
+        cur.execute(
+            """
+            INSERT INTO entity_aliases
+              (entity_id, alias_text, normalized_alias_text, alias_type, is_active, source, created_at)
+            VALUES (%s::uuid, %s, %s, 'EXACT', true, 'seed_demo_self', %s)
+            ON CONFLICT (entity_id, normalized_alias_text, alias_type) WHERE is_active = true
+            DO NOTHING
+            """,
+            (
+                ent["entity_id"],
+                ent["canonical_name"],
+                ent["canonical_name"].lower().strip(),
+                now_ts,
+            ),
+        )
 
     conn_intel.commit()
 
