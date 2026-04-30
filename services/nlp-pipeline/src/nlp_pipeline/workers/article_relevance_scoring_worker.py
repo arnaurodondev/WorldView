@@ -77,7 +77,36 @@ async def main() -> None:
         model=settings.relevance_scoring_api_model_id if _using_external else settings.relevance_scoring_model,
         cycle_seconds=settings.relevance_scoring_cycle_seconds,
     )
-    await worker.run_forever(stop_event)
+
+    # PLAN-0055 C-3: piggyback the document_source_llm_latest materialized-view
+    # refresher on this worker process. It shares the same DB session factory and
+    # already lives in the LLM-scoring lifecycle, so no separate process is needed.
+    # Refresh interval: 300s (matches the 5-min staleness budget).
+    async def _refresh_llm_latest_loop() -> None:
+        import contextlib as _ctxlib
+
+        from sqlalchemy import text as _text
+
+        refresh_interval_s = 300
+        while not stop_event.is_set():
+            try:
+                async with nlp_sf() as session:
+                    await session.execute(_text("REFRESH MATERIALIZED VIEW CONCURRENTLY document_source_llm_latest"))
+                    await session.commit()
+                log.info("dsl_latest_refreshed")
+            except Exception as exc:  # — informational; never crash the worker
+                log.warning("dsl_latest_refresh_failed", error=str(exc))
+            with _ctxlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop_event.wait(), timeout=refresh_interval_s)
+
+    refresh_task = asyncio.create_task(_refresh_llm_latest_loop(), name="dsl_latest_refresh")
+
+    try:
+        await worker.run_forever(stop_event)
+    finally:
+        refresh_task.cancel()
+        with __import__("contextlib").suppress(asyncio.CancelledError):
+            await refresh_task
 
     await nlp_engine.dispose()
     log.info("relevance_scoring_worker_stopped")

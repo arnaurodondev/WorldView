@@ -66,6 +66,14 @@ def _extract_ddl_columns(migration_text: str, table_name: str) -> set[str]:
     for m in re.finditer(add_col_pattern, migration_text):
         columns.add(m.group(1))
 
+    # ── 3. Parse raw "ALTER TABLE <table> ADD COLUMN <col>" statements ───────
+    # PLAN-0055 B-1 added `config_hash` via raw SQL ALTER (Alembic's add_column
+    # lacks GENERATED-column support). Extend the regex so the alignment guard
+    # recognises columns introduced this way.
+    alter_pattern = rf"ALTER\s+TABLE\s+{table_name}\s+ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)"
+    for m in re.finditer(alter_pattern, migration_text, re.IGNORECASE):
+        columns.add(m.group(1))
+
     return columns
 
 

@@ -64,6 +64,25 @@ class EmbeddingStatus(StrEnum):
     FAILED = "failed"
 
 
+class ProcessingPath(StrEnum):
+    """Processing path assigned by the suppression gate (PRD §6.7 Block 6).
+
+    Lives in the domain layer so it can be a typed field on ``RoutingDecision``.
+    The application-layer ``apply_suppression_gate()`` function (in
+    ``application/blocks/suppression.py``) returns instances of this enum.
+
+    Values:
+      HALT                    — SUPPRESS tier; stop all downstream work.
+      SECTION_EMBEDDINGS_ONLY — LIGHT tier; section embeddings only,
+                                no NER reprocessing, no extraction.
+      FULL_PIPELINE           — MEDIUM or DEEP; full pipeline.
+    """
+
+    HALT = "halt"
+    SECTION_EMBEDDINGS_ONLY = "section_embeddings_only"
+    FULL_PIPELINE = "full_pipeline"
+
+
 class ResolutionOutcome(StrEnum):
     """Entity resolution outcome per mention (PRD §6.7 Block 9 + PLAN-0033).
 

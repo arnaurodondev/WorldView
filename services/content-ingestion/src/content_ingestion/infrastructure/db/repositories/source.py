@@ -38,17 +38,44 @@ class SourceRepository:
         source_type: str,
         config: dict,
         enabled: bool = True,
-    ) -> SourceModel:
-        row = SourceModel(
-            id=common.ids.new_uuid7(),
-            name=name,
-            source_type=source_type,
-            config=config,
-            enabled=enabled,
+    ) -> tuple[SourceModel, bool]:
+        """Idempotent INSERT (PLAN-0055 B-1).
+
+        Returns ``(source, was_created)``. When a row with the same
+        ``(source_type, config_hash)`` already exists (UNIQUE ``uq_sources_dedup``),
+        we return the existing row with ``was_created=False`` instead of raising.
+        Operators who delete + recreate a source with identical config keep the
+        original UUID and watermark history.
+
+        Why ON CONFLICT DO UPDATE rather than DO NOTHING: ``DO NOTHING`` does not
+        return rows on conflict, so we'd need a follow-up SELECT — splitting the
+        operation into two statements (BP-007 violation). ``DO UPDATE SET enabled=...``
+        is a no-op when enabled is unchanged, but always populates RETURNING so the
+        whole flow stays in a single round-trip.
+        """
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        new_id = common.ids.new_uuid7()
+        stmt = (
+            pg_insert(SourceModel)
+            .values(
+                id=new_id,
+                name=name,
+                source_type=source_type,
+                config=config,
+                enabled=enabled,
+            )
+            .on_conflict_do_update(
+                constraint="uq_sources_dedup",
+                set_={"enabled": enabled},
+            )
+            .returning(SourceModel)
         )
-        self._session.add(row)
+        result = await self._session.execute(stmt)
+        row = result.scalar_one()
         await self._session.flush()
-        return row
+        was_created = row.id == new_id
+        return row, was_created
 
     _MUTABLE_FIELDS: frozenset[str] = frozenset({"name", "enabled", "config"})
 

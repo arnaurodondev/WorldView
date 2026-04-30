@@ -16,18 +16,23 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 import httpx
+from sqlalchemy import text
 
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from sqlalchemy import text
+# PLAN-0055 C-2: bump this constant whenever the LLM prompt template changes so
+# downstream consumers (replay worker, materialized view) treat scores from the
+# new prompt as a different lineage.
+_RELEVANCE_PROMPT_VERSION: str = "v1"
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -114,7 +119,10 @@ class ArticleRelevanceScoringWorker:
         # Branches on api_key: DeepInfra OpenAI-compat endpoint when set, Ollama otherwise.
         # F-Q1-07: each scored tuple now carries (doc_id, score, sentiment | None)
         # so we can persist both fields in a single write call.
-        scored: list[tuple[UUID, float, str | None]] = []
+        # PLAN-0055 C-2: also carry input_hash so the append-only ledger can verify
+        # exact input lineage. We hash (title, source_type) since the LLM prompt is
+        # deterministic on those (title-only prompt — see PRD-0026).
+        scored: list[tuple[UUID, float, str | None, str]] = []
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 for doc_id, title, source_type in articles:
@@ -124,7 +132,8 @@ class ArticleRelevanceScoringWorker:
                         result = await self._call_ollama(client, title, source_type, doc_id)
                     if result is not None:
                         score, sentiment = result
-                        scored.append((doc_id, score, sentiment))
+                        input_hash = hashlib.sha256(f"{title}\x00{source_type or ''}".encode()).hexdigest()
+                        scored.append((doc_id, score, sentiment, input_hash))
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
             # Provider unavailable — skip the entire cycle; try again next interval
             logger.warning(  # type: ignore[no-any-return]
@@ -137,8 +146,13 @@ class ArticleRelevanceScoringWorker:
             return 0
 
         # ── Phase 3 — Write: persist scores in a fresh session ───────────────
+        # PLAN-0055 C-2: dual-write. Legacy UPDATE keeps the news read path
+        # working until Wave C-3 wires the materialized view; the append-only
+        # INSERT establishes the audit trail going forward.
+        model_id_for_provenance = self._api_model_id if self._api_key else self._model
         async with self._nlp_sf() as session:
             await self._write_scores(session, scored)
+            await self._append_provenance(session, scored, model_id_for_provenance)
             await session.commit()
 
         logger.info(  # type: ignore[no-any-return]
@@ -301,19 +315,13 @@ class ArticleRelevanceScoringWorker:
     @staticmethod
     async def _write_scores(
         session: AsyncSession,
-        scored: list[tuple[UUID, float, str | None]],
+        scored: list[tuple[UUID, float, str | None, str]],
     ) -> None:
-        """Phase 3: write llm_relevance_score + sentiment + llm_scored_at.
+        """Phase 3a: legacy UPDATE on document_source_metadata (PLAN-0055 C-2 dual-write).
 
-        F-Q1-07: also persists `sentiment` (positive|negative|neutral|mixed|NULL)
-        extracted from the same LLM call that produces the relevance score.
-        NULL is written when the LLM returns an unrecognised value — the column
-        is nullable (migration 0011) so this degrades gracefully.
-
-        WHY a single UPDATE (not UPSERT): the row always exists in
-        document_source_metadata — it was inserted by the article consumer
-        long before the scoring worker runs.  A bare UPDATE is the correct
-        operation; no conflict handling is needed.
+        Removed in Wave C-3 once ``document_source_llm_latest`` materialized view
+        is the canonical read path. Until then, the news read path still SELECTs
+        ``llm_relevance_score`` directly so we keep this UPDATE alive.
         """
         stmt = text(
             """
@@ -324,5 +332,42 @@ class ArticleRelevanceScoringWorker:
             WHERE doc_id = :doc_id
             """,
         )
-        for doc_id, score, sentiment in scored:
+        for doc_id, score, sentiment, _input_hash in scored:
             await session.execute(stmt, {"doc_id": str(doc_id), "score": score, "sentiment": sentiment})
+
+    @staticmethod
+    async def _append_provenance(
+        session: AsyncSession,
+        scored: list[tuple[UUID, float, str | None, str]],
+        model_id: str,
+    ) -> None:
+        """Phase 3b: append-only INSERT into document_source_llm_scores (PLAN-0055 C-2).
+
+        Two rows per article: one for ``relevance`` (with score_value), one for
+        ``sentiment`` (with score_label, score_value=NULL). ON CONFLICT DO NOTHING
+        on ``uq_dsls_dedup`` makes re-runs safe.
+        """
+        from nlp_pipeline.infrastructure.nlp_db.repositories.llm_score import SqlaLLMScoreRepository
+
+        repo = SqlaLLMScoreRepository(session)
+        for doc_id, score, sentiment, input_hash in scored:
+            await repo.append(
+                doc_id=doc_id,
+                score_type="relevance",
+                score_value=score,
+                score_label=None,
+                model_id=model_id,
+                prompt_version=_RELEVANCE_PROMPT_VERSION,
+                input_hash=input_hash,
+            )
+            if sentiment is not None:
+                # Skip writing a sentiment row when the LLM gave an unrecognized value.
+                await repo.append(
+                    doc_id=doc_id,
+                    score_type="sentiment",
+                    score_value=None,
+                    score_label=sentiment,
+                    model_id=model_id,
+                    prompt_version=_RELEVANCE_PROMPT_VERSION,
+                    input_hash=input_hash,
+                )

@@ -25,6 +25,10 @@ class RoutingDecisionRepository:
             doc_id=decision.doc_id,
             routing_tier=str(decision.routing_tier),
             final_routing_tier=(str(decision.final_routing_tier) if decision.final_routing_tier else None),
+            # PLAN-0057 A-1 (F-CRIT-06): persist Block 6 suppression-gate output.
+            # ``processing_path`` is None on legacy rows; new rows always carry it
+            # because the article consumer assigns it after ``apply_suppression_gate``.
+            processing_path=(str(decision.processing_path) if decision.processing_path else None),
             composite_score=decision.composite_score,
             feature_scores_json=decision.feature_scores,
         )

@@ -77,8 +77,10 @@ def _extract_ddl_columns(migration_text: str, table_name: str) -> set[str]:
         if parts:
             columns.add(parts[0].strip('"'))
 
-    # Also collect columns added via ALTER TABLE ... ADD COLUMN (raw SQL)
-    alter_pattern = rf"ALTER\s+TABLE\s+{table_name}\s+ADD\s+COLUMN\s+(\w+)"
+    # Also collect columns added via ALTER TABLE ... ADD COLUMN (raw SQL).
+    # The optional ``IF NOT EXISTS`` qualifier is supported because defensive
+    # migrations (PLAN-0057 A-1) use it to remain idempotent under production drift.
+    alter_pattern = rf"ALTER\s+TABLE\s+{table_name}\s+ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)"
     for m in re.finditer(alter_pattern, migration_text, re.IGNORECASE):
         columns.add(m.group(1))
 

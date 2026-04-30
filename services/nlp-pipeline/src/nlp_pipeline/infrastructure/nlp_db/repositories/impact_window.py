@@ -31,13 +31,32 @@ class ArticleImpactWindowRepository(ArticleImpactWindowRepositoryPort):
         self._session = session
 
     async def upsert_batch(self, windows: list[ArticleImpactWindow]) -> None:
-        """Bulk INSERT ON CONFLICT (article_id, entity_id, window_type) DO NOTHING.
+        """Bulk INSERT ON CONFLICT (article_id, entity_id, window_type, model_id, prompt_version) DO NOTHING.
 
-        Idempotent (R9): duplicate (article_id, entity_id, window_type) triples are
-        silently ignored thanks to idx_article_impact_windows_unique (migration 0009).
+        PLAN-0055 C-1 swapped the legacy 3-column UNIQUE INDEX
+        (``idx_article_impact_windows_unique``) for the 5-column UNIQUE
+        CONSTRAINT ``uq_article_impact_windows_dedup`` so two different label
+        models can both score the same (article, entity, window). Provenance
+        columns get deterministic non-NULL defaults — Postgres treats NULL as
+        not-equal-to-anything in UNIQUE checks, so NULL provenance would defeat
+        the dedup guard.
+
+        Idempotent (R9): duplicate 5-tuples are silently ignored.
         """
         if not windows:
             return
+
+        # Stable provenance defaults for the labelling-worker lineage. Bumping
+        # ``label_prompt_version`` retroactively makes future runs eligible to
+        # write a fresh row per (article, entity, window) without trampling history.
+        import hashlib
+
+        label_model_id = "price-impact-labeller-v1"
+        label_prompt_version = "v1"
+
+        def _input_hash(article_id: UUID, entity_id: UUID, window_type: str) -> str:
+            payload = f"{article_id}|{entity_id}|{window_type}".encode()
+            return hashlib.sha256(payload).hexdigest()
 
         values = [
             {
@@ -58,6 +77,9 @@ class ArticleImpactWindowRepository(ArticleImpactWindowRepositoryPort):
                 "impact_score": w.impact_score,
                 "normalisation_cap_pct": w.normalisation_cap_pct,
                 "data_quality": str(w.data_quality),
+                "model_id": label_model_id,
+                "prompt_version": label_prompt_version,
+                "input_hash": _input_hash(w.article_id, w.entity_id, str(w.window_type)),
                 # computed_at gets server_default (now()) when not supplied
             }
             for w in windows
@@ -66,7 +88,7 @@ class ArticleImpactWindowRepository(ArticleImpactWindowRepositoryPort):
         stmt = (
             pg_insert(ArticleImpactWindowModel)
             .values(values)
-            .on_conflict_do_nothing(index_elements=["article_id", "entity_id", "window_type"])
+            .on_conflict_do_nothing(constraint="uq_article_impact_windows_dedup")
         )
         await self._session.execute(stmt)
 

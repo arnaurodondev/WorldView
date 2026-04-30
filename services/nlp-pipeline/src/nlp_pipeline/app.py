@@ -22,7 +22,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from nlp_pipeline.api.routes import dlq, embed, entities, health, internal_costs, news, search, signals
+from nlp_pipeline.api.routes import admin, dlq, embed, entities, health, internal_costs, news, search, signals
 from nlp_pipeline.config import Settings
 from nlp_pipeline.infrastructure.intelligence_db.session import (
     _build_intelligence_factories,
@@ -303,5 +303,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(news.router)
     app.include_router(dlq.router)
     app.include_router(internal_costs.router)
+    # PLAN-0055 C-4: admin LLM replay endpoint.
+    app.include_router(admin.router)
 
     return app

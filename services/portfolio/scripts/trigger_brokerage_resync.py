@@ -116,7 +116,9 @@ async def _run(settings: Settings, *, dry_run: bool) -> ResyncReport:
         )
         await session.commit()
         # ``rowcount`` is the authoritative count of affected rows.
-        updated = int(update_result.rowcount or 0)
+        # SQLAlchemy stubs hide the attribute on ``Result[Any]`` even though
+        # it exists on ``CursorResult`` at runtime for UPDATE statements.
+        updated = int(update_result.rowcount or 0)  # type: ignore[attr-defined]
         logger.info("trigger_resync_complete", updated=updated)
         return ResyncReport(eligible, updated, dry_run)
 

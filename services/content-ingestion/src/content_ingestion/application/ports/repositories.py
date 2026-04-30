@@ -146,6 +146,7 @@ class AdapterStatePort(Protocol):
         next_run_at: datetime | None = None,
         error_count: int | None = None,
         last_error: str | None = None,
+        last_run_config_hash: str | None = None,
     ) -> Any: ...
 
     async def reset_errors(self, source_id: UUID) -> None: ...

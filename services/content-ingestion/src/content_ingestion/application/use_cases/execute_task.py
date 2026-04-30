@@ -211,14 +211,18 @@ class ExecuteContentTaskUseCase:
                 prefetched_results=fetch_output.results,
             )
 
-            # Update watermark after successful writes
+            # Update watermark after successful writes.
+            # PLAN-0055 B-1: also snapshot the live ``sources.config_hash`` so the
+            # startup drift detector can flag operator config edits since this run.
             if summary.fetched > 0:
                 adapter_state_repo = self._adapter_state_factory(session)
                 now = ct_mod.utc_now()
+                config_hash = getattr(fetch_output.source, "config_hash", None)
                 await adapter_state_repo.upsert(
                     task.source_id,
                     last_watermark=now,
                     last_run_at=now,
+                    last_run_config_hash=config_hash,
                 )
 
             # 5. Mark task SUCCEEDED *inside* the advisory-lock transaction (D-9).

@@ -78,6 +78,22 @@ class Settings(BaseSettings):
     scheduler_tick_interval_seconds: float = 60.0
     scheduler_max_tasks_per_tick: int = 1000
 
+    # Auto-backfill on startup (PLAN-0055 Sub-Plan A).
+    # The scheduler process spawns a non-blocking task on startup that enqueues a
+    # backfill (now - INITIAL_DAYS, now) for every enabled polling policy whose
+    # ``backfill_start_date`` cursor doesn't already cover that horizon.
+    # OFF by default in code; gitops env flips it ON in dev + prod.
+    auto_backfill_on_startup: bool = False
+    # Initial validation horizon. Operators ratchet up gradually (14 → 365 → 3650)
+    # without redeploying via MARKET_INGESTION_AUTO_BACKFILL_INITIAL_DAYS.
+    # NOTE: plain default rather than ``Field(default=14, ge=1)`` — the older
+    # pydantic-settings version that pre-commit pins (~2.1) doesn't surface
+    # Field-annotated class attributes to mypy. The runtime guard against
+    # zero/negative values lives in ``run_startup_backfill.py``.
+    auto_backfill_initial_days: int = 14
+    # Hard cap on horizon — runtime clamps INITIAL_DAYS to YEARS * 365.
+    auto_backfill_years: int = 10
+
     # Worker
     worker_batch_size: int = 10
     worker_lease_seconds: int = 300

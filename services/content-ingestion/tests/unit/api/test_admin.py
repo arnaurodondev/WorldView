@@ -241,7 +241,8 @@ class TestListSources:
 class TestCreateSource:
     async def test_create_source_success(self, client: AsyncClient, mock_uow) -> None:
         src = _make_source(name="sec-edgar", source_type="sec_edgar")
-        mock_uow.sources.create = AsyncMock(return_value=src)
+        # PLAN-0055 B-1: repository now returns (source, was_created).
+        mock_uow.sources.create = AsyncMock(return_value=(src, True))
 
         resp = await client.post(
             "/api/v1/sources",

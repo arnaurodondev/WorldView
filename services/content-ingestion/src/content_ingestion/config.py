@@ -150,6 +150,18 @@ class Settings(BaseSettings):
     backfill_sources: str = ""
     backfill_batch_delay_seconds: float = 0.5
 
+    # PLAN-0055 Sub-Plan A — auto-backfill on startup. Independent of
+    # ``backfill_enabled`` (which gates per-source behavior). ``backfill_on_startup``
+    # seeds NULL watermarks to (now - INITIAL_DAYS) so the scheduler tick can
+    # fetch backwards. OFF by default in code; gitops env flips it ON.
+    backfill_on_startup: bool = False
+    # Plain int defaults — pre-commit's older pydantic-settings doesn't surface
+    # ``Field(default=N, ge=1)``-annotated attrs to mypy. Runtime clamping in
+    # ``seed_source_watermarks.py`` covers the validation that ``ge=1`` provided.
+    backfill_initial_days: int = 14
+    # Hard cap on horizon — runtime clamps INITIAL_DAYS to YEARS * 365.
+    backfill_years: int = 3
+
     # ── Provider settings (operational params — overridable via ConfigMap) ───
     eodhd: EODHDProviderSettings = EODHDProviderSettings()
     finnhub: FinnhubProviderSettings = FinnhubProviderSettings()
