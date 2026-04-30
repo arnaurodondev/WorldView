@@ -202,6 +202,14 @@ async def main() -> None:
         except Exception:
             log.warning("chunk_text_store_init_failed", exc_info=True)
 
+    # PLAN-0057 A-5 / F-CRIT-03: wire a session-scoped NLP usage logger so each
+    # deep-extraction LLM call appends a row to nlp_db.llm_usage_log.  Without
+    # this the table was permanently empty despite tens of MEDIUM/DEEP-tier
+    # extractions per cycle.
+    from nlp_pipeline.infrastructure.nlp_db.usage_log_factory import (
+        SessionScopedNlpUsageLogger,
+    )
+
     consumer = ArticleProcessingConsumer(
         config=article_config,
         settings=settings,
@@ -214,6 +222,7 @@ async def main() -> None:
         extraction_client=extraction_client,
         backpressure=bp,
         chunk_text_store=_chunk_text_store,
+        usage_logger=SessionScopedNlpUsageLogger(nlp_sf),
     )
 
     # BP-239: Warm up Valkey connection before entering the Kafka consumer loop.
