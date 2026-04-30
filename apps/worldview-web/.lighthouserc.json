@@ -1,0 +1,32 @@
+{
+  "_comment": "PLAN-0059 W0 fix F-005 (2026-04-30): Lighthouse CI thresholds. Plan §T-A-2-02 acceptance: LCP < 1.8s, CLS < 0.1, Perf >= 90. Run via `pnpm exec lhci autorun` in CI; fails the build if thresholds are missed. Routes match the four critical user journeys.",
+  "ci": {
+    "collect": {
+      "url": [
+        "http://localhost:3001/dashboard",
+        "http://localhost:3001/screener",
+        "http://localhost:3001/portfolio",
+        "http://localhost:3001/login"
+      ],
+      "numberOfRuns": 3,
+      "settings": {
+        "preset": "desktop",
+        "chromeFlags": "--no-sandbox --headless"
+      }
+    },
+    "assert": {
+      "preset": "lighthouse:no-pwa",
+      "assertions": {
+        "categories:performance": ["error", { "minScore": 0.9 }],
+        "categories:accessibility": ["error", { "minScore": 0.95 }],
+        "categories:best-practices": ["error", { "minScore": 0.9 }],
+        "largest-contentful-paint": ["error", { "maxNumericValue": 1800 }],
+        "cumulative-layout-shift": ["error", { "maxNumericValue": 0.1 }],
+        "total-blocking-time": ["error", { "maxNumericValue": 300 }]
+      }
+    },
+    "upload": {
+      "target": "temporary-public-storage"
+    }
+  }
+}

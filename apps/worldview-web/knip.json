@@ -1,0 +1,42 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "_comment": "PLAN-0059 W0 fix F-005 (2026-04-30): knip detects unused files, exports, and deps. Plan §T-A-2-02 acceptance: `pnpm exec knip` exits 0. Configured to recognise Next.js App Router conventions (file-based routing) so it doesn't flag pages/layouts/icons.",
+  "entry": [
+    "next.config.ts",
+    "tailwind.config.ts",
+    "postcss.config.mjs",
+    "vitest.config.ts",
+    "playwright.config.ts",
+    "instrumentation.ts!",
+    "middleware.ts!",
+    "app/**/page.tsx",
+    "app/**/layout.tsx",
+    "app/**/loading.tsx",
+    "app/**/error.tsx",
+    "app/**/not-found.tsx",
+    "app/**/template.tsx",
+    "app/**/route.ts",
+    "app/icon.{ts,tsx,svg}",
+    "app/apple-icon.{ts,tsx,svg}",
+    "app/opengraph-image.{ts,tsx}",
+    "app/twitter-image.{ts,tsx}",
+    "app/sitemap.ts",
+    "app/robots.ts",
+    "app/manifest.{ts,webmanifest}",
+    "__tests__/**/*.{test,spec}.{ts,tsx}",
+    "e2e/**/*.spec.ts"
+  ],
+  "project": ["**/*.{ts,tsx}", "!**/node_modules/**", "!.next/**"],
+  "ignoreDependencies": [
+    "@types/node",
+    "@types/react",
+    "@types/react-dom",
+    "autoprefixer",
+    "postcss",
+    "babel-plugin-react-compiler",
+    "tailwindcss-animate",
+    "@hookform/resolvers"
+  ],
+  "ignoreBinaries": ["lhci"],
+  "ignoreExportsUsedInFile": true
+}

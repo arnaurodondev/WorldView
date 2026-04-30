@@ -146,7 +146,7 @@ export function MorningBriefCard() {
           <button
             onClick={() => void refetch()}
             disabled={isFetching}
-            className="ml-auto text-muted-foreground hover:text-foreground disabled:opacity-50"
+            className="ml-auto text-muted-foreground hover:text-foreground disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
             title="Retry"
             aria-label="Retry loading brief"
           >
@@ -265,7 +265,7 @@ export function MorningBriefCard() {
               <button
                 onClick={() => void refetch()}
                 disabled={isFetching}
-                className="text-muted-foreground hover:text-foreground disabled:opacity-50"
+                className="text-muted-foreground hover:text-foreground disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
                 title="Refresh morning brief"
                 aria-label="Refresh morning brief"
               >

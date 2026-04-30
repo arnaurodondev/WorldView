@@ -35,6 +35,24 @@ class RetryConfig:
     backoff_factors: tuple[float, ...] = DEFAULT_BACKOFF_FACTORS
 
 
+def _is_retryable(exc: Exception) -> bool:
+    """Return False for exceptions that signal permanent client-side failures.
+
+    F-104 fix (2026-04-30): the previous retry loop treated every Exception
+    as transient and burned 3 attempts x backoff on permanent failures (e.g.
+    Finnhub 403 "premium endpoint required"). We detect non-retryable
+    exceptions via ``isinstance`` so the check is robust to renames and
+    subclassing — the previous string-name match would silently break if
+    ``PremiumEndpointError`` was renamed.
+    """
+    # Late import to avoid an import cycle: client.py imports from this module.
+    try:
+        from content_ingestion.infrastructure.adapters.finnhub.client import PremiumEndpointError
+    except ImportError:
+        return True
+    return not isinstance(exc, PremiumEndpointError)
+
+
 def url_hash(value: str) -> str:
     """Compute a SHA-256 hex digest used as dedup key."""
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
@@ -88,10 +106,17 @@ class SourceAdapter(SourceAdapterPort):
         cfg = retry_config or RetryConfig()
         last_exc: Exception | None = None
 
+        # F-104 fix (2026-04-30): a permanent client-side failure (403, 401, 404)
+        # must NOT be retried. The previous code caught Exception broadly and
+        # re-tried every kind of error, which on a free Finnhub tier wasted
+        # ~56 s/cycle hammering paid endpoints. Re-raise non-retryable
+        # exceptions immediately so the caller can handle them once.
         for attempt in range(cfg.max_retries + 1):
             try:
                 return await coro_factory()  # type: ignore[operator]
             except Exception as exc:
+                if not _is_retryable(exc):
+                    raise
                 last_exc = exc
                 if attempt < cfg.max_retries:
                     delay = (

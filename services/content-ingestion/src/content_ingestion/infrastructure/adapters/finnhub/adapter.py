@@ -16,7 +16,7 @@ import common.ids
 import common.time
 from content_ingestion.domain.entities import FetchResult
 from content_ingestion.infrastructure.adapters.base import RetryConfig, SourceAdapter, url_hash
-from content_ingestion.infrastructure.adapters.finnhub.client import RateLimitError
+from content_ingestion.infrastructure.adapters.finnhub.client import PremiumEndpointError, RateLimitError
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -129,7 +129,10 @@ class FinnhubAdapter(SourceAdapter):
                     ),
                 )
 
-        # Fetch transcripts (premium feature — gracefully skip if account lacks access)
+        # Fetch transcripts (premium feature — gracefully skip if account lacks access).
+        # F-104 fix: PremiumEndpointError now short-circuits before the retry loop,
+        # so a free-tier account no longer wastes 3 retries x backoff per symbol per
+        # cycle. Any other error still falls through to the existing soft-skip path.
         transcript_list: list[dict[str, Any]] = []
         try:
             transcript_list = await self._retry_request(  # type: ignore[assignment]
@@ -137,15 +140,33 @@ class FinnhubAdapter(SourceAdapter):
                 retry_config=self._retry_config,
                 context=f"finnhub:transcripts:{symbol}",
             )
-        except RateLimitError as e:
-            logger.warning("finnhub_rate_limited_transcripts", sleep_secs=e.sleep_secs)
-            await asyncio.sleep(e.sleep_secs)
-            transcript_list = await self._client.fetch_transcript_list(symbol=symbol)  # type: ignore[assignment]
-        except Exception as exc:
-            # 403 Forbidden = premium-only endpoint; log and continue with news only.
+        except PremiumEndpointError as exc:
+            # Permanent licensing failure — log once at info, do NOT retry.
             logger.info(
                 "finnhub_transcripts_unavailable",
                 symbol=symbol,
+                reason="premium_endpoint",
+                endpoint=exc.endpoint,
+            )
+        except RateLimitError as e:
+            logger.warning("finnhub_rate_limited_transcripts", sleep_secs=e.sleep_secs)
+            await asyncio.sleep(e.sleep_secs)
+            try:
+                transcript_list = await self._client.fetch_transcript_list(symbol=symbol)  # type: ignore[assignment]
+            except PremiumEndpointError as exc:
+                logger.info(
+                    "finnhub_transcripts_unavailable",
+                    symbol=symbol,
+                    reason="premium_endpoint",
+                    endpoint=exc.endpoint,
+                )
+        except Exception as exc:
+            # Non-403, non-429 errors — keep the soft-skip behaviour but log at warning
+            # so the operator notices a real adapter regression (vs. premium licensing).
+            logger.warning(
+                "finnhub_transcripts_unavailable",
+                symbol=symbol,
+                reason="adapter_error",
                 error=str(exc),
             )
 

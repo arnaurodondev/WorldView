@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -26,6 +27,63 @@ import httpx
 
 from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome
 from observability import get_logger  # type: ignore[import-untyped]
+
+# F-103 fix (2026-04-30): tolerant JSON extractor.
+# DeepInfra/Ollama models occasionally return JSON wrapped in ```json fences```
+# or with leading/trailing prose. ``json.loads(raw)`` then fails and the worker
+# previously logged the failure without including ``raw``, so 100% of the
+# 43-mention cycle was opaque. This helper:
+#   1. Tries ``json.loads`` first (the happy path is unchanged).
+#   2. Strips common code-fence wrappers and retries.
+#   3. Falls back to extracting the first balanced ``{...}`` substring.
+# Any genuine garbage still raises JSONDecodeError so the upstream except
+# block can record the raw payload for debugging.
+_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.+?)\s*```\s*$", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_json_object(raw: str) -> dict:
+    """Parse a JSON object out of a possibly-wrapped LLM response."""
+    if not isinstance(raw, str):
+        raise json.JSONDecodeError("non-string LLM response", "", 0)
+    text = raw.strip()
+    # Path 1 — direct parse.
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError:
+        result = None
+    if isinstance(result, dict):
+        return result
+    # Path 2 — strip ```json ... ``` fences.
+    fence_match = _FENCE_RE.match(text)
+    if fence_match:
+        inner = fence_match.group(1).strip()
+        try:
+            inner_result = json.loads(inner)
+        except json.JSONDecodeError:
+            inner_result = None
+        if isinstance(inner_result, dict):
+            return inner_result
+    # Path 3 — first balanced { ... } substring.
+    start = text.find("{")
+    if start != -1:
+        depth = 0
+        for i in range(start, len(text)):
+            ch = text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start : i + 1]
+                    try:
+                        cand_result = json.loads(candidate)
+                    except json.JSONDecodeError:
+                        cand_result = None
+                    if isinstance(cand_result, dict):
+                        return cand_result
+                    break
+    raise json.JSONDecodeError("no JSON object found in LLM response", text[:200], 0)
+
 
 if TYPE_CHECKING:
     from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
@@ -120,8 +178,10 @@ _CLASSIFICATION_PROMPT_TEMPLATE = (
     'SURFACE: "{surface}"\n'
     'CONTEXT: "{context}"\n'
     "\n"
-    "Respond with JSON ONLY: "
-    '{{"is_entity": true|false, "reason": "<short rationale>"}}'
+    "Respond with a single JSON object ONLY (no prose, no code fences). "
+    'Schema: {{"is_entity": <true|false>, "reason": "<short rationale>"}}\n'
+    'Concrete examples: {{"is_entity": true, "reason": "named regulator"}} '
+    'or {{"is_entity": false, "reason": "generic noun phrase"}}.'
 )
 
 
@@ -414,13 +474,21 @@ class UnresolvedResolutionWorker:
                 )
                 response.raise_for_status()
                 raw = response.json().get("response", "")
-                parsed = json.loads(raw)
+                parsed = _extract_json_object(raw)
                 is_entity = bool(parsed.get("is_entity", False))
                 reason: str | None = str(parsed.get("reason", "")) or None
-            except (json.JSONDecodeError, KeyError, ValueError):
+            except (json.JSONDecodeError, KeyError, ValueError) as parse_exc:
+                # F-103 fix: log the raw LLM response (truncated) so future
+                # failures are diagnosable instead of opaque "json_parse_failure".
+                # Prior implementation discarded `raw` entirely — see
+                # docs/audits/2026-04-30-investigation-platform-stability-followups.md.
                 logger.warning(
                     "unresolved_resolution_json_parse_failure",
                     mention_id=str(mention.mention_id),
+                    surface=mention.mention_text[:80] if mention.mention_text else None,
+                    raw=raw[:500] if isinstance(raw, str) else repr(raw)[:500],
+                    error=str(parse_exc),
+                    provider="ollama",
                 )
                 # Log usage (failure)
                 if self._usage_logger is not None:
@@ -499,13 +567,23 @@ class UnresolvedResolutionWorker:
                 )
                 response.raise_for_status()
                 raw = response.json()["choices"][0]["message"]["content"]
-                parsed = json.loads(raw)
+                parsed = _extract_json_object(raw)
                 is_entity = bool(parsed.get("is_entity", False))
                 reason: str | None = str(parsed.get("reason", "")) or None
-            except (json.JSONDecodeError, KeyError, ValueError):
+            except (json.JSONDecodeError, KeyError, ValueError) as parse_exc:
+                # F-103 fix: surface the raw LLM response so failures are
+                # diagnosable. The Llama-3.1-8B-Instruct model occasionally
+                # wraps JSON in ```json fences``` or in prose despite
+                # response_format=json_object — _extract_json_object handles
+                # the common variants; anything still failing here is a real
+                # malformed payload worth logging.
                 logger.warning(
                     "unresolved_resolution_json_parse_failure",
                     mention_id=str(mention.mention_id),
+                    surface=mention.mention_text[:80] if mention.mention_text else None,
+                    raw=raw[:500] if isinstance(raw, str) else repr(raw)[:500],
+                    error=str(parse_exc),
+                    provider="deepinfra",
                 )
                 if self._usage_logger is not None:
                     asyncio.create_task(  # fire-and-forget  # noqa: RUF006

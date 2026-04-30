@@ -125,17 +125,30 @@ describe("T-F-6-06 — ColumnSettingsPopover Saved indicator", () => {
 
 describe("T-F-6-13 — Callback page distinct error copy", () => {
   it("ERROR_COPY exposes a distinct title per error type", async () => {
-    // Pull in the module's internal ERROR_MESSAGES (legacy) AND ERROR_COPY
-    // by triggering a render that exercises each branch is overkill — instead
-    // we test the contract of the module by importing the page and asserting
-    // the four titles appear in the rendered shell when each errorType fires.
-    // For unit-test simplicity we just assert the four messages are unique
-    // strings via the public ERROR_MESSAGES export.
-    const mod: any = await import("@/app/callback/page");
-    // The module doesn't export ERROR_MESSAGES (it's a private const). So we
-    // assert the page module loaded — the visual/integration test for the
-    // distinct copy is covered by callback-page.test.tsx (existing).
-    expect(mod).toBeDefined();
+    // PLAN-0059 W0 fix F-001 (2026-04-30): ERROR_COPY + ERROR_MESSAGES
+    // moved out of `app/callback/page.tsx` into a sibling module
+    // `app/callback/error-messages.ts` because Next.js 15 page files cannot
+    // export arbitrary symbols (PageProps `never` constraint). Tests now
+    // import directly from the sibling.
+    const { ERROR_COPY, ERROR_MESSAGES } = await import(
+      "@/app/callback/error-messages"
+    );
+    const titles = Object.values(ERROR_COPY).map((c) => c.title);
+    // Four error types, four distinct titles
+    expect(new Set(titles).size).toBe(4);
+    // ERROR_MESSAGES must contain the same four keys
+    expect(Object.keys(ERROR_MESSAGES).sort()).toEqual([
+      "exchange_failed",
+      "missing_code",
+      "missing_verifier",
+      "state_mismatch",
+    ]);
+    // Each combined string contains its title
+    for (const [key, copy] of Object.entries(ERROR_COPY)) {
+      expect(ERROR_MESSAGES[key as keyof typeof ERROR_MESSAGES]).toContain(
+        copy.title,
+      );
+    }
   });
 });
 

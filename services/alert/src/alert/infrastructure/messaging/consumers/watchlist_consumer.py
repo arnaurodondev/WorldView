@@ -12,6 +12,7 @@ Behaviour:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
@@ -27,7 +28,25 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
+_TOPIC = "portfolio.watchlist.updated.v1"
 _EVENT_TYPE_DELETED = "watchlist.item_deleted"
+
+
+# F-102 fix (BP-122): same Confluent-Avro decoder pattern as S6 watchlist
+# consumer. Producer (S1) emits `\x00` magic + 4-byte schema id + Avro
+# binary. Without explicit handling, ``json.loads(raw)`` autodetected
+# UTF-32-BE on the leading nulls and dead-lettered every event.
+def _find_schema_dir() -> Path:
+    relative = Path("infra") / "kafka" / "schemas"
+    for base in Path(__file__).resolve().parents:
+        candidate = base / relative
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
+
+
+_SCHEMA_DIR = _find_schema_dir()
+_WATCHLIST_SCHEMA_PATH = str(_SCHEMA_DIR / "portfolio.watchlist.updated.v1.avsc")
 
 
 # ── Minimal no-op UoW ─────────────────────────────────────────────────────────
@@ -168,9 +187,56 @@ class WatchlistConsumer(BaseKafkaConsumer[None]):
     # ── Serialization ─────────────────────────────────────────────────────────
 
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
+        """Deserialize Confluent-Avro or JSON payload (F-102 / BP-122).
+
+        Producer uses per-event-type schemas (WatchlistItemAdded vs
+        WatchlistItemDeleted); we resolve via Schema Registry by the
+        schema_id in the wire-format header, with in-process caching.
+        """
+        if raw and raw[0:1] == b"\x00":
+            return self._deserialize_confluent(raw)
         return json.loads(raw)  # type: ignore[no-any-return]
 
+    def _deserialize_confluent(self, raw: bytes) -> dict[str, Any]:
+        import struct
+
+        from messaging.kafka.serialization_utils import deserialize_avro  # type: ignore[import-untyped]
+
+        if len(raw) < 5:
+            msg = f"Confluent payload too short: {len(raw)} bytes"
+            raise ValueError(msg)
+        schema_id = struct.unpack(">I", raw[1:5])[0]
+        schema = self._schema_for_id(schema_id)
+        return deserialize_avro(schema, raw[5:])  # type: ignore[no-any-return]
+
+    def _schema_for_id(self, schema_id: int) -> dict[str, Any]:
+        """Resolve and cache an Avro schema by Schema Registry id.
+
+        ``deserialize_value`` is invoked synchronously by BaseKafkaConsumer.
+        On cache miss this issues a sync ``httpx.get`` — bounded at ~3
+        schema_ids per topic so total blocking time over the consumer's
+        lifetime is well under 1 s.
+        """
+        cached = self.__dict__.setdefault("_schema_cache", {})
+        if schema_id in cached:
+            return cached[schema_id]  # type: ignore[no-any-return]
+        import os
+
+        import httpx
+
+        sr_url = os.environ.get("ALERT_SCHEMA_REGISTRY_URL") or os.environ.get(
+            "ALERT_KAFKA_SCHEMA_REGISTRY_URL", "http://schema-registry:8081"
+        )
+        # blocking-io-justification (HR-019): one-time blocking cost per schema_id,
+        # bounded; cache hits are zero-I/O.
+        resp = httpx.get(f"{sr_url}/schemas/ids/{schema_id}", timeout=5.0)  # - timeout set
+        resp.raise_for_status()
+        schema = json.loads(resp.json()["schema"])
+        cached[schema_id] = schema
+        return schema  # type: ignore[no-any-return]
+
     def get_schema_path(self, topic: str) -> str | None:
+        # Resolved dynamically via Schema Registry — see _deserialize_confluent.
         return None
 
     def extract_event_id(self, value: dict[str, Any]) -> str:

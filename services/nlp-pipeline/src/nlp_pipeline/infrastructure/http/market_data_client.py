@@ -5,10 +5,20 @@ returns a typed ``OHLCVBar`` dataclass (or ``None`` on 404 / any HTTP error).
 
 No exceptions are propagated to the caller — all errors are swallowed and
 logged as warnings so a single bad symbol never aborts the labelling cycle.
+
+PRD-0025 / F-101 fix (2026-04-30): every backend service is guarded by
+``InternalJWTMiddleware`` and rejects requests lacking a valid X-Internal-JWT
+header with HTTP 401. The worker mints its JWT by calling S9's
+``POST /v1/auth/dev-login`` at startup (and refreshes every ~4 minutes —
+S9 mints 5-minute tokens). When the resulting JWT is forwarded as
+``X-Internal-JWT``, the receiver verifies it against the gateway's JWKS
+endpoint just as it would for any user-initiated request.
 """
 
 from __future__ import annotations
 
+import asyncio
+import time
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -20,6 +30,11 @@ if TYPE_CHECKING:
     import httpx
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+
+# Refresh the internal JWT at most this often — S9 dev-login mints 5-minute
+# tokens; refreshing every 240 s leaves a 60 s safety margin.
+_TOKEN_REFRESH_S: float = 240.0
 
 
 @dataclass(frozen=True)
@@ -41,13 +56,75 @@ class MarketDataClient:
     Usage::
 
         async with httpx.AsyncClient(timeout=10.0) as http:
-            client = MarketDataClient(http, "http://market-data:8003")
+            client = MarketDataClient(http, "http://market-data:8003",
+                                      api_gateway_url="http://api-gateway:8000")
             bar = await client.get_ohlcv("AAPL", date(2026, 4, 1))
     """
 
-    def __init__(self, client: httpx.AsyncClient, base_url: str) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        *,
+        api_gateway_url: str | None = None,
+    ) -> None:
         self._client = client
         self._base_url = base_url.rstrip("/")
+        # F-101: api-gateway base URL for dev-login token bootstrap. When None
+        # we fall back to the legacy "no headers" behaviour — which still
+        # produces 401s on a guarded receiver but lets unit tests run without
+        # mocking the auth round-trip.
+        self._api_gateway_url = (api_gateway_url or "").rstrip("/")
+        self._token: str | None = None
+        self._token_minted_at: float = 0.0
+        self._token_lock = asyncio.Lock()
+
+    async def _get_internal_jwt(self) -> str | None:
+        """Return a fresh X-Internal-JWT, minting one if cached token is stale.
+
+        F-101: workers don't have the gateway's RS256 private key mounted, so
+        we call ``POST /v1/auth/dev-login`` to obtain a real signed JWT (RS256
+        with kid registered in JWKS). The receiver verifies signature against
+        the gateway's JWKS endpoint — it doesn't care that the token came
+        from dev-login rather than a user OIDC flow.
+
+        Returns ``None`` if api-gateway is unreachable or refuses to mint a
+        token, in which case the caller falls back to unauthenticated requests
+        (preserving the legacy 401-and-warn behaviour rather than crashing).
+        """
+        if not self._api_gateway_url:
+            return None
+
+        async with self._token_lock:
+            now = time.monotonic()
+            if self._token and (now - self._token_minted_at) < _TOKEN_REFRESH_S:
+                return self._token
+            try:
+                resp = await self._client.post(
+                    f"{self._api_gateway_url}/v1/auth/dev-login",
+                    json={},
+                    timeout=5.0,
+                )
+                if resp.status_code != 200:
+                    logger.warning(
+                        "market_data_client_token_mint_failed",
+                        status_code=resp.status_code,
+                        body=resp.text[:200],
+                    )
+                    return None
+                token = resp.json().get("access_token")
+                if not isinstance(token, str) or not token:
+                    return None
+                self._token = token
+                self._token_minted_at = now
+                logger.debug("market_data_client_token_refreshed")
+                return token
+            except Exception as exc:
+                logger.warning(
+                    "market_data_client_token_mint_error",
+                    error=str(exc),
+                )
+                return None
 
     async def get_ohlcv(self, symbol: str, bar_date: date) -> OHLCVBar | None:
         """Return the daily OHLCV bar for *symbol* on *bar_date*, or ``None``.
@@ -63,8 +140,15 @@ class MarketDataClient:
         url = f"{self._base_url}/api/v1/market-data/ohlcv/{symbol}"
         params = {"start": bar_date.isoformat(), "end": bar_date.isoformat()}
 
+        # F-101: market-data InternalJWTMiddleware rejects unauthenticated
+        # requests with HTTP 401. Inject a fresh dev-login-issued internal JWT.
+        # On token-mint failure we still fire the request without a header so
+        # the existing 401 warn-and-skip path stays as a fallback.
+        token = await self._get_internal_jwt()
+        headers = {"X-Internal-JWT": token} if token else {}
+
         try:
-            response = await self._client.get(url, params=params)
+            response = await self._client.get(url, params=params, headers=headers)
         except Exception as exc:
             logger.warning(  # type: ignore[no-any-return]
                 "market_data_client_request_error",

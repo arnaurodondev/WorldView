@@ -62,7 +62,14 @@ async def main() -> None:
         sys.exit(1)
 
     async with httpx.AsyncClient(timeout=10.0) as http_client:
-        market_client = MarketDataClient(http_client, settings.market_data_internal_url)
+        # F-101: pass api_gateway_url so MarketDataClient can mint a valid
+        # X-Internal-JWT via /v1/auth/dev-login. Without this, every OHLCV
+        # call returns 401 and article_impact_windows stays empty.
+        market_client = MarketDataClient(
+            http_client,
+            settings.market_data_internal_url,
+            api_gateway_url=settings.api_gateway_url,
+        )
         worker = PriceImpactLabellingWorker(
             nlp_session_factory=nlp_sf,
             market_data_client=market_client,
