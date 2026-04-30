@@ -38,6 +38,15 @@ import { CollapsibleSidebar } from "@/components/shell/CollapsibleSidebar";
 import { FlashOverlay } from "@/components/shell/FlashOverlay";
 import { StatusBar } from "@/components/shell/StatusBar";
 import { AskAiPanel } from "@/components/shell/AskAiPanel";
+// PLAN-0059 W1 (2026-04-30) — global hotkey infrastructure. HotkeyProvider
+// holds the scope stack; GlobalHotkeyBindings registers app-wide chords AND
+// mounts the document-level keydown listener; HotkeyCheatSheet is the `?` overlay.
+// Together these close F-LAYOUT-001 (StatusBar advertised six chord shortcuts
+// with no listener wired). The StatusBar now reads chord hints from the same
+// registry — structurally impossible to advertise an unwired chord.
+import { HotkeyProvider } from "@/contexts/HotkeyContext";
+import { GlobalHotkeyBindings } from "@/components/shell/GlobalHotkeyBindings";
+import { HotkeyCheatSheet } from "@/components/shell/HotkeyCheatSheet";
 // PLAN-0053 Wave G — feedback widget mounted at the shell so every
 // authenticated page exposes the floating Send-Feedback button + modal.
 import { FeedbackButton } from "@/components/feedback/FeedbackButton";
@@ -206,16 +215,27 @@ export default function AppLayout({ children }: AppLayoutProps) {
     return null;
   }
 
-  // Authenticated: render the protected shell layout wrapped in WorkspaceProvider
+  // Authenticated: render the protected shell layout wrapped in HotkeyProvider +
+  // WorkspaceProvider.
+  // PLAN-0059 W1: HotkeyProvider must wrap WorkspaceProvider so the workspace
+  // can later push "page" / "table" scopes from inside its tree. The hotkey
+  // infrastructure components (GlobalHotkeyBindings + HotkeyCheatSheet) live
+  // INSIDE the provider — without that they'd throw "missing provider".
   return (
-    // WHY WorkspaceProvider at layout level: workspace state must be accessible
-    // from WorkspaceTabs (workspace/page.tsx) AND potentially from the sidebar
-    // (e.g. workspace name in TopBar). Providing at layout level avoids re-mounting
-    // the context on page navigation within the (app) route group.
-    <WorkspaceProvider>
-      {/* WHY flex flex-col h-screen: pins the layout to viewport height so the
-       * main content area scrolls independently without moving the TopBar/Sidebar */}
-      <div className="flex h-screen flex-col bg-background">
+    <HotkeyProvider>
+      {/* GlobalHotkeyBindings has no DOM output — registers global chords
+          (g d/p/i/s/w/a/n/c/, plus mod+b) AND mounts the document keydown
+          listener via useChordHotkeys. Mounted FIRST so chords are live before
+          children render. */}
+      <GlobalHotkeyBindings onToggleSidebar={handleSidebarToggle} />
+
+      {/* HotkeyCheatSheet — `?` overlay; auto-derives content from the registry. */}
+      <HotkeyCheatSheet />
+
+      <WorkspaceProvider>
+        {/* WHY flex flex-col h-screen: pins the layout to viewport height so the
+         * main content area scrolls independently without moving the TopBar/Sidebar */}
+        <div className="flex h-screen flex-col bg-background">
         <TopBar
           unreadAlerts={badgeCount}
           portfolioValue={portfolioValue}
@@ -281,6 +301,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
             this quarter). */}
         <NPSPromptHost />
       </div>
-    </WorkspaceProvider>
+      </WorkspaceProvider>
+    </HotkeyProvider>
   );
 }

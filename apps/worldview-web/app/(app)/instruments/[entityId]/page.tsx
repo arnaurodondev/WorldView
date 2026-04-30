@@ -33,7 +33,7 @@
 "use client";
 // WHY "use client": uses useQuery for CompanyOverview + tab state (useState).
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 // WHY useRouter: used for router.back() in the back nav button so the user returns
 // to their previous page (e.g., screener, dashboard) rather than always going to /dashboard.
@@ -48,6 +48,13 @@ import { NewsTab } from "@/components/instrument/NewsTab";
 import { CompactInstrumentHeader } from "@/components/instrument/CompactInstrumentHeader";
 import { InstrumentAISubheader } from "@/components/instrument/InstrumentAISubheader";
 import { OverviewLayout } from "@/components/instrument/OverviewLayout";
+// PLAN-0059 W1 (2026-04-30) — Bloomberg-style mnemonic chords on the instrument
+// page. When focus is NOT inside an input, single-letter keypresses jump to the
+// matching tab: D=DES (Overview), F=FA (Fundamentals), N=CN (News), I=Intel.
+// Auto-suspended inside inputs by useChordHotkeys; auto-unregistered when the
+// page unmounts. Closes audit F-LAYOUT-001 + supports the symbol-first workflow
+// grammar described in the deep-dive layout report §7.2.
+import { HotkeyScope } from "@/components/shell/HotkeyScope";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -186,6 +193,25 @@ export default function InstrumentDetailPage() {
           pattern. InstrumentBriefPanel used a plain collapse with React state only. */}
       <InstrumentAISubheader entityId={kgEntityId} />
 
+      {/*
+       * PLAN-0059 W1 — Bloomberg mnemonic chords on the instrument page.
+       * Single-letter keys jump to the matching tab when no input is focused.
+       * useChordHotkeys auto-suspends inside <input>/<textarea>/contenteditable
+       * so typing a "d" in the AskAi composer (when open) does NOT navigate.
+       *
+       * D = DES (Description / Overview)   — Bloomberg mnemonic for an issue's
+       *                                       description page.
+       * F = FA  (Financial Analysis)       — Bloomberg's fundamentals view.
+       * N = CN  (Company News)             — Bloomberg's news page.
+       * I = Intelligence                   — local extension (Bloomberg has no
+       *                                       direct equivalent; we surface AI
+       *                                       claims/contradictions here).
+       *
+       * The bindings are scoped `page` and gated to /instruments/ so they only
+       * fire on this route. They do not appear in the cheat sheet on other pages.
+       */}
+      <InstrumentMnemonicHotkeys onTabChange={setActiveTab} />
+
       {/* ── Tab navigation (controlled) ────────────────────────────────────── */}
       {/* WHY value + onValueChange (not defaultValue): OverviewLayout's "More news"
           button programmatically switches to the "news" tab. Uncontrolled Tabs
@@ -246,4 +272,54 @@ export default function InstrumentDetailPage() {
       </Tabs>
     </div>
   );
+}
+
+// ── Local helper: instrument-page mnemonic hotkeys ──────────────────────────
+//
+// PLAN-0059 W1 — split out as a child component so we can memoise the bindings
+// list without polluting the parent's render. Bindings need stable identity to
+// avoid re-registering on every keystroke (the registration effect's dep array
+// is `[bindings]`). useMemo here gives a single stable array per onTabChange.
+
+interface InstrumentMnemonicHotkeysProps {
+  /** Tab-change callback — usually `setActiveTab` from the parent's useState. */
+  readonly onTabChange: (tab: string) => void;
+}
+
+function InstrumentMnemonicHotkeys({ onTabChange }: InstrumentMnemonicHotkeysProps) {
+  const bindings = useMemo(
+    () => [
+      {
+        id: "ins.tab.overview",
+        chord: "d",
+        group: "Symbol" as const,
+        label: "DES — Overview",
+        handler: () => onTabChange("overview"),
+      },
+      {
+        id: "ins.tab.fundamentals",
+        chord: "f",
+        group: "Symbol" as const,
+        label: "FA — Fundamentals",
+        handler: () => onTabChange("fundamentals"),
+      },
+      {
+        id: "ins.tab.news",
+        chord: "n",
+        group: "Symbol" as const,
+        label: "CN — News",
+        handler: () => onTabChange("news"),
+      },
+      {
+        id: "ins.tab.intelligence",
+        chord: "i",
+        group: "Symbol" as const,
+        label: "Intel — AI Intelligence",
+        handler: () => onTabChange("intelligence"),
+      },
+    ],
+    [onTabChange],
+  );
+
+  return <HotkeyScope scope="page" page="/instruments/" bindings={bindings} />;
 }
