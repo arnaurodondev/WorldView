@@ -1175,12 +1175,19 @@ def _emit_canonical_block(label: str, rows: list[tuple[str, str, str, dict]]) ->
 def _emit_alias_block(label: str, rows: list[tuple[str, str, str]]) -> None:
     if not rows:
         return
+    # Explicit conflict target (the unique index from migration 0008).
+    # Bare ``ON CONFLICT DO NOTHING`` would auto-resolve to whatever index
+    # happens to match at apply time, which makes the migration order-sensitive
+    # in a non-obvious way. Pinning the target makes the dependency on 0008
+    # explicit and produces a clear error if migrations run out of order.
     op.execute(
         f"-- F-CRIT-10 alias seed: {label}\n"
         "INSERT INTO entity_aliases "
         "(entity_id, alias_text, normalized_alias_text, alias_type, is_active, source) "
         f"VALUES {_values_clause_alias(rows)} "
-        "ON CONFLICT DO NOTHING"
+        "ON CONFLICT (entity_id, normalized_alias_text, alias_type) "
+        "WHERE is_active = true "
+        "DO NOTHING"
     )
 
 

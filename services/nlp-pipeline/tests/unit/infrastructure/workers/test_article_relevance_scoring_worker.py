@@ -75,6 +75,21 @@ def _make_worker(factory: MagicMock) -> ArticleRelevanceScoringWorker:
     )
 
 
+def _find_score_call(session: AsyncMock) -> dict:
+    """Return the params dict for the legacy UPDATE call carrying 'score'.
+
+    PLAN-0055 C-2 added a parallel append-only INSERT into document_source_llm_scores;
+    its bind-params have keys like ``doc_id``/``score_value``/``model_id``, NOT ``score``.
+    Tests that pin the legacy UPDATE shape must locate the right call by key
+    rather than relying on call ordering.
+    """
+    for call in session.execute.call_args_list:
+        args = call[0]
+        if len(args) >= 2 and isinstance(args[1], dict) and "score" in args[1]:
+            return args[1]
+    raise AssertionError("No execute() call with 'score' parameter found")
+
+
 # ── Ollama response parsing tests ─────────────────────────────────────────────
 
 
@@ -94,8 +109,8 @@ class TestOllamaResponseParsing:
 
         assert count == 1
         # Verify write was called with correct score
-        write_call = session.execute.call_args_list[-1]
-        params = write_call[0][1]
+        # PLAN-0055 C-2 dual-write: locate the legacy UPDATE by key.
+        params = _find_score_call(session)
         assert abs(params["score"] - 0.75) < 1e-9
 
     @pytest.mark.asyncio
@@ -111,8 +126,8 @@ class TestOllamaResponseParsing:
             count = await worker.scoring_cycle()
 
         assert count == 1
-        write_call = session.execute.call_args_list[-1]
-        params = write_call[0][1]
+        # PLAN-0055 C-2 dual-write: locate the legacy UPDATE by key.
+        params = _find_score_call(session)
         assert params["score"] == 1.0
 
     @pytest.mark.asyncio
@@ -128,8 +143,8 @@ class TestOllamaResponseParsing:
             count = await worker.scoring_cycle()
 
         assert count == 1
-        write_call = session.execute.call_args_list[-1]
-        params = write_call[0][1]
+        # PLAN-0055 C-2 dual-write: locate the legacy UPDATE by key.
+        params = _find_score_call(session)
         assert params["score"] == 0.0
 
     @pytest.mark.asyncio
@@ -360,8 +375,8 @@ class TestDeepInfraProviderPath:
             count = await worker.scoring_cycle()
 
         assert count == 1
-        write_call = session.execute.call_args_list[-1]
-        params = write_call[0][1]
+        # PLAN-0055 C-2 dual-write: locate the legacy UPDATE by key.
+        params = _find_score_call(session)
         assert abs(params["score"] - 0.9) < 1e-9
 
     @pytest.mark.asyncio

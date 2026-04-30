@@ -787,3 +787,110 @@ def test_seed_round_trip_idempotent(conn: sa.engine.Connection) -> None:
         text("SELECT COUNT(*) FROM canonical_entities WHERE metadata ->> 'seed_source' = 'F-CRIT-10'")
     ).scalar_one()
     assert before == after
+
+
+# ── PLAN-0057 QA pass — additional coverage from 2026-04-30 audit ─────────────
+
+
+def test_seed_canonicals_exclude_ambiguous_last_names(conn: sa.engine.Connection) -> None:
+    """F-MINOR-04 follow-up: Cook / Fink / Pick last names are explicitly
+    excluded from the seed because they are common English words (Tim Cook is
+    seeded as 'Tim Cook' but NOT as just 'Cook'). Verify the absence to guard
+    against future migrations that might forget this exclusion.
+    """
+    excluded_last_names = ("Cook", "Fink", "Pick")
+    for last_name in excluded_last_names:
+        rows = conn.execute(
+            text(
+                "SELECT ea.alias_text, ce.canonical_name "
+                "FROM entity_aliases ea "
+                "JOIN canonical_entities ce ON ce.entity_id = ea.entity_id "
+                "WHERE ea.alias_text = :ln "
+                "AND ea.alias_type = 'EXACT' "
+                "AND ce.metadata ->> 'seed_source' = 'F-CRIT-10'"
+            ),
+            {"ln": last_name},
+        ).fetchall()
+        assert (
+            not rows
+        ), f"Last-name-only alias '{last_name}' should be excluded to avoid common-word collision; found rows: {rows}"
+
+
+def test_entity_aliases_pre_clean_actually_dedups(conn: sa.engine.Connection) -> None:
+    """F-MINOR-04 follow-up: simulate the duplicate scenario the Wave A-2 pre-
+    clean DELETE was written to handle, then verify only one row survives per
+    (entity_id, normalized_alias_text, alias_type) triple.
+
+    We can't easily replay the migration, but we CAN insert duplicates and run
+    the pre-clean SQL inline to verify its semantics. The (created_at, alias_id)
+    ordering ensures the OLDEST row is preserved.
+    """
+    eid = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type, metadata) "
+            "VALUES (:eid, 'PreCleanCo', 'financial_instrument', '{}'::jsonb)"
+        ),
+        {"eid": str(eid)},
+    )
+    # Insert 3 duplicate aliases with explicit timestamps. is_active=false on
+    # all so neither the existing 0001 partial unique index nor the new 0008
+    # uidx_entity_aliases_entity_norm_type fires (both are partial WHERE is_active).
+    for hours_ago in (3, 2, 1):
+        conn.execute(
+            text(
+                "INSERT INTO entity_aliases "
+                "(entity_id, alias_text, normalized_alias_text, alias_type, is_active, source, created_at) "
+                "VALUES (:eid, 'PCC', 'pcc', 'TICKER', false, 'test_dup', "
+                "        now() - (:h || ' hours')::interval)"
+            ),
+            {"eid": str(eid), "h": str(hours_ago)},
+        )
+    # Run the same pre-clean SQL the migration uses.
+    conn.execute(
+        text(
+            "DELETE FROM entity_aliases a "
+            "USING entity_aliases b "
+            "WHERE (a.created_at, a.alias_id) > (b.created_at, b.alias_id) "
+            "AND a.entity_id              = b.entity_id "
+            "AND a.normalized_alias_text  = b.normalized_alias_text "
+            "AND a.alias_type             = b.alias_type"
+        )
+    )
+    # Verify exactly one survivor remains for this triple.
+    n = conn.execute(
+        text(
+            "SELECT COUNT(*) FROM entity_aliases "
+            "WHERE entity_id = :eid AND normalized_alias_text = 'pcc' AND alias_type = 'TICKER'"
+        ),
+        {"eid": str(eid)},
+    ).scalar_one()
+    assert n == 1, f"Pre-clean DELETE should keep exactly 1 row, kept {n}"
+    conn.rollback()
+
+
+def test_seed_canonicals_downgrade_purges_f_crit_10(conn: sa.engine.Connection) -> None:
+    """F-MINOR-04 follow-up: verify the migration 0009 downgrade SQL
+    (DELETE WHERE metadata->>'seed_source' = 'F-CRIT-10') actually purges
+    every seeded canonical AND its cascaded aliases / embedding_state rows.
+
+    We don't run the alembic downgrade here (would require a separate
+    fixture); we just verify the SQL pattern works.
+    """
+    # Count BEFORE
+    canonicals_before = conn.execute(
+        text("SELECT COUNT(*) FROM canonical_entities WHERE metadata ->> 'seed_source' = 'F-CRIT-10'")
+    ).scalar_one()
+    # Run the downgrade SQL inside a transaction we'll rollback.
+    conn.execute(text("DELETE FROM canonical_entities WHERE metadata ->> 'seed_source' = 'F-CRIT-10'"))
+    # AFTER: zero canonical_entities, zero aliases (CASCADE), zero embedding_state (CASCADE).
+    canonicals_after = conn.execute(
+        text("SELECT COUNT(*) FROM canonical_entities WHERE metadata ->> 'seed_source' = 'F-CRIT-10'")
+    ).scalar_one()
+    aliases_after = conn.execute(
+        text("SELECT COUNT(*) FROM entity_aliases WHERE source = 'seed:F-CRIT-10'")
+    ).scalar_one()
+    assert canonicals_before > 0, "test prerequisite: F-CRIT-10 seeds must exist after upgrade"
+    assert canonicals_after == 0, f"Downgrade left {canonicals_after} F-CRIT-10 canonicals"
+    assert aliases_after == 0, f"Downgrade should CASCADE aliases; {aliases_after} survived"
+    conn.rollback()

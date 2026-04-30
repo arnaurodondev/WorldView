@@ -41,14 +41,21 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Step 1 — pre-clean. ``alias_id`` is monotonic (UUIDv7-like) so the smallest
-    # value for a given (entity_id, normalized, alias_type) triple is the oldest;
-    # we keep that and delete the rest. CTE form is portable and atomic.
+    # Step 1 — pre-clean. Keep the row with the OLDEST ``created_at`` (which is
+    # the actually-oldest insert) per (entity_id, normalized, alias_type) triple
+    # and delete the rest. ``alias_id`` is the secondary tiebreaker for
+    # determinism when two rows share a ``created_at`` timestamp.
+    #
+    # IMPORTANT: ``alias_id`` is ``gen_random_uuid()`` (UUIDv4, random), NOT
+    # UUIDv7-monotonic, so it is NOT a reliable proxy for insertion order.
+    # An earlier draft of this migration used ``WHERE a.alias_id > b.alias_id``
+    # which preserved an ARBITRARY duplicate, not the oldest. Using
+    # ``(created_at, alias_id)`` as the lexicographic key fixes that.
     op.execute(
         """
 DELETE FROM entity_aliases a
 USING entity_aliases b
-WHERE a.alias_id > b.alias_id
+WHERE (a.created_at, a.alias_id) > (b.created_at, b.alias_id)
   AND a.entity_id              = b.entity_id
   AND a.normalized_alias_text  = b.normalized_alias_text
   AND a.alias_type             = b.alias_type

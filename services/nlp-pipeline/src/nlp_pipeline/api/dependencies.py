@@ -9,11 +9,6 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nlp_pipeline.application.ports.repositories import NewsQueryPort, SignalsQueryPort
-from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
-from nlp_pipeline.application.use_cases.enhanced_chunk_search import EnhancedChunkSearchUseCase
-from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntityResolverUseCase
-
 # PLAN-0053 platform-stability iter-1 F-PLATFORM-02: switched from importing
 # the concrete EntityMentionRepository (infrastructure) to its Protocol port
 # (application/ports). The Protocol is the type used in the Annotated[] alias
@@ -21,6 +16,10 @@ from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntity
 # a body-level import. This satisfies LAYER-API-NO-MODULE-LEVEL-INFRA without
 # the runtime NameError that previously blocked the TYPE_CHECKING approach.
 from nlp_pipeline.application.ports.entity_mention import EntityMentionRepositoryPort
+from nlp_pipeline.application.ports.repositories import NewsQueryPort, SignalsQueryPort
+from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
+from nlp_pipeline.application.use_cases.enhanced_chunk_search import EnhancedChunkSearchUseCase
+from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntityResolverUseCase
 
 _VALID_ADMIN_TOKEN_RE = re.compile(r"^[A-Za-z0-9\-_]{8,128}$")
 

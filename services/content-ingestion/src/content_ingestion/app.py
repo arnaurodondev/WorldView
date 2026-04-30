@@ -166,7 +166,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         seed_timeout = float(getattr(settings, "backfill_seed_timeout_seconds", 10.0))
         try:
             await _asyncio.wait_for(seed_use_case.execute(), timeout=seed_timeout)
-        except _asyncio.TimeoutError:
+        except TimeoutError:
             log.warning("startup_seed_watermarks_timeout", timeout_seconds=seed_timeout)
         except Exception as exc:  # never crash the API on a seed failure
             log.exception("startup_seed_watermarks_failed", error=str(exc))
