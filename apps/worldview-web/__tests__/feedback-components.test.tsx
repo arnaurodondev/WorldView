@@ -133,7 +133,10 @@ describe("FeedbackButton", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders nothing when unauthenticated", async () => {
+  it("renders for unauthenticated users (anon feedback is first-class)", async () => {
+    // PLAN-0053 QA-iter1 F-010: anonymous feedback is part of the approved
+    // design — the modal collects an email field when unauthed. The button
+    // must therefore render regardless of auth state.
     mockUseAuth.mockReturnValue({
       accessToken: null as unknown as string,
       isAuthenticated: false,
@@ -148,7 +151,10 @@ describe("FeedbackButton", () => {
         <FeedbackButton />
       </Wrapper>,
     );
-    expect(container).toBeEmptyDOMElement();
+    expect(container).not.toBeEmptyDOMElement();
+    expect(
+      container.querySelector("button[aria-label^='Send feedback']"),
+    ).toBeInTheDocument();
   });
 });
 

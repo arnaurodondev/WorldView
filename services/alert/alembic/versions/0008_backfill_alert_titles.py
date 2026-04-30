@@ -75,11 +75,18 @@ def upgrade() -> None:
             ELSE COALESCE(title, 'Alert')
           END
         )
+        -- PLAN-0053 QA-iter1 F-002: the OLD ``_compose_alert_title()``
+        -- emitted lowercase 'alert' (``f"{raw.title()} alert"``), not
+        -- 'Alert'. Match BOTH cases to handle any historical drift
+        -- across deployments + the regex catch-all for safety.
         WHERE title IS NULL
+           OR title = 'Graph Change alert'
            OR title = 'Graph Change Alert'
+           OR title = 'Contradiction alert'
            OR title = 'Contradiction Alert'
+           OR title = 'Signal alert'
            OR title = 'Signal Alert'
-           OR title ~ '^[A-Z][a-z]+ [A-Z][a-z]+ alert$'
+           OR title ~* '^[A-Za-z]+ [A-Za-z]+ alert$'
         """
     )
 

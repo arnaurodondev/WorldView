@@ -113,7 +113,7 @@ export function RealizedPnLChart({ portfolioId }: RealizedPnLChartProps) {
       {/* Header — title + period buttons + total readout */}
       <div className="flex h-7 shrink-0 items-center justify-between border-b border-border px-2">
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-          REALIZED P&amp;L
+          REALIZED P&L
         </span>
 
         <div className="flex gap-px">

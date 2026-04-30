@@ -3,9 +3,10 @@
  *
  * WHY THIS EXISTS (PLAN-0053 Wave G T-G-7-05):
  * Always-visible 56x56px circle bottom-right that opens FeedbackModal.
- * Only renders for authenticated users — anonymous flows go through the
- * /feedback public board. We mount it inside the (app)/layout.tsx shell
- * so it's available on every protected page.
+ * Renders on every shell page regardless of auth status — the user-approved
+ * design treats anonymous feedback as first-class (with email required for
+ * follow-up). The modal itself surfaces an email input when not authed.
+ * We mount it inside (app)/layout.tsx so it follows the shell.
  *
  * KEYBOARD SHORTCUT: cmd+? (or ctrl+?) also opens the modal — power
  * users don't need to mouse over to click. Implemented in this file so
@@ -23,7 +24,11 @@ import { useAuth } from "@/hooks/useAuth";
 import { FeedbackModal } from "./FeedbackModal";
 
 export function FeedbackButton() {
-  const { isAuthenticated } = useAuth();
+  // PLAN-0053 QA-iter1 F-010: useAuth retained for future surface-tagging
+  // (e.g., showing user email pre-filled when authed) but no longer gates
+  // visibility — anonymous feedback is first-class.
+  // Note: useAuth() result not destructured because we don't currently use it.
+  useAuth();
   const [open, setOpen] = useState(false);
 
   // Keyboard shortcut: cmd/ctrl + ? (Shift+/ on most layouts).
@@ -50,8 +55,6 @@ export function FeedbackButton() {
       window.removeEventListener("worldview:open-feedback", onOpenEvent);
     };
   }, []);
-
-  if (!isAuthenticated) return null;
 
   return (
     <>
