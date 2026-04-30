@@ -421,6 +421,13 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 for res in resolution_audit:
                     if res.is_winner:
                         record_entity_resolved(_stage_to_method.get(res.stage, "unknown"))
+                # PLAN-0057 A-4 (F-CRIT-02): persist the audit trail. Previously
+                # the list was iterated for Prometheus only, then dropped on the
+                # floor — every UNRESOLVED / PROVISIONAL / AUTO_RESOLVED outcome
+                # was invisible to ops and to the next-cycle worker. Writes go
+                # through the same nlp_session so commit ordering is preserved.
+                if resolution_audit:
+                    await mr_repo.add_batch(resolution_audit)
 
             # Block 10: Deep LLM extraction (writes claims to outbox via nlp_session)
             from nlp_pipeline.infrastructure.intelligence_db.repositories.claims import (
@@ -459,6 +466,11 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             await chunk_repo.add_batch(chunks)
             await mention_repo.add_batch(final_mentions)
             await stats_repo.upsert(stats)
+            # PLAN-0057 A-4 (F-CRIT-06): persist Block 6 suppression-gate output
+            # alongside the routing tier. final_path is the result of
+            # apply_suppression_gate(), accounting for any novelty-driven downgrade
+            # earlier in this method.
+            routing_decision.processing_path = final_path
             await routing_repo.add(routing_decision)
 
             # Write embeddings directly (no dedicated repo)

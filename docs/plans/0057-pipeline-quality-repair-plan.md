@@ -367,7 +367,9 @@ For `financial_institution` overlap: use `DO $$ ... IF NOT EXISTS (SELECT 1 FROM
 
 ---
 
-### Wave A-4: Persist `mention_resolutions` audit + `processing_path`
+### Wave A-4: Persist `mention_resolutions` audit + `processing_path` ✅
+
+**Status**: **DONE** — 2026-04-30 · 2 surgical edits to `article_consumer.py`. Closes F-CRIT-02 (one-line `await mr_repo.add_batch(resolution_audit)` after the metrics loop, gated on non-empty list). Closes F-CRIT-06 (set `routing_decision.processing_path = final_path` immediately before `routing_repo.add()` so the new column from Wave A-1 gets populated). 565 unit tests pass; pre-existing integration test failures in test_consumer_pipeline.py predate this wave (verified via `git stash` round-trip).
 
 **Goal**: close F-CRIT-02 (one-line audit-write fix) + complete A-1 by writing `processing_path` from Block 8 result.
 **Depends on**: T-A-1-01, T-A-1-02
