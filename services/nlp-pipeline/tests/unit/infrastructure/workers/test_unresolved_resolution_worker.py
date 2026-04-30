@@ -20,10 +20,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome
+from nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention import (
+    UnresolvedMentionWithContext,
+)
 from nlp_pipeline.infrastructure.workers.unresolved_resolution_worker import (
+    _CLASSIFICATION_PROMPT_TEMPLATE,
     UnresolvedResolutionWorker,
     WorkerStats,
 )
+
+
+def _wrap(mentions: list[Any], context: str | None = None) -> list[UnresolvedMentionWithContext]:
+    """Wrap mention mocks into the dataclass returned by the new repo method.
+
+    The worker switched to ``get_unresolved_batch_with_context`` (PLAN-0057
+    T-B-3-01); tests need to return ``UnresolvedMentionWithContext`` bundles
+    so the worker's iteration produces the correct ``(mention, context)``
+    pair when calling ``_process_mention``.
+    """
+    return [UnresolvedMentionWithContext(mention=m, context_sentence=context) for m in mentions]
+
 
 pytestmark = pytest.mark.unit
 
@@ -162,6 +178,7 @@ class TestRunOnceEmptyBatch:
 
         repo = AsyncMock()
         repo.get_unresolved_batch = AsyncMock(return_value=[])
+        repo.get_unresolved_batch_with_context = AsyncMock(return_value=[])
 
         worker = UnresolvedResolutionWorker(
             nlp_session_factory=nlp_sf,
@@ -198,6 +215,7 @@ class TestRunOnceNonEligibleClass:
 
         repo = AsyncMock()
         repo.get_unresolved_batch = AsyncMock(return_value=[mention])
+        repo.get_unresolved_batch_with_context = AsyncMock(return_value=_wrap([mention]))
         repo.mark_batch_escalated = AsyncMock()
         repo.update_resolution_outcome = AsyncMock()
 
@@ -246,6 +264,7 @@ class TestRunOncePhase2EntityCreated:
 
         repo = AsyncMock()
         repo.get_unresolved_batch = AsyncMock(return_value=[mention])
+        repo.get_unresolved_batch_with_context = AsyncMock(return_value=_wrap([mention]))
         repo.mark_batch_escalated = AsyncMock()
         repo.update_resolution_outcome = AsyncMock()
 
@@ -302,6 +321,7 @@ class TestRunOncePhase2Noise:
 
         repo = AsyncMock()
         repo.get_unresolved_batch = AsyncMock(return_value=[mention])
+        repo.get_unresolved_batch_with_context = AsyncMock(return_value=_wrap([mention]))
         repo.mark_batch_escalated = AsyncMock()
         repo.update_resolution_outcome = AsyncMock()
 
@@ -356,6 +376,7 @@ class TestRunOnceJsonParseFailure:
 
         repo = AsyncMock()
         repo.get_unresolved_batch = AsyncMock(return_value=[mention])
+        repo.get_unresolved_batch_with_context = AsyncMock(return_value=_wrap([mention]))
         repo.mark_batch_escalated = AsyncMock()
         repo.update_resolution_outcome = AsyncMock()
 
@@ -451,6 +472,7 @@ class TestUsageLogging:
 
         repo = AsyncMock()
         repo.get_unresolved_batch = AsyncMock(return_value=[mention])
+        repo.get_unresolved_batch_with_context = AsyncMock(return_value=_wrap([mention]))
         repo.mark_batch_escalated = AsyncMock()
         repo.update_resolution_outcome = AsyncMock()
 
@@ -595,3 +617,174 @@ class TestDeepInfraProviderPath:
             outcome, _ = await worker._phase2_llm_classify(mention)
 
         assert outcome == ResolutionOutcome.UNRESOLVED
+
+
+# ---------------------------------------------------------------------------
+# F-CRIT-05: financial-domain prompt — 4 worked examples + snapshot
+# ---------------------------------------------------------------------------
+
+
+# PLAN-0057 T-B-3-02: each tuple is (surface, context, llm_payload, expected_outcome).
+# The four worked examples are exactly the cases burned into the prompt body —
+# we feed each one back to the classifier with a mocked LLM that returns the
+# canonical answer, asserting end-to-end that the worker plumbs context_sentence
+# through and translates the JSON correctly.
+_FCRIT05_CASES: list[tuple[str, str, str, ResolutionOutcome]] = [
+    (
+        "iShares Core S&P 500 ETF",
+        "The iShares Core S&P 500 ETF (IVV) saw inflows of $1.2B.",
+        '{"is_entity": true, "reason": "named investable fund"}',
+        ResolutionOutcome.ENTITY_CREATED,
+    ),
+    (
+        "MAS",
+        "Singapore's MAS raised the benchmark rate by 25bps.",
+        '{"is_entity": true, "reason": "Monetary Authority of Singapore — regulator"}',
+        ResolutionOutcome.ENTITY_CREATED,
+    ),
+    (
+        "the company",
+        "Analysts said the company would miss guidance.",
+        '{"is_entity": false, "reason": "generic anaphora, not a named entity"}',
+        ResolutionOutcome.NOISE,
+    ),
+    (
+        "Q3",
+        "Q3 revenue rose 8% year-over-year.",
+        '{"is_entity": false, "reason": "calendar fragment, not a named entity"}',
+        ResolutionOutcome.NOISE,
+    ),
+]
+
+
+@pytest.mark.parametrize(("surface", "context", "llm_payload", "expected"), _FCRIT05_CASES)
+@pytest.mark.asyncio
+async def test_phase2_llm_classify_handles_financial_domain_examples(
+    surface: str,
+    context: str,
+    llm_payload: str,
+    expected: ResolutionOutcome,
+) -> None:
+    """F-CRIT-05: each worked example classifies correctly via the new prompt.
+
+    The mocked LLM returns the canonical JSON answer the new prompt elicits;
+    we assert ``_phase2_llm_classify`` translates it to the expected
+    ResolutionOutcome.  This is the anti-regression test for the
+    over-suppression bug (subsidiaries/ETFs/regulators were rejected by the
+    old "Wikipedia article" prompt).
+    """
+    settings = _make_settings()
+    mention = _make_mention(mention_class=MentionClass.ORGANIZATION, mention_text=surface)
+
+    # The Ollama path wraps the JSON inside {"response": "..."} — match that.
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = MagicMock(return_value={"response": llm_payload})
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    worker = UnresolvedResolutionWorker(
+        nlp_session_factory=MagicMock(),
+        settings=settings,
+    )
+
+    with patch(
+        "nlp_pipeline.infrastructure.workers.unresolved_resolution_worker.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        outcome, _reason = await worker._phase2_llm_classify(mention, context_sentence=context)
+
+    assert outcome == expected, f"surface={surface!r} expected {expected} got {outcome}"
+    # Confirm the prompt that hit the LLM included BOTH the surface and the
+    # context — this is the load-bearing change vs the old prompt.
+    sent_prompt = mock_client.post.await_args.kwargs["json"]["prompt"]
+    assert surface in sent_prompt
+    assert context in sent_prompt
+
+
+@pytest.mark.asyncio
+async def test_phase2_llm_classify_passes_context_to_external_provider() -> None:
+    """DeepInfra path also receives both surface AND context in the prompt body.
+
+    Both call sites (Ollama + DeepInfra) must use the new template; this
+    asserts the prompt that the OpenAI-compatible chat/completions request
+    carries contains the per-mention ``context_sentence``.
+    """
+    s = _make_settings()
+    s.unresolved_resolution_api_key = "test-key"
+    s.unresolved_resolution_api_base_url = "https://api.deepinfra.com/v1/openai"
+    s.unresolved_resolution_api_model_id = "Qwen/Qwen2.5-0.5B-Instruct"
+    mention = _make_mention(mention_class=MentionClass.ORGANIZATION, mention_text="MAS")
+
+    openai_resp = {"choices": [{"message": {"content": '{"is_entity": true, "reason": "regulator"}'}}]}
+    resp_mock = MagicMock()
+    resp_mock.json.return_value = openai_resp
+    resp_mock.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=resp_mock)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    worker = UnresolvedResolutionWorker(
+        nlp_session_factory=MagicMock(),
+        settings=s,
+    )
+
+    ctx = "Singapore central bank press release | Rate decision"
+    with patch(
+        "nlp_pipeline.infrastructure.workers.unresolved_resolution_worker.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        outcome, _reason = await worker._phase2_llm_classify(mention, context_sentence=ctx)
+
+    assert outcome == ResolutionOutcome.ENTITY_CREATED
+    chat_messages = mock_client.post.await_args.kwargs["json"]["messages"]
+    sent_prompt = chat_messages[0]["content"]
+    # Both surface and context must reach the external provider.
+    assert "MAS" in sent_prompt
+    assert "Singapore central bank" in sent_prompt
+
+
+def test_classification_prompt_template_includes_all_four_worked_examples() -> None:
+    """Snapshot: anti-regression on the four examples burned into the prompt.
+
+    If any of these four signature substrings disappears from the prompt,
+    we have silently regressed F-CRIT-05's recall fix.  The exact strings
+    are pulled verbatim from the audit fix-design report.
+    """
+    rendered = _CLASSIFICATION_PROMPT_TEMPLATE.format(
+        surface="placeholder-surface",
+        context="placeholder-context",
+    )
+    # Positive examples
+    assert "iShares Core S&P 500 ETF" in rendered
+    assert "Singapore's MAS raised the benchmark rate" in rendered
+    # Negative examples
+    assert "the company would miss guidance" in rendered
+    assert "Q3 revenue rose 8% year-over-year" in rendered
+    # Domain coverage signals
+    assert "subsidiary" in rendered
+    assert "ETF" in rendered
+    assert "regulator" in rendered
+    # The old "Wikipedia article" criterion must NOT come back.
+    assert "Wikipedia" not in rendered
+    # Final response instruction must be present and unambiguous.
+    assert "Respond with JSON ONLY" in rendered
+
+
+def test_classification_prompt_handles_missing_context_gracefully() -> None:
+    """Empty context is replaced with a stable placeholder so the prompt still renders.
+
+    Some legacy mentions have no associated document_source_metadata row
+    (or no section); the worker must not crash on ``None``.
+    """
+    rendered = _CLASSIFICATION_PROMPT_TEMPLATE.format(
+        surface="OpenAI",
+        context="(no surrounding context available)",
+    )
+    assert "OpenAI" in rendered
+    assert "(no surrounding context available)" in rendered

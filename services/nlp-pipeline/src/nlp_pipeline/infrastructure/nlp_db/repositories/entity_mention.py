@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -14,6 +15,25 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from nlp_pipeline.domain.models import EntityMention
+
+
+@dataclass(frozen=True)
+class UnresolvedMentionWithContext:
+    """Bundle of an unresolved EntityMention plus its surrounding context.
+
+    PLAN-0057 T-B-3-01: the LLM-based unresolved-resolution worker (F-CRIT-05)
+    needs domain context to distinguish "iShares Core S&P 500 ETF" (real
+    investable fund) from "Q3" (calendar fragment).  The chunk text itself is
+    stored in MinIO/S3 (keyed by ``chunks.chunk_text_key``), so we cannot
+    extract the literal ±200 chars around the mention purely in SQL.  Instead
+    we surface the strongest DB-resident context — the document title and the
+    enclosing section title — which together give the LLM enough domain signal
+    (e.g. "Singapore central bank press release" → "MAS = Monetary Authority
+    of Singapore").  Both fields are nullable because not every doc has them.
+    """
+
+    mention: EntityMentionModel
+    context_sentence: str | None
 
 
 class EntityMentionRepository:
@@ -121,6 +141,112 @@ class EntityMentionRepository:
             ),
         )
         return list(orm_result.scalars().all())
+
+    async def get_unresolved_batch_with_context(
+        self,
+        batch_size: int,
+        lookback_days: int = 90,
+        *,
+        lock: bool = True,
+    ) -> list[UnresolvedMentionWithContext]:
+        """Fetch unresolved mentions with surrounding domain context.
+
+        PLAN-0057 T-B-3-01 / F-CRIT-05.  Identical lock semantics to
+        :py:meth:`get_unresolved_batch` (FOR UPDATE SKIP LOCKED so concurrent
+        workers cannot double-process), but additionally LEFT JOINs the
+        ``document_source_metadata`` and ``sections`` tables to retrieve
+        document-title and section-title strings.  Those strings are
+        concatenated into a single ``context_sentence`` field that the
+        UnresolvedResolutionWorker passes to the LLM prompt to disambiguate
+        ambiguous surface forms (e.g. "MAS" → Monetary Authority of Singapore
+        when the title mentions Singapore).
+
+        Why title+section instead of literal ±200 chars from chunk text:
+        chunk text lives in MinIO/S3 (referenced by ``chunks.chunk_text_key``)
+        and is not joinable in SQL.  Title + section heading are the strongest
+        DB-resident contextual signals and add zero S3 round-trips per
+        mention — important because a single batch can hit hundreds of rows.
+
+        Args:
+        ----
+            batch_size:    Maximum rows to fetch.
+            lookback_days: Only consider mentions created within this many days.
+            lock:          Whether to acquire FOR UPDATE SKIP LOCKED (default True).
+                           Set False in read-only tests.
+
+        Returns:
+        -------
+            List of :class:`UnresolvedMentionWithContext`.  Empty list when no
+            unresolved rows exist.
+
+        """
+        # Step 1: fetch + lock the unresolved mention IDs.  We cannot do the
+        # JOIN in this SELECT because PostgreSQL forbids FOR UPDATE on rows
+        # produced by an outer join — so we lock entity_mentions only, then
+        # hydrate context in a second non-locking query.
+        lock_clause = "FOR UPDATE SKIP LOCKED" if lock else ""
+        result = await self._session.execute(
+            text(
+                f"""
+                SELECT mention_id
+                FROM entity_mentions
+                WHERE resolution_outcome = 'unresolved'
+                  AND created_at >= now() - make_interval(days => :days)
+                ORDER BY created_at ASC
+                LIMIT :limit
+                {lock_clause}
+                """,
+            ),
+            {"days": lookback_days, "limit": batch_size},
+        )
+        rows = result.fetchall()
+        if not rows:
+            return []
+        mention_ids = [r[0] for r in rows]
+
+        # Step 2: load ORM EntityMentionModel rows for attribute access.
+        orm_result = await self._session.execute(
+            select(EntityMentionModel).where(
+                EntityMentionModel.mention_id.in_(mention_ids),  # type: ignore[attr-defined]
+            ),
+        )
+        orm_rows: list[EntityMentionModel] = list(orm_result.scalars().all())
+
+        # Step 3: pull document title + section title in one query.  We use a
+        # raw SQL query (not the ORM) because ``document_source_metadata`` is
+        # not modelled with a relationship() to entity_mentions — adding one
+        # would force a migration that is out of scope for this wave.
+        ctx_result = await self._session.execute(
+            text(
+                """
+                SELECT em.mention_id,
+                       dsm.title         AS doc_title,
+                       s.title           AS section_title
+                FROM entity_mentions em
+                LEFT JOIN document_source_metadata dsm ON dsm.doc_id = em.doc_id
+                LEFT JOIN sections s ON s.section_id = em.section_id
+                WHERE em.mention_id = ANY(:ids)
+                """,
+            ),
+            {"ids": mention_ids},
+        )
+        # Build a lookup so we can attach context to each ORM row in O(1).
+        ctx_by_id: dict[UUID, str | None] = {}
+        for row in ctx_result.fetchall():
+            doc_title = row.doc_title or ""
+            section_title = row.section_title or ""
+            # Compose a single human-readable context string.  Empty fields
+            # are dropped to avoid stray pipes ("|").  None when both empty.
+            parts = [p for p in (doc_title.strip(), section_title.strip()) if p]
+            ctx_by_id[row.mention_id] = " | ".join(parts) if parts else None
+
+        return [
+            UnresolvedMentionWithContext(
+                mention=orm_row,
+                context_sentence=ctx_by_id.get(orm_row.mention_id),
+            )
+            for orm_row in orm_rows
+        ]
 
     async def update_resolution_outcome(
         self,

@@ -30,6 +30,7 @@ async def main() -> None:
     from nlp_pipeline.config import Settings
     from nlp_pipeline.infrastructure.intelligence_db.session import _build_intelligence_factories
     from nlp_pipeline.infrastructure.nlp_db.session import _build_nlp_factories
+    from nlp_pipeline.infrastructure.nlp_db.usage_log_factory import SessionScopedNlpUsageLogger
     from nlp_pipeline.infrastructure.workers.unresolved_resolution_worker import (
         UnresolvedResolutionWorker,
     )
@@ -52,11 +53,14 @@ async def main() -> None:
         log.error("unresolved_resolution_worker_startup_failed", error=str(exc))
         sys.exit(1)
 
+    # PLAN-0057 A-5 / F-CRIT-03: thread a session-scoped usage logger so every
+    # Phase-2 Ollama / DeepInfra classification call writes a row to
+    # nlp_db.llm_usage_log.  Until this fix the table was permanently empty.
     worker = UnresolvedResolutionWorker(
         nlp_session_factory=nlp_sf,
         settings=settings,
         intel_session_factory=intel_sf,
-        usage_logger=None,
+        usage_logger=SessionScopedNlpUsageLogger(nlp_sf),
     )
 
     # Reset any stuck-escalated mentions from a previous crash (one-time startup call).

@@ -78,6 +78,13 @@ class EntityMention:
     # Set by UnresolvedResolutionWorker (PLAN-0033 Wave 3)
     resolution_noise_reason: str | None = None  # LLM reason when outcome=noise
     resolution_processed_at: datetime | None = None  # UTC timestamp when worker processed
+    # PLAN-0057 B-2: when Block 9 emits PROVISIONAL outcome it inserts into
+    # ``provisional_entity_queue`` and stashes the canonical queue_id here so
+    # the article consumer's ``_build_raw_relations/events/claims`` helpers
+    # (Wave B-1) can reference it as a synthetic entity id while flagging
+    # the relation/event/claim with ``entity_provisional=True``. Domain-only
+    # (not persisted to ``entity_mentions``); transient for the consumer cycle.
+    provisional_queue_id: UUID | None = None
 
 
 @dataclass

@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import time
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -27,6 +28,7 @@ from sqlalchemy import text
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
+    from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 # PLAN-0055 C-2: bump this constant whenever the LLM prompt template changes so
@@ -88,6 +90,7 @@ class ArticleRelevanceScoringWorker:
         api_key: str = "",
         api_base_url: str = "https://api.deepinfra.com/v1/openai",
         api_model_id: str = "Qwen/Qwen2.5-0.5B-Instruct",
+        usage_logger: LlmUsageLogProtocol | None = None,
     ) -> None:
         self._nlp_sf = nlp_session_factory
         self._ollama_url = ollama_url.rstrip("/")
@@ -99,6 +102,10 @@ class ArticleRelevanceScoringWorker:
         self._api_key = api_key
         self._api_base_url = api_base_url.rstrip("/")
         self._api_model_id = api_model_id
+        # PLAN-0057 A-5 / F-CRIT-03: optional cost/latency logger.  When wired,
+        # every Ollama / DeepInfra HTTP call (success OR failure) appends one
+        # row to nlp_db.llm_usage_log so we can audit pipeline LLM spend.
+        self._usage_logger = usage_logger
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -225,6 +232,9 @@ class ArticleRelevanceScoringWorker:
         Raises httpx.ConnectError or httpx.TimeoutException → caller skips cycle.
         """
         prompt = _SYSTEM_PROMPT + f"\nUser: Title: {title or 'Unknown'}\nSource: {source_type or 'Unknown'}"
+        # PLAN-0057 A-5: capture latency for the usage log; wall-clock perf_counter
+        # is sufficient because the call is bounded by httpx timeout above.
+        t0 = time.perf_counter()
         resp = await client.post(
             f"{self._ollama_url}/api/generate",
             # BP-231: qwen3 is a thinking model — "think": False disables reasoning mode,
@@ -242,7 +252,11 @@ class ArticleRelevanceScoringWorker:
                 "options": {"num_ctx": 768},
             },
         )
+        latency_ms = int((time.perf_counter() - t0) * 1000)
         raw = resp.text
+        # success-from-status: HTTP 2xx implies the *transport* succeeded.  JSON-parse
+        # success is reflected separately by the return value (None = parse failure).
+        http_success = 200 <= resp.status_code < 300
         try:
             data = json.loads(raw)
             # Ollama wraps the model output in a "response" field when format=json
@@ -252,6 +266,15 @@ class ArticleRelevanceScoringWorker:
             # F-Q1-07: extract sentiment — default to None if missing or not a valid enum.
             raw_sentiment = parsed.get("sentiment", "")
             sentiment: str | None = raw_sentiment if raw_sentiment in _VALID_SENTIMENTS else None
+            await self._record_usage(
+                provider="ollama",
+                model_id=self._model,
+                latency_ms=latency_ms,
+                success=http_success,
+                tokens_in=len(prompt.split()),
+                tokens_out=len(raw.split()),
+                doc_id=doc_id,
+            )
             return max(0.0, min(1.0, score)), sentiment
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
             logger.warning(  # type: ignore[no-any-return]
@@ -259,6 +282,16 @@ class ArticleRelevanceScoringWorker:
                 article_id=str(doc_id),
                 error=str(exc),
                 raw_response=raw[:200],
+            )
+            await self._record_usage(
+                provider="ollama",
+                model_id=self._model,
+                latency_ms=latency_ms,
+                success=False,
+                tokens_in=len(prompt.split()),
+                tokens_out=0,
+                doc_id=doc_id,
+                error_code="model_error",
             )
             return None
 
@@ -281,6 +314,10 @@ class ArticleRelevanceScoringWorker:
         Raises httpx.ConnectError or httpx.TimeoutException → caller skips cycle.
         """
         user_content = _SYSTEM_PROMPT + f"\nUser: Title: {title or 'Unknown'}\nSource: {source_type or 'Unknown'}"
+        # PLAN-0057 A-5: latency captured around the network call only; if
+        # raise_for_status() throws, latency_ms still reflects the wall-clock
+        # round-trip duration so the log row is accurate.
+        t0 = time.perf_counter()
         try:
             resp = await client.post(
                 f"{self._api_base_url}/chat/completions",
@@ -297,20 +334,85 @@ class ArticleRelevanceScoringWorker:
                 },
             )
             resp.raise_for_status()
+            latency_ms = int((time.perf_counter() - t0) * 1000)
             content = resp.json()["choices"][0]["message"]["content"]
             parsed = json.loads(content)
             score = float(parsed["score"])
             # F-Q1-07: extract sentiment — default to None if missing or invalid enum.
             raw_sentiment = parsed.get("sentiment", "")
             sentiment: str | None = raw_sentiment if raw_sentiment in _VALID_SENTIMENTS else None
+            await self._record_usage(
+                provider="deepinfra",
+                model_id=self._api_model_id,
+                latency_ms=latency_ms,
+                success=True,
+                tokens_in=len(user_content.split()),
+                tokens_out=len(content.split()),
+                doc_id=doc_id,
+            )
             return max(0.0, min(1.0, score)), sentiment
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
+            latency_ms = int((time.perf_counter() - t0) * 1000)
             logger.warning(  # type: ignore[no-any-return]
                 "relevance_scoring_json_parse_error",
                 article_id=str(doc_id),
                 error=str(exc),
             )
+            await self._record_usage(
+                provider="deepinfra",
+                model_id=self._api_model_id,
+                latency_ms=latency_ms,
+                success=False,
+                tokens_in=len(user_content.split()),
+                tokens_out=0,
+                doc_id=doc_id,
+                error_code="model_error",
+            )
             return None
+
+    async def _record_usage(
+        self,
+        *,
+        provider: str,
+        model_id: str,
+        latency_ms: int,
+        success: bool,
+        tokens_in: int,
+        tokens_out: int,
+        doc_id: UUID,
+        error_code: str | None = None,
+    ) -> None:
+        """PLAN-0057 A-5: append one llm_usage_log row per LLM call.
+
+        Best-effort wrapper around ``self._usage_logger.log()`` — if the logger
+        is None (unit-test default) or its log() raises, the call returns
+        silently so the scoring path is never disrupted.
+
+        Token counts are word-split estimates (the protocol allows estimates;
+        no provider returns exact counts on this code path).
+        """
+        if self._usage_logger is None:
+            return
+        try:
+            await self._usage_logger.log(
+                model_id=model_id,
+                provider=provider,
+                capability="classification",
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                latency_ms=latency_ms,
+                estimated_cost_usd=0.0,
+                success=success,
+                error_code=error_code,
+                doc_id=doc_id,
+            )
+        except Exception as exc:  # belt-and-braces — protocol forbids raising
+            logger.warning(  # type: ignore[no-any-return]
+                "relevance_scoring_usage_log_failed",
+                article_id=str(doc_id),
+                error=str(exc),
+                exc_info=True,
+            )
 
     @staticmethod
     async def _write_scores(

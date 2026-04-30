@@ -93,6 +93,7 @@ from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from ml_clients.protocols import EmbeddingClient, ExtractionClient, NERClient  # type: ignore[import-not-found]
+    from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
@@ -159,6 +160,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
         extraction_client: ExtractionClient,
         backpressure: BackpressureController,
         chunk_text_store: ChunkTextStorePort | None = None,
+        usage_logger: LlmUsageLogProtocol | None = None,
     ) -> None:
         super().__init__(config)
         self._settings = settings
@@ -171,6 +173,10 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
         self._ext = extraction_client
         self._bp = backpressure
         self._chunk_text_store = chunk_text_store
+        # PLAN-0057 A-5 / F-CRIT-03: optional cost/latency logger threaded into
+        # the deep-extraction block.  When None (unit-test default) the block
+        # silently skips usage logging.
+        self._usage_logger = usage_logger
 
     # ── UoW (no-op — session managed inside process_message) ─────────────────
 
@@ -799,17 +805,39 @@ async def _enqueue_enriched(
     effective_tier = routing_decision.final_routing_tier or routing_decision.routing_tier
     resolved_ids = [str(m.resolved_entity_id) for m in mentions if m.resolved_entity_id is not None]
 
-    # Build entity_id lookup from resolved mentions so extraction results
-    # (which use entity_ref text names) can be mapped to canonical UUIDs
-    # that S7 (knowledge-graph) expects in raw_relations/raw_events/raw_claims.
+    # PLAN-0057 B-1 (F-CRIT-07): the prior version of this lookup was built only
+    # from RESOLVED mentions, but the deep-extraction prompt told the LLM to use
+    # entity_refs drawn from the FULL mention list. The LLM correctly followed
+    # the prompt and picked unresolved-but-mentioned surfaces; the
+    # ``_build_raw_*`` helpers below silently dropped every relation/event/claim
+    # whose ref didn't appear in this dict. Empirically that destroyed ~80% of
+    # extracted output (producer log claims=5 → consumer log claims=2; relations
+    # ~100% drop because BOTH endpoints had to resolve).
+    #
+    # The fix: include both RESOLVED mentions (real canonical UUID) AND
+    # PROVISIONAL mentions that have a ``provisional_queue_id`` (synthetic UUID
+    # pointing into ``provisional_entity_queue``). Track which keys are
+    # provisional so we can tag downstream raw_* rows with
+    # ``entity_provisional=True`` and ``provisional_queue_id=<queue UUID>``.
+    # KG-side ``enriched_consumer._parse_raw_relations`` already accepts these
+    # fields and is wired to promote provisional rows once the corresponding
+    # canonical_entity is created via the entity.canonical.created.v1 stream.
     entity_id_by_ref: dict[str, str] = {}
+    provisional_refs: set[str] = set()
     for m in mentions:
+        key = m.mention_text.lower()
         if m.resolved_entity_id is not None:
-            entity_id_by_ref[m.mention_text.lower()] = str(m.resolved_entity_id)
+            entity_id_by_ref[key] = str(m.resolved_entity_id)
+        elif m.provisional_queue_id is not None:
+            entity_id_by_ref[key] = str(m.provisional_queue_id)
+            provisional_refs.add(key)
+        # else: UNRESOLVED with no queue id (truly unknown surface) — still
+        # excluded from the lookup so downstream relations referring to it
+        # are dropped (no synthetic id to point to).
 
-    raw_relations = _build_raw_relations(extraction_result.get("relations", []), entity_id_by_ref)
-    raw_events = _build_raw_events(extraction_result.get("events", []), entity_id_by_ref)
-    raw_claims = _build_raw_claims(extraction_result.get("claims", []), entity_id_by_ref)
+    raw_relations = _build_raw_relations(extraction_result.get("relations", []), entity_id_by_ref, provisional_refs)
+    raw_events = _build_raw_events(extraction_result.get("events", []), entity_id_by_ref, provisional_refs)
+    raw_claims = _build_raw_claims(extraction_result.get("claims", []), entity_id_by_ref, provisional_refs)
 
     payload: dict[str, Any] = {
         "event_id": str(common.ids.new_uuid7()),
@@ -848,11 +876,16 @@ async def _enqueue_enriched(
 def _build_raw_relations(
     relations: list[Any],
     entity_id_by_ref: dict[str, str],
+    provisional_refs: set[str],
 ) -> list[dict[str, Any]]:
     """Convert LLM extraction relations into the dict format S7 expects.
 
     S7's ``_parse_raw_relations`` requires ``subject_entity_id``, ``object_entity_id``,
-    and ``raw_type``.  Skips relations where either entity ref cannot be resolved.
+    and ``raw_type``. Skips relations where either entity ref cannot be resolved
+    (truly unknown surface). When a ref points to a PROVISIONAL mention, sets
+    ``entity_provisional=True`` and emits the corresponding queue id as
+    ``provisional_queue_id`` so KG can promote the row once a canonical entity
+    is later created (PLAN-0057 B-1, F-CRIT-07).
     """
     result: list[dict[str, Any]] = []
     for rel in relations:
@@ -862,15 +895,26 @@ def _build_raw_relations(
         subject_id = entity_id_by_ref.get(subject_ref)
         object_id = entity_id_by_ref.get(object_ref)
         if subject_id is None or object_id is None:
-            continue  # skip unresolved — S7 cannot materialize without entity UUIDs
+            continue  # skip truly unresolved — neither resolved nor provisional
+        subject_is_provisional = subject_ref in provisional_refs
+        object_is_provisional = object_ref in provisional_refs
+        # Pick whichever endpoint is provisional as the queue_id reference.
+        # If both endpoints are provisional we surface the SUBJECT queue id —
+        # KG promotes by queue_id so either is fine; subject is the conventional
+        # primary endpoint of a relation.
+        provisional_qid: str | None = None
+        if subject_is_provisional:
+            provisional_qid = subject_id
+        elif object_is_provisional:
+            provisional_qid = object_id
         result.append(
             {
                 "subject_entity_id": subject_id,
                 "object_entity_id": object_id,
                 "raw_type": str(rel_d.get("predicate", "")),
                 "extraction_confidence": float(rel_d.get("confidence", 0.5)),
-                "entity_provisional": bool(rel_d.get("entity_provisional", False)),
-                "provisional_queue_id": rel_d.get("provisional_queue_id"),
+                "entity_provisional": subject_is_provisional or object_is_provisional,
+                "provisional_queue_id": provisional_qid,
             }
         )
     return result
@@ -879,12 +923,14 @@ def _build_raw_relations(
 def _build_raw_events(
     events: list[Any],
     entity_id_by_ref: dict[str, str],
+    provisional_refs: set[str],
 ) -> list[dict[str, Any]]:
     """Convert LLM extraction events into the dict format S7 expects.
 
     S7's ``_parse_raw_events`` requires ``subject_entity_id`` and ``event_type``.
-    Uses the first resolvable entity_ref as subject.  Skips events with no
-    resolvable entity.
+    Uses the first resolvable entity_ref as subject. Skips events with no
+    resolvable entity. When the subject ref is PROVISIONAL, sets
+    ``entity_provisional=True`` and ``provisional_queue_id`` per PLAN-0057 B-1.
     """
     result: list[dict[str, Any]] = []
     for evt in events:
@@ -892,15 +938,19 @@ def _build_raw_events(
         # Find the first resolvable entity ref from the entity_refs list
         entity_refs = evt_d.get("entity_refs", [])
         subject_id: str | None = None
+        subject_ref_lower: str | None = None
         participant_ids: list[str] = []
         for ref in entity_refs:  # type: ignore[union-attr]
-            eid = entity_id_by_ref.get(str(ref).lower())
+            ref_lower = str(ref).lower()
+            eid = entity_id_by_ref.get(ref_lower)
             if eid is not None:
                 if subject_id is None:
                     subject_id = eid
+                    subject_ref_lower = ref_lower
                 participant_ids.append(eid)
         if subject_id is None:
-            continue  # skip unresolved
+            continue  # skip truly unresolved
+        is_provisional = (subject_ref_lower or "") in provisional_refs
         result.append(
             {
                 "subject_entity_id": subject_id,
@@ -908,6 +958,8 @@ def _build_raw_events(
                 "event_text": str(evt_d.get("description", "")),
                 "extraction_confidence": float(evt_d.get("confidence", 0.5)),
                 "participant_entity_ids": participant_ids,
+                "entity_provisional": is_provisional,
+                "provisional_queue_id": subject_id if is_provisional else None,
             }
         )
     return result
@@ -916,11 +968,14 @@ def _build_raw_events(
 def _build_raw_claims(
     claims: list[Any],
     entity_id_by_ref: dict[str, str],
+    provisional_refs: set[str],
 ) -> list[dict[str, Any]]:
     """Convert LLM extraction claims into the dict format S7 expects.
 
     S7's ``_parse_raw_claims`` requires ``subject_entity_id`` and ``claim_type``.
-    Skips claims where the entity ref cannot be resolved.
+    Skips claims where the entity ref cannot be resolved. PLAN-0057 B-1: when
+    the subject_ref is a PROVISIONAL surface, emit ``entity_provisional=True``
+    and the queue UUID so KG can promote the claim once a canonical lands.
     """
     result: list[dict[str, Any]] = []
     for claim in claims:
@@ -928,7 +983,8 @@ def _build_raw_claims(
         entity_ref = str(claim_d.get("entity_ref", "")).lower()
         subject_id = entity_id_by_ref.get(entity_ref)
         if subject_id is None:
-            continue  # skip unresolved
+            continue  # skip truly unresolved
+        is_provisional = entity_ref in provisional_refs
         result.append(
             {
                 "subject_entity_id": subject_id,
@@ -936,6 +992,8 @@ def _build_raw_claims(
                 "polarity": str(claim_d.get("polarity", "neutral")),
                 "claim_text": str(claim_d.get("evidence_text", "")),
                 "extraction_confidence": float(claim_d.get("confidence", 0.5)),
+                "entity_provisional": is_provisional,
+                "provisional_queue_id": subject_id if is_provisional else None,
             }
         )
     return result
