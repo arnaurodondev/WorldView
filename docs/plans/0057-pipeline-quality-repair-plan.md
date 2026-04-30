@@ -616,7 +616,8 @@ Also: `_insert_provisional` returns the canonical `queue_id` (via `RETURNING`); 
 
 ---
 
-### Wave B-3: UnresolvedResolutionWorker prompt rewrite + context_sentence (F-CRIT-05)
+### Wave B-3: UnresolvedResolutionWorker prompt rewrite + context_sentence (F-CRIT-05) ✅
+**Status**: DONE — 2026-04-30 (commit on top of ea0da78f)
 **Goal**: stop over-suppressing real financial entities (subsidiaries, ETFs, lesser-known regulators).
 **Depends on**: T-B-2-01 (so worker has provisional queue rows to operate on)
 **Estimated effort**: 3-4 hours
