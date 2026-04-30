@@ -147,3 +147,123 @@ class TestMarketDataClientTimeout:
             bar = await mc.get_ohlcv(_SYMBOL, _DATE)
 
         assert bar is None
+
+
+class TestMarketDataClientInternalJWT:
+    """PLAN-0057 Wave E-1 — verify the X-Internal-JWT header path.
+
+    market-data is guarded by ``InternalJWTMiddleware`` so unauthenticated
+    requests return 401 and ``article_impact_windows`` stays empty.  The
+    fix: when ``api_gateway_url`` is configured, MarketDataClient mints a
+    token via S9's ``POST /v1/auth/dev-login`` and forwards it as
+    ``X-Internal-JWT`` on every OHLCV call.
+    """
+
+    @pytest.mark.asyncio
+    async def test_mints_token_and_sets_header(self, httpx_mock: pytest_httpx.HTTPXMock) -> None:
+        """Happy path: gateway returns access_token, OHLCV request carries the header."""
+        httpx_mock.add_response(
+            method="POST",
+            url="http://api-gateway:8000/v1/auth/dev-login",
+            json={"access_token": "eyJ.fake-jwt"},
+            status_code=200,
+        )
+        httpx_mock.add_response(
+            method="GET",
+            url=f"http://market-data:8003/api/v1/market-data/ohlcv/{_SYMBOL}?start=2026-04-01&end=2026-04-01",
+            json=_OHLCV_LIST_RESPONSE,
+            status_code=200,
+        )
+
+        async with httpx.AsyncClient() as client:
+            mc = MarketDataClient(
+                client,
+                "http://market-data:8003",
+                api_gateway_url="http://api-gateway:8000",
+            )
+            bar = await mc.get_ohlcv(_SYMBOL, _DATE)
+
+        assert bar is not None
+        ohlcv_req = next(r for r in httpx_mock.get_requests() if "ohlcv" in str(r.url))
+        assert ohlcv_req.headers.get("X-Internal-JWT") == "eyJ.fake-jwt"
+
+    @pytest.mark.asyncio
+    async def test_token_is_cached_across_calls(self, httpx_mock: pytest_httpx.HTTPXMock) -> None:
+        """Two get_ohlcv calls in quick succession must share a single dev-login mint."""
+        httpx_mock.add_response(
+            method="POST",
+            url="http://api-gateway:8000/v1/auth/dev-login",
+            json={"access_token": "cached-token"},
+            status_code=200,
+        )
+        # Each call consumes one queued response; both must succeed.
+        httpx_mock.add_response(
+            method="GET",
+            url=f"http://market-data:8003/api/v1/market-data/ohlcv/{_SYMBOL}?start=2026-04-01&end=2026-04-01",
+            json=_OHLCV_LIST_RESPONSE,
+            status_code=200,
+        )
+        httpx_mock.add_response(
+            method="GET",
+            url=f"http://market-data:8003/api/v1/market-data/ohlcv/{_SYMBOL}?start=2026-04-01&end=2026-04-01",
+            json=_OHLCV_LIST_RESPONSE,
+            status_code=200,
+        )
+
+        async with httpx.AsyncClient() as client:
+            mc = MarketDataClient(
+                client,
+                "http://market-data:8003",
+                api_gateway_url="http://api-gateway:8000",
+            )
+            await mc.get_ohlcv(_SYMBOL, _DATE)
+            await mc.get_ohlcv(_SYMBOL, _DATE)
+
+        login_calls = [r for r in httpx_mock.get_requests() if "dev-login" in str(r.url)]
+        assert len(login_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_no_header_when_gateway_unreachable(self, httpx_mock: pytest_httpx.HTTPXMock) -> None:
+        """If dev-login fails, fall back to unauthenticated request (preserve 401-and-warn)."""
+        httpx_mock.add_response(
+            method="POST",
+            url="http://api-gateway:8000/v1/auth/dev-login",
+            status_code=503,
+            text="gateway down",
+        )
+        httpx_mock.add_response(
+            method="GET",
+            url=f"http://market-data:8003/api/v1/market-data/ohlcv/{_SYMBOL}?start=2026-04-01&end=2026-04-01",
+            json=_OHLCV_LIST_RESPONSE,
+            status_code=200,
+        )
+
+        async with httpx.AsyncClient() as client:
+            mc = MarketDataClient(
+                client,
+                "http://market-data:8003",
+                api_gateway_url="http://api-gateway:8000",
+            )
+            bar = await mc.get_ohlcv(_SYMBOL, _DATE)
+
+        assert bar is not None  # Bar still parses — token-failure is non-fatal.
+        ohlcv_req = next(r for r in httpx_mock.get_requests() if "ohlcv" in str(r.url))
+        assert "X-Internal-JWT" not in ohlcv_req.headers
+
+    @pytest.mark.asyncio
+    async def test_no_gateway_url_means_no_token_attempt(self, httpx_mock: pytest_httpx.HTTPXMock) -> None:
+        """Backward-compat: if api_gateway_url omitted, never call dev-login."""
+        httpx_mock.add_response(
+            method="GET",
+            url=f"http://market-data:8003/api/v1/market-data/ohlcv/{_SYMBOL}?start=2026-04-01&end=2026-04-01",
+            json=_OHLCV_LIST_RESPONSE,
+            status_code=200,
+        )
+
+        async with httpx.AsyncClient() as client:
+            mc = MarketDataClient(client, "http://market-data:8003")
+            bar = await mc.get_ohlcv(_SYMBOL, _DATE)
+
+        assert bar is not None
+        login_calls = [r for r in httpx_mock.get_requests() if "dev-login" in str(r.url)]
+        assert login_calls == []
