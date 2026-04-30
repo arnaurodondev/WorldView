@@ -75,8 +75,8 @@ const SelectTrigger = React.forwardRef<
       "text-foreground",
       // Focus ring: Radix applies data-[state=open] so we use focus-visible
       "focus:outline-none focus:ring-1 focus:ring-ring",
-      // Disabled state
-      "disabled:cursor-not-allowed disabled:opacity-50",
+      // PLAN-0059 W0 F-VISUAL-027: explicit tokens (was opacity-50, fails WCAG AA)
+      "disabled:cursor-not-allowed disabled:text-[hsl(var(--disabled-foreground))]",
       // Placeholder text: muted so it's visually lighter than real values
       "[&>span[data-placeholder]]:text-muted-foreground",
       className,

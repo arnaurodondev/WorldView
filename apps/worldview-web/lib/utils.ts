@@ -238,31 +238,77 @@ export function priceChangeClass(
  *
  * WHY 7 steps: Matches the PRD-0028 spec and the pencil.dev canvas design.
  * Range -3% to +3% covers 95%+ of daily sector moves without clamping.
- * Returns CSS background + text color as an object for inline style usage
- * (lightweight-charts and other non-Tailwind contexts need hex values).
+ * Returns CSS background + text color as an object for inline style usage.
+ *
+ * PLAN-0059 W0 F-VISUAL-003 fix:
+ *   The previous implementation returned hardcoded blue-tinted hex values
+ *   (#1A2030, #0A2E28, #0A2420, #251218, #300E12, #3D0A0E) which were
+ *   leftovers from the pre-2026-04-23 "Bloomberg Dark" palette. globals.css:11
+ *   explicitly forbids those colors — but this function never got the memo.
+ *   Sector heatmap cells looked like cyan stickers on a zero-hue page.
+ *
+ *   Now derives every step from CSS variables (--positive, --negative,
+ *   --surface-2, --muted-foreground) via hsl()/0.NN alpha blends. Future
+ *   palette tweaks cascade automatically. Heatmap is now visually harmonized
+ *   with the page hue family.
+ *
+ * RETURNS hsl()/CSS-var strings (not hex). Consumers that need hex literals
+ * (lightweight-charts) should use lib/format/color.ts:resolveCssColor() —
+ * but most callers can use these CSS strings directly in inline style.
  */
 export function heatCellColor(changePct: number | null): {
   background: string;
   color: string;
 } {
   if (changePct == null) {
-    return { background: "#1A2030", color: "#6B7585" }; // neutral/no data
+    return {
+      background: "hsl(var(--surface-2))",
+      color: "hsl(var(--muted-foreground))",
+    };
   }
 
   // Clamp to [-3%, +3%] range for the 7-step scale
   const clamped = Math.max(-3, Math.min(3, changePct));
 
-  // WHY these specific hex values: tinted backgrounds harmonize with the
-  // Bloomberg Dark #0A0E14 page background. Each step blends the teal or
-  // red hue into the dark blue-grey base so cells feel "part of the page"
-  // rather than painted-on color blocks.
-  if (clamped >= 3) return { background: "#0A2E28", color: "#26A69A" };
-  if (clamped >= 1.5) return { background: "#0A2420", color: "#26A69A" };
-  if (clamped >= 0.5) return { background: "#0E201C", color: "#4DB6AC" };
-  if (clamped > -0.5) return { background: "#1A2030", color: "#6B7585" };
-  if (clamped > -1.5) return { background: "#251218", color: "#EF9A9A" };
-  if (clamped > -3) return { background: "#300E12", color: "#EF5350" };
-  return { background: "#3D0A0E", color: "#EF5350" };
+  // WHY 7 explicit alpha steps (not opacity-blended via Tailwind /20 /30):
+  // Tailwind's /NN suffix uses opacity-blend which renders slightly differently
+  // on macOS Display P3 vs Windows sRGB (the audit's color-space drift finding).
+  // CSS hsl()/N.NN syntax with explicit alpha matches the page hue exactly.
+  // Cells feel "part of the page" rather than painted-on color blocks.
+  if (clamped >= 3)
+    return {
+      background: "hsl(var(--positive) / 0.32)",
+      color: "hsl(var(--positive))",
+    };
+  if (clamped >= 1.5)
+    return {
+      background: "hsl(var(--positive) / 0.20)",
+      color: "hsl(var(--positive))",
+    };
+  if (clamped >= 0.5)
+    return {
+      background: "hsl(var(--positive) / 0.10)",
+      color: "hsl(var(--positive))",
+    };
+  if (clamped > -0.5)
+    return {
+      background: "hsl(var(--surface-2))",
+      color: "hsl(var(--muted-foreground))",
+    };
+  if (clamped > -1.5)
+    return {
+      background: "hsl(var(--negative) / 0.10)",
+      color: "hsl(var(--negative))",
+    };
+  if (clamped > -3)
+    return {
+      background: "hsl(var(--negative) / 0.20)",
+      color: "hsl(var(--negative))",
+    };
+  return {
+    background: "hsl(var(--negative) / 0.32)",
+    color: "hsl(var(--negative))",
+  };
 }
 
 /**

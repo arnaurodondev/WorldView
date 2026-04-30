@@ -26,10 +26,14 @@ import { Providers } from "./providers";
  * WHY IBM Plex Sans: Professional, legible at small sizes, excellent for
  * information-dense displays. Same font family used by IBM's own data tools.
  * variable="--font-sans" maps to tailwind.config.ts fontFamily.sans
+ *
+ * PLAN-0059 W0 F-VISUAL-NEW-G: dropped weight 300 (font-light) — grep found
+ * zero usage across the codebase. Saves ~45 KB on initial font payload.
+ * Active weights: 400 (body), 500 (medium UI), 600 (titles), 700 (hero/bold).
  */
 const ibmPlexSans = IBM_Plex_Sans({
   subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
+  weight: ["400", "500", "600", "700"],
   variable: "--font-sans",
   display: "swap",
 });
@@ -40,10 +44,13 @@ const ibmPlexSans = IBM_Plex_Sans({
  * needing fixed-width column CSS. Bloomberg Terminal and TradingView both use
  * monospace numbers — our target users expect this.
  * ADR-F-15: This is the single highest-impact visual rule in the design system.
+ *
+ * PLAN-0059 W0 F-VISUAL-NEW-G: dropped weight 600 — mono never uses bold in
+ * the codebase (price/data display always at 400 or 500). Saves ~25 KB.
  */
 const ibmPlexMono = IBM_Plex_Mono({
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  weight: ["400", "500"],
   variable: "--font-mono",
   display: "swap",
 });
@@ -51,21 +58,30 @@ const ibmPlexMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: {
     template: "%s | Worldview",
-    default: "Worldview — Professional Market Intelligence",
+    default: "Worldview — Institutional Market Intelligence",
   },
   description:
-    "Bloomberg-grade market intelligence at $29/month. AI-native research, entity graphs, news intelligence, prediction markets, and real-time alerts.",
+    "Bloomberg-grade market intelligence. AI-native research, entity graphs, news intelligence, prediction markets, and real-time alerts.",
   keywords: [
     "market intelligence",
     "stock research",
     "financial data",
     "entity graph",
     "AI finance",
+    "institutional terminal",
   ],
-  // Open Graph for sharing (thesis demo screenshots)
+  // PLAN-0059 W0 F-VISUAL-NEW-C — brand identity package.
+  // icon.svg + apple-icon.svg auto-discovered by Next.js at app/icon.svg / app/apple-icon.svg.
+  manifest: "/manifest.webmanifest",
   openGraph: {
     type: "website",
-    title: "Worldview — Professional Market Intelligence",
+    title: "Worldview — Institutional Market Intelligence",
+    description: "Bloomberg-grade research without the Bloomberg bill.",
+    siteName: "Worldview",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Worldview — Institutional Market Intelligence",
     description: "Bloomberg-grade research without the Bloomberg bill.",
   },
 };

@@ -16,6 +16,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { useState, type ReactNode } from "react";
+import { Toaster } from "sonner";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AlertStreamProvider } from "@/contexts/AlertStreamContext";
 
@@ -72,6 +73,30 @@ export function Providers({ children }: ProvidersProps) {
           {children}
         </AlertStreamProvider>
       </AuthProvider>
+      {/*
+       * PLAN-0059 W0 F-COMP-NEW-TOAST-001: sonner Toaster mounted globally.
+       * The previous @radix-ui/react-toast was a dead dep (no Toaster mounted, no
+       * imports). Inline `{error && <p className="text-destructive">...</p>}` was
+       * scattered across 38 sites. sonner gives a single import-anywhere API:
+       *   import { toast } from "sonner";
+       *   toast.error(msg) | toast.success(msg) | toast.info(msg)
+       *
+       * Position bottom-right matches Bloomberg / Aladdin chrome conventions
+       * (StatusBar lives at the bottom, so toast above it). richColors uses our
+       * semantic tokens. font-mono + tabular-nums + text-[11px] keeps the toast
+       * visually consistent with the terminal-grade row rhythm.
+       */}
+      <Toaster
+        position="bottom-right"
+        richColors
+        theme="dark"
+        closeButton
+        expand
+        visibleToasts={5}
+        toastOptions={{
+          className: "font-mono text-[11px] tabular-nums",
+        }}
+      />
       {/* ReactQueryDevtools: visible only in development
           Shows cache state, query status, and timing — useful for debugging
           data freshness issues in complex dashboards */}

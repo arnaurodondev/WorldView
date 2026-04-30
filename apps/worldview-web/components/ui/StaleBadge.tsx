@@ -45,16 +45,18 @@ const BADGE_CONFIG: Record<
 > = {
   delayed: {
     label: "DELAYED",
-    // WHY amber: yellow/amber signals "caution" not "error" — price exists
-    // but is older than 15 min. Following Bloomberg convention.
+    // PLAN-0059 W0 F-VISUAL-022: --warning token (was amber-* defaults).
+    // WHY warning: --warning #FFB000 (Bloomberg amber) signals "caution" not "error" —
+    // price exists but is older than 15 min. Token-aligned with severity-medium alerts.
     className:
-      "inline-flex items-center gap-1 rounded-[2px] bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-400",
+      "inline-flex items-center gap-1 rounded-[2px] bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-warning",
   },
   stale: {
     label: "STALE",
-    // WHY red-muted: stronger signal than delayed — data is >1 day old.
+    // PLAN-0059 W0 F-VISUAL-022: --negative token (was red-* defaults).
+    // WHY negative: stronger signal than delayed — data is >1 day old.
     className:
-      "inline-flex items-center gap-1 rounded-[2px] bg-red-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-red-400",
+      "inline-flex items-center gap-1 rounded-[2px] bg-negative/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-negative",
   },
   unavailable: {
     label: "N/A",

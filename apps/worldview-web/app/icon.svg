@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLAN-0059 W0 F-VISUAL-NEW-C — Worldview brand mark.
+
+  WHY 4x4 grid with one yellow cell: The terminal-cell metaphor signals "data
+  grid" at favicon scale (16px). Reads as "Worldview" without the wordmark.
+  Inspired by Bloomberg's quad-screen layout + Aladdin's panel grid icon.
+
+  Top-right cell is yellow (#FFD60A) — the brand primary; other cells are
+  zinc-800 on zinc-950 background. Renders correctly at 16px favicon and
+  scales cleanly to 192px PWA icon.
+
+  Light-mode media query inverts to dark cells on white for browsers that
+  request the light-theme favicon variant (e.g., Safari light tab bar).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges">
+  <style>
+    .bg { fill: #09090B; }
+    .cell { fill: #27272A; }
+    .accent { fill: #FFD60A; }
+    @media (prefers-color-scheme: light) {
+      .bg { fill: #FFFFFF; }
+      .cell { fill: #E4E4E7; }
+    }
+  </style>
+  <!-- Background -->
+  <rect class="bg" width="16" height="16" />
+
+  <!-- 4x4 grid of 3x3 cells with 1px gap, starting at (1,1) -->
+  <!-- Row 1 -->
+  <rect class="cell"   x="1"  y="1"  width="3" height="3" />
+  <rect class="cell"   x="5"  y="1"  width="3" height="3" />
+  <rect class="cell"   x="9"  y="1"  width="3" height="3" />
+  <rect class="accent" x="13" y="1"  width="2" height="3" />
+  <!-- Row 2 -->
+  <rect class="cell"   x="1"  y="5"  width="3" height="3" />
+  <rect class="cell"   x="5"  y="5"  width="3" height="3" />
+  <rect class="cell"   x="9"  y="5"  width="3" height="3" />
+  <rect class="cell"   x="13" y="5"  width="2" height="3" />
+  <!-- Row 3 -->
+  <rect class="cell"   x="1"  y="9"  width="3" height="3" />
+  <rect class="cell"   x="5"  y="9"  width="3" height="3" />
+  <rect class="cell"   x="9"  y="9"  width="3" height="3" />
+  <rect class="cell"   x="13" y="9"  width="2" height="3" />
+  <!-- Row 4 -->
+  <rect class="cell"   x="1"  y="13" width="3" height="2" />
+  <rect class="cell"   x="5"  y="13" width="3" height="2" />
+  <rect class="cell"   x="9"  y="13" width="3" height="2" />
+  <rect class="cell"   x="13" y="13" width="2" height="2" />
+</svg>

@@ -10,8 +10,19 @@
  * news feed timestamps without ambiguity.
  *
  * WHY client-side only: Time is inherently runtime state — the server-rendered
- * timestamp would be stale by the time it reaches the browser. The hydration
- * mismatch is suppressed with suppressHydrationWarning on the <span>.
+ * timestamp would be stale by the time it reaches the browser.
+ *
+ * PLAN-0059 W0 F-CODE-NEW-004 fix: REMOVED the `useState(() => formatUtcTime(new Date()))`
+ * lazy initializer pattern. With Next.js App Router this guarantees a hydration
+ * mismatch — the lazy initializer runs on the server with the server's clock during
+ * SSR, then runs on the client with the client's clock during hydration. The two
+ * values WILL differ, which forces React to discard server HTML and re-render
+ * (small but real perf cost + DOM diff repaint).
+ *
+ * Now: SSR renders an empty span (no time). useEffect populates after mount.
+ * `suppressHydrationWarning` removed — no mismatch to suppress now. The fix
+ * pattern: empty string SSR + useEffect set on mount + interval. Standard
+ * React 19 / Next.js 15 idiom for browser-only state.
  *
  * WHO USES IT: components/shell/TopBar.tsx (right side)
  * DATA SOURCE: system clock (no S9 calls)
@@ -38,12 +49,14 @@ function formatUtcTime(date: Date): string {
 }
 
 export function UtcClock() {
-  // WHY initializer function: avoids hydration mismatch warning.
-  // The server renders an empty string; the client immediately shows the correct
-  // time on mount without a flash of "00:00:00 UTC".
-  const [time, setTime] = useState<string>(() => formatUtcTime(new Date()));
+  // PLAN-0059 W0: SSR renders empty string; useEffect populates after mount.
+  // No hydration mismatch because server and client both initially render "".
+  const [time, setTime] = useState<string>("");
 
   useEffect(() => {
+    // Set immediately on mount so the user sees the time without 1s delay
+    setTime(formatUtcTime(new Date()));
+
     // Update every second — fine-grained enough for second-precision timestamps
     const id = setInterval(() => {
       setTime(formatUtcTime(new Date()));
@@ -57,11 +70,12 @@ export function UtcClock() {
   return (
     // WHY font-mono (ADR-F-15): Monospace font for all numeric/time displays ensures
     // the clock width is stable — digits don't cause layout shift as they change.
-    // suppressHydrationWarning: the time differs between server and client render;
-    // this attribute tells React to skip the mismatch check for this element.
+    // PLAN-0059 W0: removed suppressHydrationWarning — there is no longer a mismatch.
+    // The empty initial state is byte-for-byte identical between SSR and first hydration.
+    // Pre-allocate width via tabular-nums + min-width so the empty -> populated
+    // transition doesn't shift TopBar layout.
     <span
-      className="font-mono text-xs tabular-nums text-muted-foreground"
-      suppressHydrationWarning
+      className="inline-block min-w-[80px] font-mono text-xs tabular-nums text-muted-foreground"
     >
       {time}
     </span>

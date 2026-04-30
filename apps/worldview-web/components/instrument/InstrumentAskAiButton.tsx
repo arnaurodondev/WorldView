@@ -147,7 +147,8 @@ export function InstrumentAskAiButton({
           // placed the bottom edge of a 32px button flush with the StatusBar
           // top edge, intercepting clicks on status connectors at the right
           // edge of the bar.
-          className="fixed bottom-10 right-6 z-40 flex items-center gap-1.5 rounded-[2px] border border-amber-500/40 bg-amber-500/90 px-3 py-2 text-xs font-semibold text-black shadow-lg transition-colors hover:bg-amber-400"
+          // PLAN-0059 W0 F-VISUAL-022: --accent-ai violet (was amber-*)
+          className="fixed bottom-10 right-6 z-40 flex items-center gap-1.5 rounded-[2px] border border-[hsl(var(--accent-ai)/0.40)] bg-[hsl(var(--accent-ai)/0.90)] px-3 py-2 text-xs font-semibold text-white shadow-lg transition-colors hover:bg-[hsl(var(--accent-ai))]"
           aria-label={`Ask AI about ${ticker}`}
           title={`Ask AI about ${ticker}`}
         >

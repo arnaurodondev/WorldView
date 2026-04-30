@@ -261,7 +261,7 @@ export function MorningBriefCard() {
         <div className="flex w-[100px] shrink-0 items-center justify-end gap-1">
           {isStale && (
             <>
-              <span className="text-[9px] text-amber-400">stale</span>
+              <span className="text-[9px] text-warning">stale</span>
               <button
                 onClick={() => void refetch()}
                 disabled={isFetching}

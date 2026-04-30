@@ -84,7 +84,7 @@ class GraphErrorBoundary extends React.Component<
     return { hasError: true };
   }
 
-  render() {
+  override render() {
     if (this.state.hasError) {
       return (
         <div className="rounded-[2px] border border-border/40 bg-card/50 px-3 py-3">

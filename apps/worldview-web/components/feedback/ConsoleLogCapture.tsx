@@ -30,7 +30,7 @@ export interface ConsoleLogCaptureProps {
 /** Map a log level to a tailwind color so error / warn / log are distinct. */
 const LEVEL_COLOR: Record<ConsoleEntry["level"], string> = {
   log: "text-muted-foreground",
-  warn: "text-amber-400",
+  warn: "text-warning",
   error: "text-destructive",
 };
 

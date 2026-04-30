@@ -237,7 +237,7 @@ export function FeedbackModal({ open, onOpenChange, defaultTab = "bug" }: Feedba
         <SheetHeader>
           <SheetTitle>Send feedback</SheetTitle>
           <SheetDescription>
-            Help us improve Worldview — pick a category and tell us what's on your mind.
+            Help us improve Worldview — pick a category and tell us what&apos;s on your mind.
           </SheetDescription>
         </SheetHeader>
 

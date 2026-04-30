@@ -24,7 +24,8 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
           "file:border-0 file:bg-transparent file:text-sm file:font-medium",
           "placeholder:text-muted-foreground",
           "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-          "disabled:cursor-not-allowed disabled:opacity-50",
+          // PLAN-0059 W0 F-VISUAL-027: explicit tokens (was opacity-50 which fails WCAG AA)
+          "disabled:cursor-not-allowed disabled:text-[hsl(var(--disabled-foreground))] disabled:placeholder:text-[hsl(var(--disabled-foreground))]",
           className,
         )}
         ref={ref}
