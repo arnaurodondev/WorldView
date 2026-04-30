@@ -78,12 +78,17 @@ class TestDispatcherTopicRouting:
             assert event_type in EVENT_TOPIC_MAP, f"Missing route for {event_type}"
 
     def test_each_event_type_routes_to_matching_topic(self) -> None:
-        """Each event type must be the same as its topic name (self-referential routing)."""
+        """Each event type must route to a topic whose name is either:
+        * exactly equal (self-referential routing — the historical default), OR
+        * the event_type plus a ``.v1`` version suffix (introduced in
+          PLAN-0057 Wave D-2 for ``market.instrument.discovered`` →
+          ``market.instrument.discovered.v1``).
+        """
         for event_type, topic in EVENT_TOPIC_MAP.items():
-            assert event_type == topic, (
-                f"event_type '{event_type}' routes to topic '{topic}' — "
-                f"expected self-referential routing (event_type == topic)"
-            )
+            assert topic in (
+                event_type,
+                f"{event_type}.v1",
+            ), f"event_type '{event_type}' routes to topic '{topic}' — expected '{event_type}' or '{event_type}.v1'"
 
     def test_instrument_created_event_type_field(self) -> None:
         """InstrumentCreated.event_type must match the routing key."""

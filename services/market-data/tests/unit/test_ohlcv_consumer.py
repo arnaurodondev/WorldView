@@ -107,9 +107,12 @@ async def test_ohlcv_consumer_skips_non_ohlcv() -> None:
 
 @pytest.mark.asyncio
 async def test_ohlcv_consumer_creates_instrument_on_first_seen() -> None:
-    """Consumer creates a new Instrument when symbol/exchange is not found.
+    """Consumer creates a new Instrument and emits InstrumentDiscovered.
 
-    QA-016: InstrumentCreated is written atomically to outbox_events (not collect_event).
+    PLAN-0057 Wave D-2 (F-CRIT-12): the OHLCV path no longer emits
+    ``market.instrument.created`` (which had ``name=None`` and produced
+    placeholder canonicals).  It now emits ``market.instrument.discovered.v1``
+    with a small payload.  QA-016 still applies: outbox write is atomic.
     """
     new_instrument = _make_instrument()
     mock_uow = AsyncMock()
@@ -126,12 +129,42 @@ async def test_ohlcv_consumer_creates_instrument_on_first_seen() -> None:
     await consumer.process_message(None, _make_message(), {})
 
     mock_uow.instruments.upsert.assert_awaited_once()
-    # InstrumentCreated must be written to outbox atomically (not collect_event — QA-016)
     mock_uow.outbox_events.create.assert_awaited_once()
     call_kwargs = mock_uow.outbox_events.create.call_args
-    assert call_kwargs.kwargs["event_type"] == "market.instrument.created"
-    assert call_kwargs.kwargs["topic"] == "market.instrument.created"
+    # New event type/topic for the discovered flow:
+    assert call_kwargs.kwargs["event_type"] == "market.instrument.discovered"
+    assert call_kwargs.kwargs["topic"] == "market.instrument.discovered.v1"
+    # entity_id is synthesised by event_to_outbox_payload (M-017)
     assert "entity_id" in call_kwargs.kwargs["payload"]
+    assert call_kwargs.kwargs["payload"]["symbol"] == "AAPL"
+    assert call_kwargs.kwargs["payload"]["instrument_id"] == new_instrument.id
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_consumer_does_not_emit_instrument_created() -> None:
+    """OHLCV consumer must NEVER emit ``market.instrument.created`` (Wave D-2).
+
+    Post-PLAN-0057 D-2, ``market.instrument.created`` is produced ONLY by
+    ``fundamentals_consumer`` so consumers can rely on it carrying a real
+    EODHD ``Name``.  This regression test fails loudly if anyone
+    re-introduces the old emit.
+    """
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-001")
+    mock_uow.ohlcv.bulk_upsert_with_priority = AsyncMock()
+
+    raw = _make_ohlcv_jsonl(1)
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    emitted_event_types = [c.kwargs["event_type"] for c in mock_uow.outbox_events.create.call_args_list]
+    assert "market.instrument.created" not in emitted_event_types
 
 
 @pytest.mark.asyncio

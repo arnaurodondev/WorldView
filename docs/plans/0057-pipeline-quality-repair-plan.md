@@ -873,9 +873,10 @@ Also: `_insert_provisional` returns the canonical `queue_id` (via `RETURNING`); 
 
 ---
 
-### Wave D-2: Defer `InstrumentCreated`; introduce `market.instrument.discovered.v1` (APPROVED 2026-04-30)
+### Wave D-2: Defer `InstrumentCreated`; introduce `market.instrument.discovered.v1` (APPROVED 2026-04-30, ✅ DONE)
 **Depends on**: T-A-2-01 (UNIQUE alias index, so KG-side discovered consumer's alias inserts are safe)
 **Estimated effort**: 6-8 hours
+**Status**: ✅ DONE (T-D-2-01..07 implemented; 7 tasks across market-data / knowledge-graph / portfolio / libs/contracts / contract tests; 470 market-data + 659 knowledge-graph + 645 portfolio + 76 cross-service contract tests + 18 libs/contracts alignment tests pass).
 
 #### Approach (locked)
 - Producer-side (`market-data`): `ohlcv_consumer.py` and `quotes_consumer.py` no longer emit `market.instrument.created`. They emit `market.instrument.discovered.v1` (small payload). `fundamentals_consumer.py` is the sole emitter of `market.instrument.created` — gated on having a real `Name` from EODHD.
