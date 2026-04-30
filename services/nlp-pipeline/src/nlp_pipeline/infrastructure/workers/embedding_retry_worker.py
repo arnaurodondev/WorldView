@@ -133,6 +133,21 @@ class EmbeddingRetryWorker:
                 repo = EmbeddingPendingRepository(session)
                 await repo.mark_failure(job.pending_id, backoff_seconds=backoff)
                 await session.commit()
+            # PLAN-0057 Wave E-4: surface entries that have just hit the
+            # _MAX_RETRIES ceiling and will therefore be silently skipped on
+            # every subsequent ``claim_batch`` call.  Operators rely on this
+            # log line to escalate to manual triage.
+            if job.retry_count + 1 >= _MAX_RETRIES:
+                logger.warning(  # type: ignore[no-any-return]
+                    "embedding_retry_abandoned",
+                    pending_id=str(job.pending_id),
+                    doc_id=str(job.doc_id),
+                    section_id=str(job.section_id) if job.section_id else None,
+                    chunk_id=str(job.chunk_id) if job.chunk_id else None,
+                    retry_count=job.retry_count + 1,
+                    max_retries=_MAX_RETRIES,
+                    final_error=str(exc),
+                )
             return
 
         # ── Write the embedding and delete the pending row ────────────────

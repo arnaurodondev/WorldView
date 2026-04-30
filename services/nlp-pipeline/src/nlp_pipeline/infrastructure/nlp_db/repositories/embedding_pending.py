@@ -100,16 +100,34 @@ class EmbeddingPendingRepository:
         )
 
     async def mark_failure(self, pending_id: UUID, backoff_seconds: float) -> None:
-        """Increment retry_count and schedule the next retry after *backoff_seconds*."""
+        """Increment retry_count, schedule the next retry, and stamp last_attempted_at.
+
+        ``last_attempted_at`` (added in migration 0016, PLAN-0057 Wave E-4)
+        captures wall-clock time of the most recent attempt so operators can
+        diagnose stuck queues without having to infer from ``next_retry_at``.
+        """
         await self._session.execute(
             text(
                 "UPDATE embedding_pending "
                 "SET retry_count = retry_count + 1, "
-                "    next_retry_at = now() + cast(:backoff AS float) * interval '1 second' "
+                "    next_retry_at = now() + cast(:backoff AS float) * interval '1 second', "
+                "    last_attempted_at = now() "
                 "WHERE pending_id = :pending_id"
             ),
             {"pending_id": str(pending_id), "backoff": backoff_seconds},
         )
+
+    async def count_abandoned(self, max_retries: int = 5) -> int:
+        """Return how many rows have been retried ``>= max_retries`` times.
+
+        These rows are silently skipped by ``claim_batch`` until manual triage;
+        the entry-point logs the count at startup so the metric never goes dark.
+        """
+        result = await self._session.execute(
+            text("SELECT COUNT(*) FROM embedding_pending WHERE retry_count >= :max_retries"),
+            {"max_retries": max_retries},
+        )
+        return int(result.scalar_one())
 
     async def count_pending(self) -> int:
         """Return total count of rows still in the retry queue."""

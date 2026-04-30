@@ -1307,6 +1307,30 @@ services:
       retries: 3
       start_period: 10s
 
+  # PLAN-0057 Wave E-4 / F-MAJOR-05: drains the embedding_pending retry queue.
+  # The worker class existed since 2026-02 but no entry point ever ran it, so
+  # rows accumulated forever.  Standalone process per R22.
+  nlp-pipeline-embedding-retry-worker:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.workers.embedding_retry_worker_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   # ── Knowledge Graph (S7) — API + dispatcher + scheduler + 4 consumers ───────
   # S7 has no Alembic migrations — intelligence_db DDL is owned by intelligence-migrations.
   knowledge-graph:

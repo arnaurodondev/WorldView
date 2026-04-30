@@ -259,6 +259,10 @@ class EmbeddingPendingModel(Base):
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     next_retry_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # PLAN-0057 Wave E-4 / migration 0016: stamped inside ``mark_failure`` so
+    # operators can distinguish "worker is healthily retrying" from "worker
+    # has been silently failing for hours".  NULL until the first retry runs.
+    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ArticleImpactWindowModel(Base):

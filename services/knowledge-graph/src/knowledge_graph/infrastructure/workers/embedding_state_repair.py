@@ -25,15 +25,14 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import text
 
-from observability import get_logger  # type: ignore[import-untyped]
-
 from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
     EntityEmbeddingStateRepository,
     get_view_types_for_entity_type,
 )
+from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
