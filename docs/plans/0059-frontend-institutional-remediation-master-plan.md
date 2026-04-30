@@ -826,7 +826,9 @@ Before W0 closes:
 
 ---
 
-## 4. PLAN-0059-B — Workflow Grammar (Wave 1, Track A)
+## 4. PLAN-0059-B — Workflow Grammar (Wave 1, Track A) ✅ (B-1/B-2/B-3/B-5 partial)
+**Status: B-1 + B-2 + B-3 + B-5 (mnemonics) DONE — 2026-04-30 · 934 tests pass · lint+typecheck clean**
+**Deferred to follow-up:** B-3 command palette `>action` mode (needs Action Registry — its own scope), B-4 SymbolBar (needs S9 recents endpoint), B-6 idle/session/multi-tab.
 
 **Goal:** Implement the keyboard-driven, command-driven, symbol-first interaction grammar that defines an institutional terminal. Closes the single most damaging signal of the audit ("dead StatusBar shortcuts").
 **Depends on:** PLAN-0059-A complete.
