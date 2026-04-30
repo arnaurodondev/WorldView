@@ -575,3 +575,107 @@ def test_prd_0018_relation_types_seeded(conn: sa.engine.Connection) -> None:
     )
     seeded = {row[0] for row in result}
     assert seeded == {"has_executive", "revenue_from_country", "operates_in_country"}
+
+
+# ── PLAN-0057 A-2: entity_aliases UNIQUE per (entity_id, normalized, alias_type) ───
+
+
+def test_entity_aliases_uidx_entity_norm_type_exists(conn: sa.engine.Connection) -> None:
+    """The PLAN-0057 A-2 unique index is present after migration 0008."""
+    result = conn.execute(
+        text("SELECT indexdef FROM pg_indexes WHERE indexname = 'uidx_entity_aliases_entity_norm_type'")
+    )
+    row = result.scalar_one_or_none()
+    assert row is not None, "uidx_entity_aliases_entity_norm_type missing — migration 0008 did not run"
+    # Sanity-check the index covers the right columns
+    assert "entity_id" in row
+    assert "normalized_alias_text" in row
+    assert "alias_type" in row
+    assert "is_active" in row  # partial: WHERE is_active = true
+
+
+def test_entity_aliases_unique_blocks_duplicate_ticker(conn: sa.engine.Connection) -> None:
+    """Inserting two TICKER aliases with same (entity_id, normalized_alias_text)
+    raises IntegrityError. This guards the 32-of-38 duplicate seed_demo TICKER
+    pattern called out in audit F-CRIT-12.
+    """
+    eid = uuid.uuid4()
+    # Need a canonical to satisfy FK
+    conn.execute(
+        text(
+            "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type, metadata) "
+            "VALUES (:eid, 'TestCo', 'financial_instrument', '{}'::jsonb)"
+        ),
+        {"eid": str(eid)},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO entity_aliases (entity_id, alias_text, normalized_alias_text, alias_type, is_active, source) "
+            "VALUES (:eid, 'TSTC', 'tstc', 'TICKER', true, 'test')"
+        ),
+        {"eid": str(eid)},
+    )
+    with pytest.raises(sa.exc.IntegrityError):
+        conn.execute(
+            text(
+                "INSERT INTO entity_aliases "
+                "(entity_id, alias_text, normalized_alias_text, alias_type, is_active, source) "
+                "VALUES (:eid, 'TSTC', 'tstc', 'TICKER', true, 'test_dup')"
+            ),
+            {"eid": str(eid)},
+        )
+    conn.rollback()
+
+
+def test_entity_aliases_unique_allows_distinct_alias_types(conn: sa.engine.Connection) -> None:
+    """Two aliases with same (entity_id, normalized_alias_text) but DIFFERENT
+    alias_types are allowed (e.g., 'AAPL' as both TICKER and PRIMARY_TICKER).
+    """
+    eid = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type, metadata) "
+            "VALUES (:eid, 'AlphaCo', 'financial_instrument', '{}'::jsonb)"
+        ),
+        {"eid": str(eid)},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO entity_aliases (entity_id, alias_text, normalized_alias_text, alias_type, is_active, source) "
+            "VALUES (:eid, 'ALFA', 'alfa', 'TICKER', true, 'test')"
+        ),
+        {"eid": str(eid)},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO entity_aliases (entity_id, alias_text, normalized_alias_text, alias_type, is_active, source) "
+            "VALUES (:eid, 'ALFA', 'alfa', 'PRIMARY_TICKER', true, 'test')"
+        ),
+        {"eid": str(eid)},
+    )
+    conn.rollback()
+
+
+def test_entity_aliases_unique_allows_distinct_entities(conn: sa.engine.Connection) -> None:
+    """Same alias_text + alias_type for two DIFFERENT entities is allowed (the
+    older partial unique index handles cross-entity uniqueness for EXACT only).
+    """
+    eid_a = uuid.uuid4()
+    eid_b = uuid.uuid4()
+    for eid, name in ((eid_a, "AlphaCo"), (eid_b, "BravoCo")):
+        conn.execute(
+            text(
+                "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type, metadata) "
+                "VALUES (:eid, :name, 'financial_instrument', '{}'::jsonb)"
+            ),
+            {"eid": str(eid), "name": name},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO entity_aliases "
+                "(entity_id, alias_text, normalized_alias_text, alias_type, is_active, source) "
+                "VALUES (:eid, 'XYZ', 'xyz', 'CUSIP', true, 'test')"
+            ),
+            {"eid": str(eid)},
+        )
+    conn.rollback()
