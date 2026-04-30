@@ -51,11 +51,77 @@ _ELIGIBLE_CLASSES: frozenset[str] = frozenset(
 
 _NON_ENTITY_NOISE_REASON = "non_entity_creating_class"
 
+# PLAN-0057 Wave B-3 / F-CRIT-05.
+#
+# The previous prompt asked whether a mention "would have its own Wikipedia
+# article", which the LLM interpreted strictly: it rejected legitimate
+# financial entities such as subsidiaries, ETFs, lesser-known regulators,
+# and central banks of small jurisdictions.  Audit findings showed recall
+# on subsidiaries/ETFs/regulators sat around ~40% under the old prompt.
+#
+# The replacement template is finance-domain specific:
+#   • spells out *what counts* as an entity (companies, subsidiaries,
+#     business units, funds/ETFs, indices, vehicles, regulators, central
+#     banks, government bodies, supra-national institutions, named persons,
+#     named financial products);
+#   • spells out *what counts as noise* (generic anaphora, calendar
+#     fragments, common-noun event words, parser fragments);
+#   • shows four worked examples (two positive, two negative) covering
+#     the exact failure modes the audit flagged;
+#   • takes both ``surface`` (the lexical mention) and ``context`` (the
+#     surrounding domain text — pulled from the document/section title via
+#     ``EntityMentionRepository.get_unresolved_batch_with_context``) so the
+#     LLM can disambiguate ambiguous surfaces (e.g. "MAS" alone is unclear,
+#     but "Singapore central bank press release | Rate decision" → MAS is
+#     clearly the Monetary Authority of Singapore).
+#
+# Both Ollama (_phase2_llm_classify_local) and DeepInfra
+# (_phase2_llm_classify_external) call sites use this single template.
 _CLASSIFICATION_PROMPT_TEMPLATE = (
-    "Classify whether the following mention refers to a real-world entity "
-    "(organization, person, government, or product) that would have its own "
-    'Wikipedia article. Surface: "{surface}". '
-    'Respond with JSON: {{"is_entity": true/false, "reason": "..."}}.'
+    "You are classifying a candidate entity mention extracted from a "
+    "financial-news or filing pipeline. Decide whether the SURFACE refers "
+    "to a real, named entity worth tracking in a market-intelligence "
+    "knowledge graph.\n"
+    "\n"
+    "Treat as ENTITY (is_entity=true) any of:\n"
+    "  - public or private company, subsidiary, or business unit\n"
+    "  - investable fund, ETF, mutual fund, index, or other named "
+    "investable vehicle\n"
+    "  - regulator, central bank, government body, ministry, or "
+    "supra-national institution (IMF, ECB, BIS, etc.)\n"
+    "  - named person (executive, regulator, politician, analyst)\n"
+    "  - named financial product (specific bond series, named index, "
+    "named option product, etc.)\n"
+    "\n"
+    "Treat as NOISE (is_entity=false) any of:\n"
+    '  - generic noun phrases ("the company", "shares", "investors")\n'
+    "  - pure number, date, or ticker fragments without context "
+    '("Q3", "10-K", "FY24")\n'
+    '  - common-noun event words ("merger", "earnings", "guidance")\n'
+    "  - misparsed sentence fragments or partial phrases\n"
+    "\n"
+    "Worked examples:\n"
+    '  - surface="iShares Core S&P 500 ETF", '
+    'context="The iShares Core S&P 500 ETF (IVV) saw inflows of $1.2B." '
+    '→ {{"is_entity": true, "reason": "named investable fund"}}\n'
+    '  - surface="MAS", '
+    'context="Singapore\'s MAS raised the benchmark rate by 25bps." '
+    '→ {{"is_entity": true, "reason": '
+    '"Monetary Authority of Singapore — regulator"}}\n'
+    '  - surface="the company", '
+    'context="Analysts said the company would miss guidance." '
+    '→ {{"is_entity": false, "reason": '
+    '"generic anaphora, not a named entity"}}\n'
+    '  - surface="Q3", '
+    'context="Q3 revenue rose 8% year-over-year." '
+    '→ {{"is_entity": false, "reason": '
+    '"calendar fragment, not a named entity"}}\n'
+    "\n"
+    'SURFACE: "{surface}"\n'
+    'CONTEXT: "{context}"\n'
+    "\n"
+    "Respond with JSON ONLY: "
+    '{{"is_entity": true|false, "reason": "<short rationale>"}}'
 )
 
 
@@ -120,23 +186,35 @@ class UnresolvedResolutionWorker:
         lookback_days = self._settings.unresolved_resolution_lookback_days
 
         # ── Step 1: fetch batch with row-level lock ───────────────────────────
+        # PLAN-0057 T-B-3-01: use the *with_context* variant so the LLM prompt
+        # gets domain disambiguation (doc title + section title).  Falls back
+        # to the plain method when the new symbol isn't on the repo (older
+        # mocks in test fixtures expose only ``get_unresolved_batch``).
         async with self._nlp_sf() as session:
             repo = _em.EntityMentionRepository(session)
-            mentions = await repo.get_unresolved_batch(
-                batch_size=batch_size,
-                lookback_days=lookback_days,
-            )
-            if not mentions:
+            bundles: list[_em.UnresolvedMentionWithContext]
+            if hasattr(repo, "get_unresolved_batch_with_context"):
+                bundles = await repo.get_unresolved_batch_with_context(
+                    batch_size=batch_size,
+                    lookback_days=lookback_days,
+                )
+            else:  # pragma: no cover — backwards-compat shim for legacy mocks
+                plain = await repo.get_unresolved_batch(
+                    batch_size=batch_size,
+                    lookback_days=lookback_days,
+                )
+                bundles = [_em.UnresolvedMentionWithContext(mention=m, context_sentence=None) for m in plain]
+            if not bundles:
                 return WorkerStats(processed=0, auto_resolved=0, entity_created=0, noise=0, errors=0)
 
-            mention_ids = [m.mention_id for m in mentions]
+            mention_ids = [b.mention.mention_id for b in bundles]
             await repo.mark_batch_escalated(mention_ids)
             await session.commit()
 
         # ── Step 2: process each mention ─────────────────────────────────────
         stats = _BatchStats()
-        for mention in mentions:
-            await self._process_mention(mention, stats)
+        for bundle in bundles:
+            await self._process_mention(bundle.mention, stats, context_sentence=bundle.context_sentence)
 
         logger.info(
             "unresolved_resolution_cycle_done",
@@ -178,8 +256,15 @@ class UnresolvedResolutionWorker:
         self,
         mention: EntityMentionModel,
         stats: _BatchStats,
+        *,
+        context_sentence: str | None = None,
     ) -> None:
-        """Process a single mention through Phase 1 and Phase 2."""
+        """Process a single mention through Phase 1 and Phase 2.
+
+        ``context_sentence`` is the per-mention domain context (PLAN-0057
+        T-B-3-01) that gets threaded into the LLM classification prompt.
+        Keyword-only with a None default to keep older callers compiling.
+        """
         import nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention as _em
 
         stats.processed += 1
@@ -215,8 +300,10 @@ class UnresolvedResolutionWorker:
             stats.noise += 1
             return
 
-        # Eligible class → call Qwen2.5:3b via Ollama
-        outcome, noise_reason = await self._phase2_llm_classify(mention)
+        # Eligible class → call Qwen2.5:3b via Ollama (or DeepInfra).
+        # Pass the document/section context fetched in run_once() so the prompt
+        # can disambiguate ambiguous surface forms (PLAN-0057 T-B-3-02).
+        outcome, noise_reason = await self._phase2_llm_classify(mention, context_sentence=context_sentence)
 
         if outcome == ResolutionOutcome.ENTITY_CREATED:
             mention.resolution_outcome = ResolutionOutcome.ENTITY_CREATED.value
@@ -262,12 +349,19 @@ class UnresolvedResolutionWorker:
     async def _phase2_llm_classify(
         self,
         mention: EntityMentionModel,
+        *,
+        context_sentence: str | None = None,
     ) -> tuple[ResolutionOutcome, str | None]:
         """Call LLM to classify the mention as entity or noise.
 
         When *unresolved_resolution_api_key* is set, delegates to the DeepInfra
         OpenAI-compatible endpoint (_phase2_llm_classify_external).  Otherwise
         falls through to the existing Ollama path.
+
+        ``context_sentence`` is the per-mention domain context (PLAN-0057
+        T-B-3-02) — typically the document title concatenated with the
+        section title.  When None or empty we substitute a stable
+        placeholder so the prompt template still renders cleanly.
 
         Returns (ResolutionOutcome, noise_reason | None).
         Returns (UNRESOLVED, None) on JSON parse failure or provider error.
@@ -280,7 +374,15 @@ class UnresolvedResolutionWorker:
         timeout_s = self._settings.unresolved_resolution_llm_timeout_s
 
         surface = getattr(mention, "mention_text", "") or ""
-        prompt = _CLASSIFICATION_PROMPT_TEMPLATE.format(surface=surface[:200])
+        # Cap context at 400 chars so the prompt stays well under the 512-token
+        # n_ctx budget configured for the Ollama path.  Longer titles/sections
+        # are truncated with an ellipsis-free hard cut — model only needs the
+        # leading domain words to disambiguate.
+        context_text = (context_sentence or "").strip()[:400] or "(no surrounding context available)"
+        prompt = _CLASSIFICATION_PROMPT_TEMPLATE.format(
+            surface=surface[:200],
+            context=context_text,
+        )
 
         # DeepInfra path: use OpenAI-compatible chat completions when api_key is set.
         if api_key:

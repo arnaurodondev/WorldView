@@ -244,32 +244,61 @@ async def _stage4_ann(
 
 # ── Provisional queue insert ──────────────────────────────────────────────────
 
+# PLAN-0057 B-2 (F-MAJOR-10): the prior version of this SQL referenced columns
+# ``mention_id`` and ``doc_id`` that DO NOT EXIST in the
+# ``provisional_entity_queue`` schema (real columns: ``mention_text``,
+# ``normalized_surface``, ``mention_class``, ``source_doc_id``, ``context_snippet``,
+# ``status``, ``assigned_entity_id``, ``created_at``, ``resolved_at``,
+# ``retry_count``). The savepoint+except wrapper at the call site silently
+# swallowed the SQL error → ``provisional_entity_queue`` remained empty for all
+# of production. This rewrite matches the real schema and uses ``ON CONFLICT
+# ... DO UPDATE`` + ``RETURNING queue_id`` so the caller always receives the
+# canonical queue_id (whether newly inserted or pre-existing for the same
+# (normalized_surface, mention_class) pair). The ``DO UPDATE SET retry_count =
+# retry_count`` clause is a no-op solely to enable the RETURNING — without it
+# ``ON CONFLICT DO NOTHING`` would skip RETURNING on the conflict path.
 _PROVISIONAL_INSERT_SQL = """
 INSERT INTO provisional_entity_queue
-    (queue_id, normalized_surface, mention_class, mention_id, doc_id, created_at)
+    (queue_id, mention_text, normalized_surface, mention_class, source_doc_id, context_snippet)
 VALUES
-    (:queue_id, lower(trim(:surface)), :mention_class, :mention_id, :doc_id, now())
-ON CONFLICT (normalized_surface, mention_class) DO NOTHING
+    (:queue_id, :surface, lower(trim(:surface)), :mention_class, :doc_id, :ctx)
+ON CONFLICT (normalized_surface, mention_class)
+DO UPDATE SET retry_count = provisional_entity_queue.retry_count
+RETURNING queue_id
 """
 
 
 async def _insert_provisional(
     mention: EntityMention,
     intelligence_session: object,
-) -> None:
-    """Insert a PROVISIONAL mention into the provisional_entity_queue."""
+) -> UUID:
+    """Insert a PROVISIONAL mention into the provisional_entity_queue.
+
+    Returns the canonical ``queue_id`` for the (normalized_surface, mention_class)
+    pair — newly generated on first insert, pre-existing on conflict (so two
+    mentions of the same surface text in the same class share one queue row).
+    The returned id is later stashed on the mention so downstream blocks
+    (B-1 ``_build_raw_relations`` etc.) can reference it as a synthetic
+    "entity id" while emitting ``entity_provisional=True`` flagged relations.
+    """
     from sqlalchemy import text  # type: ignore[import-untyped]
 
-    await intelligence_session.execute(  # type: ignore[attr-defined]
+    result = await intelligence_session.execute(  # type: ignore[attr-defined]
         text(_PROVISIONAL_INSERT_SQL),
         {
             "queue_id": str(common.ids.new_uuid7()),
             "surface": mention.mention_text,
             "mention_class": str(mention.mention_class),
-            "mention_id": str(mention.mention_id),
             "doc_id": str(mention.doc_id),
+            # context_snippet left NULL for now; future work could extract a
+            # surrounding-sentence snippet here, but B-3 already does that for
+            # the unresolved-resolution-worker prompt and we don't want two
+            # parallel implementations.
+            "ctx": None,
         },
     )
+    queue_id_str = result.scalar_one()
+    return UUID(str(queue_id_str))
 
 
 # ── Main block entry point ────────────────────────────────────────────────────
@@ -448,7 +477,12 @@ async def run_entity_resolution_block(
                 # does NOT abort the outer transaction (BP-239: session-transaction
                 # poisoning via unguarded INSERT in entity resolution).
                 async with intelligence_session.begin_nested():  # type: ignore[attr-defined]
-                    await _insert_provisional(mention, intelligence_session)
+                    queue_id = await _insert_provisional(mention, intelligence_session)
+                # PLAN-0057 B-2: stash the canonical queue_id on the domain
+                # mention so the article consumer's ``_build_raw_*`` helpers
+                # (Wave B-1) can use it as a synthetic entity id when emitting
+                # relations/events/claims with ``entity_provisional=True``.
+                mention.provisional_queue_id = queue_id
             except Exception:
                 logger.warning(
                     "entity_resolution.provisional_insert_failed",

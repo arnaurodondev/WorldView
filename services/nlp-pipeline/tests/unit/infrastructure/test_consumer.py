@@ -1055,7 +1055,7 @@ class TestBuildRawClaims:
         ]
         entity_id_by_ref = {"aapl": entity_id}
 
-        result = _build_raw_claims(claims, entity_id_by_ref)
+        result = _build_raw_claims(claims, entity_id_by_ref, set())
 
         assert len(result) == 1
         claim = result[0]
@@ -1078,7 +1078,7 @@ class TestBuildRawClaims:
         ]
         entity_id_by_ref = {"aapl": str(uuid.uuid4())}
 
-        result = _build_raw_claims(claims, entity_id_by_ref)
+        result = _build_raw_claims(claims, entity_id_by_ref, set())
 
         assert len(result) == 0
 
@@ -1093,7 +1093,7 @@ class TestBuildRawClaims:
         ]
         entity_id_by_ref = {"aapl": entity_id_a, "msft": entity_id_b}
 
-        result = _build_raw_claims(claims, entity_id_by_ref)
+        result = _build_raw_claims(claims, entity_id_by_ref, set())
 
         assert len(result) == 2
         assert result[0]["subject_entity_id"] == entity_id_a
@@ -1105,7 +1105,7 @@ class TestBuildRawClaims:
         claims = [{"entity_ref": "AAPL", "claim_type": "general"}]
         entity_id_by_ref = {"aapl": entity_id}
 
-        result = _build_raw_claims(claims, entity_id_by_ref)
+        result = _build_raw_claims(claims, entity_id_by_ref, set())
 
         assert len(result) == 1
         claim = result[0]
@@ -1119,12 +1119,166 @@ class TestBuildRawClaims:
         claims = [{"entity_ref": "AaPl", "claim_type": "rating"}]
         entity_id_by_ref = {"aapl": entity_id}
 
-        result = _build_raw_claims(claims, entity_id_by_ref)
+        result = _build_raw_claims(claims, entity_id_by_ref, set())
 
         assert len(result) == 1
         assert result[0]["subject_entity_id"] == entity_id
 
     def test_empty_claims_returns_empty_list(self) -> None:
         """Empty input produces empty output."""
-        result = _build_raw_claims([], {"aapl": str(uuid.uuid4())})
+        result = _build_raw_claims([], {"aapl": str(uuid.uuid4())}, set())
         assert result == []
+
+
+# ── PLAN-0057 B-1 (F-CRIT-07): provisional flow in _build_raw_* helpers ──────
+
+
+class TestBuildRawRelationsProvisional:
+    """Wave B-1: relations referring to provisional surfaces are emitted
+    with ``entity_provisional=True`` and ``provisional_queue_id`` set, instead
+    of being silently dropped (the pre-fix behaviour for ~100% of relations
+    on under-resolved articles).
+    """
+
+    @pytest.mark.unit
+    def test_both_endpoints_resolved_no_provisional_flag(self) -> None:
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_relations,
+        )
+
+        aapl = str(uuid.uuid4())
+        msft = str(uuid.uuid4())
+        relations = [
+            {"subject_ref": "Apple", "object_ref": "Microsoft", "predicate": "competes_with", "confidence": 0.9}
+        ]
+        out = _build_raw_relations(relations, {"apple": aapl, "microsoft": msft}, set())
+        assert len(out) == 1
+        assert out[0]["entity_provisional"] is False
+        assert out[0]["provisional_queue_id"] is None
+        assert out[0]["subject_entity_id"] == aapl
+        assert out[0]["object_entity_id"] == msft
+
+    @pytest.mark.unit
+    def test_subject_provisional_emits_flag_and_queue_id(self) -> None:
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_relations,
+        )
+
+        aapl = str(uuid.uuid4())
+        ecb_qid = str(uuid.uuid4())  # synthetic queue UUID for unresolved "ECB"
+        relations = [{"subject_ref": "ECB", "object_ref": "Apple", "predicate": "regulates", "confidence": 0.7}]
+        out = _build_raw_relations(relations, {"ecb": ecb_qid, "apple": aapl}, {"ecb"})
+        assert len(out) == 1
+        assert out[0]["entity_provisional"] is True
+        assert out[0]["provisional_queue_id"] == ecb_qid
+
+    @pytest.mark.unit
+    def test_object_provisional_emits_flag_and_queue_id(self) -> None:
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_relations,
+        )
+
+        aapl = str(uuid.uuid4())
+        fed_qid = str(uuid.uuid4())
+        relations = [{"subject_ref": "Apple", "object_ref": "Fed", "predicate": "complies_with", "confidence": 0.6}]
+        out = _build_raw_relations(relations, {"apple": aapl, "fed": fed_qid}, {"fed"})
+        assert out[0]["entity_provisional"] is True
+        assert out[0]["provisional_queue_id"] == fed_qid
+
+    @pytest.mark.unit
+    def test_both_provisional_emits_subject_queue_id(self) -> None:
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_relations,
+        )
+
+        a_qid = str(uuid.uuid4())
+        b_qid = str(uuid.uuid4())
+        relations = [{"subject_ref": "A", "object_ref": "B", "predicate": "x", "confidence": 0.5}]
+        out = _build_raw_relations(relations, {"a": a_qid, "b": b_qid}, {"a", "b"})
+        assert out[0]["entity_provisional"] is True
+        # Convention: subject queue id wins when both are provisional.
+        assert out[0]["provisional_queue_id"] == a_qid
+
+    @pytest.mark.unit
+    def test_truly_unresolved_ref_still_dropped(self) -> None:
+        """A ref that's neither resolved nor in provisional_refs is still skipped."""
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_relations,
+        )
+
+        aapl = str(uuid.uuid4())
+        relations = [{"subject_ref": "Apple", "object_ref": "UnknownCorp", "predicate": "x", "confidence": 0.5}]
+        out = _build_raw_relations(relations, {"apple": aapl}, set())
+        assert out == []
+
+
+class TestBuildRawEventsProvisional:
+    @pytest.mark.unit
+    def test_provisional_subject_emits_flag(self) -> None:
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_events,
+        )
+
+        ecb_qid = str(uuid.uuid4())
+        events = [{"event_type": "MACRO", "description": "ECB hike", "entity_refs": ["ECB"], "confidence": 0.9}]
+        out = _build_raw_events(events, {"ecb": ecb_qid}, {"ecb"})
+        assert len(out) == 1
+        assert out[0]["entity_provisional"] is True
+        assert out[0]["provisional_queue_id"] == ecb_qid
+
+    @pytest.mark.unit
+    def test_resolved_subject_no_flag(self) -> None:
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_events,
+        )
+
+        aapl = str(uuid.uuid4())
+        events = [
+            {"event_type": "EARNINGS_RELEASE", "description": "Apple Q1", "entity_refs": ["Apple"], "confidence": 0.95}
+        ]
+        out = _build_raw_events(events, {"apple": aapl}, set())
+        assert out[0]["entity_provisional"] is False
+        assert out[0]["provisional_queue_id"] is None
+
+
+class TestBuildRawClaimsProvisional:
+    @pytest.mark.unit
+    def test_provisional_subject_emits_flag(self) -> None:
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_claims,
+        )
+
+        ecb_qid = str(uuid.uuid4())
+        claims = [
+            {
+                "entity_ref": "ECB",
+                "claim_type": "GUIDANCE_RAISE",
+                "polarity": "neutral",
+                "confidence": 0.8,
+                "evidence_text": "ECB guides higher",
+            }
+        ]
+        out = _build_raw_claims(claims, {"ecb": ecb_qid}, {"ecb"})
+        assert len(out) == 1
+        assert out[0]["entity_provisional"] is True
+        assert out[0]["provisional_queue_id"] == ecb_qid
+
+    @pytest.mark.unit
+    def test_resolved_subject_no_flag(self) -> None:
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_claims,
+        )
+
+        aapl = str(uuid.uuid4())
+        claims = [
+            {
+                "entity_ref": "Apple",
+                "claim_type": "EPS_BEAT",
+                "polarity": "positive",
+                "confidence": 0.95,
+                "evidence_text": "beat",
+            }
+        ]
+        out = _build_raw_claims(claims, {"apple": aapl}, set())
+        assert out[0]["entity_provisional"] is False
+        assert out[0]["provisional_queue_id"] is None

@@ -19,6 +19,7 @@ evidence_date heuristic: coalesce(published_at, extracted_at) — NEVER use now(
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -32,6 +33,7 @@ from nlp_pipeline.domain.models import SignalEvent
 
 if TYPE_CHECKING:
     from ml_clients.protocols import ExtractionClient  # type: ignore[import-not-found]
+    from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
 
     from nlp_pipeline.application.blocks.suppression import ProcessingPath
     from nlp_pipeline.domain.models import Chunk, EntityMention
@@ -151,11 +153,24 @@ async def _run_extraction_window(
     mentions: list[EntityMention],
     extraction_client: ExtractionClient,
     model_id: str,
+    *,
+    doc_id: UUID | None = None,
+    usage_logger: LlmUsageLogProtocol | None = None,
 ) -> ExtractionResult:
-    """Run extraction on a single window, return parsed result dict."""
+    """Run extraction on a single window, return parsed result dict.
+
+    PLAN-0057 A-5 / F-CRIT-03: when ``usage_logger`` is provided, every call
+    to ``extraction_client.extract()`` (success OR failure) appends one row
+    to ``nlp_db.llm_usage_log``. Latency is captured around the LLM call
+    only — not the JSON-parse path.
+    """
     from ml_clients.dataclasses import ExtractionInput  # type: ignore[import-not-found]
 
-    mention_names = [m.mention_text for m in mentions]
+    # PLAN-0057 B-1: dedup mention_names while preserving order. The prompt
+    # tells the LLM to pick entity_ref values from this list; duplicate
+    # surfaces (same text appearing in multiple mention rows) waste prompt
+    # tokens and don't add signal. ``dict.fromkeys`` preserves insertion order.
+    mention_names = list(dict.fromkeys(m.mention_text for m in mentions))
     prompt = _build_prompt(window_text, mention_names)
 
     inp = ExtractionInput(
@@ -165,7 +180,47 @@ async def _run_extraction_window(
         model_id=model_id,
     )
 
-    output = await extraction_client.extract(inp)
+    # PLAN-0057 A-5: capture latency for the LLM call. We log success based on
+    # whether extract() returns without raising; the JSON-parse outcome is
+    # independent (a model can return text that we fail to parse — that is
+    # still a successful HTTP round-trip from the LLM provider's POV).
+    t0 = time.perf_counter()
+    output = None
+    extract_succeeded = False
+    try:
+        output = await extraction_client.extract(inp)
+        extract_succeeded = True
+    finally:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        if usage_logger is not None:
+            try:
+                await usage_logger.log(
+                    model_id=model_id,
+                    # The deep-extraction provider is selected at consumer
+                    # wiring time (DeepInfra when extraction_api_key set,
+                    # Ollama otherwise). Without a hint on the client we tag
+                    # generically; tokens_in/out are word-split estimates per
+                    # protocol guidance.
+                    provider=getattr(extraction_client, "provider", "unknown"),
+                    capability="extraction",
+                    tokens_in=len(prompt.split()) + len(window_text.split()),
+                    tokens_out=len(str(getattr(output, "raw_response", "") or "").split()),
+                    latency_ms=latency_ms,
+                    estimated_cost_usd=0.0,
+                    success=extract_succeeded,
+                    error_code=None if extract_succeeded else "model_error",
+                    doc_id=doc_id,
+                )
+            except Exception as exc:  # protocol forbids raising; belt-and-braces
+                logger.warning(
+                    "deep_extraction.usage_log_failed",
+                    doc_id=str(doc_id) if doc_id is not None else None,
+                    error=str(exc),
+                    exc_info=True,
+                )
+
+    if output is None:
+        return {"events": [], "claims": [], "relations": []}
 
     # Parse the structured result
     raw = output.result
@@ -233,6 +288,7 @@ async def run_deep_extraction_block(
     published_at: datetime | None,
     extracted_at: datetime,
     outbox_topic_signal: str,
+    usage_logger: LlmUsageLogProtocol | None = None,
 ) -> tuple[ExtractionResult, list[SignalEvent]]:
     """Run Block 10: Deep LLM extraction for MEDIUM and DEEP tiers.
 
@@ -281,6 +337,8 @@ async def run_deep_extraction_block(
                 mentions=mentions,
                 extraction_client=extraction_client,
                 model_id=model_id,
+                doc_id=doc_id,
+                usage_logger=usage_logger,
             )
             window_results.append(result)
         except Exception:

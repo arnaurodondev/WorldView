@@ -27,6 +27,7 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 async def main() -> None:
     from nlp_pipeline.config import Settings
     from nlp_pipeline.infrastructure.nlp_db.session import _build_nlp_factories
+    from nlp_pipeline.infrastructure.nlp_db.usage_log_factory import SessionScopedNlpUsageLogger
     from nlp_pipeline.infrastructure.workers.article_relevance_scoring_worker import (
         ArticleRelevanceScoringWorker,
     )
@@ -58,6 +59,8 @@ async def main() -> None:
         log.error("relevance_scoring_worker_startup_failed", error=str(exc))
         sys.exit(1)
 
+    # PLAN-0057 A-5 / F-CRIT-03: inject the session-scoped usage logger so
+    # every Ollama / DeepInfra HTTP call appends one row to nlp_db.llm_usage_log.
     worker = ArticleRelevanceScoringWorker(
         nlp_session_factory=nlp_sf,
         ollama_url=settings.relevance_scoring_ollama_url,
@@ -68,6 +71,7 @@ async def main() -> None:
         api_key=settings.relevance_scoring_api_key,
         api_base_url=settings.relevance_scoring_api_base_url,
         api_model_id=settings.relevance_scoring_api_model_id,
+        usage_logger=SessionScopedNlpUsageLogger(nlp_sf),
     )
 
     _using_external = bool(settings.relevance_scoring_api_key)

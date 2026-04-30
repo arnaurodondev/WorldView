@@ -508,7 +508,10 @@ For `financial_institution` overlap: use `DO $$ ... IF NOT EXISTS (SELECT 1 FROM
 - `services/intelligence-migrations/alembic/versions/0001_create_intelligence_db.py:572-588` (`provisional_entity_queue` schema reference)
 - `docs/audits/.../2026-04-29-investigation...md` §6.2 (F-CRIT-07 + F-MAJOR-10 + F-CRIT-05)
 
-### Wave B-1: `_build_raw_*` carries provisional refs (F-CRIT-07)
+### Wave B-1: `_build_raw_*` carries provisional refs (F-CRIT-07) ✅
+
+**Status**: **DONE** — 2026-04-30 · 9 new unit tests cover all 3 helpers (resolved-only / one-side-provisional / both-provisional / unresolved-still-dropped). 44 unit tests in test_consumer.py pass; mypy clean. Implementation: `entity_id_by_ref` now built from BOTH resolved mentions (real canonical UUID) AND provisional mentions (synthetic queue UUID stashed by Wave B-2). `provisional_refs: set[str]` tracks which keys are provisional. The 3 `_build_raw_*` helpers gain `provisional_refs` parameter and emit `entity_provisional=True` + `provisional_queue_id=<uuid>` on the appropriate endpoint(s). When both endpoints are provisional, subject queue id wins by convention. `deep_extraction.py:158` mention_names list now deduped via `dict.fromkeys()` (preserves order).
+
 **Goal**: stop silent drop when LLM picks an unresolved mention surface; emit `entity_provisional=True` + `provisional_queue_id` so KG can persist provisional evidence and promote later.
 **Depends on**: T-A-4-01 (audit observable), T-B-2-01 (real queue_id available)
 **Estimated effort**: 4-6 hours
@@ -561,7 +564,10 @@ For `financial_institution` overlap: use `DO $$ ... IF NOT EXISTS (SELECT 1 FROM
 
 ---
 
-### Wave B-2: Fix `_PROVISIONAL_INSERT_SQL` to match real schema (F-MAJOR-10)
+### Wave B-2: Fix `_PROVISIONAL_INSERT_SQL` to match real schema (F-MAJOR-10) ✅
+
+**Status**: **DONE** — 2026-04-30 · combined commit with B-1. The prior SQL referenced `mention_id` and `doc_id` columns that DO NOT EXIST in `provisional_entity_queue` (real columns: `mention_text`, `normalized_surface`, `mention_class`, `source_doc_id`, `context_snippet`, status/timestamps). The SAVEPOINT+except wrapper at the call site silently swallowed the SQL error → queue stayed empty. Rewrote SQL to match real schema, added `RETURNING queue_id`, used `ON CONFLICT (normalized_surface, mention_class) DO UPDATE SET retry_count = retry_count` (no-op enabling RETURNING on conflict path), updated `_insert_provisional()` signature to return `UUID`, caller in `run_entity_resolution_block` stashes the returned id on `mention.provisional_queue_id` (new domain field). This wave is the precursor to B-1: B-1's `entity_id_by_ref` build relies on the queue_id being available on the mention.
+
 **Goal**: `provisional_entity_queue` actually populates. Currently the savepoint silently catches a SQL error from referencing nonexistent columns `mention_id` and `doc_id`.
 **Depends on**: none (can ship in parallel with B-1, but B-1 needs B-2 done first to have real queue_ids)
 **Estimated effort**: 2-3 hours

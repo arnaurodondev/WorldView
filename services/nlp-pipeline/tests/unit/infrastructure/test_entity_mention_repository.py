@@ -68,6 +68,92 @@ class TestGetUnresolvedBatch:
 
 
 @pytest.mark.unit
+class TestGetUnresolvedBatchWithContext:
+    """PLAN-0057 T-B-3-01: new variant returns mention + doc/section context."""
+
+    async def test_empty_batch_returns_empty_list(self) -> None:
+        """No unresolved rows → empty list, no second/third query issued."""
+        session = _make_session()
+        result_empty = _make_result(fetchall_rows=[])
+        session.execute = AsyncMock(return_value=result_empty)
+        repo = EntityMentionRepository(session)
+
+        rows = await repo.get_unresolved_batch_with_context(batch_size=5)
+
+        assert rows == []
+        # Only the locking SELECT runs; ORM hydrate + context JOIN are skipped.
+        assert session.execute.await_count == 1
+
+    async def test_non_empty_batch_returns_dataclass_with_context(self) -> None:
+        """When mentions are returned, each row is wrapped with a context_sentence.
+
+        We mock three execute() calls in sequence:
+          1. lock SELECT  → returns one mention_id row
+          2. ORM hydrate  → returns one EntityMentionModel-like mock
+          3. context JOIN → returns one (mention_id, doc_title, section_title) row
+        """
+        session = _make_session()
+        mention_id = uuid.uuid4()
+
+        # Result #1: lock SELECT → fetchall returns [(mention_id,)]
+        lock_row = MagicMock()
+        lock_row.__getitem__ = MagicMock(return_value=mention_id)
+        result_lock = _make_result(fetchall_rows=[lock_row])
+
+        # Result #2: ORM hydrate → scalars().all() returns one mock with .mention_id
+        orm_row = MagicMock()
+        orm_row.mention_id = mention_id
+        result_orm = _make_result(fetchall_rows=[], scalar_rows=[orm_row])
+
+        # Result #3: context JOIN → fetchall returns one row with doc_title + section_title
+        ctx_row = MagicMock()
+        ctx_row.mention_id = mention_id
+        ctx_row.doc_title = "Apple Q3 Earnings Release"
+        ctx_row.section_title = "Risk Factors"
+        result_ctx = _make_result(fetchall_rows=[ctx_row])
+
+        session.execute = AsyncMock(side_effect=[result_lock, result_orm, result_ctx])
+        repo = EntityMentionRepository(session)
+
+        rows = await repo.get_unresolved_batch_with_context(batch_size=10, lock=False)
+
+        assert len(rows) == 1
+        assert rows[0].mention is orm_row
+        # Both titles are concatenated with " | " separator (in order).
+        assert rows[0].context_sentence == "Apple Q3 Earnings Release | Risk Factors"
+        assert session.execute.await_count == 3
+
+    async def test_missing_titles_yields_none_context(self) -> None:
+        """When both doc and section titles are NULL, context_sentence is None."""
+        session = _make_session()
+        mention_id = uuid.uuid4()
+
+        lock_row = MagicMock()
+        lock_row.__getitem__ = MagicMock(return_value=mention_id)
+        result_lock = _make_result(fetchall_rows=[lock_row])
+
+        orm_row = MagicMock()
+        orm_row.mention_id = mention_id
+        result_orm = _make_result(fetchall_rows=[], scalar_rows=[orm_row])
+
+        ctx_row = MagicMock()
+        ctx_row.mention_id = mention_id
+        ctx_row.doc_title = None
+        ctx_row.section_title = None
+        result_ctx = _make_result(fetchall_rows=[ctx_row])
+
+        session.execute = AsyncMock(side_effect=[result_lock, result_orm, result_ctx])
+        repo = EntityMentionRepository(session)
+
+        rows = await repo.get_unresolved_batch_with_context(batch_size=10, lock=False)
+
+        assert len(rows) == 1
+        # No context available → None (not empty string) so the worker can
+        # substitute its own "(no surrounding context available)" placeholder.
+        assert rows[0].context_sentence is None
+
+
+@pytest.mark.unit
 class TestUpdateResolutionOutcome:
     async def test_calls_execute_with_mention_id(self) -> None:
         """update_resolution_outcome() must execute an UPDATE for the given mention_id."""
