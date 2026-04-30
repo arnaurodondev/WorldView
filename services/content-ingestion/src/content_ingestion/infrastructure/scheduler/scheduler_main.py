@@ -56,6 +56,12 @@ class SchedulerProcess:
             tick_interval_seconds=self._tick_interval,
             max_tasks_per_tick=self._max_tasks_per_tick,
         )
+
+        # PLAN-0055 B-1: one-shot config-drift detection at startup. WARNs (does
+        # not fail) for any source whose live config_hash differs from the snapshot
+        # at the last successful fetch — informational, not load-bearing.
+        await self._warn_on_config_drift()
+
         while not self._stop_event.is_set():
             await self._tick()
             with suppress(TimeoutError):
@@ -65,6 +71,40 @@ class SchedulerProcess:
                 )
 
         logger.info("scheduler_stopped")
+
+    async def _warn_on_config_drift(self) -> None:
+        """Surface sources where ``last_run_config_hash`` differs from live ``config_hash``.
+
+        Best-effort; any failure logs at debug and the scheduler continues.
+        """
+        from sqlalchemy import text
+
+        try:
+            async with self._read_factory() as session:
+                rows = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT s.id, s.name, sas.last_run_config_hash, s.config_hash
+                            FROM sources s
+                            JOIN source_adapter_state sas ON sas.source_id = s.id
+                            WHERE sas.last_run_config_hash IS NOT NULL
+                              AND sas.last_run_config_hash <> s.config_hash
+                            """
+                        )
+                    )
+                ).all()
+            for row in rows:
+                logger.warning(
+                    "config_drift_detected",
+                    source_id=str(row.id),
+                    name=row.name,
+                    last_run_hash=row.last_run_config_hash,
+                    current_hash=row.config_hash,
+                    detail="last_watermark may refer to old config; consider re-backfill",
+                )
+        except Exception as exc:
+            logger.debug("config_drift_check_skipped", error=str(exc))
 
     async def _tick(self) -> None:
         """Execute one scheduler tick.

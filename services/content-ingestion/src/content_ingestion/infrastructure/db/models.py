@@ -7,6 +7,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
+    Computed,
     DateTime,
     ForeignKey,
     Index,
@@ -29,7 +30,13 @@ class Base(DeclarativeBase):
 
 
 class SourceModel(Base):
-    """Configured polling source."""
+    """Configured polling source.
+
+    PLAN-0055 B-1: ``config_hash`` is a Postgres GENERATED column (SHA-256 of the
+    canonical config JSON). The ORM declares it but never writes — Postgres maintains
+    it on every INSERT/UPDATE. The ``uq_sources_dedup`` UNIQUE on
+    (source_type, config_hash) makes ``CreateSourceUseCase`` idempotent.
+    """
 
     __tablename__ = "sources"
 
@@ -38,7 +45,17 @@ class SourceModel(Base):
     source_type: Mapped[str] = mapped_column(Text, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # GENERATED column — Postgres maintains it; ORM is read-only here.
+    # SQLAlchemy's ``Computed`` directive matches the migration's DDL so this
+    # field is excluded from INSERT/UPDATE statements automatically.
+    config_hash: Mapped[str] = mapped_column(
+        String(64),
+        Computed("encode(digest(config::text, 'sha256'), 'hex')", persisted=True),
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("source_type", "config_hash", name="uq_sources_dedup"),)
 
 
 class SourceAdapterStateModel(Base):
@@ -53,6 +70,9 @@ class SourceAdapterStateModel(Base):
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PLAN-0055 B-1: snapshot of sources.config_hash at last successful fetch.
+    # Compared at startup to current sources.config_hash to surface drift WARNs.
+    last_run_config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

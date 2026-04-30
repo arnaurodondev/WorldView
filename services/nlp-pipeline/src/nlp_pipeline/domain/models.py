@@ -16,7 +16,7 @@ from nlp_pipeline.domain.enums import DataQuality, WindowType  # needed at runti
 from nlp_pipeline.domain.errors import PriceImpactError
 
 if TYPE_CHECKING:
-    from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome, RoutingTier
+    from nlp_pipeline.domain.enums import MentionClass, ProcessingPath, ResolutionOutcome, RoutingTier
 
 
 @dataclass(frozen=True)
@@ -112,6 +112,11 @@ class RoutingDecision:
     composite_score: float
     feature_scores: dict[str, float]  # all 7 signal values for audit/training
     final_routing_tier: RoutingTier | None = None  # after Stage 2 novelty correction
+    # PLAN-0057 A-1 (F-CRIT-06): Block 6 suppression-gate output, persisted
+    # so downstream queries (news ranking, audit, observability) can filter on it.
+    # Set by ``apply_suppression_gate(routing_decision)`` and assigned back onto
+    # the entity by the article consumer immediately before persistence.
+    processing_path: ProcessingPath | None = None
 
 
 @dataclass

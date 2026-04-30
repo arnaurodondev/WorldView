@@ -157,8 +157,11 @@ async def _run(settings: Settings, *, dry_run: bool) -> BackfillReport:
             ),
         )
         await session.commit()
-        updated_primary = int(update_primary.rowcount or 0)
-        updated_fallback = int(update_fallback.rowcount or 0)
+        # SQLAlchemy stubs declare ``execute()`` returns ``Result[Any]`` whose
+        # ``rowcount`` attribute is hidden from type-checkers, but it exists on
+        # CursorResult at runtime for INSERT/UPDATE/DELETE statements.
+        updated_primary = int(update_primary.rowcount or 0)  # type: ignore[attr-defined]
+        updated_fallback = int(update_fallback.rowcount or 0)  # type: ignore[attr-defined]
         updated = updated_primary + updated_fallback
 
         logger.info(

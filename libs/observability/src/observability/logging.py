@@ -51,7 +51,11 @@ def configure_logging(
 
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
-        _inject_otel_trace_context,  # injects trace_id + span_id from active OTel span
+        # ``_inject_otel_trace_context`` returns ``dict[str, Any]`` which is
+        # narrower than the ``Mapping[str, Any] | str | bytes | ...`` union
+        # that ``structlog.types.Processor`` advertises; the value is correct
+        # at runtime but mypy refuses to widen ``dict`` covariantly.
+        _inject_otel_trace_context,  # type: ignore[list-item]
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),

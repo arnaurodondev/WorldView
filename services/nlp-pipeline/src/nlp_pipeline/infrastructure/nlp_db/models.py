@@ -178,6 +178,9 @@ class RoutingDecisionModel(Base):
     doc_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     routing_tier: Mapped[str] = mapped_column(Text, nullable=False)
     final_routing_tier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PLAN-0057 A-1 (F-CRIT-06): persist Block 6 suppression-gate decision.
+    # CHECK constraint at DB layer restricts to {full_pipeline, section_embeddings_only, halt}.
+    processing_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     composite_score: Mapped[float] = mapped_column(Float, nullable=False)
     feature_scores_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -289,3 +292,72 @@ class ArticleImpactWindowModel(Base):
     normalisation_cap_pct: Mapped[Decimal] = mapped_column(sa.Numeric(6, 2), nullable=False)
     data_quality: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, server_default="daily_proxy")
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # PLAN-0055 C-1: provenance columns. Nullable because existing rows pre-date
+    # the migration; the worker rewrite (C-2) populates them on every new write.
+    model_id: Mapped[str | None] = mapped_column(VARCHAR(128), nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(VARCHAR(32), nullable=True)
+    input_hash: Mapped[str | None] = mapped_column(VARCHAR(64), nullable=True)
+
+
+class DocumentSourceLLMScoreModel(Base):
+    """Append-only LLM score ledger (PLAN-0055 Sub-Plan C).
+
+    One row per ``(doc_id, score_type, model_id, prompt_version)``. The latest
+    row by ``generated_at`` wins; the ``document_source_llm_latest`` materialized
+    view (Wave C-3) projects the current score for read paths.
+
+    Worker writes are INSERT ON CONFLICT DO NOTHING — duplicate scoring of the
+    same doc with the same model + prompt is a silent no-op.
+    """
+
+    __tablename__ = "document_source_llm_scores"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("gen_random_uuid()"),
+    )
+    doc_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    score_type: Mapped[str] = mapped_column(VARCHAR(32), nullable=False)
+    score_value: Mapped[Decimal | None] = mapped_column(sa.Numeric(6, 4), nullable=True)
+    score_label: Mapped[str | None] = mapped_column(VARCHAR(32), nullable=True)
+    model_id: Mapped[str] = mapped_column(VARCHAR(128), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(VARCHAR(32), nullable=False)
+    input_hash: Mapped[str] = mapped_column(VARCHAR(64), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+class LLMReplayJobModel(Base):
+    """Background job for the admin LLM replay endpoint (PLAN-0055 C-4).
+
+    The replay worker picks PENDING rows with FOR UPDATE SKIP LOCKED, sets
+    RUNNING, iterates articles, then sets COMPLETED (or FAILED with
+    ``error_detail`` on mid-stream errors).
+    """
+
+    __tablename__ = "llm_replay_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("gen_random_uuid()"),
+    )
+    model_id: Mapped[str] = mapped_column(VARCHAR(128), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(VARCHAR(32), nullable=False)
+    score_types: Mapped[list[str]] = mapped_column(sa.ARRAY(Text), nullable=False)
+    since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(VARCHAR(16), nullable=False, server_default="PENDING")
+    total_articles: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    processed: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)

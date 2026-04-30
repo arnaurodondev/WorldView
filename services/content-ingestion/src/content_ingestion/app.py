@@ -141,6 +141,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     await jwt_mw.startup()
 
+    # PLAN-0055 A-3: seed NULL watermarks so the scheduler tick has a starting
+    # cursor for every enabled source. Spawned as a non-blocking task — the API
+    # process must answer /health within ~100ms, so seeding cannot block startup.
+    if settings.backfill_on_startup:
+        import asyncio as _asyncio
+
+        from content_ingestion.application.use_cases.seed_source_watermarks import SeedSourceWatermarksUseCase
+
+        seed_use_case = SeedSourceWatermarksUseCase(
+            uow_factory=app.state.uow_factory,
+            settings=settings,
+        )
+
+        async def _run_seed() -> None:
+            try:
+                await seed_use_case.execute()
+            except Exception as exc:  # — fire-and-forget; never crash the API
+                log.exception("startup_seed_watermarks_failed", error=str(exc))
+
+        # Stash on app.state so the task isn't GC'd mid-flight (RUF006).
+        app.state.startup_seed_task = _asyncio.create_task(_run_seed(), name="seed_source_watermarks")
+
     log.info("service_started", service=settings.service_name)
     yield
 

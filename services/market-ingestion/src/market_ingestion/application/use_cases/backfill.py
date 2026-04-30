@@ -16,7 +16,35 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_MAX_CHUNKS: int = 100
+# PLAN-0055 A-1: bumped from 100 → 500 to support 10y daily horizons in a
+# single call (10y / 365 chunk_days = 10 chunks; 10y intraday / 30 chunk_days
+# ≈ 122 chunks). Operators only hit this cap with absurdly small chunk_days.
+_MAX_CHUNKS: int = 500
+
+
+# Daily-or-coarser timeframes can be ingested at full provider-page granularity
+# (one year per chunk fits in EODHD/Alpaca daily endpoints). Intraday timeframes
+# are heavier per-day so chunks stay smaller to avoid timing out provider calls.
+_DAILY_OR_COARSER_TIMEFRAMES: frozenset[str] = frozenset({"1d", "1w", "1mo", "1M"})
+
+
+def default_chunk_days_for_timeframe(timeframe: str) -> int:
+    """Sensible chunk_days default for a given timeframe (PLAN-0055 A-1).
+
+    - daily/weekly/monthly bars → 365 (one chunk per year)
+    - intraday (1m..4h)         → 30  (one chunk per month)
+
+    The auto-backfill startup hook uses this so callers don't have to remember
+    per-timeframe heuristics; legacy callers keep their explicit chunk_days.
+
+    Note: dropped the leading underscore so cross-module imports (used by
+    ``run_startup_backfill``) don't trip mypy's strict no-private-reexport rule.
+    """
+    return 365 if timeframe in _DAILY_OR_COARSER_TIMEFRAMES else 30
+
+
+# Backward-compat alias for any caller still using the underscored name.
+_default_chunk_days_for_timeframe = default_chunk_days_for_timeframe
 
 
 @dataclass
@@ -32,7 +60,7 @@ class BackfillUseCase:
     """Create chunked OHLCV backfill tasks for a historical date range.
 
     The date range is split into *chunk_days*-day windows.  Raises
-    ``ValueError`` if the range would produce more than 100 chunks.
+    ``ValueError`` if the range would produce more than ``_MAX_CHUNKS`` chunks.
     """
 
     def __init__(self, uow: UnitOfWork) -> None:

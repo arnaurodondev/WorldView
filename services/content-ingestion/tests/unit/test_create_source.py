@@ -27,13 +27,14 @@ def _make_source_model(
     return m
 
 
-def _make_uow(source_model: MagicMock | None = None) -> AsyncMock:
+def _make_uow(source_model: MagicMock | None = None, was_created: bool = True) -> AsyncMock:
     uow = AsyncMock()
     uow.__aenter__ = AsyncMock(return_value=uow)
     uow.__aexit__ = AsyncMock(return_value=None)
     uow.commit = AsyncMock()
     model = source_model or _make_source_model()
-    uow.sources = AsyncMock(create=AsyncMock(return_value=model))
+    # PLAN-0055 B-1: repository now returns (source, was_created).
+    uow.sources = AsyncMock(create=AsyncMock(return_value=(model, was_created)))
     return uow
 
 

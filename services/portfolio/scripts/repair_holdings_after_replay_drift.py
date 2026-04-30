@@ -274,7 +274,8 @@ async def _run(settings: Settings, *, dry_run: bool, force: bool) -> RepairRepor
                 "holdings_zeroed",
                 portfolios=len(eligible_ids),
                 holdings=holdings_zeroed,
-                snapshots_deleted=int(snap_result.rowcount or 0),
+                # Result.rowcount exists on CursorResult at runtime; stubs hide it.
+                snapshots_deleted=int(snap_result.rowcount or 0),  # type: ignore[attr-defined]
                 snapshot_date=today_utc.isoformat(),
                 skipped_by_guard=len(skipped_ids),
                 force=force,

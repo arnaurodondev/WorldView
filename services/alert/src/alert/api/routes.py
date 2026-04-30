@@ -356,9 +356,12 @@ async def alerts_stream(
             # skip_verification=True (no JWKS endpoint available).
             payload = jwt.decode(token, options={"verify_signature": False}, algorithms=["HS256", "RS256"])
         else:
+            # public_key is fetched from the JWKS cache as Any | None; in this
+            # branch we already verified it is not None, but mypy can't narrow
+            # ``Any | None`` to the cryptography union type pyjwt expects.
             payload = jwt.decode(
                 token,
-                public_key,
+                public_key,  # type: ignore[arg-type]
                 algorithms=["RS256"],
                 issuer="worldview-gateway",
                 options={"require": ["sub", "exp", "iss"]},
