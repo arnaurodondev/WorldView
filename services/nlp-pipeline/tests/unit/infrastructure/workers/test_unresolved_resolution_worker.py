@@ -773,7 +773,10 @@ def test_classification_prompt_template_includes_all_four_worked_examples() -> N
     # The old "Wikipedia article" criterion must NOT come back.
     assert "Wikipedia" not in rendered
     # Final response instruction must be present and unambiguous.
-    assert "Respond with JSON ONLY" in rendered
+    # The actual prompt phrasing is "Respond with a single JSON object ONLY"
+    # — match on the substantive token "JSON object ONLY" so it survives
+    # minor prompt rewording without breaking the anti-regression intent.
+    assert "JSON object ONLY" in rendered or "JSON ONLY" in rendered
 
 
 def test_classification_prompt_handles_missing_context_gracefully() -> None:

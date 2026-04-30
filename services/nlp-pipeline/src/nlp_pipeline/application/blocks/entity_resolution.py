@@ -484,9 +484,23 @@ async def run_entity_resolution_block(
                 # relations/events/claims with ``entity_provisional=True``.
                 mention.provisional_queue_id = queue_id
             except Exception:
+                # PLAN-0057 QA iter-1 (DS Finding-4 follow-up): on savepoint
+                # failure (DB outage, unique constraint race, etc.) the queue
+                # row was NOT inserted, so there is no queue_id to stash. If we
+                # left ``resolution_outcome=PROVISIONAL`` here, the article
+                # consumer's ``_build_raw_*`` helpers would treat the mention
+                # as truly-unresolved (no queue_id → not in entity_id_by_ref →
+                # silent drop) AND the UnresolvedResolutionWorker would NOT
+                # pick it up (it filters on ``resolution_outcome='unresolved'``).
+                # Net: the mention would be stuck in a permanent zombie state.
+                # Downgrading to UNRESOLVED restores the correct invariant: no
+                # queue row → unresolved → next worker cycle re-attempts.
+                mention.resolution_outcome = ResolutionOutcome.UNRESOLVED
+                mention.provisional_queue_id = None  # explicit (already None)
                 logger.warning(
                     "entity_resolution.provisional_insert_failed",
                     mention_id=str(mention.mention_id),
+                    downgraded_to="unresolved",
                 )
 
         else:
