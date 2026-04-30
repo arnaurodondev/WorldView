@@ -337,10 +337,21 @@
     scroll-behavior: auto !important;
   }
   /* Tick-flash (Wave D), alert flash overlay, accordion height — all clamp
-   * to instant. State changes still apply, just without the animation. */
-  .tick-flash, .animate-pulse, .animate-spin, .animate-in, .animate-out {
+   * to instant. State changes still apply, just without the animation.
+   * PLAN-0052 Wave A QA: animate-ping added — used 4× on landing (Hero
+   * kicker, LIVE pill, LiveDataStrip, Footer status). Without an explicit
+   * override the universal 0.01ms duration produces a faint initial flash. */
+  .tick-flash, .animate-pulse, .animate-ping, .animate-spin, .animate-in, .animate-out {
     animation: none !important;
   }
+}
+
+/* ── PLAN-0052 Wave A: anchor scroll offset for sticky nav ───────────────
+ * The landing page LandingNav is `sticky top-0` and ~56px tall. Without
+ * scroll-padding-top, anchor jumps (#hero, #pricing, etc.) land with the
+ * heading hidden behind the nav. 5rem = 80px gives breathing room. */
+html {
+  scroll-padding-top: 5rem;
 }
 
 /* ── 2. Forced colors (Windows High Contrast Mode) ──────────────────── */

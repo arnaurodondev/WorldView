@@ -106,7 +106,8 @@ test.describe("PLAN-0052 Wave A — landing page", () => {
     // Default = annual: Pro shows $24
     await expect(page.getByText("$24", { exact: true })).toBeVisible();
     // Switch to monthly
-    await page.getByRole("tab", { name: /monthly/i }).click();
+    // QA iter-1: toggle now uses aria-pressed (button) not role="tab".
+    await page.getByRole("button", { name: /^monthly$/i }).click();
     await expect(page.getByText("$29", { exact: true })).toBeVisible();
   });
 

@@ -55,9 +55,14 @@ const ROWS: Row[] = [
     finviz: "no",
   },
   {
+    // Bloomberg launched BloombergGPT / AI Assistant in 2024. Worldview's
+    // edge is the open-architecture grounding (full citation chain to
+    // source + price impact); calling Bloomberg "no" risks pushback from
+    // an actual Bloomberg user. "partial" is the honest call.
+    // Adjusted in PLAN-0052 Wave A QA iter-1 (design audit M2).
     feature: "AI-powered research with citations",
     worldview: "yes",
-    bloomberg: "no",
+    bloomberg: "partial",
     ibkr: "no",
     tradingview: "no",
     finviz: "no",
@@ -71,8 +76,12 @@ const ROWS: Row[] = [
     finviz: "no",
   },
   {
+    // Worldview's workspace shipped in PLAN-0059 with limited persistence
+    // and only ~5 panel templates; "yes" is aggressive. Soften to "partial"
+    // until the workspace v2 ships with full layout sharing and template
+    // marketplace. Adjusted in PLAN-0052 Wave A QA iter-1 (design audit M2).
     feature: "Configurable terminal workspace",
-    worldview: "yes",
+    worldview: "partial",
     bloomberg: "yes",
     ibkr: "partial",
     tradingview: "yes",
@@ -114,28 +123,37 @@ const PRICES = {
   finviz: "$25",
 } as const;
 
+/**
+ * CellIcon — accessible yes/partial/no cell renderer.
+ *
+ * WHY sr-only span (not aria-label on the SVG): aria-label on raw SVG is
+ * announced inconsistently across NVDA/JAWS/VoiceOver. The reliable pattern
+ * is decorative-icon (aria-hidden) plus a visually-hidden text label so the
+ * cell reads as "Yes" / "Partial" / "No" on every screen reader.
+ * Fixed in PLAN-0052 Wave A QA iter-1 (a11y audit M6).
+ */
 function CellIcon({ value }: { value: Cell }) {
   if (value === "yes") {
     return (
-      <Check
-        className="mx-auto h-4 w-4 text-positive"
-        aria-label="Yes"
-      />
+      <>
+        <Check className="mx-auto h-4 w-4 text-positive" aria-hidden="true" />
+        <span className="sr-only">Yes</span>
+      </>
     );
   }
   if (value === "partial") {
     return (
-      <Minus
-        className="mx-auto h-4 w-4 text-muted-foreground"
-        aria-label="Partial"
-      />
+      <>
+        <Minus className="mx-auto h-4 w-4 text-muted-foreground" aria-hidden="true" />
+        <span className="sr-only">Partial</span>
+      </>
     );
   }
   return (
-    <X
-      className="mx-auto h-4 w-4 text-negative/70"
-      aria-label="No"
-    />
+    <>
+      <X className="mx-auto h-4 w-4 text-negative/70" aria-hidden="true" />
+      <span className="sr-only">No</span>
+    </>
   );
 }
 
@@ -159,8 +177,20 @@ export function ComparisonTable() {
           </h2>
         </div>
 
+        {/* Mobile-only scroll hint — the table requires horizontal scroll
+            below ~760px. Without an affordance users may not realize they
+            can scroll. Hidden at md+ where the table fits. Added in
+            PLAN-0052 Wave A QA iter-1 (a11y audit M5). */}
+        <p className="mb-2 text-center font-mono text-[10px] uppercase tracking-wider text-muted-foreground/70 md:hidden">
+          ← Scroll to compare →
+        </p>
         <div className="overflow-x-auto rounded-[2px] border border-border/40 bg-card">
           <table className="w-full min-w-[760px] text-left text-sm">
+            <caption className="sr-only">
+              Worldview compared to Bloomberg, Interactive Brokers,
+              TradingView, and Finviz across nine features and estimated
+              monthly cost.
+            </caption>
             <thead>
               <tr className="border-b border-border/40 bg-muted/30">
                 <th

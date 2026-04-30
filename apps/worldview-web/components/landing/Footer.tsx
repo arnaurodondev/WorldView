@@ -60,7 +60,9 @@ export function Footer() {
       className="border-t border-border/40 bg-card/40"
     >
       <div className="mx-auto max-w-7xl px-6 py-16 lg:px-8">
-        <div className="grid grid-cols-2 gap-10 lg:grid-cols-5">
+        {/* QA iter-1 (a11y m4): added md:grid-cols-3 so the footer doesn't
+            stay 2-col + tall at 768–1023px tablet width. 2 → 3 → 5 cols. */}
+        <div className="grid grid-cols-2 gap-10 md:grid-cols-3 lg:grid-cols-5">
           {/* Brand column — wider than the other 4 to match logo + tagline */}
           <div className="col-span-2 lg:col-span-1">
             <p className="mb-2 font-mono text-base font-semibold tracking-tight text-foreground">
@@ -69,20 +71,27 @@ export function Footer() {
             <p className="mb-4 text-xs text-muted-foreground">
               Bloomberg-grade research, without the Bloomberg bill.
             </p>
+            {/* External links: rel="noopener noreferrer" defends against
+                tabnabbing if these are ever changed to target="_blank"; no
+                cost on same-tab links. lucide icons are decorative —
+                aria-hidden so SR announces only the parent aria-label.
+                QA iter-1 (security MINOR + a11y polish). */}
             <div className="flex items-center gap-3">
               <a
                 href="https://github.com"
+                rel="noopener noreferrer"
                 aria-label="GitHub"
                 className="text-muted-foreground hover:text-primary"
               >
-                <Github className="h-4 w-4" />
+                <Github className="h-4 w-4" aria-hidden="true" />
               </a>
               <a
                 href="https://status.worldview.local"
+                rel="noopener noreferrer"
                 aria-label="Status page"
                 className="text-muted-foreground hover:text-primary"
               >
-                <Globe className="h-4 w-4" />
+                <Globe className="h-4 w-4" aria-hidden="true" />
               </a>
             </div>
             {/* WHY a status badge: lets visitors verify uptime at a glance.
