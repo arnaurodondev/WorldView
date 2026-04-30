@@ -88,8 +88,15 @@ export function CashManagementCard({ portfolioId }: CashManagementCardProps) {
   // "total portfolio value" before any leverage adjustments. Falling back to
   // 1 when both are zero stops a divide-by-zero in the percentage calc and
   // yields 0% which is the right user-visible behaviour for an empty book.
-  const total = data.invested + data.cash || 1;
-  const cashPct = (data.cash / total) * 100;
+  // PLAN-0053 QA-iter1 F-007: operator precedence trap. ``a + b || 1``
+  // parses as ``(a + b) || 1``, so when *either* operand is undefined the
+  // sum becomes NaN and the `|| 1` rescue fires — but the next line still
+  // computes (undefined / 1) which is NaN, rendering "NaN%". Coerce
+  // explicitly so missing fields fall through to 0 cleanly.
+  const investedSafe = Number.isFinite(data.invested) ? data.invested : 0;
+  const cashSafe = Number.isFinite(data.cash) ? data.cash : 0;
+  const total = investedSafe + cashSafe || 1;
+  const cashPct = (cashSafe / total) * 100;
 
   // WHY 5%: see top-of-file comment. The 30-day persistence requirement from
   // the spec ("cash > 5% of portfolio for >30d") needs historical data the

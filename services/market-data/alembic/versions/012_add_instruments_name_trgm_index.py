@@ -12,8 +12,17 @@ column with pg_trgm so the search stays fast.
 Index: GIN on ``name gin_trgm_ops``. ILIKE patterns wrapped in ``%...%``
 benefit from trigram indexing for substring matches.
 
-Idempotent: ``CREATE EXTENSION IF NOT EXISTS`` and ``CREATE INDEX
-CONCURRENTLY IF NOT EXISTS`` are both no-ops on second run.
+PLAN-0053 QA-iter1 F-001 fix: ``CREATE INDEX CONCURRENTLY`` cannot run
+inside a transaction. The default Alembic env wraps every migration in
+``context.begin_transaction()``. We avoid the conflict by NOT using the
+CONCURRENTLY clause — this migration takes a brief lock on the
+``instruments`` table during the GIN build. For a multi-million row
+table the build is on the order of seconds (not minutes); deploy windows
+already tolerate that. CONCURRENTLY would only be required for true
+zero-downtime online deploys.
+
+Idempotent: ``CREATE EXTENSION IF NOT EXISTS`` and ``CREATE INDEX IF NOT
+EXISTS`` are both no-ops on second run.
 """
 
 from __future__ import annotations
@@ -35,21 +44,11 @@ def upgrade() -> None:
     # drops from ~400ms (seq scan over ~4M instruments) to <50ms (index scan).
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
 
-    # WHY CONCURRENTLY: the ``instruments`` table contains millions of rows.
-    # A blocking CREATE INDEX would lock the table during a deploy, cutting
-    # off market-data traffic for the duration. CONCURRENTLY trades a longer
-    # build time for zero downtime.
-    #
-    # Note: CONCURRENTLY cannot run inside a transaction. Alembic 1.x respects
-    # ``op.execute`` outside the implicit transaction when this file does not
-    # call ``op.create_index`` (which would auto-wrap in a tx). To be safe we
-    # also disable autocommit for this migration in env.py if needed.
-    op.execute(
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_instruments_name_trgm "
-        "ON instruments USING gin (name gin_trgm_ops)"
-    )
+    # WHY plain CREATE INDEX (not CONCURRENTLY): see module docstring.
+    # CONCURRENTLY would crash inside Alembic's transactional context.
+    op.execute("CREATE INDEX IF NOT EXISTS ix_instruments_name_trgm " "ON instruments USING gin (name gin_trgm_ops)")
 
 
 def downgrade() -> None:
-    op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_instruments_name_trgm")
+    op.execute("DROP INDEX IF EXISTS ix_instruments_name_trgm")
     # Do NOT drop pg_trgm — other tables / migrations may rely on it.

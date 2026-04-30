@@ -193,14 +193,22 @@ export function FeedbackModal({ open, onOpenChange, defaultTab = "bug" }: Feedba
           typeof navigator !== "undefined"
             ? navigator.userAgent.slice(0, 512)
             : null,
-        // We pack metadata + console logs (when opted-in) + screenshot
-        // marker into the JSON `console_logs` column. The backend treats
-        // it as opaque JSON. screenshot_url stays null until the upload
-        // pipeline lands — see ScreenshotCapture.tsx comment.
+        // PLAN-0053 QA-iter1 F-003: when the user opts in to a screenshot
+        // we now include the full data URI in the JSON ``console_logs`` blob.
+        // The backend ``screenshot_url`` column is for HTTPS S3 URLs only;
+        // until the presigned-upload route ships, the data URI rides inside
+        // the JSON column so it actually reaches operators. Truncate at 1MB
+        // to stay within reasonable JSONB row size; html2canvas at default
+        // settings produces ~200-500KB so most submissions fit.
         console_logs: {
           metadata: meta,
           console: includeConsole ? logs : null,
-          screenshot_data_uri_present: screenshotDataUrl !== null,
+          screenshot_data_uri:
+            screenshotDataUrl && screenshotDataUrl.length <= 1_048_576
+              ? screenshotDataUrl
+              : null,
+          screenshot_data_uri_truncated:
+            screenshotDataUrl !== null && screenshotDataUrl.length > 1_048_576,
         },
       },
       { onSuccess: () => onOpenChange(false) },

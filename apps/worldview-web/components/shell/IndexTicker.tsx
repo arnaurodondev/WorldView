@@ -117,6 +117,24 @@ export function IndexTicker() {
   // A missing index ticker is not a critical error — user can see prices in instruments.
   const quotes = data?.quotes ?? {};
 
+  // PLAN-0053 QA-iter1 F-012: when none of the 4 search resolutions succeed
+  // (S3 down, partial deploy, etc.) the ticker would otherwise hang on the
+  // skeleton forever because the second useQuery is gated on resolvedIds.
+  // Surface a single inline "—" cell so the bar still occupies its slot
+  // and the rest of the TopBar doesn't reflow when prices recover.
+  const allResolutionsFailed =
+    tickerToId !== undefined && resolvedIds.length === 0;
+  if (allResolutionsFailed) {
+    return (
+      <div className="flex items-center gap-2" title="Index data unavailable">
+        <span className="text-xs font-bold text-foreground">SPY</span>
+        <span className="font-mono text-xs tabular-nums text-muted-foreground">
+          —
+        </span>
+      </div>
+    );
+  }
+
   // PLAN-0053 T-A-1-09: extract ticker render into a cell component so we can
   // reuse it both inline (large viewports) and inside the Popover (narrow).
   // Typography: symbol bold-white (`font-bold text-foreground`), price+change
@@ -169,27 +187,31 @@ export function IndexTicker() {
         {overflow.map(renderCell)}
       </div>
 
-      {/* <lg viewports: collapse the rest into a Popover trigger. */}
-      <div className="lg:hidden">
-        <Popover>
-          <PopoverTrigger
-            className="flex h-6 items-center gap-0.5 rounded-[2px] border border-border bg-card px-1.5 text-[10px] font-medium text-muted-foreground hover:bg-muted/50"
-            aria-label={`Show ${overflow.length} more index tickers`}
-          >
-            <span>+{overflow.length}</span>
-            <ChevronDown className="h-3 w-3" />
-          </PopoverTrigger>
-          <PopoverContent
-            align="end"
-            sideOffset={4}
-            className="w-auto min-w-[180px] p-2"
-          >
-            <div className="flex flex-col gap-1.5">
-              {overflow.map(renderCell)}
-            </div>
-          </PopoverContent>
-        </Popover>
-      </div>
+      {/* <lg viewports: collapse the rest into a Popover trigger. PLAN-0053
+          QA-iter1 F-009: only render the trigger when there is at least one
+          overflow ticker — otherwise we'd show a useless ``+0 ▾`` button. */}
+      {overflow.length > 0 && (
+        <div className="lg:hidden">
+          <Popover>
+            <PopoverTrigger
+              className="flex h-6 items-center gap-0.5 rounded-[2px] border border-border bg-card px-1.5 text-[10px] font-medium text-muted-foreground hover:bg-muted/50"
+              aria-label={`Show ${overflow.length} more index tickers`}
+            >
+              <span>+{overflow.length}</span>
+              <ChevronDown className="h-3 w-3" />
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              sideOffset={4}
+              className="w-auto min-w-[180px] p-2"
+            >
+              <div className="flex flex-col gap-1.5">
+                {overflow.map(renderCell)}
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
+      )}
     </div>
   );
 }

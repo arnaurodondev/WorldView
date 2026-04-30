@@ -21,7 +21,22 @@ updated: 2026-04-30
 
 **Final unified suite**: 849 frontend Vitest + 417 alert + 644 portfolio + 587 content-ingestion + 548 market-data + 203 market-ingestion = **3,248 tests passing**, ruff/typecheck clean across the merged tree.
 
-**Wave H scope**: Wave H tasks T-H-8-01 (responsive dashboard), T-H-8-07 (WCAG contrast), T-H-8-13 (Load More aria) shipped. T-H-8-02/03/04/09/12 (full responsive overhaul of instrument/screener/portfolio + ARIA sweep + persistence sweep) intentionally deferred per scope discussion in commit body — they are 1700+ line page rewrites and warrant a focused follow-up plan.
+**Wave H scope** (explicit per QA-iter1 F-004 — every task accounted for):
+- ✅ T-H-8-01 — Dashboard responsive (`grid-cols-1 md:grid-cols-6 lg:grid-cols-12`)
+- ❌ T-H-8-02 — DEFERRED — Instruments responsive (sidebar collapse, metrics→tabs); 1700+ line rewrite; tracked for PLAN-0054
+- ❌ T-H-8-03 — DEFERRED — Screener responsive (table→cards); same rationale
+- ❌ T-H-8-04 — DEFERRED — Portfolio responsive (tabs→accordion); same rationale
+- ❌ T-H-8-05 — DEFERRED — Workspace responsive (touch panel resize)
+- ❌ T-H-8-06 — DEFERRED — Playwright snapshot tests at 768/480px
+- ✅ T-H-8-07 — WCAG contrast (--muted-foreground 46% → 55% lightness, AA compliant)
+- ❌ T-H-8-08 — DEFERRED — Keyboard navigation pass
+- ❌ T-H-8-09 — DEFERRED — App-wide ARIA sweep
+- ❌ T-H-8-10 — DEFERRED — Batch endpoint adoption
+- ❌ T-H-8-11 — DEFERRED — Cache-Control headers verification
+- ❌ T-H-8-12 — PARTIAL — Some persistence shipped via Wave F (alerts category, screener cols); workspace tab scroll deferred
+- ✅ T-H-8-13 — Screener Load More aria-busy + disabled + "Loading…" state
+
+These deferrals are intentional and tracked in TRACKING.md. PLAN-0054 will own the full mobile-responsive overhaul + a11y/perf sweep as a focused effort.
 
 **Env vars**: `MARKET_INGESTION_ALPHA_VANTAGE_API_KEY` already pre-wired in worldview-gitops `values/market-ingestion.yaml:105` and `bootstrap/setup-secrets.sh:175`. No gitops changes required for this PR; operator populates existing optional secret slot.
 
