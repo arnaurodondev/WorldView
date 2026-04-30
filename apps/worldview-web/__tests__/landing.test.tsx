@@ -158,7 +158,8 @@ describe("T-A-1-07 — ComparisonTable", () => {
 
   it("includes the price comparison row", () => {
     render(<ComparisonTable />);
-    expect(screen.getByText(/Estimated monthly cost/i)).toBeInTheDocument();
+    // Caption + visible row both contain the phrase, so use getAllByText.
+    expect(screen.getAllByText(/Estimated monthly cost/i).length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -180,8 +181,11 @@ describe("T-A-1-09 — PricingTiers monthly/annual toggle", () => {
 
   it("switches to monthly when the Monthly toggle is clicked", () => {
     render(<PricingTiers />);
-    const monthlyTab = screen.getByRole("tab", { name: /monthly/i });
-    fireEvent.click(monthlyTab);
+    // After QA iter-1: toggle uses aria-pressed (toggle-button pattern), not
+    // role="tab" — see PricingTiers.tsx comment for rationale.
+    const monthlyButton = screen.getByRole("button", { name: /monthly/i });
+    fireEvent.click(monthlyButton);
+    expect(monthlyButton).toHaveAttribute("aria-pressed", "true");
     // Monthly Pro = $29
     expect(screen.getByText("$29")).toBeInTheDocument();
   });

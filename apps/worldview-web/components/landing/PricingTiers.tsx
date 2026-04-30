@@ -111,17 +111,22 @@ export function PricingTiers() {
         </div>
 
         {/* Billing toggle — annual selected by default to anchor on the
-            discounted price. Pattern from Linear / Stripe / Vercel. */}
-        <div className="mb-10 flex items-center justify-center gap-2">
-          <div
-            role="tablist"
-            aria-label="Billing period"
-            className="inline-flex rounded-[2px] border border-border/60 bg-card p-0.5"
-          >
+            discounted price. Pattern from Linear / Stripe / Vercel.
+            WHY aria-pressed (not role="tab"): the buttons toggle a UI mode,
+            they don't switch between tabpanels — using role="tab" without
+            corresponding role="tabpanel" + aria-controls creates a broken
+            ARIA contract (screen readers announce tabs that lead nowhere).
+            aria-pressed is the correct idiom for two-state toggle buttons.
+            Fixed in PLAN-0052 Wave A QA iter-1. */}
+        <div
+          role="group"
+          aria-label="Billing period"
+          className="mb-10 flex items-center justify-center"
+        >
+          <div className="inline-flex rounded-[2px] border border-border/60 bg-card p-0.5">
             <button
               type="button"
-              role="tab"
-              aria-selected={billing === "monthly"}
+              aria-pressed={billing === "monthly"}
               onClick={() => setBilling("monthly")}
               className={
                 "rounded-[2px] px-4 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-colors " +
@@ -134,8 +139,7 @@ export function PricingTiers() {
             </button>
             <button
               type="button"
-              role="tab"
-              aria-selected={billing === "annual"}
+              aria-pressed={billing === "annual"}
               onClick={() => setBilling("annual")}
               className={
                 "rounded-[2px] px-4 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-colors " +
@@ -186,8 +190,13 @@ export function PricingTiers() {
                       <span className="font-mono text-4xl font-semibold tabular-nums tracking-tight text-foreground">
                         ${price}
                       </span>
+                      {/* QA iter-1: $0 has no annual concept — show "/mo"
+                          regardless of billing toggle for the Free tier. */}
                       <span className="font-mono text-xs text-muted-foreground">
-                        /{billing === "annual" ? "mo billed annually" : "mo"}
+                        /
+                        {price === 0 || billing === "monthly"
+                          ? "mo"
+                          : "mo billed annually"}
                       </span>
                     </>
                   )}

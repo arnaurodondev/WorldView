@@ -42,7 +42,7 @@ export function SectorHeatmapPreview() {
             <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
               Live in your dashboard
             </p>
-            <h2 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+            <h2 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
               7-step sector heatmap
             </h2>
             <p className="mt-2 max-w-xl text-sm text-muted-foreground">

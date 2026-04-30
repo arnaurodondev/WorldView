@@ -26,9 +26,15 @@ const TICKERS = [
 export function LiveDataStrip() {
   return (
     <section
-      aria-label="Sample live market data"
+      aria-labelledby="livedata-heading"
       className="border-b border-border/40 bg-card/40"
     >
+      {/* Visually-hidden heading — preserves the document outline so screen
+          readers announce this section by name. Added in PLAN-0052 Wave A
+          QA iter-1 (a11y audit M1). */}
+      <h2 id="livedata-heading" className="sr-only">
+        Sample market data
+      </h2>
       <div className="mx-auto flex max-w-7xl items-stretch gap-2 px-6 py-2 lg:px-8">
         {/* "LIVE" pill — matches the Bloomberg / Reuters convention */}
         <div className="flex shrink-0 items-center gap-1.5 border-r border-border/40 pr-3 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
