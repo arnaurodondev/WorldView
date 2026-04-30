@@ -187,12 +187,16 @@ class TestEventToOutboxPayload:
         assert payload["fields_updated"] == ["has_ohlcv"]
 
     def test_outbox_payload_includes_classvars(self) -> None:
-        """event_to_outbox_payload must include event_type and schema_version."""
+        """event_to_outbox_payload must include event_type and schema_version.
+
+        PLAN-0057 Wave C-1: schema_version=3 (was 2) — added cusip, figi, lei,
+        primary_ticker EODHD identifier fields.
+        """
         event = InstrumentCreated(instrument_id="x", symbol="AAPL", exchange="NASDAQ")
         payload = event_to_outbox_payload(event)
 
         assert payload["event_type"] == "market.instrument.created"
-        assert payload["schema_version"] == 2
+        assert payload["schema_version"] == 3
 
     def test_outbox_payload_updated_schema_version(self) -> None:
         """InstrumentUpdated schema_version must be 1."""

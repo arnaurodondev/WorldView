@@ -784,6 +784,121 @@ async def test_fundamentals_consumer_description_none_when_absent() -> None:
     assert outbox_payload["description"] is None
 
 
+# ---------------------------------------------------------------------------
+# PLAN-0057 Wave C-2: EODHD identifier extras (cusip / figi / lei / primary_ticker)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_populates_v3_identifiers() -> None:
+    """PLAN-0057 Wave C-2: EODHD General CUSIP/OpenFigi/LEI/PrimaryTicker
+    flow into the InstrumentCreated outbox payload.
+
+    OpenFigi maps to ``figi`` (the Avro schema uses the OpenFIGI consortium
+    name without the 'Open' prefix).
+    """
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-v3-001")
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
+
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {
+            "Name": "Apple Inc.",
+            "ISIN": "US0378331005",
+            "Description": "Apple designs consumer electronics.",
+            "CUSIP": "037833100",
+            "OpenFigi": "BBG000B9XRY4",  # EODHD field name — maps to schema field "figi"
+            "LEI": "HWUPKR0MPOU8FGXBT394",
+            "PrimaryTicker": "AAPL.US",
+        },
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.outbox_events.create.assert_awaited_once()
+    outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
+    assert outbox_payload["cusip"] == "037833100"
+    assert outbox_payload["figi"] == "BBG000B9XRY4"
+    assert outbox_payload["lei"] == "HWUPKR0MPOU8FGXBT394"
+    assert outbox_payload["primary_ticker"] == "AAPL.US"
+    # And v2 fields still flow through.
+    assert outbox_payload["name"] == "Apple Inc."
+    assert outbox_payload["isin"] == "US0378331005"
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_v3_identifiers_default_none_when_absent() -> None:
+    """PLAN-0057 Wave C-2: missing fields in EODHD General → event fields default to None."""
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-v3-002")
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
+
+    # Only Name+ISIN — no v3 identifiers.
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {"Name": "Apple Inc.", "ISIN": "US0378331005"},
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
+    assert outbox_payload["cusip"] is None
+    assert outbox_payload["figi"] is None
+    assert outbox_payload["lei"] is None
+    assert outbox_payload["primary_ticker"] is None
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_v3_identifiers_empty_strings_become_none() -> None:
+    """PLAN-0057 Wave C-2: EODHD often returns empty strings — those must coerce to None
+    so the Avro union[null, string] is emitted correctly and S7 doesn't insert
+    empty-string aliases.
+    """
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-v3-003")
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
+
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {
+            "Name": "Apple Inc.",
+            "CUSIP": "",  # empty string — coerce to None
+            "OpenFigi": "   ",  # whitespace only — coerce to None
+            "LEI": "HWUPKR0MPOU8FGXBT394",  # real value
+        },
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
+    assert outbox_payload["cusip"] is None
+    assert outbox_payload["figi"] is None
+    assert outbox_payload["lei"] == "HWUPKR0MPOU8FGXBT394"
+    assert outbox_payload["primary_ticker"] is None
+
+
 @pytest.mark.asyncio
 async def test_fundamentals_consumer_description_none_for_empty_string() -> None:
     """Empty string Description → None (falsy coercion, no empty strings in event)."""

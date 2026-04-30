@@ -286,11 +286,42 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
         except Exception as exc:
             raise MalformedDataError(f"Fundamentals parse failed: {exc}") from exc
 
-        # Extract company profile metadata early so InstrumentCreated can carry name/isin/description
+        # ── Extract company profile metadata early so InstrumentCreated can ──
+        # carry the full EODHD identifier suite into S7 / S1.  PLAN-0057 Wave
+        # C-2 (closes F-CRIT-04 / F-CRIT-11) extends the previous v2 extraction
+        # (Name / ISIN / Description) with the four EODHD General fields that
+        # are available on this account: CUSIP, OpenFigi (mapped to ``figi``
+        # because the schema uses the OpenFIGI consortium-neutral name), LEI
+        # and PrimaryTicker.
+        #
+        # Reality check: SEDOL is intentionally NOT extracted — the EODHD
+        # General endpoint on this account does not expose it.
         general = payload.get("company_profile") or {}
-        company_name: str | None = general.get("Name") if isinstance(general, dict) else None
-        company_isin: str | None = general.get("ISIN") if isinstance(general, dict) else None
-        company_description: str | None = general.get("Description") or None if isinstance(general, dict) else None
+
+        def _g(key: str) -> str | None:
+            """Return ``general[key]`` only if it is a non-empty string.
+
+            EODHD sometimes returns empty strings or unrelated falsy values for
+            optional identifiers; we coerce all of those to ``None`` so the
+            downstream Avro union[null, string] is emitted correctly and S7 /
+            S1 don't materialise empty-string aliases.
+            """
+            if not isinstance(general, dict):
+                return None
+            value = general.get(key)
+            if value is None:
+                return None
+            text_value = str(value).strip()
+            return text_value or None
+
+        company_name: str | None = _g("Name")
+        company_isin: str | None = _g("ISIN")
+        company_description: str | None = _g("Description")
+        # Wave C-2 additions — all nullable, all flow through to S7 alias suite.
+        company_cusip: str | None = _g("CUSIP")
+        company_figi: str | None = _g("OpenFigi")  # EODHD calls it "OpenFigi", schema calls it "figi"
+        company_lei: str | None = _g("LEI")
+        company_primary_ticker: str | None = _g("PrimaryTicker")
 
         # Resolve or create instrument
         instrument: Instrument | None = await uow.instruments.find_by_symbol_exchange(symbol, exchange)
@@ -311,6 +342,10 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
                 name=company_name,
                 isin=company_isin,
                 description=company_description,
+                cusip=company_cusip,
+                figi=company_figi,
+                lei=company_lei,
+                primary_ticker=company_primary_ticker,
             )
             await uow.outbox_events.create(
                 event_type=created_event.event_type,
