@@ -22,12 +22,14 @@ import type { LucideIcon } from "lucide-react";
 import {
   Activity,
   Banknote,
+  Box,
   Building2,
   Coins,
   Factory,
   Flag,
-  HardHat,
+  Hammer,
   Landmark,
+  Layers,
   LineChart,
   MapPin,
   Scale,
@@ -76,11 +78,17 @@ const TOKENS = {
   // Pre-existing canonicals (PRD-0017 §6) — sectors and industry groups
   // share the indigo family because they're conceptual buckets, not entities
   // a user can hold in a portfolio.
+  // PLAN-0057 QA M-3/M-4: sector/industry_group/industry are part of the same
+  // GICS hierarchy and frequently co-occur in graph payloads. Previously all
+  // three used `Factory` icon and adjacent purples (#818CF8/#A78BFA/#C084FC)
+  // making them visually indistinguishable. Now: same hue family (purple) but
+  // separated colour weight + distinct icons (Layers → Factory → Hammer
+  // mirrors the conceptual broad → narrow drill-down).
   sector: {
-    color: "#818CF8",
+    color: "#6366F1", // indigo-500 — broadest bucket, deepest tone
     label: "Sector",
     badgeClass: "text-indigo-400 bg-indigo-400/10 border-indigo-400/30",
-    icon: Factory,
+    icon: Layers,
     layout: "topic" as const,
   },
   industry_group: {
@@ -94,7 +102,7 @@ const TOKENS = {
     color: "#C084FC",
     label: "Industry",
     badgeClass: "text-purple-400 bg-purple-400/10 border-purple-400/30",
-    icon: Factory,
+    icon: Hammer,
     layout: "topic" as const,
   },
   technology_theme: {
@@ -148,10 +156,14 @@ const TOKENS = {
     layout: "default" as const,
   },
   commodity: {
-    color: "#D6A85A",
+    // PLAN-0057 QA M-3: previous yellow-700 (#A16207) on bg-zinc-950 measured
+    // ~3.8:1 contrast — fails WCAG AA. Bumped to amber-500 family
+    // (#F59E0B → 4.7:1) which clears AA for normal text. Icon changed from
+    // HardHat (often read as construction) to Coins (universal commodity glyph).
+    color: "#F59E0B",
     label: "Commodity",
-    badgeClass: "text-yellow-700 bg-yellow-700/10 border-yellow-700/30",
-    icon: HardHat,
+    badgeClass: "text-amber-500 bg-amber-500/10 border-amber-500/30",
+    icon: Coins,
     layout: "default" as const,
   },
   macroeconomic_indicator: {
@@ -198,7 +210,9 @@ const FALLBACK: EntityTypeToken = {
   color: "#6B7585",
   label: "Entity",
   badgeClass: "text-muted-foreground bg-muted/30 border-border/40",
-  icon: Coins,
+  // Generic Box icon — distinct from `commodity` (Coins) so an unstyled
+  // type doesn't get visually confused with a real commodity entity.
+  icon: Box,
   layout: "default",
 };
 
