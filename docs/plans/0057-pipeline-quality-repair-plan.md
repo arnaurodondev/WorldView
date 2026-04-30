@@ -241,7 +241,9 @@ Entity-detail page handles 9 new `entity_type` variants; alias-pill UI renders 4
 
 ---
 
-### Wave A-2: Add UNIQUE index on `entity_aliases` (intelligence_db)
+### Wave A-2: Add UNIQUE index on `entity_aliases` (intelligence_db) ✅
+
+**Status**: **DONE** — 2026-04-30 · 4 new round-trip tests (uidx existence + duplicate-blocks + distinct-alias-types-allowed + distinct-entities-allowed) · ruff + mypy clean. Migration is `0008_alias_unique_per_entity` (intelligence-migrations 0008, not 0009 — latest baseline was 0007). Pre-clean DELETE keeps oldest `alias_id` per (entity_id, normalized, alias_type); UNIQUE INDEX `uidx_entity_aliases_entity_norm_type` complements the existing 0001 partial index.
 
 **Goal**: prevent non-EXACT alias duplicates (TICKER/CUSIP/FIGI/...) from accumulating.
 **Depends on**: none
