@@ -117,6 +117,11 @@ async def test_fundamentals_consumer_creates_instrument_on_first_seen() -> None:
     """Consumer creates a new Instrument if symbol/exchange not found.
 
     QA-016: InstrumentCreated is written atomically to outbox_events (not collect_event).
+
+    PLAN-0057 QA-iter1 F-DS-07: emission is gated on a real EODHD ``Name`` —
+    without one, KG would re-create the placeholder canonical_name pattern
+    that Wave D-2 was supposed to eliminate. The test now supplies a real
+    Name via ``company_profile`` to exercise the create-and-emit happy path.
     """
     new_instrument = _make_instrument()
     mock_uow = AsyncMock()
@@ -124,8 +129,14 @@ async def test_fundamentals_consumer_creates_instrument_on_first_seen() -> None:
     mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
     mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-001")
     mock_uow.fundamentals.upsert_income_statement = AsyncMock()
+    # Skip the FIX-F4 security-enrichment branch (not under test here).
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
 
-    raw = _make_fundamentals_json(["income_statement"])
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {"Name": "Alphabet Inc."},
+    }
+    raw = json.dumps(payload).encode()
     mock_storage = AsyncMock()
     mock_storage.get_bytes = AsyncMock(return_value=raw)
 
@@ -137,6 +148,35 @@ async def test_fundamentals_consumer_creates_instrument_on_first_seen() -> None:
     call_kwargs = mock_uow.outbox_events.create.call_args
     assert call_kwargs.kwargs["event_type"] == "market.instrument.created"
     assert call_kwargs.kwargs["topic"] == "market.instrument.created"
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_skips_emission_when_no_name() -> None:
+    """PLAN-0057 QA-iter1 F-DS-07: missing EODHD Name → no InstrumentCreated emission.
+
+    Without a real ``Name`` the KG canonical would fall into the
+    ``synthesised_name`` path. We instead defer publication and emit a
+    ``fundamentals_skipped_no_name`` warning so the next refresh can pick it
+    up once EODHD has the Name populated.
+    """
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-skip")
+    mock_uow.fundamentals.upsert_income_statement = AsyncMock()
+
+    raw = _make_fundamentals_json(["income_statement"])  # no company_profile
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    # Instrument row still upserted (so OHLCV/quotes that arrive next don't
+    # create a duplicate), but NO InstrumentCreated outbox event.
+    mock_uow.instruments.upsert.assert_awaited_once()
+    mock_uow.outbox_events.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -168,10 +208,23 @@ async def test_fundamentals_consumer_enriches_instrument_created_with_company_pr
 
 
 @pytest.mark.asyncio
-async def test_fundamentals_consumer_emits_instrument_updated_when_flag_missing() -> None:
-    """Consumer emits InstrumentUpdated to outbox when instrument lacks has_fundamentals.
+async def test_fundamentals_consumer_emits_instrument_created_on_first_fundamentals_for_existing_instrument() -> None:
+    """PLAN-0057 QA-iter1 F-DS-02 / F-DATA-02 — closes a BLOCKING bug.
 
-    QA-016: the flag-change path previously emitted nothing; now atomically writes to outbox.
+    When OHLCV/Quotes arrive *before* fundamentals (the dominant production
+    ordering), the instrument row already exists with
+    ``has_fundamentals=False``. The legacy implementation emitted only
+    ``InstrumentUpdated`` on this path — which KG ``InstrumentEntityConsumer``
+    does NOT subscribe to — so the rich enrichment payload (Name / ISIN /
+    CUSIP / FIGI / LEI / PRIMARY_TICKER / Description) never reached the
+    knowledge graph and the placeholder canonical seeded by
+    ``InstrumentDiscoveredConsumer`` (Wave D-2) stayed un-enriched forever.
+
+    The fix: on every False→True transition of ``has_fundamentals`` (whether
+    the row was just created or already existed) emit
+    ``market.instrument.created`` so KG runs the UPSERT-after-discover
+    branch. ``InstrumentUpdated`` is no longer emitted on this path — its
+    payload didn't carry the enrichment fields anyway.
     """
     instrument = _make_instrument(has_fundamentals=False)
     mock_uow = AsyncMock()
@@ -179,20 +232,29 @@ async def test_fundamentals_consumer_emits_instrument_updated_when_flag_missing(
     mock_uow.instruments.update_flags = AsyncMock()
     mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-003")
     mock_uow.fundamentals.upsert_income_statement = AsyncMock()
+    # Skip the FIX-F4 security-enrichment branch (not under test here).
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
 
-    raw = _make_fundamentals_json(["income_statement"])
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {"Name": "Alphabet Inc.", "ISIN": "US02079K3059"},
+    }
+    raw = json.dumps(payload).encode()
     mock_storage = AsyncMock()
     mock_storage.get_bytes = AsyncMock(return_value=raw)
 
     consumer = _make_consumer(mock_uow, mock_storage)
     await consumer.process_message(None, _make_message(), {})
 
+    # Flag was flipped (so the instrument row reflects fundamentals presence).
     mock_uow.instruments.update_flags.assert_awaited_once()
+    # And the rich InstrumentCreated event was published — NOT InstrumentUpdated.
     mock_uow.outbox_events.create.assert_awaited_once()
     call_kwargs = mock_uow.outbox_events.create.call_args
-    assert call_kwargs.kwargs["event_type"] == "market.instrument.updated"
-    assert call_kwargs.kwargs["payload"]["has_fundamentals"] is True
-    assert call_kwargs.kwargs["payload"]["fields_updated"] == ["has_fundamentals"]
+    assert call_kwargs.kwargs["event_type"] == "market.instrument.created"
+    assert call_kwargs.kwargs["topic"] == "market.instrument.created"
+    assert call_kwargs.kwargs["payload"]["name"] == "Alphabet Inc."
+    assert call_kwargs.kwargs["payload"]["isin"] == "US02079K3059"
 
 
 @pytest.mark.asyncio

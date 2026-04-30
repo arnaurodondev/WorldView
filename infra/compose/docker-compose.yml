@@ -1482,6 +1482,41 @@ services:
       retries: 3
       start_period: 30s
 
+  # PLAN-0057 Wave D-2: lightweight canonical seeder. Mirrors the
+  # ``knowledge-graph-instrument-consumer`` block above but consumes the new
+  # ``market.instrument.discovered.v1`` topic and runs a slimmer pipeline (no
+  # LLM client, no description embedding — just symbol-only canonical + 2
+  # aliases + 3 embedding-state placeholders). When fundamentals_consumer
+  # later emits ``market.instrument.created`` for the same instrument_id the
+  # existing instrument-consumer above does the rich enrichment.
+  # PLAN-0057 QA-iter1 F-DS-01: this block was missing from prod; without
+  # it no canonical is materialised when ohlcv/quotes arrive before
+  # fundamentals (the dominant production ordering).
+  knowledge-graph-instrument-discovered-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.instrument_discovered_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   knowledge-graph-temporal-event-consumer:
     build:
       context: ../..

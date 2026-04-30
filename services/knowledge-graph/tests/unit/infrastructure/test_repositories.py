@@ -481,6 +481,12 @@ class TestCanonicalEntityRepositoryCreateSelfAlias:
         """Build a session whose first execute() returns the entity_id (canonical
         INSERT … RETURNING) and whose second execute() is the alias INSERT
         (no return value needed — DO NOTHING path).
+
+        PLAN-0057 QA-iter1 F-DS-05: the alias INSERT is now wrapped in
+        ``session.begin_nested()`` (SAVEPOINT) so a cross-entity EXACT
+        collision against the legacy ``uidx_entity_aliases_normalized``
+        index does not poison the outer transaction. We mock
+        ``begin_nested`` as an async context manager that does nothing.
         """
         session = AsyncMock()
         canonical_result = MagicMock()
@@ -488,6 +494,11 @@ class TestCanonicalEntityRepositoryCreateSelfAlias:
         alias_result = MagicMock()
         alias_result.fetchone.return_value = None
         session.execute = AsyncMock(side_effect=[canonical_result, alias_result])
+
+        nested_cm = AsyncMock()
+        nested_cm.__aenter__ = AsyncMock(return_value=nested_cm)
+        nested_cm.__aexit__ = AsyncMock(return_value=None)
+        session.begin_nested = MagicMock(return_value=nested_cm)
         return session
 
     def test_create_emits_self_alias_insert(self) -> None:

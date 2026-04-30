@@ -136,7 +136,13 @@ class InstrumentEntityConsumer(BaseKafkaConsumer[None]):
         """Create canonical entity + aliases + embeddings for a new instrument."""
 
         instrument_id = UUID(str(value["instrument_id"]))
-        ticker = value.get("ticker")
+        # PLAN-0057 QA-iter1 F-DATA-01: the Avro schema (market.instrument.created.avsc)
+        # only carries `symbol`; legacy code read `value.get("ticker")` which has always
+        # been None, silently neutering the TICKER/exchange-TICKER mechanical alias paths
+        # downstream. We accept either spelling for forward-compat with any future
+        # producer that sets `ticker` explicitly, but fall back to `symbol` (the schema
+        # field) which is what every real producer actually emits.
+        ticker = value.get("ticker") or value.get("symbol")
         exchange = value.get("exchange")
         isin = value.get("isin")
         description = value.get("description") or ""
@@ -245,8 +251,12 @@ WHERE entity_id = :entity_id
                     return
             else:
                 # Step 1: Create canonical entity (pristine path — no prior discovery).
+                # PLAN-0057 QA-iter1 F-DS-03 / F-DATA-04: pin entity_id to instrument_id
+                # so the M-017 stable cross-service identifier invariant holds even on
+                # backfills that hit fundamentals_consumer before any discovery.
                 entity_id = await self._create_new_canonical(
                     entity_repo,
+                    instrument_id=instrument_id,
                     canonical_name=canonical_name,
                     ticker=ticker,
                     isin=isin,
@@ -359,6 +369,7 @@ WHERE entity_id = :entity_id
         self,
         entity_repo: Any,
         *,
+        instrument_id: UUID,
         canonical_name: str,
         ticker: Any,
         isin: Any,
@@ -367,15 +378,17 @@ WHERE entity_id = :entity_id
         """Insert a brand-new canonical_entity (pristine create path).
 
         Extracted into a helper so process_message can share Steps 2..5 with the
-        UPSERT-after-discover path (PLAN-0057 Wave D-2).  The repo's create()
-        auto-generates an entity_id via gen_random_uuid(); the discovered path
-        already wrote a row with entity_id = instrument_id, so this branch is
-        only reached when no prior discovery happened (e.g. backfills that hit
-        fundamentals_consumer first).
+        UPSERT-after-discover path (PLAN-0057 Wave D-2). The canonical's
+        ``entity_id`` is pinned to ``instrument_id`` so the M-017 stable
+        cross-service identifier invariant holds (portfolio's InstrumentRef.id
+        and KG's canonical_entities.entity_id agree). When discovery already
+        seeded the canonical, the ON CONFLICT (entity_id) DO NOTHING clause in
+        the repo absorbs the duplicate-PK race deterministically.
         """
         return await entity_repo.create(  # type: ignore[no-any-return]
             canonical_name=canonical_name,
             entity_type="financial_instrument",
+            entity_id=instrument_id,
             ticker=str(ticker) if ticker else None,
             isin=str(isin) if isin else None,
             exchange=str(exchange) if exchange else None,
