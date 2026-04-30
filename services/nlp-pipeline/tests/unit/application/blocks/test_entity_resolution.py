@@ -251,7 +251,16 @@ class TestRunEntityResolutionBlock:
 
     @pytest.mark.asyncio
     async def test_provisional_outcome_for_mid_range_confidence(self) -> None:
-        """0.45 <= composite < 0.72 → PROVISIONAL (queued but not resolved)."""
+        """0.45 <= composite < 0.72 → PROVISIONAL (queued but not resolved).
+
+        Wave B-2: ``_insert_provisional`` now uses ``RETURNING queue_id`` and
+        the caller stashes the returned UUID on the mention. The
+        ``intelligence_session.execute`` mock must therefore expose a
+        ``scalar_one()`` that returns a valid UUID string — without it, the
+        UUID() conversion would raise ValueError, which the savepoint+except
+        wrapper would catch and downgrade the mention to UNRESOLVED (per the
+        QA iter-1 fix for DS Finding-4).
+        """
         entity_id = uuid.uuid4()
         # Fuzzy trigram with similarity 0.55 → composite = 0.55*0.90 = 0.495
         mention = _make_mention("Apple Incorporated")
@@ -260,6 +269,15 @@ class TestRunEntityResolutionBlock:
         )
         intelligence_session = MagicMock()
         intelligence_session.execute = AsyncMock()
+        # Mock the RETURNING queue_id result so _insert_provisional succeeds.
+        _execute_result = MagicMock()
+        _execute_result.scalar_one = MagicMock(return_value=str(uuid.uuid4()))
+        intelligence_session.execute.return_value = _execute_result
+        # begin_nested() is used as an async context manager for the savepoint.
+        _savepoint = AsyncMock()
+        _savepoint.__aenter__ = AsyncMock(return_value=_savepoint)
+        _savepoint.__aexit__ = AsyncMock(return_value=None)
+        intelligence_session.begin_nested = MagicMock(return_value=_savepoint)
 
         resolved, _ = await run_entity_resolution_block(
             [mention],
