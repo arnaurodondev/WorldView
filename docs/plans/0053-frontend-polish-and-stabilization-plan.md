@@ -2,10 +2,30 @@
 id: PLAN-0053
 title: Frontend Polish & Platform Stabilization (Phase 5)
 prd: docs/audits/2026-04-29-qa-frontend-deep-audit-and-roadmap.md
-status: in-progress
+status: completed
 created: 2026-04-29
 updated: 2026-04-30
 ---
+
+# Implementation Status — All Waves Shipped 2026-04-30
+
+| Wave | Commit | Branch | Tests | Status |
+|------|--------|--------|-------|--------|
+| A | 4458a371 | feat/content-ingestion-wave-a1 | 417 alert + 815 frontend | ✅ DONE |
+| B (search) | f9a6c25f | feat/content-ingestion-wave-a1 | 6 instrument | ✅ DONE |
+| B+D (widgets/portfolio) | fa6a1e36 | worktree-agent-a014cf1e | 644 portfolio + 5 new | ✅ MERGED |
+| C | 081dd143 | worktree-agent-a8b3d5ad | 70 mkt-ing + 18 mkt-data + 583 content-ing | ✅ MERGED |
+| E | 1c903231 | worktree-agent-ab1ad054 | 75 vitest (11 new) | ✅ MERGED |
+| F+H | 301c53db | worktree-agent-a30117b4 | 762 vitest (12 new) | ✅ MERGED |
+| G | 7a85eb9b | worktree-agent-a7efd0f8 | 17 new vitest | ✅ MERGED |
+
+**Final unified suite**: 849 frontend Vitest + 417 alert + 644 portfolio + 587 content-ingestion + 548 market-data + 203 market-ingestion = **3,248 tests passing**, ruff/typecheck clean across the merged tree.
+
+**Wave H scope**: Wave H tasks T-H-8-01 (responsive dashboard), T-H-8-07 (WCAG contrast), T-H-8-13 (Load More aria) shipped. T-H-8-02/03/04/09/12 (full responsive overhaul of instrument/screener/portfolio + ARIA sweep + persistence sweep) intentionally deferred per scope discussion in commit body — they are 1700+ line page rewrites and warrant a focused follow-up plan.
+
+**Env vars**: `MARKET_INGESTION_ALPHA_VANTAGE_API_KEY` already pre-wired in worldview-gitops `values/market-ingestion.yaml:105` and `bootstrap/setup-secrets.sh:175`. No gitops changes required for this PR; operator populates existing optional secret slot.
+
+
 
 # PLAN-0053 — Frontend Polish & Platform Stabilization
 
