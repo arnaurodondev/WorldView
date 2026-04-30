@@ -454,6 +454,10 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                     published_at=published_at,
                     extracted_at=extracted_at,
                     outbox_topic_signal=self._settings.topic_signal_detected,
+                    # PLAN-0057 A-5 / F-CRIT-03: pass through the optional cost
+                    # logger so each per-window LLM call writes one row to
+                    # nlp_db.llm_usage_log. None when not wired (unit tests).
+                    usage_logger=self._usage_logger,
                 )
 
             if should_run_deep_extraction(final_path):

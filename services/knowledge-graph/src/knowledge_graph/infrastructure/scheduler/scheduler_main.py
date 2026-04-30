@@ -92,13 +92,29 @@ async def main() -> None:
         )
         log.info("kg_embedding_ollama_adapter_selected", model_id=settings.embedding_model_id)
 
+    # PLAN-0057 A-5 / F-CRIT-03: thread the session-scoped KG usage logger so
+    # every embed/extract call from any scheduler-driven worker writes one row
+    # to intelligence_db.llm_usage_log.
+    from knowledge_graph.infrastructure.intelligence_db.usage_log_factory import (
+        SessionScopedKgUsageLogger,
+    )
+
+    kg_usage_logger = SessionScopedKgUsageLogger(write_factory)
+
     llm_client = FallbackChainClient(
         ollama_embedding=embed_client,
         # Gemini embedding / extraction adapters are wired only when keys are
         # present; for now the selected embedding adapter is sufficient.
         retry_delays_ollama=(5.0, 30.0),  # shorter delays for scheduler context
+        usage_logger=kg_usage_logger,
     )
-    workers = build_workers(settings, write_factory, llm_client=llm_client, valkey_client=valkey_client)
+    workers = build_workers(
+        settings,
+        write_factory,
+        llm_client=llm_client,
+        valkey_client=valkey_client,
+        usage_logger=kg_usage_logger,
+    )
     scheduler = KnowledgeGraphScheduler(settings, workers=workers)
 
     # Standalone scheduler: no consumer coroutine — use an async no-op
