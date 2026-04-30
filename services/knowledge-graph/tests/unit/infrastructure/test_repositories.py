@@ -464,6 +464,107 @@ class TestEntityEmbeddingStateRepositoryEnsureRowsExist:
 
 
 # ---------------------------------------------------------------------------
+# CanonicalEntityRepository — create() co-inserts EXACT self-alias (PLAN-0057 C-5)
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalEntityRepositoryCreateSelfAlias:
+    """Regression coverage for PLAN-0057 Wave C-5 / T-C-5-01.
+
+    `CanonicalEntityRepository.create()` must insert an EXACT self-alias row in
+    the same SQL transaction as the canonical row. Without this, callers that
+    bypass the dedicated `instrument_consumer` / `provisional_enrichment` paths
+    leave the canonical without a Stage-1 alias-exact match for its own name.
+    """
+
+    def _make_session_two_calls(self, entity_id: UUID) -> AsyncMock:
+        """Build a session whose first execute() returns the entity_id (canonical
+        INSERT … RETURNING) and whose second execute() is the alias INSERT
+        (no return value needed — DO NOTHING path).
+        """
+        session = AsyncMock()
+        canonical_result = MagicMock()
+        canonical_result.fetchone.return_value = (str(entity_id),)
+        alias_result = MagicMock()
+        alias_result.fetchone.return_value = None
+        session.execute = AsyncMock(side_effect=[canonical_result, alias_result])
+        return session
+
+    def test_create_emits_self_alias_insert(self) -> None:
+        """create() must execute exactly two SQL statements: canonical INSERT,
+        then entity_aliases INSERT.
+        """
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+            CanonicalEntityRepository,
+        )
+
+        eid = uuid4()
+        session = self._make_session_two_calls(eid)
+        repo = CanonicalEntityRepository(session)
+
+        result = asyncio.run(repo.create("Apple Inc.", "financial_instrument", ticker="AAPL", exchange="NASDAQ"))
+
+        assert result == eid
+        # Two execute calls: canonical INSERT + alias INSERT
+        assert session.execute.await_count == 2
+
+    def test_create_alias_insert_uses_exact_alias_type_and_canonical_name(self) -> None:
+        """The alias INSERT must use alias_type='EXACT' and the canonical_name
+        verbatim as alias_text. The normalized form is lowercase+stripped.
+        """
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+            CanonicalEntityRepository,
+        )
+
+        eid = uuid4()
+        session = self._make_session_two_calls(eid)
+        repo = CanonicalEntityRepository(session)
+
+        asyncio.run(repo.create("  Apple Inc.  ", "financial_instrument"))
+
+        # Second execute() = alias INSERT
+        alias_call = session.execute.await_args_list[1]
+        sql = str(alias_call[0][0]).lower()
+        params = alias_call[0][1]
+
+        assert "insert into entity_aliases" in sql
+        assert "'exact'" in sql
+        assert "'canonical_entity_create'" in sql
+        # On-conflict path must match the partial UNIQUE index from migration 0008
+        assert "on conflict (entity_id, normalized_alias_text, alias_type)" in sql
+        assert "where is_active = true" in sql
+        assert "do nothing" in sql
+
+        # Alias text is the canonical_name verbatim; normalized_alias_text is lowercased+stripped
+        assert params["eid"] == str(eid)
+        assert params["alias"] == "  Apple Inc.  "
+        assert params["norm"] == "apple inc."
+
+    def test_create_returns_entity_id_from_canonical_insert(self) -> None:
+        """create() must return the UUID returned by the canonical INSERT, not
+        anything from the alias INSERT.
+        """
+        import asyncio
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+            CanonicalEntityRepository,
+        )
+
+        eid = uuid4()
+        session = self._make_session_two_calls(eid)
+        repo = CanonicalEntityRepository(session)
+
+        result = asyncio.run(repo.create("Some Sector", "sector"))
+
+        assert isinstance(result, UUID)
+        assert result == eid
+
+
+# ---------------------------------------------------------------------------
 # CanonicalEntityRepository — get_batch
 # ---------------------------------------------------------------------------
 

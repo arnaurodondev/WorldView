@@ -133,7 +133,16 @@ LIMIT 1
         exchange: str | None = None,
         metadata: dict[str, object] | None = None,
     ) -> UUID:
-        """Insert a new canonical entity, returning the generated entity_id."""
+        """Insert a new canonical entity, returning the generated entity_id.
+
+        PLAN-0057 Wave C-5 (T-C-5-01): co-inserts an EXACT self-alias row in the
+        same transaction. Without this, callers that bypass the dedicated
+        instrument/provisional consumers (e.g. `CreateCanonicalEntityUseCase`)
+        would leave the canonical without a Stage-1 alias-exact match for its
+        own canonical name. Idempotent via the
+        ``uidx_entity_aliases_entity_norm_type`` partial UNIQUE index added by
+        migration 0008 (Wave A-2).
+        """
         import json
 
         result = await self._session.execute(
@@ -152,4 +161,25 @@ RETURNING entity_id
             },
         )
         row = result.fetchone()
-        return UUID(str(row[0]))  # type: ignore[index]
+        entity_id = UUID(str(row[0]))  # type: ignore[index]
+
+        # ── EXACT self-alias (PLAN-0057 C-5 / Fix-B.2) ────────────────────────
+        # Note: ON CONFLICT target matches the partial UNIQUE index installed by
+        # migration 0008 — we MUST repeat the index's WHERE clause for Postgres
+        # to use the partial-index path.
+        await self._session.execute(
+            text("""
+INSERT INTO entity_aliases
+    (entity_id, alias_text, normalized_alias_text, alias_type, is_active, source)
+VALUES (:eid, :alias, :norm, 'EXACT', true, 'canonical_entity_create')
+ON CONFLICT (entity_id, normalized_alias_text, alias_type)
+WHERE is_active = true
+DO NOTHING
+"""),
+            {
+                "eid": str(entity_id),
+                "alias": canonical_name,
+                "norm": canonical_name.lower().strip(),
+            },
+        )
+        return entity_id

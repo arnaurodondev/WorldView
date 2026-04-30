@@ -797,9 +797,10 @@ Also: `_insert_provisional` returns the canonical `queue_id` (via `RETURNING`); 
 
 ---
 
-### Wave C-5: Self-alias on canonical-create paths (Fix-B revised)
+### Wave C-5: Self-alias on canonical-create paths (Fix-B revised) ✅ DONE 2026-04-29
 **Depends on**: T-A-2-01
 **Estimated effort**: 2-3 hours
+**Status**: Closes audit finding F-CRIT-04 (revised target — `entity_consumer.py` was incorrectly identified by the original audit; the canonical-without-self-alias paths are `seed_demo_data.py` (INSTRUMENTS + KG_EXTRA_ENTITIES blocks), `seeds/003_seed_sector_entities.sql`, and `CanonicalEntityRepository.create()`). All three paths now insert an EXACT self-alias in the same transaction, idempotent via `uidx_entity_aliases_entity_norm_type` (Wave A-2). 6 net-new tests (3 unit + 2 integration + ordering/idempotency).
 
 #### Tasks
 ##### T-C-5-01: `CanonicalEntityRepository.create()` co-inserts EXACT alias
