@@ -56,10 +56,19 @@ async def main() -> None:
     valkey = create_valkey_client_from_url(settings.valkey_url)
 
     # FallbackChainClient with no adapters — ML calls return None (graceful no-op)
+    from knowledge_graph.infrastructure.intelligence_db.usage_log_factory import (
+        SessionScopedKgUsageLogger,
+    )
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
     from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
 
-    llm_client = FallbackChainClient()
+    # PLAN-0057 A-5 / F-CRIT-03: thread the session-scoped KG usage logger
+    # into FallbackChainClient so every embed/extract attempt (success OR
+    # failure) writes one row to intelligence_db.llm_usage_log.  Without
+    # this, the KG cost-log table stayed permanently empty.
+    kg_usage_logger = SessionScopedKgUsageLogger(write_factory)
+
+    llm_client = FallbackChainClient(usage_logger=kg_usage_logger)
     definition_worker = DefinitionRefreshWorker(
         write_factory,
         llm_client,

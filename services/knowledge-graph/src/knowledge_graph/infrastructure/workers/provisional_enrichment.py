@@ -30,6 +30,7 @@ from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embeddin
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
+    from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
@@ -68,12 +69,19 @@ class ProvisionalEnrichmentWorker:
         direct_producer: DirectProducerProtocol | None = None,
         entity_dirtied_topic: str = "entity.dirtied.v1",
         embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
+        usage_logger: LlmUsageLogProtocol | None = None,
     ) -> None:
         self._sf = session_factory
         self._embed_model_id = embedding_model_id
         self._llm = llm_client
         self._producer = direct_producer
         self._dirtied_topic = entity_dirtied_topic
+        # PLAN-0057 A-5 / F-CRIT-03: optional cost logger.  In practice the
+        # FallbackChainClient already calls ``usage_logger.log()`` on every
+        # embed/extract attempt — this attribute exists so call-site code can
+        # write *additional* per-worker rows when needed and so injection-time
+        # tests can assert the logger was threaded through ``build_workers``.
+        self._usage_logger = usage_logger
 
     async def run(self) -> None:
         """Enrich pending provisional entity queue entries.

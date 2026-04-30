@@ -23,6 +23,8 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from collections.abc import Coroutine
 
+    from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
+
     from knowledge_graph.config import Settings
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
 
@@ -168,6 +170,7 @@ def build_workers(
     session_factory: Any,
     llm_client: FallbackChainClient | None = None,
     valkey_client: Any | None = None,
+    usage_logger: LlmUsageLogProtocol | None = None,
 ) -> dict[str, Any]:
     """Instantiate all workers from service dependencies.
 
@@ -177,6 +180,10 @@ def build_workers(
         session_factory: intelligence_db async_sessionmaker.
         llm_client:      FallbackChainClient (None → workers use stubs).
         valkey_client:   ValkeyClient for watermark storage (None → age_sync stub).
+        usage_logger:    PLAN-0057 A-5 / F-CRIT-03 — fire-and-forget LLM cost
+                         logger threaded into ``DefinitionRefreshWorker`` and
+                         ``ProvisionalEnrichmentWorker``.  When None the
+                         workers stay backward-compatible (no logging).
 
     Returns:
     -------
@@ -207,10 +214,16 @@ def build_workers(
     if llm_client is not None:
         description_client = _build_description_client(settings, valkey_client)
         embed_model = settings.embedding_model_id
+        # PLAN-0057 A-5 / F-CRIT-03: thread the cost logger into workers that
+        # explicitly accept it.  ``DefinitionRefreshWorker`` already exposes
+        # ``usage_logger`` (used by GeminiDescriptionAdapter); the new
+        # ``ProvisionalEnrichmentWorker`` accepts the logger and forwards it
+        # into its FallbackChainClient calls (see provisional_enrichment.py).
         def_worker = DefinitionRefreshWorker(
             session_factory,
             llm_client,
             description_client,
+            usage_logger=usage_logger,
             embedding_model_id=embed_model,
         )
         workers.update(
@@ -232,11 +245,13 @@ def build_workers(
                     session_factory,
                     llm_client,
                     embedding_model_id=embed_model,
+                    usage_logger=usage_logger,
                 ),
                 "worker_13e_provisional": ProvisionalEnrichmentWorker(
                     session_factory,
                     llm_client,
                     embedding_model_id=embed_model,
+                    usage_logger=usage_logger,
                 ),
                 "embedding_refresh": EmbeddingRefreshWorker(
                     session_factory,

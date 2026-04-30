@@ -418,7 +418,9 @@ For `financial_institution` overlap: use `DO $$ ... IF NOT EXISTS (SELECT 1 FROM
 
 ---
 
-### Wave A-5: Thread `usage_logger` through every LLM call site
+### Wave A-5 ✅: Thread `usage_logger` through every LLM call site
+
+**Status**: **DONE** — 2026-04-30 · closes F-CRIT-03 — `llm_usage_log` now populated for every LLM call from nlp-pipeline + knowledge-graph (Ollama, DeepInfra, Gemini paths). Two new `SessionScopedNlpUsageLogger` / `SessionScopedKgUsageLogger` helpers + threaded into `unresolved_resolution_worker_main`, `article_relevance_scoring_worker` (constructor + per-call hook), `article_consumer_main` (deep-extraction), `instrument_consumer_main`, `fundamentals_consumer_main`, `scheduler_main` (FallbackChainClient + DefinitionRefreshWorker + ProvisionalEnrichmentWorker). 4 new unit-test files (10 net-new test cases) — all pass alongside 583 nlp-pipeline + 650 knowledge-graph existing unit tests. ruff + ruff format + mypy strict (1042 src files) all clean.
 
 **Goal**: close F-CRIT-03 — `llm_usage_log` populates with model_id, tokens, latency for every LLM call from nlp-pipeline + knowledge-graph workers.
 **Depends on**: none (independent of A-1..A-4)
