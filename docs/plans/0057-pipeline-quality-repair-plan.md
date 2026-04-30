@@ -672,9 +672,10 @@ Also: `_insert_provisional` returns the canonical `queue_id` (via `RETURNING`); 
 - `services/intelligence-migrations/seeds/003_seed_sector_entities.sql`
 - `docs/references/eodhd-endpoints-reference.md:128-247`
 
-### Wave C-1: Avro v3 InstrumentCreated + dataclass extension
+### Wave C-1: Avro v3 InstrumentCreated + dataclass extension ✅
 **Depends on**: none
 **Estimated effort**: 1-2 hours
+**Status**: DONE 2026-04-30 — schema bumped to v3 with cusip/figi/lei/primary_ticker (4 new nullable fields, all default null). InstrumentCreated dataclass extended; schema_version=3 ClassVar; field-count contract test updated 15→19; Avro round-trip tests added (v1 backward-compat + v3 with-all-identifiers).
 
 #### Tasks
 ##### T-C-1-01: bump Avro schema to v3
@@ -711,9 +712,10 @@ Also: `_insert_provisional` returns the canonical `queue_id` (via `RETURNING`); 
 
 ---
 
-### Wave C-2: market-data extracts EODHD CUSIP/FIGI/LEI/PrimaryTicker
+### Wave C-2: market-data extracts EODHD CUSIP/FIGI/LEI/PrimaryTicker ✅
 **Depends on**: T-C-1-02
 **Estimated effort**: 2-3 hours
+**Status**: DONE 2026-04-30 — fundamentals_consumer.py now reads CUSIP, OpenFigi (mapped → figi), LEI, PrimaryTicker from EODHD General; an `_g(key)` helper coerces empty/whitespace strings to None so the Avro union[null, string] is emitted correctly. 3 new unit tests cover happy path, missing fields → None, empty/whitespace → None.
 
 #### Tasks
 ##### T-C-2-01: extract new fields in `fundamentals_consumer.py`
@@ -737,9 +739,10 @@ Also: `_insert_provisional` returns the canonical `queue_id` (via `RETURNING`); 
 
 ---
 
-### Wave C-3: knowledge-graph instrument_consumer alias inserts (Fix-A + Fix-D.3)
+### Wave C-3: knowledge-graph instrument_consumer alias inserts (Fix-A + Fix-D.3) ✅
 **Depends on**: T-A-2-01, T-C-1-02
 **Estimated effort**: 3-4 hours
+**Status**: DONE 2026-04-30 — instrument_consumer.py inserts NAME alias (when EODHD name differs from canonical, source `eodhd_general_name`) + CUSIP/FIGI/LEI/PRIMARY_TICKER aliases (each with its own dedicated alias_type and `eodhd_<type>` source). nlp-pipeline `EntityAliasRepository.ticker_isin_match` + `batch_ticker_isin_match` extended with entity_aliases fallback `WHERE alias_type IN ('TICKER', 'PRIMARY_TICKER', 'ISIN')` so the new PRIMARY_TICKER aliases participate in Stage-2 resolution. 9 new unit tests in two locations (KG consumer + nlp-pipeline repo).
 
 #### Tasks
 ##### T-C-3-01: insert NAME alias when EODHD name differs from canonical
@@ -769,9 +772,10 @@ Also: `_insert_provisional` returns the canonical `queue_id` (via `RETURNING`); 
 
 ---
 
-### Wave C-4: ALIAS_GENERATION prompt v2 + caller (F-MAJOR-09)
+### Wave C-4: ALIAS_GENERATION prompt v2 + caller (F-MAJOR-09) ✅
 **Depends on**: T-C-3-01 (so `aliases_so_far` includes the new mechanical aliases)
 **Estimated effort**: 3-4 hours
+**Status**: DONE 2026-04-30 — `libs/prompts/.../alias.py` rewritten to v2.0 with `{name, ticker, description, aliases_so_far}` parameters + 4 worked examples (Apple Inc. → ["Apple Computer","Apple"], Meta → ["Facebook","Facebook Inc."], NVIDIA → ["NVIDIA","nVidia"], Foreward → []). `_add_llm_aliases` caller now fetches existing aliases via `alias_repo.get_for_entity()`, builds `aliases_so_far`, passes description directly into the prompt (context="" — moved out of `ExtractionInput.context`). 5 new prompt tests + 1 caller test.
 
 #### Tasks
 ##### T-C-4-01: rewrite `ALIAS_GENERATION` template
@@ -838,9 +842,10 @@ Also: `_insert_provisional` returns the canonical `queue_id` (via `RETURNING`); 
 - `services/market-data/src/market_data/infrastructure/messaging/consumers/ohlcv_consumer.py:213` and `quotes_consumer.py:210`
 - `services/portfolio/.../instrument_consumer.py` (consumes `market.instrument.created`)
 
-### Wave D-1: Remove `claim.extracted` orphan producer (F-CRIT-08)
+### Wave D-1: Remove `claim.extracted` orphan producer (F-CRIT-08) ✅ DONE 2026-04-29
 **Depends on**: none
 **Estimated effort**: 2-3 hours
+**Status**: Shipped — `services/nlp-pipeline/src/.../intelligence_db/repositories/claims.py` deleted; `claims_repo` parameter dropped from `run_deep_extraction_block`; `ClaimsRepository` import + instantiation removed from `article_consumer.py`; `topic_claim_extracted` setting removed from `config.py`; `dispatcher.py` docstring corrected to two output topics. 6-test regression file `tests/unit/test_no_claim_extracted_produced.py` pins the removal. Active code grep clean (only PLAN-0057 documentation comments remain). 607 unit tests + full-repo mypy pass. Ops follow-up not in this commit: `DELETE FROM nlp_db.outbox_events WHERE topic LIKE 'claim.extracted%'` + `kafka-topics --delete claim.extracted claim.extracted.v1`.
 
 #### Tasks
 ##### T-D-1-01: delete claims-extracted producer path
@@ -857,9 +862,9 @@ Also: `_insert_provisional` returns the canonical `queue_id` (via `RETURNING`); 
 **Acceptance**: integration E2E shows zero `claim.extracted` rows after a fresh article cycle.
 
 #### Validation Gate
-- [ ] no Kafka producer references `claim.extracted` in nlp-pipeline
-- [ ] all unit tests pass after `claims_repo` removal
-- [ ] grep across services for `claim.extracted` returns only `.claude/worktrees/` archives
+- [x] no Kafka producer references `claim.extracted` in nlp-pipeline (verified 2026-04-29)
+- [x] all unit tests pass after `claims_repo` removal (607 unit tests pass)
+- [x] grep across services for `claim.extracted` returns only PLAN-0057 documentation comments + `.claude/worktrees/` archives + plan/tracking docs
 
 #### Break Impact
 | File | Why | Fix |
@@ -980,9 +985,10 @@ Also: `_insert_provisional` returns the canonical `queue_id` (via `RETURNING`); 
 
 ---
 
-### Wave D-3: Synthesised-name EXACT-alias guard (F-CRIT-12.E.3)
+### Wave D-3: Synthesised-name EXACT-alias guard (F-CRIT-12.E.3) ✅
 **Depends on**: T-C-3-01 (works on top of the C-3 alias logic)
 **Estimated effort**: 1 hour
+**Status**: DONE 2026-04-30 — added `synthesised_name` flag tracking the case where raw EODHD name is missing/empty/placeholder. The mechanical-alias block now skips the EXACT alias insertion when `synthesised_name == True`, so the `Instrument-{8hex}` placeholder and bare-ticker fallback never become public-facing EXACT aliases. The canonical itself is still created (downstream services need an entity) — only the alias is gated. 3 new unit tests.
 
 #### Tasks
 ##### T-D-3-01: skip EXACT alias when name was synthesised

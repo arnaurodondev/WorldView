@@ -58,8 +58,9 @@ class Settings(BaseSettings):
     # Topics (produced)
     topic_article_enriched: str = "nlp.article.enriched.v1"
     topic_signal_detected: str = "nlp.signal.detected.v1"
-    # RH-002 fix: aligned with Kafka init script topic name (claim.extracted.v1)
-    topic_claim_extracted: str = "claim.extracted.v1"
+    # PLAN-0057 D-1 (F-CRIT-08): the legacy ``topic_claim_extracted`` setting
+    # was removed along with the orphan ``claim.extracted`` producer. Claims
+    # now flow exclusively via ``nlp.article.enriched.v1.raw_claims``.
 
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"

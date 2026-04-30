@@ -435,12 +435,14 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 if resolution_audit:
                     await mr_repo.add_batch(resolution_audit)
 
-            # Block 10: Deep LLM extraction (writes claims to outbox via nlp_session)
-            from nlp_pipeline.infrastructure.intelligence_db.repositories.claims import (
-                ClaimsRepository,
-            )
-
-            claims_repo = ClaimsRepository(nlp_session)
+            # Block 10: Deep LLM extraction.
+            # PLAN-0057 D-1 (F-CRIT-08): the previous code instantiated a
+            # ``ClaimsRepository`` here and threaded it through the block to
+            # write each extracted claim to the ``claim.extracted`` outbox
+            # topic. That topic had ZERO consumer groups subscribed (verified
+            # via ``kafka-consumer-groups --describe``); KG ingests claims via
+            # the ``raw_claims`` array on the ``nlp.article.enriched.v1``
+            # event built later in this method. The dead producer is gone.
             signals: list = []
             if should_run_deep_extraction(final_path):
                 extraction_result, signals = await run_deep_extraction_block(
@@ -449,7 +451,6 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                     mentions=final_mentions,
                     processing_path=final_path,
                     extraction_client=self._ext,
-                    claims_repo=claims_repo,
                     model_id=self._settings.extraction_model_id,
                     published_at=published_at,
                     extracted_at=extracted_at,

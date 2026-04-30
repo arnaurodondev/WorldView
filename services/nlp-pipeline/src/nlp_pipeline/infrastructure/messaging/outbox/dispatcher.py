@@ -3,7 +3,7 @@
 Design notes:
 - Outbox records store serialized payload bytes in ``payload_avro`` (may be JSON or Avro).
 - Dispatcher reads bytes + topic, produces directly via confluent_kafka.Producer.
-- Three output topics: nlp.article.enriched.v1, nlp.signal.detected.v1, claim.extracted.
+- Two output topics: nlp.article.enriched.v1, nlp.signal.detected.v1.
 - Retry semantics: marks_failed increments retry_count; after MAX_DISPATCH_ATTEMPTS,
   moves to dead_letter_queue.
 - BP-001 compliance: all Kafka production goes through this dispatcher (outbox pattern).
