@@ -22,11 +22,21 @@ from market_data.domain.enums import FundamentalsSection
 
 router = APIRouter(tags=["fundamentals"])
 
+# PLAN-0059 W0 fix F-010 (2026-04-30):
+# `pattern=` constrains the path parameter to a UUID-shaped string. Without
+# this, a request to GET /v1/fundamentals/screen (the screener endpoint
+# defined in fundamental_metrics.router) was falling through to
+# /fundamentals/{instrument_id} with instrument_id="screen", asyncpg then
+# rejected the literal as a UUID with DataError → 500. With the pattern,
+# non-UUID paths return 422 Validation Error and FastAPI keeps looking for
+# another matching route — which is what we want when /screen is a literal.
+_UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 _INSTRUMENT_ID_PARAM = Path(
+    pattern=_UUID_PATTERN,
     description=(
         "Instrument UUID. Fundamentals are stored per instrument. "
         "This path parameter was historically named 'security_id' but refers to the instrument UUID."
-    )
+    ),
 )
 
 

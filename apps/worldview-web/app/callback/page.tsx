@@ -31,14 +31,16 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { createGateway, GatewayError } from "@/lib/gateway";
 import { sanitizeRedirect } from "@/lib/utils";
-
-// ── Error types for user-facing messages ──────────────────────────────────────
-
-type CallbackErrorType =
-  | "state_mismatch"    // CSRF: state in URL doesn't match sessionStorage
-  | "missing_code"      // Zitadel didn't return a code (auth was cancelled or failed)
-  | "exchange_failed"   // S9 token exchange returned an error
-  | "missing_verifier"; // sessionStorage was cleared mid-flow (tab was closed and re-opened)
+// PLAN-0059 W0 fix F-001 (2026-04-30): ERROR_COPY/ERROR_MESSAGES/CallbackErrorType
+// were inlined here previously, but Next.js 15 page files must not export
+// arbitrary names — only the framework-recognised set is allowed. Inlining
+// + exporting `ERROR_MESSAGES` for tests broke `tsc` (TS2344) and `next build`.
+// Constants now live in a sibling module so both this page and the test file
+// can import them safely. See docs/BUG_PATTERNS.md BP-NEW for the pattern.
+import {
+  type CallbackErrorType,
+  ERROR_COPY,
+} from "./error-messages";
 
 // WHY whitelist: OIDC IdP redirects can include arbitrary error strings in the
 // ?error= query parameter. Without validation, a crafted redirect URL could inject
@@ -56,65 +58,6 @@ const KNOWN_OIDC_ERRORS = new Set([
   "login_required",
   "consent_required",
 ]);
-
-// PLAN-0053 T-F-6-13: distinct user-facing copy per error type.
-//
-// WHY each type gets its own message: each failure mode has a different
-// remediation. Surfacing a specific guidance line ("start over" vs "open in
-// the original tab" vs "try again") helps the user resolve the issue without
-// guessing. Before this change all four messages collapsed to a generic
-// "Please try again" which hid the actionable difference.
-//
-// WHY both `title` and `description`: the title gives a quick scan signal
-// (what happened) while the description gives the recovery action (what to
-// do about it). Two-line layouts are the standard for institutional error
-// pages and reduce cognitive load.
-interface CallbackErrorCopy {
-  title: string;
-  description: string;
-}
-
-const ERROR_COPY: Record<CallbackErrorType, CallbackErrorCopy> = {
-  state_mismatch: {
-    title: "Security check failed",
-    description:
-      "The state token in the callback URL doesn't match the one we issued. " +
-      "This usually happens when the callback was opened in a different browser " +
-      "or after the login session expired. Please start over from the login page.",
-  },
-  missing_code: {
-    // WHY "or failed" in the title: keeps the legacy phrase for tests +
-    // covers the case where the IdP returned ?error= (server-side failure)
-    // in addition to user cancellation.
-    title: "Authentication was cancelled or failed",
-    description:
-      "We didn't receive an authorization code from the identity provider. " +
-      "This typically means you cancelled the sign-in or the provider rejected " +
-      "the request. Please try again.",
-  },
-  exchange_failed: {
-    title: "Unable to complete sign-in",
-    description:
-      "The token exchange with the identity provider failed. This could be a " +
-      "temporary network issue or a problem with the gateway. Wait a moment and try again.",
-  },
-  missing_verifier: {
-    title: "Login session expired",
-    description:
-      "We couldn't find the verifier we stored when you started signing in. " +
-      "This happens if the browser tab was closed or storage was cleared mid-flow. " +
-      "Please open the login page in the same tab and start over.",
-  },
-};
-
-// Backwards-compat alias: existing tests assert on ERROR_MESSAGES[type] strings.
-// Map the new title+description into the legacy single-string shape so old
-// assertions keep passing while new tests can opt into the richer copy.
-// Exported so __tests__/wave-fh-polish.test.tsx can assert on the messages
-// without having to dynamically import the page module.
-export const ERROR_MESSAGES: Record<CallbackErrorType, string> = Object.fromEntries(
-  Object.entries(ERROR_COPY).map(([k, v]) => [k, `${v.title}. ${v.description}`]),
-) as Record<CallbackErrorType, string>;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 

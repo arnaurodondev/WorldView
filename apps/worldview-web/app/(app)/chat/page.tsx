@@ -1265,7 +1265,7 @@ export default function ChatPage() {
                   rows={2}
                   disabled={isStreaming}
                   maxLength={2000}
-                  className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
                   aria-label="Chat message input"
                 />
 

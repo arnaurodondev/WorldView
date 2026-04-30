@@ -298,7 +298,7 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
           rows={2}
           disabled={isStreaming}
           // WHY rounded-[2px] (was rounded-md): terminal 2px radius rule
-          className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+          className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
         />
         {/* PLAN-0059 W0 F-VISUAL-022: --accent-ai violet bg (was amber-500/90).
             WHY text-white: --accent-ai (#A855F7) has medium luminance — white reaches

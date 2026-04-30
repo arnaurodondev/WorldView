@@ -985,6 +985,33 @@ async def _get_enriched_quote(
     return legacy_resp.content, legacy_resp.status_code
 
 
+# PLAN-0059 W0 fix F-011 (2026-04-30): explicit stub for /quotes/stream so a
+# literal "stream" path doesn't fall through to /quotes/{instrument_id} and
+# 500 against market-data. The real WebSocket route lands in PLAN-0059-D
+# (Wave D) — until then, return 503 with a clear payload so the frontend
+# fallback path (polling) kicks in cleanly instead of bouncing 500s.
+@router.get("/quotes/stream")
+async def get_quote_stream_stub(request: Request) -> Response:
+    """Stub for the not-yet-implemented quote tick stream (Wave D)."""
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    # SEC-FIX-002 fix (2026-04-30): use top-level `json` import; the bare
+    # `_json` reference relied on a function-local rebind that the surrounding
+    # routes do but this stub didn't, causing NameError → 500. Also adds
+    # Retry-After per DS-FIX-002 so over-eager polling clients back off.
+    return Response(
+        content=json.dumps({
+            "error": "not_implemented",
+            "detail": "WebSocket quote stream lands in PLAN-0059 Wave D. "
+                      "Use polling on /v1/quotes/{instrument_id} until then.",
+            "wave": "D",
+        }).encode(),
+        status_code=503,
+        media_type="application/json",
+        headers={"Retry-After": "60"},
+    )
+
+
 @router.get("/quotes/{instrument_id}")
 async def get_quote(instrument_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/quotes/{instrument_id} → S3 PriceSnapshot (with fallback).

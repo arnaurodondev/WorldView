@@ -14,7 +14,7 @@
  *     g a  →  /alerts
  *     g n  →  /news (currently 307 → /alerts; will be promoted in Wave 6)
  *     g c  →  /chat
- *     g h  →  cheat-sheet (alias for `?`)
+ *     g h  →  cheat-sheet (alias for `?` — delegates to shell.help.cheatsheet binding)
  *     g ,  →  /settings
  *
  *   View toggles:
@@ -22,7 +22,10 @@
  *     mod+\ →  toggle StatusBar / full-width (placeholder — Wave 5)
  *
  *   Search / palette:
- *     mod+k  →  Cmd+K open command palette (existing GlobalSearch)
+ *     mod+k  →  intentionally NOT registered here — cmdk's Dialog handles ⌘K via
+ *               its own keydown listener. Registering it would call e.stopPropagation()
+ *               (via useChordHotkeys on match) and silently break the command palette.
+ *               The `?` overlay lists all real shortcuts; ⌘K is discoverable there.
  *     /      →  focus GlobalSearch input
  *
  *   Help:
@@ -80,8 +83,8 @@ export function GlobalHotkeyBindings({
   useChordHotkeys();
 
   // Build the list of bindings. useMemo so the registration effect doesn't
-  // re-fire on every render (router/onToggleSidebar are stable refs in practice
-  // but we depend on them so React Compiler can detect the captured closures).
+  // re-fire on every render. `registry` is stable within a provider tree but
+  // is listed in deps so React Compiler can track the captured closure.
   const bindings = useMemo<HotkeyBinding[]>(() => {
     const navTo = (path: string, id: string, label: string): HotkeyBinding => ({
       id,
@@ -104,7 +107,26 @@ export function GlobalHotkeyBindings({
       { ...navTo("/chat", "nav.chat", "Go to Chat"), chord: "g c" },
       { ...navTo("/settings", "nav.settings", "Go to Settings"), chord: "g ," },
 
-      // ── View toggles ────────────────────────────────────────────────────
+      // ── g h — alias for `?` (cheat-sheet toggle) ──────────────────────
+      // WHY delegation (not direct state access): the open/close state lives
+      // inside HotkeyCheatSheet which registers shell.help.cheatsheet with
+      // its setOpen callback. We cannot import or prop-drill that setter here
+      // without circular coupling. Delegating via the registry means the two
+      // bindings always share the same toggle behaviour — if HotkeyCheatSheet
+      // is refactored, g h stays correct automatically.
+      {
+        id: "nav.help.cheatsheet",
+        chord: "g h",
+        scope: "global",
+        group: "Navigation",
+        label: "Open keyboard shortcuts",
+        handler: (e) => {
+          const cs = registry.all().find((b) => b.id === "shell.help.cheatsheet");
+          if (cs) void cs.handler(e);
+        },
+      },
+
+      // ── View toggles ──────────────────────────────────────────────────
       {
         id: "view.toggle.sidebar",
         chord: "mod+b",
@@ -128,7 +150,7 @@ export function GlobalHotkeyBindings({
     }
 
     return list;
-  }, [router, onToggleSidebar, onFocusSearch]);
+  }, [router, onToggleSidebar, onFocusSearch, registry]);
 
   // Register all bindings on mount; unregister on unmount.
   useEffect(() => {

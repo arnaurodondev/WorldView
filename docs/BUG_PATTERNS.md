@@ -7781,3 +7781,270 @@ Two distinct anti-patterns that produce the same symptom:
 - Code review: flag any production `Optional[X] = None` default on a logger / audit repo.
 - CI test: instrument each pipeline boundary with a "this audit table must have at least one row after the smoke fixture" assertion.
 - See R28 (proposed): pipeline boundary contracts must include audit-table write coverage.
+
+## BP-295 — Next.js 15 Page File Cannot Export Arbitrary Symbols (PageProps `never` Constraint)
+
+**Category**: Build / framework constraint
+**Severity**: CRITICAL (typecheck + production build fail)
+**Affected areas**: Any `app/**/page.tsx` (App Router page) that exports symbols beyond the framework-recognized set.
+**First seen**: 2026-04-30 (PLAN-0059 W0 commit `99b8bcf7`, fix F-001).
+
+**Symptoms**:
+- `pnpm typecheck` fails with `error TS2344: Type 'OmitWithTag<typeof import(".../page"), "default" | "viewport" | "metadata" | ... | "experimental_ppr", "">' does not satisfy the constraint '{ [x: string]: never; }'. Property 'X' is incompatible with index signature. Type 'Y' is not assignable to type 'never'.`
+- `pnpm build` fails with the same error during type generation.
+- `next dev` may succeed because the strict PageProps check is bypassed in dev.
+
+**Root Cause**:
+Next.js 15 App Router page files have a strict type constraint on what they may export. The recognized set is `default`, `metadata`, `viewport`, `dynamic`, `revalidate`, `fetchCache`, `runtime`, `preferredRegion`, `experimental_ppr`, `generateStaticParams`, `generateMetadata`, `generateViewport`. Any other export is mapped to type `never`, so `export const FOO = ...` collides with `Record<string, never>`.
+
+In the Wave A diff a constant was made `export` so a test file could import it directly (avoiding a fragile dynamic import of the page module). The export survived ESLint/lint but blew up `tsc` and `next build`.
+
+**Fix**:
+Move the constants to a sibling module:
+```ts
+// app/some-route/page.tsx — page only
+import { ERROR_MESSAGES } from "./error-messages";
+
+// app/some-route/error-messages.ts — testable module
+export const ERROR_MESSAGES = { ... };
+```
+Tests import from `@/app/some-route/error-messages` directly. Both the page and the test see the same constant; the page module stays clean of arbitrary exports.
+
+**Prevention**:
+- Lint rule (custom): forbid named exports from any `app/**/page.{ts,tsx}` other than `default` + the framework-recognized list.
+- Code review check: if a page file has any `export const/function/class` other than the default component, ask “why isn’t this in a sibling module?”.
+- Run `pnpm typecheck` AND `pnpm build` (not just lint) before committing — `next lint` does not catch this.
+
+**Regression test**: `apps/worldview-web/__tests__/wave-a-config.test.ts` (`F-001 — ERROR_MESSAGES not exported from app/callback/page.tsx`).
+
+---
+
+## BP-296 — CSS Comment Containing `*/` Substring Breaks PostCSS
+
+**Category**: Build / parser
+**Severity**: CRITICAL (production build fails; dev `next dev` may tolerate it)
+**Affected areas**: any `.css` file with comments that contain the literal sequence `*/` inside the comment body — typically when documenting Tailwind glob patterns (`text-amber-*/bg-amber-*`).
+**First seen**: 2026-04-30 (PLAN-0059 W0, fix F-001b).
+
+**Symptoms**:
+- `next build` (or `pnpm build`) fails with: `Syntax error: <path>/globals.css Unknown word (NN:M)` where line NN is inside what was meant to be a `/* ... */` comment.
+- The Docker image build of the frontend fails at the `pnpm build` stage; container falls back to the previous successful image (`up 21 hours`), making the bug invisible in `docker ps`.
+- Dev mode (`pnpm dev`) often tolerates the parser oddity (CSS HMR is more forgiving), so the bug is invisible until production build.
+
+**Root Cause**:
+CSS uses `/* ... */` for comments. The first `*/` after `/*` closes the comment; everything after is parsed as CSS top-level. When a comment author writes `text-amber-*/bg-amber-*` to denote “any utility class matching `text-amber-*` or `bg-amber-*`”, the substring `*/` inside `text-amber-*` terminates the comment early. The text `bg-amber-* in AI panels...` then lands at top level → "Unknown word" parse error.
+
+**Fix**:
+Rewrite the comment to remove the inline `*/` sequence:
+- Replace `text-amber-*/bg-amber-*` with `text-amber-NNN and bg-amber-NNN` (descriptive)
+- Or with `text-amber-* / bg-amber-*` (space breaks the `*/` substring)
+- Or escape: `text-amber-* /bg-amber-*`
+
+**Prevention**:
+- ESLint plugin (custom or stylelint `comment-no-empty` extended): scan CSS comments for the substring `*/` and warn.
+- CI gate: `pnpm build` runs on every PR (not just `pnpm lint` + `pnpm typecheck`) so production CSS parsing is exercised.
+- Code review: when documenting Tailwind glob patterns inside CSS comments, prefer `text-amber-NNN` (placeholder) over `text-amber-*` (real glob).
+
+**Regression test**: catching this requires a successful `pnpm build` in CI.
+
+---
+
+## BP-297 — Docker `--build` ≠ `--no-cache`: Stale Frontend Bundle in Live Container
+
+**Category**: Deploy / build cache
+**Severity**: HIGH (silent — visual changes do not reach production)
+**Affected areas**: any Next.js `output: standalone` Docker image that uses `pnpm build` inside the multi-stage Dockerfile.
+**First seen**: 2026-04-30 (PLAN-0059 W0 QA).
+
+**Symptoms**:
+- Source files (`globals.css`, `next.config.ts`, etc.) are committed and look correct in `git diff`.
+- `docker compose ... up -d --build worldview-web` reports success.
+- The running container’s `Status` still shows `Up 21 hours`, NOT recently restarted.
+- `curl /_next/static/css/<hash>.css` serves the OLD bundle — CSS hash is unchanged from before the commit.
+- New brand assets (`/icon.svg`, `/manifest.webmanifest`, etc.) return 404.
+
+**Root Cause**:
+Docker's BuildKit layer cache reuses the prior `RUN pnpm build` output when its inputs (the COPY layer’s file digests) match. In a monorepo where the build context is large, BuildKit may decide a layer hasn’t changed even when source files within it have, depending on `.dockerignore` and `COPY` granularity.
+
+`docker compose build` only forces a rebuild of the configured stages, not of cache-reusable layers. The `--build` flag on `up` is shorthand for "build first if needed", but it does NOT pass `--no-cache` to the underlying build.
+
+**Fix**:
+- Use `docker compose -f infra/compose/docker-compose.yml build --no-cache worldview-web` after any frontend visual change.
+- Then `docker compose ... up -d --force-recreate worldview-web`.
+- Verification (canary): `curl /_next/static/css/$(curl / | grep -oE '/_next/static/css/[a-f0-9]+\.css' | head -1) | grep <new-token>` — the hash must change AND the new token must appear.
+
+**Prevention**:
+- CI deploy job: always pass `--no-cache` to the frontend image build.
+- Add a deploy smoke test: after frontend container restart, assert that the served CSS bundle contains a sentinel string from the latest commit.
+- Add an `ARG GIT_SHA` to the Dockerfile that gets baked into a build label, so the image is bust-able by passing a fresh SHA.
+
+**Regression test**: deploy smoke test (CI) — `apps/worldview-web/__tests__/wave-a-tokens.test.ts` covers the source-level invariants; the deploy-time canary is operational, not a unit test.
+
+## BP-298 — `e.isTrusted` Guard Breaks `fireEvent`-Based Hotkey Tests
+
+**Category**: Frontend / test infrastructure
+**Severity**: HIGH (blocks a critical security hardening)
+**Affected areas**: Any document-level keyboard listener that checks `e.isTrusted` + any test using `@testing-library/react`'s `fireEvent`.
+**First seen**: 2026-04-30 (PLAN-0059-B QA pass).
+
+**Symptoms**:
+- Adding `if (!e.isTrusted) return;` at the top of a `keydown` listener causes all `fireEvent.keyDown(document, ...)` tests to silently fail — handlers are never called.
+- The fix is correct for production; the failure is only in test.
+
+**Root Cause**:
+`fireEvent.keyDown()` from `@testing-library/react` internally calls `new KeyboardEvent('keydown', options)` and dispatches it. Synthetic events created via the `KeyboardEvent` constructor always have `isTrusted = false` per the Web spec — the browser only sets `isTrusted = true` on events originating from real user interaction.
+
+**Fix**:
+Create a `fireTrustedKey` helper in the test file or a shared test utility:
+```ts
+function fireTrustedKey(
+  element: Document | HTMLElement,
+  key: string,
+  options: KeyboardEventInit = {}
+): void {
+  const evt = new KeyboardEvent("keydown", {
+    key, bubbles: true, cancelable: true, ...options
+  });
+  Object.defineProperty(evt, "isTrusted", { value: true });
+  element.dispatchEvent(evt);
+}
+```
+Replace all `fireEvent.keyDown(document, ...)` calls in the affected test file with `fireTrustedKey(document, ...)`.
+
+**Prevention**:
+- Add the `fireTrustedKey` helper to `apps/worldview-web/vitest.setup.ts` as a named export so all keyboard tests can use it.
+- Add a lint rule (or test) that bans `fireEvent.keyDown` in files that test keyboard listeners.
+
+## BP-299 — HotkeyContext Scope Push/Pop Non-Atomic in React 18 Concurrent Mode
+
+**Category**: Frontend / React 18 / concurrency
+**Severity**: MEDIUM (theoretical; only manifests with two simultaneous scope-push calls)
+**Affected areas**: `HotkeyContext.tsx` `pushScope`/`popScope` callbacks that read-then-write `scopeCountsRef.current`.
+**First seen**: 2026-04-30 (PLAN-0059-B DS review).
+
+**Symptoms**:
+- Two dialogs mounting simultaneously both push `"modal"` scope.
+- Both callbacks read `prev === 0`, so both call `setActiveScopes` with `prev === 0` condition true.
+- One of the two increment operations is lost — effective count is 1 not 2.
+- On unmount of the first dialog: `popScope` decrements to 0 and removes the modal scope.
+- Second dialog is now open but global chords are no longer suppressed → pressing `g d` navigates away while the dialog is visible.
+
+**Root Cause**:
+`useRef`-based mutable counters read and written in `useCallback` are not atomic in React 18's concurrent rendering model. Two effects can interleave their reads before either has written.
+
+**Fix**:
+Use `useState` with a functional updater for the scope count map — functional updaters are queued and applied serially:
+```ts
+const [scopeCounts, setScopeCounts] = useState<Map<HotkeyScope, number>>(new Map());
+const pushScope = useCallback((scope: HotkeyScope) => {
+  setScopeCounts(prev => {
+    const count = prev.get(scope) ?? 0;
+    return new Map(prev).set(scope, count + 1);
+  });
+}, []);
+```
+Derive `activeScopes` from `scopeCounts` via `useMemo`.
+
+**Prevention**:
+- Any ref-based counter that must be consistent across concurrent renders should be `useState` with functional updater.
+- Add `__tests__/hotkey-context.test.tsx` with concurrent push/pop tests using `act()` to catch regressions.
+
+## BP-300 — `isMountedRef` Not Reset on Effect Re-Run → WebSocket Permanently Dead After Token Refresh
+
+**Category**: React / WebSocket / reconnect
+**Severity**: CRITICAL
+**Affected areas**: `AlertStreamContext.tsx` and any component that uses `isMountedRef` as an unmount guard inside a multi-dependency `useEffect`.
+**First seen**: 2026-04-30 (PLAN-0059-B stability review, F-STAB-002).
+
+**Symptoms**:
+- After a token refresh (or any dependency change that re-runs the WebSocket `useEffect`), the WS connects successfully.
+- When the WS closes (network hiccup, server restart), no reconnect is scheduled.
+- The AlertStream badge shows 0 alerts forever after the first token refresh, even though new alerts are being pushed.
+
+**Root Cause**:
+`isMountedRef` is initialized to `true` (`useRef(true)`) and set to `false` in the effect's cleanup function. When the effect re-runs (due to auth state change), the cleanup runs first — setting `isMountedRef.current = false` — but the new effect body never resets it to `true`. All subsequent `onclose` handlers check `if (!isMountedRef.current) return;` and bail out, silently skipping the reconnect timer.
+
+```tsx
+// Bad — isMountedRef stays false after first token refresh
+useEffect(() => {
+  void connect(); // connects OK
+  return () => {
+    isMountedRef.current = false; // cleanup sets false
+    // ...
+  };
+}, [isAuthenticated, accessToken, connect]);
+// Next run: cleanup fires (sets false), then effect body runs WITHOUT resetting to true.
+// The onclose check fires and returns early — no reconnect ever scheduled.
+
+// Good — reset at the top of every effect body run
+useEffect(() => {
+  isMountedRef.current = true; // <-- reset before any async work
+  void connect();
+  return () => {
+    isMountedRef.current = false;
+    // ...
+  };
+}, [isAuthenticated, accessToken, connect]);
+```
+
+**Fix**:
+Add `isMountedRef.current = true;` as the first statement of the useEffect body.
+
+**Prevention**:
+- Whenever `isMountedRef` (or any boolean liveness ref) is set to `false` in cleanup, always add the corresponding reset to `true` at the top of the effect body.
+- Code review heuristic: if you see `isMountedRef.current = false` in a cleanup inside a multi-dependency effect, check that the effect body resets it.
+
+**Regression test**: `__tests__/AlertStreamContext.test.tsx` — the test for reconnect after token refresh would catch this.
+
+## BP-301 — Test IDs Not Updated After UUID Pattern Constraint Added to FastAPI Path Parameter
+
+**Category**: Testing / API
+**Severity**: MEDIUM
+**Affected areas**: `market-data` fundamentals API tests; any FastAPI route that adds a `pattern=` constraint to a path parameter.
+**First seen**: 2026-04-30 (PLAN-0059-B QA, pre-existing failure).
+
+**Symptoms**:
+- Tests that previously passed with short non-UUID IDs (`"instr-001"`, `"unknown-id"`) start returning 422 instead of expected 200/404 after a `pattern=` constraint is added to the path parameter.
+- `assert resp.status_code == 404` fails with `422 == 404`.
+
+**Root Cause**:
+A UUID pattern constraint (`pattern=r"^[0-9a-fA-F]{8}-..."`) was added to prevent a route collision (where a literal path segment like `/screen` was being matched as `instrument_id`). The constraint is correct in production but breaks existing tests that use short non-UUID test IDs.
+
+**Fix**:
+Replace all test IDs with valid UUID-format strings. Add a module-level constant for reuse:
+```python
+INSTR_UUID = "00000000-0000-0000-0000-000000000001"
+UNKNOWN_UUID = "00000000-0000-0000-0000-000000000099"
+```
+
+**Prevention**:
+- When adding `pattern=` to a FastAPI `Path(...)`, immediately update all unit tests to use IDs matching the new pattern.
+- Use a module-level UUID constant in test files rather than inline literals — makes bulk-updates easier.
+
+## BP-302 — `next.config.ts` `env:` Default Masks `NEXT_PUBLIC_*` Absence Check
+
+**Affected areas**: `apps/worldview-web/next.config.ts`; any `login/page.tsx`-style feature-gate that reads a `NEXT_PUBLIC_*` env var to detect whether a service is configured.
+
+**First seen**: 2026-04-30 (O-AU-01 investigation — dev login button absent after security fix).
+
+**Symptoms**:
+- A feature is intentionally gated on `!process.env.NEXT_PUBLIC_SOME_VAR` (var absent = feature enabled).
+- The feature never activates, even in local dev where the var is not set in `.env.local`.
+
+**Root Cause**:
+`next.config.ts` `env:` block uses `??` to supply a fallback:
+```ts
+NEXT_PUBLIC_SOME_VAR: process.env.NEXT_PUBLIC_SOME_VAR ?? "http://localhost:default",
+```
+Next.js evaluates this at build/startup time and bakes the string into the bundle. `process.env.NEXT_PUBLIC_SOME_VAR` inside browser code is always the fallback string — never `undefined` — so absence checks always fail.
+
+**Fix**:
+Remove the `??` fallback for any `NEXT_PUBLIC_*` var whose **absence** is a meaningful signal:
+```ts
+NEXT_PUBLIC_SOME_VAR: process.env.NEXT_PUBLIC_SOME_VAR,  // no default — absence is intentional
+```
+Ensure consuming code handles `undefined` gracefully (error message, disabled UI, etc.).
+
+**Prevention**:
+- Only use `?? default` for vars that are **always required** (WS URL, app name). Never for vars whose absence signals a "dev mode" or "feature not configured" state.
+- Add a code comment explaining why no default is provided.

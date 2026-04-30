@@ -67,6 +67,9 @@ terraform.tfvars
 
 # Claude Code local state
 .claude/projects/
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+.claire/
 .mcp.json
 
 # Node

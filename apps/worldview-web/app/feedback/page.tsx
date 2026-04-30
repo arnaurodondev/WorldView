@@ -41,12 +41,21 @@ import type { FeatureRequest, FeatureStatus } from "@/types/api";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-/** Map a feature status to a status badge color. */
+/**
+ * Map a feature status to a status badge color.
+ *
+ * PLAN-0059 W0 fix F-008 (2026-04-30): replaced Tailwind defaults
+ * (`bg-blue-500/10 text-blue-400`, `bg-emerald-500/10 text-emerald-400`)
+ * with semantic design tokens. `planned` → AI-accent violet (signals
+ * "future / on the roadmap"); `shipped` → positive green (signals
+ * "delivered / live"). Both now derive from CSS vars and inherit
+ * accessibility behaviour (forced-colors, prefers-contrast, print).
+ */
 const STATUS_COLOR: Record<FeatureStatus, string> = {
   proposed: "bg-muted text-muted-foreground",
-  planned: "bg-blue-500/10 text-blue-400",
+  planned: "bg-[hsl(var(--accent-ai)/0.10)] text-[hsl(var(--accent-ai))]",
   in_progress: "bg-warning/10 text-warning",
-  shipped: "bg-emerald-500/10 text-emerald-400",
+  shipped: "bg-[hsl(var(--positive)/0.10)] text-[hsl(var(--positive))]",
   rejected: "bg-destructive/10 text-destructive",
 };
 

@@ -60,6 +60,7 @@ const PRIORITY_IDS: readonly string[] = [
   "nav.workspace",
   "nav.portfolio",
   "nav.alerts",
+  "nav.chat",           // 6th slot — nav chords fill the bar before search/help
   "shell.search.focus",
   "shell.help.cheatsheet",
 ];

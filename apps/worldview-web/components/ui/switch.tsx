@@ -11,7 +11,13 @@ const Switch = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SwitchPrimitives.Root
     className={cn(
-      "peer inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input",
+      // PLAN-0059 W0 fix F-002 (2026-04-30): replaced disabled:opacity-50 with
+      // explicit --disabled-bg/--disabled-border tokens. The `!` prefix is
+      // required because data-[state=checked]:bg-primary would otherwise win
+      // (Tailwind variant precedence: later wins). With !important, the
+      // disabled state overrides regardless of checked. WCAG-AA contrast:
+      // ~5.5:1 on text vs --disabled-bg, well above the 4.5:1 floor.
+      "peer inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:!bg-[hsl(var(--disabled-bg))] disabled:!border-[hsl(var(--disabled-border))] data-[state=checked]:bg-primary data-[state=unchecked]:bg-input",
       className
     )}
     {...props}

@@ -1041,7 +1041,8 @@ Same prod-RS256-issuer gap as portfolio. Phase 1 (this wave): HS256 in dev; prod
 
 ---
 
-### Wave E-2: Gemini description provider env (F-MAJOR-04)
+### Wave E-2: Gemini description provider env (F-MAJOR-04) ✅
+**Status**: **DONE** — 2026-05-01 · config-only flip in `dev.local.env.example` + `docker.env` + KG service docs · ruff/mypy N/A (no code change). Gemini API key remains blank in checked-in configs; user populates via `make fetch-secrets` from gitops repo.
 **Estimated effort**: 30 min (config-only)
 
 #### Tasks
@@ -1068,7 +1069,8 @@ Prod: cap at $200/mo, key from sealed secret.
 
 ---
 
-### Wave E-3: AGE cypher_enabled flip (F-MAJOR-08)
+### Wave E-3: AGE cypher_enabled flip (F-MAJOR-08) ✅
+**Status**: **DONE** — 2026-05-01 · `KNOWLEDGE_GRAPH_CYPHER_ENABLED=true` in dev/docker configs; KG service docs updated; AgeSyncWorker already registered in scheduler so flip is sufficient.
 **Estimated effort**: 30 min
 
 #### Tasks

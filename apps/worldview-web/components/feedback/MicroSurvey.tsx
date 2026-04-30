@@ -99,7 +99,7 @@ export function MicroSurvey({ surveyKey, prompt, className }: MicroSurveyProps) 
           aria-label={label}
           className={[
             "rounded-[2px] border border-border bg-card p-1.5 transition-colors hover:bg-muted",
-            "disabled:opacity-50 disabled:cursor-not-allowed",
+            "disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))] disabled:cursor-not-allowed",
             picked === value ? "border-primary bg-primary/10" : "",
           ].join(" ")}
         >

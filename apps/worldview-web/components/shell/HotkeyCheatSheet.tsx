@@ -23,6 +23,7 @@
 // WHY "use client": uses useState (open), useEffect (registration), and ref to dialog.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { X } from "lucide-react";
 import {
   formatChordForDisplay,
@@ -54,6 +55,7 @@ export function HotkeyCheatSheet() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const bindings = useHotkeyBindings();
   const { registry } = useHotkeyScope();
+  const pathname = usePathname();
 
   // Register the toggle binding once. We do this here (not in
   // GlobalHotkeyBindings) so the open/close state and registration co-located.
@@ -99,7 +101,22 @@ export function HotkeyCheatSheet() {
   // bucket by group, then sort each bucket alphabetically for stable display.
   const grouped = useMemo(() => {
     const lower = filter.trim().toLowerCase();
+    const currentPath = pathname ?? "";
     const filtered = bindings.filter((b) => {
+      // Hide page-scoped bindings that don't apply to the current route. This
+      // prevents instrument mnemonics (D/F/N/I) from appearing in the cheat
+      // sheet when the user opens `?` on a different page. The bindings are
+      // correctly unregistered when their page unmounts, but this filter adds
+      // a second layer in case of concurrent-mount edge cases.
+      if (b.scope === "page" && b.page !== undefined) {
+        const pg = b.page;
+        if (typeof pg === "string") {
+          if (pg.endsWith("/") && !currentPath.startsWith(pg)) return false;
+          if (!pg.endsWith("/") && currentPath !== pg) return false;
+        } else if (pg instanceof RegExp && !pg.test(currentPath)) {
+          return false;
+        }
+      }
       if (!lower) return true;
       return (
         b.label.toLowerCase().includes(lower) ||
@@ -119,7 +136,7 @@ export function HotkeyCheatSheet() {
     return GROUP_ORDER.map((g) => [g, buckets.get(g) ?? []] as const).filter(
       ([, arr]) => arr.length > 0,
     );
-  }, [bindings, filter]);
+  }, [bindings, filter, pathname]);
 
   if (!open) return null;
 
