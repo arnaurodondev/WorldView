@@ -6,14 +6,17 @@ Uses Qwen2.5-7B-Instruct via ExtractionClient for structured extraction.
 Output:
   - events, claims, relations (structured per PRD §6.7 Block 10 schema)
   - Emits nlp.signal.detected.v1 for high-confidence (≥0.80) resolved entities
-  - Claims written via nlp_db outbox (NEVER directly to intelligence_db)
+  - Claims flow downstream via the enriched event's ``raw_claims`` array.
+    PLAN-0057 D-1 (F-CRIT-08): the legacy ``claim.extracted`` outbox topic
+    was an orphan — no consumer group ever subscribed (verified via
+    ``kafka-consumer-groups --describe``). KG ingests claims via
+    ``nlp.article.enriched.v1.raw_claims`` (see KG enriched_consumer).
+    The ClaimsRepository + per-claim outbox write loop have been removed.
   - Relations with provisional entities → entity_provisional=true + provisional_queue_id
 
 Window strategy (PRD §6.7 Block 10):
   ≤24,000 tokens → single window
   >24,000 tokens → 6,000-token windows with 500-token overlap
-
-evidence_date heuristic: coalesce(published_at, extracted_at) — NEVER use now().
 """
 
 from __future__ import annotations
@@ -37,7 +40,6 @@ if TYPE_CHECKING:
 
     from nlp_pipeline.application.blocks.suppression import ProcessingPath
     from nlp_pipeline.domain.models import Chunk, EntityMention
-    from nlp_pipeline.infrastructure.intelligence_db.repositories.claims import ClaimsRepository
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -283,7 +285,6 @@ async def run_deep_extraction_block(
     processing_path: ProcessingPath,
     *,
     extraction_client: ExtractionClient,
-    claims_repo: ClaimsRepository,
     model_id: str,
     published_at: datetime | None,
     extracted_at: datetime,
@@ -295,7 +296,11 @@ async def run_deep_extraction_block(
     For LIGHT/SUPPRESS tiers returns empty results immediately — callers
     must guard via ``should_run_deep_extraction(processing_path)``.
 
-    evidence_date = coalesce(published_at, extracted_at) — NEVER uses now().
+    PLAN-0057 D-1 (F-CRIT-08): the per-claim outbox write loop that produced
+    to the orphan ``claim.extracted`` topic has been removed. Claims still
+    leave this function via the returned ``extraction_result["claims"]``;
+    the article consumer wraps them as ``raw_claims`` inside the
+    ``nlp.article.enriched.v1`` payload, which KG's enriched_consumer reads.
 
     Args:
         doc_id: Document being processed.
@@ -303,7 +308,6 @@ async def run_deep_extraction_block(
         mentions: Resolved entity mentions for context injection.
         processing_path: Current routing path (HALT/SECTION_EMBEDDINGS_ONLY/FULL_PIPELINE).
         extraction_client: Injected ExtractionClient (OllamaExtractionAdapter).
-        claims_repo: Writes claims via nlp_db outbox.
         model_id: Extraction model ID (e.g. "qwen2.5:7b-instruct").
         published_at: Article publication datetime (UTC or None).
         extracted_at: Extraction datetime (UTC).
@@ -322,8 +326,13 @@ async def run_deep_extraction_block(
     if not chunks:
         return _empty, []
 
-    # evidence_date = coalesce(published_at, extracted_at) — NEVER now()
-    evidence_date = published_at if published_at is not None else extracted_at
+    # PLAN-0057 D-1 (F-CRIT-08): the previous code path used
+    # ``evidence_date = coalesce(published_at, extracted_at)`` to populate the
+    # per-claim ``claim.extracted`` outbox payload. That topic had ZERO
+    # subscribers (verified) so the value was dropped on the floor. Claims
+    # downstream (KG enriched_consumer reading raw_claims) take their evidence
+    # date from the article's published_at carried in the enriched envelope —
+    # so we no longer compute it here.
 
     # Build text windows
     windows = _build_windows(chunks, max_tokens=WINDOW_SIZE_TOKENS, overlap_tokens=WINDOW_OVERLAP_TOKENS)
@@ -354,26 +363,10 @@ async def run_deep_extraction_block(
         if mention.resolved_entity_id is not None:
             entity_id_by_ref[mention.mention_text.lower()] = mention.resolved_entity_id
 
-    # Write claims via outbox (never directly to intelligence_db)
-    for claim in merged.get("claims", []):
-        claim_d = dict(claim)  # type: ignore[call-overload]
-        entity_ref = str(claim_d.get("entity_ref", "")).lower()
-        entity_id = entity_id_by_ref.get(entity_ref)
-        if entity_id is None:
-            continue  # skip unresolved claims
-
-        try:
-            await claims_repo.write_via_outbox(
-                doc_id=doc_id,
-                entity_id=entity_id,
-                claim_type=str(claim_d.get("claim_type", "")),
-                polarity=str(claim_d.get("polarity", "")),
-                confidence=float(claim_d.get("confidence", 0.0)),
-                evidence_text=str(claim_d.get("evidence_text", "")),
-                evidence_date=evidence_date,
-            )
-        except Exception:
-            logger.warning("deep_extraction.claim_write_failed", doc_id=str(doc_id))
+    # PLAN-0057 D-1 (F-CRIT-08): claims used to be enqueued to the orphan
+    # ``claim.extracted`` outbox topic here. Removed — the topic had zero
+    # subscribers and KG already consumes claims via the ``raw_claims`` array
+    # built from ``merged["claims"]`` in the article consumer.
 
     # Build SignalEvent list for high-confidence signals
     now = common.time.utc_now()  # type: ignore[no-any-return]
