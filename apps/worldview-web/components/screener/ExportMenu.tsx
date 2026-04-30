@@ -142,7 +142,7 @@ export function ExportMenu<T>({
           type="button"
           disabled={disabled}
           aria-label="Export results"
-          className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground hover:text-foreground hover:border-border/80 rounded-[2px] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground hover:text-foreground hover:border-border/80 rounded-[2px] transition-colors disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))] disabled:cursor-not-allowed"
         >
           <Download className="h-3 w-3" aria-hidden />
           Export

@@ -130,12 +130,14 @@
     --warning: 40 100% 50%;         /* #FFB000 — Bloomberg amber (distinct from primary yellow) */
 
     /* AI accent — F-VISUAL-022 fix (PLAN-0059 W0):
-     * Replaces hardcoded text-amber-*/bg-amber-* in AI panels (AskAi, brief,
-     * copilot icons). Violet is the universal industry color for AI/ML
+     * Replaces hardcoded text-amber-NNN and bg-amber-NNN in AI panels (AskAi,
+     * brief, copilot icons). Violet is the universal industry color for AI/ML
      * (Anthropic, OpenAI Sora, GitHub Copilot, Notion AI). Using --primary
-     * yellow for AI muddied the brand (yellow already means price/alert). */
+     * yellow for AI muddied the brand (yellow already means price/alert).
+     * (Note: do NOT write `text-amber-` then `*` then `/` then `bg-` here —
+     * that substring closes the CSS comment early and breaks PostCSS.) */
     --accent-ai: 268 90% 65%;       /* #A855F7 — AI assistant accent (violet) */
-    --accent-ai-fill: 268 75% 50%;  /* #8E44CE — fill */
+    --accent-ai-fill: 268 75% 50%;  /* #9233D9 — fill (PLAN-0059 W0 fix F-019: hex annotation corrected) */
 
     /* Border radius — near-zero for hard terminal edges.
      * WHY 0.125rem (2px): Bloomberg Terminal uses zero-radius sharp rectangles.
@@ -382,6 +384,16 @@
     --foreground: 0 0% 100%;         /* pure white text */
     --muted-foreground: 0 0% 78%;    /* 6.8:1 from #09090B */
     --border: 0 0% 45%;              /* visible 1px panel edges */
+    /* PLAN-0059 W0 fix F-018 (2026-04-30): boost price/AI/brand tokens
+     * proportionally so colour signals keep parity with the bumped
+     * foreground. Without these, the high-contrast page sharpens text
+     * but green/red/violet stay at default chroma — visually inconsistent. */
+    --positive: 150 100% 50%;        /* #00FF80, AAA on bumped fg */
+    --negative: 350 100% 70%;        /* #FF668A, brighter urgent red */
+    --destructive: 0 95% 65%;        /* #FA4C4C, sharper delete red */
+    --warning: 40 100% 60%;          /* #FFB833, brighter Bloomberg amber */
+    --primary: 48 100% 60%;          /* #FFE034, max-luminance trading yellow */
+    --accent-ai: 268 95% 75%;        /* brighter AI violet */
   }
 }
 

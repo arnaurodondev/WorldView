@@ -494,7 +494,57 @@ async def me(request: Request) -> Response:
     access_token = auth_header[7:]
 
     if oidc_config is None:
-        return JSONResponse(status_code=503, content={"error": "oidc_unavailable"})
+        # PLAN-0059 W0 fix F-012 (2026-04-30) — tightened by SEC-FIX-001
+        # (2026-04-30 same-day): when Zitadel is not configured (typical in
+        # dev / CI), fall back to reading the user from `request.state.user`
+        # which `InternalJWTMiddleware` already populates by RS256-verifying
+        # the token against `request.app.state.rsa_public_key`. This re-uses
+        # the already-validated identity instead of re-decoding the token
+        # unverified (which would otherwise be a footgun if a misconfigured
+        # production deploy hit this code path).
+        #
+        # Defense in depth: we ALSO refuse the fallback in production so a
+        # mis-configuration (`app_env=production` + `oidc_discovery_optional=
+        # True`) cannot accidentally accept tokens via the dev path.
+        if settings.app_env == "production":
+            return JSONResponse(
+                status_code=503,
+                content={"error": "oidc_unavailable"},
+            )
+        # Read the verified user shape that InternalJWTMiddleware put on
+        # request.state. If it's not there, the token never passed verification.
+        user = getattr(request.state, "user", None)
+        if user is None:
+            logger.warning(
+                "me_no_verified_user_dev_fallback",
+                action="me",
+                result="error",
+            )
+            return JSONResponse(
+                status_code=401,
+                content={"error": "invalid_token", "detail": "Access token validation failed"},
+            )
+        # `user` shape comes from InternalJWTMiddleware — see middleware.py.
+        # Cast through dict to keep the return type aligned with the verified
+        # OIDC path above (sub, user_id, tenant_id, email, email_verified).
+        u: dict[str, Any] = dict(user) if isinstance(user, dict) else {
+            "sub": getattr(user, "sub", ""),
+            "user_id": getattr(user, "user_id", ""),
+            "tenant_id": getattr(user, "tenant_id", ""),
+            "email": getattr(user, "email", ""),
+            "email_verified": bool(getattr(user, "email_verified", False)),
+        }
+        return JSONResponse(
+            status_code=200,
+            content={
+                "user_id": u.get("user_id") or u.get("sub", ""),
+                "tenant_id": u.get("tenant_id", ""),
+                "email": u.get("email", ""),
+                "sub": u.get("sub", ""),
+                "email_verified": bool(u.get("email_verified", False)),
+                "_dev_fallback": True,
+            },
+        )
 
     try:
         unverified_header = jwt.get_unverified_header(access_token)

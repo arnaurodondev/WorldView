@@ -171,9 +171,20 @@ export function AlertStreamProvider({ children }: AlertStreamProviderProps) {
         try {
           const data = JSON.parse(event.data as string) as AlertPayload;
           dispatch(data);
-        } catch {
-          // WHY silently ignore: malformed messages from S10 should not crash the app
-          // Logging would be appropriate here in production (structlog equivalent)
+        } catch (err) {
+          // PLAN-0059 W0 fix F-020 (2026-04-30): no longer silently swallowing
+          // malformed S10 frames. console.warn is preserved by next.config.ts
+          // `removeConsole.exclude: ["error","warn"]` and will flow to Sentry
+          // once T-A-2-03 (Sentry wiring) ships. Sample bounded to 200 chars
+          // to avoid leaking large frames or any embedded tokens into logs.
+          const sample =
+            typeof event.data === "string"
+              ? event.data.slice(0, 200)
+              : "(non-string frame)";
+          console.warn("[AlertStream] malformed S10 frame", {
+            sample,
+            err: String(err).slice(0, 120),
+          });
         }
       };
 
@@ -231,6 +242,11 @@ export function AlertStreamProvider({ children }: AlertStreamProviderProps) {
 
   // Open the WS connection when the user is authenticated AND auth check complete
   useEffect(() => {
+    // WHY reset here: the cleanup sets isMountedRef.current=false, but this
+    // effect re-runs on every auth-state change (token refresh). Without the
+    // reset, the onclose handler's isMountedRef guard would permanently block
+    // reconnects after the first token refresh (DS-011 fix, 2026-04-30).
+    isMountedRef.current = true;
     // WHY check !isLoading: mirrors the guard inside connect() — only attempt
     // connection once AuthProvider has finished its initial refresh check.
     if (isAuthenticated && accessToken && !isLoading) {

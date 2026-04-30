@@ -112,7 +112,7 @@ export function InstrumentBriefPanel({ entityId }: InstrumentBriefPanelProps) {
         <button
           onClick={() => void refetch()}
           disabled={isFetching}
-          className="shrink-0 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+          className="shrink-0 text-xs text-muted-foreground hover:text-foreground disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
           title="Retry"
         >
           <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} />
@@ -164,7 +164,7 @@ export function InstrumentBriefPanel({ entityId }: InstrumentBriefPanelProps) {
               <button
                 onClick={() => void refetch()}
                 disabled={isFetching}
-                className="underline hover:no-underline disabled:opacity-50"
+                className="underline hover:no-underline disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
               >
                 refresh
               </button>

@@ -14,12 +14,28 @@
 
 import type { NextConfig } from "next";
 
-// Warn if WS is insecure in production — JWT token travels in query param
+// PLAN-0059 W0 fix F-016 (2026-04-30): in production SERVING (not build), refuse
+// to start with ws:// — previous behaviour was a console.warn that was easy to
+// miss. JWT travels in URL (still — F-015 deferred to Wave D), so plaintext is
+// a hard failure, not a warning. We detect serving via NEXT_PHASE so the build
+// step (Docker, CI) can complete with the dev default value; the deploy
+// pipeline must override NEXT_PUBLIC_WS_BASE_URL at runtime to wss://.
 const wsBaseUrl = process.env.NEXT_PUBLIC_WS_BASE_URL ?? "ws://localhost:8010";
-if (process.env.NODE_ENV === "production" && wsBaseUrl.startsWith("ws://")) {
+const isProductionServer =
+  process.env.NODE_ENV === "production" &&
+  process.env.NEXT_PHASE === "phase-production-server";
+if (isProductionServer && wsBaseUrl.startsWith("ws://")) {
+  throw new Error(
+    "[SECURITY] NEXT_PUBLIC_WS_BASE_URL uses ws:// (plaintext) in production. " +
+    "Set NEXT_PUBLIC_WS_BASE_URL=wss://... before starting. " +
+    "WebSocket JWT tokens travel in the URL query string and would be exposed " +
+    "in proxies / logs / network captures."
+  );
+}
+// Build-time + dev: log a warn (preserved by `removeConsole.exclude: ["warn"]`).
+if (process.env.NODE_ENV === "production" && wsBaseUrl.startsWith("ws://") && !isProductionServer) {
   console.warn(
-    "[SECURITY] NEXT_PUBLIC_WS_BASE_URL uses ws:// (plaintext). " +
-    "In production, use wss:// to encrypt WebSocket JWT tokens in transit."
+    "[SECURITY] NEXT_PUBLIC_WS_BASE_URL uses ws:// — set wss:// at deploy time."
   );
 }
 
@@ -38,6 +54,13 @@ const nextConfig: NextConfig = {
   //   console.error/warn for Sentry surfacing.
   // - productionBrowserSourceMaps: required for Sentry sourcemap upload (Wave A-2 T-A-2-03).
   experimental: {
+    // PLAN-0059 W0 fix F-006 (2026-04-30): React Compiler (auto-memoization).
+    // The Compiler emits `useMemo`/`useCallback`/`React.memo` automatically
+    // for components/hooks that satisfy its rules-of-React rules. With it on,
+    // the perf budgets in W4 (Plan §G) measure against an auto-memoized
+    // baseline — the way Linear / Vercel Dashboard / Cal.com run.
+    // Requires `babel-plugin-react-compiler` (installed alongside this flag).
+    reactCompiler: true,
     optimizePackageImports: [
       "lucide-react",
       "@radix-ui/react-icons",
@@ -52,7 +75,12 @@ const nextConfig: NextConfig = {
         ? { exclude: ["error", "warn"] }
         : false,
   },
-  productionBrowserSourceMaps: true,
+  // PLAN-0059 W0 fix F-014 (2026-04-30): production sourcemaps DISABLED until
+  // T-A-2-03 (Sentry wiring) lands. Otherwise `.map` files would be served at
+  // /_next/static/chunks/*.js.map exposing absolute build paths and full
+  // unminified source. Re-enable in tandem with `withSentryConfig({ hideSourceMaps: true })`
+  // so Sentry can upload them at build time without leaving them publicly reachable.
+  productionBrowserSourceMaps: false,
 
   // Standalone output: produces a self-contained server.js + minimal node_modules.
   // Required for the Docker multi-stage build (see Dockerfile).
@@ -102,8 +130,9 @@ const nextConfig: NextConfig = {
       // 'unsafe-inline' is required for Next.js 15 App Router — the React runtime
       // injects inline hydration scripts during SSR.  A nonce-based CSP (using
       // Next.js Middleware to set a per-request nonce) would be strictly stronger,
-      // but that requires significant refactoring (see TODO below).
-      // TODO: upgrade to nonce-based CSP via Next.js Middleware when attack surface justifies it.
+      // but that requires significant refactoring.
+      // DEFERRED: PLAN-0059 Wave 6 (PLAN-0059-I) — see master report §F-CODE-NEW-011.
+      // Tracked in docs/plans/0059-frontend-institutional-remediation-master-plan.md.
       "script-src 'self' 'unsafe-inline'",
       // 'unsafe-inline' for styles: required by Tailwind's runtime CSS injection
       // and shadcn/ui's inline style attributes (SVG animations, chart colours).
@@ -153,8 +182,15 @@ const nextConfig: NextConfig = {
     // Zitadel OIDC configuration — used by login/callback pages for PKCE flow
     // These are NOT secrets: they are public OIDC params that belong in the browser.
     // The actual tokens are handled server-side by S9 (never visible in the browser).
-    NEXT_PUBLIC_ZITADEL_URL:
-      process.env.NEXT_PUBLIC_ZITADEL_URL ?? "http://localhost:8080",
+    //
+    // WHY no default for NEXT_PUBLIC_ZITADEL_URL: login/page.tsx gates the
+    // "Dev Login" affordance on `!process.env.NEXT_PUBLIC_ZITADEL_URL` (the
+    // O-AU-01 fix). A ?? fallback here would inject "http://localhost:8080"
+    // at build time so the var is never absent — permanently suppressing the
+    // dev-login button even when Zitadel is not running. Leave it undefined
+    // when not set; the login page's initiateLogin() already surfaces a clear
+    // error if someone clicks "Sign in with Zitadel" without the var set.
+    NEXT_PUBLIC_ZITADEL_URL: process.env.NEXT_PUBLIC_ZITADEL_URL,
     NEXT_PUBLIC_ZITADEL_CLIENT_ID:
       process.env.NEXT_PUBLIC_ZITADEL_CLIENT_ID ?? "worldview-web",
   },

@@ -84,6 +84,45 @@ async def get_timeseries(
     )
 
 
+# PLAN-0059 W0 fix F-010 (2026-04-30): GET /fundamentals/screen route added so
+# the frontend convenience call (no body) works. Previously a GET hit the
+# /fundamentals/{instrument_id} route, asyncpg rejected "screen" as a UUID,
+# returned 500. Now GET delegates to the same use case with default filters.
+@router.get("/fundamentals/screen", response_model=ScreenResponse)
+async def screen_instruments_get(
+    limit: int = 50,
+    offset: int = 0,
+    uc: ScreenInstrumentsUseCase = Depends(get_screen_instruments_uc),  # type: ignore[assignment]
+) -> ScreenResponse:
+    """Empty-filter screen — returns the first `limit` instruments by ticker.
+
+    Convenience GET endpoint mirroring POST /fundamentals/screen with no
+    filters. Useful for frontend sanity checks and the screener default state.
+    """
+    results, total = await uc.execute(
+        [],
+        limit=limit,
+        offset=offset,
+        sort_by=None,
+        sort_order="asc",
+    )
+    return ScreenResponse(
+        results=[
+            ScreenInstrumentResponse(
+                instrument_id=r.instrument_id,
+                ticker=r.ticker,
+                name=r.name,
+                exchange=r.exchange,
+                sector=r.sector,
+                metrics={k: float(v) if v is not None else None for k, v in r.metrics.items()},
+            )
+            for r in results
+        ],
+        count=len(results),
+        total=total,
+    )
+
+
 @router.post("/fundamentals/screen", response_model=ScreenResponse)
 async def screen_instruments(
     body: ScreenRequest,

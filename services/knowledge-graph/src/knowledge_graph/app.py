@@ -116,6 +116,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 4. Admin token (DLQ endpoint auth)
     app.state.admin_token = getattr(settings, "admin_token", "")
 
+    # 5. Repair missing entity_embedding_state rows (PLAN-0057 Wave E-5 / F-MAJOR-06).
+    # Idempotent: ensure_rows_exist uses ON CONFLICT DO NOTHING. Runs at every API
+    # container start so any canonicals added by seeds or out-of-band scripts get
+    # their definition / narrative / fundamentals rows before refresh workers tick.
+    try:
+        from knowledge_graph.infrastructure.workers.embedding_state_repair import (
+            repair_missing_embedding_state,
+        )
+
+        repair_stats = await repair_missing_embedding_state(write_factory)
+        log.info(
+            "kg_embedding_state_repair_at_startup",
+            canonicals_checked=repair_stats["checked"],
+            rows_inserted=repair_stats["inserted"],
+        )
+    except Exception as exc:  # pragma: no cover — never block startup on the repair
+        log.warning("kg_embedding_state_repair_failed", error=str(exc))
+
     try:
         log.info("knowledge_graph_started", service=settings.service_name)
         yield
