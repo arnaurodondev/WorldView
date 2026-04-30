@@ -284,7 +284,10 @@ Entity-detail page handles 9 new `entity_type` variants; alias-pill UI renders 4
 
 ---
 
-### Wave A-3: Canonical-Entity Bootstrap Seed (224 rows + 448 embedding-state rows)
+### Wave A-3: Canonical-Entity Bootstrap Seed (224 rows + 448 embedding-state rows) ✅
+
+**Status**: **DONE** — 2026-04-30 · 6 new round-trip tests covering counts, descriptions, EXACT alias presence, embedding_state row count, currency iso_code metadata, and idempotency. Migration is `0009_seed_canonicals_bootstrap` (intelligence-migrations 0009). Seeded ~224 canonicals: 33 currencies, 25 regulators, 25 government bodies, 30 indices, 25 commodities, 30 macros, 30 locations, 20 persons, 6 non-listed financial institutions. Each carries hand-written 1-2 sentence factual description in `metadata.description` (UI-ready per the user's quality bar) + 2-3 EXACT/TICKER aliases + 2 embedding_state view rows (definition + narrative; fundamentals_ohlcv N/A — none are financial_instrument). Stable UUIDv7-shaped IDs `0195daad-c001..c009-...`. Idempotent via `metadata->>'seed_source' = 'F-CRIT-10'` + ON CONFLICT DO NOTHING.
+
 
 **Goal**: seed canonical_entities + entity_aliases + entity_embedding_state for the 7 NER classes that currently have zero canonicals (currency, regulatory_body, government_body, index, commodity, macroeconomic_indicator, location), plus persons (~20) and financial_institutions (~6 non-listed).
 **Depends on**: T-A-2-01 (so the new UNIQUE index exists when we INSERT alias rows)

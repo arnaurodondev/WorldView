@@ -12,7 +12,7 @@ implements this Protocol.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -34,3 +34,9 @@ class EntityMentionRepositoryPort(Protocol):
     async def add_batch(self, mentions: list[EntityMention]) -> None: ...
 
     async def get_by_doc(self, doc_id: UUID) -> list: ...
+
+    async def get_articles_for_entity(
+        self,
+        entity_id: UUID,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]: ...
