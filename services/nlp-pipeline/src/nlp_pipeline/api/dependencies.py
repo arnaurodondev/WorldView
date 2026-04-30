@@ -14,11 +14,13 @@ from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
 from nlp_pipeline.application.use_cases.enhanced_chunk_search import EnhancedChunkSearchUseCase
 from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntityResolverUseCase
 
-# WHY unconditional import (not TYPE_CHECKING): EntityMentionRepository is used at
-# module-level in EntityMentionRepoDep = Annotated[EntityMentionRepository, ...].
-# Annotated[] evaluates its type argument at import time, so TYPE_CHECKING-guarded
-# imports (which are None at runtime) cause NameError. Pre-existing bug fixed here.
-from nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention import EntityMentionRepository
+# PLAN-0053 platform-stability iter-1 F-PLATFORM-02: switched from importing
+# the concrete EntityMentionRepository (infrastructure) to its Protocol port
+# (application/ports). The Protocol is the type used in the Annotated[] alias
+# below; the concrete class is only loaded inside the dependency function via
+# a body-level import. This satisfies LAYER-API-NO-MODULE-LEVEL-INFRA without
+# the runtime NameError that previously blocked the TYPE_CHECKING approach.
+from nlp_pipeline.application.ports.entity_mention import EntityMentionRepositoryPort
 
 _VALID_ADMIN_TOKEN_RE = re.compile(r"^[A-Za-z0-9\-_]{8,128}$")
 
@@ -126,17 +128,19 @@ NewsQueryRepoDep = Annotated[NewsQueryPort, Depends(get_news_query_repo)]
 
 def get_entity_mention_repo(
     session: Annotated[AsyncSession, Depends(get_read_nlp_session)],  # R27: read replica
-) -> EntityMentionRepository:
+) -> EntityMentionRepositoryPort:
     """Build an EntityMentionRepository backed by the read replica (R27 — query-only).
 
     Used by GET /api/v1/entities/{entity_id}/articles in the entities router.
+    The function-body import keeps the API layer free of module-level
+    infrastructure references (LAYER-API-NO-MODULE-LEVEL-INFRA).
     """
     from nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention import EntityMentionRepository
 
     return EntityMentionRepository(session)
 
 
-EntityMentionRepoDep = Annotated[EntityMentionRepository, Depends(get_entity_mention_repo)]
+EntityMentionRepoDep = Annotated[EntityMentionRepositoryPort, Depends(get_entity_mention_repo)]
 
 
 def get_entity_resolver_use_case(

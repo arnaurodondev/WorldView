@@ -141,9 +141,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     await jwt_mw.startup()
 
-    # PLAN-0055 A-3: seed NULL watermarks so the scheduler tick has a starting
-    # cursor for every enabled source. Spawned as a non-blocking task — the API
-    # process must answer /health within ~100ms, so seeding cannot block startup.
+    # PLAN-0055 A-3 / PLAN-0053 platform-stability iter-1 F-PLATFORM-02:
+    # Seed NULL watermarks so the scheduler tick has a starting cursor for
+    # every enabled source.
+    #
+    # Earlier this used ``asyncio.create_task(...)`` from inside lifespan to
+    # avoid blocking /health, but that's an R22 violation (TOPO-LIFESPAN —
+    # background processes must run as standalone entry points, not embedded
+    # tasks). The seed is intentionally fast (a single bulk UPDATE on the
+    # ``source_adapter_state`` table) so we now AWAIT it directly inline,
+    # bounded by ``settings.backfill_seed_timeout_seconds`` (default 10s).
+    # Operators who genuinely need a multi-minute seed should disable
+    # ``backfill_on_startup`` and run ``python -m content_ingestion.scripts.seed_watermarks``
+    # as a Job before deploy.
     if settings.backfill_on_startup:
         import asyncio as _asyncio
 
@@ -153,15 +163,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             uow_factory=app.state.uow_factory,
             settings=settings,
         )
-
-        async def _run_seed() -> None:
-            try:
-                await seed_use_case.execute()
-            except Exception as exc:  # — fire-and-forget; never crash the API
-                log.exception("startup_seed_watermarks_failed", error=str(exc))
-
-        # Stash on app.state so the task isn't GC'd mid-flight (RUF006).
-        app.state.startup_seed_task = _asyncio.create_task(_run_seed(), name="seed_source_watermarks")
+        seed_timeout = float(getattr(settings, "backfill_seed_timeout_seconds", 10.0))
+        try:
+            await _asyncio.wait_for(seed_use_case.execute(), timeout=seed_timeout)
+        except _asyncio.TimeoutError:
+            log.warning("startup_seed_watermarks_timeout", timeout_seconds=seed_timeout)
+        except Exception as exc:  # never crash the API on a seed failure
+            log.exception("startup_seed_watermarks_failed", error=str(exc))
 
     log.info("service_started", service=settings.service_name)
     yield
