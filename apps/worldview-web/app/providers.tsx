@@ -19,6 +19,11 @@ import { useState, type ReactNode } from "react";
 import { Toaster } from "sonner";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AlertStreamProvider } from "@/contexts/AlertStreamContext";
+// PLAN-0059-C C-3: ApiClientProvider memoises createGateway(accessToken) so
+// the gateway is constructed once per token (not once per queryFn call).
+// Must be INSIDE AuthProvider (reads accessToken) and INSIDE
+// QueryClientProvider (so useAuthedQuery has the cache).
+import { ApiClientProvider } from "@/lib/api-client";
 
 // WHY useState for QueryClient (not module-level singleton):
 // In Next.js App Router, module-level singletons are shared across ALL requests
@@ -66,12 +71,17 @@ export function Providers({ children }: ProvidersProps) {
       {/* AuthProvider: manages OIDC session state (accessToken, user, isAuthenticated).
           Must wrap all children so protected layouts can read auth state via useAuth(). */}
       <AuthProvider>
-        {/* AlertStreamProvider: opens S10 WebSocket for real-time alerts.
-            Must be INSIDE AuthProvider so it can read accessToken for ws-token fetch.
-            Wraps all children so TopBar, FlashOverlay, and AlertsPage share one WS connection. */}
-        <AlertStreamProvider>
-          {children}
-        </AlertStreamProvider>
+        {/* ApiClientProvider: memoises createGateway(accessToken). Mounts
+            BEFORE AlertStreamProvider so any future query inside the alert
+            stream can use useApiClient() / useAuthedQuery(). */}
+        <ApiClientProvider>
+          {/* AlertStreamProvider: opens S10 WebSocket for real-time alerts.
+              Must be INSIDE AuthProvider so it can read accessToken for ws-token fetch.
+              Wraps all children so TopBar, FlashOverlay, and AlertsPage share one WS connection. */}
+          <AlertStreamProvider>
+            {children}
+          </AlertStreamProvider>
+        </ApiClientProvider>
       </AuthProvider>
       {/*
        * PLAN-0059 W0 F-COMP-NEW-TOAST-001: sonner Toaster mounted globally.

@@ -44,6 +44,9 @@ import { useCallback, useRef, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { AskAiPanel } from "@/components/shell/AskAiPanel";
 import type { Fundamentals, OHLCVBar } from "@/types/api";
+// PLAN-0059-C C-5: replaced inline ternary B/M formatter with the canonical
+// formatCompactCurrency. `adaptive: true` matches the previous look (1 dec).
+import { formatCompactCurrency } from "@/lib/format";
 
 interface InstrumentAskAiButtonProps {
   /** Display ticker (e.g. "AAPL") — used in the contextual greeting line. */
@@ -92,11 +95,15 @@ function buildContextLine({
     bits.push(`P/E ${fundamentals.pe_ratio.toFixed(1)}`);
   }
   if (fundamentals?.market_cap != null) {
-    // millions/billions feel cleaner than scientific notation in a one-liner
-    const cap = fundamentals.market_cap;
-    const formatted =
-      cap >= 1e9 ? `$${(cap / 1e9).toFixed(1)}B` : cap >= 1e6 ? `$${(cap / 1e6).toFixed(0)}M` : `$${cap}`;
-    bits.push(`mcap ${formatted}`);
+    // millions/billions feel cleaner than scientific notation in a one-liner.
+    // PLAN-0059-C C-5: canonical formatter; `adaptive: true` reproduces the
+    // previous look ($1.5B / $850M with one or zero decimals as magnitude grows).
+    bits.push(
+      `mcap ${formatCompactCurrency(fundamentals.market_cap, "USD", {
+        adaptive: true,
+        maxDecimals: 1,
+      })}`,
+    );
   }
 
   return bits.join(" · ");

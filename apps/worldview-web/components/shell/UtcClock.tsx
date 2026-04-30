@@ -34,6 +34,12 @@
 // state every second. Server Components cannot have time-based state.
 
 import { useEffect, useState } from "react";
+// PLAN-0059-C C-4: replaced raw setInterval with the Abramov-pattern
+// useInterval hook. Functionally identical here (the callback has no
+// closed-over state), but using the shared hook keeps the timer pattern
+// consistent across the app and protects against future refactors that
+// might add stale-closure-prone state.
+import { useInterval } from "@/hooks/useInterval";
 
 /**
  * formatUtcTime — format a Date as HH:MM:SS UTC
@@ -53,19 +59,16 @@ export function UtcClock() {
   // No hydration mismatch because server and client both initially render "".
   const [time, setTime] = useState<string>("");
 
+  // Set immediately on mount so the user sees the time without 1s delay
   useEffect(() => {
-    // Set immediately on mount so the user sees the time without 1s delay
     setTime(formatUtcTime(new Date()));
+  }, []);
 
-    // Update every second — fine-grained enough for second-precision timestamps
-    const id = setInterval(() => {
-      setTime(formatUtcTime(new Date()));
-    }, 1000);
-
-    // WHY cleanup: interval would fire after unmount if not cleared,
-    // causing "setState on unmounted component" in strict mode dev logging
-    return () => clearInterval(id);
-  }, []); // Empty deps: set up once, run for component lifetime
+  // Update every second — fine-grained enough for second-precision timestamps.
+  // useInterval handles cleanup + stale-closure safety internally.
+  useInterval(() => {
+    setTime(formatUtcTime(new Date()));
+  }, 1000);
 
   return (
     // WHY font-mono (ADR-F-15): Monospace font for all numeric/time displays ensures

@@ -2,6 +2,31 @@
   "extends": ["next/core-web-vitals", "next/typescript"],
   "rules": {
     "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }],
-    "@typescript-eslint/no-explicit-any": "error"
-  }
+    "@typescript-eslint/no-explicit-any": "error",
+    "no-restricted-syntax": [
+      "warn",
+      {
+        "selector": "Property[key.name='queryKey'][value.type='ArrayExpression'][value.elements.0.type='Literal']",
+        "message": "Inline queryKey arrays are forbidden. Import { qk } from '@/lib/query/keys' and use the hierarchical factory (e.g. qk.portfolios.list()). Currently 'warn' during incremental migration; will be promoted to 'error' once 153 legacy sites are converted. PLAN-0059-C C-2."
+      },
+      {
+        "selector": "Property[key.name='queryKey'][value.type='ArrayExpression'][value.elements.0.type='TemplateLiteral']",
+        "message": "Inline queryKey arrays are forbidden. Import { qk } from '@/lib/query/keys' and use the hierarchical factory. PLAN-0059-C C-2."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["**/__tests__/**/*", "**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-syntax": "off"
+      }
+    },
+    {
+      "files": ["lib/query/keys.ts"],
+      "rules": {
+        "no-restricted-syntax": "off"
+      }
+    }
+  ]
 }
