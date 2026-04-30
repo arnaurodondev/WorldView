@@ -70,9 +70,16 @@ async def main() -> None:
         log.warning("storage_not_configured_fundamentals_downloads_disabled", exc_info=True)
 
     # Definition worker — FallbackChainClient with no adapters acts as no-op for ML calls
+    from knowledge_graph.infrastructure.intelligence_db.usage_log_factory import (
+        SessionScopedKgUsageLogger,
+    )
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
 
-    llm_client = FallbackChainClient()
+    # PLAN-0057 A-5 / F-CRIT-03: thread the usage logger so each embed/extract
+    # attempt records a row in intelligence_db.llm_usage_log.
+    kg_usage_logger = SessionScopedKgUsageLogger(write_factory)
+
+    llm_client = FallbackChainClient(usage_logger=kg_usage_logger)
     definition_worker = DefinitionRefreshWorker(
         write_factory,
         llm_client,

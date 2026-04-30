@@ -415,3 +415,65 @@ class TestDeepInfraProviderPath:
 
         call_url = client_mock.post.call_args[0][0]
         assert "api/generate" in call_url
+
+
+# ── PLAN-0057 A-5 / F-CRIT-03: usage_logger threading ────────────────────────
+
+
+class TestUsageLoggerThreading:
+    """Verify the LLM cost/latency logger is invoked once per Ollama round.
+
+    These tests close audit finding F-CRIT-03 — without ``usage_logger`` the
+    nlp_db.llm_usage_log table stayed permanently empty despite ~50 calls per
+    30-min cycle.
+    """
+
+    @pytest.mark.asyncio
+    async def test_ollama_round_logs_usage(self) -> None:
+        """A single Ollama call must trigger exactly one usage_logger.log call."""
+        articles = [(_DOC_ID, "Tesla earnings beat", "NEWS")]
+        factory, _ = _make_session_factory(articles)
+
+        # The 200-OK Ollama body is irrelevant for this assertion, but it must
+        # parse cleanly so the worker takes the success branch (which logs
+        # success=True) — we still want a single log call either way.
+        body = json.dumps({"response": json.dumps({"score": 0.6, "reason": "ok"})})
+
+        usage_logger = AsyncMock()
+        usage_logger.log = AsyncMock()
+
+        # Build worker with the usage logger injected via the new kwarg.
+        worker = ArticleRelevanceScoringWorker(
+            nlp_session_factory=factory,
+            ollama_url="http://ollama:11434",
+            model="qwen3:0.6b",
+            batch_size=10,
+            timeout_seconds=5,
+            cycle_seconds=1,
+            usage_logger=usage_logger,
+        )
+
+        # Patch the resp.status_code attribute so the worker's success-from-status
+        # branch fires (HTTP 2xx → success=True in the log row).
+        with patch(_PATCH_HTTPX) as mock_cls:
+            resp_mock = MagicMock()
+            resp_mock.text = body
+            resp_mock.status_code = 200
+            client_mock = AsyncMock()
+            client_mock.post = AsyncMock(return_value=resp_mock)
+            ctx = MagicMock()
+            ctx.__aenter__ = AsyncMock(return_value=client_mock)
+            ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = ctx
+            await worker.scoring_cycle()
+
+        # Exactly one log row written for the single article scored.
+        usage_logger.log.assert_awaited_once()
+        kwargs = usage_logger.log.await_args.kwargs
+        assert kwargs["provider"] == "ollama"
+        assert kwargs["capability"] == "classification"
+        assert kwargs["success"] is True
+        # tokens_in/out are word-split estimates (≥0 is sufficient).
+        assert kwargs["tokens_in"] > 0
+        assert kwargs["latency_ms"] >= 0
+        assert kwargs["doc_id"] == _DOC_ID
