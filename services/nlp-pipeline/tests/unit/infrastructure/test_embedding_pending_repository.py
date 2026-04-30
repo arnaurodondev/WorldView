@@ -146,6 +146,23 @@ class TestClaimBatch:
         assert jobs[0].retry_count == 1
 
     @pytest.mark.asyncio
+    async def test_uses_for_update_skip_locked_for_concurrency_safety(self) -> None:
+        """PLAN-0057 QA H-3: claim_batch must use FOR UPDATE SKIP LOCKED so two
+        concurrent retry workers never claim the same row.  Asserts the SQL
+        text — without this guard mark_failure can double-increment retry_count.
+        """
+        session = _make_session()
+        execute_result = MagicMock()
+        execute_result.fetchall.return_value = []
+        session.execute = AsyncMock(return_value=execute_result)
+        repo = EmbeddingPendingRepository(session)
+
+        await repo.claim_batch()
+
+        sql_text = str(session.execute.call_args[0][0])
+        assert "FOR UPDATE" in sql_text.upper()
+        assert "SKIP LOCKED" in sql_text.upper()
+
     async def test_empty_result_returns_empty_list(self) -> None:
         session = _make_session()
         mock_result = MagicMock()

@@ -8048,3 +8048,29 @@ Ensure consuming code handles `undefined` gracefully (error message, disabled UI
 **Prevention**:
 - Only use `?? default` for vars that are **always required** (WS URL, app name). Never for vars whose absence signals a "dev mode" or "feature not configured" state.
 - Add a code comment explaining why no default is provided.
+
+---
+
+## BP-303 — Production OHLCV Auth Blackhole: Workers Rely on `dev-login`, Blocked in Prod
+
+**Affected areas**: `services/nlp-pipeline/src/nlp_pipeline/infrastructure/http/market_data_client.py`; any future worker that calls another internal service guarded by `InternalJWTMiddleware`.
+
+**First seen**: 2026-05-01 (PLAN-0057 Wave E-1 strict QA — H-2).
+
+**Symptoms**:
+- A backend worker mints its `X-Internal-JWT` by calling `POST /v1/auth/dev-login` against the API gateway.
+- In **dev/demo** the worker is fully authenticated; downstream tables (`article_impact_windows`) populate as expected.
+- In **production** the dev-login endpoint returns 403 (`app_env=production` guard in `services/api-gateway/src/api_gateway/routes/auth.py`). The worker swallows the error, logs `market_data_client_token_mint_failed`, and **falls back to unauthenticated requests** which the receiver rejects with 401. Net effect: the table stays empty forever and only a low-cadence WARN log signals the failure.
+
+**Root Cause**:
+Worker authentication assumes the dev-login flow is always available. Production correctly disables it (it's a developer tool), but no production-equivalent path was wired so the fallback "unauthenticated request" path silently masks the gap.
+
+**Fix options** (none shipped yet — TODO):
+1. Provision a per-service-account credential and let workers obtain a token via a new gateway endpoint (best — preserves the "S9 signs / others verify" model).
+2. Mint a service JWT directly in the worker using the gateway's RSA private key (requires distributing the key — increases blast radius if compromised).
+3. Add a `/internal/v1/service-token` endpoint protected by a shared service-account secret rotated via Kubernetes secrets.
+
+**Prevention**:
+- Any worker that calls a guarded internal service must be reviewed for "what happens in prod when dev-login is disabled?" before merging.
+- Add an explicit check on startup: if `app_env=production` and the worker depends on dev-login, fail fast rather than degrade silently.
+- Track this gap in PLAN telemetry — file a P1 ticket the moment the worker ships, not after the audit catches it.

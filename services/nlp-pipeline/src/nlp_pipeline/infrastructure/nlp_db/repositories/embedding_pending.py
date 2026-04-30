@@ -65,6 +65,14 @@ class EmbeddingPendingRepository:
         failures are retried first.  Rows that have already reached
         *max_retries* are excluded — they are abandoned in place and
         should be reviewed manually.
+
+        ``FOR UPDATE SKIP LOCKED`` (PLAN-0057 QA H-3): when more than one
+        retry-worker container runs (scaling, blue/green deploys, the
+        standalone process plus a stray scheduler tick) the claim must be
+        partition-safe.  SKIP LOCKED makes each worker instantly skip rows
+        another worker is currently processing instead of blocking on the
+        row-level lock — no double increments of ``retry_count``, no two
+        workers writing the same embedding twice.
         """
         result = await self._session.execute(
             text(
@@ -73,7 +81,8 @@ class EmbeddingPendingRepository:
                 "WHERE retry_count < :max_retries "
                 "  AND next_retry_at <= now() "
                 "ORDER BY next_retry_at ASC "
-                "LIMIT :batch_size"
+                "LIMIT :batch_size "
+                "FOR UPDATE SKIP LOCKED"
             ),
             {"max_retries": max_retries, "batch_size": batch_size},
         )

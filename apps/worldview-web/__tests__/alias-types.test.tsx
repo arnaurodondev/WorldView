@@ -102,4 +102,15 @@ describe("AliasPill", () => {
     expect(screen.getByText("abc123")).toBeInTheDocument();
     expect(screen.getByText("Alias")).toBeInTheDocument();
   });
+
+  it("renders a copy button by default with accessible label", () => {
+    render(<AliasPill aliasType="CUSIP" value="037833100" />);
+    const button = screen.getByRole("button", { name: /copy cusip value/i });
+    expect(button).toBeInTheDocument();
+  });
+
+  it("hides the copy button when hideCopy is set", () => {
+    render(<AliasPill aliasType="CUSIP" value="037833100" hideCopy />);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
 });
