@@ -259,3 +259,75 @@ class TestInstrumentEntityConsumerReplay:
         def_worker.refresh_for_entity.assert_awaited_once()
         call_args = def_worker.refresh_for_entity.call_args
         assert call_args.args[1] == _DESCRIPTION
+
+
+class TestInstrumentEntityConsumerUpsertAfterDiscover:
+    """PLAN-0057 Wave D-2: UPSERT-after-discover semantics.
+
+    When a placeholder canonical exists (created by InstrumentDiscoveredConsumer
+    with metadata.needs_fundamentals_enrichment = true), processing
+    market.instrument.created MUST:
+      1. UPDATE canonical_entities to clear the flag and stamp the real Name/ISIN.
+      2. Run the rich alias-enrichment block (entity_repo.create() must NOT be
+         called — the canonical already exists).
+      3. Trigger description embedding via DefinitionRefreshWorker.
+    """
+
+    def test_upsert_after_discover_updates_and_runs_alias_block(self) -> None:
+        """Placeholder canonical → UPDATE + alias enrichment + embedding refresh."""
+        consumer, def_worker, entity_repo, emb_repo = _make_consumer(entity_exists=True)
+
+        # Override the existing dict to mark it as a discovered placeholder
+        entity_repo.get = AsyncMock(
+            return_value={
+                "entity_id": _INSTRUMENT_ID,
+                "canonical_name": "AAPL",  # placeholder = symbol
+                "entity_type": "financial_instrument",
+                "ticker": "AAPL",
+                "exchange": "NASDAQ",
+                "isin": None,
+                "metadata": {
+                    "source": "discovered",
+                    "needs_fundamentals_enrichment": True,
+                    "discovered_at": "2026-04-30T11:00:00Z",
+                },
+            }
+        )
+        # entity_repo.create must NEVER be called on the upsert-after-discover path
+        entity_repo.create = AsyncMock(side_effect=AssertionError("create() called on UPSERT path"))
+
+        msg = {
+            "event_id": str(uuid4()),
+            "instrument_id": str(_INSTRUMENT_ID),
+            "name": "Apple Inc.",
+            "ticker": "AAPL",
+            "exchange": "NASDAQ",
+            "isin": "US0378331005",
+            "description": _DESCRIPTION,
+        }
+
+        import unittest.mock as mock
+
+        with (
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity.CanonicalEntityRepository",
+                return_value=entity_repo,
+            ),
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias.EntityAliasRepository",
+                return_value=mock.AsyncMock(insert=mock.AsyncMock(), find_exact=mock.AsyncMock(return_value=None)),
+            ),
+            mock.patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state.EntityEmbeddingStateRepository",
+                return_value=emb_repo,
+            ),
+        ):
+            asyncio.run(consumer.process_message(None, msg, {}))
+
+        # 1. entity_repo.create was NOT called (handled by side_effect AssertionError)
+        # 2. ensure_rows_exist was called (Step 4 still runs)
+        emb_repo.ensure_rows_exist.assert_awaited_once()
+        # 3. description embedding refresh was triggered (Step 5)
+        def_worker.refresh_for_entity.assert_awaited_once()
+        call_args = def_worker.refresh_for_entity.call_args
+        assert call_args.args[1] == _DESCRIPTION

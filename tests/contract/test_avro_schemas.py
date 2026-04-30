@@ -32,6 +32,10 @@ EXPECTED_FIELD_COUNTS: dict[str, int] = {
     "alert.delivered.v1": 11,
     "market.instrument.created": 15,  # Enhanced with name, description, isin, security_id, entity_id, causation_id
     "market.instrument.updated": 14,
+    # PLAN-0057 Wave D-2: lightweight pre-fundamentals discovery event.
+    # 10 fields = 4 envelope (event_id, event_type, schema_version, occurred_at)
+    # + 6 data (instrument_id, symbol, exchange, entity_id, correlation_id, causation_id).
+    "market.instrument.discovered.v1": 10,
     "market.dataset.fetched": 27,  # Existing mature schema: 27 fields (claim-check pattern)
     "portfolio.events.v1": 10,  # 10 record types in multi-record schema file
     "portfolio.watchlist.updated.v1": 9,
@@ -280,3 +284,116 @@ class TestMarketInstrumentCreatedEnhancement:
         assert rows[0]["name"] is None
         assert rows[0]["description"] is None
         assert rows[0]["isin"] is None
+
+
+@pytest.mark.contract
+class TestMarketInstrumentDiscoveredV1Schema:
+    """PLAN-0057 Wave D-2: ``market.instrument.discovered.v1`` cross-service event.
+
+    The schema must:
+      * have all envelope fields (event_id, event_type, schema_version, occurred_at)
+      * have the 3 required data fields: instrument_id, symbol, exchange
+      * have nullable optional fields: entity_id, correlation_id, causation_id
+      * round-trip through fastavro (writer/reader)
+      * coexist with ``market.instrument.created`` (no field-name collisions
+        that would confuse the Schema Registry).
+    """
+
+    def test_schema_exists_and_parses(self) -> None:
+        path = SCHEMA_DIR / "market.instrument.discovered.v1.avsc"
+        assert path.exists(), "market.instrument.discovered.v1.avsc must exist"
+        schema = _load_schema(path)
+        assert fastavro.parse_schema(schema) is not None
+
+    def test_required_data_fields_present(self) -> None:
+        schema = _load_schema(SCHEMA_DIR / "market.instrument.discovered.v1.avsc")
+        fields_by_name = {f["name"]: f for f in schema["fields"]}
+        # instrument_id and symbol are NOT NULL (required producer-side data)
+        assert fields_by_name["instrument_id"]["type"] == "string"
+        assert fields_by_name["symbol"]["type"] == "string"
+
+    def test_optional_fields_are_nullable_with_default(self) -> None:
+        schema = _load_schema(SCHEMA_DIR / "market.instrument.discovered.v1.avsc")
+        fields_by_name = {f["name"]: f for f in schema["fields"]}
+        for field_name in ("exchange", "entity_id", "correlation_id", "causation_id"):
+            assert fields_by_name[field_name]["default"] is None
+            assert fields_by_name[field_name]["type"] == ["null", "string"]
+
+    def test_round_trip_with_minimal_payload(self) -> None:
+        """A minimal valid payload (omitting all optional fields) must round-trip."""
+        schema = _load_schema(SCHEMA_DIR / "market.instrument.discovered.v1.avsc")
+        parsed = fastavro.parse_schema(schema)
+        import io
+
+        sample = {
+            "event_id": "018f3a85-b39f-7a78-bf2a-1f03523ad9cf",
+            "event_type": "market.instrument.discovered",
+            "schema_version": 1,
+            "occurred_at": "2026-04-30T12:00:00Z",
+            "instrument_id": "018f3a85-b39f-7a78-bf2a-1f03523ad9d0",
+            "symbol": "AAPL",
+            # All other fields fall back to their nullable defaults.
+        }
+        buf = io.BytesIO()
+        fastavro.writer(buf, parsed, [sample])
+        buf.seek(0)
+        rows = list(fastavro.reader(buf))
+        assert len(rows) == 1
+        assert rows[0]["symbol"] == "AAPL"
+        assert rows[0]["exchange"] is None
+        assert rows[0]["entity_id"] is None
+        assert rows[0]["correlation_id"] is None
+        assert rows[0]["causation_id"] is None
+
+    def test_round_trip_with_full_payload(self) -> None:
+        """A fully-populated payload (including entity_id from M-017) must round-trip."""
+        schema = _load_schema(SCHEMA_DIR / "market.instrument.discovered.v1.avsc")
+        parsed = fastavro.parse_schema(schema)
+        import io
+
+        sample = {
+            "event_id": "018f3a85-b39f-7a78-bf2a-1f03523ad9cf",
+            "event_type": "market.instrument.discovered",
+            "schema_version": 1,
+            "occurred_at": "2026-04-30T12:00:00Z",
+            "instrument_id": "018f3a85-b39f-7a78-bf2a-1f03523ad9d0",
+            "symbol": "AAPL",
+            "exchange": "NASDAQ",
+            "entity_id": "018f3a85-b39f-7a78-bf2a-1f03523ad9d0",
+            "correlation_id": "corr-1",
+            "causation_id": None,
+        }
+        buf = io.BytesIO()
+        fastavro.writer(buf, parsed, [sample])
+        buf.seek(0)
+        rows = list(fastavro.reader(buf))
+        assert rows[0]["entity_id"] == sample["entity_id"]
+        assert rows[0]["correlation_id"] == "corr-1"
+
+    def test_market_instrument_created_still_decodes(self) -> None:
+        """Adding the new ``discovered.v1`` topic must not change ``created`` behaviour.
+
+        Backward compatibility check — the existing ``market.instrument.created``
+        schema continues to decode old payloads correctly.  Together with
+        TestMarketInstrumentCreatedEnhancement.test_old_sample_still_valid this
+        guards against accidental cross-schema interference.
+        """
+        schema = _load_schema(SCHEMA_DIR / "market.instrument.created.avsc")
+        parsed = fastavro.parse_schema(schema)
+        import io
+
+        sample = {
+            "event_id": "018f3a85-b39f-7a78-bf2a-1f03523ad9cf",
+            "event_type": "market.instrument.created",
+            "schema_version": 2,
+            "occurred_at": "2026-04-30T12:00:00Z",
+            "instrument_id": "018f3a85-b39f-7a78-bf2a-1f03523ad9d0",
+            "symbol": "AAPL",
+            "exchange": "US",
+            "name": "Apple Inc.",
+        }
+        buf = io.BytesIO()
+        fastavro.writer(buf, parsed, [sample])
+        buf.seek(0)
+        rows = list(fastavro.reader(buf))
+        assert rows[0]["name"] == "Apple Inc."

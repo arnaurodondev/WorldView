@@ -1,8 +1,12 @@
 """MarketDataOutboxDispatcher — concrete outbox dispatcher for the market-data service.
 
 Topic routing:
-  ``market.instrument.created``  ←  :class:`~market_data.domain.events.InstrumentCreated`
-  ``market.instrument.updated``  ←  :class:`~market_data.domain.events.InstrumentUpdated`
+  ``market.instrument.created``        ←  :class:`~market_data.domain.events.InstrumentCreated`
+  ``market.instrument.updated``        ←  :class:`~market_data.domain.events.InstrumentUpdated`
+  ``market.instrument.discovered.v1``  ←  :class:`~market_data.domain.events.InstrumentDiscovered`
+                                          (PLAN-0057 Wave D-2: emitted by ohlcv_consumer
+                                          and quotes_consumer when an instrument is first
+                                          seen, BEFORE fundamentals enrichment.)
 
 Serialization:
 - Avro schemas are loaded from the canonical ``infra/kafka/schemas/`` directory.
@@ -66,6 +70,9 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 EVENT_TOPIC_MAP: dict[str, str] = {
     "market.instrument.created": "market.instrument.created",
     "market.instrument.updated": "market.instrument.updated",
+    # PLAN-0057 Wave D-2: lightweight discovery event emitted by ohlcv/quotes
+    # consumers; topic is suffixed ``.v1`` for explicit version namespacing.
+    "market.instrument.discovered": "market.instrument.discovered.v1",
 }
 
 # ── Event-type → Avro schema file mapping ─────────────────────────────────────
@@ -73,6 +80,7 @@ EVENT_TOPIC_MAP: dict[str, str] = {
 _AVSC_MAP: dict[str, str] = {
     "market.instrument.created": "market.instrument.created.avsc",
     "market.instrument.updated": "market.instrument.updated.avsc",
+    "market.instrument.discovered": "market.instrument.discovered.v1.avsc",
 }
 
 

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from contracts.canonical.ohlcv import CanonicalOHLCVBar  # type: ignore[import-untyped]
 from market_data.domain.entities import Instrument, OHLCVBar, Security
 from market_data.domain.enums import Provider, Timeframe
-from market_data.domain.events import InstrumentCreated, InstrumentUpdated
+from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags, ProviderPriority
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
@@ -210,16 +210,22 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
                 flags=InstrumentFlags(has_ohlcv=True),
             )
             instrument = await uow.instruments.upsert(instrument)
-            created_event = InstrumentCreated(
+            # PLAN-0057 Wave D-2: emit ``market.instrument.discovered.v1`` instead
+            # of ``market.instrument.created`` here.  At this stage we only know
+            # symbol/exchange — the EODHD ``Name`` is not available, and emitting
+            # ``InstrumentCreated(name=None)`` previously produced placeholder
+            # canonicals like ``Instrument-019dbbdb`` in the knowledge graph
+            # (audit finding F-CRIT-12).  ``fundamentals_consumer`` is now the
+            # SOLE emitter of ``market.instrument.created`` (gated on a real Name).
+            discovered_event = InstrumentDiscovered(
                 instrument_id=instrument.id,
-                security_id=instrument.security_id,
                 symbol=symbol,
-                exchange=exchange,
+                exchange=exchange or None,
             )
             await uow.outbox_events.create(
-                event_type=created_event.event_type,
-                topic=EVENT_TOPIC_MAP[created_event.event_type],
-                payload=event_to_outbox_payload(created_event),
+                event_type=discovered_event.event_type,
+                topic=EVENT_TOPIC_MAP[discovered_event.event_type],
+                payload=event_to_outbox_payload(discovered_event),
             )
         elif not instrument.flags.has_ohlcv:
             updated_flags = InstrumentFlags(
