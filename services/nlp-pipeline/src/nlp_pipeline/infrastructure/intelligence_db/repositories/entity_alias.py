@@ -46,7 +46,16 @@ class EntityAliasRepository:
         isin: str | None,
         exchange: str | None = None,
     ) -> UUID | None:
-        """Stage 2 — ticker/ISIN match against canonical_entities. Confidence: 0.95."""
+        """Stage 2 — ticker/ISIN match against canonical_entities. Confidence: 0.95.
+
+        PLAN-0057 Wave C-3-02: when the canonical_entities lookup misses
+        (e.g. the canonical was created via the bootstrap seed without a
+        ticker, or the EODHD primary ticker hasn't been promoted to the
+        ``ticker`` column yet), fall back to ``entity_aliases`` matching
+        ``alias_type IN ('TICKER', 'PRIMARY_TICKER', 'ISIN')``.  This lets the
+        new PRIMARY_TICKER aliases inserted by the KG instrument_consumer
+        participate in Stage-2 resolution.
+        """
         if ticker:
             result = await self._session.execute(
                 text(
@@ -60,9 +69,37 @@ class EntityAliasRepository:
             row = result.fetchone()
             if row:
                 return UUID(str(row[0]))
+            # Fallback: check entity_aliases for TICKER or PRIMARY_TICKER.
+            result = await self._session.execute(
+                text(
+                    "SELECT entity_id FROM entity_aliases "
+                    "WHERE normalized_alias_text = lower(trim(:ticker)) "
+                    "AND alias_type IN ('TICKER', 'PRIMARY_TICKER', 'ISIN') "
+                    "AND is_active = true "
+                    "LIMIT 1",
+                ),
+                {"ticker": ticker},
+            )
+            row = result.fetchone()
+            if row:
+                return UUID(str(row[0]))
         if isin:
             result = await self._session.execute(
                 text("SELECT entity_id FROM canonical_entities WHERE isin = :isin LIMIT 1"),
+                {"isin": isin},
+            )
+            row = result.fetchone()
+            if row:
+                return UUID(str(row[0]))
+            # Fallback: ISIN can also be stored as an alias.
+            result = await self._session.execute(
+                text(
+                    "SELECT entity_id FROM entity_aliases "
+                    "WHERE normalized_alias_text = lower(trim(:isin)) "
+                    "AND alias_type IN ('TICKER', 'PRIMARY_TICKER', 'ISIN') "
+                    "AND is_active = true "
+                    "LIMIT 1",
+                ),
                 {"isin": isin},
             )
             row = result.fetchone()
@@ -125,6 +162,11 @@ class EntityAliasRepository:
         """Stage 2 batch — return {ticker_or_isin: entity_id} for all matches.
 
         One SQL query for tickers + one for ISINs (only if non-empty inputs).
+
+        PLAN-0057 Wave C-3-02: after the canonical_entities sweep, any tickers
+        / isins that missed are re-tried against ``entity_aliases`` with
+        ``alias_type IN ('TICKER', 'PRIMARY_TICKER', 'ISIN')`` so the new
+        PRIMARY_TICKER aliases participate in batch resolution.
         """
         out: dict[str, UUID] = {}
         if tickers:
@@ -138,6 +180,31 @@ class EntityAliasRepository:
             )
             for row in result.fetchall():
                 out[str(row[0])] = UUID(str(row[1]))
+            # Fallback: check entity_aliases for any tickers we didn't find in
+            # canonical_entities.ticker (covers PRIMARY_TICKER + entries whose
+            # canonical row hasn't promoted ticker yet).
+            missing_tickers = [t for t in tickers if t not in out]
+            if missing_tickers:
+                placeholders = ", ".join(f":mtk{i}" for i in range(len(missing_tickers)))
+                params = {f"mtk{i}": t.lower().strip() for i, t in enumerate(missing_tickers)}
+                # Also need a parallel mapping back to original casing so the
+                # caller can index by the input value.
+                lower_to_orig = {t.lower().strip(): t for t in missing_tickers}
+                result = await self._session.execute(
+                    text(
+                        "SELECT normalized_alias_text, entity_id "
+                        "FROM entity_aliases "
+                        f"WHERE normalized_alias_text IN ({placeholders}) "
+                        "AND alias_type IN ('TICKER', 'PRIMARY_TICKER', 'ISIN') "
+                        "AND is_active = true",
+                    ),
+                    params,
+                )
+                for row in result.fetchall():
+                    norm_text = str(row[0])
+                    orig = lower_to_orig.get(norm_text)
+                    if orig is not None:
+                        out[orig] = UUID(str(row[1]))
         if isins:
             placeholders = ", ".join(f":is{i}" for i in range(len(isins)))
             params = {f"is{i}": v for i, v in enumerate(isins)}
@@ -149,6 +216,27 @@ class EntityAliasRepository:
             )
             for row in result.fetchall():
                 out[str(row[0])] = UUID(str(row[1]))
+            # Fallback to entity_aliases for ISINs missed above.
+            missing_isins = [i for i in isins if i not in out]
+            if missing_isins:
+                placeholders = ", ".join(f":mis{i}" for i in range(len(missing_isins)))
+                params = {f"mis{i}": v.lower().strip() for i, v in enumerate(missing_isins)}
+                lower_to_orig = {v.lower().strip(): v for v in missing_isins}
+                result = await self._session.execute(
+                    text(
+                        "SELECT normalized_alias_text, entity_id "
+                        "FROM entity_aliases "
+                        f"WHERE normalized_alias_text IN ({placeholders}) "
+                        "AND alias_type IN ('TICKER', 'PRIMARY_TICKER', 'ISIN') "
+                        "AND is_active = true",
+                    ),
+                    params,
+                )
+                for row in result.fetchall():
+                    norm_text = str(row[0])
+                    orig = lower_to_orig.get(norm_text)
+                    if orig is not None:
+                        out[orig] = UUID(str(row[1]))
         return out
 
     async def batch_fuzzy_trigram(

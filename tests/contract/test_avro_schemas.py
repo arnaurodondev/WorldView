@@ -30,7 +30,8 @@ EXPECTED_FIELD_COUNTS: dict[str, int] = {
     "entity.canonical.created.v1": 10,
     "relation.type.proposed.v1": 12,  # Existing: 12 fields (richer than PRD minimum)
     "alert.delivered.v1": 11,
-    "market.instrument.created": 15,  # Enhanced with name, description, isin, security_id, entity_id, causation_id
+    # PLAN-0057 Wave C-1: schema_version=3 added cusip, figi, lei, primary_ticker (15 → 19)
+    "market.instrument.created": 19,
     "market.instrument.updated": 14,
     "market.dataset.fetched": 27,  # Existing mature schema: 27 fields (claim-check pattern)
     "portfolio.events.v1": 10,  # 10 record types in multi-record schema file
@@ -242,9 +243,14 @@ class TestConfluentWireFormatRoundtrip:
 
 @pytest.mark.contract
 class TestMarketInstrumentCreatedEnhancement:
-    """Validate the 3 new optional fields on market.instrument.created are BACKWARD compatible."""
+    """Validate optional fields on market.instrument.created are BACKWARD compatible.
 
-    def test_new_fields_are_nullable_with_defaults(self) -> None:
+    PLAN-0057 Wave C-1 (F-CRIT-04 / F-CRIT-11): schema bumped to v3 with four
+    new EODHD identifier fields — ``cusip``, ``figi``, ``lei`` and
+    ``primary_ticker`` — all nullable with default null.
+    """
+
+    def test_v2_fields_are_nullable_with_defaults(self) -> None:
         schema = _load_schema(SCHEMA_DIR / "market.instrument.created.avsc")
         fields_by_name = {f["name"]: f for f in schema["fields"]}
 
@@ -254,8 +260,25 @@ class TestMarketInstrumentCreatedEnhancement:
             assert field["default"] is None, f"{field_name} must have default null for BACKWARD compat"
             assert ["null", "string"] == field["type"], f"{field_name} must be union [null, string]"
 
+    def test_v3_fields_are_nullable_with_defaults(self) -> None:
+        """PLAN-0057 Wave C-1: cusip, figi, lei, primary_ticker — all nullable, default null."""
+        schema = _load_schema(SCHEMA_DIR / "market.instrument.created.avsc")
+        fields_by_name = {f["name"]: f for f in schema["fields"]}
+
+        for field_name in ("cusip", "figi", "lei", "primary_ticker"):
+            assert field_name in fields_by_name, f"Missing v3 field: {field_name}"
+            field = fields_by_name[field_name]
+            assert field["default"] is None, f"{field_name} must have default null for BACKWARD compat"
+            assert ["null", "string"] == field["type"], f"{field_name} must be union [null, string]"
+
+    def test_schema_version_default_is_three(self) -> None:
+        """PLAN-0057 Wave C-1: schema_version defaults to 3 (was 2)."""
+        schema = _load_schema(SCHEMA_DIR / "market.instrument.created.avsc")
+        fields_by_name = {f["name"]: f for f in schema["fields"]}
+        assert fields_by_name["schema_version"]["default"] == 3
+
     def test_old_sample_still_valid(self) -> None:
-        """A message produced by the OLD schema (without name/description/isin) must still decode."""
+        """A message produced by the OLD v1 schema (without any optional fields) must still decode."""
         schema = _load_schema(SCHEMA_DIR / "market.instrument.created.avsc")
         parsed = fastavro.parse_schema(schema)
         import io
@@ -270,7 +293,7 @@ class TestMarketInstrumentCreatedEnhancement:
             "exchange": "US",
             "instrument_type": "Common Stock",
             "correlation_id": None,
-            # name, description, isin NOT provided — defaults to null
+            # name, description, isin, cusip, figi, lei, primary_ticker NOT provided — default to null
         }
         buf = io.BytesIO()
         fastavro.writer(buf, parsed, [old_sample])
@@ -280,3 +303,45 @@ class TestMarketInstrumentCreatedEnhancement:
         assert rows[0]["name"] is None
         assert rows[0]["description"] is None
         assert rows[0]["isin"] is None
+        # PLAN-0057 Wave C-1 — v3 fields default to None for v1/v2 producers.
+        assert rows[0]["cusip"] is None
+        assert rows[0]["figi"] is None
+        assert rows[0]["lei"] is None
+        assert rows[0]["primary_ticker"] is None
+
+    def test_v3_sample_roundtrip_with_all_identifiers(self) -> None:
+        """PLAN-0057 Wave C-1: a full v3 message with all identifiers populated round-trips."""
+        schema = _load_schema(SCHEMA_DIR / "market.instrument.created.avsc")
+        parsed = fastavro.parse_schema(schema)
+        import io
+
+        v3_sample = {
+            "event_id": "018f3a85-b39f-7a78-bf2a-1f03523ad9cf",
+            "event_type": "market.instrument.created",
+            "schema_version": 3,
+            "occurred_at": "2026-04-30T12:00:00Z",
+            "instrument_id": "018f3a85-b39f-7a78-bf2a-1f03523ad9d0",
+            "symbol": "AAPL",
+            "exchange": "US",
+            "instrument_type": "Common Stock",
+            "name": "Apple Inc.",
+            "description": "Apple designs consumer electronics.",
+            "isin": "US0378331005",
+            "cusip": "037833100",
+            "figi": "BBG000B9XRY4",
+            "lei": "HWUPKR0MPOU8FGXBT394",
+            "primary_ticker": "AAPL.US",
+            "security_id": None,
+            "entity_id": None,
+            "correlation_id": None,
+            "causation_id": None,
+        }
+        buf = io.BytesIO()
+        fastavro.writer(buf, parsed, [v3_sample])
+        buf.seek(0)
+        rows = list(fastavro.reader(buf))
+        assert len(rows) == 1
+        assert rows[0]["cusip"] == "037833100"
+        assert rows[0]["figi"] == "BBG000B9XRY4"
+        assert rows[0]["lei"] == "HWUPKR0MPOU8FGXBT394"
+        assert rows[0]["primary_ticker"] == "AAPL.US"

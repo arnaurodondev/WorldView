@@ -47,26 +47,98 @@ class TestEntityProfile:
 
 
 class TestAliasGeneration:
+    """ALIAS_GENERATION v2.0 (PLAN-0057 Wave C-4 / F-MAJOR-09).
+
+    The v2.0 prompt requires four parameters — ``name``, ``ticker``,
+    ``description`` and ``aliases_so_far`` — and bakes four worked examples
+    into the template so the LLM has a precision-over-recall demonstration.
+    """
+
     def test_render(self) -> None:
-        result = ALIAS_GENERATION.render(name="Apple Inc", ticker="AAPL")
+        result = ALIAS_GENERATION.render(
+            name="Apple Inc",
+            ticker="AAPL",
+            description="A consumer electronics company.",
+            aliases_so_far="Apple Inc., AAPL",
+        )
         assert "Apple Inc" in result
         assert "AAPL" in result
+        assert "A consumer electronics company." in result
+        assert "Apple Inc., AAPL" in result
 
     def test_contains_json_instruction(self) -> None:
-        result = ALIAS_GENERATION.render(name="Test", ticker="TST")
+        result = ALIAS_GENERATION.render(
+            name="Test",
+            ticker="TST",
+            description="",
+            aliases_so_far="",
+        )
         assert '"aliases"' in result
         assert "5 common alternative names" in result
 
+    def test_v20_includes_all_four_worked_examples(self) -> None:
+        """Each of the 4 examples (Apple, Meta, NVIDIA, Foreward) must appear."""
+        result = ALIAS_GENERATION.render(
+            name="Test",
+            ticker="TST",
+            description="",
+            aliases_so_far="",
+        )
+        # Apple Inc — former name "Apple Computer"
+        assert "Apple Computer" in result
+        assert "Apple Inc." in result
+        # Meta — former name "Facebook"
+        assert "Facebook" in result
+        assert "Meta Platforms" in result
+        # NVIDIA — casing variants
+        assert "NVIDIA" in result
+        assert "nVidia" in result
+        # Foreward — empty list precision-over-recall demo
+        assert "Foreward" in result
+        assert '"aliases": []' in result
+
     def test_missing_name_raises(self) -> None:
         with pytest.raises(ValueError, match="name"):
-            ALIAS_GENERATION.render(ticker="AAPL")
+            ALIAS_GENERATION.render(
+                ticker="AAPL",
+                description="",
+                aliases_so_far="",
+            )
 
     def test_missing_ticker_raises(self) -> None:
         with pytest.raises(ValueError, match="ticker"):
-            ALIAS_GENERATION.render(name="Apple Inc")
+            ALIAS_GENERATION.render(
+                name="Apple Inc",
+                description="",
+                aliases_so_far="",
+            )
+
+    def test_missing_description_raises(self) -> None:
+        """v2.0 added description as a required parameter."""
+        with pytest.raises(ValueError, match="description"):
+            ALIAS_GENERATION.render(
+                name="Apple Inc",
+                ticker="AAPL",
+                aliases_so_far="",
+            )
+
+    def test_missing_aliases_so_far_raises(self) -> None:
+        """v2.0 added aliases_so_far as a required parameter."""
+        with pytest.raises(ValueError, match="aliases_so_far"):
+            ALIAS_GENERATION.render(
+                name="Apple Inc",
+                ticker="AAPL",
+                description="",
+            )
+
+    def test_version_is_v20(self) -> None:
+        assert ALIAS_GENERATION.version == "2.0"
 
 
 class TestVersions:
     def test_all_versions_are_semver(self) -> None:
-        for pt in [RELATION_SUMMARY, ENTITY_PROFILE, ALIAS_GENERATION]:
-            assert pt.version == "1.0", f"{pt.name} has unexpected version"
+        # RELATION_SUMMARY + ENTITY_PROFILE remain at v1.0; ALIAS_GENERATION
+        # bumped to v2.0 in PLAN-0057 Wave C-4.
+        assert RELATION_SUMMARY.version == "1.0"
+        assert ENTITY_PROFILE.version == "1.0"
+        assert ALIAS_GENERATION.version == "2.0"
