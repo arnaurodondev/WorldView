@@ -1310,6 +1310,12 @@ services:
   # PLAN-0057 Wave E-4 / F-MAJOR-05: drains the embedding_pending retry queue.
   # The worker class existed since 2026-02 but no entry point ever ran it, so
   # rows accumulated forever.  Standalone process per R22.
+  #
+  # Intentionally NO `ollama` dependency: deployments running with
+  # NLP_PIPELINE_EMBEDDING_PROVIDER=deepinfra (the dev/prod default) never
+  # touch Ollama, so coupling the retry queue to Ollama health would block
+  # drain whenever Ollama flakes — for no benefit.  The Ollama-fallback path
+  # gracefully degrades to "embedding_retry_failed" and re-tries with backoff.
   nlp-pipeline-embedding-retry-worker:
     build:
       context: ../..
@@ -1318,8 +1324,6 @@ services:
     depends_on:
       nlp-pipeline-migrate:
         condition: service_completed_successfully
-      ollama:
-        condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.workers.embedding_retry_worker_main"]
