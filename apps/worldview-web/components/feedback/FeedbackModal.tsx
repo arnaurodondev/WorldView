@@ -28,7 +28,7 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import {
   Sheet,
@@ -109,9 +109,23 @@ export interface FeedbackModalProps {
   onOpenChange: (open: boolean) => void;
   /** Default tab — useful when launching from "Suggest a feature" CTA. */
   defaultTab?: TabId;
+  /**
+   * Optional pre-filled description.
+   *
+   * PLAN-0052 Wave E T-E-5-08: when the modal opens via a deep link
+   * (?feedback=bug&page=X), the URL `page` value is folded into the
+   * textarea so the user doesn't have to retype context. The user can
+   * still edit / clear the text before submitting.
+   */
+  defaultDescription?: string;
 }
 
-export function FeedbackModal({ open, onOpenChange, defaultTab = "bug" }: FeedbackModalProps) {
+export function FeedbackModal({
+  open,
+  onOpenChange,
+  defaultTab = "bug",
+  defaultDescription = "",
+}: FeedbackModalProps) {
   const { user, isAuthenticated } = useAuth();
   const submitFeedback = useFeedbackSubmit();
   // WHY a separate mutation here: the "feature" tab posts to a different
@@ -121,7 +135,7 @@ export function FeedbackModal({ open, onOpenChange, defaultTab = "bug" }: Feedba
 
   // ── Form state ──────────────────────────────────────────────────────────
   const [tab, setTab] = useState<TabId>(defaultTab);
-  const [description, setDescription] = useState("");
+  const [description, setDescription] = useState(defaultDescription);
   const [severity, setSeverity] = useState<FeedbackSeverity>("medium");
   const [email, setEmail] = useState("");
   const [featureTitle, setFeatureTitle] = useState("");
@@ -131,10 +145,22 @@ export function FeedbackModal({ open, onOpenChange, defaultTab = "bug" }: Feedba
   const [includeConsole, setIncludeConsole] = useState(false);
   const { logs, clear: clearConsole } = useConsoleCapture(includeConsole);
 
+  // PLAN-0052 Wave E QA-iter1 bugs/M-2: track whether we're currently
+  // displaying the prop-supplied prefill. If `defaultDescription` changes
+  // WHILE the modal is open AND the user has typed nothing extra, we sync.
+  // If the user has started editing (description !== last-seen prefill),
+  // we DON'T overwrite their typing. The ref records the prefill we last
+  // committed to local state so the comparison is exact rather than
+  // heuristic.
+  const lastAppliedPrefillRef = useRef<{
+    tab: TabId;
+    description: string;
+  }>({ tab: defaultTab, description: defaultDescription });
+
   // Reset form when the modal closes — avoids stale state on next open.
   useEffect(() => {
     if (!open) {
-      setDescription("");
+      setDescription(defaultDescription);
       setSeverity("medium");
       setEmail("");
       setFeatureTitle("");
@@ -145,11 +171,38 @@ export function FeedbackModal({ open, onOpenChange, defaultTab = "bug" }: Feedba
       setTab(defaultTab);
       submitFeedback.reset();
       submitFeature.reset();
+      // Refresh the ref so the next open compares against the current
+      // prefill, not the last one we showed.
+      lastAppliedPrefillRef.current = {
+        tab: defaultTab,
+        description: defaultDescription,
+      };
+    } else {
+      // PLAN-0052 Wave E T-E-5-08: when the modal opens via a deep-link the
+      // parent re-renders with new defaultTab + defaultDescription values.
+      // The reset branch above only runs on close → open without re-keying,
+      // so we pull the new prefill into local state explicitly here.
+      //
+      // QA-iter1 bugs/M-2: only overwrite the user's current input if it
+      // matches what we last applied — i.e. they haven't started typing.
+      // Without this guard, a parent re-render with the same prefill (or
+      // a stale render after a deep link) would clobber in-progress text.
+      const last = lastAppliedPrefillRef.current;
+      if (description === last.description) {
+        setDescription(defaultDescription);
+      }
+      if (tab === last.tab) {
+        setTab(defaultTab);
+      }
+      lastAppliedPrefillRef.current = {
+        tab: defaultTab,
+        description: defaultDescription,
+      };
     }
     // We intentionally exclude submit* and clearConsole from deps to avoid
     // re-running this on every render — they're stable references.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, defaultTab]);
+  }, [open, defaultTab, defaultDescription]);
 
   const currentTab = TABS.find((t) => t.id === tab)!;
 
