@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from common.time import to_iso8601, utc_now  # type: ignore[import-untyped]
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
@@ -320,11 +321,35 @@ WHERE entity_id = :entity_id
                 alias_type: str,
                 source: str = "instrument_consumer",
             ) -> None:
+                # PLAN-0057 QA F-004 (DS-010 extension): mirror the
+                # IntegrityError/pgcode='23505' distinction we already use in
+                # instrument_discovered_consumer so UniqueViolation on
+                # idempotent re-delivery is silent but everything else is
+                # logged. `except Exception: pass` here would silently mask
+                # FK violations / pool exhaustion / type drift.
                 try:
                     async with session.begin_nested():
                         await alias_repo.insert(entity_id, alias_text, normalized, alias_type, source)
-                except Exception:  # noqa: S110
-                    pass  # SAVEPOINT rolled back; outer transaction remains usable
+                except IntegrityError as exc:
+                    pgcode = getattr(getattr(exc, "orig", None), "pgcode", None)
+                    if pgcode == "23505":
+                        return
+                    logger.warning(  # type: ignore[no-any-return]
+                        "alias_insert_savepoint_rolled_back",
+                        entity_id=str(entity_id),
+                        alias=alias_text,
+                        alias_type=alias_type,
+                        pgcode=pgcode,
+                        error=str(exc),
+                    )
+                except Exception as exc:
+                    logger.warning(  # type: ignore[no-any-return]
+                        "alias_insert_unexpected_error",
+                        entity_id=str(entity_id),
+                        alias=alias_text,
+                        alias_type=alias_type,
+                        error=str(exc),
+                    )
 
             normalized_name = canonical_name.lower().strip()
             # PLAN-0057 Wave D-3 (F-CRIT-12.E.3): only insert the canonical as an
@@ -520,6 +545,8 @@ WHERE entity_id = :entity_id
                     entity_id=str(entity_id),
                 )
                 continue
+            # PLAN-0057 QA F-004 (DS-010 extension): same IntegrityError /
+            # pgcode='23505' distinction as the mechanical-alias insert above.
             try:
                 async with session.begin_nested():
                     await alias_repo.insert(entity_id, alias, normalized, "LLM", "instrument_consumer")
@@ -534,8 +561,23 @@ WHERE entity_id = :entity_id
                     alias_type="LLM",
                     description_hash=description_hash,
                 )
-            except Exception:  # noqa: S110
-                pass  # SAVEPOINT rolled back; outer transaction remains usable
+            except IntegrityError as exc:
+                pgcode = getattr(getattr(exc, "orig", None), "pgcode", None)
+                if pgcode != "23505":
+                    logger.warning(  # type: ignore[no-any-return]
+                        "instrument_consumer_llm_alias_insert_failed",
+                        entity_id=str(entity_id),
+                        alias=alias,
+                        pgcode=pgcode,
+                        error=str(exc),
+                    )
+            except Exception as exc:
+                logger.warning(  # type: ignore[no-any-return]
+                    "instrument_consumer_llm_alias_insert_unexpected",
+                    entity_id=str(entity_id),
+                    alias=alias,
+                    error=str(exc),
+                )
 
     # ------------------------------------------------------------------
     # Idempotency
