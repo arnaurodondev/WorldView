@@ -6,25 +6,33 @@
  * stable order, multi-select, copy-as-TSV, CSV export, sticky header,
  * column-resize, integrated context menu. Today every table re-implements
  * a subset of these ad-hoc, with inconsistent UX. This primitive is the
- * **foundation** — new tables consume it; existing well-built tables (e.g.
+ * foundation — new tables consume it; existing well-built tables (e.g.
  * ScreenerTable) migrate opportunistically.
+ *
+ * QA-iter1 fixes (consolidated from 5 reviewers):
+ *   - Sec/QA: scoped `copy` listener to table element + skips when a real text
+ *     selection exists (no clipboard hijack).
+ *   - QA: selection-change effect depends on a stable rowSelection-key string,
+ *     not on the recomputed-each-render selectedRows array (no infinite loop).
+ *   - A11y: rowgroup wrappers, aria-rowcount/aria-rowindex, aria-colcount/colindex,
+ *     bulk-action toolbar uses role="status" + aria-live for SR announcement.
+ *   - UX: selected rows render with a 2px left-border accent (institutional
+ *     convention), inactive sort chevron only on column-header hover, bulk
+ *     toolbar reads as "tools active" (left-border) not "alert" (muted bg).
+ *   - Arch: optional controlled props (`sorting`, `rowSelection`,
+ *     `columnVisibility`) so future saved-views / URL-state lift state out
+ *     without rework. CSV/TSV utilities live in lib/format/csv-tsv.ts now.
  *
  * SCOPE FOR THIS WAVE (F-1 subset):
  *   - TanStack Table v8 + react-virtual (already a project dep).
- *   - density: compact|default|comfortable (22px / 32px / 40px row heights).
- *   - Multi-column sort: shift-click to add a secondary sort key. Sort state
- *     is controlled or uncontrolled; "stable order" is achieved by passing
- *     all sort keys to TanStack and letting it merge.
- *   - Multi-select: row checkbox column, shift-click range, header indeterminate.
- *   - Bulk action toolbar: when N>0 selected, a thin bar appears above the
- *     header with "N selected · [actions...]".
- *   - Copy-as-TSV: ⌘C on a selected range copies tab-separated values. Plain
- *     copy of any single row is also TSV.
- *   - CSV export: utility function exposed; consumers wire to a button.
- *   - Sticky header: position: sticky top-0 inside a flex column.
- *   - DataTableContextMenu: optional render-prop wrapping each row.
+ *   - density: compact|default|comfortable.
+ *   - Multi-column sort: shift-click adds secondary key.
+ *   - Multi-select + bulk-action toolbar.
+ *   - Copy-as-TSV (⌘C scoped to table), CSV export.
+ *   - Sticky header, column resize.
+ *   - DataTableContextMenu render-prop set.
  *
- * DEFERRED to follow-up wave: inline edit, group-by, sticky-footer totals,
+ * DEFERRED to follow-up wave: inline edit, group-by + sticky-footer totals,
  * saved views, frozen rows/cols, PDF/Excel exports, virtualized columns.
  */
 
@@ -54,6 +62,12 @@ import {
   ContextMenuShortcut,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { rowsToTsv, rowsToCsv, downloadCsv } from "@/lib/format/csv-tsv";
+
+// Re-export from canonical location for backwards-compat (a Wave-F downstream
+// task identified this as a layer smell; keeping the re-export so consumers
+// who already imported from `@/components/ui/data-table` keep working).
+export { rowsToTsv, rowsToCsv, downloadCsv };
 
 export type DataTableDensity = "compact" | "default" | "comfortable";
 
@@ -73,9 +87,7 @@ export interface DataTableBulkAction<TData> {
   id: string;
   label: string;
   icon?: React.ReactNode;
-  /** Called with the full set of selected rows. */
   onClick: (rows: TData[]) => void;
-  /** Mark as destructive — renders in destructive color. */
   destructive?: boolean;
 }
 
@@ -84,7 +96,6 @@ export interface DataTableContextMenuItem<TData> {
   label: string;
   shortcut?: string;
   icon?: React.ReactNode;
-  /** Called with the row that was right-clicked. */
   onClick: (row: TData) => void;
   destructive?: boolean;
   /** If returns false, item is disabled for that row. */
@@ -94,114 +105,47 @@ export interface DataTableContextMenuItem<TData> {
 }
 
 export interface DataTableProps<TData> {
-  /** Column definitions in TanStack format. Use `id` + `accessorKey` + `header` + `cell`. */
   columns: ColumnDef<TData>[];
-  /** Row data. */
   data: TData[];
   /** Stable row ID extractor — required for selection state to survive re-render. */
   getRowId: (row: TData) => string;
 
   // Display
   density?: DataTableDensity;
-  /** ARIA label for the table. */
   ariaLabel?: string;
-  /** Render when data is empty (after loading). */
   emptyMessage?: React.ReactNode;
-  /** Render skeleton rows while data loads. */
   isLoading?: boolean;
 
   // Selection
-  /** Enable row checkbox + multi-select. Default false. */
   selectable?: boolean;
-  /** Optional bulk-action set; toolbar renders when selection is non-empty. */
   bulkActions?: DataTableBulkAction<TData>[];
-  /** Notify on selection change (controlled-style; component still owns state). */
+  /** Notify on selection change. Called with currently-selected entities. */
   onSelectionChange?: (rows: TData[]) => void;
+  /** OPTIONAL controlled-mode: pass when parent owns selection state (URL state, saved views). */
+  rowSelection?: RowSelectionState;
+  onRowSelectionChange?: React.Dispatch<React.SetStateAction<RowSelectionState>>;
+
+  // Sort
+  /** OPTIONAL controlled-mode for sort state. */
+  sorting?: SortingState;
+  onSortingChange?: React.Dispatch<React.SetStateAction<SortingState>>;
+
+  // Column visibility
+  /** OPTIONAL controlled column-visibility (paired with a column-toggle menu). */
+  columnVisibility?: VisibilityState;
+  onColumnVisibilityChange?: React.Dispatch<React.SetStateAction<VisibilityState>>;
 
   // Context menu
-  /** Per-row context-menu item set; right-click opens. */
   contextMenu?: DataTableContextMenuItem<TData>[];
 
   // Row interaction
-  /** Click a row (no modifier). Useful for navigation. */
   onRowClick?: (row: TData) => void;
 
   // Misc
   className?: string;
-  /** Wrap the table area in a virtualizer. Default: true if data.length > 50. */
   virtualize?: boolean;
 }
 
-/**
- * Convert a column array of accessorKeys into a TSV header line + row line.
- * WHY no library: tiny code, exact control over quoting/escaping. CSV/TSV
- * libraries pull >50KB to do <30 lines of work.
- */
-export function rowsToTsv<TData>(rows: TData[], columns: ColumnDef<TData>[]): string {
-  const headers = columns
-    .filter((c) => c.id !== "__select__")
-    .map((c) => (typeof c.header === "string" ? c.header : (c.id ?? "")));
-  const lines = [headers.join("\t")];
-
-  for (const row of rows) {
-    const cells = columns
-      .filter((c) => c.id !== "__select__")
-      .map((c) => {
-        const accessor = (c as { accessorKey?: keyof TData }).accessorKey;
-        const v = accessor ? (row as TData)[accessor] : "";
-        // WHY toString and replace: tabs and newlines inside cells must be sanitised
-        // for TSV to remain parseable. Most spreadsheet apps tolerate spaces in cells.
-        return v == null ? "" : String(v).replace(/\t/g, " ").replace(/\n/g, " ");
-      });
-    lines.push(cells.join("\t"));
-  }
-
-  return lines.join("\n");
-}
-
-/** Convert rows to a CSV string. RFC 4180 quoting. */
-export function rowsToCsv<TData>(rows: TData[], columns: ColumnDef<TData>[]): string {
-  const escape = (v: unknown) => {
-    if (v == null) return "";
-    const s = String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const cols = columns.filter((c) => c.id !== "__select__");
-  const headers = cols.map((c) => (typeof c.header === "string" ? c.header : (c.id ?? "")));
-  const lines = [headers.map(escape).join(",")];
-  for (const row of rows) {
-    lines.push(
-      cols
-        .map((c) => {
-          const accessor = (c as { accessorKey?: keyof TData }).accessorKey;
-          return escape(accessor ? (row as TData)[accessor] : "");
-        })
-        .join(","),
-    );
-  }
-  return lines.join("\n");
-}
-
-export function downloadCsv(filename: string, csv: string) {
-  // WHY Blob + revokeObjectURL: avoids leaking memory across exports.
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-/**
- * The primitive itself.
- *
- * WHY generic <TData>: column accessors and selection callbacks are typed end-to-end.
- * The caller passes their entity type (Holding, ScreenerResult, etc.) and gets
- * full IntelliSense in the column definitions and bulk-action handlers.
- */
 export function DataTable<TData>({
   columns,
   data,
@@ -213,14 +157,18 @@ export function DataTable<TData>({
   selectable,
   bulkActions,
   onSelectionChange,
+  rowSelection: controlledRowSelection,
+  onRowSelectionChange,
+  sorting: controlledSorting,
+  onSortingChange,
+  columnVisibility: controlledColumnVisibility,
+  onColumnVisibilityChange,
   contextMenu,
   onRowClick,
   className,
   virtualize,
 }: DataTableProps<TData>) {
   // ── Selection column injection ────────────────────────────────────────────
-  // WHY inject vs caller-defined: caller would have to repeat the same checkbox
-  // boilerplate in every table. We inject once here.
   const fullColumns = React.useMemo<ColumnDef<TData>[]>(() => {
     if (!selectable) return columns;
     const selectCol: ColumnDef<TData> = {
@@ -247,7 +195,7 @@ export function DataTable<TData>({
           className="h-3 w-3 cursor-pointer accent-primary"
           checked={row.getIsSelected()}
           onChange={row.getToggleSelectedHandler()}
-          // WHY stop propagation: clicking the checkbox should NOT also fire onRowClick.
+          // Stop propagation so the row's onClick doesn't ALSO fire.
           onClick={(e) => e.stopPropagation()}
         />
       ),
@@ -255,11 +203,21 @@ export function DataTable<TData>({
     return [selectCol, ...columns];
   }, [columns, selectable]);
 
-  // ── Table state ───────────────────────────────────────────────────────────
-  const [sorting, setSorting] = React.useState<SortingState>([]);
+  // ── Internal state (used when NOT in controlled mode) ─────────────────────
+  const [internalSorting, setInternalSorting] = React.useState<SortingState>([]);
   const [columnSizing, setColumnSizing] = React.useState<ColumnSizingState>({});
-  const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
-  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
+  const [internalRowSelection, setInternalRowSelection] = React.useState<RowSelectionState>({});
+  const [internalColumnVisibility, setInternalColumnVisibility] = React.useState<VisibilityState>(
+    {},
+  );
+
+  const sorting = controlledSorting ?? internalSorting;
+  const rowSelection = controlledRowSelection ?? internalRowSelection;
+  const columnVisibility = controlledColumnVisibility ?? internalColumnVisibility;
+
+  const setSorting = onSortingChange ?? setInternalSorting;
+  const setRowSelection = onRowSelectionChange ?? setInternalRowSelection;
+  const setColumnVisibility = onColumnVisibilityChange ?? setInternalColumnVisibility;
 
   const table = useReactTable({
     data,
@@ -278,18 +236,27 @@ export function DataTable<TData>({
     getSortedRowModel: getSortedRowModel(),
   });
 
-  // Notify parent of selection changes.
-  // WHY useMemo dependency: we want stable identity so the consumer doesn't see
-  // spurious notifications when nothing changed.
-  const selectedRows = React.useMemo(
-    () => table.getSelectedRowModel().rows.map((r) => r.original),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- depends on rowSelection ref
-    [rowSelection, data],
-  );
+  // ── Selection-change notification (bug fix: stable string key) ───────────
+  // PROBLEM (QA agent finding): previously depended on `selectedRows` array
+  // identity. Every parent re-render that produced a new `data` reference
+  // caused selectedRows to be recomputed, firing onSelectionChange even when
+  // the actual selection was unchanged → infinite-loop risk.
+  // FIX: depend on a stable string key derived from rowSelection. Compute
+  // selectedRows lazily inside the effect.
+  const selectionKey = React.useMemo(() => Object.keys(rowSelection).sort().join(","), [
+    rowSelection,
+  ]);
   React.useEffect(() => {
-    onSelectionChange?.(selectedRows);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: consumer is stable
-  }, [selectedRows]);
+    if (!onSelectionChange) return;
+    const sel = table.getSelectedRowModel().rows.map((r) => r.original);
+    onSelectionChange(sel);
+    // selectionKey + table identity covers all real selection changes.
+  }, [selectionKey, table, onSelectionChange]);
+
+  // For toolbar render — recompute on every render is fine (cheap, single map).
+  const selectedRows = table.getSelectedRowModel().rows.map((r) => r.original);
+  const selectionCount = selectedRows.length;
+  const showToolbar = selectable && selectionCount > 0;
 
   // ── Virtualization ────────────────────────────────────────────────────────
   const rows = table.getRowModel().rows;
@@ -303,38 +270,47 @@ export function DataTable<TData>({
     enabled: shouldVirtualize,
   });
 
-  // ── Copy-as-TSV on ⌘C/Ctrl-C ──────────────────────────────────────────────
+  // ── Copy-as-TSV (bug fix: scoped + selection check) ─────────────────────
+  // PROBLEM (security + QA): document-level listener fired for every copy
+  // event, hijacked the clipboard whenever focus was anywhere inside the
+  // table — even when the user was selecting plain cell text to copy.
+  // FIX: attach to the table element (copy events bubble); skip when a real
+  // text Selection exists (let the browser handle it natively).
   const tableElRef = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
     const el = tableElRef.current;
     if (!el) return;
     const onCopy = (e: ClipboardEvent) => {
-      // Only copy our TSV if focus is inside the table AND we have a selection.
-      if (!el.contains(document.activeElement)) return;
-      const sel = table.getSelectedRowModel().rows.map((r) => r.original);
-      if (sel.length === 0) return;
+      // If user has a real text selection, let the native copy proceed.
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed && sel.toString().length > 0) return;
+
+      const selRows = table.getSelectedRowModel().rows.map((r) => r.original);
+      if (selRows.length === 0) return;
+
       e.preventDefault();
-      const tsv = rowsToTsv(sel, fullColumns);
+      const tsv = rowsToTsv(selRows, fullColumns);
       e.clipboardData?.setData("text/plain", tsv);
     };
-    document.addEventListener("copy", onCopy);
-    return () => document.removeEventListener("copy", onCopy);
+    el.addEventListener("copy", onCopy);
+    return () => el.removeEventListener("copy", onCopy);
   }, [table, fullColumns]);
 
-  // ── Render: bulk action toolbar ────────────────────────────────────────────
-  const selectionCount = selectedRows.length;
-  const showToolbar = selectable && selectionCount > 0;
-
-  // ── Sub-render: row ─────────────────────────────────────────────────────────
+  // ── Render: row ──────────────────────────────────────────────────────────
   function renderRow(virtualOffsetTop: number | undefined, rowIdx: number) {
     const row = rows[rowIdx];
     if (!row) return null;
     const cells = row.getVisibleCells();
+    // aria-rowindex: header is row 1, body rows start at 2.
+    const ariaRowIndex = rowIdx + 2;
+    const isSelected = row.getIsSelected();
+
     const node = (
       <div
         key={row.id}
         role="row"
-        aria-selected={row.getIsSelected()}
+        aria-rowindex={ariaRowIndex}
+        aria-selected={isSelected}
         tabIndex={0}
         onClick={() => onRowClick?.(row.original)}
         onKeyDown={(e) => {
@@ -356,13 +332,17 @@ export function DataTable<TData>({
           "flex items-center border-b border-white/[0.06] cursor-default transition-none",
           rowIdx % 2 === 0 ? "bg-white/[0.02]" : "",
           onRowClick && "cursor-pointer hover:bg-white/[0.05]",
-          row.getIsSelected() && "bg-primary/10",
+          // PRD-0031 institutional convention: selected rows get a 2px left-border
+          // accent + faint tint, NOT a heavy fill (which reads as "highlighted/warning").
+          isSelected &&
+            "bg-primary/[0.04] shadow-[inset_2px_0_0_hsl(var(--primary))]",
         )}
       >
-        {cells.map((cell) => (
+        {cells.map((cell, cellIdx) => (
           <div
             key={cell.id}
             role="cell"
+            aria-colindex={cellIdx + 1}
             className="shrink-0 truncate px-2 flex items-center"
             style={{ width: cell.column.getSize() }}
           >
@@ -417,13 +397,18 @@ export function DataTable<TData>({
       ref={tableElRef}
       role="table"
       aria-label={ariaLabel}
-      aria-rowcount={rows.length}
+      aria-rowcount={rows.length + 1 /* +1 for header */}
+      aria-colcount={fullColumns.length}
       className={cn("flex flex-col min-h-0 flex-1 overflow-hidden", TEXT_SIZE[density], className)}
     >
-      {/* ── Bulk action toolbar ──────────────────────────────────────────── */}
+      {/* ── Bulk action toolbar — role=status + aria-live for SR announcement ─ */}
       {showToolbar && (
-        <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-2 py-1">
-          <span className="text-[11px] tabular-nums text-foreground">
+        <div
+          role="region"
+          aria-label="Bulk actions"
+          className="flex items-center gap-2 border-b border-l-2 border-l-primary border-border bg-card px-2 py-1"
+        >
+          <span role="status" aria-live="polite" className="text-[11px] tabular-nums text-foreground">
             <strong>{selectionCount}</strong> selected
           </span>
           <span className="h-3 w-px bg-border" aria-hidden />
@@ -459,102 +444,114 @@ export function DataTable<TData>({
             >
               <Download className="h-3 w-3" /> CSV
             </Button>
-            <Button density="compact" variant="ghost" onClick={() => setRowSelection({})}>
+            <Button
+              density="compact"
+              variant="ghost"
+              onClick={() => setRowSelection({})}
+            >
               Clear
             </Button>
           </div>
         </div>
       )}
 
-      {/* ── Header row ───────────────────────────────────────────────────── */}
-      <div
-        role="row"
-        aria-label="Column headers"
-        className="flex h-[22px] shrink-0 items-center border-b border-border bg-card sticky top-0 z-10"
-      >
-        {table.getFlatHeaders().map((header) => {
-          const canSort = header.column.getCanSort();
-          const sorted = header.column.getIsSorted();
-          return (
-            <div
-              key={header.id}
-              role="columnheader"
-              aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : "none"}
-              className={cn(
-                "shrink-0 px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground",
-                "flex items-center justify-start",
-                canSort && "cursor-pointer select-none hover:text-foreground",
-              )}
-              style={{ width: header.getSize() }}
-              onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
-              onKeyDown={(e) => {
-                if (canSort && (e.key === "Enter" || e.key === " ")) {
-                  e.preventDefault();
-                  header.column.getToggleSortingHandler()?.(e);
+      {/* ── Header row (rowgroup wrapper for SR semantics) ─────────────── */}
+      <div role="rowgroup" className="shrink-0">
+        <div
+          role="row"
+          aria-rowindex={1}
+          className="group/header flex h-[22px] items-center border-b border-border bg-card sticky top-0 z-10"
+        >
+          {table.getFlatHeaders().map((header, headerIdx) => {
+            const canSort = header.column.getCanSort();
+            const sorted = header.column.getIsSorted();
+            return (
+              <div
+                key={header.id}
+                role="columnheader"
+                aria-colindex={headerIdx + 1}
+                aria-sort={
+                  sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : "none"
                 }
-              }}
-              tabIndex={canSort ? 0 : undefined}
-            >
-              <span className="truncate">
-                {flexRender(header.column.columnDef.header, header.getContext())}
-              </span>
-              {canSort && (
-                <span className="ml-0.5 inline-flex shrink-0">
-                  {sorted === "asc" ? (
-                    <ChevronUp className="h-2.5 w-2.5 text-primary" />
-                  ) : sorted === "desc" ? (
-                    <ChevronDown className="h-2.5 w-2.5 text-primary" />
-                  ) : (
-                    <ChevronsUpDown className="h-2.5 w-2.5 text-muted-foreground/40" />
-                  )}
+                className={cn(
+                  "shrink-0 px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground",
+                  "flex items-center justify-start",
+                  canSort && "cursor-pointer select-none hover:text-foreground",
+                )}
+                style={{ width: header.getSize() }}
+                onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
+                onKeyDown={(e) => {
+                  if (canSort && (e.key === "Enter" || e.key === " ")) {
+                    e.preventDefault();
+                    header.column.getToggleSortingHandler()?.(e);
+                  }
+                }}
+                tabIndex={canSort ? 0 : undefined}
+              >
+                <span className="truncate">
+                  {flexRender(header.column.columnDef.header, header.getContext())}
                 </span>
-              )}
-              {/* Resize handle */}
-              {header.column.getCanResize() && (
-                <span
-                  role="separator"
-                  aria-orientation="vertical"
-                  onMouseDown={header.getResizeHandler()}
-                  onTouchStart={header.getResizeHandler()}
-                  onClick={(e) => e.stopPropagation()}
-                  className="ml-auto h-3 w-1 cursor-col-resize bg-transparent hover:bg-border"
-                />
-              )}
-            </div>
-          );
-        })}
+                {canSort && (
+                  <span className="ml-0.5 inline-flex shrink-0">
+                    {sorted === "asc" ? (
+                      <ChevronUp className="h-3 w-3 text-primary" />
+                    ) : sorted === "desc" ? (
+                      <ChevronDown className="h-3 w-3 text-primary" />
+                    ) : (
+                      // Per UX agent: only show inactive chevron on column-header
+                      // hover. opacity-0 → group-hover:opacity-100 reveals.
+                      <ChevronsUpDown className="h-2.5 w-2.5 text-muted-foreground/60 opacity-0 transition-opacity group-hover/header:opacity-100" />
+                    )}
+                  </span>
+                )}
+                {header.column.getCanResize() && (
+                  <span
+                    role="separator"
+                    aria-orientation="vertical"
+                    onMouseDown={header.getResizeHandler()}
+                    onTouchStart={header.getResizeHandler()}
+                    onClick={(e) => e.stopPropagation()}
+                    className="ml-auto h-3 w-1 cursor-col-resize bg-transparent hover:bg-border"
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
-      {/* ── Body ─────────────────────────────────────────────────────────── */}
-      {isLoading ? (
-        <div className="flex-1 overflow-hidden">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div
-              key={i}
-              className="flex items-center border-b border-border/30 px-2 gap-2"
-              style={{ height: ROW_HEIGHT_PX[density] }}
-            >
-              <div className="h-2 w-10 bg-muted/40 rounded-none animate-pulse" />
-              <div className="h-2 w-32 bg-muted/40 rounded-none animate-pulse" />
-              <div className="h-2 w-20 bg-muted/30 rounded-none animate-pulse ml-auto" />
-            </div>
-          ))}
-        </div>
-      ) : rows.length === 0 ? (
-        <div className="px-2 py-2 text-[11px] text-muted-foreground">
-          {emptyMessage ?? "No results."}
-        </div>
-      ) : shouldVirtualize ? (
-        <div ref={scrollRef} className="flex-1 overflow-auto">
-          <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
-            {rowVirtualizer.getVirtualItems().map((vRow) => renderRow(vRow.start, vRow.index))}
+      {/* ── Body (rowgroup wrapper) ────────────────────────────────────── */}
+      <div role="rowgroup" className="flex-1 flex flex-col min-h-0 overflow-hidden">
+        {isLoading ? (
+          <div className="flex-1 overflow-hidden">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div
+                key={i}
+                className="flex items-center border-b border-border/30 px-2 gap-2"
+                style={{ height: ROW_HEIGHT_PX[density] }}
+              >
+                <div className="h-2 w-10 bg-muted/40 rounded-none animate-pulse" />
+                <div className="h-2 w-32 bg-muted/40 rounded-none animate-pulse" />
+                <div className="h-2 w-20 bg-muted/30 rounded-none animate-pulse ml-auto" />
+              </div>
+            ))}
           </div>
-        </div>
-      ) : (
-        <div className="flex-1 overflow-auto">
-          {rows.map((_, idx) => renderRow(undefined, idx))}
-        </div>
-      )}
+        ) : rows.length === 0 ? (
+          <div className="px-2 py-2 text-[11px] text-muted-foreground">
+            {emptyMessage ?? "No results."}
+          </div>
+        ) : shouldVirtualize ? (
+          <div ref={scrollRef} className="flex-1 overflow-auto">
+            <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
+              {rowVirtualizer.getVirtualItems().map((vRow) => renderRow(vRow.start, vRow.index))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 overflow-auto">
+            {rows.map((_, idx) => renderRow(undefined, idx))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
