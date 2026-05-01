@@ -6,8 +6,8 @@
  * so analysts can distinguish CUSIP from FIGI from ISIN at a glance.
  */
 
-import { render, screen } from "@testing-library/react";
-import { describe, it, expect } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AliasPill } from "@/components/entity/AliasPill";
 import { aliasTypeToken, sortAliasesByType } from "@/lib/alias-types";
@@ -112,5 +112,154 @@ describe("AliasPill", () => {
   it("hides the copy button when hideCopy is set", () => {
     render(<AliasPill aliasType="CUSIP" value="037833100" hideCopy />);
     expect(screen.queryByRole("button")).toBeNull();
+  });
+});
+
+// ── Copy-to-clipboard interaction tests (PLAN-0057 Wave C T-007) ─────────────
+// WHY a separate describe: these tests need fake timers + a mocked
+// `navigator.clipboard` (jsdom does not provide one by default).  Keeping the
+// fake-timer scope narrow means the rest of the file keeps using real timers.
+//
+// WHY fireEvent.click (not userEvent.click): @testing-library/user-event v14
+// uses internal timer-based delays between pointer events, and its setup() with
+// `advanceTimers: vi.advanceTimersByTime` deadlocks against vitest's fake
+// timers in this jsdom environment.  fireEvent.click is a synchronous DOM
+// dispatch — perfect for "the user clicked the copy button" semantics here.
+describe("AliasPill — copy interaction", () => {
+  // Track the original clipboard descriptor so we can restore it between tests
+  // — some tests deliberately remove `navigator.clipboard` to verify the SSR
+  // fallback path; without restore, later tests would lose the mock.
+  let originalClipboard: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    // jsdom does not implement Clipboard API — install a vi.fn() so we can
+    // assert what was written and control the resolution / rejection.
+    originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.assign(navigator, {
+      clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+    // Use fake timers so we can assert the 1500 ms icon-reset deterministically
+    // without sleeping in the test runner.
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    if (originalClipboard) {
+      Object.defineProperty(navigator, "clipboard", originalClipboard);
+    } else {
+      // If jsdom never had a clipboard descriptor, drop our injected one.
+      // The cast to `Record<string, unknown>` is necessary because TypeScript
+      // doesn't allow `delete` on `navigator.clipboard` directly.
+      delete (navigator as unknown as Record<string, unknown>).clipboard;
+    }
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * Helper that clicks the button and flushes pending promises so React
+   * commits the post-click state update.  We need a microtask flush because
+   * handleCopy is async (await navigator.clipboard.writeText) and React only
+   * schedules setCopied(true) after the awaited promise resolves.
+   */
+  async function clickAndFlush(button: HTMLElement): Promise<void> {
+    await act(async () => {
+      fireEvent.click(button);
+      // Allow the awaited writeText() promise to settle before assertions.
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("writes the value to navigator.clipboard on click", async () => {
+    render(<AliasPill aliasType="CUSIP" value="037833100" />);
+    const button = screen.getByRole("button", { name: /copy cusip value/i });
+
+    await clickAndFlush(button);
+
+    expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("037833100");
+  });
+
+  it("swaps Copy → Check icon after a successful copy", async () => {
+    // The lucide-react icons render as <svg> with a `lucide-<name>` class on
+    // the SVG element — this is the most stable selector across lucide
+    // versions (icon names are part of the public API).
+    const { container } = render(
+      <AliasPill aliasType="CUSIP" value="037833100" />,
+    );
+    // Pre-condition: the Copy icon is rendered before the user clicks.
+    expect(container.querySelector("svg.lucide-copy")).toBeInTheDocument();
+    expect(container.querySelector("svg.lucide-check")).toBeNull();
+
+    await clickAndFlush(
+      screen.getByRole("button", { name: /copy cusip value/i }),
+    );
+
+    // After a successful click the Check icon must replace Copy — that's the
+    // visual confirmation the analyst relies on.
+    expect(container.querySelector("svg.lucide-check")).toBeInTheDocument();
+    expect(container.querySelector("svg.lucide-copy")).toBeNull();
+  });
+
+  it("resets the icon back to Copy after 1500 ms", async () => {
+    const { container } = render(
+      <AliasPill aliasType="CUSIP" value="037833100" />,
+    );
+
+    await clickAndFlush(
+      screen.getByRole("button", { name: /copy cusip value/i }),
+    );
+    expect(container.querySelector("svg.lucide-check")).toBeInTheDocument();
+
+    // Advance fake timers past the 1500 ms window.setTimeout in handleCopy.
+    // act() ensures the resulting React state update is flushed before we
+    // assert on the post-timer icon.
+    await act(async () => {
+      vi.advanceTimersByTime(1500);
+    });
+
+    expect(container.querySelector("svg.lucide-copy")).toBeInTheDocument();
+    expect(container.querySelector("svg.lucide-check")).toBeNull();
+  });
+
+  it("silently no-ops when navigator.clipboard.writeText rejects", async () => {
+    // Permission-denied (HTTPS context lock-down, locked-down browsers) must
+    // not crash the component — handleCopy wraps writeText in try/catch.
+    Object.assign(navigator, {
+      clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    });
+    const { container } = render(
+      <AliasPill aliasType="CUSIP" value="037833100" />,
+    );
+
+    // The click must not throw — if the catch block were missing the awaited
+    // rejection would surface as an unhandled promise and crash the test.
+    await clickAndFlush(
+      screen.getByRole("button", { name: /copy cusip value/i }),
+    );
+
+    // setCopied(true) is only called on success — the Check icon must NOT
+    // appear when writeText rejects.
+    expect(container.querySelector("svg.lucide-check")).toBeNull();
+    expect(container.querySelector("svg.lucide-copy")).toBeInTheDocument();
+  });
+
+  it("does not throw when navigator.clipboard is undefined", async () => {
+    // Simulate environments where the Clipboard API is unavailable (very old
+    // browsers, SSR, locked-down enterprise builds).  AliasPill guards on
+    // `navigator.clipboard` so the click should be a silent no-op.
+    delete (navigator as unknown as Record<string, unknown>).clipboard;
+
+    const { container } = render(
+      <AliasPill aliasType="CUSIP" value="037833100" />,
+    );
+
+    await clickAndFlush(
+      screen.getByRole("button", { name: /copy cusip value/i }),
+    );
+
+    expect(container.querySelector("svg.lucide-check")).toBeNull();
+    expect(container.querySelector("svg.lucide-copy")).toBeInTheDocument();
   });
 });

@@ -69,7 +69,7 @@ interface EdgeTooltip {
 // We need one because sigma.js attempts WebGL context creation, which throws
 // in unsupported browsers (old Safari, Firefox with hardware acceleration off).
 
-class GraphErrorBoundary extends React.Component<
+export class GraphErrorBoundary extends React.Component<
   { children: React.ReactNode },
   { hasError: boolean }
 > {
