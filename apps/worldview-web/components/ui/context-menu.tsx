@@ -111,7 +111,7 @@ const ContextMenuCheckboxItem = React.forwardRef<
   <ContextMenuPrimitive.CheckboxItem
     ref={ref}
     className={cn(
-      "relative flex cursor-default select-none items-center rounded-[2px] py-1 pl-6 pr-2 text-[11px] outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-60",
+      "relative flex cursor-default select-none items-center rounded-[2px] py-1 pl-6 pr-2 text-[11px] outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:text-[hsl(var(--disabled-foreground))]",
       className,
     )}
     checked={checked}
@@ -134,7 +134,7 @@ const ContextMenuRadioItem = React.forwardRef<
   <ContextMenuPrimitive.RadioItem
     ref={ref}
     className={cn(
-      "relative flex cursor-default select-none items-center rounded-[2px] py-1 pl-6 pr-2 text-[11px] outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-60",
+      "relative flex cursor-default select-none items-center rounded-[2px] py-1 pl-6 pr-2 text-[11px] outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:text-[hsl(var(--disabled-foreground))]",
       className,
     )}
     {...props}

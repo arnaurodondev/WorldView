@@ -132,9 +132,27 @@ describe("parseShorthand", () => {
     it("trims whitespace", () => {
       expect(parseShorthand("  $1.5m  ")).toBe(1_500_000);
     });
+    it("-$100 → -100 (sign before currency)", () => {
+      expect(parseShorthand("-$100")).toBe(-100);
+    });
+    it("$-100 → -100 (currency before sign)", () => {
+      expect(parseShorthand("$-100")).toBe(-100);
+    });
     it("returns null for ambiguous garbage", () => {
       expect(parseShorthand("$$$")).toBeNull();
       expect(parseShorthand("1m2b")).toBeNull(); // "1m2" not parseable
+    });
+  });
+
+  describe("scientific notation (round-trip safety)", () => {
+    it("accepts 1e-7", () => {
+      expect(parseShorthand("1e-7")).toBeCloseTo(1e-7);
+    });
+    it("accepts 1.5e10", () => {
+      expect(parseShorthand("1.5e10")).toBe(1.5e10);
+    });
+    it("accepts -2.3E+5", () => {
+      expect(parseShorthand("-2.3E+5")).toBe(-2.3e5);
     });
   });
 });

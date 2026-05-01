@@ -65,9 +65,13 @@ const SI_MULTIPLIERS: Record<string, number> = {
  * STRICT_NUMBER — guard against `parseFloat`'s greedy leniency. `parseFloat("1m2")`
  * returns 1 (parses prefix, ignores garbage). For shorthand, "1m2b" is ambiguous
  * garbage, not "1B". Apply this regex to the numeric portion before `parseFloat`
- * to reject any tail beyond a clean signed decimal.
+ * to reject any tail beyond a clean signed decimal (with optional exponent).
+ *
+ * Supports: "100", "1.5", "-2.3", ".5", "-0.5", "1e10", "1.5e-7", "-1E+3".
+ * Scientific notation lets very small floats round-trip cleanly through
+ * NumberInput (parent value 1e-7 → display "1e-7" → parse back to 1e-7).
  */
-const STRICT_NUMBER = /^-?\d+(\.\d+)?$|^-?\.\d+$/;
+const STRICT_NUMBER = /^-?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/;
 
 function strictParseFloat(s: string): number | null {
   if (!STRICT_NUMBER.test(s)) return null;
@@ -113,11 +117,12 @@ export function parseShorthand(
     s = s.slice(1, -1).trim();
   }
 
-  // Step 3: strip currency symbols (single leading char).
-  // WHY include ₿: crypto-currency support per multi-currency formatters in lib/format.ts.
+  // Step 3: strip currency symbols (single leading char). Run TWICE bracketing
+  // sign-strip so inputs like "-$100" (sign before currency) AND "$-100"
+  // (currency before sign — rare but seen in pasted Excel data) both work.
   s = s.replace(/^[$€£¥₹₿]/u, "");
 
-  // Allow leading +/- sign after currency strip.
+  // Allow leading +/- sign after first currency strip.
   let signMul = 1;
   if (s.startsWith("+")) {
     s = s.slice(1);
@@ -125,6 +130,10 @@ export function parseShorthand(
     signMul = -1;
     s = s.slice(1);
   }
+
+  // Strip currency symbol AGAIN — handles "-$100" where the dollar arrived
+  // after sign-strip. Cheap and idempotent if no currency present.
+  s = s.replace(/^[$€£¥₹₿]/u, "");
 
   // Step 4: strip thousands separators (commas, spaces, NBSP, narrow-no-break, apostrophe).
   // WHY include narrow-no-break (U+202F) and NBSP (U+00A0): used as thousands separator
@@ -176,6 +185,8 @@ export function parseShorthand(
  * compact representation when the value is large enough.
  *
  * For values < 1000, returns the raw number. Beyond that, returns SI shorthand.
+ * Scientific-notation-safe: very small values (e.g. 1e-7) display as "1e-7"
+ * which the parser accepts back losslessly.
  */
 export function formatShorthand(value: number | null | undefined, decimals = 2): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "";
@@ -186,5 +197,7 @@ export function formatShorthand(value: number | null | undefined, decimals = 2):
   if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(decimals).replace(/\.?0+$/, "")}B`;
   if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(decimals).replace(/\.?0+$/, "")}M`;
   if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(decimals).replace(/\.?0+$/, "")}K`;
+  // String(value) handles very-small floats correctly: 1e-7 → "1e-7" (not lossy).
+  // The parser's STRICT_NUMBER regex accepts the scientific form on round-trip.
   return String(value);
 }

@@ -95,12 +95,25 @@ function T1Button({ tier: _tier, onConfirm, children, className, ...rest }: T1Pr
   void _tier;
   const [armed, setArmed] = React.useState(false);
   const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // mountedRef guards against `setArmed(false)` after the parent removes the
+  // button mid-armed-window (e.g. parent navigates away, list re-renders).
+  // Without this, React 19 logs "state update on unmounted component" in dev.
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
 
   // WHY 4-second armed window: long enough to be deliberate, short enough to
   // prevent accidental confirmation if user wanders off and clicks back later.
   React.useEffect(() => {
     if (armed) {
-      timerRef.current = setTimeout(() => setArmed(false), 4000);
+      timerRef.current = setTimeout(() => {
+        if (mountedRef.current) setArmed(false);
+      }, 4000);
       return () => {
         if (timerRef.current) clearTimeout(timerRef.current);
       };
@@ -120,6 +133,8 @@ function T1Button({ tier: _tier, onConfirm, children, className, ...rest }: T1Pr
         setArmed(false);
         void onConfirm();
       }}
+      // SR live announcement when the label flips to "Confirm?".
+      aria-live="polite"
       {...rest}
     >
       {armed ? "Confirm?" : children}
@@ -187,7 +202,11 @@ function T3Button({
   void _tier;
   const [open, setOpen] = React.useState(false);
   const [typed, setTyped] = React.useState("");
-  const matches = typed.trim() === typeToConfirm.trim();
+  // WHY .normalize("NFC"): pre-composed vs decomposed Unicode (e.g. "Café"
+  // typed via macOS IME could arrive as decomposed code points) would
+  // otherwise fail an exact compare frustrating legitimate users. Strict
+  // case-sensitivity is preserved. No bypass risk — strictly stricter.
+  const matches = typed.normalize("NFC").trim() === typeToConfirm.normalize("NFC").trim();
 
   // Reset typed value when the dialog closes so the next open starts fresh.
   React.useEffect(() => {
@@ -227,7 +246,12 @@ function T3Button({
             onChange={(e) => setTyped(e.target.value)}
             placeholder={typeToConfirm}
             aria-label="Type to confirm"
+            aria-describedby="t3-match-status"
           />
+          {/* SR live announcement when match state flips */}
+          <span id="t3-match-status" role="status" aria-live="polite" className="sr-only">
+            {matches ? "Confirmation matches — destructive action enabled." : ""}
+          </span>
         </div>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>

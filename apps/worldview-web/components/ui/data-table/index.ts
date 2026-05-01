@@ -1,17 +1,20 @@
 /**
  * components/ui/data-table — Universal DataTable primitive surface.
  *
- * Re-exports the DataTable component plus its TSV/CSV utility helpers
- * so consumers can import everything from a single path.
+ * The TSV/CSV utility helpers have moved to lib/format/csv-tsv.ts (canonical
+ * location for serialisation primitives) — this index keeps the legacy
+ * re-export so existing imports `from "@/components/ui/data-table"` keep
+ * working. New code should import the format helpers directly from
+ * `@/lib/format/csv-tsv`.
  */
 
 export {
   DataTable,
-  rowsToTsv,
-  rowsToCsv,
-  downloadCsv,
   type DataTableProps,
   type DataTableDensity,
   type DataTableBulkAction,
   type DataTableContextMenuItem,
 } from "./data-table";
+
+// Backwards-compat re-exports — prefer @/lib/format/csv-tsv for new imports.
+export { rowsToTsv, rowsToCsv, downloadCsv } from "@/lib/format/csv-tsv";
