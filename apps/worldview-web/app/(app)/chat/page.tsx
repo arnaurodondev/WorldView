@@ -60,7 +60,7 @@ import {
   useState,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Bot,
   Download,
@@ -528,6 +528,8 @@ export default function ChatPage() {
 
   // ── Entity context from URL param ─────────────────────────────────────────
   const searchParams = useSearchParams();
+  // PLAN-0052 platform-QA round 5: router for the 401 re-auth CTA below.
+  const router = useRouter();
   const entityIdFromUrl = searchParams.get("entity_id");
 
   // QA-iter1 MAJ-5: ?entity_id= carries a UUID, not a ticker. The earlier
@@ -1052,8 +1054,45 @@ export default function ChatPage() {
             )}
 
             {threadsError && !threadsLoading && (
+              // PLAN-0052 platform-QA round 5 (2026-05-01): better thread-list
+              // error UX. The previous banner just said "Failed to load
+              // threads, check your connection" which was misleading the most
+              // common cause was a 401 from a lapsed JWT (no auto-refresh).
+              // Detect 401 specifically and surface a Re-authenticate CTA;
+              // for everything else fall back to the generic message + Retry.
               <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-                Failed to load threads. Check your connection.
+                {(() => {
+                  const msg = (threadsError as Error)?.message ?? "";
+                  const is401 =
+                    msg.includes("401") ||
+                    msg.toLowerCase().includes("unauthor");
+                  return is401 ? (
+                    <>
+                      <p className="font-medium">Your session expired.</p>
+                      <p className="mt-1">
+                        Sign in again to load your conversations.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => router.push("/login?redirect_to=/chat")}
+                        className="mt-2 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20"
+                      >
+                        Sign in
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <p>Failed to load threads. Check your connection.</p>
+                      <button
+                        type="button"
+                        onClick={() => void refetchThreads()}
+                        className="mt-2 rounded-[2px] border border-destructive/40 px-2 py-1 text-[11px] font-medium hover:bg-destructive/20"
+                      >
+                        Retry
+                      </button>
+                    </>
+                  );
+                })()}
               </div>
             )}
 
