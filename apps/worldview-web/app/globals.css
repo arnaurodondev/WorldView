@@ -408,6 +408,28 @@ html {
   }
 }
 
+/* ── 3.b. Density data-attribute — PLAN-0059 I-4 ─────────────────────
+     PreferencesProvider sets `data-density` on <body> from the user's
+     preference. These rules let global surfaces respond — but components
+     that already opt in via cva density variants (Button, Input,
+     DataTable) remain consumer-controlled. */
+[data-density="comfortable"] body,
+body[data-density="comfortable"] {
+  /* Slight font-size bump for marketing surfaces / long-form pages */
+  font-size: 14px;
+}
+body[data-density="comfortable"] .text-\[11px\] {
+  font-size: 12px;
+}
+body[data-density="default"] {
+  /* No overrides — matches the legacy app shape. */
+}
+body[data-density="compact"] {
+  /* Compact is the institutional default and matches the existing
+     22px-row token system. No overrides needed today; reserved for
+     future component-class scoping. */
+}
+
 /* ── 4. Print stylesheet — light theme on paper ─────────────────────── */
 @media print {
   :root, .dark {

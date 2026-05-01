@@ -238,6 +238,13 @@ export default function AppLayout({ children }: AppLayoutProps) {
     // every consumer via usePreferences(). Mounted at the layout level so all
     // (app)/* pages share the same instance. Persists to localStorage today;
     // S1 backend persistence is a deferred follow-up.
+    //
+    // QA-iter1: this provider must mount INSIDE ApiClientProvider once the
+    // backend swap lands. ApiClientProvider currently lives in
+    // `app/providers.tsx` (root layout), an ancestor of this (app)/layout —
+    // the layering is satisfied today by accident. When converting to API
+    // persistence, keep this mount but document the dependency so a future
+    // refactor doesn't relocate ApiClientProvider below us.
     <PreferencesProvider>
     <HotkeyProvider>
       {/* GlobalHotkeyBindings has no DOM output — registers global chords
