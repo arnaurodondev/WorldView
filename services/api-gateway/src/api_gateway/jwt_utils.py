@@ -19,6 +19,7 @@ from common.time import utc_now  # type: ignore[import-untyped]
 _ISSUER = "worldview-gateway"
 _USER_TTL = 300  # 5 minutes
 _SYSTEM_TTL = 60  # 1 minute
+_SERVICE_TTL = 300  # 5 minutes — service-account JWTs minted by /internal/v1/service-token
 _PUBLIC_TTL = 60  # 1 minute — short-lived JWT for public proxy routes
 _WS_TTL = 30  # 30 seconds — short-lived for WebSocket URL token exposure
 
@@ -74,6 +75,45 @@ def issue_system_jwt(
         "jti": str(new_uuid7()),
         "iat": iat,
         "exp": iat + _SYSTEM_TTL,
+        "kid": kid,
+    }
+    return jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid})  # type: ignore[no-any-return]
+
+
+def issue_service_jwt(
+    service_name: str,
+    private_key: RSAPrivateKey,
+    kid: str,
+    *,
+    ttl_seconds: int = _SERVICE_TTL,
+) -> str:
+    """Issue a service-account RS256 internal JWT (default TTL 5 min).
+
+    PLAN-0057 Wave A-1 / BP-303: replaces the worker → ``POST /v1/auth/dev-login``
+    bootstrap path that fails in production (dev-login is hard-blocked when
+    ``app_env == 'production'``). Background workers authenticate to S9 with a
+    shared service-account secret and receive an RS256 JWT that other backends
+    verify against the gateway JWKS exactly the same way they verify a user
+    token — preserving the PRD-0025 invariant that S9 is the only signer.
+
+    The minted JWT carries:
+      - ``sub = "service:<service_name>"`` so downstream logs surface the caller
+      - ``tenant_id = "system"``           — system-scope, never a real tenant
+      - ``role = "system"``                — backends recognise as system traffic
+      - ``oidc_sub = "service:<service_name>"`` for log continuity with user JWTs
+    """
+    iat = int(utc_now().timestamp())
+    sub_value = f"service:{service_name}"
+    payload = {
+        "iss": _ISSUER,
+        "sub": sub_value,
+        "tenant_id": "system",
+        "oidc_sub": sub_value,
+        "role": "system",
+        "service_name": service_name,
+        "jti": str(new_uuid7()),
+        "iat": iat,
+        "exp": iat + ttl_seconds,
         "kid": kid,
     }
     return jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid})  # type: ignore[no-any-return]
