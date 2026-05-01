@@ -1171,8 +1171,8 @@ Prod: cap at $200/mo, key from sealed secret.
 ### 11.2 DB migrations (ordered)
 1. `intelligence-migrations/0009_alias_unique_per_entity` (A-2)
 2. `intelligence-migrations/0010_seed_canonicals_bootstrap` (A-3)
-3. `nlp-pipeline/0012_add_processing_path_to_routing_decisions` (A-1)
-4. `nlp-pipeline/0013_add_embedding_pending_last_attempted` (E-4)
+3. `nlp-pipeline/0015_add_processing_path_to_routing_decisions` (A-1) — bumped from `0013` because PLAN-0055 LLM-provenance migrations took 0012-0014.
+4. `nlp-pipeline/0016_add_last_attempted_at_to_embedding_pending` (E-4) — bumped from `0013` for the same reason.
 
 ### 11.3 New Kafka topics
 - D-2 (CHECKPOINT-A only): `market.instrument.discovered.v1`

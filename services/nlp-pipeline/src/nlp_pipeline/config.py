@@ -91,6 +91,12 @@ class Settings(BaseSettings):
     # Jina AI config (used when embedding_provider="jina")
     jina_api_key: str = ""  # NLP_PIPELINE_JINA_API_KEY
 
+    # PLAN-0057 QA A-005: tunable retry ceiling for the embedding-retry worker.
+    # Was hard-coded to 5 in three places (worker module, repo defaults). Now
+    # operator-tunable via NLP_PIPELINE_EMBEDDING_RETRY_MAX_ATTEMPTS so a high
+    # error-rate from DeepInfra can be tolerated without a code change.
+    embedding_retry_max_attempts: int = 5
+
     # Deep extraction via external API (DeepInfra / OpenAI-compatible)
     # When extraction_api_key is set, DeepSeekExtractionAdapter is used instead of OllamaExtractionAdapter.
     # qwen2.5:7b-instruct is not available locally (too large for CPU); DeepInfra hosts it at $0.03/M tokens.
