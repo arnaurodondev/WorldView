@@ -120,6 +120,37 @@ class TestChunkSection:
             words1 = set(chunks[1].text.split())
             assert words0 & words1, "Overlap expected between consecutive chunks"
 
+    def test_oversize_sentence_with_overlap_does_not_hang(self) -> None:
+        """BP-302 regression: a single sentence longer than max_tokens
+        following a non-empty overlap window must NOT hang the loop.
+
+        Before the fix, the inner break exited without incrementing `i`,
+        the outer loop rebuilt the same overlap, and `i` never advanced.
+        Empirically this hung worldview-nlp-pipeline-article-consumer-1
+        on real news articles containing un-punctuated pull-quotes >512
+        words. Test with `max_tokens=10` and a 50-word un-punctuated
+        sentence sandwiched between short ones to trigger the exact
+        race: the first short sentence carries over as overlap, the
+        oversize sentence on its own exceeds max_tokens, the inner
+        break fires, and the liveness guard must drop the overlap and
+        force `i` to advance on the next outer iteration.
+
+        The assertion is implicit: this test must RETURN within a
+        reasonable wall-clock window. pytest's collection timeout will
+        kill it if the loop hangs.
+        """
+        oversize = " ".join(["x"] * 50)  # 50 "words", no `.!?`
+        text = f"Short start here. {oversize} Short end here."
+        section = _make_section(text)
+        chunks = chunk_section(section, max_tokens=10, overlap_tokens=3)
+        # Must produce >= 2 chunks (start + oversize + tail) without hanging
+        assert len(chunks) >= 2
+        # Every input word should appear in at least one chunk (no data loss).
+        all_chunk_text = " ".join(c.text for c in chunks)
+        assert "Short start here" in all_chunk_text
+        assert "Short end here" in all_chunk_text
+        assert "x x x" in all_chunk_text  # the oversize sentence content
+
     def test_empty_section_returns_empty(self) -> None:
         section = _make_section("")
         chunks = chunk_section(section)

@@ -97,20 +97,49 @@ def chunk_section(
         current_sentences: list[str] = list(overlap_sentences)
         current_tokens = sum(_word_count(s) for s in current_sentences)
 
+        # PLAN-0052 platform-QA fix (2026-05-01): track whether we consumed
+        # at least one new sentence in this outer iteration. Required to
+        # close BP-302 (silent infinite loop): when the next sentence
+        # alone exceeds `max_tokens` AND `overlap_sentences` already filled
+        # `current_sentences`, the inner `break` fires WITHOUT incrementing
+        # `i`, the outer loop rebuilds the same overlap, and we spin
+        # forever — the consumer hangs, no offset committed, every
+        # re-delivery hits the same poison message. Confirmed via py-spy
+        # against `worldview-nlp-pipeline-article-consumer-1`. Articles up
+        # to 8 187 words are common; news HTML routinely contains a single
+        # un-punctuated pull-quote / list / caption longer than the 512-
+        # word `CHUNK_MAX_TOKENS` budget, which is what the existing
+        # sentence splitter (`[.!?]\s+`) leaves as one "sentence".
+        #
         # Add sentences until we would exceed max_tokens
+        progress_made = False
         while i < len(sentences):
             s_tokens = _word_count(sentences[i])
             if current_tokens + s_tokens > max_tokens and current_sentences:
-                # Would overflow — flush
+                # Would overflow — flush carry-over now.
                 break
             current_sentences.append(sentences[i])
             current_tokens += s_tokens
             i += 1
+            progress_made = True
 
         if not current_sentences:
             # Single sentence that alone exceeds max_tokens — emit as-is
             current_sentences = [sentences[i]]
             i += 1
+            progress_made = True
+
+        # Liveness guard (BP-302): if we exited the inner loop having
+        # consumed NO new sentence (overlap alone filled the budget AND
+        # the next sentence is oversize), drop the overlap and restart
+        # the outer iteration so the oversize sentence is taken alone on
+        # the next pass. Without this, `i` never advances. We do NOT
+        # emit a chunk in this iteration — the carry-over already lives
+        # in the previous chunk we emitted, so re-emitting it would
+        # produce a duplicate.
+        if not progress_made:
+            overlap_sentences = []
+            continue
 
         chunk_text = " ".join(current_sentences)
 
