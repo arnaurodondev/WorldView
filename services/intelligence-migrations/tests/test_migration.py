@@ -956,9 +956,7 @@ def test_migration_0011_alias_norm_stage2_index_exists(conn: sa.engine.Connectio
     pre-migration state (same name, same columns, same partial predicate)
     so the planner keeps using it.
     """
-    result = conn.execute(
-        text("SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_entity_aliases_norm_stage2'")
-    )
+    result = conn.execute(text("SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_entity_aliases_norm_stage2'"))
     row = result.scalar_one_or_none()
     assert row is not None, "idx_entity_aliases_norm_stage2 missing — migration 0011 did not leave it in place"
     # Sanity-check: same shape as 0010/0011 definition.

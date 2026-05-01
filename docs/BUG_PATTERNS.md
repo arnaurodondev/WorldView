@@ -8065,10 +8065,19 @@ Ensure consuming code handles `undefined` gracefully (error message, disabled UI
 **Root Cause**:
 Worker authentication assumes the dev-login flow is always available. Production correctly disables it (it's a developer tool), but no production-equivalent path was wired so the fallback "unauthenticated request" path silently masks the gap.
 
-**Fix options** (none shipped yet — TODO):
+**Fix options** (Option 3 shipped):
 1. Provision a per-service-account credential and let workers obtain a token via a new gateway endpoint (best — preserves the "S9 signs / others verify" model).
 2. Mint a service JWT directly in the worker using the gateway's RSA private key (requires distributing the key — increases blast radius if compromised).
 3. Add a `/internal/v1/service-token` endpoint protected by a shared service-account secret rotated via Kubernetes secrets.
+
+**Resolution** (PLAN-0057 follow-up Wave A-1, 2026-05-01 — feat(wave-a-prod-hardening)):
+
+Option 3 shipped. The implementation:
+- New endpoint `POST /internal/v1/service-token` on S9 (`services/api-gateway/src/api_gateway/routes/internal.py`). Authenticates via shared `API_GATEWAY_SERVICE_ACCOUNT_TOKEN` secret + an explicit allow-list of service identities (`_ALLOWED_SERVICE_NAMES`), constant-time comparison via `secrets.compare_digest`. Issues a 5-minute RS256 JWT with `sub="service:<name>"`, `tenant_id="system"`, `role="system"`. The endpoint is intentionally **not** guarded by `app_env=="production"` — the shared secret IS the auth boundary.
+- New helper `issue_service_jwt` in `services/api-gateway/src/api_gateway/jwt_utils.py`.
+- `MarketDataClient` (`services/nlp-pipeline/src/nlp_pipeline/infrastructure/http/market_data_client.py`) gained `service_account_token` and `service_name` constructor args. When the secret is set it calls the new endpoint; when unset it falls back to `POST /v1/auth/dev-login` for local-dev convenience. A 401 from the service-token endpoint does NOT cascade to dev-login (operators expect the new path to be authoritative).
+- Worker entrypoint `services/nlp-pipeline/src/nlp_pipeline/workers/price_impact_labelling_worker.py` reads `settings.service_account_token` and passes it through.
+- Settings + env-var documentation: `API_GATEWAY_SERVICE_ACCOUNT_TOKEN` (S9 side) and `NLP_PIPELINE_SERVICE_ACCOUNT_TOKEN` (worker side); both empty by default to keep dev workflows on dev-login.
 
 **Prevention**:
 - Any worker that calls a guarded internal service must be reviewed for "what happens in prod when dev-login is disabled?" before merging.
