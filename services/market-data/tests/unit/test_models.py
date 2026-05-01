@@ -273,6 +273,21 @@ class TestInfrastructureModels:
         # Legacy column name must NOT exist
         assert "leased_until" not in cols
 
+    def test_outbox_event_has_partition_key(self):
+        """PLAN-0057-followup Wave B (F-DATA-06): outbox_events must expose
+        a nullable ``partition_key`` column so the dispatcher can forward
+        the optional Kafka partition key to ``producer.produce(key=...)``.
+
+        The column is nullable so events with no ordering invariant (legacy
+        rows) continue to dispatch via Kafka's round-robin partitioner.
+        """
+        table = _table(OutboxEventModel)
+        cols = _columns(OutboxEventModel)
+        assert "partition_key" in cols
+        # Must be nullable — NULL = round-robin (legacy behaviour).
+        partition_col = table.c["partition_key"]
+        assert partition_col.nullable is True
+
 
 class TestPredictionMarketModels:
     """DDL alignment tests for prediction market tables (PRD-0019, BP-019)."""

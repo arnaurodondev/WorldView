@@ -511,6 +511,79 @@ New services implementing the outbox pattern MUST follow these rules:
 
 **R-OUTBOX-5: ID type** — Outbox event IDs MUST use UUIDv7 (`common.ids.new_uuid7()`).
 
+### 3.10 Outbox `partition_key` pattern (PLAN-0057-followup)
+
+**Why per-entity ordering matters.** Kafka guarantees ordering only within a single
+partition. Without a producer key, librdkafka's sticky/round-robin partitioner spreads
+messages across partitions arbitrarily — fine for events with no ordering invariant
+(e.g., independent dataset arrivals), but **broken** for events that mutate the same
+aggregate. Concrete example: two `market.instrument.created` events for the same
+`instrument_id` can land on different partitions and reach the S7 KG consumer
+out-of-order, overwriting the enriched canonical with an earlier placeholder. This was
+audit finding **F-DATA-06** (`docs/audits/2026-05-01-investigation-plan-0057-open-items.md`
+§2.2).
+
+**The fix.** `OutboxRecordProtocol` exposes `partition_key: str | None` and
+`BaseOutboxDispatcher` forwards it to `producer.produce(key=partition_key.encode("utf-8"))`.
+NULL/None means round-robin (unchanged legacy behaviour); a non-empty string pins all
+events with that key to the same Kafka partition.
+
+**Three-step migration pattern (per producing service).** Adopt incrementally — only
+services that emit ordered-by-aggregate events need it. Pilot example: market-data Wave B
+(this PRD).
+
+1. **Alembic — add the column** (forward-compatible per R11 / R5; nullable, no default):
+
+   ```python
+   def upgrade() -> None:
+       op.execute(
+           "ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS partition_key TEXT"
+       )
+   ```
+
+2. **Repo + ORM — accept and persist the kwarg:**
+
+   ```python
+   # ORM model
+   partition_key: Mapped[str | None] = mapped_column(String, nullable=True)
+
+   # Repository.create — keyword arg, defaults to None
+   async def create(
+       self, event_type: str, topic: str, payload: dict, partition_key: str | None = None
+   ) -> str:
+       ...
+       insert(OutboxEventModel).values(..., partition_key=partition_key)
+   ```
+
+3. **Producer call sites — pass the aggregate id when ordering matters:**
+
+   ```python
+   # Pin all events for the same instrument to the same partition.
+   await uow.outbox_events.create(
+       event_type=event.event_type,
+       topic=topic,
+       payload=event_to_outbox_payload(event),
+       partition_key=str(instrument.id),
+   )
+   ```
+
+**When NOT to set `partition_key`.** Events without ordering invariants (e.g.,
+`market.dataset.fetched`, content-ingestion `content.article.raw.v1`) should leave it
+NULL — Kafka's sticky/round-robin partitioner gives better load balancing than a
+single-key hot spot. Empty-string keys are coerced to None by the dispatcher to prevent
+accidental hot spots.
+
+**Backwards compatibility.** Records that pre-date the protocol change keep working —
+`BaseOutboxDispatcher` reads via `getattr(record, "partition_key", None)`, so legacy
+outbox row types that don't declare the column dispatch with `key=None`.
+
+**Reference implementation.** `services/market-data` (PLAN-0057-followup Wave B):
+- Migration `services/market-data/alembic/versions/014_add_partition_key_to_outbox.py`
+- ORM `services/market-data/src/market_data/infrastructure/db/models/infrastructure.py`
+- Repo `services/market-data/src/market_data/infrastructure/db/repositories/outbox_event_repo.py`
+- Producers: `ohlcv_consumer.py`, `quotes_consumer.py`, `fundamentals_consumer.py` —
+  each pins instrument-scoped events with `partition_key=str(instrument.id)`.
+
 ### 3.9 Kafka Consumer Standard (R20)
 
 Every Kafka consumer in a service **must** extend `BaseKafkaConsumer` from

@@ -87,6 +87,12 @@ class OutboxEventModel(Base):
 
     Column fix vs legacy: renamed ``leased_until`` → ``lease_expires_at``,
     added ``claimed_by``, ``claimed_at``, ``dispatched_at``.
+
+    PLAN-0057-followup Wave B (F-DATA-06): added ``partition_key`` to carry
+    the optional Kafka partition key forward into the dispatcher. NULL =
+    legacy semantic (round-robin partitioning); see migration 014 and
+    ``libs/messaging`` ``OutboxRecordProtocol.partition_key`` docstring for
+    details.
     """
 
     __tablename__ = "outbox_events"
@@ -106,3 +112,8 @@ class OutboxEventModel(Base):
     attempts: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    # F-DATA-06: optional Kafka partition key for per-aggregate ordering.
+    # NULL → dispatcher passes ``key=None`` (Kafka round-robin), preserving
+    # legacy behaviour. Producers opt in by passing ``partition_key=`` to
+    # ``OutboxEventRepository.create``.
+    partition_key: Mapped[str | None] = mapped_column(String, nullable=True)

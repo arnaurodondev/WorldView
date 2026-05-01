@@ -28,7 +28,13 @@ class PgOutboxEventRepository(OutboxEventRepository):
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def create(self, event_type: str, topic: str, payload: dict) -> str:
+    async def create(
+        self,
+        event_type: str,
+        topic: str,
+        payload: dict,
+        partition_key: str | None = None,
+    ) -> str:
         record_id = new_uuid7_str()
         await self._session.execute(
             insert(OutboxEventModel).values(
@@ -37,6 +43,9 @@ class PgOutboxEventRepository(OutboxEventRepository):
                 topic=topic,
                 payload=payload,
                 status="pending",
+                # F-DATA-06: persist the optional Kafka partition key so the
+                # dispatcher can forward it to ``producer.produce(key=...)``.
+                partition_key=partition_key,
             )
         )
         return record_id
