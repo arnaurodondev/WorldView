@@ -338,14 +338,33 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             )
 
         user = getattr(request.state, "user", None)
+        path = str(request.url.path)
+        # PLAN-0052 platform-QA fix (2026-05-01): bucket public-feedback +
+        # public-roadmap surfaces under a separate, more generous IP-keyed
+        # bucket. The default 20/min/IP cap meant a single noisy NAT (dev
+        # tab opening /feedback + a docs micro-survey + a few feature votes)
+        # would 429-lock every other unauth visitor on the same IP. The
+        # public surfaces are intentionally read-mostly and idempotent;
+        # 120/min is roughly "1 vote + 1 list refresh per second" sustained.
+        # Shape: the prefix match keeps the rule trivial — feedback features
+        # listing, voting, and the docs micro-survey POST all live under
+        # /v1/feedback/.
+        is_public_feedback = path.startswith("/v1/feedback/")
         if user and user.get("user_id"):
             key = f"rl:v1:user:{user['user_id']}"
             limit = self.max_requests
         else:
             ip = request.client.host if request.client else "unknown"
             ip_hash = hashlib.sha256(ip.encode()).hexdigest()[:16]
-            key = f"rl:v1:ip:{ip_hash}"
-            limit = 20  # stricter limit for unauthenticated
+            if is_public_feedback:
+                # Separate bucket so the feedback-surface activity does not
+                # eat the global 20/min budget for the same IP. Different
+                # key prefix ensures the two counters don't collide.
+                key = f"rl:v1:ip-fb:{ip_hash}"
+                limit = 120
+            else:
+                key = f"rl:v1:ip:{ip_hash}"
+                limit = 20  # stricter limit for unauthenticated
 
         try:
             current = await valkey.incr(key)
@@ -355,10 +374,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # remaining time is still within the window.
             await valkey.expire(key, self.window_seconds)
             if current > limit:
+                # PLAN-0052 platform-QA fix: include Retry-After header so
+                # clients (and the user) know when to retry. We use the
+                # window length as a conservative upper bound — the actual
+                # remaining time is window_seconds minus elapsed-in-window,
+                # but Valkey doesn't surface the elapsed cheaply enough to
+                # justify the extra round-trip per 429.
                 return Response(
                     content='{"detail":"Rate limit exceeded"}',
                     status_code=429,
                     media_type="application/json",
+                    headers={
+                        "Retry-After": str(self.window_seconds),
+                        "X-RateLimit-Limit": str(limit),
+                        "X-RateLimit-Remaining": "0",
+                    },
                 )
         except Exception:
             # D-001: Fail-closed — Valkey operation failure returns 503.
