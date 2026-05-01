@@ -74,6 +74,15 @@ class Settings(BaseSettings):
     # provider. In production, role MUST come from the OIDC payload.
     dev_admin_emails: str = ""
 
+    # PLAN-0057 Wave A-1 / BP-303 — Service-account secret used by
+    # ``POST /internal/v1/service-token``. Background workers (e.g. the
+    # nlp-pipeline price-impact worker) authenticate with this shared secret
+    # to mint an RS256 internal JWT. Empty default keeps local dev workflows
+    # using ``POST /v1/auth/dev-login``; production deployments MUST set this
+    # via sealed secret. Compared with ``secrets.compare_digest`` to avoid
+    # leaking timing information.
+    service_account_token: SecretStr = SecretStr("")
+
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "api-gateway"
     log_level: str = "INFO"

@@ -945,6 +945,31 @@ def test_seed_003_sector_self_alias_idempotent(conn: sa.engine.Connection) -> No
     conn.rollback()
 
 
+# ── PLAN-0057 follow-up Wave A (D-005): CONCURRENTLY alias-norm index ────────
+
+
+def test_migration_0011_alias_norm_stage2_index_exists(conn: sa.engine.Connection) -> None:
+    """After ``alembic upgrade head`` migration 0011 leaves the Stage-2 index in place.
+
+    The migration drops + re-creates ``idx_entity_aliases_norm_stage2`` with
+    ``CREATE INDEX CONCURRENTLY``. The end state must be identical to the
+    pre-migration state (same name, same columns, same partial predicate)
+    so the planner keeps using it.
+    """
+    result = conn.execute(
+        text("SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_entity_aliases_norm_stage2'")
+    )
+    row = result.scalar_one_or_none()
+    assert row is not None, "idx_entity_aliases_norm_stage2 missing — migration 0011 did not leave it in place"
+    # Sanity-check: same shape as 0010/0011 definition.
+    assert "normalized_alias_text" in row
+    assert "alias_type" in row
+    assert "TICKER" in row
+    assert "PRIMARY_TICKER" in row
+    assert "ISIN" in row
+    assert "is_active" in row
+
+
 def test_seed_canonicals_downgrade_purges_f_crit_10(conn: sa.engine.Connection) -> None:
     """F-MINOR-04 follow-up: verify the migration 0009 downgrade SQL
     (DELETE WHERE metadata->>'seed_source' = 'F-CRIT-10') actually purges

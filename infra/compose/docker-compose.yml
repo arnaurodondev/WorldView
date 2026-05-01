@@ -173,6 +173,26 @@ services:
     entrypoint: ["python3", "/register-schemas.py"]
     restart: "no"
 
+  # ── Schema Registry: pin per-subject compatibility level (one-shot) ───────
+  # PLAN-0057 follow-up Wave A (D-004). Runs AFTER schema-registry-init so
+  # every subject already exists. Idempotent re-runs are safe; we PUT
+  # ``{"compatibility":"BACKWARD"}`` per subject regardless of current state.
+  schema-compat-init:
+    image: alpine:3.20
+    profiles: [infra, all]
+    depends_on:
+      schema-registry-init:
+        condition: service_completed_successfully
+    volumes:
+      - ../kafka/init/set-schema-compatibility.sh:/set-schema-compatibility.sh:ro
+    environment:
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      COMPAT_LEVEL: BACKWARD
+    # ``apk add`` curl is required because the alpine base image does not ship
+    # with curl by default. Cheap (~3 MB, ~1 s) and avoids a custom image.
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache curl >/dev/null && /bin/sh /set-schema-compatibility.sh"]
+    restart: "no"
+
   # ── Valkey (Redis-compatible cache) ─────────────────────────────────────────
   valkey:
     image: valkey/valkey:7.2-alpine
