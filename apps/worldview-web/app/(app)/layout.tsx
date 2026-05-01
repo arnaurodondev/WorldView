@@ -29,10 +29,11 @@
 // (which reads from localStorage — browser-only). Server Components cannot
 // access React context or browser APIs.
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
+import { useIdleLock } from "@/hooks/useIdleLock";
 import { TopBar } from "@/components/shell/TopBar";
 import { CollapsibleSidebar } from "@/components/shell/CollapsibleSidebar";
 import { FlashOverlay } from "@/components/shell/FlashOverlay";
@@ -54,6 +55,12 @@ import { FeedbackButton } from "@/components/feedback/FeedbackButton";
 // dispatch a CustomEvent; this host decides whether to actually pop the
 // modal based on eligibility.
 import { NPSPromptHost } from "@/components/feedback/NPSPromptHost";
+// PLAN-0052 Wave E T-E-5-08 — translates `?feedback=<kind>&page=<X>` URL
+// query params into the open-feedback CustomEvent the FeedbackButton
+// listens for. Wrapped in <Suspense> below because useSearchParams must
+// be inside a Suspense boundary to avoid forcing the entire shell into
+// fully-dynamic rendering on static-eligible routes.
+import { FeedbackDeepLinkHandler } from "@/components/feedback/FeedbackDeepLinkHandler";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { useAlertStream } from "@/contexts/AlertStreamContext";
 import { createGateway } from "@/lib/gateway";
@@ -93,6 +100,13 @@ export default function AppLayout({ children }: AppLayoutProps) {
   const { isLoading, isAuthenticated, accessToken } = useAuth();
   const router = useRouter();
   const { unreadCount } = useAlertStream();
+
+  // PLAN-0059 I-6: idle-lock — auto-redirect to /login after 15 minutes of
+  // inactivity, preserving the user's current path via ?next=. Disabled
+  // while we don't have a session yet (login page must not lock itself).
+  // Multi-tab aware via BroadcastChannel — activity in any tab keeps every
+  // tab unlocked.
+  useIdleLock({ enabled: isAuthenticated });
 
   // WHY REST pending count: the WebSocket unreadCount only tracks alerts received
   // during this browser session — it resets to 0 on page refresh. The TopBar badge
@@ -297,6 +311,16 @@ export default function AppLayout({ children }: AppLayoutProps) {
             the user is eligible (≥3 sessions, no submission in 30d, none
             this quarter). */}
         <NPSPromptHost />
+
+        {/* PLAN-0052 Wave E T-E-5-08 — deep-link query-param translator.
+            Reads ?feedback=<kind>&page=<X> on every navigation and fires
+            the open-feedback event the button listens for. Suspense is
+            required because useSearchParams suspends during route
+            transitions; wrapping it here keeps the rest of the shell
+            statically renderable. */}
+        <Suspense fallback={null}>
+          <FeedbackDeepLinkHandler />
+        </Suspense>
       </div>
       </WorkspaceProvider>
     </HotkeyProvider>

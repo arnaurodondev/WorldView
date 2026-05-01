@@ -159,11 +159,15 @@ describe("T-F-6-09 — ColorSwatch click-to-copy", () => {
     // WHY source-level assertion: jsdom's Radix Tabs interaction is brittle —
     // running the actual click would require user-event + extra setup. The
     // contract we care about is "the swatch is wired to clipboard.writeText".
+    // PLAN-0059 I-3: settings was split into nested routes; the ColorSwatch
+    // component now lives in the shared _components/tabs.tsx file. The
+    // contract this test guards is unchanged: a swatch is wired to
+    // navigator.clipboard.writeText(hex).
     const fs = await import("fs");
     const path = await import("path");
     const filePath = path.join(
       process.cwd(),
-      "app/(app)/settings/page.tsx",
+      "app/(app)/settings/_components/tabs.tsx",
     );
     const src = fs.readFileSync(filePath, "utf8");
     expect(src).toContain("navigator.clipboard.writeText(hex)");
@@ -175,16 +179,17 @@ describe("T-F-6-09 — ColorSwatch click-to-copy", () => {
 // ── T-F-6-08 ─────────────────────────────────────────────────────────────────
 
 describe('T-F-6-08 — Settings "Coming soon" banner', () => {
-  it("Settings page source contains the Coming soon banner string", async () => {
+  it("NotificationsTab source contains the Coming soon banner string", async () => {
+    // PLAN-0059 I-3: the tab now lives in the extracted _components/tabs.tsx.
     const fs = await import("fs");
     const path = await import("path");
     const filePath = path.join(
       process.cwd(),
-      "app/(app)/settings/page.tsx",
+      "app/(app)/settings/_components/tabs.tsx",
     );
     const src = fs.readFileSync(filePath, "utf8");
     expect(src).toContain("Coming soon");
-    // The banner is above the toggles — verify it appears before NOTIFICATION_TYPES map.
+    // Banner is above the toggle map — verify it appears before NOTIFICATION_TYPES.map.
     const bannerIdx = src.indexOf("Coming soon");
     const mapIdx = src.indexOf("NOTIFICATION_TYPES.map");
     expect(bannerIdx).toBeGreaterThan(0);
