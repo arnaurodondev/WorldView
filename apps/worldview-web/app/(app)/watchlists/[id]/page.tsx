@@ -12,7 +12,7 @@
 
 "use client";
 
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -40,6 +40,9 @@ export default function WatchlistDetailPage() {
 
   const [renameMode, setRenameMode] = useState(false);
   const [draftName, setDraftName] = useState("");
+  // QA-iter1: ref to the rename trigger button so focus returns to it after
+  // a successful rename submit (would otherwise land on <body>).
+  const renameTriggerRef = React.useRef<HTMLButtonElement | null>(null);
 
   const {
     data: watchlist,
@@ -62,6 +65,10 @@ export default function WatchlistDetailPage() {
       void qc.invalidateQueries({ queryKey: qk.watchlists.detail(watchlistId!) });
       toast.success("Watchlist renamed");
       setRenameMode(false);
+      // QA-iter1 a11y: return focus to the rename-trigger button after the
+      // form unmounts. requestAnimationFrame defers until after React paints
+      // the new DOM; without this focus drops to <body>.
+      requestAnimationFrame(() => renameTriggerRef.current?.focus());
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Rename failed"),
   });
@@ -209,6 +216,7 @@ export default function WatchlistDetailPage() {
       memberCount={watchlist.member_count}
       onBack={() => router.push("/watchlists")}
       renameMode={renameMode}
+      renameTriggerRef={renameTriggerRef}
       onStartRename={() => {
         setDraftName(watchlist.name);
         setRenameMode(true);
@@ -262,6 +270,8 @@ interface ShellProps {
   onSaveRename?: () => void;
   onDraftChange?: (v: string) => void;
   onDelete?: () => void;
+  /** Ref to the rename-trigger button so focus can return after submit. */
+  renameTriggerRef?: React.RefObject<HTMLButtonElement | null>;
 }
 
 function Shell({
@@ -276,6 +286,7 @@ function Shell({
   onSaveRename,
   onDraftChange,
   onDelete,
+  renameTriggerRef,
 }: ShellProps) {
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -332,6 +343,7 @@ function Shell({
             )}
             {onStartRename && (
               <Button
+                ref={renameTriggerRef}
                 variant="ghost"
                 density="compact"
                 onClick={onStartRename}

@@ -87,12 +87,15 @@ describe("useIdleLock", () => {
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
-  it("default action redirects to /login?next=<current-path>", () => {
+  it("default action redirects to /login?redirect_to=<current-path>", () => {
+    // QA-iter1: param renamed from ?next to ?redirect_to so the login page's
+    // existing sanitizeRedirect handler picks it up. The original ?next was
+    // silently dropped — broken UX after lock-out.
     renderHook(() => useIdleLock({ timeoutMs: 1000, warnMs: 0 }));
     act(() => {
       vi.advanceTimersByTime(1100);
     });
-    expect(mockReplace).toHaveBeenCalledWith("/login?next=%2Fdashboard");
+    expect(mockReplace).toHaveBeenCalledWith("/login?redirect_to=%2Fdashboard");
   });
 
   it("does nothing when enabled=false", () => {
