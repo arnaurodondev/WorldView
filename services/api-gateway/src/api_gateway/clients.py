@@ -286,6 +286,126 @@ async def get_company_overview(
     }
 
 
+# ── Instrument page bundle (PLAN-0059 I-5) ──────────────────────────────
+
+
+async def get_instrument_page_bundle(
+    clients: ServiceClients,
+    instrument_id: str,
+    *,
+    make_headers: Callable[[], dict[str, str]] | None = None,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Composite endpoint for /instruments/[id] initial page load.
+
+    Collapses the instrument-detail page's overview-tab waterfall into a
+    single round-trip. Calls all of the following in parallel via
+    asyncio.gather; per-call failures degrade gracefully to null sub-fields
+    rather than failing the whole bundle (return_exceptions semantics
+    achieved via the _safe_call wrapper).
+
+    Composed sub-resources (each returns the same shape the dedicated
+    endpoint would return, so the FE can prime its TanStack Query caches):
+
+      - overview         : the existing CompanyOverview composite
+                           (instrument + quote + fundamentals header + ohlcv 90d)
+      - fundamentals     : full all-sections fundamentals
+      - technicals       : technicals_snapshot section
+      - insider          : insider transactions
+      - top_news         : entity-scoped top-N news (limit=5, public)
+
+    Tab-specific surfaces (full news feed, intelligence, peers, knowledge
+    graph) intentionally NOT bundled — they load on tab switch and have
+    feature-specific filtering.
+
+    Each downstream call gets a fresh JWT via the make_headers factory so
+    the JTI replay-detection in InternalJWTMiddleware doesn't reject
+    parallel calls sharing one token.
+    """
+    import asyncio
+
+    def _h() -> dict[str, str]:
+        return make_headers() if make_headers is not None else (headers or {})
+
+    async def _safe_md(path: str, **kwargs: Any) -> dict[str, Any] | None:
+        """market-data GET — returns None on any DownstreamError."""
+        try:
+            return await _checked_get(clients.market_data, "market-data", path, headers=_h(), **kwargs)
+        except DownstreamError:
+            return None
+
+    async def _safe_nlp(path: str, **kwargs: Any) -> dict[str, Any] | None:
+        try:
+            return await _checked_get(clients.nlp_pipeline, "nlp-pipeline", path, headers=_h(), **kwargs)
+        except DownstreamError:
+            return None
+
+    # Required: the overview composite. If THIS fails, we still return a
+    # partial bundle (overview=None) so the FE can render an error UI
+    # instead of crashing — better UX than a 5xx.
+    async def _safe_overview() -> dict[str, Any] | None:
+        try:
+            return await get_company_overview(
+                clients,
+                instrument_id,
+                make_headers=make_headers,
+                headers=headers,
+            )
+        except DownstreamError:
+            return None
+
+    # Resolve the KG entity_id once (best-effort) so news can be
+    # entity-scoped accurately. Falls back to instrument_id.
+    async def _resolve_entity_id() -> str:
+        # Quick instrument fetch to get ticker, then KG lookup.
+        # If either step fails, fall back to instrument_id.
+        try:
+            inst = await _checked_get(
+                clients.market_data,
+                "market-data",
+                f"/api/v1/instruments/{instrument_id}",
+                headers=_h(),
+            )
+            ticker = inst.get("symbol", "")
+            if not ticker:
+                return instrument_id
+            kg_resp = await _checked_get(
+                clients.knowledge_graph,
+                "knowledge-graph",
+                "/api/v1/entities/lookup",
+                headers=_h(),
+                params={"ticker": ticker},
+            )
+            return str(kg_resp.get("entity_id") or instrument_id)
+        except (DownstreamError, KeyError):
+            return instrument_id
+
+    # First batch: overview + entity-id resolution. We need entity_id before
+    # we can fetch entity-scoped news.
+    overview_data, entity_id = await asyncio.gather(
+        _safe_overview(),
+        _resolve_entity_id(),
+    )
+
+    # Second batch: everything else in parallel. None on per-call failure.
+    fundamentals_data, technicals_data, insider_data, news_data = await asyncio.gather(
+        _safe_md(f"/api/v1/fundamentals/{instrument_id}"),
+        _safe_md(f"/api/v1/fundamentals/{instrument_id}/technicals-snapshot"),
+        _safe_md(f"/api/v1/fundamentals/{instrument_id}/insider-transactions"),
+        _safe_nlp(f"/api/v1/news/entity/{entity_id}", params={"limit": 5}),
+    )
+
+    return {
+        "instrument_id": instrument_id,
+        "entity_id": entity_id,
+        "overview": overview_data,
+        "fundamentals": fundamentals_data,
+        "technicals": technicals_data,
+        "insider": insider_data,
+        "top_news": news_data,
+    }
+
+
 async def get_relevant_news(
     clients: ServiceClients,
     limit: int = 20,
