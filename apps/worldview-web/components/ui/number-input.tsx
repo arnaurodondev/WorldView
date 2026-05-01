@@ -5,17 +5,18 @@
  * like "1.5m" or "+2%". Institutional traders type fast — they expect the input
  * to interpret what they meant. This component:
  *   1. Accepts any string (text input under the hood) so shorthand isn't blocked.
- *   2. Parses on blur via lib/format/parse-shorthand.
- *   3. Re-formats to the canonical display (e.g. "1.5M") so the user sees what
- *      was understood.
- *   4. Fires onChange with the *numeric* value — consumers always get a number.
+ *   2. Parses on blur (via lib/format/parse-shorthand).
+ *   3. Re-formats to canonical display (e.g. "1.5M") so user sees what was understood.
+ *   4. Fires onValueChange with the *numeric* value — consumers always get a number.
  *
- * USAGE:
- *   <NumberInput value={qty} onValueChange={setQty} placeholder="0" />
- *   <NumberInput percent value={pct} onValueChange={setPct} />
- *
- * USED BY (planned): screener filter price/cap thresholds, alert-rule threshold
- * input, trade-ticket quantity input, position-size editor.
+ * QA-iter1 fixes:
+ *   - aria-invalid wired when raw text is non-empty AND parses to null (a11y).
+ *   - Live parse-preview ghost shown to the right while focused so the user
+ *     can see what the parser interprets BEFORE blur (UX win).
+ *   - Parent-clamp race: when commit() updates parent and parent clamps the
+ *     value, we mirror the clamped value back into raw on next render even
+ *     while still focused — using a `committedRef` cycle counter to detect
+ *     external value changes vs our own commit.
  */
 
 "use client";
@@ -27,99 +28,142 @@ import { inputVariants, type InputDensity } from "./input";
 
 export interface NumberInputProps
   extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange" | "type"> {
-  /** Current numeric value. `null` means "no value entered". */
   value: number | null;
-  /** Called with the parsed numeric value. `null` means cleared. */
   onValueChange: (value: number | null) => void;
-  /** If true, "%" suffix returns fraction (2% → 0.02). Default true. */
+  /**
+   * If true, "%" suffix returns fraction (2% → 0.02). Default true.
+   * BE EXPLICIT at call sites that store literal percent (e.g. allocation slider
+   * 0–100) — silently dividing by 100 has burned us before.
+   */
   percent?: boolean;
   /** If true, "bps" suffix returns fraction (25bps → 0.0025). Default true. */
   bps?: boolean;
-  /** Density variant; defaults to compact (matches institutional 22px row height). */
   density?: InputDensity;
-  /**
-   * Display formatter — called when the input is *not* focused. Default:
-   * formatShorthand. Pass a custom formatter for currency-prefixed display
-   * (e.g. `(v) => v == null ? "" : `$${v.toFixed(2)}`)`).
-   */
+  /** Display formatter when not focused. Default: formatShorthand. */
   format?: (value: number | null) => string;
+  /** Show parse-preview ghost while focused. Default true. */
+  showParsePreview?: boolean;
 }
 
-/**
- * NumberInput — a lifted-state input that round-trips parse <-> format.
- *
- * The internal "raw" string is what the user is currently typing. On blur, we
- * parse it, fire onValueChange, and re-format to the canonical display. While
- * focused, the raw string is preserved so the user can edit freely without
- * the formatter fighting their cursor.
- */
 export const NumberInput = React.forwardRef<HTMLInputElement, NumberInputProps>(
-  ({ value, onValueChange, percent = true, bps = true, density = "compact", format, className, onBlur, onFocus, onKeyDown, ...props }, ref) => {
+  (
+    {
+      value,
+      onValueChange,
+      percent = true,
+      bps = true,
+      density = "compact",
+      format,
+      showParsePreview = true,
+      className,
+      onBlur,
+      onFocus,
+      onKeyDown,
+      ...props
+    },
+    ref,
+  ) => {
     const formatter = format ?? formatShorthand;
 
-    // raw = what's in the input box right now. Synced from value when not focused.
     const [raw, setRaw] = React.useState<string>(() => formatter(value));
     const [focused, setFocused] = React.useState(false);
 
-    // When the parent updates `value` and we're not focused, mirror it.
-    // WHY guard on focused: don't overwrite the user mid-typing.
+    // Track the last value WE committed; lets us tell our own commit-driven
+    // value-prop change apart from a parent-driven external change. When the
+    // parent clamps our committed value (e.g. Math.min(parsed, max)), the new
+    // value differs from `lastCommittedRef`, so we re-mirror raw even while
+    // focused.
+    const lastCommittedRef = React.useRef<number | null>(value);
+
     React.useEffect(() => {
-      if (!focused) {
+      // External change (parent reset, parent clamp): re-mirror display.
+      if (value !== lastCommittedRef.current) {
+        setRaw(formatter(value));
+        lastCommittedRef.current = value;
+      } else if (!focused) {
+        // Stable value, not focused → also keep display in sync if formatter
+        // changed (rare, e.g. currency option).
         setRaw(formatter(value));
       }
     }, [value, formatter, focused]);
 
     function commit(input: string) {
       const parsed = parseShorthand(input, { percentAsFraction: percent, bpsAsFraction: bps });
+      lastCommittedRef.current = parsed;
       onValueChange(parsed);
-      // After commit, sync display to canonical form.
       setRaw(formatter(parsed));
     }
 
+    // Live parse during typing — used only for the preview ghost; does NOT
+    // call onValueChange (commit happens on blur/Enter).
+    const livePreview = React.useMemo(() => {
+      if (!showParsePreview || !focused || !raw.trim()) return null;
+      const parsed = parseShorthand(raw, {
+        percentAsFraction: percent,
+        bpsAsFraction: bps,
+      });
+      if (parsed === null) return null;
+      const formatted = formatShorthand(parsed);
+      // Don't show the preview when the formatted form equals what the user typed.
+      if (formatted === raw.trim()) return null;
+      return formatted;
+    }, [raw, focused, percent, bps, showParsePreview]);
+
+    // aria-invalid: text typed but unparseable.
+    const isInvalid = focused
+      ? raw.trim() !== "" && parseShorthand(raw, { percentAsFraction: percent, bpsAsFraction: bps }) === null
+      : false;
+
     return (
-      <input
-        ref={ref}
-        type="text"
-        inputMode="decimal"
-        // WHY autocomplete=off: numeric finance inputs should not autofill from
-        // unrelated browser memory.
-        autoComplete="off"
-        // WHY spellCheck=false: shorthand like "1.5m" triggers underline squiggles.
-        spellCheck={false}
-        value={raw}
-        onChange={(e) => setRaw(e.target.value)}
-        onFocus={(e) => {
-          setFocused(true);
-          // Select-all on focus matches Bloomberg / TradingView behavior — fast
-          // overwrite without manual selection.
-          e.currentTarget.select();
-          onFocus?.(e);
-        }}
-        onBlur={(e) => {
-          setFocused(false);
-          commit(e.currentTarget.value);
-          onBlur?.(e);
-        }}
-        onKeyDown={(e) => {
-          // WHY commit on Enter: matches Bloomberg "press Enter to apply".
-          if (e.key === "Enter") {
+      <span className="relative inline-block w-full">
+        <input
+          ref={ref}
+          type="text"
+          inputMode="decimal"
+          autoComplete="off"
+          spellCheck={false}
+          aria-invalid={isInvalid || undefined}
+          value={raw}
+          onChange={(e) => setRaw(e.target.value)}
+          onFocus={(e) => {
+            setFocused(true);
+            e.currentTarget.select();
+            onFocus?.(e);
+          }}
+          onBlur={(e) => {
+            setFocused(false);
             commit(e.currentTarget.value);
-          }
-          // WHY Escape reverts: cancels in-progress edit, restores last committed value.
-          if (e.key === "Escape") {
-            setRaw(formatter(value));
-            e.currentTarget.blur();
-          }
-          onKeyDown?.(e);
-        }}
-        className={cn(
-          inputVariants({ density }),
-          // Right-align by default — numeric values read better right-aligned in tables.
-          "text-right tabular-nums font-mono",
-          className,
+            onBlur?.(e);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              commit(e.currentTarget.value);
+            }
+            if (e.key === "Escape") {
+              setRaw(formatter(value));
+              e.currentTarget.blur();
+            }
+            onKeyDown?.(e);
+          }}
+          className={cn(
+            inputVariants({ density }),
+            "text-right tabular-nums font-mono",
+            isInvalid && "border-destructive focus-visible:ring-destructive",
+            // Reserve right-padding for the parse-preview ghost.
+            livePreview && "pr-14",
+            className,
+          )}
+          {...props}
+        />
+        {livePreview && (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute right-2 top-0 flex h-full items-center text-[10px] text-muted-foreground/70 tabular-nums font-mono"
+          >
+            ≈ {livePreview}
+          </span>
         )}
-        {...props}
-      />
+      </span>
     );
   },
 );

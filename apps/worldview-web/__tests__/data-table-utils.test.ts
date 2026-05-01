@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { rowsToTsv, rowsToCsv } from "@/components/ui/data-table/data-table";
+import { rowsToTsv, rowsToCsv, sanitiseFormula } from "@/lib/format/csv-tsv";
 
 interface Row {
   ticker: string;
@@ -59,6 +59,61 @@ describe("rowsToTsv", () => {
       colsWithSelect as unknown as Parameters<typeof rowsToTsv<Row>>[1],
     );
     expect(tsv.split("\n")[0]).toBe("Ticker\tPrice\tNote");
+  });
+});
+
+describe("sanitiseFormula (CWE-1236)", () => {
+  it("prefixes = with '", () => {
+    expect(sanitiseFormula("=HYPERLINK(\"...\")")).toBe("'=HYPERLINK(\"...\")");
+  });
+  it("prefixes + with '", () => {
+    expect(sanitiseFormula("+1+2")).toBe("'+1+2");
+  });
+  it("prefixes - with '", () => {
+    expect(sanitiseFormula("-cmd")).toBe("'-cmd");
+  });
+  it("prefixes @ with '", () => {
+    expect(sanitiseFormula("@SUM(A1)")).toBe("'@SUM(A1)");
+  });
+  it("prefixes \\t with '", () => {
+    expect(sanitiseFormula("\tfoo")).toBe("'\tfoo");
+  });
+  it("does not prefix safe values", () => {
+    expect(sanitiseFormula("AAPL")).toBe("AAPL");
+    expect(sanitiseFormula("100.5")).toBe("100.5");
+    expect(sanitiseFormula("Apple, Inc.")).toBe("Apple, Inc.");
+  });
+});
+
+describe("formula-injection in TSV/CSV", () => {
+  it("TSV neutralises =HYPERLINK in a cell", () => {
+    const rows: { name: string; v: number }[] = [
+      { name: '=HYPERLINK("evil","x")', v: 1 },
+    ];
+    const cols = [
+      { id: "name", accessorKey: "name", header: "Name" },
+      { id: "v", accessorKey: "v", header: "V" },
+    ];
+    const tsv = rowsToTsv(rows, cols as unknown as Parameters<typeof rowsToTsv<typeof rows[number]>>[1]);
+    expect(tsv).toMatch(/'=HYPERLINK/);
+    expect(tsv.split("\n")[1]).not.toMatch(/^=HYPERLINK/);
+  });
+
+  it("CSV neutralises @SUM in a cell", () => {
+    const rows: { v: string }[] = [{ v: "@SUM(A1:A10)" }];
+    const cols = [{ id: "v", accessorKey: "v", header: "V" }];
+    const csv = rowsToCsv(rows, cols as unknown as Parameters<typeof rowsToCsv<typeof rows[number]>>[1]);
+    expect(csv).toMatch(/'@SUM/);
+  });
+
+  it("supports accessorFn columns (not just accessorKey)", () => {
+    interface NestedRow { meta: { name: string } }
+    const rows: NestedRow[] = [{ meta: { name: "AAPL" } }];
+    const cols = [
+      { id: "n", accessorFn: (r: NestedRow) => r.meta.name, header: "Name" },
+    ];
+    const tsv = rowsToTsv(rows, cols as unknown as Parameters<typeof rowsToTsv<NestedRow>>[1]);
+    expect(tsv).toBe("Name\nAAPL");
   });
 });
 
