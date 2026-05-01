@@ -281,11 +281,13 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         classifier: Any = DeepInfraIntentClassifier(
             api_key=settings.deepinfra_api_key,
             model=settings.deepinfra_classification_model,
+            usage_logger=usage_logger,
         )
     else:
         classifier = OllamaIntentClassifier(
             ollama_base_url=settings.ollama_base_url,
             model=settings.ollama_classification_model,
+            usage_logger=usage_logger,
         )
 
     # ── Reranker selection (PLAN-0052 platform-QA round 5) ──────────────────

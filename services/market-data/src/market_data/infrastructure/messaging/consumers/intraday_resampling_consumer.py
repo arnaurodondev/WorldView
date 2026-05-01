@@ -151,7 +151,7 @@ class IntradayResamplingConsumer(BaseKafkaConsumer[dict]):
     async def update_failure(self, failure: FailureInfo[dict]) -> None:
         pass  # retry tracking is handled by store_failure
 
-    async def dead_letter(self, failure: FailureInfo[dict]) -> None:
+    async def _dead_letter_impl(self, failure: FailureInfo[dict]) -> None:
         if self._current_uow is not None:
             payload = {
                 "event_id": failure.event_id,

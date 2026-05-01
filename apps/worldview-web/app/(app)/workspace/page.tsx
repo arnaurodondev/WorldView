@@ -42,6 +42,13 @@ import { useEffect, useRef } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { SymbolLinkingProvider } from "@/contexts/SymbolLinkingContext";
 import { WorkspaceTabs } from "@/components/workspace/WorkspaceTabs";
+// PLAN-0059 G-2: WorkspaceGrid stays statically imported. Considered for
+// dynamic-import (it pulls react-resizable-panels + every panel widget) but
+// /workspace is already a separate Next route bundle — splitting the grid
+// inside it doesn't save initial bundle on other routes, and existing tests
+// expect synchronous panel render. The widget-level lazy-loading happens
+// via the per-panel components (FundamentalsTab uses next/dynamic for
+// EntityGraphPanel, etc.), which is the meaningful split point here.
 import { WorkspaceGrid } from "@/components/workspace/WorkspaceGrid";
 import { ShareWorkspaceDialog } from "@/components/workspace/ShareWorkspaceDialog";
 import { NewFromTemplateDialog } from "@/components/workspace/NewFromTemplateDialog";

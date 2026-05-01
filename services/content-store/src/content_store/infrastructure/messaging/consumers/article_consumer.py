@@ -213,7 +213,7 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
     async def update_failure(self, failure: FailureInfo[dict]) -> None:  # type: ignore[type-arg]
         """No-op: retry tracking is handled via DLQ, not a separate table."""
 
-    async def dead_letter(self, failure: FailureInfo[dict]) -> None:  # type: ignore[type-arg]
+    async def _dead_letter_impl(self, failure: FailureInfo[dict]) -> None:  # type: ignore[type-arg]
         """Write a DLQ row directly to dead_letter_queue via a new session."""
         import common.ids  # type: ignore[import-untyped]
         from content_store.infrastructure.db.models import DeadLetterQueueModel

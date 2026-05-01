@@ -48,6 +48,17 @@ logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 AUTO_RESOLVE_THRESHOLD: float = 0.62
 PROVISIONAL_THRESHOLD: float = 0.45
 
+# ── Provisional churn guard ───────────────────────────────────────────────────
+
+# Maximum number of provisional rows allowed for the same (normalized_surface,
+# mention_class) pair within a rolling 1-hour window.  Noisy NER output (e.g.
+# "the company", "the bank") can produce hundreds of duplicate provisional
+# inserts per hour — the UNIQUE ON CONFLICT clause deduplicates them at the
+# DB level, but the retry_count counter would still be bumped, and the
+# savepoint overhead accumulates.  This guard skips even attempting the INSERT
+# once 5 rows already exist in the window, reducing unnecessary DB round-trips.
+MAX_PROVISIONAL_PER_HOUR: int = 5
+
 # ── Stage confidences ─────────────────────────────────────────────────────────
 
 CONFIDENCE_EXACT: float = 1.0
@@ -497,6 +508,45 @@ async def run_entity_resolution_block(
             mention.resolution_confidence = confidence
             mention.resolution_outcome = ResolutionOutcome.PROVISIONAL
             try:
+                # ── Churn guard: skip INSERT if ≥ MAX_PROVISIONAL_PER_HOUR rows
+                # already exist for the same (normalized_surface, mention_class)
+                # pair in the last 1 hour.  Noisy NER tokens like "the company"
+                # would otherwise hammer the savepoint machinery on every article.
+                # Uses raw SQL (consistent with _insert_provisional) so we avoid
+                # pulling sqlalchemy.func + datetime.timedelta into the module
+                # top-level for a single call site.
+                from sqlalchemy import text as _sql_text  # type: ignore[import-untyped]
+
+                _mention_class_val = (
+                    mention.mention_class.value  # type: ignore[union-attr]
+                    if hasattr(mention.mention_class, "value")
+                    else str(mention.mention_class)
+                )
+                _count_result = await intelligence_session.execute(  # type: ignore[attr-defined]
+                    _sql_text(
+                        "SELECT COUNT(*) FROM provisional_entity_queue"
+                        " WHERE normalized_surface = lower(trim(:surface))"
+                        "   AND mention_class = :mention_class"
+                        "   AND created_at >= NOW() - INTERVAL '1 hour'"
+                    ),
+                    {"surface": mention.mention_text, "mention_class": _mention_class_val},
+                )
+                _hourly_count: int = _count_result.scalar_one()
+                if _hourly_count >= MAX_PROVISIONAL_PER_HOUR:
+                    # Too many recent entries — skip the INSERT to avoid churn.
+                    # Downgrade to UNRESOLVED so the mention is not silently
+                    # dropped (resolution_outcome='unresolved' is picked up by
+                    # UnresolvedResolutionWorker on the next cycle).
+                    mention.resolution_outcome = ResolutionOutcome.UNRESOLVED
+                    log = logger.bind(  # type: ignore[no-any-return]
+                        surface_form=mention.mention_text,
+                        entity_class=_mention_class_val,
+                        count=_hourly_count,
+                    )
+                    log.warning("provisional_churn_guard_skipped")
+                    all_audit.extend(audit)
+                    continue
+
                 # Use a SAVEPOINT so a UNIQUE-constraint failure on this insert
                 # does NOT abort the outer transaction (BP-239: session-transaction
                 # poisoning via unguarded INSERT in entity resolution).

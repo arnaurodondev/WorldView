@@ -47,6 +47,35 @@ vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => ({ getValueHistory: mockGetValueHistory })),
 }));
 
+// ── lightweight-charts mock (PLAN-0059 G-1) ────────────────────────────────
+// EquityCurveChart now renders via lightweight-charts (was recharts). The
+// library uses Canvas APIs unavailable in jsdom; mocking yields stub series
+// + chart objects so the component init effect resolves without throwing.
+vi.mock("lightweight-charts", () => ({
+  createChart: vi.fn(() => ({
+    addSeries: vi.fn(() => ({ setData: vi.fn(), applyOptions: vi.fn() })),
+    applyOptions: vi.fn(),
+    timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
+    priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
+    subscribeCrosshairMove: vi.fn(),
+    unsubscribeCrosshairMove: vi.fn(),
+    remove: vi.fn(),
+  })),
+  LineSeries: "LineSeries",
+  CandlestickSeries: "CandlestickSeries",
+  HistogramSeries: "HistogramSeries",
+  AreaSeries: "AreaSeries",
+}));
+
+// jsdom has no ResizeObserver — EquityCurveCanvas constructs one in its
+// init effect. Shim with no-op so the component mounts cleanly.
+class MockResizeObserver {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+}
+vi.stubGlobal("ResizeObserver", MockResizeObserver);
+
 import { EquityCurveChart } from "@/components/portfolio/EquityCurveChart";
 
 function wrap(children: ReactNode) {
@@ -87,14 +116,12 @@ describe("EquityCurveChart — PLAN-0049 T-D-4-05 empty-state guard", () => {
   });
 
   it("renders the chart container (not the empty state) when there are points", async () => {
-    // Inverse of the above — populated data must render the chart, not the
-    // empty state. We assert the absence of the empty-state copy AND the
-    // presence of the recharts ResponsiveContainer wrapper class
-    // (".recharts-responsive-container") that EquityCurveChart wraps the
-    // LineChart in. We avoid asserting the SVG itself because Recharts'
-    // ResponsiveContainer needs a real ResizeObserver to compute width/height
-    // and skips rendering its child in jsdom — but the wrapper div is always
-    // present and is enough to prove we took the chart branch (not empty).
+    // PLAN-0059 G-1: chart now renders via lightweight-charts (was recharts).
+    // The wrapper div carries `data-testid="equity-curve-canvas"`; presence
+    // of that node is enough to prove we took the chart branch. We don't
+    // assert canvas drawing because lightweight-charts is dynamically
+    // imported and jsdom doesn't run the canvas paint loop — but the
+    // wrapper is always rendered.
     const populatedResp: ValueHistoryResponse = {
       points: [
         { date: "2026-04-01", value: 100, cost_basis: 100, cash: 0 },
@@ -110,12 +137,9 @@ describe("EquityCurveChart — PLAN-0049 T-D-4-05 empty-state guard", () => {
       { wrapper: ({ children }) => wrap(children) },
     );
 
-    // Wait for any tick after the query resolves so React re-renders.
     await waitFor(() => {
-      // The recharts ResponsiveContainer wrapper class confirms we entered
-      // the chart branch (the empty branch would render only a <p>).
-      const respContainer = container.querySelector(".recharts-responsive-container");
-      expect(respContainer).not.toBeNull();
+      const canvas = container.querySelector('[data-testid="equity-curve-canvas"]');
+      expect(canvas).not.toBeNull();
     });
 
     // Negative: empty-state copy must NOT be present.

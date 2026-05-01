@@ -7,7 +7,8 @@ constant for the internal briefing endpoint.
 
 from rag_chat.application.pipeline.prompts.intent_prompts import (
     EMAIL_DEEP_BRIEF_PROMPT,
+    RetrievalCounts,
     get_system_prompt,
 )
 
-__all__ = ["EMAIL_DEEP_BRIEF_PROMPT", "get_system_prompt"]
+__all__ = ["EMAIL_DEEP_BRIEF_PROMPT", "RetrievalCounts", "get_system_prompt"]

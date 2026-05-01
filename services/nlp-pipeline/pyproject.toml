@@ -42,6 +42,7 @@ dev = [
     "mypy>=1.10,<2",
     "fakeredis[aioredis]>=2.23,<3",
     "testcontainers[postgres]>=4.8,<5",
+    "hypothesis>=6.100,<7",
 ]
 
 [tool.hatch.build.targets.wheel]

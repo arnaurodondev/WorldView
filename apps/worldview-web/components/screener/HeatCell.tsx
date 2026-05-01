@@ -19,6 +19,7 @@
  * DESIGN REFERENCE: docs/ui/DESIGN_SYSTEM.md HeatCell, PRD-0027 §6.5 canvas
  */
 
+import { memo } from "react";
 import { heatCellColor } from "@/lib/utils";
 
 // ── Props ──────────────────────────────────────────────────────────────────────
@@ -41,7 +42,14 @@ interface HeatCellProps {
 // WHY inline hex (not Tailwind classes): heatCellColor() returns hex values because
 // these same colors are shared with lightweight-charts and other non-Tailwind contexts.
 // The hex source of truth lives in lib/utils.ts heatCellColor() — see V-1.4.
-export function HeatCell({ score }: HeatCellProps) {
+//
+// PLAN-0059 G-3: HeatCell is a high-frequency leaf — rendered once per
+// screener row + once per dashboard sector tile. Memoising on `score`
+// (the only prop) prevents re-running heatCellColor() / Math.round() when
+// other table state (sort, scroll, filter) changes but the score for a
+// given row didn't. Verified-stable: heatCellColor is pure, the prop is
+// a primitive, and there are no callbacks in the prop set.
+function HeatCellInner({ score }: HeatCellProps) {
   // ── Null / no-data case ────────────────────────────────────────────────────
   if (score === null || score === undefined) {
     // WHY neutral palette: user should see "no data" not "bad score" — grey
@@ -79,3 +87,8 @@ export function HeatCell({ score }: HeatCellProps) {
     </span>
   );
 }
+
+// PLAN-0059 G-3: memo'd export. The inner is named HeatCellInner so React
+// DevTools shows the memoised component as just "HeatCell".
+export const HeatCell = memo(HeatCellInner);
+HeatCell.displayName = "HeatCell";

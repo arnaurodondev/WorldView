@@ -68,6 +68,9 @@ class ConsumerConfig:
     backoff_multiplier: float = 2.0
     # PLAN-0052 QA-R6 (BP-302): watchdog timeout per message.  Set to 0 to disable.
     message_processing_timeout_s: int = 120
+    # Maximum dead-letters allowed before the consumer crashes to force a restart.
+    # Prevents a runaway poison-message storm from silently filling the DLQ.
+    dead_letter_cap: int = 100
 
     def to_dict(self) -> dict[str, Any]:
         """Return Confluent-compatible consumer config dict."""
@@ -142,6 +145,9 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         self._metrics = metrics or _create_metrics(config.group_id)
         self._consumer: Any = None  # confluent_kafka.Consumer, assigned in _init_kafka
         self._stop_event = asyncio.Event()
+        # Running count of dead-letters sent; crashes the consumer when it
+        # exceeds dead_letter_cap to trigger a container restart.
+        self._dead_letter_count: int = 0
 
     # ── Abstract interface ────────────────────────────────────────────────────
 
@@ -200,14 +206,40 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         """
 
     @abstractmethod
-    async def dead_letter(self, failure: FailureInfo[TFailure]) -> None:
-        """Move a failure record to the dead-letter store.
+    async def _dead_letter_impl(self, failure: FailureInfo[TFailure]) -> None:
+        """Move a failure record to the dead-letter store (subclass hook).
 
-        Called when ``failure.attempt >= config.max_retries``.
+        Called by :meth:`dead_letter` after the cap check passes.
+        Subclasses persist the record to their dead-letter table/topic here.
 
         Args:
             failure: :class:`FailureInfo` that exceeded max retries.
         """
+
+    async def dead_letter(self, failure: FailureInfo[TFailure]) -> None:
+        """Move a failure record to the dead-letter store with cap enforcement.
+
+        Increments the internal dead-letter counter and delegates to
+        :meth:`_dead_letter_impl`.  If the counter exceeds
+        ``config.dead_letter_cap``, a :exc:`RuntimeError` is raised to crash
+        the consumer and trigger a container restart — preventing a runaway
+        poison-message storm from silently filling the DLQ.
+
+        Args:
+            failure: :class:`FailureInfo` that exceeded max retries.
+
+        Raises:
+            RuntimeError: When the dead-letter count exceeds the configured cap.
+        """
+        self._dead_letter_count += 1
+        if self._dead_letter_count > self._config.dead_letter_cap:
+            logger.critical(
+                "dead_letter_cap_exceeded",
+                cap=self._config.dead_letter_cap,
+                count=self._dead_letter_count,
+            )
+            raise RuntimeError(f"Dead-letter cap {self._config.dead_letter_cap} exceeded — forcing restart")
+        await self._dead_letter_impl(failure)
 
     @abstractmethod
     async def get_pending_retries(self) -> list[FailureInfo[TFailure]]:

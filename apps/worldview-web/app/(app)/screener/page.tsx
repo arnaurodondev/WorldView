@@ -38,11 +38,23 @@ import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { ScreenerTable, type SortState, type SortableKey } from "@/components/screener/ScreenerTable";
+// PLAN-0059 G-2: ScreenerFilterBar is the largest component on /screener
+// (~986 LOC + per-section validators). Dynamic-import code-splits it out
+// of the initial bundle so the screener route's first paint shows the
+// table sooner; the filter bar lazy-loads while the user reads results.
+// Type-only imports remain static so the page can use FilterState.
+import dynamic from "next/dynamic";
 import {
-  ScreenerFilterBar,
   DEFAULT_FILTERS,
   type FilterState,
 } from "@/components/screener/ScreenerFilterBar";
+const ScreenerFilterBar = dynamic(
+  () =>
+    import("@/components/screener/ScreenerFilterBar").then(
+      (m) => ({ default: m.ScreenerFilterBar }),
+    ),
+  { ssr: false },
+);
 import { DashboardEmptyState } from "@/components/ui/dashboard-empty-state";
 import type { ScreenerResult, ScreenerRequest, ScreenerFilter } from "@/types/api";
 // PLAN-0051 Wave B Part 2 imports — Saved Screens, Column Settings, Export, Sparklines.
