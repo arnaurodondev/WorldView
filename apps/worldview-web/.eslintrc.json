@@ -3,6 +3,7 @@
   "rules": {
     "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }],
     "@typescript-eslint/no-explicit-any": "error",
+    "no-await-in-loop": "warn",
     "no-restricted-syntax": [
       "warn",
       {
@@ -12,6 +13,10 @@
       {
         "selector": "Property[key.name='queryKey'][value.type='ArrayExpression'][value.elements.0.type='TemplateLiteral']",
         "message": "Inline queryKey arrays are forbidden. Import { qk } from '@/lib/query/keys' and use the hierarchical factory. PLAN-0059-C C-2."
+      },
+      {
+        "selector": "WhileStatement[test.type='Literal'][test.value=true]",
+        "message": "Unbounded while(true) loop detected. Add a break condition or use a bounded loop."
       }
     ]
   },
