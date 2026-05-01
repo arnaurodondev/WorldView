@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import TYPE_CHECKING
 
@@ -70,23 +71,59 @@ class DeepSeekExtractionAdapter:
                         base_url=self._base_url,
                         timeout=openai.Timeout(connect=5.0, read=self._timeout_s, write=30.0, pool=5.0),
                     )
+                    # PLAN-0052 platform-QA round 8 (2026-05-01): adopt the
+                    # JSON-mode pattern proven by sibling workers
+                    # (article_relevance_scoring_worker.py:335,
+                    # unresolved_resolution_worker.py:561). Without these three
+                    # parameters Llama-3.1-8B is free to wrap output in markdown
+                    # fences, prepend reasoning preambles, or truncate at the
+                    # default token cap — all producing JSONDecodeError that
+                    # the article-consumer logs as ``deep_extraction.window_failed``
+                    # and silently drops. ``response_format`` forces a valid
+                    # JSON object server-side, ``temperature=0`` removes
+                    # sampling variance, ``max_tokens=2048`` covers the
+                    # extraction schema with comfortable headroom.
                     response = await client.chat.completions.create(
                         model=self._model_id,
                         messages=[
                             {"role": "system", "content": inp.prompt},
                             {"role": "user", "content": inp.context},
                         ],
+                        response_format={"type": "json_object"},
+                        temperature=0.0,
+                        max_tokens=2048,
                     )
                     # Capture actual token usage from API response when available
                     if response.usage is not None:
                         tokens_in = response.usage.prompt_tokens or 0
                         tokens_out = response.usage.completion_tokens or 0
                     raw_response: str = response.choices[0].message.content or ""
+                    finish_reason: str | None = getattr(response.choices[0], "finish_reason", None)
                     logger.info("deepseek_extraction_completed", model_id=self._model_id)
+                    # Defense-in-depth: even with response_format=json_object,
+                    # strip markdown fences (` ```json ... ``` `) before parsing
+                    # in case a future model variant ignores the directive.
                     try:
                         result: dict[str, object] = json.loads(raw_response)
-                    except json.JSONDecodeError as exc:
-                        raise FatalError(f"malformed extraction output: {exc}") from exc
+                    except json.JSONDecodeError:
+                        cleaned = re.sub(
+                            r"^\s*```(?:json)?\s*|\s*```\s*$",
+                            "",
+                            raw_response.strip(),
+                        )
+                        try:
+                            result = json.loads(cleaned)
+                        except json.JSONDecodeError as exc:
+                            # Surface the raw response prefix so the next
+                            # regression of this class is debuggable.
+                            logger.warning(
+                                "deepseek_extraction_malformed",
+                                model_id=self._model_id,
+                                raw_response_prefix=raw_response[:500],
+                                raw_response_len=len(raw_response),
+                                finish_reason=finish_reason,
+                            )
+                            raise FatalError(f"malformed extraction output: {exc}") from exc
                     return ExtractionOutput(
                         result=result,
                         raw_response=raw_response,
