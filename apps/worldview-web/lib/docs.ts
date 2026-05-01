@@ -30,6 +30,11 @@
  * for static-prerender. Async would add complexity for zero benefit.
  */
 
+// QA iter-1 (architecture M-AR1): server-only marker fails the build
+// instantly if a Client Component accidentally imports this module —
+// node:fs is unavailable in the browser. Type-only imports are unaffected.
+import "server-only";
+
 import fs from "node:fs";
 import path from "node:path";
 import matter from "gray-matter";
@@ -120,17 +125,52 @@ function humaniseSlug(slug: string): string {
 }
 
 /**
- * getAllDocs — load every MDX page on disk. Cached per process for the
- * dev server's hot-reload speed; full re-read at every cold start.
+ * slugifyHeading — turn heading text into an HTML id anchor slug. Shared
+ * between extractHeadings() and the MDX components map so TOC anchors and
+ * rendered heading IDs always agree.
+ *
+ * QA iter-1 (bugs m-4): single source of truth — was duplicated in two
+ * files where any drift would break all anchors silently.
+ */
+export function slugifyHeading(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-");
+}
+
+/**
+ * isSafeSlugSegment — defensive validator for one URL slug segment.
+ *
+ * Currently lib/docs.ts looks slugs up via membership-test against the
+ * pre-walked file tree (no fs.readFile with the user-controlled path),
+ * so path traversal is structurally impossible. This validator is
+ * defense-in-depth: a future refactor that joins the slug with
+ * CONTENT_ROOT would otherwise risk traversal. Reject anything that
+ * isn't strictly [a-z0-9-]+.
+ *
+ * QA iter-1 (bugs M-2, security M-1).
+ */
+export function isSafeSlugSegment(seg: string): boolean {
+  return /^[a-z0-9][a-z0-9-]*$/i.test(seg);
+}
+
+/**
+ * getAllDocs — load every MDX page on disk.
  *
  * WHY a module-level cache: Next.js 15 may invoke this loader once per
  * dynamic route and once per generateStaticParams, generateMetadata, etc.
  * Caching avoids redundant fs traversal during a single build.
+ *
+ * QA iter-1 (architecture M-AR2): cache is bypassed in development so
+ * MDX content edits are picked up immediately by the Next dev server.
+ * Production keeps the cache (build-time only — no staleness risk).
  */
 let _cache: DocPage[] | null = null;
+const CACHE_ENABLED = process.env.NODE_ENV === "production";
 
 export function getAllDocs(): DocPage[] {
-  if (_cache) return _cache;
+  if (CACHE_ENABLED && _cache) return _cache;
 
   const files = walkDocsDir(CONTENT_ROOT);
   const pages: DocPage[] = files.map((filePath) => {
@@ -254,6 +294,11 @@ export interface DocHeading {
 
 export function extractHeadings(body: string): DocHeading[] {
   const headings: DocHeading[] = [];
+  // QA iter-1 (bugs m-4): track seen slugs and dedup with -2/-3/... suffix
+  // (mirrors GitHub / rehype-slug behaviour) so two `## Setup` headings on
+  // the same page don't produce duplicate IDs (HTML invalid; React key
+  // collision in TOC).
+  const seen = new Map<string, number>();
   let inFence = false;
   for (const line of body.split("\n")) {
     if (line.startsWith("```")) {
@@ -265,10 +310,10 @@ export function extractHeadings(body: string): DocHeading[] {
     if (!m) continue;
     const level = m[1].length === 2 ? 2 : 3;
     const text = m[2].trim();
-    const slug = text
-      .toLowerCase()
-      .replace(/[^a-z0-9\s-]/g, "")
-      .replace(/\s+/g, "-");
+    const baseSlug = slugifyHeading(text);
+    const count = seen.get(baseSlug) ?? 0;
+    seen.set(baseSlug, count + 1);
+    const slug = count === 0 ? baseSlug : `${baseSlug}-${count + 1}`;
     headings.push({ level: level as 2 | 3, text, slug });
   }
   return headings;

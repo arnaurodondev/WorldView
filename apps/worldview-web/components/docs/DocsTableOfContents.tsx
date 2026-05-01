@@ -71,32 +71,41 @@ export function DocsTableOfContents({ headings }: DocsTableOfContentsProps) {
   return (
     <aside
       aria-label="On this page"
-      className="sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto text-sm"
+      // QA iter-1 (design POLISH): top-16 matches the sticky nav (was top-20).
+      className="sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto text-sm"
     >
       <p className="mb-3 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground/70">
         On this page
       </p>
-      <ul className="space-y-1.5">
-        {headings.map((h) => (
-          <li
-            key={h.slug}
-            // h3 entries indented one notch deeper than h2 so the
-            // hierarchy reads visually.
-            className={cn("text-xs", h.level === 3 && "pl-3")}
-          >
-            <a
-              href={`#${h.slug}`}
-              className={cn(
-                "block transition-colors",
-                activeSlug === h.slug
-                  ? "text-primary"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
+      {/* QA iter-1 (a11y M-A2 + design M-D5): vertical border-l acts as
+          the anchor bar; active heading swaps to a 2px primary border so
+          the active state is signaled by both color AND a structural
+          indicator (WCAG 1.4.1 — color is not the only cue). */}
+      <ul className="space-y-1 border-l border-border/30">
+        {headings.map((h) => {
+          const isActive = activeSlug === h.slug;
+          return (
+            <li
+              key={h.slug}
+              // QA iter-1 (design POLISH): pl-2 instead of pl-3 — 12px
+              // indent on 12px text was too aggressive.
+              className={cn("text-xs", h.level === 3 && "pl-2")}
             >
-              {h.text}
-            </a>
-          </li>
-        ))}
+              <a
+                href={`#${h.slug}`}
+                aria-current={isActive ? "location" : undefined}
+                className={cn(
+                  "-ml-px block border-l-2 py-0.5 pl-3 transition-colors",
+                  isActive
+                    ? "border-primary text-primary"
+                    : "border-transparent text-muted-foreground hover:border-border/60 hover:text-foreground",
+                )}
+              >
+                {h.text}
+              </a>
+            </li>
+          );
+        })}
       </ul>
     </aside>
   );

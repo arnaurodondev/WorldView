@@ -58,17 +58,32 @@ export function CodeBlock({ title, children, lang }: CodeBlockProps) {
     <div className="my-5 overflow-hidden rounded-[2px] border border-border/40 bg-card">
       {(title || lang) && (
         <div className="flex items-center justify-between border-b border-border/40 bg-muted/40 px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          <span>{title}</span>
+          {/* QA iter-1 (design m-D7): only render the title span when set;
+              an empty span made flex layout asymmetric. */}
+          {title ? <span>{title}</span> : <span aria-hidden="true" />}
           {lang ? <span className="text-muted-foreground/60">{lang}</span> : null}
         </div>
       )}
-      <div className="relative">
+      {/* QA iter-1 (bugs m-3, a11y m-3): the copy button uses
+          group-hover:opacity-100; the `group` MUST sit on an ancestor that
+          contains BOTH the button and the code. The previous arrangement
+          had `group` on the inner div (button's sibling), so the button
+          was effectively invisible on desktop. focus-within reveals the
+          button when keyboard users tab to it. */}
+      <div className="group relative">
+        {/* Visually-hidden live region announces clipboard success to
+            screen readers — required to make the copy action perceivable
+            without sight. QA iter-1 (a11y M-A5). */}
+        <span role="status" aria-live="polite" className="sr-only">
+          {copied ? "Copied to clipboard" : ""}
+        </span>
         <button
           type="button"
           onClick={handleCopy}
           aria-label="Copy code"
           className={cn(
-            "absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-[2px] border border-border/40 bg-card/80 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100",
+            "absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-[2px] border border-border/40 bg-card/80 text-muted-foreground opacity-0 transition-opacity hover:text-foreground",
+            "group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100",
             // Always visible on touch devices where hover-reveal doesn't work.
             "[@media(hover:none)]:opacity-100",
           )}
@@ -79,11 +94,7 @@ export function CodeBlock({ title, children, lang }: CodeBlockProps) {
             <Copy className="h-3.5 w-3.5" />
           )}
         </button>
-        {/* group/group-hover pattern: button only appears when hovering the
-            code block itself, keeping the page chrome quiet. */}
-        <div ref={preRef} className="group">
-          {children}
-        </div>
+        <div ref={preRef}>{children}</div>
       </div>
     </div>
   );

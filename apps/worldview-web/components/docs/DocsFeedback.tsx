@@ -16,7 +16,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ThumbsUp, ThumbsDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -32,15 +32,31 @@ export function DocsFeedback({ pageUrl }: DocsFeedbackProps) {
   const [comment, setComment] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // QA iter-1 (a11y M-A1 followup): when thumbs-down opens the textarea,
+  // move focus into it so SR users immediately know they can type.
+  useEffect(() => {
+    if (choice === "down" && textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  }, [choice]);
 
   async function handleVote(vote: "up" | "down") {
     setChoice(vote);
-    // Thumbs-up has no follow-up form — fire-and-forget the POST.
+    // Thumbs-up has no follow-up form. QA iter-1 (bugs M-1): previously
+    // showed "Thanks!" even on POST failure (silently misleading the
+    // user). Now: only mark submitted on real success; on failure leave
+    // the buttons available for retry and surface a small error line.
     if (vote === "up") {
-      await postFeedback({ pageUrl, vote, comment: null }).then(
-        () => setSubmitted(true),
-        () => setSubmitted(true), // soft-fail — don't blame the reader
-      );
+      try {
+        await postFeedback({ pageUrl, vote, comment: null });
+        setSubmitted(true);
+        setError(null);
+      } catch (e) {
+        setChoice(null); // let the user click again
+        setError(e instanceof Error ? e.message : "Could not send feedback");
+      }
     }
     // Thumbs-down opens the textarea; submit happens after they hit "Send".
   }
@@ -68,7 +84,14 @@ export function DocsFeedback({ pageUrl }: DocsFeedbackProps) {
   }
 
   return (
-    <div className="mt-8 rounded-[2px] border border-border/40 bg-card/40 p-4">
+    // QA iter-1 (design m-D11): drop the bordered card chrome on the
+    // initial state — feels too "form-y" for a thumbs prompt. Stripe and
+    // Vercel use a single inline row. The bordered chrome returns when
+    // the textarea opens (thumbs-down) since that IS a form.
+    <div className="mt-8">
+      {error ? (
+        <p className="mb-2 text-xs text-destructive">{error}</p>
+      ) : null}
       <p className="mb-3 text-xs font-medium text-foreground">
         Was this page helpful?
       </p>
@@ -104,7 +127,7 @@ export function DocsFeedback({ pageUrl }: DocsFeedbackProps) {
       </div>
 
       {choice === "down" ? (
-        <div className="mt-3 space-y-2">
+        <div className="mt-3 space-y-2 rounded-[2px] border border-border/40 bg-card/40 p-3">
           <label
             htmlFor="docs-feedback-comment"
             className="block text-xs text-muted-foreground"
@@ -113,6 +136,7 @@ export function DocsFeedback({ pageUrl }: DocsFeedbackProps) {
           </label>
           <textarea
             id="docs-feedback-comment"
+            ref={textareaRef}
             value={comment}
             onChange={(e) => setComment(e.target.value)}
             rows={3}

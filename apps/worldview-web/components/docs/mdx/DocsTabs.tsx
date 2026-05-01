@@ -51,6 +51,23 @@ export function DocsTabs({ items, children, storeKey }: DocsTabsProps) {
     }
   }
 
+  // QA iter-1 (a11y M-A6): WAI-ARIA tabs pattern requires arrow-key nav
+  // (Left/Right wrap, Home/End jump). Roving tabindex (only the active
+  // tab has tabIndex=0; others -1) so Tab moves OUT of the tab list.
+  function handleTabKey(e: React.KeyboardEvent<HTMLButtonElement>, i: number) {
+    let next = i;
+    if (e.key === "ArrowRight") next = (i + 1) % items.length;
+    else if (e.key === "ArrowLeft") next = (i - 1 + items.length) % items.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = items.length - 1;
+    else return;
+    e.preventDefault();
+    selectTab(next);
+    // Move focus to the new tab so the user can immediately activate it.
+    const btn = document.getElementById(`tab-${next}`);
+    btn?.focus();
+  }
+
   return (
     <div className="my-5">
       <div role="tablist" aria-label="Code language" className="flex gap-1 border-b border-border/40">
@@ -62,7 +79,10 @@ export function DocsTabs({ items, children, storeKey }: DocsTabsProps) {
             aria-selected={i === active}
             aria-controls={`tabpanel-${i}`}
             id={`tab-${i}`}
+            // Roving tabindex per WAI-ARIA tabs pattern
+            tabIndex={i === active ? 0 : -1}
             onClick={() => selectTab(i)}
+            onKeyDown={(e) => handleTabKey(e, i)}
             className={cn(
               "relative -mb-px border-b-2 px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-colors",
               i === active
