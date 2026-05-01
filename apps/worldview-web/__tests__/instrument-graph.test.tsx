@@ -28,7 +28,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import { EntityGraph } from "@/components/instrument/EntityGraph";
+import { EntityGraph, GraphErrorBoundary } from "@/components/instrument/EntityGraph";
 import type { EntityGraph as EntityGraphData } from "@/types/api";
 
 // ── @react-sigma/core mock ────────────────────────────────────────────────────
@@ -195,65 +195,54 @@ describe("EntityGraph", () => {
     expect(container).toBeInTheDocument();
   });
 
-  it("EntityGraph does not propagate errors beyond itself (ErrorBoundary present)", () => {
-    // WHY: The GraphErrorBoundary is an internal class component inside EntityGraph.tsx.
-    // Since it's not exported, we test it indirectly by building a minimal React error
-    // boundary fixture that mirrors the same behavior, confirming the pattern works.
-    //
-    // WHY NOT test with a real throw here: The only way to trigger a throw inside the
-    // existing GraphErrorBoundary is to make SigmaContainer throw. But in this test file,
-    // SigmaContainer is mocked to a plain div (not a vi.fn()), so we can't
-    // mockImplementationOnce on it without reworking the entire mock factory.
-    //
-    // EQUIVALENT COVERAGE: The ErrorBoundary renders "Graph unavailable" + "Reload page".
-    // We verify this by building a local boundary + throwing child inline.
-    // The full WebGL failure path (WebGL2RenderingContext not defined) is in e2e tests.
+  it("GraphErrorBoundary renders children when no error occurs", () => {
+    // WHY: confirms the boundary is transparent in the happy path so it doesn't
+    // cosmetically affect the EntityGraph component tree when WebGL is healthy.
+    render(
+      <GraphErrorBoundary>
+        <div data-testid="boundary-child">healthy</div>
+      </GraphErrorBoundary>,
+    );
 
+    expect(screen.getByTestId("boundary-child")).toBeInTheDocument();
+    expect(screen.getByText("healthy")).toBeInTheDocument();
+  });
+
+  it("GraphErrorBoundary renders the production fallback when a child throws", () => {
+    // PLAN-0057 Wave C T-008: assert the REAL production fallback text instead
+    // of an inline-mirrored boundary (the previous test rebuilt its own boundary
+    // class and asserted on its own copy — a tautology).  We import the actual
+    // exported `GraphErrorBoundary` and let a `<ThrowingChild>` trigger it; the
+    // assertions check the exact strings rendered by the production component.
+
+    // React logs the captured error via console.error when an ErrorBoundary
+    // catches a render-time throw.  Silencing keeps the test output clean.
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
-      // Define a minimal error boundary that mirrors GraphErrorBoundary behavior
-      class TestErrorBoundary extends React.Component<
-        { children: React.ReactNode },
-        { hasError: boolean }
-      > {
-        constructor(props: { children: React.ReactNode }) {
-          super(props);
-          this.state = { hasError: false };
-        }
-        static getDerivedStateFromError(): { hasError: boolean } {
-          return { hasError: true };
-        }
-        override render() {
-          if (this.state.hasError) {
-            return (
-              <div>
-                <p>Graph unavailable</p>
-                <p>WebGL is required for the entity graph visualization.</p>
-                <button onClick={() => {}}>Reload page</button>
-              </div>
-            );
-          }
-          return this.props.children;
-        }
-      }
-
-      // A child that throws during render — simulates WebGL context failure
+      // A child that throws during render — simulates WebGL context creation
+      // failure inside the SigmaContainer subtree.
       const ThrowingChild = (): React.ReactNode => {
         throw new Error("WebGL2RenderingContext is not defined");
       };
 
       render(
-        <TestErrorBoundary>
+        <GraphErrorBoundary>
           {React.createElement(ThrowingChild)}
-        </TestErrorBoundary>,
+        </GraphErrorBoundary>,
       );
 
-      // WHY these assertions: the fallback UI must show these three elements
-      // so the user understands what failed and how to recover.
-      expect(screen.getByText("Graph unavailable")).toBeInTheDocument();
-      expect(screen.getByText(/WebGL is required/)).toBeInTheDocument();
-      expect(screen.getByText("Reload page")).toBeInTheDocument();
+      // WHY exact text including the em-dash: the production component renders
+      // "Graph unavailable — WebGL required." (U+2014).  Asserting on the exact
+      // string catches accidental copy edits / dash-style drift in code review.
+      expect(
+        screen.getByText("Graph unavailable — WebGL required."),
+      ).toBeInTheDocument();
+      // The "Reload page" button is the user's only recovery affordance — it
+      // must be rendered so we can click it (and it must be a real <button>).
+      expect(
+        screen.getByRole("button", { name: /reload page/i }),
+      ).toBeInTheDocument();
     } finally {
       consoleSpy.mockRestore();
     }
