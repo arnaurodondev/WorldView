@@ -70,9 +70,11 @@ const mockApplyOptions = vi.fn();
 const mockRemove = vi.fn();
 const mockFitContent = vi.fn();
 
+// PLAN-0059 H-1: lightweight-charts v5 — series creation now goes through
+// chart.addSeries(SeriesDefinition, opts). Mock provides the same shape.
 vi.mock("lightweight-charts", () => ({
   createChart: vi.fn(() => ({
-    addCandlestickSeries: vi.fn(() => ({
+    addSeries: vi.fn(() => ({
       setData: mockSetData,
       applyOptions: mockApplyOptions,
     })),
@@ -80,6 +82,10 @@ vi.mock("lightweight-charts", () => ({
     timeScale: vi.fn(() => ({ fitContent: mockFitContent })),
     remove: mockRemove,
   })),
+  CandlestickSeries: "CandlestickSeries",
+  LineSeries: "LineSeries",
+  HistogramSeries: "HistogramSeries",
+  AreaSeries: "AreaSeries",
 }));
 
 // ── ResizeObserver shim — jsdom doesn't ship one ─────────────────────────────
