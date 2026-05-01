@@ -16,6 +16,7 @@ from api_gateway.clients import (
     DownstreamError,
     ServiceClients,
     get_company_overview,
+    get_instrument_page_bundle,
     get_map_layers,
     get_market_heatmap,
     get_relevant_news,
@@ -107,6 +108,25 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
         )
     except DownstreamError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
+
+
+@router.get("/instruments/{instrument_id}/page-bundle")
+async def instrument_page_bundle(instrument_id: str, request: Request) -> dict[str, Any]:
+    """PLAN-0059 I-5 — instrument-detail page initial-load composite.
+
+    Collapses the overview-tab waterfall (overview + fundamentals + technicals
+    + insider + top-news) into a single round-trip. Each downstream call uses
+    its own freshly-issued internal JWT so InternalJWTMiddleware's JTI replay
+    detection accepts the parallel fan-out.
+
+    Per-call failures degrade gracefully — failed sub-resources return null
+    fields rather than failing the whole bundle. The FE renders partial UIs.
+    """
+    return await get_instrument_page_bundle(
+        _clients(request),
+        instrument_id,
+        make_headers=lambda: _auth_headers(request),
+    )
 
 
 # ── News ──────────────────────────────────────────────────
@@ -1000,12 +1020,14 @@ async def get_quote_stream_stub(request: Request) -> Response:
     # routes do but this stub didn't, causing NameError → 500. Also adds
     # Retry-After per DS-FIX-002 so over-eager polling clients back off.
     return Response(
-        content=json.dumps({
-            "error": "not_implemented",
-            "detail": "WebSocket quote stream lands in PLAN-0059 Wave D. "
-                      "Use polling on /v1/quotes/{instrument_id} until then.",
-            "wave": "D",
-        }).encode(),
+        content=json.dumps(
+            {
+                "error": "not_implemented",
+                "detail": "WebSocket quote stream lands in PLAN-0059 Wave D. "
+                "Use polling on /v1/quotes/{instrument_id} until then.",
+                "wave": "D",
+            }
+        ).encode(),
         status_code=503,
         media_type="application/json",
         headers={"Retry-After": "60"},
