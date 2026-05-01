@@ -195,6 +195,15 @@ ON CONFLICT (entity_id) DO NOTHING
             # alias does not abort the outer transaction (matches the pattern in
             # instrument_consumer.py).
             async def _try_insert_alias(alias_text: str, normalized: str, alias_type: str) -> None:
+                # PLAN-0057 QA DS-010 fix: previously `except Exception: pass`
+                # silently swallowed everything — UniqueViolation (expected on
+                # idempotent re-delivery) was indistinguishable from FK
+                # violations / pool exhaustion / type mismatches (real bugs).
+                # Now we let the savepoint roll back UniqueViolation silently
+                # but log every other error class at WARN so operators can spot
+                # alias-insert regressions without grepping the entire stream.
+                from sqlalchemy.exc import IntegrityError
+
                 try:
                     async with session.begin_nested():
                         await session.execute(
@@ -213,9 +222,28 @@ DO NOTHING
                                 "atype": alias_type,
                             },
                         )
-                except Exception:  # noqa: S110
-                    # SAVEPOINT rolled back; outer transaction remains usable.
-                    pass
+                except IntegrityError as exc:
+                    pgcode = getattr(getattr(exc, "orig", None), "pgcode", None)
+                    if pgcode == "23505":
+                        # UniqueViolation — expected when the same instrument
+                        # is re-delivered to the consumer.  Silent.
+                        return
+                    logger.warning(  # type: ignore[no-any-return]
+                        "alias_insert_savepoint_rolled_back",
+                        entity_id=str(instrument_id),
+                        alias=alias_text,
+                        alias_type=alias_type,
+                        pgcode=pgcode,
+                        error=str(exc),
+                    )
+                except Exception as exc:
+                    logger.warning(  # type: ignore[no-any-return]
+                        "alias_insert_unexpected_error",
+                        entity_id=str(instrument_id),
+                        alias=alias_text,
+                        alias_type=alias_type,
+                        error=str(exc),
+                    )
 
             await _try_insert_alias(canonical_name, normalised_name, "EXACT")
             await _try_insert_alias(ticker_upper, ticker_upper, "TICKER")

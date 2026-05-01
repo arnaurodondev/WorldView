@@ -70,6 +70,41 @@ def _find_schema_dir() -> Path:
 _SCHEMA_DIR = _find_schema_dir()
 
 
+# PLAN-0057 QA F-SEC-02 layer 2: stop-words that signal an LLM injection
+# attempt rather than a legitimate alias. Substring match is intentional —
+# these tokens never appear in real entity aliases. ASCII-uppercase compare.
+_LLM_ALIAS_STOPWORDS: tuple[str, ...] = (
+    "IGNORE",
+    "SYSTEM",
+    "PROMPT",
+    "INSTRUCTION",
+    ">>>",
+    "<<<",
+)
+_LLM_ALIAS_MAX_LEN = 64
+# Allow a Bell character through? No — control chars are universally suspicious
+# in alias text and would never appear in legitimate company / instrument names.
+_LLM_ALIAS_FORBIDDEN_CHARS: tuple[str, ...] = ("\n", "\r", "\t")
+
+
+def _is_valid_llm_alias(alias: str) -> bool:
+    """Return True iff ``alias`` looks like a real entity alias.
+
+    PLAN-0057 QA F-SEC-02 layer 2 — output validation. Defends against the
+    LLM echoing attacker-controlled tokens from a poisoned ``description``.
+    See ``libs/prompts/src/prompts/knowledge/alias.py`` for layer 1 (prompt
+    delimiter wrapping + ``sanitize_description``).
+    """
+    if not alias or not alias.strip():
+        return False
+    if len(alias) > _LLM_ALIAS_MAX_LEN:
+        return False
+    if any(ch in alias for ch in _LLM_ALIAS_FORBIDDEN_CHARS):
+        return False
+    upper = alias.upper()
+    return all(stop not in upper for stop in _LLM_ALIAS_STOPWORDS)
+
+
 # ---------------------------------------------------------------------------
 # Minimal no-op UoW (same pattern as existing consumers)
 # ---------------------------------------------------------------------------
@@ -430,10 +465,22 @@ WHERE entity_id = :entity_id
         except Exception:
             aliases_so_far = ""
 
-        # Truncate description to 500 chars to keep the prompt small (the model
-        # only needs enough context to disambiguate the entity, not the full
-        # company write-up).
-        description_excerpt = description[:500] if description else ""
+        # PLAN-0057 QA F-SEC-02 layer 1 (prompt sanitisation): strip control
+        # characters and collapse newlines BEFORE truncation so an attacker
+        # can't smuggle "ignore the above" instructions across line breaks.
+        # Then truncate to 500 chars (model only needs enough context to
+        # disambiguate, not the full company write-up).
+        from prompts.knowledge.alias import sanitize_description
+
+        clean_description = sanitize_description(description)
+        description_excerpt = clean_description[:500]
+        # Hash kept short for the audit log (full hash is 64 chars; 16 is
+        # plenty to disambiguate two distinct descriptions in logs).
+        import hashlib
+
+        description_hash = (
+            hashlib.sha256(description.encode("utf-8")).hexdigest()[:16] if description else ""
+        )
 
         inp = ExtractionInput(
             prompt=ALIAS_GENERATION.render(
@@ -452,6 +499,18 @@ WHERE entity_id = :entity_id
 
         llm_aliases: list[str] = result.result.get("aliases") or []
         for alias in llm_aliases[:5]:
+            # PLAN-0057 QA F-SEC-02 layer 2 (output validation): the LLM may
+            # echo poisoned content from the description. Reject anything that
+            # looks like an injection attempt rather than a real alias.
+            if not _is_valid_llm_alias(alias):
+                logger.info(  # type: ignore[no-any-return]
+                    "instrument_consumer_llm_alias_rejected",
+                    entity_id=str(entity_id),
+                    alias=alias[:80],  # bound the log line length too
+                    description_hash=description_hash,
+                )
+                continue
+
             normalized = alias.lower().strip()
             existing = await alias_repo.find_exact(normalized)
             if existing and existing["entity_id"] != entity_id:
@@ -464,6 +523,17 @@ WHERE entity_id = :entity_id
             try:
                 async with session.begin_nested():
                     await alias_repo.insert(entity_id, alias, normalized, "LLM", "instrument_consumer")
+                # PLAN-0057 QA F-SEC-02 layer 3 (provenance audit): log every
+                # successful LLM-typed alias with the description hash so
+                # forensic replay is possible if a poisoned alias is ever
+                # discovered downstream.
+                logger.info(  # type: ignore[no-any-return]
+                    "instrument_consumer_llm_alias_inserted",
+                    entity_id=str(entity_id),
+                    alias=alias,
+                    alias_type="LLM",
+                    description_hash=description_hash,
+                )
             except Exception:  # noqa: S110
                 pass  # SAVEPOINT rolled back; outer transaction remains usable
 
