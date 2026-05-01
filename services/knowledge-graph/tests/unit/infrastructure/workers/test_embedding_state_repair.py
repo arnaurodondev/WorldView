@@ -184,5 +184,5 @@ class TestRepairMissingEmbeddingState:
         factory = MagicMock(side_effect=_ctx)
 
         stats = asyncio.run(repair_missing_embedding_state(factory))
-        # The cap is 100 iterations × _PAGE_SIZE rows per iteration.
+        # The cap is 100 iterations x _PAGE_SIZE rows per iteration.
         assert stats["checked"] == 100 * _PAGE_SIZE
