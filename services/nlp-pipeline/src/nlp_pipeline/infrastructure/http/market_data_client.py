@@ -199,7 +199,11 @@ class MarketDataClient:
         token = await self._get_internal_jwt()
         headers = {"X-Internal-JWT": token} if token else {}
         try:
-            response = await self._client.get(url, headers=headers)
+            # PLAN-0052 platform-QA round 7 (2026-05-01): defense-in-depth — set
+            # an explicit per-call timeout (10s) so the worker can never hang
+            # indefinitely if the outer AsyncClient default timeout is ever
+            # cleared by a future refactor (BP-235 pattern).
+            response = await self._client.get(url, headers=headers, timeout=10.0)
         except Exception as exc:
             logger.warning(  # type: ignore[no-any-return]
                 "market_data_resolve_request_error",
@@ -274,7 +278,11 @@ class MarketDataClient:
         headers = {"X-Internal-JWT": token} if token else {}
 
         try:
-            response = await self._client.get(url, params=params, headers=headers)
+            # PLAN-0052 platform-QA round 7 (2026-05-01): explicit per-call
+            # timeout ensures the worker cannot stall waiting on a half-open
+            # market-data connection. The outer AsyncClient also sets 10s but
+            # we mirror it here so this guarantee is co-located with the call.
+            response = await self._client.get(url, params=params, headers=headers, timeout=10.0)
         except Exception as exc:
             logger.warning(  # type: ignore[no-any-return]
                 "market_data_client_request_error",

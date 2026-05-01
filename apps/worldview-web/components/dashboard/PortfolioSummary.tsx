@@ -380,7 +380,11 @@ export function PortfolioSummary() {
           // S1 holding fields (which are null for unenriched brokerage imports).
           const ov = holdingOverviews?.[h.instrument_id];
           const displayTicker = ov?.ticker || h.ticker || "—";
-          const displayName = ov?.name || h.name || "Unknown holding";
+          // PLAN-0052 platform-QA round 7 (2026-05-01): fall back to the
+          // ticker symbol before "Unknown holding". S1 brokerage imports
+          // arrive with name=null until the instrument enrichment job runs;
+          // showing the ticker is more useful than a placeholder string.
+          const displayName = ov?.name || h.name || displayTicker || "Unknown holding";
 
           return (
             <div
