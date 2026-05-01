@@ -20,17 +20,25 @@ import { Callout } from "./Callout";
 import { CodeBlock } from "./CodeBlock";
 import { DocsTabs, DocsTab } from "./DocsTabs";
 import { Steps, Step } from "./Steps";
+// QA iter-1 (bugs m-4): use the shared slugifyHeading from lib/docs.ts
+// so TOC anchors and rendered heading IDs cannot drift apart.
+import { slugifyHeading as slugify } from "@/lib/docs";
 
 /**
- * slugify — turn heading text into an HTML id slug. Mirrors the same
- * logic used by lib/docs.ts:extractHeadings so TOC anchors and rendered
- * heading IDs always agree.
+ * sanitiseHref — block javascript:/data:/vbscript: schemes from MDX
+ * authored links. The trusted-author threat model accepts MDX execution
+ * server-side, but a stray javascript: URL in body content would still
+ * fire on click. Defense-in-depth.
+ *
+ * QA iter-1 (security m-9).
  */
-function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-");
+function sanitiseHref(href: string | undefined): string {
+  if (!href) return "#";
+  const lower = href.trim().toLowerCase();
+  if (lower.startsWith("javascript:") || lower.startsWith("data:") || lower.startsWith("vbscript:")) {
+    return "#";
+  }
+  return href;
 }
 
 /**
@@ -55,21 +63,23 @@ function textOf(node: ReactNode): string {
  */
 export const mdxComponents = {
   // ── Headings ──────────────────────────────────────────────────────────
-  // h1 is reserved for the page title rendered outside of MDX, so we treat
-  // any h1 in MDX as an h2 to preserve hierarchy. Real authors should not
-  // use h1 in MDX content — we accept it gracefully.
+  // QA iter-1 (design M-D2): differentiate h1 (orphan) from h2 so authors
+  // get a visible cue when they accidentally write `# Title` in MDX.
+  // Page-level h1 is rendered by page.tsx outside the MDX body. The amber
+  // left-border on orphan h1 makes the lint failure obvious in dev.
   h1: ({ children }: { children?: ReactNode }) => (
-    <h2 id={slugify(textOf(children))} className="mt-10 mb-3 text-2xl font-semibold tracking-tight text-foreground scroll-mt-24">
+    <h2 id={slugify(textOf(children))} className="mt-9 mb-2 border-l-2 border-primary pl-3 text-2xl font-semibold tracking-tight text-foreground scroll-mt-24">
       {children}
     </h2>
   ),
+  // QA iter-1 (design M-D2): tighter rhythm — mt-10 → mt-9 / mb-3 → mb-2.
   h2: ({ children }: { children?: ReactNode }) => (
-    <h2 id={slugify(textOf(children))} className="mt-10 mb-3 text-2xl font-semibold tracking-tight text-foreground scroll-mt-24">
+    <h2 id={slugify(textOf(children))} className="mt-9 mb-2 text-2xl font-semibold tracking-tight text-foreground scroll-mt-24">
       {children}
     </h2>
   ),
   h3: ({ children }: { children?: ReactNode }) => (
-    <h3 id={slugify(textOf(children))} className="mt-7 mb-2 text-lg font-semibold tracking-tight text-foreground scroll-mt-24">
+    <h3 id={slugify(textOf(children))} className="mt-6 mb-1.5 text-lg font-semibold tracking-tight text-foreground scroll-mt-24">
       {children}
     </h3>
   ),
@@ -80,20 +90,23 @@ export const mdxComponents = {
   ),
 
   // ── Body text ────────────────────────────────────────────────────────
+  // QA iter-1 (design M-D1): bumped from text-muted-foreground +
+  // leading-relaxed (consumer-SaaS) to text-foreground/90 + leading-6
+  // (Bloomberg-grade — full-strength reading text, tight rhythm).
   p: ({ children }: { children?: ReactNode }) => (
-    <p className="my-3 text-sm leading-relaxed text-muted-foreground">{children}</p>
+    <p className="my-3 text-sm leading-6 text-foreground/90">{children}</p>
   ),
   ul: ({ children }: { children?: ReactNode }) => (
-    <ul className="my-3 list-disc space-y-1 pl-5 text-sm text-muted-foreground marker:text-primary/60">
+    <ul className="my-3 list-disc space-y-1 pl-5 text-sm leading-6 text-foreground/90 marker:text-primary/60">
       {children}
     </ul>
   ),
   ol: ({ children }: { children?: ReactNode }) => (
-    <ol className="my-3 list-decimal space-y-1 pl-5 text-sm text-muted-foreground marker:text-primary/60">
+    <ol className="my-3 list-decimal space-y-1 pl-5 text-sm leading-6 text-foreground/90 marker:text-primary/60">
       {children}
     </ol>
   ),
-  li: ({ children }: { children?: ReactNode }) => <li className="leading-relaxed">{children}</li>,
+  li: ({ children }: { children?: ReactNode }) => <li className="leading-6">{children}</li>,
   blockquote: ({ children }: { children?: ReactNode }) => (
     <blockquote className="my-5 border-l-2 border-primary/40 bg-muted/20 px-4 py-2 italic text-foreground">
       {children}
@@ -108,26 +121,30 @@ export const mdxComponents = {
   em: ({ children }: { children?: ReactNode }) => <em className="italic">{children}</em>,
   code: ({ children }: { children?: ReactNode }) => (
     // Inline `code` only (block code is handled by rehype-pretty-code <pre>).
-    <code className="rounded-[2px] bg-muted/60 px-1 py-0.5 font-mono text-[12px] text-foreground">
+    // QA iter-1 (design M-D3): bumped from text-[12px] / bg-muted/60 to
+    // text-[13px] / bg-muted/80 — was reading as a downsize against 14px
+    // body. Stripe/Vercel use ~0.9em with stronger bg differentiation.
+    <code className="rounded-[2px] bg-muted/80 px-1 py-0.5 font-mono text-[13px] text-foreground">
       {children}
     </code>
   ),
   a: ({ href, children }: { href?: string; children?: ReactNode }) => {
+    // QA iter-1 (security m-9): block javascript:/data:/vbscript: schemes.
+    const safe = sanitiseHref(href);
+    // QA iter-1 (design POLISH): always-underline body links so they're
+    // scannable inside paragraphs. underline-offset-2 keeps it crisp.
+    const cls =
+      "text-primary underline decoration-primary/30 underline-offset-2 hover:decoration-primary";
     // Internal links use next/link for prefetching; external open in new tab.
-    if (href?.startsWith("/")) {
+    if (safe.startsWith("/")) {
       return (
-        <Link href={href} className="text-primary underline-offset-2 hover:underline">
+        <Link href={safe} className={cls}>
           {children}
         </Link>
       );
     }
     return (
-      <a
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-primary underline-offset-2 hover:underline"
-      >
+      <a href={safe} target="_blank" rel="noopener noreferrer" className={cls}>
         {children}
       </a>
     );

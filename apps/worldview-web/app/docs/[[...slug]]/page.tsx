@@ -23,10 +23,10 @@ import rehypePrettyCode from "rehype-pretty-code";
 import remarkGfm from "remark-gfm";
 
 import {
-  getAllDocs,
   getDocBySlug,
   getDocSlugs,
   extractHeadings,
+  isSafeSlugSegment,
 } from "@/lib/docs";
 import { mdxComponents } from "@/components/docs/mdx/components";
 import { DocsBreadcrumb } from "@/components/docs/DocsBreadcrumb";
@@ -44,18 +44,23 @@ interface PageProps {
  * WHY pre-render all: docs is publicly indexable + small (~50 pages),
  * so SSG produces fastest TTFB and best SEO. No need for ISR.
  *
- * Returns an empty-slug entry for the /docs root index page since
- * Next.js requires it to be explicitly listed for the optional catch-all
- * route to pre-render that variant.
+ * QA iter-1 (architecture M-AR4): always return `{ slug: [] }` for the
+ * root rather than `{ slug: undefined }`. Next 15 catch-all contract is
+ * the empty-array form; the undefined form was undefined behaviour.
  */
 export async function generateStaticParams() {
   const slugs = getDocSlugs();
-  return slugs.map((slug) => ({ slug: slug.length === 0 ? undefined : slug }));
+  return slugs.map((slug) => ({ slug }));
 }
 
 /**
- * generateMetadata — per-page <title> + description from frontmatter.
- * Falls back gracefully when a page omits a description.
+ * generateMetadata — per-page <title> + description + canonical URL +
+ * Open Graph from frontmatter. Falls back gracefully when a page omits
+ * fields.
+ *
+ * QA iter-1 (SEO M-8): added canonical + per-page OG. Without canonical
+ * tags, /docs/getting-started and /docs/getting-started/ are seen as
+ * duplicate content by search engines.
  */
 export async function generateMetadata({ params }: PageProps) {
   const { slug } = await params;
@@ -66,6 +71,13 @@ export async function generateMetadata({ params }: PageProps) {
   return {
     title: doc.frontmatter.title,
     description: doc.frontmatter.description,
+    alternates: { canonical: doc.url },
+    openGraph: {
+      title: doc.frontmatter.title,
+      description: doc.frontmatter.description,
+      url: doc.url,
+      type: "article",
+    },
   };
 }
 
@@ -86,6 +98,13 @@ function editUrl(filePath: string): string | undefined {
 
 export default async function DocsPage({ params }: PageProps) {
   const { slug } = await params;
+  // QA iter-1 (bugs M-2, security M-1): defense-in-depth slug validator.
+  // Catches malformed segments before the loader. Today's loader does
+  // membership-test only (no fs.join with user input), so this is belt-
+  // and-suspenders, not gating real exploitable behaviour.
+  if (slug && !slug.every(isSafeSlugSegment)) {
+    notFound();
+  }
   const doc = getDocBySlug(slug);
   if (!doc) {
     notFound();
@@ -120,10 +139,36 @@ export default async function DocsPage({ params }: PageProps) {
         ) : null}
       </header>
 
+      {/* Mobile / tablet (md-lg): collapsed "On this page" disclosure
+          above the body so users on small viewports still get an in-page
+          TOC. QA iter-1 (a11y/responsive M-A8). */}
+      {headings.length > 0 ? (
+        <details className="mb-6 rounded-[2px] border border-border/40 bg-card/30 px-3 py-2 xl:hidden">
+          <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+            On this page ({headings.length})
+          </summary>
+          <ul className="mt-2 space-y-1 border-l border-border/30 text-xs">
+            {headings.map((h) => (
+              <li key={h.slug} className={h.level === 3 ? "pl-2" : ""}>
+                <a
+                  href={`#${h.slug}`}
+                  className="-ml-px block border-l-2 border-transparent py-0.5 pl-3 text-muted-foreground hover:border-border/60 hover:text-foreground"
+                >
+                  {h.text}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+
       {/* Right-rail TOC — visible only at xl widths since the layout
-          allocates the third column conditionally. The empty-headings
-          case is handled inside the component. */}
-      <div className="hidden xl:fixed xl:right-8 xl:top-24 xl:block xl:w-44">
+          allocates the third column conditionally. Empty-headings case
+          handled inside the component. QA iter-1 (a11y m-AR-TOC):
+          xl:sticky inside the grid cell instead of xl:fixed so the
+          reserved column actually holds the TOC and there's no overlap
+          risk at the breakpoint boundary. */}
+      <div className="hidden xl:absolute xl:right-8 xl:top-24 xl:block xl:w-44">
         <DocsTableOfContents headings={headings} />
       </div>
 
@@ -158,9 +203,10 @@ export default async function DocsPage({ params }: PageProps) {
  * `dynamicParams: false` would 404 any request whose slug isn't in
  * generateStaticParams, but we want a soft 404 page instead, so we
  * leave it default (true) and rely on notFound() above.
+ *
+ * QA iter-1 (architecture m-AR3): explicitly request the Node runtime —
+ * lib/docs.ts uses node:fs which is incompatible with Edge. Pinning
+ * `runtime = "nodejs"` defends against future config drift.
  */
 export const dynamic = "force-static";
-
-// Touch the loader at module load so dev-server hot-reloads the index
-// without restart. Pure side-effect import — no runtime impact in prod.
-void getAllDocs;
+export const runtime = "nodejs";
