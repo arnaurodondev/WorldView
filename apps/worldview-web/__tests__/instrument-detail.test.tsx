@@ -87,15 +87,24 @@ vi.mock("next/dynamic", () => ({
 // jsdom. Without mocking, the dynamic import in OHLCVChart's useEffect throws
 // when the library tries to access canvas context. The chart is not the subject
 // of these tests — we just verify the timeframe selector and skeleton logic.
+// PLAN-0059 H-1: v5 factory mock — addSeries(SeriesDef, opts).
 vi.mock("lightweight-charts", () => ({
   createChart: vi.fn(() => ({
-    addCandlestickSeries: vi.fn(() => ({
+    addSeries: vi.fn(() => ({
       setData: vi.fn(),
+      applyOptions: vi.fn(),
     })),
     applyOptions: vi.fn(),
     timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
+    priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
+    subscribeCrosshairMove: vi.fn(),
+    unsubscribeCrosshairMove: vi.fn(),
     remove: vi.fn(),
   })),
+  CandlestickSeries: "CandlestickSeries",
+  LineSeries: "LineSeries",
+  HistogramSeries: "HistogramSeries",
+  AreaSeries: "AreaSeries",
 }));
 
 // ── Next.js router mock ───────────────────────────────────────────────────────
@@ -665,13 +674,18 @@ describe("OHLCVChart", () => {
     // Restore the original mock for subsequent tests
     vi.doMock("lightweight-charts", () => ({
       createChart: vi.fn(() => ({
-        addCandlestickSeries: vi.fn(() => ({
-          setData: vi.fn(),
-        })),
+        addSeries: vi.fn(() => ({ setData: vi.fn(), applyOptions: vi.fn() })),
         applyOptions: vi.fn(),
         timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
+        priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
+        subscribeCrosshairMove: vi.fn(),
+        unsubscribeCrosshairMove: vi.fn(),
         remove: vi.fn(),
       })),
+      CandlestickSeries: "CandlestickSeries",
+      LineSeries: "LineSeries",
+      HistogramSeries: "HistogramSeries",
+      AreaSeries: "AreaSeries",
     }));
   });
 

@@ -57,12 +57,18 @@ import { ChartToolbar } from "@/components/instrument/ChartToolbar";
 import { DrawingPalette } from "@/components/instrument/DrawingPalette";
 import { DrawingCanvas } from "@/components/instrument/DrawingCanvas";
 import { VolumeProfileOverlay } from "@/components/instrument/VolumeProfileOverlay";
+import { CrosshairHUD } from "@/components/instrument/CrosshairHUD";
 // WHY import IChartApi / ISeriesApi / UTCTimestamp: typed refs eliminate all the
 // `any`-casts that previously silenced TypeScript on chart + series method calls.
 // IChartApi = the chart instance returned by createChart().
 // ISeriesApi<T> = a generic series handle; T discriminates Candlestick/Line/Histogram.
 // UTCTimestamp = branded number type (number & { _brand: "UTCTimestamp" }) that
 // lightweight-charts uses to enforce time values are in Unix seconds (not ms).
+// PLAN-0059 H-1: lightweight-charts upgraded to v5. v5 collapses series-creation
+// into a single `chart.addSeries(SeriesDefinition, options)` factory; no more
+// `chart.addSeries(CandlestickSeries,opts)` / `chart.addSeries(LineSeries,opts)` shortcuts.
+// Series-definition values (CandlestickSeries / LineSeries / HistogramSeries /
+// AreaSeries) are imported from the package and passed as the first argument.
 import type { IChartApi, ISeriesApi, UTCTimestamp } from "lightweight-charts";
 import type { OHLCVBar } from "@/types/api";
 import type { CoordinateConverter } from "@/components/instrument/DrawingCanvas";
@@ -238,6 +244,12 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   const [showVolProfile, setShowVolProfile] = useState(false);
   const [showVWAPLine, setShowVWAPLine] = useState(false);
 
+  // ── PLAN-0059 H-2: log-scale toggle ───────────────────────────────────────
+  // WHY default false: linear is the institutional default. Log mode helps
+  // when comparing percentage changes across very different absolute prices
+  // (e.g. AAPL at $180 vs BRK.A at $700k). One toolbar toggle.
+  const [logScale, setLogScale] = useState(false);
+
   // ── Wave C: Volume profile data (computed from bars, not lightweight-charts) ─
   const [volumeProfileBuckets, setVolumeProfileBuckets] = useState<VolumeProfileBucket[]>([]);
 
@@ -343,7 +355,14 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
 
     async function initChart() {
       try {
-        const { createChart } = await import("lightweight-charts");
+        // v5 factory imports — see header note. SeriesDefinition values are
+        // passed to chart.addSeries(...) as the first arg.
+        const {
+          createChart,
+          CandlestickSeries,
+          LineSeries,
+          HistogramSeries,
+        } = await import("lightweight-charts");
 
         // WHY null check after await: dynamic import is async — by the time it
         // resolves, the component may have unmounted and the ref may be null.
@@ -367,7 +386,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         });
 
         // ── Candlestick series ─────────────────────────────────────────────
-        const series = chart.addCandlestickSeries({
+        const series = chart.addSeries(CandlestickSeries,{
           upColor: "#26A69A",         // --positive: teal-green (bullish)
           downColor: "#EF5350",       // --negative: muted red (bearish)
           borderUpColor: "#26A69A",
@@ -384,7 +403,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         // preventing volume bars from affecting the candlestick Y range.
         // WHY scaleMargins top:0.8: volume occupies the bottom 20% of chart
         // height (~56px at CHART_HEIGHT=280) — the candlestick area uses 80%.
-        const volumeSeries = chart.addHistogramSeries({
+        const volumeSeries = chart.addSeries(HistogramSeries,{
           color: "#26A69A",           // default color; overridden per-bar
           priceFormat: { type: "volume" },
           priceScaleId: "volume",
@@ -397,7 +416,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         // ── MA50 line series (yellow, default hidden) ──────────────────────
         // WHY #FFD60A (primary yellow): primary yellow is the brand accent;
         // using it for MA50 ties the overlay to the platform's identity.
-        const ma50Series = chart.addLineSeries({
+        const ma50Series = chart.addSeries(LineSeries,{
           color: "#FFD60A",
           lineWidth: 1,
           priceScaleId: "right",      // same scale as candlesticks
@@ -408,7 +427,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         // ── MA200 line series (sky-500, default hidden) ────────────────────
         // WHY #0EA5E9 (sky-500): distinct from MA50 yellow; blue is a common
         // convention for MA200 in Bloomberg and TradingView.
-        const ma200Series = chart.addLineSeries({
+        const ma200Series = chart.addSeries(LineSeries,{
           color: "#0EA5E9",
           lineWidth: 1,
           priceScaleId: "right",
@@ -421,7 +440,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         // RSI — orange line in a dedicated sub-pane (0-100 scale separate from price)
         // WHY priceScaleId "rsi": creates a separate price scale for the RSI oscillator
         // so it doesn't affect the candlestick Y axis range.
-        const rsiSeries = chart.addLineSeries({
+        const rsiSeries = chart.addSeries(LineSeries,{
           color: "#F59E0B",           // amber — oscillator convention
           lineWidth: 1,
           priceScaleId: "rsi",
@@ -438,19 +457,19 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
 
         // MACD — three series: MACD line (purple), signal line (orange), histogram (teal/red)
         // WHY priceScaleId "macd": separate sub-pane below price and RSI
-        const macdLine = chart.addLineSeries({
+        const macdLine = chart.addSeries(LineSeries,{
           color: "#A78BFA",           // purple-400 — MACD line (TradingView convention)
           lineWidth: 1,
           priceScaleId: "macd",
           visible: false,
         });
-        const macdSignal = chart.addLineSeries({
+        const macdSignal = chart.addSeries(LineSeries,{
           color: "#F59E0B",           // amber — signal line
           lineWidth: 1,
           priceScaleId: "macd",
           visible: false,
         });
-        const macdHist = chart.addHistogramSeries({
+        const macdHist = chart.addSeries(HistogramSeries,{
           color: "#26A69A",           // teal/red per bar in data
           priceScaleId: "macd",
           visible: false,
@@ -465,20 +484,20 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         // Bollinger Bands — three lines on the main price scale
         // WHY priceScaleId "right": BB overlays the candlesticks (same scale)
         // WHY dashed style: distinguishes BB from the solid MA50/MA200 lines
-        const bbUpper = chart.addLineSeries({
+        const bbUpper = chart.addSeries(LineSeries,{
           color: "#6366F1",           // indigo-500
           lineWidth: 1,
           lineStyle: 2,               // dashed (lightweight-charts LineStyle.Dashed = 2)
           priceScaleId: "right",
           visible: false,
         });
-        const bbMiddle = chart.addLineSeries({
+        const bbMiddle = chart.addSeries(LineSeries,{
           color: "#6366F199",         // indigo-500 at 60% opacity (middle band = SMA)
           lineWidth: 1,
           priceScaleId: "right",
           visible: false,
         });
-        const bbLower = chart.addLineSeries({
+        const bbLower = chart.addSeries(LineSeries,{
           color: "#6366F1",
           lineWidth: 1,
           lineStyle: 2,
@@ -490,7 +509,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         bbLowerRef.current = bbLower;
 
         // ATR — green line in a sub-pane (absolute $ volatility measure)
-        const atrSeries = chart.addLineSeries({
+        const atrSeries = chart.addSeries(LineSeries,{
           color: "#10B981",           // emerald-500 — volatility = green convention
           lineWidth: 1,
           priceScaleId: "atr",
@@ -502,13 +521,13 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         atrRef.current = atrSeries;
 
         // Stochastic — %K (teal) and %D (red) in a sub-pane
-        const stochK = chart.addLineSeries({
+        const stochK = chart.addSeries(LineSeries,{
           color: "#26A69A",           // teal — %K fast line
           lineWidth: 1,
           priceScaleId: "stoch",
           visible: false,
         });
-        const stochD = chart.addLineSeries({
+        const stochD = chart.addSeries(LineSeries,{
           color: "#EF5350",           // red — %D slow signal line
           lineWidth: 1,
           priceScaleId: "stoch",
@@ -521,7 +540,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         stochDRef.current = stochD;
 
         // OBV — sky-blue line on a separate OBV scale (cumulative volume units)
-        const obvSeries = chart.addLineSeries({
+        const obvSeries = chart.addSeries(LineSeries,{
           color: "#38BDF8",           // sky-400 — OBV (volume-based, not price)
           lineWidth: 1,
           priceScaleId: "obv",
@@ -536,7 +555,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         // WHY pink (#EC4899): VWAP is a price-level overlay (on the main scale)
         // but it's NOT a moving average (no smoothing). Pink distinguishes it
         // from MA50 (yellow) and MA200 (blue). TradingView uses pink for VWAP.
-        const vwapSeries = chart.addLineSeries({
+        const vwapSeries = chart.addSeries(LineSeries,{
           color: "#EC4899",
           lineWidth: 1,
           lineStyle: 1,               // dotted (VWAP convention — not a trend line)
@@ -546,7 +565,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         vwapRef.current = vwapSeries;
 
         // Volume MA20 — yellow-green line overlaid on the volume scale
-        const volMA20Series = chart.addLineSeries({
+        const volMA20Series = chart.addSeries(LineSeries,{
           color: "#84CC16",           // lime-500 — distinguishable on dark background
           lineWidth: 1,
           priceScaleId: "volume",
@@ -558,7 +577,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         // WHY duplicate: the Indicators dropdown "VWAP" is for advanced users who know
         // the abbreviation. The Volume submenu "VWAP Line" is labeled more descriptively
         // for users browsing volume sub-indicators. Both drive the same data computation.
-        const vwapLineSeries = chart.addLineSeries({
+        const vwapLineSeries = chart.addSeries(LineSeries,{
           color: "#EC4899",
           lineWidth: 1,
           lineStyle: 1,
@@ -793,6 +812,15 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     vwapLineRef.current?.applyOptions({ visible: showVWAPLine });
   }, [showVWAPLine]);
 
+  // ── PLAN-0059 H-2: apply log-scale to right price scale ───────────────────
+  // mode 0 = Normal, 1 = Logarithmic, 2 = Percentage, 3 = IndexedTo100.
+  useEffect(() => {
+    if (!chartRef.current) return;
+    chartRef.current.priceScale("right").applyOptions({
+      mode: logScale ? 1 : 0,
+    });
+  }, [logScale]);
+
   // ── Indicator toggle callback ──────────────────────────────────────────────
   // WHY useCallback: this is passed to ChartToolbar. Without useCallback, a new
   // function reference is created on every render, causing ChartToolbar to
@@ -889,6 +917,24 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
             {tf}
           </button>
         ))}
+
+        {/* PLAN-0059 H-2: log-scale toggle. Sits flush with timeframe tabs so
+            it reads as a sibling control. WHY linked to right scale only:
+            indicator panes (RSI/MACD/etc.) use their own scales and would
+            break under log transformation. */}
+        <button
+          onClick={() => setLogScale((v) => !v)}
+          className={`ml-1 rounded-[2px] px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors ${
+            logScale
+              ? "bg-primary/20 text-primary"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+          aria-pressed={logScale}
+          aria-label="Toggle logarithmic price scale"
+          title="Logarithmic price scale"
+        >
+          log
+        </button>
 
         {/* Chart overlay controls — right side of toolbar */}
         <ChartToolbar
@@ -993,6 +1039,16 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
               profileWidth={60}
             />
           )}
+
+          {/* ── PLAN-0059 H-2: Crosshair HUD ─────────────────────────────────
+              Shows OHLCV + volume at the hovered bar in the top-left of the
+              chart. Subscribes to chart.subscribeCrosshairMove. Pointer-events
+              disabled so it never blocks the chart's own crosshair tracking. */}
+          <CrosshairHUD
+            chart={chartRef.current}
+            candleSeries={seriesRef.current}
+            volumeSeries={volumeSeriesRef.current}
+          />
 
           {/* ── Skeleton loading overlay ───────────────────────────────────── */}
           {isLoading && !data && (
