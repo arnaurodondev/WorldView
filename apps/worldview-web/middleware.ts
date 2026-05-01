@@ -130,8 +130,15 @@ export const config = {
       missing: [
         // Skip pre-fetches — they don't need CSP enforcement and re-running
         // the middleware on each one would burn nonce-generation cycles.
+        // Coverage:
+        //   - next-router-prefetch: emitted by Next.js Link prefetch.
+        //   - purpose=prefetch: legacy Chrome / Safari prefetch.
+        //   - sec-purpose=prefetch: modern Chrome/Edge prefetch (Speculation
+        //     Rules API). Without this exclusion every browser-driven
+        //     prefetch burns a fresh nonce.
         { type: "header", key: "next-router-prefetch" },
         { type: "header", key: "purpose", value: "prefetch" },
+        { type: "header", key: "sec-purpose", value: "prefetch" },
       ],
     },
   ],
