@@ -1,29 +1,40 @@
 /**
- * components/dashboard/MarketHeatmap.tsx — GICS sector performance grid
+ * components/dashboard/MarketHeatmap.tsx — GICS sector performance treemap
  *
  * WHY THIS EXISTS: Portfolio managers need instant macro context — which sectors
  * are moving today. The heatmap gives a visual distribution of market forces
  * without reading individual stock data. Finviz/Bloomberg both feature this
  * prominently for the same reason: pattern recognition from color at a glance.
  *
+ * PLAN-0059 H-3: migrated from a fixed grid (every cell same size) to a true
+ * Bruls/Huijsen/van Wijk squarified treemap (lib/treemap.ts) where cell area
+ * is proportional to the sector's `instrument_count` (best proxy for sector
+ * weight until S9 returns market_cap_weight on the heatmap response).
+ *
+ * WHY squarified (not flex grid): institutional treemaps communicate TWO axes
+ * — direction (color) AND magnitude (size). Equal-cell grids miss the second
+ * axis entirely. With squarify, Tech (largest sector by instrument count)
+ * visually dominates while Materials (smallest) gets a smaller tile, matching
+ * Finviz / Bloomberg conventions.
+ *
  * WHY 7-STEP COLOR SCALE:
- * Linear interpolation from deep red (−3%) → neutral (#1A2030) → deep teal (+3%)
- * maps the typical daily range. Outside ±3% is clipped to max saturation.
- * Intermediates: step at ±1%, ±2%. 7 steps avoids visual noise from continuous gradients.
+ * Linear interpolation deep red (−3%) → neutral → deep teal (+3%) maps the
+ * typical daily range. Outside ±3% is clipped to max saturation.
  *
  * WHO USES IT: app/(app)/dashboard/page.tsx
- * DATA SOURCE: S9 GET /api/v1/market/heatmap → S3 screener grouped by sector
+ * DATA SOURCE: S9 GET /v1/market/heatmap → S3 screener grouped by sector
  * DESIGN REFERENCE: PRD-0028 §6.5 Dashboard MarketHeatmap, DESIGN_SYSTEM.md HeatCell
  */
 
 "use client";
-// WHY "use client": uses useQuery for data fetching.
 
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { heatCellColor } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SquarifiedTreemap } from "@/components/ui/squarified-treemap";
+import type { HeatmapSector } from "@/types/api";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -34,24 +45,20 @@ export function MarketHeatmap() {
     queryKey: ["market-heatmap"],
     queryFn: () => createGateway(accessToken).getMarketHeatmap(),
     enabled: !!accessToken,
-    // WHY 60s: heatmap is a macro view; sub-minute refresh would be noise
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
 
-  // ── Loading state ──────────────────────────────────────────────────────────
   if (isLoading) {
     return (
-      <div className="grid grid-cols-3 gap-1 sm:grid-cols-4">
+      <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 h-56">
         {Array.from({ length: 11 }).map((_, i) => (
-          <Skeleton key={i} className="h-14" style={{ animationDelay: `${i * 40}ms` }} />
+          <Skeleton key={i} className="h-full" style={{ animationDelay: `${i * 40}ms` }} />
         ))}
       </div>
     );
   }
 
-  // ── Error state ────────────────────────────────────────────────────────────
-  // WHY muted (not destructive red): backend service offline is not a user error.
   if (isError || !data) {
     return (
       <p className="py-3 text-xs text-muted-foreground">
@@ -60,49 +67,57 @@ export function MarketHeatmap() {
     );
   }
 
-  return (
-    // WHY 3 cols on mobile, 4 on sm+: 11 GICS sectors need 3 rows minimum
-    <div className="grid grid-cols-3 gap-1 sm:grid-cols-4">
-      {data.sectors.map((sector) => {
-        const { background, color } = heatCellColor(sector.change_pct);
+  // Treemap input: weight by instrument_count when present, fall back to 1
+  // so flat-zero sectors still receive a visible tile.
+  const items = data.sectors.map((s) => ({
+    id: s.name,
+    weight: s.instrument_count > 0 ? s.instrument_count : 1,
+    payload: s,
+  }));
 
-        return (
-          <div
-            key={sector.name}
-            // WHY rounded-[2px]: design system mandates 2px radius everywhere; bare `rounded` = 4px default
-            className="flex min-h-[3.5rem] flex-col items-center justify-center rounded-[2px] p-1 text-center"
-            style={{ backgroundColor: background }}
-          >
-            {/* Sector name — abbreviated to fit tight cell */}
-            <span
-              className="truncate text-[10px] font-medium leading-tight"
-              style={{ color }}
-              title={sector.name}
-            >
-              {abbreviateSector(sector.name)}
-            </span>
-            {/* Percentage change — the most important data point */}
-            <span
-              className="font-mono text-xs font-semibold tabular-nums"
-              style={{ color }}
-            >
-              {sector.change_pct !== null
-                ? `${sector.change_pct >= 0 ? "+" : ""}${sector.change_pct.toFixed(2)}%`
-                : "—"}
-            </span>
-          </div>
-        );
-      })}
+  return (
+    // Fixed 14rem (224px) height — keeps the treemap inside the dashboard
+    // card without forcing a CLS jump after measurement.
+    <div className="h-56">
+      <SquarifiedTreemap
+        items={items}
+        gap={2}
+        ariaLabel="Sector performance treemap"
+        renderTile={(cell) => <SectorTile sector={cell.item.payload} />}
+      />
+    </div>
+  );
+}
+
+// ── Tile ──────────────────────────────────────────────────────────────────────
+
+function SectorTile({ sector }: { sector: HeatmapSector }) {
+  const { background, color } = heatCellColor(sector.change_pct);
+  return (
+    <div
+      className="flex h-full w-full flex-col items-center justify-center rounded-[2px] p-1 text-center"
+      style={{ backgroundColor: background }}
+      title={sector.name}
+      aria-label={`${sector.name} sector, ${sector.instrument_count} instruments, ${
+        sector.change_pct !== null
+          ? `${sector.change_pct >= 0 ? "+" : ""}${sector.change_pct.toFixed(2)} percent`
+          : "no data"
+      }`}
+    >
+      <span className="truncate text-[10px] font-medium leading-tight" style={{ color }}>
+        {abbreviateSector(sector.name)}
+      </span>
+      <span className="font-mono text-xs font-semibold tabular-nums" style={{ color }}>
+        {sector.change_pct !== null
+          ? `${sector.change_pct >= 0 ? "+" : ""}${sector.change_pct.toFixed(2)}%`
+          : "—"}
+      </span>
     </div>
   );
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/**
- * abbreviateSector — shorten GICS sector names for heatmap cells
- * WHY: cells are only ~80px wide; full names like "Consumer Discretionary" overflow
- */
 function abbreviateSector(name: string): string {
   const abbreviations: Record<string, string> = {
     "Information Technology": "Tech",
@@ -110,12 +125,12 @@ function abbreviateSector(name: string): string {
     "Consumer Discretionary": "Cons Disc",
     "Consumer Staples": "Cons Stpl",
     "Communication Services": "Comm Svcs",
-    "Financials": "Fins",
-    "Industrials": "Indus",
-    "Materials": "Matls",
+    Financials: "Fins",
+    Industrials: "Indus",
+    Materials: "Matls",
     "Real Estate": "RE",
-    "Utilities": "Util",
-    "Energy": "Energy",
+    Utilities: "Util",
+    Energy: "Energy",
   };
   return abbreviations[name] ?? name.slice(0, 9);
 }

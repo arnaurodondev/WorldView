@@ -190,7 +190,9 @@ export function WorkspaceChartWidget({ ticker }: WorkspaceChartWidgetProps) {
       try {
         // WHY dynamic import: lightweight-charts uses browser APIs (Canvas) that
         // would explode at SSR. Dynamic import keeps it client-only.
-        const { createChart } = await import("lightweight-charts");
+        // PLAN-0059 H-1: lightweight-charts v5 factory pattern — series
+        // creation now goes through chart.addSeries(SeriesDefinition, opts).
+        const { createChart, CandlestickSeries } = await import("lightweight-charts");
 
         // WHY this null-check after await: dynamic import is async — by the time
         // it resolves, the component may have unmounted. containerRef would be
@@ -216,7 +218,7 @@ export function WorkspaceChartWidget({ ticker }: WorkspaceChartWidgetProps) {
           timeScale: { borderColor: PALETTE.card, timeVisible: true },
         });
 
-        const series = chart.addCandlestickSeries({
+        const series = chart.addSeries(CandlestickSeries, {
           upColor: PALETTE.positive,
           downColor: PALETTE.negative,
           borderUpColor: PALETTE.positive,

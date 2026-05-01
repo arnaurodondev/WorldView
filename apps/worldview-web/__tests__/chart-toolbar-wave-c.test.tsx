@@ -31,17 +31,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 // WHY mock lightweight-charts: WebGL APIs not available in jsdom.
 // The mock returns enough surface for OHLCVChart to initialise without crashing.
+// PLAN-0059 H-1: lightweight-charts v5 — series creation goes through
+// chart.addSeries(SeriesDefinition, opts).
 vi.mock("lightweight-charts", () => ({
   createChart: vi.fn(() => ({
-    addCandlestickSeries: vi.fn(() => ({
-      setData: vi.fn(),
-      applyOptions: vi.fn(),
-    })),
-    addHistogramSeries: vi.fn(() => ({
-      setData: vi.fn(),
-      applyOptions: vi.fn(),
-    })),
-    addLineSeries: vi.fn(() => ({
+    addSeries: vi.fn(() => ({
       setData: vi.fn(),
       applyOptions: vi.fn(),
     })),
@@ -54,8 +48,14 @@ vi.mock("lightweight-charts", () => ({
       timeToCoordinate: vi.fn(() => null),
       coordinateToTime: vi.fn(() => null),
     })),
+    subscribeCrosshairMove: vi.fn(),
+    unsubscribeCrosshairMove: vi.fn(),
     remove: vi.fn(),
   })),
+  CandlestickSeries: "CandlestickSeries",
+  LineSeries: "LineSeries",
+  HistogramSeries: "HistogramSeries",
+  AreaSeries: "AreaSeries",
 }));
 
 // WHY mock next/navigation: OHLCVChart → ChartToolbar doesn't directly use routing,
@@ -831,9 +831,7 @@ describe("OHLCVChart — Wave C integration", () => {
     // Restore mock for subsequent tests
     vi.doMock("lightweight-charts", () => ({
       createChart: vi.fn(() => ({
-        addCandlestickSeries: vi.fn(() => ({ setData: vi.fn(), applyOptions: vi.fn() })),
-        addHistogramSeries: vi.fn(() => ({ setData: vi.fn(), applyOptions: vi.fn() })),
-        addLineSeries: vi.fn(() => ({ setData: vi.fn(), applyOptions: vi.fn() })),
+        addSeries: vi.fn(() => ({ setData: vi.fn(), applyOptions: vi.fn() })),
         priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
         applyOptions: vi.fn(),
         timeScale: vi.fn(() => ({
@@ -843,6 +841,10 @@ describe("OHLCVChart — Wave C integration", () => {
         })),
         remove: vi.fn(),
       })),
+      CandlestickSeries: "CandlestickSeries",
+      LineSeries: "LineSeries",
+      HistogramSeries: "HistogramSeries",
+      AreaSeries: "AreaSeries",
     }));
   });
 });
