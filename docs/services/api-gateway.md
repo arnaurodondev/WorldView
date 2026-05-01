@@ -91,9 +91,38 @@ To register a new service caller:
 | Method | Path | Sources | Auth |
 |--------|------|---------|------|
 | GET | `/v1/companies/{id}/overview` | S3 (fundamentals + OHLCV) + S5 (news) | Yes |
+| GET | `/v1/instruments/{id}/page-bundle` | Composes overview + fundamentals + technicals + insider + top-news in one round-trip (PLAN-0059 I-5) | Yes |
 | GET | `/v1/market/heatmap` | S3 (11 parallel sector-average screener calls) | Yes |
 | GET | `/v1/market/top-movers` | S3 (sorted by daily_return) | Yes |
 | GET | `/v1/map/layers` | S3 (GeoJSON overlays) | No |
+
+#### `/v1/instruments/{id}/page-bundle` — initial-load composite (PLAN-0059 I-5)
+
+Collapses the instrument-detail page's overview-tab waterfall into a single
+HTTP request. Behavior:
+
+- **Composition** — two-phase `asyncio.gather`:
+  - Phase 1: `get_company_overview` (which itself parallelises 5 calls and
+    resolves the KG `entity_id`).
+  - Phase 2 (uses Phase-1's resolved `entity_id`): full
+    `/api/v1/fundamentals/{id}` + `/technicals-snapshot` +
+    `/insider-transactions-snapshot` + S6 `/api/v1/news/entity/{entity_id}?limit=5`.
+- **Per-call failures degrade gracefully** — failed sub-resources return
+  `null` in the response. The bundle still returns 200 so the FE renders
+  partial UIs rather than seeing a 5xx.
+- **Overall timeout** — the whole composition is wrapped in
+  `asyncio.wait_for(20s)`. On timeout the bundle returns 200 with all
+  sub-fields `null`.
+- **Auth required** — explicit `request.state.user is None → 401` guard
+  at the route handler.
+- **JWT-per-call** — each downstream gets a freshly-signed internal JWT
+  via `make_headers` factory so InternalJWTMiddleware's JTI-replay
+  detection accepts the parallel fan-out.
+
+Response shape: `{instrument_id, entity_id, overview, fundamentals,
+technicals, insider, top_news}`. Sub-resource shapes match the dedicated
+endpoints' responses verbatim so clients can prime TanStack Query caches
+with bundle.* values.
 
 ### News Endpoints (→ S5 Content Store)
 
