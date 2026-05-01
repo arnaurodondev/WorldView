@@ -48,6 +48,19 @@ export interface SquarifiedTreemapProps<T> {
   className?: string;
   /** ARIA label for the layout region. */
   ariaLabel?: string;
+  /**
+   * Optional click handler. When provided, each tile becomes keyboard-reachable
+   * (tabIndex=0, role=button, Enter/Space activation) and a focus ring renders.
+   * Without this, tiles are static visual blocks (presentation role).
+   */
+  onTileClick?: (item: SquarifiedTreemapItem<T>, index: number) => void;
+  /**
+   * Per-tile aria-label resolver. Used together with `onTileClick` so each
+   * focusable tile announces meaningful content to screen readers. The
+   * absolute-positioned wrapper carries the label so SR users hear it on
+   * focus, not via inner-tile traversal.
+   */
+  getTileAriaLabel?: (item: SquarifiedTreemapItem<T>) => string;
 }
 
 /**
@@ -69,6 +82,8 @@ export function SquarifiedTreemap<T>({
   minHeight = 0,
   className,
   ariaLabel,
+  onTileClick,
+  getTileAriaLabel,
 }: SquarifiedTreemapProps<T>) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [size, setSize] = React.useState<{ w: number; h: number } | null>(null);
@@ -129,6 +144,7 @@ export function SquarifiedTreemap<T>({
         const w = Math.max(0, cell.width - gap);
         const h = Math.max(0, cell.height - gap);
         if (w < minWidth || h < minHeight) return null;
+        const isInteractive = !!onTileClick;
         return (
           <div
             key={cell.item.id}
@@ -139,6 +155,26 @@ export function SquarifiedTreemap<T>({
               width: w,
               height: h,
             }}
+            // PLAN-0059 H-QA-iter1: keyboard-reachability fix. Without
+            // tabIndex/role the tile is a dead visual block — old grid layout
+            // had focusable cells, treemap regression must be closed. We only
+            // make it focusable when an onTileClick is provided (otherwise
+            // there's no action to fire).
+            tabIndex={isInteractive ? 0 : undefined}
+            role={isInteractive ? "button" : undefined}
+            aria-label={getTileAriaLabel?.(cell.item)}
+            onClick={isInteractive ? () => onTileClick?.(cell.item, i) : undefined}
+            onKeyDown={
+              isInteractive
+                ? (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onTileClick?.(cell.item, i);
+                    }
+                  }
+                : undefined
+            }
+            className={isInteractive ? "focus:outline-none focus-visible:ring-1 focus-visible:ring-primary cursor-pointer" : undefined}
           >
             {renderTile(cell, i)}
           </div>

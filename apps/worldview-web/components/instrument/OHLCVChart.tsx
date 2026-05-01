@@ -249,6 +249,11 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   // when comparing percentage changes across very different absolute prices
   // (e.g. AAPL at $180 vs BRK.A at $700k). One toolbar toggle.
   const [logScale, setLogScale] = useState(false);
+  // logScaleRef captures the current toggle so the async chart-init effect
+  // can apply the user's pre-init choice once the chart resolves. Without
+  // this, toggling before the dynamic import resolves silently dropped.
+  const logScaleRef = useRef(logScale);
+  logScaleRef.current = logScale;
 
   // ── Wave C: Volume profile data (computed from bars, not lightweight-charts) ─
   const [volumeProfileBuckets, setVolumeProfileBuckets] = useState<VolumeProfileBucket[]>([]);
@@ -397,6 +402,12 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
 
         chartRef.current = chart;
         seriesRef.current = series;
+
+        // QA iter-1 fix: apply the user's log-scale preference NOW. If the
+        // user toggled `log` before the chart resolved, the dependent effect
+        // ran with a null chart ref and was a no-op. Reading via ref keeps it
+        // current at init time.
+        chart.priceScale("right").applyOptions({ mode: logScaleRef.current ? 1 : 0 });
 
         // ── Volume histogram series ────────────────────────────────────────
         // WHY priceScaleId "volume": separates volume from the price scale,
@@ -918,16 +929,20 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
           </button>
         ))}
 
-        {/* PLAN-0059 H-2: log-scale toggle. Sits flush with timeframe tabs so
-            it reads as a sibling control. WHY linked to right scale only:
-            indicator panes (RSI/MACD/etc.) use their own scales and would
-            break under log transformation. */}
+        {/* QA iter-1: 1px hairline separator marks the visual class break
+            between timeframe selection (high-frequency) and view-mode
+            toggles (low-frequency, e.g. log). */}
+        <span className="mx-1.5 h-3 w-px shrink-0 bg-border/50" aria-hidden />
+
+        {/* PLAN-0059 H-2: log-scale toggle. Demoted from primary-tinted (which
+            visually competed with active timeframe) to ghost+ring style: log
+            is a rare-toggle view mode, not a timeframe sibling. */}
         <button
           onClick={() => setLogScale((v) => !v)}
-          className={`ml-1 rounded-[2px] px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors ${
+          className={`rounded-[2px] px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors ${
             logScale
-              ? "bg-primary/20 text-primary"
-              : "text-muted-foreground hover:text-foreground"
+              ? "text-foreground ring-1 ring-border bg-transparent"
+              : "text-muted-foreground/70 hover:text-foreground"
           }`}
           aria-pressed={logScale}
           aria-label="Toggle logarithmic price scale"
@@ -936,7 +951,11 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
           log
         </button>
 
-        {/* Chart overlay controls — right side of toolbar */}
+        {/* Chart overlay controls — right side of toolbar.
+            QA iter-1: wrapping div with ml-auto anchors the cluster right
+            and lets the left timeframe group shrink predictably at narrow
+            panel widths. */}
+        <div className="ml-auto flex items-center">
         <ChartToolbar
           showVolume={showVolume}
           onToggleVolume={() => setShowVolume((v) => !v)}
@@ -955,6 +974,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
           showVWAPLine={showVWAPLine}
           onToggleVWAPLine={() => setShowVWAPLine((v) => !v)}
         />
+        </div>
       </div>
 
       {/* ── Chart error fallback ────────────────────────────────────────── */}
