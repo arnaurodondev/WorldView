@@ -78,6 +78,33 @@ describe("PreferencesProvider", () => {
     expect(result.current.density).toBe("compact"); // back to default
   });
 
+  it("rejects malicious IANA timezone (would crash Intl) and falls back", () => {
+    // QA-iter1 CRITICAL: previously any non-empty string passed validation;
+    // a poisoned "Foo/Bar" then crashed every Intl.DateTimeFormat consumer
+    // with RangeError → app DoS until storage cleared.
+    localStorage.setItem(
+      "worldview.preferences.v1",
+      JSON.stringify({ density: "compact", currency: "USD", timezone: "Foo/Bar" }),
+    );
+    const { result } = renderHook(() => usePreferences(), { wrapper });
+    expect(result.current.timezone).toBe("auto"); // default when corrupt
+    // resolvedTimezone must not throw — even with the rejected value, the
+    // hook's defense-in-depth try/catch returns a valid zone.
+    expect(typeof result.current.resolvedTimezone).toBe("string");
+  });
+
+  it("reset() removes the storage key (not just rewrites defaults)", () => {
+    const { result } = renderHook(() => usePreferences(), { wrapper });
+    act(() => result.current.setCurrency("EUR"));
+    expect(localStorage.getItem("worldview.preferences.v1")).toBeTruthy();
+    act(() => result.current.reset());
+    // After reset() the key should be gone — a follow-up "factory reset"
+    // feature must find no leftover state.
+    // Note: state writes back DEFAULTS on the next effect cycle but the
+    // skipNextWriteRef prevents that. Verify storage is empty post-reset.
+    expect(localStorage.getItem("worldview.preferences.v1")).toBeNull();
+  });
+
   it("density change applies data-density attribute on body", () => {
     const { result } = renderHook(() => usePreferences(), { wrapper });
     act(() => result.current.setDensity("comfortable"));
