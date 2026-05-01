@@ -36,6 +36,7 @@
  * DESIGN REFERENCE: PLAN-0052 §Wave A; docs/audits/2026-04-28-qa-frontend-design-roadmap.md
  */
 
+import { headers } from "next/headers";
 import { LandingNav } from "@/components/landing/LandingNav";
 import { HeroSection } from "@/components/landing/HeroSection";
 import { LiveDataStrip } from "@/components/landing/LiveDataStrip";
@@ -191,7 +192,15 @@ function jsonLd(payload: object): string {
   return JSON.stringify(payload).replace(/</g, "\\u003c");
 }
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  // PLAN-0059 I-6: middleware sets a per-request CSP nonce in the request
+  // headers. We attach it to the inline JSON-LD scripts so they pass the
+  // strict-dynamic script-src directive. application/ld+json type is
+  // structured-data not executable, but modern browsers still enforce CSP
+  // on it under script-src — the nonce makes that explicit.
+  const headerStore = await headers();
+  const nonce = headerStore.get("x-nonce") ?? undefined;
+
   return (
     <>
       {/* Structured data — see comments above each constant for purpose.
@@ -199,14 +208,17 @@ export default function LandingPage() {
           in any future payload cannot break out of the inline script tag. */}
       <script
         type="application/ld+json"
+        nonce={nonce}
         dangerouslySetInnerHTML={{ __html: jsonLd(ORG_JSONLD) }}
       />
       <script
         type="application/ld+json"
+        nonce={nonce}
         dangerouslySetInnerHTML={{ __html: jsonLd(SITE_JSONLD) }}
       />
       <script
         type="application/ld+json"
+        nonce={nonce}
         dangerouslySetInnerHTML={{ __html: jsonLd(FAQ_JSONLD) }}
       />
 

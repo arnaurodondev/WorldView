@@ -116,52 +116,27 @@ const nextConfig: NextConfig = {
     ];
   },
 
-  // Security headers applied to every response (all routes, all methods).
-  // These headers harden the browser environment and protect against common
-  // web vulnerabilities without requiring any application-level changes.
+  // Security headers applied to every response.
+  //
+  // PLAN-0059 I-6 hardening: the per-request Content-Security-Policy now
+  // lives in `middleware.ts` (nonce-based, strict-dynamic). The other
+  // security headers stay here because they are STATIC (don't change per
+  // request) and `headers()` is the Next-recommended path for static
+  // header config. Per-request dynamic headers go through middleware.
   async headers() {
-    // Derive both ws:// and wss:// origins from the configured WS base URL so that
-    // the CSP connect-src covers both plaintext (dev) and TLS (prod) WebSocket connections.
-    // e.g. "ws://localhost:8010" → allows both ws://localhost:8010 and wss://localhost:8010
-    const wsOrigin = wsBaseUrl.replace(/^wss?:\/\//, "");
-    const cspDirectives = [
-      "default-src 'self'",
-      // SEC-001 FIX: Content-Security-Policy header added (was absent entirely).
-      // 'unsafe-inline' is required for Next.js 15 App Router — the React runtime
-      // injects inline hydration scripts during SSR.  A nonce-based CSP (using
-      // Next.js Middleware to set a per-request nonce) would be strictly stronger,
-      // but that requires significant refactoring.
-      // DEFERRED: PLAN-0059 Wave 6 (PLAN-0059-I) — see master report §F-CODE-NEW-011.
-      // Tracked in docs/plans/0059-frontend-institutional-remediation-master-plan.md.
-      "script-src 'self' 'unsafe-inline'",
-      // 'unsafe-inline' for styles: required by Tailwind's runtime CSS injection
-      // and shadcn/ui's inline style attributes (SVG animations, chart colours).
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-      "font-src 'self' https://fonts.gstatic.com",
-      // data: and blob: needed for chart SVG exports and image placeholders.
-      "img-src 'self' https://*.eodhd.com https://*.clearbit.com data: blob:",
-      // connect-src: 'self' covers /api/* (proxied to S9) plus both WS variants for S10.
-      `connect-src 'self' ws://${wsOrigin} wss://${wsOrigin}`,
-      // frame-ancestors: belt-and-suspenders with X-Frame-Options: DENY below.
-      "frame-ancestors 'none'",
-    ].join("; ");
-
     return [
       {
         source: "/(.*)",
         headers: [
-          // SEC-001 FIX: Content-Security-Policy — blocks XSS, clickjacking, and
-          // mixed-content attacks by declaring authorised script/style/connect origins.
-          { key: "Content-Security-Policy", value: cspDirectives },
-          // Prevent clickjacking — no page should ever be framed
+          // Prevent clickjacking — no page should ever be framed.
           { key: "X-Frame-Options", value: "DENY" },
-          // Prevent MIME-type sniffing (e.g., serving JS as text/html)
+          // Prevent MIME-type sniffing (e.g., serving JS as text/html).
           { key: "X-Content-Type-Options", value: "nosniff" },
-          // Control referrer information leaked to external sites (news article links)
+          // Control referrer info leaked to external sites (news article links).
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-          // Disable browser features we never use
+          // Disable browser features we never use.
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
-          // HSTS only in production — localhost breaks with HSTS preload
+          // HSTS only in production — localhost breaks with HSTS preload.
           ...(process.env.NODE_ENV === "production"
             ? [{ key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" }]
             : []),

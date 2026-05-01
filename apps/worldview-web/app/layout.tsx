@@ -20,6 +20,7 @@ import type { Metadata } from "next";
 import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
+import { CookieConsentBanner } from "@/components/legal/CookieConsentBanner";
 
 /**
  * IBM Plex Sans — for all UI labels, headings, and prose text
@@ -132,6 +133,10 @@ export default function RootLayout({
             - AuthProvider for OIDC token state
             (These are "use client" components, separated to keep layout as Server Component) */}
         <Providers>{children}</Providers>
+        {/* PLAN-0059 I-6: cookie/storage consent banner. Mounted at the root
+            so it appears on both authenticated and unauthenticated surfaces.
+            Self-hides after the user records a decision. */}
+        <CookieConsentBanner />
       </body>
     </html>
   );
