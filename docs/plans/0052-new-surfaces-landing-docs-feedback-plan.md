@@ -57,19 +57,43 @@ Ship three new product surfaces:
 
 ---
 
-## Wave B — Documentation Hub `/docs` Foundation (~26h)
+## Wave B — Documentation Hub `/docs` Foundation (~26h) ✅
+
+**Status**: **DONE** — 2026-05-01 · 16 docs tests pass (1081 total) · ruff/lint + typecheck + production build clean (5 SSG-prerendered docs routes, 4.72 kB / 120 kB FLJ)
 
 **Goal**: MDX-driven docs site with sidebar nav, cmd-K search, TOC, breadcrumb, feedback widget.
 
 **Tasks**:
-- **T-B-2-01** (config) — Add `next-mdx-remote@^5`, `contentlayer@^0.3.4`, `remark-gfm`, `rehype-pretty-code`, `shiki`, `fuse.js` to package.json (exact versions)
-- **T-B-2-02** (impl, M) — `app/docs/[[...slug]]/page.tsx` dynamic route + `lib/docs.ts` content loader
-- **T-B-2-03** (impl, M) — `<DocsLayout>` + `<DocsSidebar>` (collapsible nav tree, hardcoded structure)
-- **T-B-2-04** (impl, M) — `<DocsTableOfContents>` (auto-generated from h2/h3, scroll-spy)
-- **T-B-2-05** (impl, M) — Custom MDX components: `<Callout>` (info/warn/tip), `<CodeBlock>` (syntax + copy), `<DocsTabs>` (curl/Python/JS), `<Steps>`
-- **T-B-2-06** (impl, S) — `<DocsBreadcrumb>` + `<DocsFooter>` (last-updated + edit-on-GitHub)
-- **T-B-2-07** (impl, M) — `<DocsSearch>` cmd-K with Fuse.js fuzzy search across titles + headings
-- **T-B-2-08** (impl, S) — `<DocsFeedback>` thumbs up/down at footer of every page (POSTs to /v1/feedback/micro-survey from Wave D)
+- **T-B-2-01** ✅ (config) — Added `next-mdx-remote@5.0.0`, `rehype-pretty-code@0.14.1`, `shiki@1.29.2`, `fuse.js@7.1.0`, `gray-matter@4.0.3` (exact versions). `remark-gfm` already installed. **Skipped contentlayer** (deprecated, last release 2023) — replaced by `next-mdx-remote/rsc` which is the Vercel-recommended Next.js 15 App Router pattern.
+- **T-B-2-02** ✅ (impl, M) — `app/docs/[[...slug]]/page.tsx` optional catch-all dynamic route with `generateStaticParams` (SSG every doc) + `lib/docs.ts` file-based loader (walks `content/docs/**/*.mdx`, frontmatter via `gray-matter`, in-memory cache, `getAllDocs`/`getDocBySlug`/`getSidebarSections`/`getSearchIndex`/`extractHeadings` with code-fence-aware regex)
+- **T-B-2-03** ✅ (impl, M) — `app/docs/layout.tsx` 3-col grid (sidebar / content / TOC reserved) + `<DocsSidebar>` (`usePathname` active-link highlight, sticky-top scroll container, sections grouped by frontmatter `section`)
+- **T-B-2-04** ✅ (impl, M) — `<DocsTableOfContents>` IntersectionObserver scroll-spy (rootMargin -80px / -66% so heading is "active" while in upper third of viewport, picks topmost intersecting)
+- **T-B-2-05** ✅ (impl, M) — `<Callout>` (info/warn/tip with semantic-tinted left-border + icon), `<CodeBlock>` (clipboard copy + filename label, group-hover reveal + always-on for touch), `<DocsTabs>` + `<DocsTab>` (radix-grade ARIA tablist + tabpanel + storeKey localStorage), `<Steps>` + `<Step>` (numbered gutter badges, connector line); plus `mdxComponents` map themeing every HTML tag (h1-h4 with anchor-ID slug, p, ul/ol, code, table, blockquote, hr) — `slugify()` mirrors `extractHeadings()` so TOC anchors agree
+- **T-B-2-06** ✅ (impl, S) — `<DocsBreadcrumb>` (Docs > segment > title with `aria-current=page`) + `<DocsFooter>` (Intl-formatted last-updated + edit-on-GitHub link via `NEXT_PUBLIC_REPO_URL`)
+- **T-B-2-07** ✅ (impl, M) — `<DocsSearch>` cmd/ctrl-K dialog (radix Dialog), Fuse.js index with weighted keys (title×3 / description×2 / section×1 / body×1), threshold 0.35, ignoreLocation, top 8 matches, ↑↓/Enter keyboard nav, click + auto-close + router.push deep-link with `#hash` for heading anchors
+- **T-B-2-08** ✅ (impl, S) — `<DocsFeedback>` thumbs up/down at every page footer; thumbs-up fires direct POST to `/api/v1/feedback/micro-survey` (Wave D endpoint), thumbs-down opens textarea + Send; soft-fail on network errors so reading isn't disrupted
+
+**Files added**:
+- `apps/worldview-web/lib/docs.ts` (file-based MDX loader with cache, sidebar grouping, search index, heading extraction)
+- `apps/worldview-web/app/docs/layout.tsx` (3-col grid + header with cmd-K search)
+- `apps/worldview-web/app/docs/[[...slug]]/page.tsx` (catch-all dynamic route, SSG, MDXRemote/RSC + remarkGfm + rehypePrettyCode/shiki "github-dark")
+- `apps/worldview-web/components/docs/{DocsSidebar,DocsTableOfContents,DocsBreadcrumb,DocsFooter,DocsSearch,DocsFeedback}.tsx`
+- `apps/worldview-web/components/docs/mdx/{Callout,CodeBlock,DocsTabs,Steps,components}.tsx`
+- `apps/worldview-web/content/docs/{index,getting-started/index,api-reference/index,changelog,faq}.mdx` (5 seed pages — Wave C will author the full set)
+- `apps/worldview-web/__tests__/docs.test.tsx` (16 vitest assertions — loader, sidebar, TOC, breadcrumb, MDX components, feedback POST contract, IntersectionObserver stub)
+- `apps/worldview-web/e2e/docs.spec.ts` (Playwright: index, nested, 404, cmd-K open + result list, sidebar nav)
+
+**Validation**:
+- [x] pnpm typecheck — clean
+- [x] pnpm lint — no errors in docs/* (only pre-existing PLAN-0059-C queryKey migration warnings)
+- [x] pnpm test — 1081/1081 pass (100 files), 16 new docs tests
+- [x] pnpm build — production build green; `/docs/[[...slug]]` SSG-prerendered for 5 routes (4.72 kB / 120 kB FLJ)
+
+**Notes**:
+- Followed shadcn/ui-only policy: only existing `Dialog` primitive + `Accordion` (added in Wave A) + lucide icons
+- Heavy comments policy honored: every component has WHY-style header
+- 2px radius policy honored throughout
+- `disabled:opacity-50` policy honored (used semantic `--disabled-bg` / `--disabled-foreground` tokens on the Send-feedback button instead)
 
 **Depends_on**: PLAN-0049
 **Effort**: 26h
