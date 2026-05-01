@@ -294,6 +294,36 @@ export interface CompanyOverview {
   ohlcv: OHLCVResponse | null; // last 30 days 1D bars for the mini chart
 }
 
+/**
+ * InstrumentPageBundle — PLAN-0059 I-5 single-round-trip composite for
+ * /instruments/[id] initial page load.
+ *
+ * Returned by GET /v1/instruments/{id}/page-bundle. The S9 endpoint composes
+ * 5 downstream calls via asyncio.gather; per-call failures degrade
+ * gracefully (the failed sub-resource is null in the response). Existing
+ * dedicated endpoints remain available — components may still hit
+ * /v1/companies/{id}/overview, /v1/fundamentals/{id}, etc. if they need
+ * fresher data than the bundle's cached snapshot.
+ *
+ * Sub-resource shapes match the dedicated endpoints' responses verbatim so
+ * the FE can prime its TanStack Query caches with bundle.* values.
+ */
+export interface InstrumentPageBundle {
+  instrument_id: string;
+  /** KG entity_id resolved by the gateway via ticker → KG lookup. Falls back to instrument_id. */
+  entity_id: string;
+  /** CompanyOverview composite (instrument + quote + fundamentals header + 90d ohlcv). */
+  overview: CompanyOverview | null;
+  /** Full all-sections fundamentals (mirrors /v1/fundamentals/{id}). */
+  fundamentals: FundamentalsSectionResponse | null;
+  /** Technicals snapshot (52-week range etc.). */
+  technicals: FundamentalsSectionResponse | null;
+  /** Insider transactions records. */
+  insider: FundamentalsSectionResponse | null;
+  /** Top-N entity-scoped news (limit=5). */
+  top_news: RankedNewsResponse | null;
+}
+
 // ── Knowledge Graph ────────────────────────────────────────────────────────
 
 export interface GraphNode {

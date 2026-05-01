@@ -25,6 +25,7 @@ import type {
   AuthCallbackResponse,
   WsTokenResponse,
   CompanyOverview,
+  InstrumentPageBundle,
   OHLCVResponse,
   Quote,
   BatchQuoteResponse,
@@ -325,6 +326,25 @@ export function createGateway(token?: string | null) {
     getCompanyOverview(instrumentId: string): Promise<CompanyOverview> {
       return apiFetch<CompanyOverview>(
         `/v1/companies/${encodeURIComponent(instrumentId)}/overview`,
+        { token: t },
+      );
+    },
+
+    /**
+     * getInstrumentPageBundle — single-round-trip composite for /instruments/[id].
+     *
+     * PLAN-0059 I-5: collapses the overview-tab waterfall (overview + fundamentals
+     * + technicals + insider + top-news) into one HTTP request. The S9 endpoint
+     * fans out via asyncio.gather; failed sub-resources degrade to null in the
+     * response so the FE can render partial UIs.
+     *
+     * Children of /instruments/[id] can keep their own per-feature useQuery calls
+     * to populate tab-specific surfaces; this bundle covers the OVERVIEW tab's
+     * initial paint without requiring those children to be migrated.
+     */
+    getInstrumentPageBundle(instrumentId: string): Promise<InstrumentPageBundle> {
+      return apiFetch<InstrumentPageBundle>(
+        `/v1/instruments/${encodeURIComponent(instrumentId)}/page-bundle`,
         { token: t },
       );
     },

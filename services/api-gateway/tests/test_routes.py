@@ -164,6 +164,141 @@ async def test_company_overview_propagates_downstream_error(client, mock_clients
     assert response.status_code == 404
 
 
+# ── PLAN-0059 I-5: instrument page-bundle ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_instrument_page_bundle_composes_all_subresources(client, mock_clients) -> None:
+    """GET /v1/instruments/:id/page-bundle returns the 5 sub-resources.
+
+    Verifies the asyncio.gather composition. Each downstream call is dispatched
+    to a mock that returns a recognisable shape; the bundle must surface each
+    under its named key (overview, fundamentals, technicals, insider, top_news).
+    """
+    inst_id = "01900000-0000-7000-8000-000000001005"
+
+    inst_data = {"id": inst_id, "symbol": "MSFT", "exchange": "NASDAQ", "is_active": True}
+    profile_data = {"records": [{"data": {"Name": "Microsoft", "Currency": "USD"}}]}
+    ohlcv_data = {"items": [], "total": 0, "timeframe": "1d"}
+    quote_data = {"instrument_id": inst_id, "last": "350.00", "timestamp": "2026-04-30T16:00:00Z"}
+    fundamentals_data = {"records": [{"section": "highlights", "data": {"MarketCapitalization": 2e12}}]}
+    technicals_data = {"records": [{"section": "technicals_snapshot", "data": {"52WeekHigh": 400.0}}]}
+    insider_data = {"records": [{"data": {"0": {"ownerName": "Satya N", "transactionAcquiredDisposed": "A"}}}]}
+    news_data = {"articles": [{"article_id": "n1", "title": "Hot news"}], "total": 1}
+    kg_lookup_data = {"entity_id": inst_id}
+
+    def _make_resp(data: dict) -> MagicMock:
+        r = MagicMock(spec=httpx.Response)
+        r.status_code = 200
+        r.json.return_value = data
+        return r
+
+    async def _md_dispatch(path: str, **_kwargs: object) -> MagicMock:
+        # Order matters here — more-specific paths must match first.
+        if "ohlcv" in path:
+            return _make_resp(ohlcv_data)
+        if "quotes" in path:
+            return _make_resp(quote_data)
+        if "company-profile" in path:
+            return _make_resp(profile_data)
+        if "technicals-snapshot" in path:
+            return _make_resp(technicals_data)
+        if "insider-transactions" in path:
+            return _make_resp(insider_data)
+        if "fundamentals/" in path and not any(s in path for s in ("technicals", "insider", "company-profile")):
+            # General all-sections fundamentals
+            return _make_resp(fundamentals_data)
+        return _make_resp(inst_data)
+
+    async def _kg_dispatch(_path: str, **_kwargs: object) -> MagicMock:
+        return _make_resp(kg_lookup_data)
+
+    async def _nlp_dispatch(_path: str, **_kwargs: object) -> MagicMock:
+        return _make_resp(news_data)
+
+    mock_clients.market_data.get = AsyncMock(side_effect=_md_dispatch)
+    mock_clients.knowledge_graph.get = AsyncMock(side_effect=_kg_dispatch)
+    mock_clients.nlp_pipeline.get = AsyncMock(side_effect=_nlp_dispatch)
+
+    response = await client.get(f"/v1/instruments/{inst_id}/page-bundle")
+    assert response.status_code == 200
+
+    body = response.json()
+    # All five sub-resources surface under named keys.
+    assert body["instrument_id"] == inst_id
+    assert "entity_id" in body
+    assert body["overview"] is not None
+    assert body["overview"]["instrument"]["ticker"] == "MSFT"
+    assert body["fundamentals"] is not None
+    assert body["technicals"] is not None
+    assert body["insider"] is not None
+    assert body["top_news"] is not None
+    assert body["top_news"]["articles"][0]["title"] == "Hot news"
+
+
+@pytest.mark.asyncio
+async def test_instrument_page_bundle_degrades_on_partial_failure(client, mock_clients) -> None:
+    """Per-call failure must NOT fail the whole bundle.
+
+    If insider/technicals/news downstream services 5xx, the bundle returns
+    null for those keys and the rest still populate. This is the contract
+    that lets the FE render a partial page instead of seeing a 5xx.
+    """
+    inst_id = "01900000-0000-7000-8000-000000001006"
+
+    inst_data = {"id": inst_id, "symbol": "GOOG", "exchange": "NASDAQ", "is_active": True}
+    profile_data = {"records": []}
+    ohlcv_data = {"items": [], "total": 0, "timeframe": "1d"}
+    quote_data = {"instrument_id": inst_id, "last": "150.00"}
+    fundamentals_data = {"records": []}
+
+    def _ok(data: dict) -> MagicMock:
+        r = MagicMock(spec=httpx.Response)
+        r.status_code = 200
+        r.json.return_value = data
+        return r
+
+    def _err(status: int) -> MagicMock:
+        r = MagicMock(spec=httpx.Response)
+        r.status_code = status
+        r.text = "Service unavailable"
+        return r
+
+    async def _md_dispatch(path: str, **_kwargs: object) -> MagicMock:
+        if "technicals-snapshot" in path:
+            return _err(503)  # technicals fails
+        if "insider-transactions" in path:
+            return _err(503)  # insider fails
+        if "ohlcv" in path:
+            return _ok(ohlcv_data)
+        if "quotes" in path:
+            return _ok(quote_data)
+        if "company-profile" in path:
+            return _ok(profile_data)
+        if "fundamentals/" in path:
+            return _ok(fundamentals_data)
+        return _ok(inst_data)
+
+    async def _nlp_dispatch(_path: str, **_kwargs: object) -> MagicMock:
+        return _err(500)  # news fails
+
+    async def _kg_dispatch(_path: str, **_kwargs: object) -> MagicMock:
+        return _ok({"entity_id": inst_id})
+
+    mock_clients.market_data.get = AsyncMock(side_effect=_md_dispatch)
+    mock_clients.nlp_pipeline.get = AsyncMock(side_effect=_nlp_dispatch)
+    mock_clients.knowledge_graph.get = AsyncMock(side_effect=_kg_dispatch)
+
+    response = await client.get(f"/v1/instruments/{inst_id}/page-bundle")
+    # Bundle MUST still return 200 — the failed sub-resources are null.
+    assert response.status_code == 200
+    body = response.json()
+    assert body["overview"] is not None  # required pieces succeeded
+    assert body["technicals"] is None  # downstream 503 → null
+    assert body["insider"] is None  # downstream 503 → null
+    assert body["top_news"] is None  # downstream 500 → null
+
+
 @pytest.mark.asyncio
 async def test_map_layers_returns_static(client) -> None:
     """GET /v1/map/layers returns layer definitions."""
@@ -338,9 +473,7 @@ async def test_get_fundamentals_timeseries_proxies_to_market_data(client, mock_c
 _INSTR_ID = "00000000-0000-0000-0000-000000000042"
 # Dummy HS256 JWT header — not a real credential; the authed_client fixture decodes
 # it without signature verification to inject request.state.user.
-_DUMMY_JWT = (
-    "eyJhbGciOiJIUzI1NiJ9" ".eyJzdWIiOiJ1c2VyLTEiLCJ1c2VyX2lkIjoidXNlci0xIiwidGVuYW50X2lkIjoidGVuYW50LTEifQ" ".sig"
-)
+_DUMMY_JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEiLCJ1c2VyX2lkIjoidXNlci0xIiwidGVuYW50X2lkIjoidGVuYW50LTEifQ.sig"
 
 
 def _downstream_200(content: bytes = b'{"records": []}') -> MagicMock:
