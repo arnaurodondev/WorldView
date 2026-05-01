@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import urllib.parse
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -160,6 +161,88 @@ class MarketDataClient:
                 )
                 return None
 
+    async def _resolve_instrument_id(self, ticker: str) -> str | None:
+        """Resolve a ticker to its instrument_id UUID via market-data lookup.
+
+        PLAN-0052 platform-QA round 4 (2026-05-01): the prior version of
+        ``get_ohlcv`` called ``/api/v1/market-data/ohlcv/{TICKER}`` with
+        the ticker symbol — but the actual market-data route is
+        ``/api/v1/ohlcv/{instrument_id}`` keyed on a UUID. Result: every
+        single price-impact lookup 404'd silently → ``article_impact_windows``
+        was always empty → news-relevance scoring couldn't use price
+        signal at all.
+
+        Fix: resolve the ticker once via market-data's existing
+        ``/api/v1/instruments/symbol/{ticker}`` endpoint (already used by
+        the brokerage-sync worker), cache in process memory keyed on
+        ticker+date so the next call within the same labelling cycle is
+        free. The cache is bounded to 1024 entries (LRU-ish via dict
+        ordering) — we typically resolve <100 distinct tickers per cycle.
+
+        Returns ``None`` on any failure (auth, 404, network) so the
+        outer ``get_ohlcv`` falls back to its existing "no data" path
+        without surfacing a new error class.
+        """
+        # In-process cache (initialised on first call). One-day key cache
+        # is fine: tickers don't change identity within a single labelling
+        # cycle, and each cycle re-creates the client fresh.
+        cache: dict[str, str] = getattr(self, "_ticker_cache", None) or {}
+        if not hasattr(self, "_ticker_cache"):
+            self._ticker_cache = cache  # type: ignore[attr-defined]
+        cached: str | None = cache.get(ticker)
+        if cached is not None:
+            # Empty string is the negative-cache sentinel: ticker is known
+            # to be unresolvable. Treat it as None for the caller's purposes.
+            return cached if cached else None
+
+        url = f"{self._base_url}/api/v1/instruments/symbol/{urllib.parse.quote(ticker, safe='')}"
+        token = await self._get_internal_jwt()
+        headers = {"X-Internal-JWT": token} if token else {}
+        try:
+            response = await self._client.get(url, headers=headers)
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "market_data_resolve_request_error",
+                ticker=ticker,
+                error=str(exc),
+            )
+            return None
+        if response.status_code != 200:
+            # 404 = unknown ticker (legitimately unmapped); other status =
+            # logged so we can spot upstream regressions.
+            if response.status_code != 404:
+                logger.warning(  # type: ignore[no-any-return]
+                    "market_data_resolve_unexpected_status",
+                    ticker=ticker,
+                    status=response.status_code,
+                )
+            cache[ticker] = ""  # negative cache so we don't retry per-bar
+            return None
+        try:
+            body = response.json()
+            instrument_id = body.get("instrument_id")
+            if not instrument_id:
+                cache[ticker] = ""
+                return None
+            # Bound the cache.
+            if len(cache) > 1024:
+                # Drop the oldest 256 entries (Python 3.7+ dict preserves
+                # insertion order — pop from the head).
+                for _ in range(256):
+                    try:
+                        cache.pop(next(iter(cache)))
+                    except StopIteration:
+                        break
+            cache[ticker] = str(instrument_id)
+            return str(instrument_id)
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "market_data_resolve_parse_error",
+                ticker=ticker,
+                error=str(exc),
+            )
+            return None
+
     async def get_ohlcv(self, symbol: str, bar_date: date) -> OHLCVBar | None:
         """Return the daily OHLCV bar for *symbol* on *bar_date*, or ``None``.
 
@@ -171,7 +254,16 @@ class MarketDataClient:
 
         Callers should treat ``None`` as "no data" and create a zero-impact label.
         """
-        url = f"{self._base_url}/api/v1/market-data/ohlcv/{symbol}"
+        # PLAN-0052 platform-QA round 4 (2026-05-01): resolve ticker → UUID
+        # via market-data's existing /api/v1/instruments/symbol/{ticker}
+        # before making the OHLCV call. Without this, every call hit
+        # /api/v1/market-data/ohlcv/{TICKER} → 404 → silent "no data".
+        instrument_id = await self._resolve_instrument_id(symbol)
+        if not instrument_id:
+            # Unknown ticker — graceful no-data return; matches prior behavior.
+            return None
+
+        url = f"{self._base_url}/api/v1/ohlcv/{urllib.parse.quote(instrument_id, safe='')}"
         params = {"start": bar_date.isoformat(), "end": bar_date.isoformat()}
 
         # F-101: market-data InternalJWTMiddleware rejects unauthenticated

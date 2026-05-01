@@ -28,6 +28,7 @@ from market_ingestion.domain.errors import (
     ProviderDataError,
     ProviderRateLimited,
     ProviderUnavailable,
+    ProviderUnsupportedSymbol,
     StorageUnavailable,
     TaskLeaseLost,
     WatermarkViolation,
@@ -365,6 +366,15 @@ class ExecuteTaskUseCase:
                 except Exception as cb_exc:
                     log.warning("circuit_breaker_unavailable", error=str(cb_exc))
             await self._persist_retry(task, exc)
+            raise
+        except ProviderUnsupportedSymbol as exc:
+            # PLAN-0052 platform-QA round 4 (2026-05-01): a provider-side
+            # 404 (e.g. EODHD doesn't expose `/eod/INDU.INDX`) is dead-
+            # lettered without polluting the fatal-error metric / logs.
+            # Distinct telemetry event so we can monitor unsupported
+            # combinations and drop them from the schedule, not panic.
+            log.warning("provider_unsupported_symbol", error=str(exc))
+            await self._persist_fail(task, exc)
             raise
         except (ProviderAuthError, ProviderDataError) as exc:
             log.error("fetch_fatal_error", error=str(exc))
