@@ -90,6 +90,8 @@
 - [ ] **`schema_version` base class default is `1`, not `0`** — default 0 means subclasses that forget to override emit version-0 events silently (BP-053)
 - [ ] **`asyncio.Event.set()` in confluent-kafka delivery callbacks uses `loop.call_soon_threadsafe(event.set)`** — direct `event.set()` from librdkafka C thread is not thread-safe (BP-050, HR-024)
 - [ ] **Repositories with read/write session splitting: `get_or_create` reads back via write session after INSERT** — never call `self.get()` (read session) immediately after INSERT on write session (BP-049)
+- [ ] **Kafka `producer.produce(...)` calls pass `key=` for any topic with per-entity ordering semantics** — without `key=`, sticky/round-robin partitioning means two events for the same `entity_id` can land on different partitions and be reordered downstream (F-DATA-06, PLAN-0057 deferred). Acceptable today only because all consumers use ON CONFLICT idempotency; fails the moment a destructive event ships.
+- [ ] **LLM prompts that interpolate untrusted text use explicit delimiters AND validate output charset/length** — `f"... {description} ..."` without `<<<DELIMITER>>>...<<<END>>>` wrappers + an output denylist permits prompt-injection attacks where a poisoned `description` makes the LLM emit attacker-chosen aliases/claims that downstream code persists (F-SEC-02, PLAN-0057 deferred).
 
 ## 7. Architecture Compliance
 
