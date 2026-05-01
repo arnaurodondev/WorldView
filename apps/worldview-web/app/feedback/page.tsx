@@ -172,6 +172,20 @@ export default function FeedbackPublicPage() {
           <p className="text-sm text-muted-foreground">
             No feature requests yet. Be the first to suggest one.
           </p>
+          {/* PLAN-0052 Wave E platform-QA fix (2026-05-01): the empty state
+              previously had no inline CTA — first-time visitors had to
+              spot the small "Suggest a feature" button up in the toolbar.
+              Discoverability gap. Adding a primary button below the
+              copy makes the action obvious. */}
+          <Button
+            variant="default"
+            size="sm"
+            className="mt-4"
+            onClick={() => setModalOpen(true)}
+          >
+            <MessageSquarePlus className="mr-1.5 h-3.5 w-3.5" />
+            Suggest the first feature
+          </Button>
         </div>
       )}
 

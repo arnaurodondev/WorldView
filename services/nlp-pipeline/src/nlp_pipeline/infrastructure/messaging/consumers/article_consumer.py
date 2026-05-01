@@ -432,8 +432,20 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 # floor — every UNRESOLVED / PROVISIONAL / AUTO_RESOLVED outcome
                 # was invisible to ops and to the next-cycle worker. Writes go
                 # through the same nlp_session so commit ordering is preserved.
-                if resolution_audit:
-                    await mr_repo.add_batch(resolution_audit)
+                #
+                # PLAN-0052 platform-QA fix (2026-05-01): defer the audit batch
+                # to AFTER `mention_repo.add_batch(final_mentions)` below. SQLA
+                # autoflush would otherwise flush the children
+                # (`mention_resolutions.mention_id`) before the parents
+                # (`entity_mentions.mention_id`) are in the session, producing
+                # `mention_resolutions_mention_id_fkey` violations and a silent
+                # full-pipeline drop (3,081 docs in → 0 mention_resolutions).
+                # The audit batch is captured in `resolution_audit` and stashed
+                # in the closure variable below; the actual `add_batch` runs
+                # after `mention_repo.add_batch(final_mentions)`.
+                pending_resolution_audit = resolution_audit
+            else:
+                pending_resolution_audit = []
 
             # Block 10: Deep LLM extraction.
             # PLAN-0057 D-1 (F-CRIT-08): the previous code instantiated a
@@ -476,6 +488,17 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             await section_repo.add_batch(sections)
             await chunk_repo.add_batch(chunks)
             await mention_repo.add_batch(final_mentions)
+            # PLAN-0052 platform-QA fix (2026-05-01): persist the resolution
+            # audit AFTER the parent entity_mentions are in the session, so
+            # SQLA's autoflush can satisfy the
+            # `mention_resolutions_mention_id_fkey` constraint. See the
+            # deferring branch in Block 9 above for the full rationale.
+            # `mr_repo` is only defined when the resolution branch ran; we
+            # rebuild a fresh local one here so the deferred write doesn't
+            # reach across an undefined-name path.
+            if pending_resolution_audit:
+                deferred_mr_repo = MentionResolutionRepository(nlp_session)
+                await deferred_mr_repo.add_batch(pending_resolution_audit)
             await stats_repo.upsert(stats)
             # PLAN-0057 A-4 (F-CRIT-06): persist Block 6 suppression-gate output
             # alongside the routing tier. final_path is the result of

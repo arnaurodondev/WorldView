@@ -25,7 +25,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { CheckSquare, Download, Filter as FilterIcon, Loader2, MinusSquare, Square } from "lucide-react";
+import { AlertCircle, CheckSquare, Download, Filter as FilterIcon, Loader2, MinusSquare, Square } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -203,6 +203,47 @@ export default function AdminFeedbackPage() {
   const patch = usePatchFeedbackSubmission();
 
   const items = useMemo(() => data?.items ?? [], [data]);
+
+  // PLAN-0052 platform-QA fix (2026-05-01): per-row PATCH state. The shared
+  // `patch` mutation only exposes a single isPending / error state for the
+  // whole table — when admin A picks a new status on row 5, every row's
+  // dropdown would simultaneously show pending. Worse, on failure the
+  // dropdown silently snaps back via cache invalidation with no signal —
+  // the admin thinks the change saved when it didn't. We track in-flight
+  // ids and last-failed ids in two Sets so each row can render its own
+  // spinner / error glyph independently.
+  const [rowPendingIds, setRowPendingIds] = useState<Set<string>>(new Set());
+  const [rowFailedIds, setRowFailedIds] = useState<Set<string>>(new Set());
+
+  const updateRowStatus = (id: string, next: FeedbackStatus) => {
+    // Mark the row pending and clear any prior failure flag.
+    setRowPendingIds((prev) => new Set(prev).add(id));
+    setRowFailedIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const out = new Set(prev);
+      out.delete(id);
+      return out;
+    });
+    patch
+      .mutateAsync({ id, fields: { status: next } })
+      .then(() => {
+        // success — drop the pending flag.
+        setRowPendingIds((prev) => {
+          const out = new Set(prev);
+          out.delete(id);
+          return out;
+        });
+      })
+      .catch(() => {
+        // failure — clear pending, set failed so the row glyph shows.
+        setRowPendingIds((prev) => {
+          const out = new Set(prev);
+          out.delete(id);
+          return out;
+        });
+        setRowFailedIds((prev) => new Set(prev).add(id));
+      });
+  };
 
   // ── Bulk-selection state (PLAN-0052 Wave E T-E-5-10) ────────────────────
   // We track selected row ids in a Set so toggle-all and per-row toggle are
@@ -545,26 +586,44 @@ export default function AdminFeedbackPage() {
                 <td className="p-2 capitalize">{row.kind.replace("_", " ")}</td>
                 <td className="p-2">{row.severity ?? "—"}</td>
                 <td className="p-2">
-                  <Select
-                    value={row.status}
-                    onValueChange={(v) =>
-                      patch.mutate({
-                        id: row.id,
-                        fields: { status: v as FeedbackStatus },
-                      })
-                    }
-                  >
-                    <SelectTrigger className="h-7 w-32 text-[10px]">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {STATUS_OPTIONS.map((s) => (
-                        <SelectItem key={s} value={s}>
-                          {s.replace("_", " ")}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {/* PLAN-0052 platform-QA fix (2026-05-01): per-row pending +
+                      failed glyphs alongside the Select. Without these the
+                      admin had no signal for in-flight or failed PATCHes —
+                      a 500 from S9 would silently snap the dropdown back on
+                      cache invalidation. Now: spinner while in flight,
+                      AlertCircle (red) for the last failure on this row. */}
+                  <div className="flex items-center gap-1.5">
+                    <Select
+                      value={row.status}
+                      onValueChange={(v) =>
+                        updateRowStatus(row.id, v as FeedbackStatus)
+                      }
+                      disabled={rowPendingIds.has(row.id)}
+                    >
+                      <SelectTrigger className="h-7 w-32 text-[10px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {STATUS_OPTIONS.map((s) => (
+                          <SelectItem key={s} value={s}>
+                            {s.replace("_", " ")}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {rowPendingIds.has(row.id) && (
+                      <Loader2
+                        className="h-3 w-3 motion-safe:animate-spin text-muted-foreground"
+                        aria-label="Saving status change"
+                      />
+                    )}
+                    {rowFailedIds.has(row.id) && (
+                      <AlertCircle
+                        className="h-3 w-3 text-destructive"
+                        aria-label="Failed to save — try again"
+                      />
+                    )}
+                  </div>
                 </td>
                 <td className="p-2 font-mono text-[10px]">
                   {row.email ?? row.user_id ?? "—"}
