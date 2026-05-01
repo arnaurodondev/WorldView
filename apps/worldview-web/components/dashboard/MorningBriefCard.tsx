@@ -50,11 +50,42 @@ import Link from "next/link";
 // can pass it as `remarkPlugins`. It's a tiny module — no point lazy-loading.
 import dynamic from "next/dynamic";
 import remarkGfm from "remark-gfm";
+
+// QA-iter1: hoist remark plugins to module scope. Inline `[remarkGfm]`
+// passed as a prop creates a NEW array reference on every render, which
+// re-triggers react-markdown's full remark pipeline on every parent
+// re-render (expand toggle, isFetching flip). Module-scope const = stable
+// reference, single pipeline run per content change.
+const REMARK_PLUGINS = [remarkGfm];
+
+// QA-iter1: brief 5-line skeleton shown while the dynamic react-markdown
+// bundle resolves (~50–200ms first load). Without this, the card chrome
+// paints first and the brief surface is silent until the bundle lands —
+// SR users hear nothing during the gap.
+function BriefMarkdownSkeleton() {
+  return (
+    <div
+      className="space-y-1.5 px-1 pt-1"
+      aria-busy="true"
+      aria-label="Loading brief"
+    >
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div
+          key={i}
+          className="h-3 animate-pulse rounded-[2px] bg-muted/40"
+          style={{
+            width: i === 4 ? "66%" : "100%",
+            animationDelay: `${i * 50}ms`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 const ReactMarkdown = dynamic(() => import("react-markdown"), {
   ssr: false,
-  // Dashboard cards already render their own loading skeleton above; no
-  // extra placeholder needed inside the markdown branch.
-  loading: () => null,
+  loading: () => <BriefMarkdownSkeleton />,
 });
 import { RefreshCw } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
@@ -327,7 +358,7 @@ export function MorningBriefCard() {
               }
             >
               <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={REMARK_PLUGINS}
                 components={{
                   a: ({ href, children }) => (
                     <Link href={href ?? "#"} className="text-primary hover:underline">
@@ -386,7 +417,7 @@ export function MorningBriefCard() {
             // marker above for the rationale.
             <div data-testid="brief-narrative">
               <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={REMARK_PLUGINS}
                 components={{
                   a: ({ href, children }) => (
                     <Link href={href ?? "#"} className="text-primary hover:underline">
