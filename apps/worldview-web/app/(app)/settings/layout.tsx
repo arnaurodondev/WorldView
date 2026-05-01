@@ -21,6 +21,7 @@ import {
   Palette,
   Plug,
   ShieldCheck,
+  Sliders,
   User,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -34,6 +35,7 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { href: "/settings/profile", label: "Profile", icon: User },
+  { href: "/settings/preferences", label: "Preferences", icon: Sliders },
   { href: "/settings/notifications", label: "Notifications", icon: Bell },
   { href: "/settings/appearance", label: "Appearance", icon: Palette },
   { href: "/settings/security", label: "Security", icon: ShieldCheck, badge: "soon" },
