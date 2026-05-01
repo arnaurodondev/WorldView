@@ -61,10 +61,21 @@ const buttonVariants = cva(
         lg: "h-10 rounded-[2px] px-8",
         icon: "h-8 w-8",  // WHY h-8 w-8: compact icon buttons for dense toolbar layouts
       },
+      // WHY density layered on top of size: existing call sites passed `size="sm"|"lg"`;
+      // adding `density` lets new code opt into institutional 22px-row heights without
+      // disturbing those defaults. When `density="compact"`, classes here override the
+      // size-driven height/padding/text — that's why this comes AFTER size in the cva
+      // compound class concatenation order (last-wins in Tailwind class merge).
+      density: {
+        compact: "h-7 px-3 text-[11px] [&_svg]:size-3",
+        default: "",
+        comfortable: "h-10 px-5 text-sm",
+      },
     },
     defaultVariants: {
       variant: "default",
       size: "default",
+      density: "default",
     },
   },
 );
@@ -78,11 +89,11 @@ export interface ButtonProps
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
+  ({ className, variant, size, density, asChild = false, ...props }, ref) => {
     const Comp = asChild ? Slot : "button";
     return (
       <Comp
-        className={cn(buttonVariants({ variant, size, className }))}
+        className={cn(buttonVariants({ variant, size, density, className }))}
         ref={ref}
         {...props}
       />
