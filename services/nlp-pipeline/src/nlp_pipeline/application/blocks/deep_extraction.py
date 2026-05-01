@@ -173,23 +173,19 @@ async def _run_extraction_window(
     # surfaces (same text appearing in multiple mention rows) waste prompt
     # tokens and don't add signal. ``dict.fromkeys`` preserves insertion order.
     #
-    # PLAN-0052 platform-QA round 8 (2026-05-01): only advertise mentions the
-    # downstream article-consumer can resolve to an id. ``article_consumer.
-    # _build_raw_*`` populates ``entity_id_by_ref`` exclusively from
-    # AUTO_RESOLVED + PROVISIONAL mentions (resolution.py:892-907) and silently
-    # drops any relation/event/claim whose ref hits an UNRESOLVED mention.
-    # When the LLM is told to use the FULL mention list (~75% UNRESOLVED in
-    # observed live traffic), every relation between two unresolved entities
-    # — exactly the relations a news article is actually about — is dropped
-    # at consumer.py:1017 with no log. Filtering here aligns the prompt's
-    # entity_refs with what downstream can render, restoring the 100%
-    # producer→consumer retention rate that ``_build_raw_*`` was originally
-    # designed for.
-    mention_names = list(
-        dict.fromkeys(
-            m.mention_text for m in mentions if m.resolved_entity_id is not None or m.provisional_queue_id is not None
-        )
-    )
+    # PLAN-0052 platform-QA round 9 (2026-05-01): pass ALL mentions back to
+    # the LLM (reverting round-8's resolved-only filter). Round 9 added
+    # ``synthesize_provisional_refs`` in the article-consumer that creates
+    # an inline ``provisional_entity_queue`` row for any LLM-referenced
+    # UNRESOLVED mention BEFORE ``_build_raw_*`` runs. With that wired,
+    # the consumer's ``entity_id_by_ref`` lookup gets a synthetic UUID for
+    # every referenced surface, so filtering here is no longer necessary —
+    # and is harmful, because a mining article is mostly UNRESOLVED entities
+    # that should still surface as ``entity_provisional=True`` relations
+    # with ``provisional_queue_id`` set. KG enriched_consumer already
+    # promotes those to canonicals when the unresolved-resolution-worker
+    # canonicalises the queue row.
+    mention_names = list(dict.fromkeys(m.mention_text for m in mentions))
     prompt = _build_prompt(window_text, mention_names)
 
     inp = ExtractionInput(
