@@ -44,6 +44,47 @@ All routes are prefixed with `/v1` (main), `/v1/auth` (auth), or `/internal`.
 | GET | `/readyz` | Readiness probe (checks Valkey) | No |
 | GET | `/metrics` | Prometheus metrics | No |
 | GET | `/internal/jwks` | RS256 public key (JWKS format) for backend JWT verification | No |
+| POST | `/internal/v1/service-token` | Mint a service-account RS256 internal JWT (PLAN-0057 Wave A-1 / BP-303) | Shared secret |
+
+**`POST /internal/v1/service-token`** (PLAN-0057 Wave A-1 — closes BP-303):
+
+Mints a 5-minute RS256 internal JWT for background workers. Solves the production "OHLCV auth blackhole" problem where workers minted their `X-Internal-JWT` via `POST /v1/auth/dev-login`, which is hard-blocked when `app_env == "production"`.
+
+Authentication: shared `API_GATEWAY_SERVICE_ACCOUNT_TOKEN` secret + service identity on the allow-list (`routes/internal.py::_ALLOWED_SERVICE_NAMES`). Comparison uses `secrets.compare_digest` (constant-time).
+
+Request body (`application/json`):
+
+```json
+{
+  "service_name": "nlp-pipeline-price-impact",
+  "secret": "<shared-secret>"
+}
+```
+
+Response (200):
+
+```json
+{
+  "access_token": "<rs256-jwt>",
+  "expires_in": 300,
+  "token_type": "Bearer"
+}
+```
+
+Issued JWT claims: `sub="service:<service_name>"`, `tenant_id="system"`, `role="system"`, `service_name=<name>`, `iss="worldview-gateway"`, 5-minute expiry.
+
+Status codes:
+- **200**: secret valid AND `service_name` allow-listed → JWT issued.
+- **401**: wrong secret OR unknown service_name (same error to avoid disclosing which check failed).
+- **422**: missing/invalid request body (Pydantic validation).
+- **503**: `API_GATEWAY_SERVICE_ACCOUNT_TOKEN` unset (deployment misconfiguration) or RSA private key missing.
+
+**This endpoint is NOT guarded by `app_env`** — the shared secret IS the auth boundary, and the endpoint must work in production (that is the whole reason it exists). Each successful mint logs `service_token_issued` with the `service_name` (never the secret nor the JWT).
+
+To register a new service caller:
+1. Add the canonical name to `_ALLOWED_SERVICE_NAMES` in `services/api-gateway/src/api_gateway/routes/internal.py`.
+2. Distribute the shared `API_GATEWAY_SERVICE_ACCOUNT_TOKEN` to the caller's deployment via sealed secret (matching env var on the caller side, e.g. `NLP_PIPELINE_SERVICE_ACCOUNT_TOKEN`).
+3. Update the caller to pass `service_account_token=settings.service_account_token` and `service_name=<canonical-name>` to its HTTP client (see `MarketDataClient` in services/nlp-pipeline for the reference pattern).
 
 ### Composition Endpoints (multi-service aggregation)
 

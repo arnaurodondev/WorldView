@@ -280,9 +280,7 @@ class TestMarketDataClientServiceToken:
     """
 
     @pytest.mark.asyncio
-    async def test_uses_service_token_endpoint_when_secret_set(
-        self, httpx_mock: pytest_httpx.HTTPXMock
-    ) -> None:
+    async def test_uses_service_token_endpoint_when_secret_set(self, httpx_mock: pytest_httpx.HTTPXMock) -> None:
         """``service_account_token`` set → POST /internal/v1/service-token, NOT /v1/auth/dev-login."""
         httpx_mock.add_response(
             method="POST",
@@ -329,9 +327,7 @@ class TestMarketDataClientServiceToken:
         assert ohlcv_req.headers.get("X-Internal-JWT") == "svc-token-abc"
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_dev_login_when_service_token_unset(
-        self, httpx_mock: pytest_httpx.HTTPXMock
-    ) -> None:
+    async def test_falls_back_to_dev_login_when_service_token_unset(self, httpx_mock: pytest_httpx.HTTPXMock) -> None:
         """``service_account_token`` unset → POST /v1/auth/dev-login (legacy path)."""
         httpx_mock.add_response(
             method="POST",

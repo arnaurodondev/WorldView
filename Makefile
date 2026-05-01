@@ -1,4 +1,4 @@
-.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down qa qa-exhaustive qa-exhaustive-backend qa-exhaustive-frontend qa-live-stack qa-contract dev dev-down dev-reset dev-logs dev-ps dev-rebuild dev-clean seed
+.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down schema-set-compat qa qa-exhaustive qa-exhaustive-backend qa-exhaustive-frontend qa-live-stack qa-contract dev dev-down dev-reset dev-logs dev-ps dev-rebuild dev-clean seed
 
 # ── Default target ────────────────────────────────────────────────────────────
 
@@ -83,6 +83,15 @@ infra-up:
 
 infra-down:
 	docker compose -f infra/compose/docker-compose.test.yml down -v
+
+## Pin per-subject Schema Registry compatibility level (PLAN-0057 D-004).
+## Idempotent: re-runs the set-schema-compatibility.sh script against the
+## running registry. Use this if you bring the registry up manually OR want
+## to force-reset the policy without a full ``make dev`` cycle.
+schema-set-compat:
+	SCHEMA_REGISTRY_URL=$${SCHEMA_REGISTRY_URL:-http://localhost:8081} \
+	COMPAT_LEVEL=$${COMPAT_LEVEL:-BACKWARD} \
+	  bash infra/kafka/init/set-schema-compatibility.sh
 
 # ── CI gate ───────────────────────────────────────────────────────────────────
 
