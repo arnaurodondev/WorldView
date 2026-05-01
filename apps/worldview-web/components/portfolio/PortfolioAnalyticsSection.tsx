@@ -38,6 +38,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { useAuth } from "@/hooks/useAuth";
 import { createGateway } from "@/lib/gateway";
+import { useExposure } from "@/hooks/useExposure";
 import { EquityCurveChart, type PeriodLabel } from "./EquityCurveChart";
 import { ExposureBreakdown } from "./ExposureBreakdown";
 import { RiskMetricsStrip } from "./RiskMetricsStrip";
@@ -91,6 +92,20 @@ export function PortfolioAnalyticsSection({
     !equityLoading &&
     (equityPoints.length === 0 ||
       equityPoints.every((p) => Number(p.value) === 0));
+
+  // PLAN-0052 platform-QA fix (2026-05-01): mirror the equity-curve
+  // load-state branching for the exposure cell. Previously the wrapper
+  // rendered an unconditional `min-h-[200px] bg-card` panel — when the
+  // exposure API returned empty (all-cash portfolio, error, or pre-load
+  // race), the panel collapsed to a tall black rectangle on the dark
+  // page background ("half the screen is black" user report). The
+  // shared useExposure hook (TanStack dedup) ensures we don't fan out
+  // to a second network call.
+  const { data: exposureData, isLoading: exposureLoading } = useExposure(portfolioId);
+  const exposureIsEmpty =
+    !exposureLoading &&
+    (!exposureData ||
+      (Number(exposureData.invested ?? 0) + Number(exposureData.cash ?? 0)) <= 0);
 
   return (
     // WHY mt-3 + space-y-3: terminal density — 12px gap above the section
@@ -158,21 +173,30 @@ export function PortfolioAnalyticsSection({
           </div>
         )}
 
-        {/* Exposure breakdown — compact panel with the same min-height as
-            the chart so the row's vertical alignment stays clean.
-            F-DP1-16 (audit 2026-04-29): added ``flex items-center
-            justify-center`` so when the child ExposureBreakdown enters
-            its empty/error branch (which renders a centered
-            InlineEmptyState), the OUTER panel also centers the content
-            vertically. Pre-fix the child centered itself but the panel
-            still rendered as a tall ``min-h-[200px] bg-card`` rectangle
-            — the same "big black box on bg-card page" anti-pattern the
-            equity-curve cell already mitigates above. */}
-        <div className="col-span-12 lg:col-span-4 min-h-[200px] bg-card border border-border rounded-[2px] p-2 flex items-center justify-center">
-          <div className="w-full">
-            <ExposureBreakdown portfolioId={portfolioId} />
+        {/* Exposure breakdown — three-state branching matches the
+            equity-curve cell above. The shared useExposure hook lets
+            us choose the right wrapper without a second network call.
+            PLAN-0052 platform-QA fix (2026-05-01): closes the user-
+            reported "half the screen is black" bug.
+              - loading → skeleton at full panel height
+              - empty   → small bordered card with InlineEmptyState (no
+                          tall black bg-card box)
+              - data    → original min-h-[200px] bg-card chart panel */}
+        {exposureLoading ? (
+          <div className="col-span-12 lg:col-span-4">
+            <Skeleton className="h-[200px] w-full rounded-[2px]" />
           </div>
-        </div>
+        ) : exposureIsEmpty ? (
+          <div className="col-span-12 lg:col-span-4 flex h-auto items-center justify-center rounded-[2px] border border-border/40 py-6">
+            <InlineEmptyState message="No exposure data — add holdings to see breakdown." />
+          </div>
+        ) : (
+          <div className="col-span-12 lg:col-span-4 min-h-[200px] bg-card border border-border rounded-[2px] p-2 flex items-center justify-center">
+            <div className="w-full">
+              <ExposureBreakdown portfolioId={portfolioId} />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Bottom row: risk metrics strip, full width ────────────────── */}

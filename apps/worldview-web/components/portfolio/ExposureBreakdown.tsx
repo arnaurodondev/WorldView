@@ -27,10 +27,7 @@
 // WHY "use client": useQuery for fetching exposure; reactive re-render when
 // the active portfolio id changes upstream.
 
-import { useQuery } from "@tanstack/react-query";
-
-import { createGateway } from "@/lib/gateway";
-import { useAuth } from "@/hooks/useAuth";
+import { useExposure } from "@/hooks/useExposure";
 import { formatPrice, formatPercent } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
@@ -45,16 +42,11 @@ export interface ExposureBreakdownProps {
 // ── ExposureBreakdown ─────────────────────────────────────────────────────────
 
 export function ExposureBreakdown({ portfolioId }: ExposureBreakdownProps) {
-  const { accessToken } = useAuth();
-
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ["exposure", portfolioId],
-    queryFn: () => createGateway(accessToken).getExposure(portfolioId),
-    enabled: !!accessToken && !!portfolioId,
-    // 30s — exposure depends on current prices which the dashboard already
-    // refreshes every 15s. This panel doesn't need to be more aggressive.
-    staleTime: 30_000,
-  });
+  // PLAN-0052 platform-QA fix (2026-05-01): query lifted to a shared
+  // hook so the parent (PortfolioAnalyticsSection) can branch its panel
+  // wrapper on the same load state — see useExposure docstring for the
+  // "half-screen black panel" anti-pattern this closes.
+  const { data, isLoading, isError } = useExposure(portfolioId);
 
   // ── Loading skeleton ────────────────────────────────────────────────────
   // PLAN-0053 T-A-1-02 (BP-291): the parent wrapper in PortfolioAnalyticsSection

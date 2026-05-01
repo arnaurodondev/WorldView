@@ -127,10 +127,47 @@ interface FetchOptions extends Omit<RequestInit, "body"> {
   token?: string;
 }
 
+/**
+ * PLAN-0052 platform-QA fix (2026-05-01): defensive guard against the
+ * "frontend passes literal `undefined`" race-condition class. Without
+ * this, components that call e.g. `getCompanyOverview(instrumentId)`
+ * before `instrumentId` resolves would fire `/v1/companies/undefined/overview`
+ * → backend asyncpg `DataError: invalid UUID 'undefined'` → 500. Live
+ * platform observed ~80 such 500s/hour from a single mounted screener
+ * row whose useQuery's `enabled` guard wasn't sufficient.
+ *
+ * The path-segment check is intentionally narrow: only fail-fast when
+ * the URL contains "/undefined", "/null", or trailing-empty segments.
+ * It does NOT inspect URL params (those have their own validation) or
+ * the body. Throws `GatewayError(0, "...")` so the calling useQuery
+ * surfaces a clean error state instead of a 500 propagating.
+ */
+function _detectMalformedPath(path: string): string | null {
+  // Match a path segment whose entire value is the literal string
+  // "undefined" or "null" — these are JavaScript stringification
+  // artifacts, never legitimate UUIDs / tickers / IDs.
+  if (/\/undefined(\/|\?|$)/.test(path)) return "undefined";
+  if (/\/null(\/|\?|$)/.test(path)) return "null";
+  // Trailing-empty segment: `/companies//overview` — the templated id
+  // was empty string. Same race; same fail-fast.
+  if (/\/\/(\?|$)|\/\/[a-z]/i.test(path)) return "empty-segment";
+  return null;
+}
+
 async function apiFetch<T>(
   path: string,
   options: FetchOptions = {},
 ): Promise<T> {
+  // Fail-fast on malformed paths from undefined/null id race conditions.
+  const malformed = _detectMalformedPath(path);
+  if (malformed) {
+    throw new GatewayError(
+      0,
+      `Refusing to call malformed path (${malformed} in ${path}). ` +
+        `Likely a useQuery enabled-guard race; check the call site.`,
+    );
+  }
+
   const { body, token, ...rest } = options;
 
   const headers: HeadersInit = {
