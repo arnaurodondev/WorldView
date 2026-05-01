@@ -22,10 +22,10 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Download, Filter as FilterIcon } from "lucide-react";
+import { CheckSquare, Download, Filter as FilterIcon, Loader2, MinusSquare, Square } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -40,6 +40,7 @@ import {
 } from "@/hooks/useFeedbackSubmissions";
 import { useAuth } from "@/hooks/useAuth";
 import { createGateway } from "@/lib/gateway";
+import { qk } from "@/lib/query/keys";
 import type {
   FeedbackKind,
   FeedbackStatus,
@@ -82,8 +83,23 @@ function exportCsv(rows: FeedbackSubmission[]) {
     "description",
   ];
   // WHY \"\" escapes: CSV escape rule — embedded double-quotes become "".
-  const escape = (v: string | null | undefined) =>
-    v === null || v === undefined ? "" : `"${v.replace(/"/g, '""')}"`;
+  //
+  // PLAN-0052 Wave E QA-iter1 sec/M-1: CSV formula injection defence.
+  // Excel / LibreOffice / Google Sheets evaluate any cell beginning with
+  // `=`, `+`, `-`, `@`, tab, or carriage return as a formula — even when
+  // wrapped in double quotes (the parsers strip the wrapper before the
+  // formula check). User-supplied free-text (description, email) is the
+  // attack surface; backend PII redaction does NOT remove these chars.
+  // Mitigation: prepend a single apostrophe, which Excel treats as a
+  // text-quote prefix and discards on display while neutralising the
+  // formula. Same defence used by Google Sheets / Microsoft guidance.
+  const FORMULA_TRIGGERS = /^[=+\-@\t\r]/;
+  const sanitiseCell = (v: string) =>
+    FORMULA_TRIGGERS.test(v) ? `'${v}` : v;
+  const escape = (v: string | null | undefined) => {
+    if (v === null || v === undefined) return "";
+    return `"${sanitiseCell(v).replace(/"/g, '""')}"`;
+  };
   const lines = [headers.join(",")];
   for (const r of rows) {
     lines.push(
@@ -117,7 +133,11 @@ function exportCsv(rows: FeedbackSubmission[]) {
 function NPSStrip() {
   const { accessToken } = useAuth();
   const { data, isError } = useQuery({
-    queryKey: ["nps-aggregate", 30],
+    // PLAN-0052 Wave E QA-iter1 arch/M-3 + C-1: lifted from inline
+    // ["nps-aggregate", 30] to the qk.feedback.npsAggregate factory.
+    // Stays under the qk.feedback.* cascade so admin-side feedback
+    // mutations also refresh the aggregate strip.
+    queryKey: qk.feedback.npsAggregate(30),
     queryFn: () => createGateway(accessToken).getNPSAggregate(30),
     enabled: !!accessToken,
     staleTime: 60_000,
@@ -126,7 +146,12 @@ function NPSStrip() {
   if (isError) return null; // 403 → don't show the strip silently
   if (!data) {
     return (
-      <div className="mb-4 h-16 animate-pulse rounded-[2px] border border-border bg-card/30" />
+      <div
+        className="mb-4 h-16 animate-pulse rounded-[2px] border border-border bg-card/30"
+        role="status"
+        aria-busy="true"
+        aria-label="Loading NPS aggregate"
+      />
     );
   }
 
@@ -179,6 +204,101 @@ export default function AdminFeedbackPage() {
 
   const items = useMemo(() => data?.items ?? [], [data]);
 
+  // ── Bulk-selection state (PLAN-0052 Wave E T-E-5-10) ────────────────────
+  // We track selected row ids in a Set so toggle-all and per-row toggle are
+  // both O(1). The set is refreshed when the underlying items change so a
+  // status-filter change (which removes rows from view) doesn't leave
+  // dangling ids selected. Bulk action picks a single status to apply to
+  // every selected row; we issue the patches in parallel via Promise.all
+  // and rely on usePatchFeedbackSubmission to invalidate the list cache.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkStatus, setBulkStatus] = useState<FeedbackStatus | "">("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+
+  // Trim the selection whenever the visible items change so we never carry
+  // ids that aren't on screen (avoids confusing UX where the count chip
+  // claims rows that the user can't see).
+  useEffect(() => {
+    if (selectedIds.size === 0) return;
+    const visible = new Set(items.map((row) => row.id));
+    setSelectedIds((prev) => {
+      const next = new Set<string>();
+      for (const id of prev) if (visible.has(id)) next.add(id);
+      return next.size === prev.size ? prev : next;
+    });
+  }, [items, selectedIds.size]);
+
+  const allSelected = items.length > 0 && selectedIds.size === items.length;
+  const someSelected = selectedIds.size > 0 && !allSelected;
+
+  const toggleAll = () => {
+    if (allSelected || someSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(items.map((r) => r.id)));
+    }
+  };
+
+  const toggleRow = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // Ref to the bulk-error banner so we can move focus to it after a
+  // partial failure — the banner sits above the table while the user's
+  // focus lives on the Apply button below, so without the focus jump
+  // the error is easy to miss. PLAN-0052 Wave E QA-iter1 a11y/M-4.
+  const bulkErrorRef = useRef<HTMLParagraphElement | null>(null);
+
+  const applyBulkStatus = async () => {
+    if (!bulkStatus || selectedIds.size === 0) return;
+    setBulkBusy(true);
+    setBulkError(null);
+    // PLAN-0052 Wave E QA-iter1 bugs/C-3 + sec/M-2: Promise.allSettled
+    // surfaces per-row outcomes so a partial failure produces accurate
+    // counts ("3 of 50 failed") instead of a misleading "Failed to update
+    // one or more rows" that omits which rows succeeded. We also clear
+    // the SUCCESSFUL rows from the selection so the user can re-Apply
+    // on just the failed subset.
+    const ids = Array.from(selectedIds);
+    const results = await Promise.allSettled(
+      ids.map((id) =>
+        patch.mutateAsync({ id, fields: { status: bulkStatus } }),
+      ),
+    );
+    const failedIds = new Set<string>();
+    let okCount = 0;
+    results.forEach((res, i) => {
+      if (res.status === "fulfilled") {
+        okCount += 1;
+      } else {
+        failedIds.add(ids[i]);
+      }
+    });
+    if (failedIds.size === 0) {
+      // All succeeded — clear selection so the next bulk op starts fresh.
+      setSelectedIds(new Set());
+      setBulkStatus("");
+    } else {
+      // Keep only the failed ids in the selection so Apply re-runs on
+      // just the subset that didn't go through.
+      setSelectedIds(failedIds);
+      setBulkError(
+        `Updated ${okCount} of ${ids.length}. ${failedIds.size} failed — selection narrowed to the failures so you can retry.`,
+      );
+      // Move focus to the error banner so AT users (and sighted keyboard
+      // users) hear the result without hunting up the page.
+      // requestAnimationFrame so the DOM is mounted before .focus().
+      requestAnimationFrame(() => bulkErrorRef.current?.focus());
+    }
+    setBulkBusy(false);
+  };
+
   if (isLoading) {
     return <div className="p-8 text-sm text-muted-foreground">Loading…</div>;
   }
@@ -199,7 +319,9 @@ export default function AdminFeedbackPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl p-6">
+    // PLAN-0052 Wave E QA-iter1 design/#7: p-6 → p-3 to match the
+    // terminal density used elsewhere (settings, beta-program).
+    <div className="mx-auto max-w-7xl p-3">
       <header className="mb-4 flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Admin: Feedback</h1>
@@ -216,7 +338,7 @@ export default function AdminFeedbackPage() {
 
       <NPSStrip />
 
-      {/* Filters */}
+      {/* Filters + bulk action bar */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <FilterIcon className="h-3.5 w-3.5 text-muted-foreground" />
         <Select
@@ -252,13 +374,119 @@ export default function AdminFeedbackPage() {
             ))}
           </SelectContent>
         </Select>
+
+        {/* Bulk action — only enabled when ≥1 row is selected.
+            PLAN-0052 Wave E QA-iter1 design/#2: visual separator (vertical
+            divider + extra padding at sm+) so the destructive bulk-write
+            surface is structurally distinct from the read-only filter chips.
+            QA-iter1 a11y/C-1: dropped role="status" on the count chip — the
+            polite live region was firing on every selection toggle ("5
+            selected", "6 selected"…) producing torrents of audio spam. The
+            count is now ambient text; the bulk-Apply error banner below
+            carries the announcement when a result happens. */}
+        <div
+          className="ml-auto flex items-center gap-2 sm:border-l sm:border-border/40 sm:pl-2"
+          aria-label="Bulk actions"
+        >
+          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+            {selectedIds.size > 0
+              ? `${selectedIds.size} selected`
+              : "No rows selected"}
+          </span>
+          <Select
+            value={bulkStatus}
+            onValueChange={(v) => setBulkStatus(v as FeedbackStatus)}
+            disabled={selectedIds.size === 0 || bulkBusy}
+          >
+            <SelectTrigger
+              className="h-8 w-44 text-xs"
+              aria-label="Bulk status"
+            >
+              <SelectValue placeholder="Set status…" />
+            </SelectTrigger>
+            <SelectContent>
+              {STATUS_OPTIONS.map((s) => (
+                <SelectItem key={s} value={s}>
+                  Set to {s.replace("_", " ")}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {/* PLAN-0052 Wave E QA-iter1 design/#3: Loader2 spinner (matches
+              the beta-program Save button + every other in-flight action
+              in the shell) instead of a text swap. */}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={selectedIds.size === 0 || !bulkStatus || bulkBusy}
+            onClick={() => void applyBulkStatus()}
+          >
+            {bulkBusy && (
+              <Loader2
+                className="mr-1.5 h-3.5 w-3.5 motion-safe:animate-spin"
+                aria-hidden="true"
+              />
+            )}
+            {bulkBusy ? "Applying…" : "Apply"}
+          </Button>
+        </div>
       </div>
+      {/* PLAN-0052 Wave E QA-iter1 a11y/M-4: aria-live="assertive" so the
+          banner interrupts and is heard immediately; tabIndex={-1} lets
+          us focus() it programmatically after a partial-failure result
+          (see applyBulkStatus). */}
+      {bulkError && (
+        <p
+          ref={bulkErrorRef}
+          className="mb-2 text-xs text-destructive focus:outline-none"
+          role="alert"
+          aria-live="assertive"
+          tabIndex={-1}
+        >
+          {bulkError}
+        </p>
+      )}
 
       {/* Table */}
       <div className="overflow-x-auto rounded-[2px] border border-border">
         <table className="w-full text-xs">
           <thead className="bg-muted/30 text-left text-[10px] uppercase">
             <tr>
+              {/* Bulk-select header — clickable cell renders a tri-state
+                  glyph (empty / partial / all). WHY a button (not native
+                  checkbox): the partial / indeterminate state is awkward
+                  to wire on a real <input>. The button + lucide icons give
+                  us the same affordance with a single render path.
+                  PLAN-0052 Wave E QA-iter1 a11y/B-2: explicit
+                  role="checkbox" + aria-checked={"true"|"false"|"mixed"}
+                  so screen readers convey ALL THREE selection states.
+                  Without these, AT users heard "button, deselect all"
+                  with no signal of WHAT was selected.
+                  QA-iter1 design/#6: distinct MinusSquare icon for the
+                  partial state — opacity drop alone was too subtle for
+                  many sighted users to register the difference. */}
+              <th className="p-2">
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={
+                    allSelected ? "true" : someSelected ? "mixed" : "false"
+                  }
+                  onClick={toggleAll}
+                  aria-label={
+                    allSelected ? "Deselect all rows" : "Select all rows"
+                  }
+                  className="inline-flex items-center justify-center text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                >
+                  {allSelected ? (
+                    <CheckSquare className="h-3.5 w-3.5 text-primary" />
+                  ) : someSelected ? (
+                    <MinusSquare className="h-3.5 w-3.5 text-primary" />
+                  ) : (
+                    <Square className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </th>
               <th className="p-2">Created</th>
               <th className="p-2">Kind</th>
               <th className="p-2">Severity</th>
@@ -271,20 +499,46 @@ export default function AdminFeedbackPage() {
           <tbody>
             {rowsLoading && (
               <tr>
-                <td colSpan={7} className="p-4 text-center text-muted-foreground">
+                <td colSpan={8} className="p-4 text-center text-muted-foreground">
                   Loading…
                 </td>
               </tr>
             )}
             {!rowsLoading && items.length === 0 && (
               <tr>
-                <td colSpan={7} className="p-4 text-center text-muted-foreground">
+                <td colSpan={8} className="p-4 text-center text-muted-foreground">
                   No submissions match these filters.
                 </td>
               </tr>
             )}
             {items.map((row) => (
               <tr key={row.id} className="border-t border-border hover:bg-muted/10">
+                <td className="p-2">
+                  {/* PLAN-0052 Wave E QA-iter1 a11y/B-2: role="checkbox" +
+                      aria-checked is the correct ARIA model for selection.
+                      Previously used aria-pressed (toggle-button semantics)
+                      which reads as "pressed/not pressed" instead of
+                      "checked/not checked" — semantically wrong AND
+                      inconsistent with the header tri-state checkbox. */}
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={selectedIds.has(row.id)}
+                    onClick={() => toggleRow(row.id)}
+                    aria-label={
+                      selectedIds.has(row.id)
+                        ? `Deselect submission ${row.id}`
+                        : `Select submission ${row.id}`
+                    }
+                    className="inline-flex items-center justify-center text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                  >
+                    {selectedIds.has(row.id) ? (
+                      <CheckSquare className="h-3.5 w-3.5 text-primary" />
+                    ) : (
+                      <Square className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </td>
                 <td className="p-2 font-mono tabular-nums">
                   {row.created_at.slice(0, 19).replace("T", " ")}
                 </td>

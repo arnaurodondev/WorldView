@@ -21,7 +21,7 @@
 
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import {
@@ -84,6 +84,12 @@ export function NPSPrompt({ open, onOpenChange, surface }: NPSPromptProps) {
 
   const handleDismiss = useCallback(() => {
     markDismissed();
+    // PLAN-0052 Wave E QA-iter1: reset local form state on dismiss so a
+    // re-open (next quarter, or in tests) doesn't show a stale score
+    // pre-selected. The `next quarter` window is rare in practice, but
+    // tests and dev re-mounts hit this path constantly.
+    setScore(null);
+    setComment("");
     onOpenChange(false);
   }, [markDismissed, onOpenChange]);
 
@@ -94,15 +100,80 @@ export function NPSPrompt({ open, onOpenChange, surface }: NPSPromptProps) {
 
   // WHY a controlled dialog: we need to call markDismissed() when the user
   // closes via the X button, not just when they press "Maybe later".
+  //
+  // PLAN-0052 Wave E QA-iter1: also reset local state on close — see the
+  // handleDismiss comment for rationale. We intentionally do NOT call
+  // markDismissed when the dialog closes after a successful submit
+  // (markSubmitted already set the same quarter key, and dismissing on
+  // top is harmless but wasteful — the early `submit.isSuccess` skip
+  // keeps the localStorage write count low).
   const handleOpenChange = useCallback(
     (next: boolean) => {
       if (!next) {
-        markDismissed();
+        if (!submit.isSuccess) {
+          markDismissed();
+        }
+        setScore(null);
+        setComment("");
       }
       onOpenChange(next);
     },
-    [markDismissed, onOpenChange],
+    [markDismissed, onOpenChange, submit.isSuccess],
   );
+
+  // PLAN-0052 Wave E QA-iter1 a11y/B-1: WAI-ARIA radiogroup keyboard model.
+  // Refs for each score button so arrow / Home / End keys can move focus
+  // between them. We also adopt roving tabindex (one stop in the tab
+  // sequence) so keyboard users tab into the group ONCE, then arrow-key
+  // through. Arrow keys also update the selected score to match focus
+  // (per spec — radios in a radiogroup follow focus).
+  const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  /** Move focus + selection by `delta` (wraps via modulo). */
+  const moveBy = useCallback(
+    (current: number, delta: number) => {
+      const next = (current + delta + SCORES.length) % SCORES.length;
+      setScore(next);
+      buttonRefs.current[next]?.focus();
+    },
+    [],
+  );
+
+  const handleRadioKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLButtonElement>, n: number) => {
+      switch (e.key) {
+        case "ArrowRight":
+        case "ArrowDown":
+          e.preventDefault();
+          moveBy(n, +1);
+          break;
+        case "ArrowLeft":
+        case "ArrowUp":
+          e.preventDefault();
+          moveBy(n, -1);
+          break;
+        case "Home":
+          e.preventDefault();
+          setScore(0);
+          buttonRefs.current[0]?.focus();
+          break;
+        case "End":
+          e.preventDefault();
+          setScore(SCORES.length - 1);
+          buttonRefs.current[SCORES.length - 1]?.focus();
+          break;
+      }
+    },
+    [moveBy],
+  );
+
+  /**
+   * Roving tabindex: exactly ONE button in the sequence at a time.
+   * - When a score is selected, that button is the tab stop.
+   * - When nothing is selected yet, the first (0) is the tab stop so
+   *   keyboard users can land on the group with a single Tab.
+   */
+  const focusableIndex = score === null ? 0 : score;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -129,12 +200,20 @@ export function NPSPrompt({ open, onOpenChange, surface }: NPSPromptProps) {
                 type="button"
                 role="radio"
                 aria-checked={selected}
+                tabIndex={n === focusableIndex ? 0 : -1}
+                ref={(el) => {
+                  buttonRefs.current[n] = el;
+                }}
                 onClick={() => setScore(n)}
+                onKeyDown={(e) => handleRadioKeyDown(e, n)}
                 // WHY tabular-nums + font-mono via class: numeric pads in
                 // dense finance UIs always use tabular figures so each
                 // glyph is the same width.
                 className={[
-                  "h-9 w-9 rounded-[2px] border text-sm font-mono tabular-nums transition-colors",
+                  // PLAN-0052 Wave E QA-iter1 a11y/M-3: motion-safe transition.
+                  "h-9 w-9 rounded-[2px] border text-sm font-mono tabular-nums motion-safe:transition-colors",
+                  // Focus ring so keyboard users see the active radio.
+                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background",
                   selected
                     ? "border-primary bg-primary text-primary-foreground"
                     : "border-border bg-card hover:bg-muted",
@@ -184,7 +263,7 @@ export function NPSPrompt({ open, onOpenChange, surface }: NPSPromptProps) {
             onClick={handleSubmit}
             disabled={score === null || submit.isPending}
           >
-            {submit.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+            {submit.isPending && <Loader2 className="mr-1.5 h-3.5 w-3.5 motion-safe:animate-spin" />}
             Submit
           </Button>
         </DialogFooter>

@@ -144,25 +144,52 @@ Ship three new product surfaces:
 
 ---
 
-## Wave E — Feedback System Frontend (~16h)
+## Wave E — Feedback System Frontend (~16h) ✅
+
+**Status**: **DONE** — 2026-05-01 · 1,196/1,196 frontend tests pass · ruff/lint clean (errors-free for Wave E surface) · typecheck + production build clean
 
 **Goal**: In-app modal + NPS prompt + micro-survey + admin dashboard + public roadmap.
 
 **Tasks**:
-- **T-E-5-01** (impl, S) — `<FeedbackButton>` floating bottom-right (56px circular) on all authenticated routes
-- **T-E-5-02** (impl, M) — `<FeedbackModal>` form: type select, textarea (10-5000 chars), screenshot toggle, console-log toggle, optional email
-- **T-E-5-03** (impl, M) — `<ScreenshotCapture>` using html2canvas; preview + blur tool; upload to S3 via pre-signed URL
-- **T-E-5-04** (impl, S) — `<ConsoleLogCapture>` last 50 entries with PII review before send
-- **T-E-5-05** (impl, M) — `<NPSPrompt>` modal triggered on key actions or 30-day check
-- **T-E-5-06** (impl, S) — `<MicroSurvey>` inline thumbs up/down (used by docs feedback widget too)
-- **T-E-5-07** (impl, S) — Beta program toggle in `/settings/beta-program` route
-- **T-E-5-08** (impl, S) — Bug-report deep link `?feedback=bug&page=X` opens form pre-filled
-- **T-E-5-09** (impl, M) — Public roadmap at `/feedback`: feature requests list with upvoting; "Suggest Feature" button
-- **T-E-5-10** (impl, M) — Admin dashboard at `/admin/feedback`: table with filters, tagging, CSV export, bulk status update
-- **T-E-5-11** (test) — Vitest + Playwright for full feedback flows
+- **T-E-5-01** ✅ (impl, S) — `<FeedbackButton>` floating bottom-right (56px circular) mounted in `(app)/layout.tsx`. QA-iter1: collapsed two parallel state slots into a single `prefill` shape with one reset path, replaced verbose `aria-label` with clean `"Send feedback"` + standard `aria-keyshortcuts="Meta+Shift+Slash Control+Shift+Slash"`, gated press-scale animation behind `motion-safe:`.
+- **T-E-5-02** ✅ (impl, M) — `<FeedbackModal>` 5-tab Sheet (bug/feature/ux/general/contact). QA-iter1: `defaultDescription` prop + one-shot consume via `lastAppliedPrefillRef` so a parent re-render doesn't clobber user typing.
+- **T-E-5-03** ✅ (impl, M) — `<ScreenshotCapture>` html2canvas with blur-toggle V1; data URI rides in `console_logs` JSON column under 1MB cap (presigned S3 upload deferred).
+- **T-E-5-04** ✅ (impl, S) — `<ConsoleLogCapture>` last-50 entries with PII review and live IDE-style preview.
+- **T-E-5-05** ✅ (impl, M) — `<NPSPrompt>` modal + `NPSPromptHost` shell-mounted listener for `worldview:request-nps` CustomEvent. QA-iter1: WAI-ARIA radiogroup keyboard model (roving tabindex + ArrowLeft/Right/Up/Down/Home/End + focus-visible ring), local state reset on dismiss/close (no stale score on re-open), skip redundant `markDismissed` after `submit.isSuccess`, `motion-safe:` on spinners.
+- **T-E-5-06** ✅ (impl, S) — `<MicroSurvey>` inline thumbs widget (used by docs feedback widget — no changes from PLAN-0053 baseline).
+- **T-E-5-07** ✅ (impl, S) — `/settings/beta-program` route (page + `<Switch>` toggle + `<textarea>` notes + Save button). New `useBetaEnrollment` + `usePatchBetaEnrollment` hooks (TanStack Query, registered under `qk.feedback.betaEnrollment` factory entry). New `getBetaEnrollment`/`patchBetaEnrollment` gateway methods + `BetaEnrollment`/`BetaEnrollmentPatch` types in `types/api.ts`. QA-iter1: notes-draft sync guarded with `lastSyncedNotesRef` so a 30s background refetch doesn't clobber mid-typed notes; resolved Switch htmlFor/aria-label conflict (kept the `<Label>` association); textarea focus ring upgraded to `ring-2 ring-offset-2`.
+- **T-E-5-08** ✅ (impl, S) — `<FeedbackDeepLinkHandler>` Suspense-wrapped at the (app) shell. Reads `?feedback=<kind>&page=<X>`, dispatches `worldview:open-feedback` CustomEvent with `{tab, description}` detail (FeedbackButton listens). QA-iter1: dedup signature via `lastHandledRef` (StrictMode-safe), URL strip happens for invalid `kind` values too (no garbage refresh-loop), `window.location.hash` preserved through cleanup.
+- **T-E-5-09** ✅ (impl, M) — `/feedback` public roadmap with feature requests list, upvote (idempotent), status/sort filters, "Suggest a feature" CTA opens FeedbackModal on the feature tab.
+- **T-E-5-10** ✅ (impl, M) — `/admin/feedback` table with status/kind filters, per-row status edit, CSV export. QA-iter1: tri-state header checkbox (`role="checkbox"` + `aria-checked="mixed"` + distinct `MinusSquare` icon for partial state); per-row checkbox switched from button-toggle `aria-pressed` to checkbox-semantics `aria-checked`; bulk PATCH uses `Promise.allSettled` with per-row outcome surface + selection narrowed to failures + assertive aria-live error banner with `requestAnimationFrame` focus jump; CSV formula-injection escape (`'` prefix on cells starting with `[=+\-@\t\r]`); bulk toolbar visual separator + `Loader2` spinner consistency + density `p-3`; `qk.feedback.npsAggregate` factory.
+- **T-E-5-11** ✅ (test) — `__tests__/feedback-wave-e.test.tsx` (7 vitest tests covering useBetaEnrollment auth gating + mutation, FeedbackButton CustomEvent prefill happy + invalid-tab fallback + manual-click reset). `e2e/feedback.spec.ts` (Playwright: public roadmap renders without auth, Suggest-a-feature opens feature tab, /admin/feedback + /settings/beta-program redirect when unauthed, deep-link on public route is no-op).
+
+**Files added (Wave E iter-1)**:
+- `apps/worldview-web/hooks/useBetaEnrollment.ts`
+- `apps/worldview-web/app/(app)/settings/beta-program/page.tsx`
+- `apps/worldview-web/components/feedback/FeedbackDeepLinkHandler.tsx`
+- `apps/worldview-web/__tests__/feedback-wave-e.test.tsx`
+- `apps/worldview-web/e2e/feedback.spec.ts`
+
+**Files modified (Wave E iter-1)**:
+- `apps/worldview-web/components/feedback/{FeedbackButton,FeedbackModal,NPSPrompt}.tsx`
+- `apps/worldview-web/app/admin/feedback/page.tsx`
+- `apps/worldview-web/app/(app)/layout.tsx` (Suspense + handler mount — landed via PLAN-0059 Wave I-A merge)
+- `apps/worldview-web/lib/gateway.ts` + `apps/worldview-web/lib/query/keys.ts` + `apps/worldview-web/types/api.ts`
+
+**Validation**:
+- [x] pnpm typecheck — clean
+- [x] pnpm lint — only pre-existing PLAN-0059-C migration warnings (no errors in Wave E surface)
+- [x] pnpm test — 1,196/1,196 pass (107 files, 7 new wave-E tests)
+- [x] pnpm build — production build green; `/settings/beta-program` (4.89 kB / 139 kB FLJ), `/admin/feedback` (10.3 kB / 164 kB FLJ), `/feedback` static-prerendered
+
+**QA-iter1 closure** (5-agent parallel pass):
+- 3 BLOCKING closed — deep-link StrictMode double-fire (B1), NPS radio keyboard nav (B-1), tri-state ARIA (B-2)
+- 5 CRITICAL closed — notes-draft clobber (C1), bulk PATCH partial-failure (C-3), CSV formula injection (M-1 sec), noisy `role="status"` chip (C-1 a11y), missing `qk` factory entry (C-1 arch)
+- 8 MAJOR closed — aria-label punctuation (M-1 a11y), Switch Label conflict (M-2 a11y), description nuke on prop change (M-2 bugs), invalid-kind URL leak (M-4 bugs), reduced-motion (M-3 a11y), bulk error focus mgmt (M-4 a11y), duplicate Notifications copy (#1 design — already removed by parallel commit), bulk toolbar separator + `Loader2` (#2/#3 design)
+- Deferred (non-blocking polish): admin tagging (no API), screenshot presigned-S3 upload (out of scope), MINOR design items (icon size scaling, focus-ring tuning)
 
 **Depends_on**: Wave D backend
-**Effort**: 16h
+**Effort**: 16h (planned) + ~6h iter-1 polish
 
 ---
 
