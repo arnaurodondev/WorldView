@@ -442,6 +442,38 @@ html {
   thead {
     display: table-header-group;     /* repeat header on every page */
   }
+  /* PLAN-0059 I-6: print-quality refinements.
+     - Show URL after every link in body content so the printed copy is useful
+       without the hyperlink. Skip for nav/menu links (those are display:none).
+     - Force charts (canvas-rendered) to fit within page width.
+     - Reset card shadows that don't print clean. */
+  main a[href]:not([data-print-hide])::after {
+    content: " (" attr(href) ")";
+    font-size: 9pt;
+    color: #666;
+    word-break: break-all;
+  }
+  canvas, svg {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+  .shadow-md, .shadow-lg, .shadow-xl, [class*="shadow-["] {
+    box-shadow: none !important;
+  }
+  /* Brand mark prefix on the first heading of every page —
+     gives the printed PDF a recognisable header. */
+  body::before {
+    content: "Worldview";
+    display: block;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 600;
+    font-size: 9pt;
+    color: #999;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 4pt;
+    margin-bottom: 12pt;
+  }
+
   /* A4 portrait, 1.5cm margins by default */
   @page {
     margin: 1.5cm;
