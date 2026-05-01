@@ -28,7 +28,6 @@ import {
   Zap,
 } from "lucide-react";
 import { useApiClient } from "@/lib/api-client";
-import { useAuth } from "@/hooks/useAuth";
 import { qk } from "@/lib/query/keys";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -62,28 +61,32 @@ function formatPublishedAt(iso: string | null): string {
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export default function NewsHubPage() {
-  const { accessToken } = useAuth();
   const gateway = useApiClient();
   const [windowKey, setWindowKey] = useState<WindowKey>("24h");
   const [tier, setTier] = useState<TierFilter>("ALL");
+  // QA-iter1: explicit "Load more" pagination — was hard-capped at 50 with
+  // no signal when total > 50. Now the consumer can grow the page; UI shows
+  // "Showing N of M" so silent truncation is impossible.
+  const [pageSize, setPageSize] = useState<number>(50);
 
   const params: TopNewsParams = useMemo(() => {
     const hours = WINDOWS.find((w) => w.key === windowKey)?.hours ?? 24;
     return {
       hours,
-      limit: 50,
+      limit: pageSize,
       ...(tier !== "ALL" ? { routing_tier: tier } : {}),
     };
-  }, [windowKey, tier]);
+  }, [windowKey, tier, pageSize]);
 
-  const { data, isLoading, isError, refetch } = useQuery({
+  const { data, isLoading, isFetching, isError, refetch } = useQuery({
     // qk.news.top accepts a generic record; cast preserves call-site clarity
     // without forcing TopNewsParams to add an index signature.
     queryKey: qk.news.top(params as unknown as Readonly<Record<string, unknown>>),
     queryFn: () => gateway.getTopNews(params),
-    // Public endpoint — accessToken not required, but we still want to
-    // re-query when auth state flips (showing personalised hot-news later).
-    enabled: !!accessToken,
+    // QA-iter1: dropped `enabled: !!accessToken` — /v1/news/top is a public
+    // endpoint per S6 contract. Gating it on auth made signed-out users see
+    // a permanent skeleton (this page lives under (app)/ so it's not visible
+    // to them today, but the leak would surface in any future public mount).
     staleTime: 60_000,
     refetchInterval: 60_000,
   });
@@ -168,13 +171,34 @@ export default function NewsHubPage() {
             <InlineEmptyState message="No articles in this window." />
           </div>
         ) : (
-          <ul className="divide-y divide-border/40">
-            {articles.map((a) => (
-              <li key={a.article_id}>
-                <ArticleRow article={a} />
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul className="divide-y divide-border/40">
+              {articles.map((a) => (
+                <li key={a.article_id}>
+                  <ArticleRow article={a} />
+                </li>
+              ))}
+            </ul>
+            {/* QA-iter1: explicit pagination so silent truncation at 50
+                articles is impossible. Shows count + Load-more when total>shown. */}
+            {data && (
+              <div className="flex items-center justify-between border-t border-border/40 px-3 py-2 text-[10px]">
+                <span className="font-mono tabular-nums text-muted-foreground">
+                  Showing {articles.length} of {data.total}
+                </span>
+                {data.total > articles.length && (
+                  <Button
+                    density="compact"
+                    variant="outline"
+                    onClick={() => setPageSize((n) => n + 50)}
+                    disabled={isFetching}
+                  >
+                    {isFetching ? "Loading…" : "Load 50 more"}
+                  </Button>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -184,9 +208,12 @@ export default function NewsHubPage() {
 // ── Article row ────────────────────────────────────────────────────────────
 
 function ArticleRow({ article: a }: { article: RankedArticle }) {
+  // QA-iter1: tier pill is now neutral so it doesn't visually compete with
+  // the active-window selector (which uses bg-primary/20). Reserve primary
+  // tint for user-controllable state; tiers are server-classified data.
   const tierClass =
     a.routing_tier === "DEEP"
-      ? "text-primary bg-primary/15"
+      ? "text-foreground ring-1 ring-border"
       : a.routing_tier === "MEDIUM"
       ? "text-foreground bg-muted/40"
       : a.routing_tier === "LIGHT"
@@ -210,6 +237,9 @@ function ArticleRow({ article: a }: { article: RankedArticle }) {
       href={a.url ?? "#"}
       target="_blank"
       rel="noopener noreferrer"
+      // QA-iter1 a11y: explicit "(opens in new tab)" cue so SR users hear
+      // it before activation. Composed with the article title.
+      aria-label={`${a.title ?? "(untitled)"}${a.primary_entity_symbol ? `, ${a.primary_entity_symbol}` : ""} (opens in new tab)`}
       className={cn(
         "block px-3 py-1.5 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
         isDim && "opacity-60",

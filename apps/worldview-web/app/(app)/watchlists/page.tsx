@@ -19,7 +19,6 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
 import { Plus, Eye, ListChecks } from "lucide-react";
 import { useAuthedQuery } from "@/lib/api-client";
 import { qk } from "@/lib/query/keys";
@@ -173,23 +172,17 @@ export default function WatchlistsHubPage() {
   }
 
   if (watchlists.length === 0) {
+    // QA-iter1: align with the rest of the dashboard's empty-state convention
+    // (left-aligned InlineEmptyState + small inline CTA). Previous centred
+    // 32px-icon block read as a consumer-app pattern, not Bloomberg.
     return (
       <>
         <PageShell onCreate={() => setCreateOpen(true)} count={0}>
-          <div className="flex flex-1 items-center justify-center px-4 py-12">
-            <div className="max-w-md text-center">
-              <ListChecks className="mx-auto mb-3 h-8 w-8 text-muted-foreground/40" aria-hidden />
-              <h2 className="mb-1 font-mono text-sm uppercase tracking-[0.08em] text-foreground">
-                No watchlists yet
-              </h2>
-              <p className="mb-3 text-[11px] text-muted-foreground">
-                Group instruments to track them across the dashboard, alerts,
-                and the screener. Each watchlist supports up to 200 members.
-              </p>
-              <Button density="compact" onClick={() => setCreateOpen(true)}>
-                <Plus className="h-3 w-3" /> Create watchlist
-              </Button>
-            </div>
+          <div className="flex flex-col items-start gap-2 p-4">
+            <InlineEmptyState message="No watchlists yet. Group instruments to track them across dashboard, alerts, and the screener." />
+            <Button density="compact" onClick={() => setCreateOpen(true)}>
+              <Plus className="h-3 w-3" /> Create watchlist
+            </Button>
           </div>
         </PageShell>
         {createOpen && (
