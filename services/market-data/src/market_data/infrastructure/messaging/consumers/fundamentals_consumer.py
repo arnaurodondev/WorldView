@@ -420,6 +420,12 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
                     event_type=created_event.event_type,
                     topic=EVENT_TOPIC_MAP[created_event.event_type],
                     payload=event_to_outbox_payload(created_event),
+                    # PLAN-0057-followup Wave B (F-DATA-06): pin every
+                    # ``market.instrument.created`` event for a given
+                    # instrument to the same Kafka partition so the S7
+                    # KG consumer observes the enrichment payload in causal
+                    # order with the earlier discovered.v1 event.
+                    partition_key=str(instrument.id),
                 )
             else:
                 # No real Name — defer enrichment publication to a later
