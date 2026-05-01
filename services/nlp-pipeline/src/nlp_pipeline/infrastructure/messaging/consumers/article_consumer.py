@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -852,13 +853,55 @@ async def _enqueue_enriched(
     # canonical_entity is created via the entity.canonical.created.v1 stream.
     entity_id_by_ref: dict[str, str] = {}
     provisional_refs: set[str] = set()
+
+    # PLAN-0052 platform-QA fix (2026-05-01): seed the lookup with multiple
+    # normalized variants of each mention surface so the LLM's slightly
+    # different rendering (drops "Corp"/"Inc", normalizes whitespace, etc.)
+    # still matches. Without this, the consumer log showed
+    # `relations=0, events=0` for every doc despite extraction producing
+    # 1-3 of each — the F-CRIT-07 entity_id_by_ref miss persisted.
+    # Variants we seed for each mention:
+    #   - exact lowercase
+    #   - whitespace-collapsed lowercase
+    #   - stripped of common corporate suffixes (Inc, Corp, Ltd, LLC, PLC,
+    #     Co, Holdings, Group, AG, NV, SA)
+    # The first variant that matches wins — we never overwrite a more-
+    # specific key with a less-specific one (resolved beats provisional
+    # naturally because resolved mentions are added to the dict first).
+    # Local closure over the module-level _BUILD_RAW_SUFFIX_RX so we don't
+    # duplicate the regex literal — the build_raw_* helpers below also need it.
+    def _ref_variants(text: str) -> list[str]:
+        """Return all normalized lookup variants for a mention surface."""
+        out: list[str] = []
+        lower = text.lower().strip()
+        out.append(lower)
+        # whitespace-collapsed (multiple spaces → single)
+        collapsed = " ".join(lower.split())
+        if collapsed != lower:
+            out.append(collapsed)
+        # suffix-stripped (try until the regex no longer matches; defensive
+        # against rare double-suffixes like "Foo Holdings Inc")
+        stripped = _BUILD_RAW_SUFFIX_RX.sub("", collapsed).strip()
+        while stripped != collapsed:
+            if stripped and stripped not in out:
+                out.append(stripped)
+            collapsed = stripped
+            stripped = _BUILD_RAW_SUFFIX_RX.sub("", collapsed).strip()
+        return out
+
     for m in mentions:
-        key = m.mention_text.lower()
         if m.resolved_entity_id is not None:
-            entity_id_by_ref[key] = str(m.resolved_entity_id)
+            value = str(m.resolved_entity_id)
+            for variant in _ref_variants(m.mention_text):
+                # Don't clobber an earlier (more-specific) key. setdefault
+                # gives "first writer wins" without an extra branch.
+                entity_id_by_ref.setdefault(variant, value)
         elif m.provisional_queue_id is not None:
-            entity_id_by_ref[key] = str(m.provisional_queue_id)
-            provisional_refs.add(key)
+            value = str(m.provisional_queue_id)
+            for variant in _ref_variants(m.mention_text):
+                if variant not in entity_id_by_ref:
+                    entity_id_by_ref[variant] = value
+                    provisional_refs.add(variant)
         # else: UNRESOLVED with no queue id (truly unknown surface) — still
         # excluded from the lookup so downstream relations referring to it
         # are dropped (no synthetic id to point to).
@@ -901,6 +944,55 @@ async def _enqueue_enriched(
     )
 
 
+# PLAN-0052 platform-QA fix (2026-05-01): symmetric normalization on the
+# LLM-side ref. The lookup dict was widened with stripped suffixes /
+# whitespace-collapsed variants of each mention, but the LLM may also
+# output the OPPOSITE direction — e.g. mention is "NVIDIA Corp" (variant
+# adds "nvidia") while LLM returns "NVIDIA Corporation". Without
+# normalizing the LLM ref too, that miss persists. We try the raw ref
+# first (cheapest), then fall back through the same variant list.
+_BUILD_RAW_SUFFIX_RX = re.compile(
+    r"\s+(inc|corp|corporation|ltd|llc|plc|co|holdings|group|ag|nv|sa|s\.a\.|s\.p\.a\.)\.?$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_ref_variants(text: str) -> list[str]:
+    """Same shape as the closure helper in `_emit_enriched_event`.
+
+    Kept duplicated rather than refactored into a shared module to keep this
+    fix self-contained — the build_raw_* helpers are module-private and the
+    normalization rules are identical to the lookup-population rules.
+    """
+    out: list[str] = []
+    lower = text.lower().strip()
+    if not lower:
+        return out
+    out.append(lower)
+    collapsed = " ".join(lower.split())
+    if collapsed != lower:
+        out.append(collapsed)
+    stripped = _BUILD_RAW_SUFFIX_RX.sub("", collapsed).strip()
+    while stripped and stripped != collapsed:
+        if stripped not in out:
+            out.append(stripped)
+        collapsed = stripped
+        stripped = _BUILD_RAW_SUFFIX_RX.sub("", collapsed).strip()
+    return out
+
+
+def _resolve_ref(
+    raw_ref: str,
+    entity_id_by_ref: dict[str, str],
+) -> tuple[str | None, str | None]:
+    """Return (entity_id, matched_key) for the first variant that hits."""
+    for variant in _normalize_ref_variants(raw_ref):
+        eid = entity_id_by_ref.get(variant)
+        if eid is not None:
+            return eid, variant
+    return None, None
+
+
 def _build_raw_relations(
     relations: list[Any],
     entity_id_by_ref: dict[str, str],
@@ -918,14 +1010,17 @@ def _build_raw_relations(
     result: list[dict[str, Any]] = []
     for rel in relations:
         rel_d: dict[str, Any] = dict(rel) if not isinstance(rel, dict) else rel  # type: ignore[call-overload]
-        subject_ref = str(rel_d.get("subject_ref", "")).lower()
-        object_ref = str(rel_d.get("object_ref", "")).lower()
-        subject_id = entity_id_by_ref.get(subject_ref)
-        object_id = entity_id_by_ref.get(object_ref)
+        subject_ref = str(rel_d.get("subject_ref", ""))
+        object_ref = str(rel_d.get("object_ref", ""))
+        subject_id, subject_match = _resolve_ref(subject_ref, entity_id_by_ref)
+        object_id, object_match = _resolve_ref(object_ref, entity_id_by_ref)
         if subject_id is None or object_id is None:
             continue  # skip truly unresolved — neither resolved nor provisional
-        subject_is_provisional = subject_ref in provisional_refs
-        object_is_provisional = object_ref in provisional_refs
+        # Provisional flag uses the matched-key (post-normalization) so the
+        # provisional_refs set lookup stays consistent with the lookup we
+        # actually used.
+        subject_is_provisional = subject_match in provisional_refs
+        object_is_provisional = object_match in provisional_refs
         # Pick whichever endpoint is provisional as the queue_id reference.
         # If both endpoints are provisional we surface the SUBJECT queue id —
         # KG promotes by queue_id so either is fine; subject is the conventional
@@ -963,18 +1058,19 @@ def _build_raw_events(
     result: list[dict[str, Any]] = []
     for evt in events:
         evt_d: dict[str, Any] = dict(evt) if not isinstance(evt, dict) else evt  # type: ignore[call-overload]
-        # Find the first resolvable entity ref from the entity_refs list
+        # Find the first resolvable entity ref from the entity_refs list.
+        # PLAN-0052 platform-QA fix: use _resolve_ref so suffix-stripped /
+        # whitespace-collapsed LLM output still matches.
         entity_refs = evt_d.get("entity_refs", [])
         subject_id: str | None = None
         subject_ref_lower: str | None = None
         participant_ids: list[str] = []
         for ref in entity_refs:  # type: ignore[union-attr]
-            ref_lower = str(ref).lower()
-            eid = entity_id_by_ref.get(ref_lower)
+            eid, matched = _resolve_ref(str(ref), entity_id_by_ref)
             if eid is not None:
                 if subject_id is None:
                     subject_id = eid
-                    subject_ref_lower = ref_lower
+                    subject_ref_lower = matched
                 participant_ids.append(eid)
         if subject_id is None:
             continue  # skip truly unresolved
@@ -1008,11 +1104,13 @@ def _build_raw_claims(
     result: list[dict[str, Any]] = []
     for claim in claims:
         claim_d: dict[str, Any] = dict(claim) if not isinstance(claim, dict) else claim  # type: ignore[call-overload]
-        entity_ref = str(claim_d.get("entity_ref", "")).lower()
-        subject_id = entity_id_by_ref.get(entity_ref)
+        # PLAN-0052 platform-QA fix: same suffix-stripping / whitespace-
+        # collapsed lookup as the relations + events helpers above.
+        entity_ref_raw = str(claim_d.get("entity_ref", ""))
+        subject_id, matched_key = _resolve_ref(entity_ref_raw, entity_id_by_ref)
         if subject_id is None:
             continue  # skip truly unresolved
-        is_provisional = entity_ref in provisional_refs
+        is_provisional = (matched_key or "") in provisional_refs
         result.append(
             {
                 "subject_entity_id": subject_id,
