@@ -34,6 +34,7 @@ import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { useIdleLock } from "@/hooks/useIdleLock";
+import { PreferencesProvider } from "@/contexts/PreferencesContext";
 import { TopBar } from "@/components/shell/TopBar";
 import { CollapsibleSidebar } from "@/components/shell/CollapsibleSidebar";
 import { FlashOverlay } from "@/components/shell/FlashOverlay";
@@ -233,6 +234,11 @@ export default function AppLayout({ children }: AppLayoutProps) {
   // infrastructure components (GlobalHotkeyBindings + HotkeyCheatSheet) live
   // INSIDE the provider — without that they'd throw "missing provider".
   return (
+    // PLAN-0059 I-4: PreferencesProvider supplies density/currency/timezone to
+    // every consumer via usePreferences(). Mounted at the layout level so all
+    // (app)/* pages share the same instance. Persists to localStorage today;
+    // S1 backend persistence is a deferred follow-up.
+    <PreferencesProvider>
     <HotkeyProvider>
       {/* GlobalHotkeyBindings has no DOM output — registers global chords
           (g d/p/i/s/w/a/n/c/, plus mod+b) AND mounts the document keydown
@@ -324,5 +330,6 @@ export default function AppLayout({ children }: AppLayoutProps) {
       </div>
       </WorkspaceProvider>
     </HotkeyProvider>
+    </PreferencesProvider>
   );
 }
