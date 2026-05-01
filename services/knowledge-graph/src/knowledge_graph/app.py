@@ -120,16 +120,36 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Idempotent: ensure_rows_exist uses ON CONFLICT DO NOTHING. Runs at every API
     # container start so any canonicals added by seeds or out-of-band scripts get
     # their definition / narrative / fundamentals rows before refresh workers tick.
+    #
+    # PLAN-0057 QA DS-004 fix: bound the await with a hard timeout (30 s) so a
+    # slow intelligence_db (lock contention, pgvector hot loop, replica lag)
+    # never blocks API readiness past the k8s readiness probe.  R22 forbids
+    # ``asyncio.create_task`` here (TOPO-LIFESPAN) so we keep the call
+    # synchronous-with-timeout instead of backgrounding it.  The repair is a
+    # self-healing safety-net — InstrumentEntityConsumer +
+    # InstrumentDiscoveredConsumer both call ensure_rows_exist on the live-write
+    # path, so canonical state converges even if this run is skipped.
+    import asyncio as _asyncio
+
     try:
         from knowledge_graph.infrastructure.workers.embedding_state_repair import (
             repair_missing_embedding_state,
         )
 
-        repair_stats = await repair_missing_embedding_state(write_factory)
+        repair_stats = await _asyncio.wait_for(
+            repair_missing_embedding_state(write_factory),
+            timeout=30.0,
+        )
         log.info(
             "kg_embedding_state_repair_at_startup",
             canonicals_checked=repair_stats["checked"],
             rows_inserted=repair_stats["inserted"],
+        )
+    except TimeoutError:
+        log.warning(
+            "kg_embedding_state_repair_timeout",
+            timeout_s=30.0,
+            note="repair will retry next container restart; live-write path covers the gap",
         )
     except Exception as exc:  # pragma: no cover — never block startup on the repair
         log.warning("kg_embedding_state_repair_failed", error=str(exc))

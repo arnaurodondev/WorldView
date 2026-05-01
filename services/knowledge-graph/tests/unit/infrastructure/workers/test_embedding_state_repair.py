@@ -116,3 +116,73 @@ class TestRepairMissingEmbeddingState:
         stats = asyncio.run(repair_missing_embedding_state(factory))
         assert stats["checked"] == 2
         assert stats["inserted"] == 4
+
+    def test_advances_through_multiple_full_pages(self) -> None:
+        """PLAN-0057 QA DS-002 regression: the previous OFFSET-based pagination
+        skipped ~50% of canonicals when the gap-set exceeded a single page,
+        because INSERTs from page 1 shifted the gap-set under page 2's OFFSET
+        cursor.  This test simulates a 1001-canonical gap-set delivered in
+        three pages (500 + 500 + 1) and asserts every row is processed.
+        """
+        from knowledge_graph.infrastructure.workers.embedding_state_repair import (
+            _PAGE_SIZE,
+            repair_missing_embedding_state,
+        )
+
+        page1 = [(f"c{i:04d}", "currency") for i in range(_PAGE_SIZE)]
+        page2 = [(f"c{i:04d}", "currency") for i in range(_PAGE_SIZE, _PAGE_SIZE * 2)]
+        page3 = [(f"c{_PAGE_SIZE * 2:04d}", "currency")]
+        # Empty page after page3 short-circuits the iteration cap.
+        rows = [page1, page2, page3, []]
+        factory = _make_session_factory(rows)
+
+        stats = asyncio.run(repair_missing_embedding_state(factory))
+        assert stats["checked"] == _PAGE_SIZE * 2 + 1, (
+            f"expected {_PAGE_SIZE * 2 + 1} canonicals processed, got {stats['checked']}"
+        )
+        assert stats["inserted"] == (_PAGE_SIZE * 2 + 1) * 2  # 2 view types per non-instrument
+
+    def test_iteration_cap_protects_against_runaway_loop(self) -> None:
+        """If ensure_rows_exist were silently failing (e.g. constraint violation
+        rolled back) the gap-set would never shrink and the loop would spin.
+        The iteration cap (100) bounds the worst case.  Simulated by always
+        returning a full page.
+        """
+        from knowledge_graph.infrastructure.workers.embedding_state_repair import (
+            _PAGE_SIZE,
+            repair_missing_embedding_state,
+        )
+
+        infinite_page = [(f"c{i:04d}", "currency") for i in range(_PAGE_SIZE)]
+        # Iterator yields the same full page forever — repair must terminate
+        # within the iteration cap rather than hang the test.
+        from itertools import repeat as _repeat
+
+        page_iter = _repeat(infinite_page)
+        inserts: list[tuple[str, str]] = []
+
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock
+
+        @asynccontextmanager
+        async def _ctx():
+            session = AsyncMock()
+
+            async def _execute(query, params=None):
+                text_q = str(query)
+                if text_q.lstrip().upper().startswith("INSERT INTO ENTITY_EMBEDDING_STATE"):
+                    inserts.append((str(params["entity_id"]), params["view_type"]))
+                    return MagicMock()
+                res = MagicMock()
+                res.fetchall.return_value = next(page_iter)
+                return res
+
+            session.execute = _execute
+            session.commit = AsyncMock()
+            yield session
+
+        factory = MagicMock(side_effect=_ctx)
+
+        stats = asyncio.run(repair_missing_embedding_state(factory))
+        # The cap is 100 iterations × _PAGE_SIZE rows per iteration.
+        assert stats["checked"] == 100 * _PAGE_SIZE

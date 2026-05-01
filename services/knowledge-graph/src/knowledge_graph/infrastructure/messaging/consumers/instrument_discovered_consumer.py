@@ -239,16 +239,41 @@ DO NOTHING
     # Idempotency (Valkey-cached event_id; same pattern as instrument_consumer.py)
     # ------------------------------------------------------------------
     async def is_duplicate(self, event_id: str) -> bool:
+        # PLAN-0057 QA DS-003 / F-DATA-08 fix: Valkey errors must NOT block
+        # the consumer.  Canonical/alias inserts are protected by ON CONFLICT
+        # DO NOTHING (defence-in-depth), so reprocessing a duplicate event is
+        # safe.  Previously a Valkey hiccup raised → propagated to
+        # _handle_failure → eventually dead-lettered the event, despite the
+        # underlying writes being idempotent.  Fail OPEN here instead.
         if self._dedup_client is None:
             return False
         key = f"{self._dedup_prefix}:{event_id}"
-        return bool(await self._dedup_client.exists(key))
+        try:
+            return bool(await self._dedup_client.exists(key))
+        except Exception as exc:  # pragma: no cover — exercised by Valkey outage tests
+            logger.warning(  # type: ignore[no-any-return]
+                "instrument_discovered_consumer_dedup_check_unavailable",
+                event_id=event_id,
+                error=str(exc),
+                note="failing open — canonical/alias writes are idempotent",
+            )
+            return False
 
     async def mark_processed(self, event_id: str) -> None:
+        # Same fail-open semantics as is_duplicate: a missed mark just means
+        # the next delivery will re-execute the idempotent INSERTs, not that
+        # data is lost or corrupted.
         if self._dedup_client is None:
             return
         key = f"{self._dedup_prefix}:{event_id}"
-        await self._dedup_client.set(key, "1", ex=86400)
+        try:
+            await self._dedup_client.set(key, "1", ex=86400)
+        except Exception as exc:  # pragma: no cover
+            logger.warning(  # type: ignore[no-any-return]
+                "instrument_discovered_consumer_mark_processed_unavailable",
+                event_id=event_id,
+                error=str(exc),
+            )
 
     # ------------------------------------------------------------------
     # Failure tracking

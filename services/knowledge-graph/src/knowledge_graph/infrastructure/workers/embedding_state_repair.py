@@ -87,18 +87,23 @@ async def repair_missing_embedding_state(session_factory: async_sessionmaker[Asy
     """
     checked = 0
     inserted = 0
-    page_offset = 0  # Used only for the "page < _PAGE_SIZE → done" exit.
+    # PLAN-0057 QA DS-002: NO `OFFSET` here.  After each page we INSERT rows
+    # that REMOVE entities from the gap-set, so OFFSET would skip the next
+    # page-worth of *new* gaps that have shifted into the OFFSET=0..LIMIT
+    # window.  Always re-query from the top — the gap-set monotonically
+    # shrinks, so the loop terminates when the gap query returns zero rows.
+    # Iteration cap defends against a permanent insert-failure that would
+    # otherwise spin forever (e.g. ensure_rows_exist no-op due to constraint).
+    iteration_cap = 100
+    iterations = 0
 
-    while True:
+    while iterations < iteration_cap:
+        iterations += 1
         async with session_factory() as session:
-            # We re-run the gap query each page because INSERTs from earlier
-            # pages mean the gap set shrinks over time — re-querying is
-            # cheaper than tracking a cursor manually since most pages will
-            # be near-empty after the first run.
-            result = await session.execute(text(_GAP_QUERY + " LIMIT :limit OFFSET :offset"), {
-                "limit": _PAGE_SIZE,
-                "offset": page_offset,
-            })
+            result = await session.execute(
+                text(_GAP_QUERY + " LIMIT :limit"),
+                {"limit": _PAGE_SIZE},
+            )
             rows = result.fetchall()
             if not rows:
                 break
@@ -123,7 +128,15 @@ async def repair_missing_embedding_state(session_factory: async_sessionmaker[Asy
 
         if len(rows) < _PAGE_SIZE:
             break
-        page_offset += _PAGE_SIZE
+
+    if iterations >= iteration_cap:
+        logger.warning(
+            "kg_embedding_state_repair_iteration_cap_hit",
+            iteration_cap=iteration_cap,
+            checked=checked,
+            inserted=inserted,
+            note="ensure_rows_exist may be silently failing — investigate",
+        )
 
     logger.info(
         "kg_embedding_state_repair_complete",

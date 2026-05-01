@@ -418,3 +418,20 @@ make run       # port 8006
 make test
 make lint
 ```
+
+## PLAN-0057 changes (2026-04-30 → 2026-05-01)
+
+This plan closed audit findings F-CRIT-02..12 + 8 MAJORs across the S4→S5→S6→S7 pipeline. Material changes inside nlp-pipeline:
+
+| Wave | Change |
+|------|--------|
+| A-1 | Migration `0015` — `routing_decisions.processing_path` + idempotent re-add of `final_routing_tier`. Persists Block 8 novelty downgrade so downstream queries can filter on it. |
+| A-4 | `article_consumer._record_resolution_audit` — now calls `mr_repo.add_batch(resolution_audit)` (was iterated for metrics only — silent persistence failure pattern). |
+| A-5 | `usage_logger` threading — `SessionScopedNlpUsageLogger` instantiated in every worker entry point; every Phase-2 LLM call writes one row to `nlp_db.llm_usage_log` (was permanently empty). |
+| B-1 | `_build_raw_*` (`article_consumer`) carries `entity_provisional` + `provisional_queue_id` for unresolved mentions (~80% of dropped raw_relations/events/claims now flow downstream). |
+| B-2 | `_PROVISIONAL_INSERT_SQL` rewritten to match the real `provisional_entity_queue` schema; SAVEPOINT no longer silently swallows errors. |
+| B-3 | `UnresolvedResolutionWorker` prompt rewrite — financial-domain criterion + 4 worked examples + `context_sentence` (±200 chars). |
+| E-1 | `MarketDataClient` mints internal JWT via S9 `POST /v1/auth/dev-login`; cached 240 s; sent as `X-Internal-JWT` (unblocks `article_impact_windows`). **BP-303**: this path is disabled in production — see `BUG_PATTERNS.md`. |
+| E-4 | New standalone process `nlp_pipeline.workers.embedding_retry_worker_main` drains `embedding_pending` queue. Migration `0016` adds `last_attempted_at`. `EmbeddingPendingRepository.claim_batch` uses `FOR UPDATE SKIP LOCKED`. Worker emits `embedding_retry_abandoned` log on final retry. Registered as `nlp-pipeline-embedding-retry-worker` in `infra/compose/docker-compose.yml`. |
+
+**Removed**: `claim.extracted` orphan producer (D-1; no consumer existed; was wasting outbox capacity).
