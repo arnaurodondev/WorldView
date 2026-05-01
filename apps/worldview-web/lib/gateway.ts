@@ -88,6 +88,8 @@ import type {
   FeatureRequestFilters,
   FeatureVoteResponse,
   MicroSurveyPayload,
+  BetaEnrollment,
+  BetaEnrollmentPatch,
 } from "@/types/api";
 
 // ── Base URL ──────────────────────────────────────────────────────────────
@@ -2643,6 +2645,39 @@ export function createGateway(token?: string | null) {
       // discard it so consumers don't have to model an unused shape.
       return apiFetch<void>("/v1/feedback/micro-survey", {
         method: "POST",
+        body: payload,
+        token: t,
+      });
+    },
+
+    /**
+     * getBetaEnrollment — read the current user's beta-program row.
+     *
+     * BACKEND: GET /v1/feedback/beta-program/enrollment → 200 with
+     * BetaEnrollmentResponse. The route is auth-only; calling without a
+     * token returns 401. The server returns a row with `enrolled: false`
+     * (not 404) when the user has never opted in, so the UI can render an
+     * unchecked toggle without special-casing missing-row.
+     *
+     * PLAN-0052 Wave E T-E-5-07.
+     */
+    getBetaEnrollment(): Promise<BetaEnrollment> {
+      return apiFetch<BetaEnrollment>("/v1/feedback/beta-program/enrollment", {
+        method: "GET",
+        token: t,
+      });
+    },
+
+    /**
+     * patchBetaEnrollment — partial update on the user's beta row. Used by
+     * the toggle in /settings/beta-program. Server upserts on first PATCH.
+     *
+     * BACKEND: PATCH /v1/feedback/beta-program/enrollment → 200 with the
+     * updated row. Auth-only.
+     */
+    patchBetaEnrollment(payload: BetaEnrollmentPatch): Promise<BetaEnrollment> {
+      return apiFetch<BetaEnrollment>("/v1/feedback/beta-program/enrollment", {
+        method: "PATCH",
         body: payload,
         token: t,
       });

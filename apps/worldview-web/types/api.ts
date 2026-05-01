@@ -1399,3 +1399,37 @@ export interface MicroSurveyPayload {
   /** Optional free-text follow-up — ≤ 2000 chars. */
   comment?: string | null;
 }
+
+// ── Beta program enrollment ────────────────────────────────────────────────
+//
+// PLAN-0052 Wave E T-E-5-07: Backend lives at
+//   GET    /v1/feedback/beta-program/enrollment
+//   PATCH  /v1/feedback/beta-program/enrollment
+// (Proxied through api-gateway.routes.proxy.feedback_*_beta_enrollment.)
+//
+// The Pydantic model on the backend (api-gateway BetaEnrollmentResponse)
+// returns one row keyed on (tenant_id, user_id). When the user has never
+// opted in, the route returns the row with `enrolled: false` so the UI can
+// render an unchecked toggle without special-casing 404. The PATCH body
+// is a single optional field — flip the boolean and the server upserts.
+
+/** Server-side BetaEnrollment row — matches BetaEnrollmentResponse. */
+export interface BetaEnrollment {
+  /** UUIDv7 — present when the user has ever opted in. */
+  id: string | null;
+  /** ISO timestamp — null until first enrollment. */
+  enrolled_at: string | null;
+  /** Whether the user is currently in the beta cohort. */
+  enrolled: boolean;
+  /**
+   * Optional notes the user can leave (e.g. "interested in graph features").
+   * ≤ 500 chars. Server stores empty string as NULL.
+   */
+  notes: string | null;
+}
+
+/** PATCH body — partial; server merges any present fields. */
+export interface BetaEnrollmentPatch {
+  enrolled?: boolean;
+  notes?: string | null;
+}

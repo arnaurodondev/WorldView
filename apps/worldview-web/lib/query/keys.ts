@@ -222,6 +222,17 @@ export const qk = {
         ? (["feedback", "submissions", filters] as const)
         : (["feedback", "submissions"] as const),
     featureRequests: () => ["feedback", "feature-requests"] as const,
+    // PLAN-0052 Wave E T-E-5-07. One row per user; no filters. Lives under
+    // the feedback.* cascade so an admin-side mutation that bumps unrelated
+    // feedback rows doesn't refetch enrollment, but invalidating
+    // `qk.feedback.all` will still clear it (intentional — feedback-wide
+    // refetch on admin actions).
+    betaEnrollment: () => ["feedback", "beta-enrollment"] as const,
+    // PLAN-0053 Wave G — admin NPS aggregate strip. Same shape as the
+    // existing inline ["nps-aggregate", days] keys; centralising lets us
+    // drop the bare top-level key once admin/feedback/page.tsx switches.
+    npsAggregate: (days: number) =>
+      ["feedback", "nps-aggregate", days] as const,
   },
 
   // ── User ─────────────────────────────────────────────────────────────────

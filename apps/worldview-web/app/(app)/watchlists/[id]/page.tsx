@@ -235,7 +235,7 @@ export default function WatchlistDetailPage() {
             </h2>
             <p className="text-[11px] text-muted-foreground">
               Add instruments from any instrument page or the screener — the
-              "Add to watchlist" action will surface this list.
+              &ldquo;Add to watchlist&rdquo; action will surface this list.
             </p>
           </div>
         </div>
