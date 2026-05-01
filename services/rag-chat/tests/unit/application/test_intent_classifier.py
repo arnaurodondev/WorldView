@@ -161,6 +161,12 @@ class TestDeepInfraIntentClassifier:
         assert "Bearer test-key-abc" in posted_kwargs.get("headers", {}).get("Authorization", "")
 
     async def test_deepinfra_classifier_default_model_is_available(self) -> None:
-        """Default model must be meta-llama/Meta-Llama-3.1-8B-Instruct (confirmed on DeepInfra)."""
+        """PLAN-0052 platform-QA round 5: default model is the 1B (was 8B).
+
+        The 1B is ~6x cheaper for the small intent-classification task.
+        Both `meta-llama/Llama-3.2-1B-Instruct` and the legacy 8B are
+        confirmed available on the project's DeepInfra account; the 1B
+        is the right default for cost/latency, the 8B is available as
+        a config override for installs that need higher accuracy."""
         clf = DeepInfraIntentClassifier(api_key="test")
-        assert clf._model == "meta-llama/Meta-Llama-3.1-8B-Instruct"
+        assert clf._model == "meta-llama/Llama-3.2-1B-Instruct"
