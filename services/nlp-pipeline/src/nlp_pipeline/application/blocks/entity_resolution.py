@@ -606,3 +606,93 @@ async def run_entity_resolution_block(
         all_audit.extend(audit)
 
     return mentions, all_audit
+
+
+# ── Synthetic-provisional-on-demand (PLAN-0052 platform-QA round 9) ──────────
+
+
+async def ensure_provisional_for_mention(
+    mention: EntityMention,
+    intelligence_session: object,
+) -> UUID | None:
+    """Create a provisional_entity_queue row for an UNRESOLVED mention on demand.
+
+    Used by the article-consumer to synthesise a queue row for mentions the
+    deep-extraction LLM later references in a relation/event/claim. Without
+    this, ``_build_raw_*`` would silently drop those rows because
+    ``entity_id_by_ref`` would have no synthetic UUID for the unresolved
+    surface.
+
+    Reuses the same SAVEPOINT + churn-guard + INSERT pattern as Block 9's
+    own provisional path (lines 514-596 above), but is callable from outside
+    the resolution loop. Mutates ``mention`` in place: on success, sets
+    ``mention.provisional_queue_id`` and flips ``resolution_outcome`` from
+    UNRESOLVED to PROVISIONAL so downstream observability is accurate. On
+    churn-guard hit or DB failure, leaves the mention UNRESOLVED.
+
+    Returns the new queue_id (or the pre-existing one on UNIQUE conflict),
+    or ``None`` if the row was not inserted.
+    """
+    from sqlalchemy import text as _sql_text  # type: ignore[import-untyped]
+
+    # Idempotency: if the mention already has a queue_id (Block 9 PROVISIONAL
+    # path created one), there's nothing to do.
+    if mention.provisional_queue_id is not None:
+        return mention.provisional_queue_id
+
+    # Only synthesise for genuinely unresolved mentions; never overwrite an
+    # AUTO_RESOLVED resolution.
+    if mention.resolved_entity_id is not None:
+        return None
+
+    _mention_class_val = (
+        mention.mention_class.value  # type: ignore[union-attr]
+        if hasattr(mention.mention_class, "value")
+        else str(mention.mention_class)
+    )
+
+    try:
+        # Churn guard — same shape as Block 9: skip if ≥ MAX_PROVISIONAL_PER_HOUR
+        # rows already exist for this (surface, class) pair in the last hour.
+        _count_result = await intelligence_session.execute(  # type: ignore[attr-defined]
+            _sql_text(
+                "SELECT COUNT(*) FROM provisional_entity_queue"
+                " WHERE normalized_surface = lower(trim(:surface))"
+                "   AND mention_class = :mention_class"
+                "   AND created_at >= NOW() - INTERVAL '1 hour'"
+            ),
+            {"surface": mention.mention_text, "mention_class": _mention_class_val},
+        )
+        _hourly_count: int = _count_result.scalar_one()
+        if _hourly_count >= MAX_PROVISIONAL_PER_HOUR:
+            logger.warning(  # type: ignore[no-any-return]
+                "ensure_provisional.churn_guard_skipped",
+                surface_form=mention.mention_text,
+                entity_class=_mention_class_val,
+                count=_hourly_count,
+            )
+            return None
+
+        # SAVEPOINT-guarded INSERT (BP-239: a UNIQUE-constraint failure on the
+        # outer transaction would otherwise poison the article-consumer's
+        # whole transaction).
+        async with intelligence_session.begin_nested():  # type: ignore[attr-defined]
+            queue_id = await _insert_provisional(mention, intelligence_session)
+
+        mention.provisional_queue_id = queue_id
+        # Flip the outcome so observability reflects reality. The MentionResolution
+        # audit row was already written by Block 9 with outcome=UNRESOLVED; we do
+        # not write a new audit row here (the on-demand promotion is metadata,
+        # not a stage-N resolution decision).
+        mention.resolution_outcome = ResolutionOutcome.PROVISIONAL
+        return queue_id
+    except Exception as exc:
+        logger.warning(  # type: ignore[no-any-return]
+            "ensure_provisional.insert_failed",
+            mention_id=str(mention.mention_id),
+            surface=mention.mention_text,
+            exception_type=type(exc).__name__,
+            exception_message=str(exc),
+            exc_info=True,
+        )
+        return None

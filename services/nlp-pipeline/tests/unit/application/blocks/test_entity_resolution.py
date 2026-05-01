@@ -464,3 +464,132 @@ class TestAnnScoreMonotonicity:
         should_auto = confidence > AUTO_RESOLVE_THRESHOLD
         # Re-derive from raw — must be consistent
         assert should_auto == (confidence > AUTO_RESOLVE_THRESHOLD)
+
+
+# ── ensure_provisional_for_mention (PLAN-0052 round 9 / Option 2) ────────────
+
+
+def _intelligence_session_mock(*, hourly_count: int = 0, queue_id: uuid.UUID | None = None) -> MagicMock:
+    """Build a mock intelligence_session that mirrors the SAVEPOINT + churn-guard
+    + INSERT pattern used by ``ensure_provisional_for_mention``.
+
+    - ``hourly_count`` controls the COUNT(*) the churn-guard query returns.
+    - ``queue_id`` is what ``_insert_provisional`` sees as the RETURNING row.
+      When ``None``, the SAVEPOINT block raises an Exception to simulate
+      DB failure / unique-conflict-without-RETURNING.
+    """
+    session = MagicMock()
+
+    # Two execute() calls happen: the COUNT(*) churn guard, then the INSERT.
+    count_result = MagicMock()
+    count_result.scalar_one = MagicMock(return_value=hourly_count)
+    insert_result = MagicMock()
+    insert_result.scalar_one = MagicMock(return_value=str(queue_id) if queue_id else None)
+    session.execute = AsyncMock(side_effect=[count_result, insert_result])
+
+    # begin_nested() returns an async context manager. When queue_id is None we
+    # simulate failure inside the SAVEPOINT block.
+    nested_cm = AsyncMock()
+    if queue_id is None:
+        nested_cm.__aenter__ = AsyncMock(side_effect=RuntimeError("savepoint failure"))
+    else:
+        nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
+    return session
+
+
+@pytest.mark.unit
+class TestEnsureProvisionalForMention:
+    """ensure_provisional_for_mention promotes UNRESOLVED → PROVISIONAL inline.
+
+    Used by article_consumer's synthesize_provisional_refs to give LLM-
+    referenced UNRESOLVED mentions a queue_id so _build_raw_* can address
+    them. Idempotent (no-op if mention already has a queue_id) and safe
+    (never overwrites an AUTO_RESOLVED mention's resolved_entity_id).
+    """
+
+    @pytest.mark.asyncio
+    async def test_unresolved_mention_promoted_to_provisional(self) -> None:
+        from nlp_pipeline.application.blocks.entity_resolution import ensure_provisional_for_mention
+
+        mention = _make_mention("Endeavour Mining")
+        mention.resolution_outcome = ResolutionOutcome.UNRESOLVED
+        queue_id = uuid.uuid4()
+        session = _intelligence_session_mock(hourly_count=0, queue_id=queue_id)
+
+        result = await ensure_provisional_for_mention(mention, session)
+
+        assert result == queue_id
+        assert mention.provisional_queue_id == queue_id
+        assert mention.resolution_outcome == ResolutionOutcome.PROVISIONAL
+
+    @pytest.mark.asyncio
+    async def test_idempotent_when_mention_already_has_queue_id(self) -> None:
+        """If Block 9 already created a queue row, the helper short-circuits."""
+        from nlp_pipeline.application.blocks.entity_resolution import ensure_provisional_for_mention
+
+        mention = _make_mention("Apple Inc.")
+        existing_qid = uuid.uuid4()
+        mention.provisional_queue_id = existing_qid
+        mention.resolution_outcome = ResolutionOutcome.PROVISIONAL
+        session = _intelligence_session_mock(hourly_count=0, queue_id=uuid.uuid4())
+
+        result = await ensure_provisional_for_mention(mention, session)
+
+        assert result == existing_qid
+        # No DB calls — short-circuit before touching the session.
+        session.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_mention_already_resolved(self) -> None:
+        """Never overwrite an AUTO_RESOLVED mention with a synthetic queue_id."""
+        from nlp_pipeline.application.blocks.entity_resolution import ensure_provisional_for_mention
+
+        mention = _make_mention("NVIDIA Corp")
+        mention.resolved_entity_id = uuid.uuid4()
+        mention.resolution_outcome = ResolutionOutcome.AUTO_RESOLVED
+        session = _intelligence_session_mock(hourly_count=0, queue_id=uuid.uuid4())
+
+        result = await ensure_provisional_for_mention(mention, session)
+
+        assert result is None
+        assert mention.provisional_queue_id is None
+        # Auto_resolved outcome must NOT be flipped.
+        assert mention.resolution_outcome == ResolutionOutcome.AUTO_RESOLVED
+
+    @pytest.mark.asyncio
+    async def test_churn_guard_skips_when_threshold_hit(self) -> None:
+        """If MAX_PROVISIONAL_PER_HOUR rows already exist, skip insert."""
+        from nlp_pipeline.application.blocks.entity_resolution import (
+            MAX_PROVISIONAL_PER_HOUR,
+            ensure_provisional_for_mention,
+        )
+
+        mention = _make_mention("the company")
+        mention.resolution_outcome = ResolutionOutcome.UNRESOLVED
+        session = _intelligence_session_mock(hourly_count=MAX_PROVISIONAL_PER_HOUR, queue_id=uuid.uuid4())
+
+        result = await ensure_provisional_for_mention(mention, session)
+
+        assert result is None
+        assert mention.provisional_queue_id is None
+        # Churn-guard must not flip the outcome (mention stays UNRESOLVED so
+        # UnresolvedResolutionWorker eventually re-attempts on its cycle).
+        assert mention.resolution_outcome == ResolutionOutcome.UNRESOLVED
+
+    @pytest.mark.asyncio
+    async def test_savepoint_failure_returns_none(self) -> None:
+        """DB failure inside SAVEPOINT must not poison the outer transaction."""
+        from nlp_pipeline.application.blocks.entity_resolution import ensure_provisional_for_mention
+
+        mention = _make_mention("Some Org")
+        mention.resolution_outcome = ResolutionOutcome.UNRESOLVED
+        session = _intelligence_session_mock(hourly_count=0, queue_id=None)
+
+        result = await ensure_provisional_for_mention(mention, session)
+
+        assert result is None
+        assert mention.provisional_queue_id is None
+        # Outcome stays UNRESOLVED so the next cycle re-attempts.
+        assert mention.resolution_outcome == ResolutionOutcome.UNRESOLVED
