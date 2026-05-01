@@ -74,7 +74,22 @@ function adaptiveDecimals(scaledAbs: number, maxDecimals = 2): number {
 // Intl.NumberFormat would return localised symbols ("US$", "CA$") in some
 // locales which Bloomberg-style tables don't use. We pick the unambiguous
 // symbol for institutional finance UIs.
-const CURRENCY_SYMBOLS: Record<string, string> = {
+/**
+ * Canonical list of currency codes the UI knows about. PLAN-0059 I-4
+ * QA-iter1: extracted as the SINGLE SOURCE OF TRUTH. Adding a currency here
+ * automatically surfaces it in PreferencesContext and the picker dropdown.
+ *
+ * `as const` so the inferred union (`CurrencyCode`) is the literal-string
+ * union, not just `string`. This is what makes the validator allow-list and
+ * dropdown stay in lock-step.
+ */
+export const CURRENCY_CODES = [
+  "USD", "EUR", "GBP", "JPY", "CHF", "CAD", "AUD",
+  "CNY", "HKD", "KRW", "BTC", "ETH",
+] as const;
+export type CurrencyCode = (typeof CURRENCY_CODES)[number];
+
+const CURRENCY_SYMBOLS: Record<CurrencyCode, string> = {
   USD: "$",
   EUR: "€",
   GBP: "£",
@@ -91,7 +106,8 @@ const CURRENCY_SYMBOLS: Record<string, string> = {
 };
 
 function symbolFor(currency: string): string {
-  return CURRENCY_SYMBOLS[currency.toUpperCase()] ?? `${currency.toUpperCase()} `;
+  const code = currency.toUpperCase() as CurrencyCode;
+  return CURRENCY_SYMBOLS[code] ?? `${currency.toUpperCase()} `;
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -207,10 +223,10 @@ export function formatPrice(
   currency = "USD",
 ): string {
   if (value == null || !Number.isFinite(value)) return DASH;
-  const code = currency.toUpperCase();
+  const code = currency.toUpperCase() as CurrencyCode;
 
   // Try Intl first for ISO-recognised codes (USD/EUR/GBP/JPY/CHF/CAD/AUD/CNY/HKD/KRW).
-  if (CURRENCY_SYMBOLS[code] && code !== "BTC" && code !== "ETH") {
+  if (code in CURRENCY_SYMBOLS && code !== "BTC" && code !== "ETH") {
     try {
       return new Intl.NumberFormat("en-US", {
         style: "currency",

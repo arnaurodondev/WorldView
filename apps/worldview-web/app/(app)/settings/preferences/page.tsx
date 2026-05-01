@@ -17,7 +17,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
+import { DestructiveButton } from "@/components/ui/destructive-button";
 import {
   Select,
   SelectContent,
@@ -196,21 +196,28 @@ export default function SettingsPreferencesPage() {
         </CardContent>
       </Card>
 
-      {/* Reset */}
-      <Card className="border-border/60 bg-card">
+      {/* Reset — QA-iter1: T1 inline two-step confirm so a misclick doesn't
+          wipe the user's preferences silently. Card is moved to a "Danger
+          zone" treatment with destructive border. */}
+      <Card className="border-destructive/40 bg-card">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-medium text-foreground">
-            Reset preferences
+            Danger zone
           </CardTitle>
           <CardDescription className="text-xs">
-            Restores density, currency, and timezone to their defaults. Does
-            not affect other settings (notifications, appearance, security).
+            Reset density, currency, and timezone to defaults. Does not
+            affect other settings (notifications, appearance, security).
+            Click twice to confirm.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Button density="compact" variant="outline" onClick={reset}>
-            Reset to defaults
-          </Button>
+          <DestructiveButton
+            tier="t1"
+            density="compact"
+            onConfirm={() => reset()}
+          >
+            Reset preferences
+          </DestructiveButton>
         </CardContent>
       </Card>
 
