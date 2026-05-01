@@ -167,23 +167,20 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
 
         # BP-159: Read from app.state, not self — serving instance != startup instance
         public_key = getattr(request.app.state, "_internal_jwt_public_key", None) or self._public_key
-        if public_key is None:
-            # F-001: Fail-closed by default when JWKS public key is unavailable.
-            # Without the public key we cannot verify JWT signatures, so accepting
-            # tokens here would allow any forged JWT to pass through unchecked.
-            if not self._skip_verification:
-                logger.error(  # type: ignore[no-any-return]
-                    "internal_jwt_no_public_key",
-                    detail="JWKS public key not loaded — rejecting request (fail-closed).",
-                )
-                return Response(
-                    content='{"detail":"Service Unavailable — JWKS not loaded"}',
-                    status_code=503,
-                    media_type="application/json",
-                )
 
-            # skip_verification=True: decode WITHOUT signature verification.
-            # This path exists ONLY for E2E tests without the full S9 stack.
+        # PLAN-0052 platform-QA fix (2026-05-01): when skip_verification is
+        # enabled (dev / E2E only), ALWAYS take the unverified-decode path —
+        # not just when the public_key is missing. The previous gating only
+        # honored skip_verification when JWKS load FAILED, which meant any
+        # service starting up successfully (loading a real RS256 public key
+        # from S9) would then reject HS256 dev tokens with 401. This was
+        # silently degrading portfolio-snapshot-worker NAV calculations
+        # (cost-basis fallback firing every snapshot cycle). The
+        # skip_verification flag is config-gated in production via
+        # `internal_jwt_skip_verification MUST NOT be enabled in production`
+        # (config.py F-007 guard), so dev convenience here doesn't widen
+        # the prod attack surface.
+        if self._skip_verification:
             logger.critical(  # type: ignore[no-any-return]
                 "internal_jwt_unverified_decode",
                 detail="Decoding JWT WITHOUT signature verification (skip_verification=True).",
@@ -198,6 +195,21 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 request.state.user_id = ""
                 request.state.role = ""
             return cast("Response", await call_next(request))
+
+        if public_key is None:
+            # F-001: Fail-closed by default when JWKS public key is unavailable.
+            # Without the public key we cannot verify JWT signatures, so accepting
+            # tokens here would allow any forged JWT to pass through unchecked.
+            # (The skip_verification short-circuit above handles the dev path.)
+            logger.error(  # type: ignore[no-any-return]
+                "internal_jwt_no_public_key",
+                detail="JWKS public key not loaded — rejecting request (fail-closed).",
+            )
+            return Response(
+                content='{"detail":"Service Unavailable — JWKS not loaded"}',
+                status_code=503,
+                media_type="application/json",
+            )
 
         try:
             # F-015: pass issuer= to jwt.decode so PyJWT validates iss internally.
