@@ -839,3 +839,161 @@ For full implementation from a design, use `/scaffold-frontend`.
 | OQ-10 | Portfolio chart library | Resolved | recharts (donut + horizontal bar); code-split to `/portfolio` route only |
 | OQ-11 | Sector heat map data | Resolved | Batch quotes for 11 SPDR sector ETFs (XLK…XLC) via `POST /v1/quotes/batch` |
 | OQ-12 | Landing page hero copy | Resolved | "Bloomberg-Grade Research. Without the Bloomberg Bill." (see PRD-0027 §3 F-01) |
+
+
+---
+
+## 12. PLAN-0059 Wave F + H Primitives
+
+### 12.1 `<DataTable>` — universal table primitive (Wave F-1)
+
+**Path**: `components/ui/data-table/`
+
+**Purpose**: institutional-terminal table grammar — density-aware rows, virtualization, multi-column sort, multi-select with bulk-action toolbar, sticky header, column resize, copy-as-TSV (⌘C scoped to the table), CSV export, integrated context menu.
+
+**API**:
+```tsx
+<DataTable<TRow>
+  columns={cols}
+  data={rows}
+  getRowId={(r) => r.id}                 // REQUIRED — selection state
+  density="compact"                      // 22px rows, 11px text (default)
+  selectable                             // adds checkbox col + bulk toolbar
+  bulkActions={[{ id, label, onClick, destructive }]}
+  contextMenu={[{ id, label, shortcut, onClick }]}
+  onRowClick={(r) => router.push(...)}
+  /* Optional CONTROLLED-mode escape hatches — pass when parent owns state
+     (URL state, saved views, multi-table coordination). When omitted,
+     internal state is used. */
+  sorting={sorting}  onSortingChange={setSorting}
+  rowSelection={selection}  onRowSelectionChange={setSelection}
+  columnVisibility={visibility}  onColumnVisibilityChange={setVisibility}
+/>
+```
+
+**Density tokens**: `compact` (22px row, 11px) / `default` (32px row, xs) / `comfortable` (40px row, sm).
+
+**a11y**: `role="table"` with `aria-rowcount` + `aria-colcount`; `role="rowgroup"` wrappers around header and body; per-row `aria-rowindex`; per-cell `aria-colindex`; bulk toolbar uses `role="region"` + `role="status"` + `aria-live="polite"` so SR users hear "N selected" when appearing.
+
+**Selection treatment**: 2px primary left-border accent + faint tint (`bg-primary/[0.04] shadow-[inset_2px_0_0_hsl(var(--primary))]`). Reads as "marked", NOT "highlighted/warning".
+
+**Security**: TSV/CSV serialisation in `lib/format/csv-tsv.ts` defangs CWE-1236 spreadsheet formula injection. Defended in test `__tests__/data-table-utils.test.ts`. See BP-304.
+
+**Deferred** (follow-up wave): inline edit, group-by + sticky-footer totals, saved views, frozen rows/cols, PDF/Excel exports, virtualised columns.
+
+### 12.2 `<NumberInput>` — TradingView-style shorthand parser (Wave F-2)
+
+**Path**: `components/ui/number-input.tsx` + `lib/format/parse-shorthand.ts`
+
+**Shorthand grammar** (case-insensitive; round-trips through `formatShorthand`):
+
+| Input | Parsed value |
+|-------|:---:|
+| `1.5m` / `2.3b` / `850k` / `1.2t` | SI multipliers (1e6 / 1e9 / 1e3 / 1e12) |
+| `+2%` / `-15%` | fractional (`0.02` / `-0.15`) when `percent=true` (default) |
+| `25bps` / `25bp` | fractional (`0.0025`) when `bps=true` (default) |
+| `$1.5m` / `€2.3b` / `£100` / `¥50000` / `₿1` | currency-stripped |
+| `(500)` / `($1.5m)` / `(-100)` | accounting parens → negative |
+| `1,234.56` / `1 234.56` / `1'234'567` | locale thousands separators |
+| `1e-7` / `-2.3E+5` | scientific notation (lossless round-trip) |
+| `abc` / `$$$` / `1m2b` | invalid → `null` |
+
+**Sign rule**: parens override inner sign. `(-100)` is `-100`, not `+100`. See BP-307.
+
+**Visual feedback**: live parse-preview ghost (`≈ 1.5M`) shown to the right while focused — user sees what the parser interprets BEFORE blur. Invalid input wires `aria-invalid` + destructive border ring.
+
+**Density**: defaults to `compact` (matches institutional 22px rows).
+
+### 12.3 `<MultiCombobox>` — multi-select picker (Wave F-2)
+
+**Path**: `components/ui/multi-combobox.tsx`
+
+**Purpose**: type-ahead search + checkbox multi-select with grouped items, "+N more" trigger collapse, footer "Clear all", X-clear button.
+
+**API**: `<MultiCombobox items={[{id, label, hint?, group?}]} selectedIds onChange placeholder ... />`
+
+**a11y**: trigger uses `aria-haspopup="dialog"` (popover contains a search input — listbox semantics misrepresent). Clear-X is a SIBLING button (not nested inside the trigger) so the trigger remains a single tab stop.
+
+**Performance**: items list is in-memory; cap at ~500 items per call site. For >500, use the `loadItems` async escape hatch (planned, not yet implemented).
+
+### 12.4 `<ContextMenu>` — Radix wrapper (Wave F-3)
+
+**Path**: `components/ui/context-menu.tsx`
+
+**Purpose**: shadcn-style Radix wrapper for row-level right-click actions. Supports nested submenus, checkbox/radio items, shortcut display in `tabular-nums`, destructive variant.
+
+**Density**: items at `text-[11px]` to match terminal density. `font-mono` for the entire menu so shortcut tracking aligns.
+
+### 12.5 `<DestructiveButton>` — 3-tier confirm ladder (Wave F-4)
+
+**Path**: `components/ui/destructive-button.tsx`
+
+| Tier | Use for | Mechanism |
+|------|---------|-----------|
+| `t1` | low-risk dismiss / archive / mark-read | inline two-step (button flips to "Confirm?" with destructive ring; 4-second auto-revert) |
+| `t2` | medium-risk delete row / cancel order | modal AlertDialog with Cancel / Delete |
+| `t3` | high-risk delete portfolio / wipe workspace | modal with **type-to-confirm** (NFC-normalised exact string match) |
+
+**a11y**: T1 button has `aria-live="polite"` so the label flip announces. T3 has a sr-only `role="status"` `aria-live` region announcing match/no-match.
+
+### 12.6 `<SquarifiedTreemap>` — Bruls/Huijsen/van Wijk treemap (Wave H-3)
+
+**Path**: `components/ui/squarified-treemap.tsx` + `lib/treemap.ts`
+
+**Algorithm**: Bruls/Huijsen/van Wijk (2000) — packs rectangles so each cell's aspect ratio is as close to 1 as possible. O(n log n). Guarantees full-rect coverage with no gaps.
+
+**API**:
+```tsx
+<SquarifiedTreemap<MyPayload>
+  items={[{ id, weight, payload }]}
+  renderTile={(cell) => <MyTile data={cell.item.payload} cellWidth={cell.width} />}
+  gap={2}
+  minWidth={48}    /* hide below this width */
+  minHeight={28}   /* hide below this height */
+  onTileClick={(item) => router.push(...)}        /* makes tiles focusable + keyboard-actionable */
+  getTileAriaLabel={(item) => "..."}              /* SR announcement on focus */
+/>
+```
+
+**Used by**: `MarketHeatmap` (sector treemap; weight = `instrument_count` until S9 returns `market_cap_weight`).
+
+### 12.7 `<CrosshairHUD>` — chart OHLCV overlay (Wave H-2)
+
+**Path**: `components/instrument/CrosshairHUD.tsx`
+
+**Purpose**: Bloomberg/TradingView-style HUD — shows Date · ±change-pill · O H L C V (volume) at the hovered chart bar. Subscribes to `chart.subscribeCrosshairMove`.
+
+**Position**: top-left of chart (`left-9 top-2`). `pointer-events-none` so the chart's own crosshair tracking is never blocked. Backdrop-blur + `bg-card/90` for legibility on dark candlesticks.
+
+**Typography**: 11px body (institutional readability floor), 10px timestamp for hierarchy. font-mono + tabular-nums.
+
+### 12.8 lightweight-charts v5 (Wave H-1)
+
+**Migration** (4.x → 5.x): series creation no longer uses dedicated methods. Use the factory:
+
+```ts
+// v4 (old)
+chart.addCandlestickSeries(opts)
+chart.addLineSeries(opts)
+chart.addHistogramSeries(opts)
+
+// v5 (current)
+import { CandlestickSeries, LineSeries, HistogramSeries } from "lightweight-charts";
+chart.addSeries(CandlestickSeries, opts)
+chart.addSeries(LineSeries, opts)
+chart.addSeries(HistogramSeries, opts)
+```
+
+Test mocks must export the SeriesDefinition string sentinels and an `addSeries: vi.fn()` per chart instance. `subscribeCrosshairMove` / `unsubscribeCrosshairMove` are also required for the HUD subscription.
+
+### 12.9 Density variants (Wave F-5)
+
+**Affected**: `<Button>` and `<Input>` now accept a `density` cva variant.
+
+| density | Button | Input |
+|---------|--------|-------|
+| `compact` | h-7 px-3 text-[11px] · svg size-3 | h-7 px-2 text-[11px] |
+| `default` (legacy default) | h-9 px-4 py-2 | h-9 px-3 text-sm |
+| `comfortable` | h-10 px-5 text-sm | h-10 px-3 text-sm |
+
+Default kept on `default` to preserve all existing call sites; new code opts into `compact` for institutional 22px-row contexts.
