@@ -172,7 +172,24 @@ async def _run_extraction_window(
     # tells the LLM to pick entity_ref values from this list; duplicate
     # surfaces (same text appearing in multiple mention rows) waste prompt
     # tokens and don't add signal. ``dict.fromkeys`` preserves insertion order.
-    mention_names = list(dict.fromkeys(m.mention_text for m in mentions))
+    #
+    # PLAN-0052 platform-QA round 8 (2026-05-01): only advertise mentions the
+    # downstream article-consumer can resolve to an id. ``article_consumer.
+    # _build_raw_*`` populates ``entity_id_by_ref`` exclusively from
+    # AUTO_RESOLVED + PROVISIONAL mentions (resolution.py:892-907) and silently
+    # drops any relation/event/claim whose ref hits an UNRESOLVED mention.
+    # When the LLM is told to use the FULL mention list (~75% UNRESOLVED in
+    # observed live traffic), every relation between two unresolved entities
+    # — exactly the relations a news article is actually about — is dropped
+    # at consumer.py:1017 with no log. Filtering here aligns the prompt's
+    # entity_refs with what downstream can render, restoring the 100%
+    # producer→consumer retention rate that ``_build_raw_*`` was originally
+    # designed for.
+    mention_names = list(
+        dict.fromkeys(
+            m.mention_text for m in mentions if m.resolved_entity_id is not None or m.provisional_queue_id is not None
+        )
+    )
     prompt = _build_prompt(window_text, mention_names)
 
     inp = ExtractionInput(

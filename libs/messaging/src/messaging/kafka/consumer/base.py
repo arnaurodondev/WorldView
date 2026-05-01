@@ -57,9 +57,23 @@ class ConsumerConfig:
     topics: list[str] = dataclasses.field(default_factory=list)
     auto_offset_reset: str = "earliest"
     enable_auto_commit: bool = False
-    session_timeout_ms: int = 30_000
-    heartbeat_interval_ms: int = 10_000
-    max_poll_interval_ms: int = 300_000
+    # PLAN-0052 platform-QA round 8 (2026-05-01): the previous defaults had
+    # session_timeout_ms (30s) < message_processing_timeout_s (120s), which is
+    # the inverse of what's correct. Heartbeats only fire from inside
+    # ``Consumer.poll()``; once ``_handle_message`` runs we cannot heartbeat,
+    # so any handler exceeding session_timeout_ms triggers SESSTMOUT and a
+    # rebalance. The watchdog (message_processing_timeout_s) MUST be
+    # strictly less than session_timeout_ms or Kafka wins the race and kicks
+    # the consumer out of the group before the watchdog can dead-letter the
+    # poison message. This bit two KG dataset consumers (fundamentals,
+    # insider-transactions) which call DeepInfra embed inside the message
+    # handler — observable as a continuous "revoking assignment and
+    # rejoining" log loop. Reorder: session_timeout 60s, max_poll 600s,
+    # watchdog 45s. Heartbeat scaled at ~1/3 of session_timeout per
+    # rdkafka guidance.
+    session_timeout_ms: int = 60_000
+    heartbeat_interval_ms: int = 20_000
+    max_poll_interval_ms: int = 600_000
     max_poll_records: int = 500
     poll_timeout_seconds: float = 1.0
     max_retries: int = 5
@@ -67,7 +81,9 @@ class ConsumerConfig:
     max_backoff_seconds: float = 60.0
     backoff_multiplier: float = 2.0
     # PLAN-0052 QA-R6 (BP-302): watchdog timeout per message.  Set to 0 to disable.
-    message_processing_timeout_s: int = 120
+    # Must be strictly less than session_timeout_ms so the watchdog dead-letters
+    # the message before Kafka declares the consumer dead.
+    message_processing_timeout_s: int = 45
     # Maximum dead-letters allowed before the consumer crashes to force a restart.
     # Prevents a runaway poison-message storm from silently filling the DLQ.
     dead_letter_cap: int = 100
