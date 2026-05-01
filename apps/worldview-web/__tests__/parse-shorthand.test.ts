@@ -123,6 +123,17 @@ describe("parseShorthand", () => {
     it("treats ($1.5m) as -1500000", () => {
       expect(parseShorthand("($1.5m)")).toBe(-1_500_000);
     });
+    // QA iter-2 regression — prior impl returned +100 for "(-100)" because the
+    // `negate` flag (parens) and the `signMul=-1` (leading -) cancelled.
+    it("treats (-100) as -100 (parens AND leading minus do NOT cancel)", () => {
+      expect(parseShorthand("(-100)")).toBe(-100);
+    });
+    it("treats (-1.5m) as -1500000 (paren+sign+SI)", () => {
+      expect(parseShorthand("(-1.5m)")).toBe(-1_500_000);
+    });
+    it("treats (- $100) as -100 (paren+sign+currency)", () => {
+      expect(parseShorthand("(- $100)")).toBe(-100);
+    });
   });
 
   describe("combinations", () => {
