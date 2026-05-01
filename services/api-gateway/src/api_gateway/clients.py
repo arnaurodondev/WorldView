@@ -295,24 +295,37 @@ async def get_instrument_page_bundle(
     *,
     make_headers: Callable[[], dict[str, str]] | None = None,
     headers: dict[str, str] | None = None,
+    overall_timeout_s: float = 20.0,
 ) -> dict[str, Any]:
     """Composite endpoint for /instruments/[id] initial page load.
 
     Collapses the instrument-detail page's overview-tab waterfall into a
-    single round-trip. Calls all of the following in parallel via
-    asyncio.gather; per-call failures degrade gracefully to null sub-fields
-    rather than failing the whole bundle (return_exceptions semantics
-    achieved via the _safe_call wrapper).
+    single round-trip. Per-call failures degrade gracefully to null
+    sub-fields rather than failing the whole bundle. The whole composition
+    is wrapped in asyncio.wait_for(overall_timeout_s) so a single sluggish
+    downstream cannot hang the page indefinitely (QA-iter1).
 
     Composed sub-resources (each returns the same shape the dedicated
     endpoint would return, so the FE can prime its TanStack Query caches):
 
       - overview         : the existing CompanyOverview composite
-                           (instrument + quote + fundamentals header + ohlcv 90d)
-      - fundamentals     : full all-sections fundamentals
+                           (instrument + quote + fundamentals header + ohlcv 90d).
+                           Required-ish — if this fails the page is essentially
+                           empty, but bundle still returns 200 with overview=null
+                           so the FE can render its own "not found" UI.
+      - fundamentals     : full all-sections fundamentals (FundamentalsTab feed)
       - technicals       : technicals_snapshot section
-      - insider          : insider transactions
+      - insider          : insider transactions snapshot
       - top_news         : entity-scoped top-N news (limit=5, public)
+
+    QA-iter1 fixes:
+      - insider path was wrong (missing -snapshot suffix) → silent 404. Fixed.
+      - entity_id is now read from overview.instrument.entity_id (which the
+        overview already resolves via KG lookup) instead of duplicating that
+        same instrument-fetch + KG-lookup pair (perf agent C-1).
+      - overall asyncio.wait_for budget defends against single-leg hangs.
+      - _safe_* wrappers broadened to swallow generic Exception so httpx
+        network errors (ConnectError, ReadTimeout) degrade to null too.
 
     Tab-specific surfaces (full news feed, intelligence, peers, knowledge
     graph) intentionally NOT bundled — they load on tab switch and have
@@ -328,21 +341,19 @@ async def get_instrument_page_bundle(
         return make_headers() if make_headers is not None else (headers or {})
 
     async def _safe_md(path: str, **kwargs: Any) -> dict[str, Any] | None:
-        """market-data GET — returns None on any DownstreamError."""
+        """market-data GET — returns None on ANY exception (DownstreamError +
+        httpx network errors). QA-iter1: was DownstreamError-only."""
         try:
             return await _checked_get(clients.market_data, "market-data", path, headers=_h(), **kwargs)
-        except DownstreamError:
+        except Exception:
             return None
 
     async def _safe_nlp(path: str, **kwargs: Any) -> dict[str, Any] | None:
         try:
             return await _checked_get(clients.nlp_pipeline, "nlp-pipeline", path, headers=_h(), **kwargs)
-        except DownstreamError:
+        except Exception:
             return None
 
-    # Required: the overview composite. If THIS fails, we still return a
-    # partial bundle (overview=None) so the FE can render an error UI
-    # instead of crashing — better UX than a 5xx.
     async def _safe_overview() -> dict[str, Any] | None:
         try:
             return await get_company_overview(
@@ -351,59 +362,63 @@ async def get_instrument_page_bundle(
                 make_headers=make_headers,
                 headers=headers,
             )
-        except DownstreamError:
+        except Exception:
             return None
 
-    # Resolve the KG entity_id once (best-effort) so news can be
-    # entity-scoped accurately. Falls back to instrument_id.
-    async def _resolve_entity_id() -> str:
-        # Quick instrument fetch to get ticker, then KG lookup.
-        # If either step fails, fall back to instrument_id.
-        try:
-            inst = await _checked_get(
-                clients.market_data,
-                "market-data",
-                f"/api/v1/instruments/{instrument_id}",
-                headers=_h(),
-            )
-            ticker = inst.get("symbol", "")
-            if not ticker:
-                return instrument_id
-            kg_resp = await _checked_get(
-                clients.knowledge_graph,
-                "knowledge-graph",
-                "/api/v1/entities/lookup",
-                headers=_h(),
-                params={"ticker": ticker},
-            )
-            return str(kg_resp.get("entity_id") or instrument_id)
-        except (DownstreamError, KeyError):
-            return instrument_id
+    async def _compose() -> dict[str, Any]:
+        # Phase 1: overview composite. Sequential because Phase 2's news call
+        # needs the resolved entity_id from overview.instrument.entity_id.
+        overview_data = await _safe_overview()
 
-    # First batch: overview + entity-id resolution. We need entity_id before
-    # we can fetch entity-scoped news.
-    overview_data, entity_id = await asyncio.gather(
-        _safe_overview(),
-        _resolve_entity_id(),
-    )
+        # Read entity_id from overview's already-resolved value. Falls back
+        # to instrument_id when overview failed entirely.
+        entity_id = instrument_id
+        if overview_data and isinstance(overview_data.get("instrument"), dict):
+            resolved = overview_data["instrument"].get("entity_id")
+            if isinstance(resolved, str) and resolved:
+                entity_id = resolved
 
-    # Second batch: everything else in parallel. None on per-call failure.
-    fundamentals_data, technicals_data, insider_data, news_data = await asyncio.gather(
-        _safe_md(f"/api/v1/fundamentals/{instrument_id}"),
-        _safe_md(f"/api/v1/fundamentals/{instrument_id}/technicals-snapshot"),
-        _safe_md(f"/api/v1/fundamentals/{instrument_id}/insider-transactions"),
-        _safe_nlp(f"/api/v1/news/entity/{entity_id}", params={"limit": 5}),
-    )
+        # Phase 2: everything else in parallel. None on per-call failure.
+        # QA-iter1: insider path corrected to /insider-transactions-snapshot.
+        # market-data exposes the snapshot suffix; the un-suffixed path would
+        # 404 silently (the dedicated S9 proxy at routes/proxy.py rewrites
+        # the short path before calling S3).
+        fundamentals_data, technicals_data, insider_data, news_data = await asyncio.gather(
+            _safe_md(f"/api/v1/fundamentals/{instrument_id}"),
+            _safe_md(f"/api/v1/fundamentals/{instrument_id}/technicals-snapshot"),
+            _safe_md(f"/api/v1/fundamentals/{instrument_id}/insider-transactions-snapshot"),
+            _safe_nlp(f"/api/v1/news/entity/{entity_id}", params={"limit": 5}),
+        )
 
-    return {
-        "instrument_id": instrument_id,
-        "entity_id": entity_id,
-        "overview": overview_data,
-        "fundamentals": fundamentals_data,
-        "technicals": technicals_data,
-        "insider": insider_data,
-        "top_news": news_data,
-    }
+        return {
+            "instrument_id": instrument_id,
+            "entity_id": entity_id,
+            "overview": overview_data,
+            "fundamentals": fundamentals_data,
+            "technicals": technicals_data,
+            "insider": insider_data,
+            "top_news": news_data,
+        }
+
+    # Overall budget: wrap the entire composition. If the wait_for tripwires,
+    # the bundle still succeeds — we return whatever sub-resources finished
+    # plus null for anything still in flight, by re-resolving via
+    # gather(return_exceptions=True) inside _compose. For simplicity we just
+    # raise TimeoutError → bundle returns null for everything, plus 504 from
+    # the route handler. Acceptable: a 20s overall budget is generous; if it
+    # trips, the cluster is in trouble anyway.
+    try:
+        return await asyncio.wait_for(_compose(), timeout=overall_timeout_s)
+    except TimeoutError:
+        return {
+            "instrument_id": instrument_id,
+            "entity_id": instrument_id,
+            "overview": None,
+            "fundamentals": None,
+            "technicals": None,
+            "insider": None,
+            "top_news": None,
+        }
 
 
 async def get_relevant_news(

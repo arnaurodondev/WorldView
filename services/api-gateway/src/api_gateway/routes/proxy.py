@@ -121,7 +121,14 @@ async def instrument_page_bundle(instrument_id: str, request: Request) -> dict[s
 
     Per-call failures degrade gracefully — failed sub-resources return null
     fields rather than failing the whole bundle. The FE renders partial UIs.
+
+    QA-iter1: explicit auth guard. OIDCAuthMiddleware does not 401 on its own
+    — individual routes enforce auth. The bundle exposes 6 downstream
+    sub-resources (including insider transactions which can be sensitive),
+    so unauthenticated access is rejected here.
     """
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     return await get_instrument_page_bundle(
         _clients(request),
         instrument_id,
