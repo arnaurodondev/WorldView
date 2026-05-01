@@ -325,7 +325,16 @@ def test_internal_jwt_rejects_wrong_issuer() -> None:
     mock_app = Starlette()
     mock_app.state._internal_jwt_public_key = public_key
 
-    mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=True)
+    # PLAN-0052 platform-QA fix (2026-05-01): this test exercises the
+    # PRODUCTION verification path (PyJWT issuer rejection). Passing
+    # skip_verification=True here only happened to hit the verification
+    # path under the OLD middleware logic where skip_verification was
+    # silently ignored when a public_key was loaded — i.e. the test was
+    # exercising broken-by-accident behavior. The middleware fix makes
+    # skip_verification consistently bypass verification, so this test
+    # must construct a production-mode middleware (skip_verification=False)
+    # to correctly assert the issuer-rejection contract.
+    mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
     mw._public_key = public_key
 
     called: list[bool] = []
