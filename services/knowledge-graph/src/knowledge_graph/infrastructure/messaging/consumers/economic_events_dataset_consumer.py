@@ -91,9 +91,18 @@ def _parse_event_date(date_str: str) -> datetime | None:
     """
     if not date_str:
         return None
+    # PLAN-0052 platform-QA fix (2026-05-01): EODHD EU economic events
+    # arrive with a space separator ("2026-04-30 12:15:00") instead of
+    # the ISO-T form. Without this normalization, 100% of EU events were
+    # silently dropped via the strptime fallthrough — confirmed live
+    # (`worldview-knowledge-graph-economic-events-dataset-consumer-1`
+    # logged 81 EU events at 12:25:55 with `ingested=0`). Replace the
+    # FIRST space (between date and time) with `T` so the existing
+    # `%Y-%m-%dT%H:%M:%S` pattern matches both shapes.
+    normalized = date_str.replace(" ", "T", 1)
     for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
         try:
-            dt = datetime.strptime(date_str[:19], fmt)  # noqa: DTZ007
+            dt = datetime.strptime(normalized[:19], fmt)  # noqa: DTZ007
             return dt.replace(tzinfo=UTC)
         except ValueError:
             continue
