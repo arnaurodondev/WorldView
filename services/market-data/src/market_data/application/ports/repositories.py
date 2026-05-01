@@ -403,8 +403,23 @@ class OutboxEventRepository(ABC):
     """Transactional outbox for domain event publishing."""
 
     @abstractmethod
-    async def create(self, event_type: str, topic: str, payload: dict) -> str:
-        """Insert a new pending outbox record; return the new record ID."""
+    async def create(
+        self,
+        event_type: str,
+        topic: str,
+        payload: dict,
+        partition_key: str | None = None,
+    ) -> str:
+        """Insert a new pending outbox record; return the new record ID.
+
+        ``partition_key`` (PLAN-0057-followup Wave B / F-DATA-06): optional
+        Kafka partition key. When set, the outbox dispatcher will pass
+        ``key=partition_key.encode("utf-8")`` to ``producer.produce(...)``
+        so that every event for the same key lands on the same Kafka
+        partition (preserving per-aggregate ordering for downstream
+        consumers). When ``None`` (default), Kafka's sticky/round-robin
+        partitioner is used — fine for events with no ordering invariants.
+        """
 
     @abstractmethod
     async def find_pending(self, limit: int = 100) -> list[dict]:

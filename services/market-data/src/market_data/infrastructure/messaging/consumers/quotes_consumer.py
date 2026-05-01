@@ -220,6 +220,11 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
                 event_type=discovered_event.event_type,
                 topic=EVENT_TOPIC_MAP[discovered_event.event_type],
                 payload=event_to_outbox_payload(discovered_event),
+                # PLAN-0057-followup Wave B (F-DATA-06): pin every
+                # ``market.instrument.discovered.v1`` event for a given
+                # instrument to the same Kafka partition so KG observes
+                # discovered → created enrichment in causal order.
+                partition_key=str(instrument.id),
             )
         elif not instrument.flags.has_quotes:
             updated_flags = InstrumentFlags(
@@ -241,6 +246,9 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
                 event_type=updated_event.event_type,
                 topic=EVENT_TOPIC_MAP[updated_event.event_type],
                 payload=event_to_outbox_payload(updated_event),
+                # F-DATA-06: keep all updates for this instrument on the same
+                # partition so KG/S6 observe them in order.
+                partition_key=str(instrument.id),
             )
 
         # Map canonical → domain entity; preserve NULL values (D-004)
