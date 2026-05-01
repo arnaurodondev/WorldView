@@ -30,6 +30,10 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
+# Default retry-attempt ceiling. Kept as a module-level constant for backward
+# compatibility (existing tests import + assert against it). Production callers
+# should pass ``max_retries=settings.embedding_retry_max_attempts`` to make the
+# value operator-tunable per PLAN-0057 QA A-005.
 _MAX_RETRIES: int = 5
 _BACKOFF_BASE_SECONDS: float = 60.0
 _MAX_BACKOFF_SECONDS: float = 3_600.0
@@ -47,12 +51,18 @@ class EmbeddingRetryWorker:
         model_id: str,
         instruction_prefix: str,
         poll_interval: float = _POLL_INTERVAL_SECONDS,
+        max_retries: int = _MAX_RETRIES,
     ) -> None:
         self._nlp_sf = nlp_session_factory
         self._embedding_client = embedding_client
         self._model_id = model_id
         self._instruction_prefix = instruction_prefix
         self._poll_interval = poll_interval
+        # PLAN-0057 QA A-005: previously hard-coded to ``_MAX_RETRIES`` here AND
+        # as default kwarg in ``claim_batch`` / ``count_abandoned`` — drifting
+        # the constant without updating the callers silently broke parity. Now
+        # the worker carries the value and threads it through every call.
+        self._max_retries = max_retries
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -67,7 +77,7 @@ class EmbeddingRetryWorker:
 
         async with self._nlp_sf() as session:
             repo = EmbeddingPendingRepository(session)
-            jobs = await repo.claim_batch(batch_size=_BATCH_SIZE, max_retries=_MAX_RETRIES)
+            jobs = await repo.claim_batch(batch_size=_BATCH_SIZE, max_retries=self._max_retries)
 
         if not jobs:
             return 0
@@ -137,7 +147,7 @@ class EmbeddingRetryWorker:
             # _MAX_RETRIES ceiling and will therefore be silently skipped on
             # every subsequent ``claim_batch`` call.  Operators rely on this
             # log line to escalate to manual triage.
-            if job.retry_count + 1 >= _MAX_RETRIES:
+            if job.retry_count + 1 >= self._max_retries:
                 logger.warning(  # type: ignore[no-any-return]
                     "embedding_retry_abandoned",
                     pending_id=str(job.pending_id),
@@ -145,7 +155,7 @@ class EmbeddingRetryWorker:
                     section_id=str(job.section_id) if job.section_id else None,
                     chunk_id=str(job.chunk_id) if job.chunk_id else None,
                     retry_count=job.retry_count + 1,
-                    max_retries=_MAX_RETRIES,
+                    max_retries=self._max_retries,
                     final_error=str(exc),
                 )
             return
@@ -187,3 +197,24 @@ class EmbeddingRetryWorker:
                 pending_id=str(job.pending_id),
                 error=str(exc),
             )
+            # PLAN-0057 QA DS-006 fix: without this fallback, write-side
+            # failures left ``next_retry_at`` unchanged, so the next poll
+            # re-claims the same row immediately and hot-loops on persistent
+            # DB errors.  Bump retry_count + advance next_retry_at by 5 min
+            # via a fresh session (the original session may be in an
+            # unusable state after the commit failure).
+            try:
+                fallback_backoff = min(
+                    _BACKOFF_BASE_SECONDS * (2.0**job.retry_count) + 240.0,
+                    _MAX_BACKOFF_SECONDS,
+                )
+                async with self._nlp_sf() as recovery_session:
+                    recovery_repo = EmbeddingPendingRepository(recovery_session)
+                    await recovery_repo.mark_failure(job.pending_id, backoff_seconds=fallback_backoff)
+                    await recovery_session.commit()
+            except Exception as recovery_exc:  # pragma: no cover — last resort
+                logger.error(  # type: ignore[no-any-return]
+                    "embedding_retry_fallback_mark_failure_failed",
+                    pending_id=str(job.pending_id),
+                    error=str(recovery_exc),
+                )

@@ -32,37 +32,15 @@ from observability import configure_logging, get_logger  # type: ignore[import-u
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
+# PLAN-0057 QA A-004: provider-selection logic moved to
+# ``nlp_pipeline.bootstrap.embedding`` so this entry point and the API process
+# share one source of truth (no more silent drift when a new provider lands).
+# Tests retain the legacy ``_build_embedding_client`` symbol — it's a thin shim.
 def _build_embedding_client(settings: Any) -> Any:
-    """Pick the same embedding adapter the API process uses (mirror of app.py).
+    """Delegate to the shared bootstrap helper."""
+    from nlp_pipeline.bootstrap.embedding import build_embedding_client
 
-    Kept inline here to avoid coupling this entry point to the FastAPI factory;
-    settings.embedding_provider drives the choice and the API and worker
-    processes must agree on the same vector space.
-    """
-    provider = settings.embedding_provider.lower()
-    if provider == "deepinfra" and settings.embedding_api_key:
-        from ml_clients.adapters.deepinfra_embedding import (  # type: ignore[import-not-found]
-            DeepInfraEmbeddingAdapter,
-        )
-
-        return DeepInfraEmbeddingAdapter(
-            api_key=settings.embedding_api_key,
-            model_id=settings.embedding_api_model_id,
-            base_url=settings.embedding_api_base_url,
-        )
-    if provider == "jina" and settings.jina_api_key:
-        from ml_clients.adapters.jina_embedding import JinaEmbeddingAdapter  # type: ignore[import-not-found]
-
-        return JinaEmbeddingAdapter(api_key=settings.jina_api_key)
-    from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter  # type: ignore[import-not-found]
-
-    return OllamaEmbeddingAdapter(
-        base_url=settings.ollama_base_url,
-        model_id=settings.embedding_model_id,
-        # Single Ollama slot — retry traffic is not bursty and contending with
-        # the API process for the local model would slow user-facing queries.
-        semaphore=asyncio.Semaphore(1),
-    )
+    return build_embedding_client(settings)
 
 
 async def main() -> None:
@@ -101,14 +79,17 @@ async def main() -> None:
         sys.exit(1)
 
     # Surface any pre-existing abandoned rows so silent rot is impossible.
+    # PLAN-0057 QA A-005: max_retries comes from settings (was hard-coded 5).
+    max_retries = settings.embedding_retry_max_attempts
     async with nlp_sf() as session:
         repo = EmbeddingPendingRepository(session)
-        abandoned = await repo.count_abandoned(max_retries=5)
+        abandoned = await repo.count_abandoned(max_retries=max_retries)
     if abandoned:
         log.warning(
             "embedding_retry_abandoned_at_startup",
             count=abandoned,
-            note="rows with retry_count>=5 are skipped by claim_batch and need manual triage",
+            max_retries=max_retries,
+            note=f"rows with retry_count>={max_retries} are skipped by claim_batch and need manual triage",
         )
 
     embedding_client = _build_embedding_client(settings)
@@ -119,6 +100,7 @@ async def main() -> None:
         if settings.embedding_provider.lower() == "deepinfra"
         else settings.embedding_model_id,
         instruction_prefix=settings.embedding_instruction_prefix,
+        max_retries=max_retries,
     )
 
     log.info("embedding_retry_worker_ready", provider=settings.embedding_provider)

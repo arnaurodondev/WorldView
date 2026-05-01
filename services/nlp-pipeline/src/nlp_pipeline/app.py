@@ -99,38 +99,15 @@ async def _expire_stale_embeddings(
 
 
 def _build_embedding_client(settings: Settings) -> object:
-    """Instantiate the embedding adapter for the API process (/api/v1/embed endpoint).
+    """Instantiate the embedding adapter for the API process.
 
-    Provider is selected via NLP_PIPELINE_EMBEDDING_PROVIDER.  Must match the
-    provider configured for article_consumer_main so that ingestion embeddings
-    and query-time embeddings land in the same vector space.
-
-    Returns a client with an ``embed(inputs: list[EmbeddingInput]) -> list[EmbeddingOutput]``
-    coroutine method.
+    Thin shim over :func:`nlp_pipeline.bootstrap.embedding.build_embedding_client`
+    — the implementation moved there so the API process and the standalone
+    embedding-retry worker share one source of truth (PLAN-0057 QA A-004).
     """
-    import asyncio
+    from nlp_pipeline.bootstrap.embedding import build_embedding_client
 
-    provider = settings.embedding_provider.lower()
-    if provider == "deepinfra" and settings.embedding_api_key:
-        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter  # type: ignore[import-not-found]
-
-        return DeepInfraEmbeddingAdapter(
-            api_key=settings.embedding_api_key,
-            model_id=settings.embedding_api_model_id,
-            base_url=settings.embedding_api_base_url,
-        )
-    if provider == "jina" and settings.jina_api_key:
-        from ml_clients.adapters.jina_embedding import JinaEmbeddingAdapter  # type: ignore[import-not-found]
-
-        return JinaEmbeddingAdapter(api_key=settings.jina_api_key)
-    # Default: Ollama (or fallback when key is missing)
-    from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter  # type: ignore[import-not-found]
-
-    return OllamaEmbeddingAdapter(
-        base_url=settings.ollama_base_url,
-        model_id=settings.embedding_model_id,
-        semaphore=asyncio.Semaphore(1),  # API process: single concurrent embed to avoid contention
-    )
+    return build_embedding_client(settings)
 
 
 @asynccontextmanager
