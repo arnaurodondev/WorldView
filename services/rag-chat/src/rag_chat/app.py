@@ -184,7 +184,15 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         )
     # Ollama is always the emergency fallback
     providers.append(OllamaCompletionAdapter(base_url=settings.ollama_base_url, model=settings.ollama_completion_model))
-    llm_chain = LLMProviderChain(providers=providers, valkey=valkey_client)
+
+    # PLAN-0052 QA-R6: wire the session-scoped usage logger so every successful
+    # or failed LLM call writes a cost row to rag_chat_db.llm_usage_log.
+    # The write_factory was created before _wire_orchestrator() is called (step 3
+    # in lifespan), so app.state.write_factory is available here.
+    from rag_chat.infrastructure.db.usage_log_factory import SessionScopedRagUsageLogger
+
+    usage_logger = SessionScopedRagUsageLogger(session_factory=app.state.write_factory)
+    llm_chain = LLMProviderChain(providers=providers, valkey=valkey_client, usage_logger=usage_logger)
 
     # Embedding: provider selection via RAG_CHAT_JINA_API_KEY.
     #   - jina_api_key set  → use JinaEmbeddingAdapter directly (1024-dim, ~100-300ms REST)

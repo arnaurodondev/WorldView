@@ -10,8 +10,8 @@
  * center = market data, right = tools + user.
  *
  * WHO USES IT: app/(app)/layout.tsx — rendered at the top of every protected page
- * DATA SOURCE: auth state from AuthContext, market data from IndexTicker
- * DESIGN REFERENCE: PRD-0028 §6.5 TopBar
+ * DATA SOURCE: auth state from AuthContext, market data from TopBarMarquee (10-ticker scroll)
+ * DESIGN REFERENCE: PRD-0028 §6.5 TopBar; Handoff 2026-05-01 Tier-3 #7
  */
 
 "use client";
@@ -23,7 +23,7 @@ import { useRouter } from "next/navigation";
 import { LogOut, Settings, User, Bell } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { UtcClock } from "@/components/shell/UtcClock";
-import { IndexTicker } from "@/components/shell/IndexTicker";
+import { TopBarMarquee } from "@/components/shell/TopBarMarquee";
 import { MarketStatusPill } from "@/components/shell/MarketStatusPill";
 import { GlobalSearch } from "@/components/shell/GlobalSearch";
 import { AskAiButton } from "@/components/shell/AskAiButton";
@@ -170,20 +170,17 @@ export function TopBar({
         <GlobalSearch />
       </div>
 
-      {/* ── Center: Market data (IndexTicker) ─────────────────────── */}
+      {/* ── Center: Market data (TopBarMarquee) ─────────────────────── */}
       {/* WHY flex-1 + min-w-0 + max-w-[640px]:
           - flex-1: this child absorbs all horizontal slack so left/right blocks
             stay pinned to their edges.
           - min-w-0: required for any flex child that may need to shrink below
-            its intrinsic content width — without it, the SPY/QQQ/VIX/BTC row
+            its intrinsic content width — without it, the scrolling marquee
             would force the parent to overflow at 1280px.
-          - max-w-[640px]: prevents the ticker from ballooning on ultrawide
-            viewports; once it exceeds ~640px the extra whitespace just adds
-            empty padding around prices that should sit visually centered.
-          - overflow-hidden: lets the ticker truncate gracefully (its own
-            internal layout already supports truncation). */}
+          - max-w-[640px]: caps the ticker viewport on ultrawide screens.
+          - overflow-hidden: clips the CSS-animated scrolling strip cleanly. */}
       <div className="flex min-w-0 max-w-[640px] flex-1 justify-center overflow-hidden">
-        <IndexTicker />
+        <TopBarMarquee />
       </div>
 
       {/* ── Right: Tools + User ──────────────────────────────────── */}

@@ -66,6 +66,8 @@ class ConsumerConfig:
     initial_backoff_seconds: float = 1.0
     max_backoff_seconds: float = 60.0
     backoff_multiplier: float = 2.0
+    # PLAN-0052 QA-R6 (BP-302): watchdog timeout per message.  Set to 0 to disable.
+    message_processing_timeout_s: int = 120
 
     def to_dict(self) -> dict[str, Any]:
         """Return Confluent-compatible consumer config dict."""
@@ -330,11 +332,39 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         headers_raw = msg.headers() or []
         headers = {k: v.decode() if isinstance(v, bytes) else v for k, v in headers_raw}
 
+        timeout_s = self._config.message_processing_timeout_s
         async with await self.get_unit_of_work() as uow:
             try:
-                await self.process_message(key, value, headers)
+                if timeout_s > 0:
+                    async with asyncio.timeout(timeout_s):
+                        await self.process_message(key, value, headers)
+                else:
+                    await self.process_message(key, value, headers)
                 await self.mark_processed(event_id)
                 await uow.commit()
+            except TimeoutError:
+                # BP-302 watchdog: poison message hung processing for timeout_s.
+                # Dump a stack trace, dead-letter the message, and continue so
+                # the consumer does not stall on re-delivery of the same message.
+                import faulthandler
+
+                faulthandler.dump_traceback(file=sys.stderr)
+                await uow.rollback()
+                _timeout_failure: FailureInfo[TFailure] = FailureInfo(
+                    event_id=event_id,
+                    topic=topic,
+                    partition=msg.partition(),
+                    offset=msg.offset(),
+                    attempt=self._config.max_retries,
+                    last_error=TimeoutError(f"message_processing_timeout after {timeout_s}s"),
+                )
+                await self.dead_letter(_timeout_failure)
+                logger.error(  # type: ignore[no-any-return]
+                    "message_processing_timeout_dead_lettered",
+                    event_id=event_id,
+                    topic=topic,
+                    timeout_s=timeout_s,
+                )
             except Exception:
                 await uow.rollback()
                 raise
@@ -456,7 +486,7 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                 # get_watermark_offsets returns (low, high) — the high watermark
                 # is the offset of the next message to be produced, so the lag
                 # is high - current_position.
-                low, high = self._consumer.get_watermark_offsets(tp, timeout=1.0)
+                _low, high = self._consumer.get_watermark_offsets(tp, timeout=1.0)
                 position_list = self._consumer.position([tp])
                 if position_list:
                     position = position_list[0].offset

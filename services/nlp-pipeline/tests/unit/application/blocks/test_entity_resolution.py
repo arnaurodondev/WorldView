@@ -377,6 +377,39 @@ class TestRunEntityResolutionBlock:
         assert 4 in stages_hit  # ANN (always emits)
 
     @pytest.mark.asyncio
+    async def test_ann_hit_at_distance_0_325_auto_resolves_with_new_thresholds(self) -> None:
+        """PLAN-0052 QA-R6 Option C: ANN distance 0.325 → confidence 0.641 > 0.62 → AUTO_RESOLVED.
+
+        Old thresholds (0.80 multiplier, 0.72 threshold): 0.675 * 0.80 = 0.54 < 0.72 → UNRESOLVED.
+        New thresholds (0.95 multiplier, 0.62 threshold): 0.675 * 0.95 = 0.641 > 0.62 → AUTO_RESOLVED.
+        """
+        entity_id = uuid.uuid4()
+        mention = _make_mention("Amazon.com")
+        # Only one ANN candidate (no margin issue), distance = 0.325
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos(
+            ann_results=[(entity_id, 0.325)],
+        )
+        intelligence_session = MagicMock()
+        intelligence_session.execute = AsyncMock()
+
+        resolved, _ = await run_entity_resolution_block(
+            [mention],
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=_make_embedding_client(),
+            intelligence_session=intelligence_session,
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        assert resolved[0].resolution_outcome == ResolutionOutcome.AUTO_RESOLVED
+        assert resolved[0].resolved_entity_id == entity_id
+        expected_confidence = (1.0 - 0.325) * 0.95
+        assert abs(resolved[0].resolution_confidence - expected_confidence) < 1e-6  # type: ignore[operator]
+
+    @pytest.mark.asyncio
     async def test_empty_mentions_returns_empty(self) -> None:
         """Empty input returns immediately with no DB calls."""
         alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos()
