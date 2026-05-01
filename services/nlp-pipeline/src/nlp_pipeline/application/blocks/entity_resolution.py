@@ -277,7 +277,14 @@ _PROVISIONAL_INSERT_SQL = """
 INSERT INTO provisional_entity_queue
     (queue_id, mention_text, normalized_surface, mention_class, source_doc_id, context_snippet)
 VALUES
-    (:queue_id, :surface, lower(trim(:surface)), :mention_class, :doc_id, :ctx)
+    (
+        CAST(:queue_id AS uuid),
+        CAST(:surface AS varchar(500)),
+        lower(trim(CAST(:surface AS varchar(500)))),
+        CAST(:mention_class AS varchar(50)),
+        CAST(:doc_id AS uuid),
+        CAST(:ctx AS text)
+    )
 ON CONFLICT (normalized_surface, mention_class)
 DO UPDATE SET retry_count = provisional_entity_queue.retry_count
 RETURNING queue_id

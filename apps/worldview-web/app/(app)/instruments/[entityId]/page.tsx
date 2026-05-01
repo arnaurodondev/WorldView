@@ -64,6 +64,16 @@ export default function InstrumentDetailPage() {
   // WHY decodeURIComponent: entity_id from URL may be percent-encoded
   const entityId = decodeURIComponent(params.entityId as string);
   const { accessToken } = useAuth();
+  // PLAN-0052 platform-QA round 7 (2026-05-01): the literal slug "undefined"
+  // arrived from broken link generators (notably the screener row when a row
+  // had no entity_id). Backend page-bundle accepts it and returns 200 with
+  // synthetic data, but the page is junk. Redirect to /instruments instead
+  // of letting the user stare at a fake instrument page.
+  useEffect(() => {
+    if (!params.entityId || entityId === "undefined") {
+      router.replace("/instruments");
+    }
+  }, [params.entityId, entityId, router]);
   // ── Controlled tab state ───────────────────────────────────────────────────
   // WHY controlled Tabs (not defaultValue): OverviewLayout's "More news" button
   // needs to programmatically switch to the News tab. Controlled Tabs allow this.
