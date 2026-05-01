@@ -56,11 +56,19 @@ class Settings(BaseSettings):
     deepinfra_api_key: str | None = None  # primary: configurable via completion_model
     openrouter_api_key: str | None = None  # fallback: configurable via openrouter_completion_model
 
-    # ── Intent classification (DeepInfra GPU — replaces qwen3:0.6b Ollama CPU) ─
-    # Uses the same deepinfra_api_key above.  Small model (3B) → ~100-200ms GPU.
-    # WHY: qwen3:0.6b on CPU Ollama causes model-swap contention (30s delays),
-    # resulting in 100% fallback to keyword heuristic and loss of sub_questions.
-    deepinfra_classification_model: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    # ── Intent classification (DeepInfra GPU) ─────────────────────────────────
+    # PLAN-0052 platform-QA round 5 (2026-05-01): switched default 8B → 1B.
+    # Llama-3.2-1B-Instruct is ~6x smaller, completes in ~1.2s, and is more
+    # than capable of the small classification task ("which intent template
+    # does this query map to?"). Live probe confirmed availability on our
+    # DeepInfra account (the 8B was the only model documented as confirmed
+    # in project memory, but the lowercase `llama` path unlocks the 1B/3B
+    # variants too). Saves ~80% on classification tokens vs the 8B.
+    # WHY 1B over 3B: classification is a 1-token decision; the 1B's accuracy
+    # is sufficient and the cost/latency floor matters more here. We keep 3B
+    # available as a config override for installations that need higher
+    # accuracy (e.g. ambiguous multi-intent queries).
+    deepinfra_classification_model: str = "meta-llama/Llama-3.2-1B-Instruct"
 
     # ── External reranker (Cohere — replaces bge-reranker-v2-m3 Ollama) ───────
     # WHY: bge-reranker-v2-m3 is not in the Ollama registry (ollama pull fails),

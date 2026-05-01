@@ -89,7 +89,12 @@ _VALID_INTENTS: frozenset[str] = frozenset(q.value for q in QueryIntent)
 # ── DeepInfra API constants ────────────────────────────────────────────────────
 
 _DEEPINFRA_API_URL = "https://api.deepinfra.com/v1/openai/chat/completions"
-_DEEPINFRA_DEFAULT_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+# PLAN-0052 platform-QA round 5 (2026-05-01): default 8B → 1B. The 1B
+# completes a single-token intent decision in ~1.2s at ~1/6 the cost;
+# on DeepInfra the lowercase `llama` path unlocks the 3.2-1B/3B
+# variants. The 8B remains valid via env override for installs that
+# need higher accuracy on ambiguous multi-intent queries.
+_DEEPINFRA_DEFAULT_MODEL = "meta-llama/Llama-3.2-1B-Instruct"
 
 # ── Keyword heuristic classifier ───────────────────────────────────────────────
 

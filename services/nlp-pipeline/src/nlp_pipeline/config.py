@@ -184,7 +184,11 @@ class Settings(BaseSettings):
     #   Qwen/Qwen2.5-1.5B-Instruct             (medium — upgrade account to unlock)
     relevance_scoring_api_key: str = ""  # NLP_PIPELINE_RELEVANCE_SCORING_API_KEY
     relevance_scoring_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # RELEVANCE_SCORING_API_BASE_URL
-    relevance_scoring_api_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"  # RELEVANCE_SCORING_API_MODEL_ID
+    # PLAN-0052 platform-QA round 5 (2026-05-01): default 8B → 3B. Relevance
+    # scoring is a per-article rate-the-relevance task; the 3B is sufficient
+    # and ~3x cheaper at scale (live state showed 927 calls in 12h = ~74/h
+    # of cost we can halve). The 8B remains valid via env override.
+    relevance_scoring_api_model_id: str = "meta-llama/Llama-3.2-3B-Instruct"  # RELEVANCE_SCORING_API_MODEL_ID
     # Per-component weights for display_relevance_score = 0.5*market + 0.4*llm + 0.1*routing
     s6_display_weight_market: float = 0.50  # S6_DISPLAY_WEIGHT_MARKET
     s6_display_weight_llm: float = 0.40  # S6_DISPLAY_WEIGHT_LLM
@@ -207,9 +211,11 @@ class Settings(BaseSettings):
     # Same model options as relevance_scoring (see above).
     unresolved_resolution_api_key: str = ""  # NLP_PIPELINE_UNRESOLVED_RESOLUTION_API_KEY
     unresolved_resolution_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # UNRESOLVED_RESOLUTION_API_BASE
-    unresolved_resolution_api_model_id: str = (
-        "meta-llama/Meta-Llama-3.1-8B-Instruct"  # UNRESOLVED_RESOLUTION_API_MODEL_ID
-    )
+    # PLAN-0052 platform-QA round 5 (2026-05-01): default 8B → 3B. The
+    # unresolved-resolution LLM disambiguates entity mentions against
+    # canonical_entities — well within the 3B's capability for the
+    # one-mention-at-a-time prompt shape.
+    unresolved_resolution_api_model_id: str = "meta-llama/Llama-3.2-3B-Instruct"  # UNRESOLVED_RESOLUTION_API_MODEL_ID
 
     # LLM usage logging (PLAN-0033)
     llm_usage_log_enabled: bool = True

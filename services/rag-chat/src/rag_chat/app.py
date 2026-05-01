@@ -134,7 +134,11 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         DeepInfraIntentClassifier,
         OllamaIntentClassifier,
     )
-    from rag_chat.application.pipeline.reranker import BGEReranker, CohereReranker
+    from rag_chat.application.pipeline.reranker import (
+        BGEReranker,
+        CohereReranker,
+        DeepInfraReranker,
+    )
     from rag_chat.application.pipeline.retrieval_orchestrator import ParallelRetrievalOrchestrator
     from rag_chat.application.pipeline.retrieval_plan_builder import RetrievalPlanBuilder
     from rag_chat.application.security.input_validator import InputValidator
@@ -276,13 +280,22 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
             model=settings.ollama_classification_model,
         )
 
-    # ── Reranker: Cohere (primary) → BGE Ollama (fallback) ──────────────────
-    # CohereReranker is used when cohere_api_key is configured.
-    # bge-reranker-v2-m3 does not exist in the Ollama registry (ollama pull fails),
-    # so BGEReranker ALWAYS falls back to fusion_score sort — no reranking happens.
-    # Cohere Rerank v2 provides real cross-encoder reranking at ~300ms latency.
-    if settings.cohere_api_key:
-        reranker: Any = CohereReranker(api_key=settings.cohere_api_key)
+    # ── Reranker selection (PLAN-0052 platform-QA round 5) ──────────────────
+    # Priority order:
+    #   1. DeepInfra Qwen3-Reranker-0.6B — confirmed available on our account,
+    #      sub-second latency at $0.00025/query (24 docs). Replaces the previous
+    #      Ollama BGE path that was 100% broken (model not in Ollama registry —
+    #      every call 404'd → silent fusion_score fallback for hours).
+    #   2. Cohere Rerank v2 — only used when an explicit `cohere_api_key` is
+    #      configured. Kept as an alternative for installations that prefer
+    #      Cohere + don't have DeepInfra credits.
+    #   3. BGE Ollama — last-resort local-only path. Documented as "always
+    #      falls back" for the bge-reranker-v2-m3 model name; useful only if
+    #      an operator manually `ollama pull`s a working reranker model.
+    if settings.deepinfra_api_key:
+        reranker: Any = DeepInfraReranker(api_key=settings.deepinfra_api_key)
+    elif settings.cohere_api_key:
+        reranker = CohereReranker(api_key=settings.cohere_api_key)
     else:
         reranker = BGEReranker(
             ollama_base_url=settings.ollama_base_url,
