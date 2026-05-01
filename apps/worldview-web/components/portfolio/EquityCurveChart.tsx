@@ -30,25 +30,16 @@
  */
 
 "use client";
-// WHY "use client": Recharts is a client-side renderer; useState for the
-// period selector; useQuery for fetching snapshots.
+// WHY "use client": lightweight-charts is a client-side renderer (Canvas);
+// useState for the period selector; useQuery for fetching snapshots.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 // F-P-003 (PLAN-0051 W6): the period state is OPTIONALLY controlled by the
 // parent page now so other panels (KPI strip, analytics) can react to the
 // same period the user picks here. We keep the local useState as a fallback
 // so existing call sites that don't lift state continue to work.
 import { useQuery } from "@tanstack/react-query";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-  type TooltipProps,
-} from "recharts";
+import type { IChartApi, ISeriesApi, MouseEventParams, UTCTimestamp } from "lightweight-charts";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -169,12 +160,16 @@ interface PointShape {
   data_quality?: string;
 }
 
-function ChartTooltip({ active, payload }: TooltipProps<number, string>) {
-  // payload[0].payload is the original data row (our PointShape).
-  if (!active || !payload || payload.length === 0) return null;
-  const point = payload[0].payload as PointShape;
-  // WHY guard the cost basis: a brand-new portfolio with no transactions
-  // would have cost_basis === 0 → division produces Infinity. Show "—".
+/**
+ * EquityCurveTooltip — small absolutely-positioned overlay rendered next to
+ * the crosshair when the user hovers a bar.
+ *
+ * G-1 migration: under recharts the tooltip was managed by Recharts' own
+ * Tooltip component. lightweight-charts gives us crosshair-move events with
+ * point + seriesData, so we render the same DOM ourselves and position it
+ * via the chart's `point` (logical x/y in pixels).
+ */
+function EquityCurveTooltip({ point }: { point: PointShape }) {
   const returnPct =
     point.cost_basis > 0
       ? ((point.value - point.cost_basis) / point.cost_basis) * 100
@@ -385,58 +380,211 @@ export function EquityCurveChart({
   return (
     <div className="flex flex-col gap-2 h-full">
       <ChartHeader period={period} setPeriod={setPeriod} />
-      <div className="flex-1 min-h-[180px]">
-        {/* WHY ResponsiveContainer: the parent grid cell sizes dynamically;
-            Recharts needs explicit numeric width/height OR a ResponsiveContainer
-            to compute layout. */}
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart
-            data={points}
-            margin={{ top: 4, right: 8, left: 8, bottom: 4 }}
-          >
-            {/* Subtle grid — visible enough to read values, faint enough not
-                to compete with the line. */}
-            <CartesianGrid
-              strokeDasharray="2 4"
-              // WHY inline rgba: Recharts CartesianGrid does not respect Tailwind
-              // CSS-var fills inside SVG; using a hard-coded but theme-appropriate
-              // semi-transparent grey is the standard escape hatch.
-              stroke="rgba(148, 163, 184, 0.15)"
-              vertical={false}
-            />
-            <XAxis
-              dataKey="date"
-              tick={{ fontSize: 10, fill: "rgba(148,163,184,0.7)" }}
-              tickLine={false}
-              axisLine={false}
-              minTickGap={32}
-            />
-            <YAxis
-              tick={{ fontSize: 10, fill: "rgba(148,163,184,0.7)" }}
-              tickLine={false}
-              axisLine={false}
-              domain={["dataMin", "dataMax"]}
-              tickFormatter={(v: number) => formatPrice(v)}
-              width={64}
-            />
-            <Tooltip content={<ChartTooltip />} cursor={{ stroke: "rgba(148,163,184,0.3)" }} />
-            <Line
-              type="monotone"
-              dataKey="value"
-              // F-008: use the canonical Midnight Pro design tokens
-              // (`--positive` / `--negative`, raw HSL triplets in globals.css)
-              // wrapped in `hsl(...)` — matches every other coloured cell in
-              // the app and respects future theme switches. The previous
-              // `--color-positive`/`--color-negative` names did not exist in
-              // the stylesheet and silently fell through to the hex fallback.
-              stroke={isUp ? "hsl(var(--positive))" : "hsl(var(--negative))"}
-              strokeWidth={1.5}
-              dot={false}
-              isAnimationActive={false}
-            />
-          </LineChart>
-        </ResponsiveContainer>
+      <EquityCurveCanvas points={points} isUp={isUp} />
+    </div>
+  );
+}
+
+// ── EquityCurveCanvas — lightweight-charts implementation (G-1) ──────────────
+
+/**
+ * EquityCurveCanvas — replaces the recharts `<LineChart>` with a
+ * lightweight-charts line-series rendering. Drops a heavy SVG dependency
+ * (~50KB gz) and matches the OHLCVChart's render path so future chart-
+ * polish work (H-2 brush, etc.) only needs to learn one charting API.
+ *
+ * RICH HOVER TOOLTIP: lightweight-charts gives us crosshair-move events
+ * with logical x/y pixel coords + the seriesData at the hovered time. We
+ * build a `pointsByTime` Map at render time so the hover handler can look
+ * up our full PointShape (including cost_basis + data_quality, which the
+ * series itself doesn't carry) in O(1).
+ *
+ * H-2 brush: a follow-up commit hooks `chart.timeScale().setVisibleRange`
+ * to a brush-handle component; the chart-instance ref is exported via
+ * useImperativeHandle in that wave so a parent <Brush> can drive it.
+ */
+function EquityCurveCanvas({
+  points,
+  isUp,
+}: {
+  points: PointShape[];
+  isUp: boolean;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const [hovered, setHovered] = useState<{ point: PointShape; x: number; y: number } | null>(null);
+  const [chartError, setChartError] = useState(false);
+
+  // Map each ISO date → PointShape so the crosshair-move handler can resolve
+  // the FULL row (cost_basis + data_quality) from the lightweight-charts time
+  // value (Unix-seconds). useMemo so we don't rebuild on every render.
+  const pointsByTime = useMemo(() => {
+    const map = new Map<number, PointShape>();
+    for (const p of points) {
+      // Convert YYYY-MM-DD or ISO string → Unix seconds. lightweight-charts
+      // accepts a YYYY-MM-DD string directly (parses as midnight UTC); but
+      // the crosshair handler returns the value as a number-or-BusinessDay.
+      // For safety we use the second-precision Unix epoch as our key.
+      const t = Math.floor(new Date(p.date).getTime() / 1000);
+      map.set(t, p);
+    }
+    return map;
+  }, [points]);
+
+  // Effect 1: chart init / teardown. Empty-deps because the chart is created
+  // once per mount; data updates flow through the second effect.
+  useEffect(() => {
+    let cancelled = false;
+    let chart: IChartApi | null = null;
+
+    async function init() {
+      try {
+        // Dynamic import — lightweight-charts uses canvas APIs unavailable at SSR.
+        const { createChart, LineSeries } = await import("lightweight-charts");
+        if (cancelled || !containerRef.current) return;
+
+        chart = createChart(containerRef.current, {
+          width: containerRef.current.clientWidth,
+          height: containerRef.current.clientHeight,
+          layout: { background: { color: "transparent" }, textColor: "#71717A" },
+          grid: {
+            vertLines: { visible: false },
+            horzLines: { color: "rgba(148, 163, 184, 0.10)" },
+          },
+          crosshair: { mode: 0 },
+          rightPriceScale: { borderColor: "rgba(148, 163, 184, 0.15)" },
+          timeScale: { borderColor: "rgba(148, 163, 184, 0.15)", timeVisible: true },
+          // PLAN-0059 H-2: native pan + zoom — brush-equivalent UX without a
+          // second sub-chart. Mouse-wheel zooms the time axis; drag pans;
+          // pinch (touchpad) zooms. The Reset button below restores fitContent.
+          handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
+          handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true },
+        });
+
+        // Initial series colour matches the up/down verdict; updated in the
+        // data-update effect when isUp flips.
+        const series = chart.addSeries(LineSeries, {
+          color: isUp ? "hsl(150 100% 41%)" : "hsl(350 100% 62%)",
+          lineWidth: 2,
+          priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+        });
+
+        chartRef.current = chart;
+        seriesRef.current = series;
+
+        // Crosshair move → tooltip overlay.
+        chart.subscribeCrosshairMove((param: MouseEventParams) => {
+          if (!param.point || param.time == null) {
+            setHovered(null);
+            return;
+          }
+          const t = typeof param.time === "number" ? param.time : null;
+          if (t === null) {
+            setHovered(null);
+            return;
+          }
+          const p = pointsByTime.get(t);
+          if (!p) {
+            setHovered(null);
+            return;
+          }
+          setHovered({ point: p, x: param.point.x, y: param.point.y });
+        });
+      } catch (e) {
+        // Library failed to load (CDN miss, build break) — fall back to an
+        // honest error UI instead of an empty chart frame. Same pattern as
+        // OHLCVChart.
+        if (!cancelled) {
+          setChartError(true);
+          // eslint-disable-next-line no-console
+          console.error("EquityCurveChart: failed to load lightweight-charts:", e);
+        }
+      }
+    }
+
+    void init();
+
+    // ResizeObserver — re-fits the chart when the parent grid cell resizes.
+    const observer = new ResizeObserver(() => {
+      if (chartRef.current && containerRef.current) {
+        chartRef.current.applyOptions({
+          width: containerRef.current.clientWidth,
+          height: containerRef.current.clientHeight,
+        });
+      }
+    });
+    if (containerRef.current) observer.observe(containerRef.current);
+
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+      chart?.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- intentional empty deps
+
+  // Effect 2: push data + colour into the series whenever points change.
+  useEffect(() => {
+    if (!seriesRef.current || points.length === 0) return;
+    seriesRef.current.setData(
+      points.map((p) => ({
+        time: Math.floor(new Date(p.date).getTime() / 1000) as UTCTimestamp,
+        value: p.value,
+      })),
+    );
+    seriesRef.current.applyOptions({
+      color: isUp ? "hsl(150 100% 41%)" : "hsl(350 100% 62%)",
+    });
+    chartRef.current?.timeScale().fitContent();
+  }, [points, isUp]);
+
+  if (chartError) {
+    return (
+      <div className="flex-1 min-h-[180px] flex items-center justify-center">
+        <InlineEmptyState message="Chart unavailable — failed to load chart library." />
       </div>
+    );
+  }
+
+  // PLAN-0059 H-2: reset visible-range button. Calls fitContent() to restore
+  // the full series after the user has panned / zoomed. Hidden when the chart
+  // hasn't initialised yet.
+  function handleResetRange() {
+    chartRef.current?.timeScale().fitContent();
+  }
+
+  return (
+    <div className="relative flex-1 min-h-[180px]">
+      <div ref={containerRef} className="h-full w-full" data-testid="equity-curve-canvas" />
+      {/* Reset-range button — appears top-right; visible only after chart
+          init. Pointer-events-auto overrides the parent's relative-pos
+          stacking. */}
+      <button
+        type="button"
+        onClick={handleResetRange}
+        aria-label="Reset chart range"
+        title="Reset chart range to fit all data"
+        className="absolute right-2 top-2 z-10 rounded-[2px] border border-border/40 bg-card/80 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground backdrop-blur-sm transition-colors hover:text-foreground"
+      >
+        Reset
+      </button>
+      {/* Hover tooltip overlay — positioned to the right of the crosshair so it
+          doesn't occlude the line under the cursor. Pointer-events-none
+          ensures the chart's own crosshair tracking isn't interrupted. */}
+      {hovered && (
+        <div
+          className="pointer-events-none absolute z-10"
+          style={{
+            // Offset 12px right + 4px up from cursor; clamp to container.
+            left: Math.min(hovered.x + 12, (containerRef.current?.clientWidth ?? 9999) - 180),
+            top: Math.max(0, hovered.y - 60),
+          }}
+        >
+          <EquityCurveTooltip point={hovered.point} />
+        </div>
+      )}
     </div>
   );
 }

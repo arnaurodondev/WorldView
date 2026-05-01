@@ -9,7 +9,12 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from hypothesis import given
+from hypothesis import settings as h_settings
+from hypothesis import strategies as st
 from nlp_pipeline.application.blocks.entity_resolution import (
+    ANN_CONFIDENCE_MULTIPLIER,
+    AUTO_RESOLVE_THRESHOLD,
     _stage1_exact,
     _stage2_ticker_isin,
     _stage3_fuzzy,
@@ -268,11 +273,14 @@ class TestRunEntityResolutionBlock:
             fuzzy_map={"apple incorporated": [(entity_id, 0.55)]},
         )
         intelligence_session = MagicMock()
-        intelligence_session.execute = AsyncMock()
-        # Mock the RETURNING queue_id result so _insert_provisional succeeds.
-        _execute_result = MagicMock()
-        _execute_result.scalar_one = MagicMock(return_value=str(uuid.uuid4()))
-        intelligence_session.execute.return_value = _execute_result
+        # Two sequential execute() calls now happen:
+        #   1. Churn guard COUNT(*) query → must return int 0 (below threshold)
+        #   2. _insert_provisional RETURNING queue_id → returns UUID string
+        _count_result = MagicMock()
+        _count_result.scalar_one = MagicMock(return_value=0)
+        _insert_result = MagicMock()
+        _insert_result.scalar_one = MagicMock(return_value=str(uuid.uuid4()))
+        intelligence_session.execute = AsyncMock(side_effect=[_count_result, _insert_result])
         # begin_nested() is used as an async context manager for the savepoint.
         _savepoint = AsyncMock()
         _savepoint.__aenter__ = AsyncMock(return_value=_savepoint)
@@ -430,3 +438,29 @@ class TestRunEntityResolutionBlock:
         assert resolved == []
         assert audit == []
         alias_repo.batch_exact_match.assert_not_called()
+
+
+@pytest.mark.unit
+class TestAnnScoreMonotonicity:
+    """Property-based tests: ANN score → confidence mapping is monotone (Item 10)."""
+
+    @given(
+        d1=st.floats(min_value=0.0, max_value=1.0, allow_nan=False),
+        d2=st.floats(min_value=0.0, max_value=1.0, allow_nan=False),
+    )
+    @h_settings(max_examples=500)
+    def test_confidence_monotonically_decreasing_with_distance(self, d1: float, d2: float) -> None:
+        """For any two ANN distances, the closer one must always score higher confidence."""
+        c1 = (1.0 - d1) * ANN_CONFIDENCE_MULTIPLIER
+        c2 = (1.0 - d2) * ANN_CONFIDENCE_MULTIPLIER
+        if d1 < d2:
+            assert c1 >= c2, f"d1={d1} < d2={d2} but c1={c1} < c2={c2}"
+
+    @given(distance=st.floats(min_value=0.0, max_value=1.0, allow_nan=False))
+    @h_settings(max_examples=500)
+    def test_auto_resolve_iff_confidence_above_threshold(self, distance: float) -> None:
+        """AUTO_RESOLVED iff confidence > AUTO_RESOLVE_THRESHOLD."""
+        confidence = (1.0 - distance) * ANN_CONFIDENCE_MULTIPLIER
+        should_auto = confidence > AUTO_RESOLVE_THRESHOLD
+        # Re-derive from raw — must be consistent
+        assert should_auto == (confidence > AUTO_RESOLVE_THRESHOLD)

@@ -503,9 +503,7 @@ WHERE entity_id = :entity_id
         # plenty to disambiguate two distinct descriptions in logs).
         import hashlib
 
-        description_hash = (
-            hashlib.sha256(description.encode("utf-8")).hexdigest()[:16] if description else ""
-        )
+        description_hash = hashlib.sha256(description.encode("utf-8")).hexdigest()[:16] if description else ""
 
         inp = ExtractionInput(
             prompt=ALIAS_GENERATION.render(
@@ -613,7 +611,7 @@ WHERE entity_id = :entity_id
             attempt=failure.attempt,
         )
 
-    async def dead_letter(self, failure: FailureInfo[None]) -> None:
+    async def _dead_letter_impl(self, failure: FailureInfo[None]) -> None:
         logger.error(  # type: ignore[no-any-return]
             "instrument_consumer_dead_lettered",
             event_id=failure.event_id,

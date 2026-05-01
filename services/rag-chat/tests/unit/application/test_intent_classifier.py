@@ -4,10 +4,12 @@ Covers:
 - KeywordHeuristicClassifier (pure, no I/O)
 - OllamaIntentClassifier fallback path
 - DeepInfraIntentClassifier happy path and fallback
+- Usage logger integration (PLAN-0052 QA-R6 Item 2b)
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,6 +23,12 @@ from rag_chat.application.pipeline.intent_classifier import (
 from rag_chat.domain.enums import QueryIntent
 
 pytestmark = pytest.mark.unit
+
+
+def _make_usage_logger() -> AsyncMock:
+    logger = AsyncMock()
+    logger.log = AsyncMock()
+    return logger
 
 
 class TestKeywordHeuristicClassifier:
@@ -70,6 +78,55 @@ class TestOllamaIntentClassifierFallback:
         assert intent == QueryIntent.COMPARISON
         assert sub_q == []
         mock_client.post.assert_awaited_once()
+
+    async def test_ollama_usage_logger_called_on_success(self) -> None:
+        """usage_logger.log is called once per classify() call on the success path."""
+        body = json.dumps({"intent": "FACTUAL_LOOKUP", "sub_questions": [], "rephrased_query": "who is CEO?"})
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {
+            "response": body,
+            "prompt_eval_count": 50,
+            "eval_count": 10,
+        }
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.post = AsyncMock(return_value=resp)
+        usage_logger = _make_usage_logger()
+
+        clf = OllamaIntentClassifier(
+            ollama_base_url="http://localhost:11434",
+            http_client=mock_client,
+            usage_logger=usage_logger,
+        )
+        await clf.classify("who is the CEO of Apple?", [], [])
+        await asyncio.sleep(0)  # allow fire-and-forget task to execute
+
+        usage_logger.log.assert_awaited_once()
+        call_kwargs = usage_logger.log.call_args.kwargs
+        assert call_kwargs["capability"] == "intent_classification"
+        assert call_kwargs["provider"] == "ollama"
+        assert call_kwargs["success"] is True
+        assert call_kwargs["tokens_in"] == 50
+        assert call_kwargs["tokens_out"] == 10
+
+    async def test_ollama_usage_logger_called_on_fallback(self) -> None:
+        """usage_logger.log is called even when Ollama errors and keyword fallback fires."""
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
+        usage_logger = _make_usage_logger()
+
+        clf = OllamaIntentClassifier(
+            ollama_base_url="http://localhost:11434",
+            http_client=mock_client,
+            usage_logger=usage_logger,
+        )
+        await clf.classify("compare TSLA vs RIVN", [], [])
+        await asyncio.sleep(0)
+
+        usage_logger.log.assert_awaited_once()
+        call_kwargs = usage_logger.log.call_args.kwargs
+        assert call_kwargs["success"] is False
+        assert call_kwargs["error_code"] == "TimeoutException"
 
 
 class TestDeepInfraIntentClassifier:
@@ -170,3 +227,58 @@ class TestDeepInfraIntentClassifier:
         a config override for installs that need higher accuracy."""
         clf = DeepInfraIntentClassifier(api_key="test")
         assert clf._model == "meta-llama/Llama-3.2-1B-Instruct"
+
+    async def test_deepinfra_usage_logger_called_on_success(self) -> None:
+        """usage_logger.log is called once per classify() on the happy path."""
+        content = json.dumps({"intent": "FACTUAL_LOOKUP", "sub_questions": [], "rephrased_query": ""})
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {
+            "choices": [{"message": {"content": content}}],
+            "usage": {"prompt_tokens": 120, "completion_tokens": 30},
+        }
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.post = AsyncMock(return_value=resp)
+        usage_logger = _make_usage_logger()
+
+        clf = DeepInfraIntentClassifier(api_key="test-key", http_client=mock_client, usage_logger=usage_logger)
+        await clf.classify("who is the CEO of Apple?", [], [])
+        await asyncio.sleep(0)  # let fire-and-forget task execute
+
+        usage_logger.log.assert_awaited_once()
+        kwargs = usage_logger.log.call_args.kwargs
+        assert kwargs["capability"] == "intent_classification"
+        assert kwargs["provider"] == "deepinfra"
+        assert kwargs["success"] is True
+        assert kwargs["tokens_in"] == 120
+        assert kwargs["tokens_out"] == 30
+        assert kwargs["error_code"] is None
+
+    async def test_deepinfra_usage_logger_called_on_failure(self) -> None:
+        """usage_logger.log fires with success=False when DeepInfra errors."""
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
+        usage_logger = _make_usage_logger()
+
+        clf = DeepInfraIntentClassifier(api_key="test-key", http_client=mock_client, usage_logger=usage_logger)
+        await clf.classify("latest news on NVDA", [], [])
+        await asyncio.sleep(0)
+
+        usage_logger.log.assert_awaited_once()
+        kwargs = usage_logger.log.call_args.kwargs
+        assert kwargs["success"] is False
+        assert kwargs["error_code"] == "TimeoutException"
+        assert kwargs["tokens_in"] == 0
+
+    async def test_no_usage_logger_no_error(self) -> None:
+        """usage_logger=None (default) — classifier works normally."""
+        content = json.dumps({"intent": "GENERAL", "sub_questions": [], "rephrased_query": ""})
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {"choices": [{"message": {"content": content}}], "usage": {}}
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.post = AsyncMock(return_value=resp)
+
+        clf = DeepInfraIntentClassifier(api_key="test-key", http_client=mock_client)
+        intent, _, _ = await clf.classify("how do interest rates work?", [], [])
+        assert intent == QueryIntent.GENERAL

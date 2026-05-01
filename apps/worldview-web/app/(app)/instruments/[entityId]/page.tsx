@@ -33,11 +33,11 @@
 "use client";
 // WHY "use client": uses useQuery for CompanyOverview + tab state (useState).
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 // WHY useRouter: used for router.back() in the back nav button so the user returns
 // to their previous page (e.g., screener, dashboard) rather than always going to /dashboard.
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createGateway } from "@/lib/gateway";
@@ -69,18 +69,63 @@ export default function InstrumentDetailPage() {
   // needs to programmatically switch to the News tab. Controlled Tabs allow this.
   const [activeTab, setActiveTab] = useState("overview");
 
-  // ── Fetch CompanyOverview — composite endpoint ─────────────────────────────
-  // WHY pass entityId as instrumentId to getCompanyOverview:
-  // MVP: S9 routes /v1/companies/{id}/overview accepts entity_id or instrument_id.
-  // The backend resolves either form. Future: dedicated /v1/entities/{id}/overview.
-  const { data: overview, isLoading: overviewLoading } = useQuery({
-    queryKey: ["company-overview", entityId],
-    queryFn: () => createGateway(accessToken).getCompanyOverview(entityId),
+  // ── Fetch instrument page-bundle (PLAN-0059 I-5) ───────────────────────────
+  // The page-bundle endpoint composes overview + fundamentals + technicals +
+  // insider + top-news in one round-trip. We use it as the page-level query;
+  // sub-resources are SEEDED into TanStack Query's cache via setQueryData so
+  // child-component queries (FundamentalsTab, InsiderTransactionsTable, etc.)
+  // hit cache instead of refetching.
+  //
+  // Backwards-compat: existing children continue using their own queryKeys
+  // (["fundamentals", instrumentId], etc.). The seed only PRIMES the cache —
+  // children remain authoritative for refetch / staleTime semantics, and any
+  // user-driven refresh flows through their own hook.
+  const queryClient = useQueryClient();
+  const { data: bundle, isLoading: overviewLoading } = useQuery({
+    queryKey: ["instrument-page-bundle", entityId],
+    queryFn: () => createGateway(accessToken).getInstrumentPageBundle(entityId),
     enabled: !!accessToken && !!entityId,
-    // WHY 5min: overview is expensive to compute; price is refreshed via LiveQuoteBadge
+    // 5min — overview is expensive; LiveQuoteBadge handles intraday refresh.
     staleTime: 5 * 60_000,
   });
 
+  // ── Cache priming — seed child-component query caches (PLAN-0059 I-5) ──────
+  // The bundle's sub-resources match the dedicated endpoints' shapes verbatim
+  // (per S9 contract). We setQueryData for the keys child components watch so
+  // they read from cache on first paint instead of firing a duplicate request.
+  //
+  // Effect runs once per bundle change; bundle.* are server-trusted values
+  // and we never overwrite a fresher cache entry (TanStack Query handles
+  // staleness — setQueryData only stamps an `updatedAt` of NOW for the key).
+  useEffect(() => {
+    if (!bundle) return;
+    const md_id = bundle.instrument_id;
+    if (bundle.overview) {
+      queryClient.setQueryData(["company-overview", entityId], bundle.overview);
+    }
+    if (bundle.fundamentals) {
+      queryClient.setQueryData(["fundamentals", md_id], bundle.fundamentals);
+    }
+    if (bundle.technicals) {
+      queryClient.setQueryData(["technicals", md_id], bundle.technicals);
+    }
+    if (bundle.insider) {
+      queryClient.setQueryData(["insider-transactions", md_id], bundle.insider);
+    }
+    if (bundle.top_news) {
+      // NewsTab keys on entity-news per (entityId, offset). The bundle
+      // returns top-5 — sufficient to prime the FIRST page (offset=0).
+      queryClient.setQueryData(
+        ["entity-news-tab", bundle.entity_id, 0],
+        bundle.top_news,
+      );
+    }
+  }, [bundle, entityId, queryClient]);
+
+  // overview reference points at the bundle's overview (or null when bundle
+  // failed entirely / is still loading). Downstream code reads instrument.*
+  // exactly as before — no consumer changes.
+  const overview = bundle?.overview ?? null;
   const instrument = overview?.instrument;
 
   // WHY kgEntityId derived before guards and queries: The URL segment (`entityId`) may

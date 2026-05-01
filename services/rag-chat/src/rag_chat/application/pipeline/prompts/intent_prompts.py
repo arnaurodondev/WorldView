@@ -14,6 +14,7 @@ Each prompt is tuned for the answer structure expected by that intent:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -26,6 +27,77 @@ _SAFETY = (
     "Never speculate beyond the evidence provided."
 )
 
+# ── Retrieval counts dataclass ─────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class RetrievalCounts:
+    """Counts of retrieved items by type — injected into the RETRIEVAL META block.
+
+    WHY: The LLM needs to know how many items were retrieved so it can decide
+    whether to answer or refuse (empty-context case).  Passing these counts via
+    the system prompt avoids a separate tool-call round-trip.
+    """
+
+    n_context_items: int = 0
+    n_chunks: int = 0
+    n_rel: int = 0
+    n_events: int = 0
+    n_fin: int = 0
+    extra: dict[str, int] = field(default_factory=dict)
+
+
+# ── Shared v2 preamble ────────────────────────────────────────────────────────
+# WHY SEPARATE FUNCTION: the preamble is identical across all 8 intents.
+# Keeping it in one place means a single edit updates all prompts.
+
+
+def _build_v2_preamble(counts: RetrievalCounts | None) -> str:
+    """Return the RETRIEVAL META + few-shot block injected before each prompt.
+
+    When counts is None (e.g. briefing endpoint that doesn't use PromptBuilder),
+    the META line shows placeholders so the block is still structurally present.
+    """
+    if counts is not None:
+        meta_line = (
+            f"RETRIEVAL META: {counts.n_context_items} context items were retrieved "
+            f"(chunks={counts.n_chunks}, relations={counts.n_rel}, "
+            f"events={counts.n_events}, financial={counts.n_fin}). "
+            f"If n_context_items < 3 AND the query is entity-specific, "
+            f"refuse with the empty-context line below."
+        )
+    else:
+        meta_line = (
+            "RETRIEVAL META: context items were retrieved. "
+            "If the context is empty AND the query is entity-specific, "
+            "refuse with the empty-context line below."
+        )
+
+    return (
+        f"{meta_line}\n"
+        "\n"
+        "FEW-SHOT EXAMPLE 1 (cite + answer):\n"
+        "Q: What was AAPL's Q3 EPS?\n"
+        "Context: [1] Apple Inc reported diluted EPS of $1.40 for Q3 FY24 (10-Q filing 2024-08-01).\n"
+        "A: AAPL Q3 FY24 diluted EPS was $1.40 [1].\n"
+        "\n"
+        "FEW-SHOT EXAMPLE 2 (refuse on empty context):\n"
+        "Q: What was AAPL's Q3 EPS?\n"
+        "Context: (empty)\n"
+        "A: This information is not available in the retrieved context for AAPL.\n"
+    )
+
+
+# ── Shared v2 response rules appended to every prompt ─────────────────────────
+# Rules 1-3 are in the per-intent prompt bodies; rules 4-5 are universal.
+
+_V2_EXTRA_RULES = (
+    "4. THINKING BUDGET (DeepSeek R1): keep <think> blocks under 200 tokens. "
+    "Final answer must be ≤200 words for FACTUAL_LOOKUP.\n"
+    "5. Citation discipline: every factual claim needs a [N] marker. "
+    "Any number in the response without a [N] marker is treated as fabricated and stripped."
+)
+
 # ── 8 query-intent prompts ─────────────────────────────────────────────────────
 
 _FACTUAL_LOOKUP_PROMPT = (
@@ -33,6 +105,7 @@ _FACTUAL_LOOKUP_PROMPT = (
     "Every factual claim MUST be supported by a numbered citation [N] from the context.\n"
     "Lead with the direct answer in one sentence, then provide supporting evidence.\n"
     "If the information is not in the context, say so explicitly — do not fabricate.\n"
+    f"{_V2_EXTRA_RULES}\n"
     f"{_SAFETY}"
 )
 
@@ -42,6 +115,7 @@ _RELATIONSHIP_PROMPT = (
     "Cite the graph path source for each hop with a numbered citation [N].\n"
     "Summarise the end-to-end relationship in one sentence before the detailed path.\n"
     "If the graph context is incomplete, state which links are missing.\n"
+    f"{_V2_EXTRA_RULES}\n"
     f"{_SAFETY}"
 )
 
@@ -51,6 +125,7 @@ _SIGNAL_INTEL_PROMPT = (
     "For each signal: state the event, date, source, and potential market impact.\n"
     "Flag conflicting signals explicitly: 'Source [A] says X, but source [B] says Y.'\n"
     "Conclude with a one-sentence sentiment summary.\n"
+    f"{_V2_EXTRA_RULES}\n"
     f"{_SAFETY}"
 )
 
@@ -60,6 +135,7 @@ _FINANCIAL_DATA_PROMPT = (
     "Always include: metric name, value, period, source [N], and comparison baseline.\n"
     "Flag stale data (>90 days old) explicitly.\n"
     "Do not interpret or project beyond what the data states.\n"
+    f"{_V2_EXTRA_RULES}\n"
     f"{_SAFETY}"
 )
 
@@ -69,6 +145,7 @@ _COMPARISON_PROMPT = (
     "Use a consistent metric structure across all sub-sections for easy side-by-side reading.\n"
     "Cite evidence for each entity separately with numbered citations [N].\n"
     "Conclude with a balanced summary that does not recommend one over the other.\n"
+    f"{_V2_EXTRA_RULES}\n"
     f"{_SAFETY}"
 )
 
@@ -78,6 +155,7 @@ _REASONING_PROMPT = (
     "Assign confidence weights (high/medium/low) to each causal link based on evidence.\n"
     "Acknowledge alternative explanations if the context supports them.\n"
     "Cite every causal claim with a numbered citation [N].\n"
+    f"{_V2_EXTRA_RULES}\n"
     f"{_SAFETY}"
 )
 
@@ -87,6 +165,7 @@ _PORTFOLIO_PROMPT = (
     "For each risk signal: identify which positions are exposed, severity, and timeframe.\n"
     "Do not recommend buy/sell actions — present risks and evidence only.\n"
     "Cite all risk signals with numbered citations [N].\n"
+    f"{_V2_EXTRA_RULES}\n"
     f"{_SAFETY}"
 )
 
@@ -98,6 +177,7 @@ _GENERAL_PROMPT = (
     # WHY REMOVED: This is an institutional terminal, not a consumer chatbot.
     # Suggested follow-ups clutter the output and are inappropriate in a Bloomberg-style
     # UI where the analyst controls the conversation flow.
+    f"{_V2_EXTRA_RULES}\n"
     f"{_SAFETY}"
 )
 
@@ -132,10 +212,18 @@ _INTENT_PROMPTS: dict[str, str] = {
 }
 
 
-def get_system_prompt(intent: QueryIntent) -> str:
-    """Return the intent-specific system prompt string.
+def get_system_prompt(
+    intent: QueryIntent,
+    retrieval_counts: RetrievalCounts | None = None,
+) -> str:
+    """Return the intent-specific system prompt string with v2 preamble.
 
     Falls back to ``_FACTUAL_LOOKUP_PROMPT`` for any unrecognised intent value,
     so new intents added to the enum degrade gracefully rather than raising.
+
+    The RETRIEVAL META preamble is prepended regardless of intent — it gives the
+    LLM the item count and few-shot examples it needs for citation discipline.
     """
-    return _INTENT_PROMPTS.get(str(intent), _FACTUAL_LOOKUP_PROMPT)
+    base = _INTENT_PROMPTS.get(str(intent), _FACTUAL_LOOKUP_PROMPT)
+    preamble = _build_v2_preamble(retrieval_counts)
+    return f"{preamble}\n{base}"

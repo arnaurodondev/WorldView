@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from rag_chat.application.pipeline.prompts import get_system_prompt
+from rag_chat.application.pipeline.prompts import RetrievalCounts, get_system_prompt
 from rag_chat.domain.enums import QueryIntent
 
 if TYPE_CHECKING:
@@ -36,6 +36,7 @@ class PromptBuilder:
         contradiction_block: ContradictionBlock,
         financial_items: list[RetrievedItem] | None = None,
         intent: QueryIntent = QueryIntent.FACTUAL_LOOKUP,
+        retrieval_counts: RetrievalCounts | None = None,
     ) -> str:
         """Return the complete prompt string to be sent to the LLM.
 
@@ -47,8 +48,11 @@ class PromptBuilder:
             contradiction_block:   Pre-built contradiction evidence block.
             financial_items:       Optional financial data items for dedicated block.
             intent:                Query intent — selects the system prompt module.
+            retrieval_counts:      Item-type breakdown from the retrieval step — injected
+                                   into the RETRIEVAL META block so the LLM knows whether
+                                   to answer or refuse (empty-context case).
         """
-        system_prompt = get_system_prompt(intent)
+        system_prompt = get_system_prompt(intent, retrieval_counts)
         parts: list[str] = [f"System:\n{system_prompt}"]
 
         if context_block:

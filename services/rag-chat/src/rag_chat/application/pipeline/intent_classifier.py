@@ -13,8 +13,10 @@ which tier was used.
 
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import TYPE_CHECKING, Any
+import time
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 import structlog
@@ -23,6 +25,24 @@ from rag_chat.domain.enums import QueryIntent
 
 if TYPE_CHECKING:
     from rag_chat.domain.entities.chat import ResolvedEntity
+
+
+class _UsageLogProtocol(Protocol):
+    async def log(
+        self,
+        *,
+        model_id: str,
+        provider: str,
+        capability: str,
+        tokens_in: int,
+        tokens_out: int,
+        latency_ms: int,
+        estimated_cost_usd: float,
+        success: bool,
+        error_code: str | None,
+        **context: object,
+    ) -> None: ...
+
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -142,11 +162,13 @@ class OllamaIntentClassifier:
         model: str = "qwen3:0.6b",
         *,
         http_client: httpx.AsyncClient | None = None,
+        usage_logger: _UsageLogProtocol | None = None,
     ) -> None:
         self._ollama_url = ollama_base_url.rstrip("/")
         self._model = model
         self._client = http_client or httpx.AsyncClient()
         self._fallback = KeywordHeuristicClassifier()
+        self._usage_logger = usage_logger
 
     async def classify(
         self,
@@ -166,6 +188,11 @@ class OllamaIntentClassifier:
                 [{"canonical_name": e.canonical_name, "type": e.entity_type} for e in resolved_entities]
             ),
         )
+        t0 = time.monotonic()
+        success = False
+        error_code: str | None = None
+        tokens_in = 0
+        tokens_out = 0
         try:
             response = await self._client.post(
                 f"{self._ollama_url}/api/generate",
@@ -177,14 +204,35 @@ class OllamaIntentClassifier:
                 timeout=20.0,
             )
             response.raise_for_status()
-            return _parse_intent_response(response.json().get("response", ""))
-        except Exception:
+            body = response.json()
+            tokens_in = body.get("prompt_eval_count", 0)
+            tokens_out = body.get("eval_count", 0)
+            success = True
+            return _parse_intent_response(body.get("response", ""))
+        except Exception as exc:
+            error_code = type(exc).__name__
             log.warning(  # type: ignore[no-any-return]
                 "ollama_intent_classifier_fallback",
                 model=self._model,
                 msg_len=len(message),
             )
             return self._fallback.classify(message)
+        finally:
+            if self._usage_logger is not None:
+                latency_ms = int((time.monotonic() - t0) * 1000)
+                asyncio.create_task(  # noqa: RUF006
+                    self._usage_logger.log(
+                        model_id=self._model,
+                        provider="ollama",
+                        capability="intent_classification",
+                        tokens_in=tokens_in,
+                        tokens_out=tokens_out,
+                        latency_ms=latency_ms,
+                        estimated_cost_usd=0.0,
+                        success=success,
+                        error_code=error_code,
+                    )
+                )
 
 
 # ── DeepInfra-backed classifier ───────────────────────────────────────────────
@@ -218,12 +266,14 @@ class DeepInfraIntentClassifier:
         *,
         http_client: httpx.AsyncClient | None = None,
         timeout: float = 10.0,
+        usage_logger: _UsageLogProtocol | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._client = http_client or httpx.AsyncClient()
         self._timeout = timeout
         self._fallback = KeywordHeuristicClassifier()
+        self._usage_logger = usage_logger
 
     async def classify(
         self,
@@ -243,6 +293,11 @@ class DeepInfraIntentClassifier:
                 [{"canonical_name": e.canonical_name, "type": e.entity_type} for e in resolved_entities]
             ),
         )
+        t0 = time.monotonic()
+        success = False
+        error_code: str | None = None
+        tokens_in = 0
+        tokens_out = 0
         try:
             response = await self._client.post(
                 _DEEPINFRA_API_URL,
@@ -269,15 +324,37 @@ class DeepInfraIntentClassifier:
                 timeout=self._timeout,
             )
             response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
+            body = response.json()
+            usage = body.get("usage", {})
+            tokens_in = usage.get("prompt_tokens", 0)
+            tokens_out = usage.get("completion_tokens", 0)
+            success = True
+            content = body["choices"][0]["message"]["content"]
             return _parse_intent_response(content)
-        except Exception:
+        except Exception as exc:
+            error_code = type(exc).__name__
             log.warning(  # type: ignore[no-any-return]
                 "deepinfra_intent_classifier_fallback",
                 model=self._model,
                 msg_len=len(message),
             )
             return self._fallback.classify(message)
+        finally:
+            if self._usage_logger is not None:
+                latency_ms = int((time.monotonic() - t0) * 1000)
+                asyncio.create_task(  # noqa: RUF006
+                    self._usage_logger.log(
+                        model_id=self._model,
+                        provider="deepinfra",
+                        capability="intent_classification",
+                        tokens_in=tokens_in,
+                        tokens_out=tokens_out,
+                        latency_ms=latency_ms,
+                        estimated_cost_usd=0.0,
+                        success=success,
+                        error_code=error_code,
+                    )
+                )
 
 
 # ── Response parser ────────────────────────────────────────────────────────────
