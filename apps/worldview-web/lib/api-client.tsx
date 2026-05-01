@@ -55,8 +55,11 @@
 
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import {
+  useMutation,
   useQuery,
   type QueryKey,
+  type UseMutationOptions,
+  type UseMutationResult,
   type UseQueryOptions,
   type UseQueryResult,
 } from "@tanstack/react-query";
@@ -215,5 +218,55 @@ export function useAuthedQuery<
     ...rest,
     enabled: finalEnabled,
     queryFn: () => queryFn(gateway),
+  });
+}
+
+/**
+ * useAuthedMutation — useMutation wrapper that injects the gateway.
+ *
+ * Mirrors useAuthedQuery for write paths. The mutationFn receives the
+ * memoised gateway as its first argument; subsequent arguments are the
+ * variables passed to mutate(...).
+ *
+ * BEHAVIOUR:
+ *   - Same gateway-identity guarantee as useAuthedQuery.
+ *   - Does NOT auto-disable: mutations are user-initiated and should fail
+ *     loudly if called while signed-out (we surface the 401 to the toast).
+ *   - All other useMutation options pass through.
+ *
+ * USAGE:
+ *   const renameMut = useAuthedMutation({
+ *     mutationFn: (gw, newName: string) => gw.renameWatchlist(id, newName),
+ *     onSuccess: () => qc.invalidateQueries({ queryKey: qk.watchlists.detail(id) }),
+ *   });
+ *
+ * Added in PLAN-0059 Wave I QA-iter1 to stop the proliferation of hand-rolled
+ * `const gw = useApiClient(); useMutation({ mutationFn: () => gw.foo(...) })`.
+ */
+export function useAuthedMutation<
+  TData = unknown,
+  TError = Error,
+  TVariables = void,
+  TContext = unknown,
+>(
+  options: Omit<
+    UseMutationOptions<TData, TError, TVariables, TContext>,
+    "mutationFn"
+  > & {
+    mutationFn: (gw: Gateway, variables: TVariables) => Promise<TData>;
+  },
+): UseMutationResult<TData, TError, TVariables, TContext> {
+  const ctx = useContext(ApiClientContext);
+  if (!ctx) {
+    throw new Error(
+      "useAuthedMutation must be used inside <ApiClientProvider>. PLAN-0059-C C-3.",
+    );
+  }
+  const { gateway } = ctx;
+  const { mutationFn, ...rest } = options;
+
+  return useMutation<TData, TError, TVariables, TContext>({
+    ...rest,
+    mutationFn: (variables: TVariables) => mutationFn(gateway, variables),
   });
 }

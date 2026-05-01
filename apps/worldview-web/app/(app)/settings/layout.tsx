@@ -72,8 +72,13 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                     className={cn(
                       "flex h-7 items-center gap-2 rounded-[2px] px-2 text-[11px] transition-colors",
                       active
-                        ? "bg-primary/10 text-foreground shadow-[inset_2px_0_0_hsl(var(--primary))]"
-                        : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+                        ? // QA-iter1: combine inset shadow accent (rendered in
+                          // normal mode) with a left border (preserved under
+                          // forced-colors / Windows High Contrast where
+                          // bg-primary/10 + box-shadow are stripped). Either
+                          // mode renders a visible left-edge marker.
+                          "bg-primary/10 text-foreground shadow-[inset_2px_0_0_hsl(var(--primary))] border-l-2 border-l-primary -ml-px"
+                        : "border-l-2 border-l-transparent -ml-px text-muted-foreground hover:bg-muted/40 hover:text-foreground",
                     )}
                   >
                     <Icon className="h-3 w-3 shrink-0" aria-hidden />

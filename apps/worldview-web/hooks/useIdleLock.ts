@@ -83,12 +83,25 @@ export function useIdleLock(options: UseIdleLockOptions = {}) {
   const lastResetRef = React.useRef<number>(0);
   const channelRef = React.useRef<BroadcastChannel | null>(null);
 
-  // Default lock action — captured in a stable callback so consumers that
-  // don't pass `onIdle` get sane behaviour.
-  const defaultIdleAction = React.useCallback(() => {
-    const next = encodeURIComponent(pathname ?? "/dashboard");
-    router.replace(`/login?next=${next}`);
-  }, [router, pathname]);
+  // QA-iter1 fix: callback refs to avoid listener churn on every parent
+  // re-render. The previous impl included onIdle/onWarn/defaultIdleAction in
+  // the effect dep array, which tore down + rebuilt all activity listeners
+  // and the BroadcastChannel whenever the consumer passed fresh closures
+  // (the common case). Refs sidestep this entirely while preserving "always
+  // call the latest callback".
+  const onIdleRef = React.useRef(onIdle);
+  const onWarnRef = React.useRef(onWarn);
+  React.useEffect(() => {
+    onIdleRef.current = onIdle;
+    onWarnRef.current = onWarn;
+  }, [onIdle, onWarn]);
+
+  // Default lock action — captured via refs above. Pathname is read at
+  // fire-time via a ref so navigations don't tear down listeners.
+  const pathnameRef = React.useRef(pathname);
+  React.useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
 
   React.useEffect(() => {
     if (!enabled) return;
@@ -112,18 +125,30 @@ export function useIdleLock(options: UseIdleLockOptions = {}) {
 
     const fireIdle = () => {
       clearTimers();
-      if (onIdle) onIdle();
-      else defaultIdleAction();
+      if (onIdleRef.current) {
+        onIdleRef.current();
+      } else {
+        // QA-iter1 fix: use ?redirect_to= to match the login page's existing
+        // sanitizeRedirect contract (app/login/page.tsx:117). The previous
+        // ?next= param was silently dropped after re-auth so users always
+        // landed on /dashboard instead of where they were locked out.
+        const target = encodeURIComponent(pathnameRef.current ?? "/dashboard");
+        router.replace(`/login?redirect_to=${target}`);
+      }
     };
 
     const fireWarn = () => {
-      onWarn?.();
+      onWarnRef.current?.();
     };
 
-    const reset = (broadcast: boolean) => {
+    // QA-iter1 fix: `force=true` bypasses the 1Hz activity throttle. Used at
+    // initial-arm and broadcast-receipt so the timer always arms. Without
+    // this, a rapid enabled-toggle (e.g. auth-state churn or StrictMode
+    // double-invoke) could starve the initial reset and leave the hook
+    // silently disarmed.
+    const reset = (broadcast: boolean, force = false) => {
       const now = Date.now();
-      // Throttle: ignore if we already reset less than ACTIVITY_THROTTLE_MS ago.
-      if (now - lastResetRef.current < ACTIVITY_THROTTLE_MS) return;
+      if (!force && now - lastResetRef.current < ACTIVITY_THROTTLE_MS) return;
       lastResetRef.current = now;
 
       clearTimers();
@@ -150,16 +175,17 @@ export function useIdleLock(options: UseIdleLockOptions = {}) {
     window.addEventListener("focus", onActivity);
 
     // Cross-tab activity — when ANY tab broadcasts activity, reset our timer
-    // too (without re-broadcasting, to avoid an echo loop).
+    // too. force=true so the throttle doesn't drop the first cross-tab event.
     const onMessage = (e: MessageEvent) => {
       if (e.data && typeof e.data === "object" && e.data.type === "activity") {
-        reset(false);
+        reset(false, true);
       }
     };
     channelRef.current?.addEventListener("message", onMessage);
 
-    // Page-load: kick off the timer.
-    reset(false);
+    // Page-load: kick off the timer with force=true so a rapid enabled-toggle
+    // doesn't leave the hook silently disarmed.
+    reset(false, true);
 
     return () => {
       clearTimers();
@@ -171,5 +197,8 @@ export function useIdleLock(options: UseIdleLockOptions = {}) {
       channelRef.current?.close();
       channelRef.current = null;
     };
-  }, [enabled, timeoutMs, warnMs, onWarn, onIdle, defaultIdleAction]);
+    // QA-iter1: dep array intentionally minimal — onIdle/onWarn/pathname
+    // are read via refs at fire-time so navigations and parent re-renders
+    // don't tear down listeners.
+  }, [enabled, timeoutMs, warnMs, router]);
 }
