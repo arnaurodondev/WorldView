@@ -517,7 +517,7 @@ export function createGateway(token?: string | null) {
               volume: number | null;
             }>;
           }>;
-        }>("/v1/quotes/bars/batch", {
+        }>("/v1/ohlcv/batch", {
           method: "POST",
           body,
           token: t,
@@ -1932,9 +1932,21 @@ export function createGateway(token?: string | null) {
 
     /**
      * getThreads — user's conversation thread list
+     *
+     * PLAN-0052 platform-QA round 7 (2026-05-01): the live S9 gateway returns
+     * `{threads: [...]}` (envelope), but earlier code assumed a bare `Thread[]`.
+     * Calling `.filter(...)` on the envelope object threw a TypeError that the
+     * chat page surfaced as "Failed to load threads", masking the real error
+     * and producing the chat-tab popup. Tolerate both shapes so a future
+     * back-compat shift doesn't break the page again.
      */
-    getThreads(): Promise<Thread[]> {
-      return apiFetch<Thread[]>("/v1/threads", { token: t });
+    async getThreads(): Promise<Thread[]> {
+      const raw = await apiFetch<{ threads?: Thread[] } | Thread[]>(
+        "/v1/threads",
+        { token: t },
+      );
+      if (Array.isArray(raw)) return raw;
+      return Array.isArray(raw?.threads) ? raw.threads : [];
     },
 
     /**

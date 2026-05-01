@@ -28,7 +28,7 @@ class RelationTypeRegistryRepository:
         """Step 1: exact-match lookup against canonical_type."""
         result = await self._session.execute(
             text("""
-SELECT type_id, canonical_type, semantic_mode, decay_class, base_confidence, dcc.decay_alpha
+SELECT rtr.type_id, rtr.canonical_type, rtr.semantic_mode, rtr.decay_class, rtr.base_confidence, dcc.decay_alpha
 FROM relation_type_registry rtr
 JOIN decay_class_config dcc ON dcc.decay_class = rtr.decay_class
 WHERE rtr.canonical_type = :canonical_type
@@ -83,13 +83,13 @@ WHERE canonical_type = :canonical_type AND is_active = true
         # Smaller value = more similar; threshold is MAX distance allowed.
         result = await self._session.execute(
             text("""
-SELECT type_id, canonical_type, semantic_mode, decay_class, base_confidence,
+SELECT rtr.type_id, rtr.canonical_type, rtr.semantic_mode, rtr.decay_class, rtr.base_confidence,
              dcc.decay_alpha,
-       embedding <=> CAST(:query_embedding AS vector) AS cosine_distance
+       rtr.embedding <=> CAST(:query_embedding AS vector) AS cosine_distance
 FROM relation_type_registry rtr
 JOIN decay_class_config dcc ON dcc.decay_class = rtr.decay_class
-WHERE is_active  = true
-  AND embedding IS NOT NULL
+WHERE rtr.is_active  = true
+  AND rtr.embedding IS NOT NULL
 ORDER BY cosine_distance
 LIMIT :limit
 """),
