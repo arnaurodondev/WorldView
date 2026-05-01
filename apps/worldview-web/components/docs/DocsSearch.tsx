@@ -123,22 +123,34 @@ export function DocsSearch({ index }: DocsSearchProps) {
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-xl gap-0 p-0">
+        {/* QA iter-1 (a11y responsive m-3): mx-4 + w-[calc(100vw-2rem)]
+            keeps the dialog within the viewport on 480px screens. */}
+        <DialogContent className="mx-4 w-[calc(100vw-2rem)] max-w-xl gap-0 p-0">
           <DialogTitle className="sr-only">Search documentation</DialogTitle>
           <div className="flex items-center gap-2 border-b border-border/40 px-4 py-3">
             <Search
               className="h-4 w-4 text-muted-foreground"
               aria-hidden="true"
             />
+            {/* QA iter-1 (a11y M-A3): WAI-ARIA combobox pattern — input is
+                role=combobox with aria-controls + aria-expanded +
+                aria-activedescendant pointing to the highlighted option. */}
             <input
               ref={inputRef}
               type="text"
+              role="combobox"
+              aria-controls="docs-search-listbox"
+              aria-expanded={results.length > 0}
+              aria-autocomplete="list"
+              aria-activedescendant={
+                results[active] ? `docs-search-option-${active}` : undefined
+              }
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "ArrowDown") {
                   e.preventDefault();
-                  setActive((a) => Math.min(a + 1, results.length - 1));
+                  setActive((a) => Math.min(a + 1, Math.max(results.length - 1, 0)));
                 } else if (e.key === "ArrowUp") {
                   e.preventDefault();
                   setActive((a) => Math.max(a - 1, 0));
@@ -154,13 +166,26 @@ export function DocsSearch({ index }: DocsSearchProps) {
           </div>
 
           {results.length > 0 ? (
-            <ul role="listbox" className="max-h-80 overflow-y-auto py-2">
+            <ul
+              id="docs-search-listbox"
+              role="listbox"
+              className="max-h-80 overflow-y-auto py-2"
+            >
               {results.map((r, i) => (
-                <li key={`${r.url}#${r.hash ?? ""}-${i}`} role="option" aria-selected={i === active}>
+                <li
+                  key={`${r.url}#${r.hash ?? ""}-${i}`}
+                  id={`docs-search-option-${i}`}
+                  role="option"
+                  aria-selected={i === active}
+                >
                   <button
                     type="button"
                     onClick={() => navigate(r)}
                     onMouseEnter={() => setActive(i)}
+                    // tabIndex=-1 because focus stays on the input
+                    // (combobox pattern); button is reachable via mouse +
+                    // aria-activedescendant for AT.
+                    tabIndex={-1}
                     className={cn(
                       "flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-sm transition-colors",
                       i === active ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-muted/40",
@@ -174,7 +199,10 @@ export function DocsSearch({ index }: DocsSearchProps) {
                         </span>
                       ) : null}
                     </span>
-                    <span className="hidden font-mono text-[10px] uppercase tracking-wider text-muted-foreground/60 sm:inline">
+                    {/* QA iter-1 (design m-D10): bumped to /80 from /60 so
+                        the section label is actually readable next to the
+                        title row. */}
+                    <span className="hidden font-mono text-[10px] uppercase tracking-wider text-muted-foreground/80 sm:inline">
                       {r.section}
                     </span>
                     <ChevronRight
@@ -187,7 +215,9 @@ export function DocsSearch({ index }: DocsSearchProps) {
             </ul>
           ) : (
             <div className="px-4 py-6 text-center text-xs text-muted-foreground">
-              {query ? "No matching pages." : "Type to search the documentation…"}
+              {query
+                ? <>No matching pages. Try keywords like <em className="text-foreground">quotes</em>, <em className="text-foreground">screener</em>, or <em className="text-foreground">brokerage</em>.</>
+                : "Type to search the documentation…"}
             </div>
           )}
         </DialogContent>

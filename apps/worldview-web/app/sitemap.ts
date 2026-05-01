@@ -17,6 +17,8 @@
 
 import type { MetadataRoute } from "next";
 
+import { getAllDocs } from "@/lib/docs";
+
 const baseUrl =
   process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ?? "https://worldview.local";
 
@@ -30,12 +32,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
       lastModified: now,
       changeFrequency: "weekly",
       priority: 1.0,
-    },
-    {
-      url: `${baseUrl}/docs`,
-      lastModified: now,
-      changeFrequency: "weekly",
-      priority: 0.9,
     },
     {
       url: `${baseUrl}/feedback`,
@@ -57,5 +53,17 @@ export default function sitemap(): MetadataRoute.Sitemap {
     },
   ];
 
-  return publicRoutes;
+  // QA iter-1 (SEO M-7): enumerate every docs page so search engines
+  // discover deep content. Without this, only /docs is in the sitemap
+  // and the ~50 future pages stay invisible to crawlers.
+  const docs = getAllDocs();
+  const docsRoutes: MetadataRoute.Sitemap = docs.map((d) => ({
+    url: `${baseUrl}${d.url}`,
+    lastModified: d.frontmatter.updated ? new Date(d.frontmatter.updated) : now,
+    changeFrequency: "monthly",
+    // Root /docs index gets the highest priority; deep pages slightly less.
+    priority: d.slug.length === 0 ? 0.9 : 0.7,
+  }));
+
+  return [...publicRoutes, ...docsRoutes];
 }

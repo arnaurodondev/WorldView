@@ -60,8 +60,11 @@ export function Callout({ type = "info", title, children }: CalloutProps) {
     <div
       role="note"
       aria-label={`${type} callout`}
+      // QA iter-1 (design m-D8): dropped `border border-border/40` —
+      // the full ring fought the variant.border left-bar in two colors.
+      // Stripe/Tailwind use left-bar OR full ring, not both.
       className={cn(
-        "my-5 flex gap-3 rounded-[2px] border border-border/40 border-l-2 p-4 text-sm",
+        "my-5 flex gap-3 rounded-[2px] border-l-2 p-4 text-sm",
         variant.border,
         variant.bg,
       )}

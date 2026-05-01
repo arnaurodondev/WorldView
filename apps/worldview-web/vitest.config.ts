@@ -46,6 +46,11 @@ export default defineConfig({
     // Map @/ to project root — matches tsconfig paths
     alias: {
       "@": path.resolve(__dirname, "."),
+      // PLAN-0052 Wave B QA iter-1: lib/docs.ts uses `import "server-only"`
+      // to fail builds on accidental client imports (the package only
+      // exports a build-time error in client bundles). Vitest doesn't
+      // know it's a real module, so alias it to an empty stub for tests.
+      "server-only": path.resolve(__dirname, "vitest.server-only-stub.ts"),
     },
   },
 });

@@ -13,6 +13,7 @@
 
 "use client";
 
+import { useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -24,13 +25,26 @@ interface DocsSidebarProps {
 
 export function DocsSidebar({ sections }: DocsSidebarProps) {
   const pathname = usePathname();
+  // QA iter-1 (a11y M-A1): auto-scroll the active link into view on mount
+  // / pathname change. Long sidebars (50+ pages) otherwise leave the
+  // active page below the fold.
+  const navRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const active = navRef.current?.querySelector('[aria-current="page"]');
+    if (active && "scrollIntoView" in active) {
+      (active as HTMLElement).scrollIntoView({ block: "nearest" });
+    }
+  }, [pathname]);
 
   return (
     <nav
+      ref={navRef}
       aria-label="Documentation sections"
       // sticky-top with overflow so a long sidebar can scroll inside its
       // own scroll container instead of pushing the page out of view.
-      className="sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto pr-4 text-sm"
+      // QA iter-1 (design POLISH): top-16 matches the actual sticky nav
+      // height (~52-56px) — was top-20 = 80px = 24px dead band.
+      className="sticky top-16 max-h-[calc(100vh-5rem)] overflow-y-auto pr-4 text-sm"
     >
       {sections.map((section) => (
         <div key={section.heading} className="mb-6">
@@ -45,10 +59,13 @@ export function DocsSidebar({ sections }: DocsSidebarProps) {
                   <Link
                     href={item.url}
                     aria-current={isActive ? "page" : undefined}
+                    // QA iter-1 (design M-D4): dropped bg-primary/5 — the
+                    // border-l-2 + font-medium combo is sufficient signal
+                    // for the active state without the second amber cue.
                     className={cn(
                       "block rounded-[2px] border-l-2 py-1 pl-3 pr-2 transition-colors",
                       isActive
-                        ? "border-primary bg-primary/5 text-foreground"
+                        ? "border-primary text-foreground font-medium"
                         : "border-transparent text-muted-foreground hover:border-border/60 hover:text-foreground",
                     )}
                   >
