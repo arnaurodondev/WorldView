@@ -52,6 +52,7 @@ import { WorkspacePortfolioPanel } from "./WorkspacePortfolioPanel";
 import { WorkspaceChartWidget } from "./WorkspaceChartWidget";
 import { WorkspaceFundamentalsWidget } from "./WorkspaceFundamentalsWidget";
 import { SymbolLinkColorPicker } from "./SymbolLinkColorPicker";
+import { TickerPicker } from "./TickerPicker";
 import { useWorkspace, type PanelType, type WorkspacePanel } from "@/contexts/WorkspaceContext";
 import { useSymbolLink } from "@/contexts/SymbolLinkingContext";
 
@@ -183,11 +184,6 @@ export function WorkspacePanelContainer({
 
   const meta = PANEL_META[panel.type];
   const Icon = meta.icon;
-  // WHY only show linked symbol on symbol-aware panels: a "news" panel doesn't lock
-  // to a single ticker; showing [AAPL] in its header would mislead the user. The
-  // symbol-awareness gate scopes the indicator to panels where it makes sense.
-  const showSymbolIndicator =
-    SYMBOL_AWARE_TYPES.has(panel.type) && isLinked && !!symbol;
 
   return (
     // WHY flex flex-col min-h-0: panel must fill the full PanelGroup slot height.
@@ -219,16 +215,18 @@ export function WorkspacePanelContainer({
           {meta.label}
         </span>
 
-        {/* Symbol indicator — only on symbol-aware panels with a linked symbol */}
+        {/* Symbol picker — only on symbol-aware panels (chart/fundamentals/graph) */}
         {/*
-         * WHY show symbol inline (not a full input): the panel header is only 24px.
-         * A [AAPL] bracketed label is the Bloomberg pattern — instantly readable.
-         * A future wave will add a click handler to open a symbol picker.
+         * WHY show on ALL symbol-aware panels (not just when linked): even an unlinked
+         * panel needs the picker so the user can set an initial symbol. The TickerPicker
+         * renders "[—]" when symbol is null — a visible invite to pick a ticker.
+         *
+         * WHY TickerPicker (not a static label): the static "[AAPL]" was read-only.
+         * TickerPicker broadcasts the new symbol to all panels in the same color group
+         * via setActiveSymbol — essential for the multi-panel symbol-linking UX.
          */}
-        {showSymbolIndicator && (
-          <span className="font-mono text-[11px] text-foreground ml-1 cursor-default">
-            [{symbol}]
-          </span>
+        {SYMBOL_AWARE_TYPES.has(panel.type) && (
+          <TickerPicker panelId={panel.id} symbol={symbol} />
         )}
 
         {/* Spacer — pushes right controls to the edge */}
