@@ -52,21 +52,70 @@ const CURRENCIES: ReadonlyArray<{ code: CurrencyCode; label: string }> = [
   { code: "ETH", label: "ETH — Ether" },
 ];
 
-// Curated short list of common IANA zones; user can also pick "auto".
-const TIMEZONES = [
+// PLAN-0059 I-6 follow-up: full IANA zone list via Intl.supportedValuesOf
+// when the browser supports it (Chrome 99+, Firefox 106+, Safari 15.4+).
+// Falls back to the curated 12-zone list on older runtimes.
+//
+// We always prepend "auto" + "UTC" so users get the two most common picks
+// at the top regardless of the supported list ordering, then append the
+// browser's full set sorted alphabetically.
+const CURATED_FALLBACK = [
   { value: "auto", label: "Auto (use browser timezone)" },
   { value: "UTC", label: "UTC" },
   { value: "America/New_York", label: "New York (ET)" },
   { value: "America/Chicago", label: "Chicago (CT)" },
   { value: "America/Los_Angeles", label: "Los Angeles (PT)" },
+  { value: "America/Toronto", label: "Toronto (ET)" },
+  { value: "America/Sao_Paulo", label: "São Paulo (BRT)" },
   { value: "Europe/London", label: "London (GMT/BST)" },
   { value: "Europe/Paris", label: "Paris (CET/CEST)" },
   { value: "Europe/Zurich", label: "Zurich (CET/CEST)" },
-  { value: "Asia/Tokyo", label: "Tokyo (JST)" },
-  { value: "Asia/Hong_Kong", label: "Hong Kong (HKT)" },
+  { value: "Europe/Berlin", label: "Berlin / Frankfurt (CET/CEST)" },
+  { value: "Asia/Dubai", label: "Dubai (GST)" },
+  { value: "Asia/Kolkata", label: "Mumbai / Kolkata (IST)" },
   { value: "Asia/Singapore", label: "Singapore (SGT)" },
+  { value: "Asia/Hong_Kong", label: "Hong Kong (HKT)" },
+  { value: "Asia/Tokyo", label: "Tokyo (JST)" },
   { value: "Australia/Sydney", label: "Sydney (AEDT/AEST)" },
 ];
+
+function buildTimezoneOptions(): Array<{ value: string; label: string }> {
+  // Always-pinned options at the top.
+  const pinned = [
+    { value: "auto", label: "Auto (use browser timezone)" },
+    { value: "UTC", label: "UTC" },
+  ];
+
+  // Older runtimes (or test environments without the API) fall back to the
+  // curated list — every entry has a hand-picked human-readable label.
+  const intlAny = Intl as unknown as {
+    supportedValuesOf?: (key: string) => string[];
+  };
+  if (typeof intlAny.supportedValuesOf !== "function") {
+    return CURATED_FALLBACK;
+  }
+
+  let zones: string[];
+  try {
+    zones = intlAny.supportedValuesOf("timeZone");
+  } catch {
+    return CURATED_FALLBACK;
+  }
+  if (!Array.isArray(zones) || zones.length === 0) {
+    return CURATED_FALLBACK;
+  }
+
+  // For zones with no curated label, use the IANA name verbatim. Skip UTC
+  // (already pinned) to avoid duplication.
+  const rest = zones
+    .filter((z) => z !== "UTC")
+    .sort((a, b) => a.localeCompare(b))
+    .map((z) => ({ value: z, label: z }));
+
+  return [...pinned, ...rest];
+}
+
+const TIMEZONES = buildTimezoneOptions();
 
 export default function SettingsPreferencesPage() {
   const {

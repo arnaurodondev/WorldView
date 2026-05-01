@@ -40,12 +40,22 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-// WHY ReactMarkdown: S8 returns brief content as markdown — plain text rendering
-// would lose headers, bold, lists, and tables that the LLM generates.
-import ReactMarkdown from "react-markdown";
-// WHY remarkGfm: enables GitHub Flavored Markdown extensions (tables, task lists,
-// strikethrough) that the LLM may include in the briefing output.
+// PLAN-0059 G-2: dashboard is the home route, so its initial bundle is the
+// most cost-sensitive in the app. react-markdown + remark-gfm + the GFM
+// plugins together push ~150KB gz that ONLY matters when this card is on
+// screen. Dynamic-import them so the dashboard chrome paints first; the
+// brief content streams in after the markdown bundle resolves.
+//
+// remarkGfm is configured at module scope below so the dynamic ReactMarkdown
+// can pass it as `remarkPlugins`. It's a tiny module — no point lazy-loading.
+import dynamic from "next/dynamic";
 import remarkGfm from "remark-gfm";
+const ReactMarkdown = dynamic(() => import("react-markdown"), {
+  ssr: false,
+  // Dashboard cards already render their own loading skeleton above; no
+  // extra placeholder needed inside the markdown branch.
+  loading: () => null,
+});
 import { RefreshCw } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";

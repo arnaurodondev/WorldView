@@ -397,7 +397,7 @@ class MacroIndicatorDatasetConsumer(BaseKafkaConsumer[None]):
             attempt=failure.attempt,
         )
 
-    async def dead_letter(self, failure: FailureInfo[None]) -> None:
+    async def _dead_letter_impl(self, failure: FailureInfo[None]) -> None:
         logger.error(  # type: ignore[no-any-return]
             "macro_indicator_consumer_dead_lettered",
             event_id=failure.event_id,

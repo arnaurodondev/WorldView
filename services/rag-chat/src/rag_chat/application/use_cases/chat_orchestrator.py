@@ -26,6 +26,7 @@ from rag_chat.application.pipeline.context_assembler import (
 )
 from rag_chat.application.pipeline.output_processor import OutputProcessor
 from rag_chat.application.pipeline.prompt_builder import PromptBuilder
+from rag_chat.application.pipeline.prompts import RetrievalCounts
 from rag_chat.application.pipeline.sse_emitter import SSEEmitter
 from rag_chat.application.use_cases.persist_chat import AssistantResponse
 from rag_chat.domain.entities.chat import ResolvedQuery
@@ -296,6 +297,13 @@ class ChatOrchestrator:
 
         # Step 10: prompt construction
         context_block = self._context_assembler.assemble(reranked)
+        _counts = RetrievalCounts(
+            n_context_items=len(reranked),
+            n_chunks=_type_counts.get("chunk", 0),
+            n_rel=_type_counts.get("relation", 0),
+            n_events=_type_counts.get("event", 0),
+            n_fin=_type_counts.get("financial", 0),
+        )
         prompt = self._prompt_builder.build(
             context_block=context_block,
             conversation_history=conversation_history,
@@ -303,6 +311,7 @@ class ChatOrchestrator:
             sub_questions=tuple(sub_questions),
             contradiction_block=contradiction_block,
             intent=intent,
+            retrieval_counts=_counts,
         )
 
         # Step 11: LLM streaming — filter out <think> blocks in real time (Bug 1 Fix B).

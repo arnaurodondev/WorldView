@@ -38,6 +38,24 @@ _CITATION_N_PREFIX_RE = re.compile(r"\[N(\d+)\]")
 # These are not part of our citation protocol — always strip them.
 _CITATION_N_COLON_RE = re.compile(r"\s*\[N:\d+\]")
 
+# Strip bare citation-reference integers (1-30) NOT wrapped in [N] brackets.
+# WHY: Citation discipline rule 5 — the model is instructed that any number it
+# emits without [N] wrapping will be stripped.  This enforces that invariant.
+# We only target citation-sized integers (1-30) to avoid stripping legitimate
+# numeric content: years (4-digit), "Q3", "FY24", "$1.40", "42%", "3B" are
+# all protected by the lookahead/lookbehind guards.
+# Applied only when retrieved_items is non-empty (no point stripping when the
+# coherence guard above already removed all [N] markers).
+_BARE_CITATION_INT_RE = re.compile(
+    r"(?<!\[)"  # not preceded by [ (not already a citation)
+    r"(?<!\$)"  # not preceded by $ (not a currency value)
+    r"(?<!\d)"  # not preceded by digit (not mid-number like "2024")
+    r"\b([1-9]|[12]\d|30)\b"  # integers 1-30 (citation-range only)
+    r"(?!\])"  # not followed by ] (not an existing citation)
+    r"(?!\d)"  # not followed by digit (not a year)
+    r"(?![%./\w])"  # not followed by unit / word char / decimal point
+)
+
 # Basic PII patterns — email, phone, SSN, credit card
 _PII_PATTERNS = [
     re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"),  # email
@@ -90,6 +108,13 @@ class OutputProcessor:
         # the standard [N] format. They are never part of our citation protocol and
         # have no corresponding citation entry in retrieved_items (F-CH-009 fix).
         text = _CITATION_N_COLON_RE.sub("", text)
+
+        # 1d. Strip bare citation-range integers NOT wrapped in [N] brackets.
+        # Enforces citation discipline rule 5: numbers without [N] are treated as
+        # fabricated. Only applied when retrieved_items exist (the coherence guard
+        # above handles the empty-context case separately).
+        if retrieved_items:
+            text = _BARE_CITATION_INT_RE.sub("", text)
 
         # 2. PII scan on output
         if _contains_pii(text):

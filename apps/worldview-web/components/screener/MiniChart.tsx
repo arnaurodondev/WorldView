@@ -34,7 +34,7 @@
  * WHO USES IT: components/screener/ScreenerTable.tsx (sparkline column)
  */
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { OHLCVBar } from "@/types/api";
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -66,7 +66,13 @@ export interface MiniChartProps {
  * neutral line. WHY: a totally empty cell would mis-align the row. A subtle
  * grey line communicates "no data yet" without breaking the layout.
  */
-export function MiniChart({
+// PLAN-0059 G-3: memoised — MiniChart is one per screener row (up to
+// hundreds rendered + virtualized). The `bars` prop is a stable reference
+// from the parent's sparklines map, so memo wins are real: scroll, sort,
+// or sibling-row state changes no longer re-execute the polyline path
+// computation when this row's bars are unchanged. Default shallow compare
+// is correct here — `bars` is a ref-stable array.
+function MiniChartInner({
   bars,
   width = 60,
   height = 18,
@@ -172,3 +178,6 @@ export function MiniChart({
     </svg>
   );
 }
+
+export const MiniChart = memo(MiniChartInner);
+MiniChart.displayName = "MiniChart";
