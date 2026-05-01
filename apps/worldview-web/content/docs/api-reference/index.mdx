@@ -1,0 +1,59 @@
+---
+title: API reference
+description: The S9 gateway exposes 55+ documented endpoints. Use them from any HTTP client.
+section: API Reference
+order: 1
+updated: 2026-05-01
+---
+
+Worldview's S9 API gateway is the single entry point for programmatic access to market data, news, alerts, the knowledge graph, and the chat assistant. Every authenticated route requires a JWT issued by Zitadel.
+
+## Authentication
+
+All requests need an `Authorization: Bearer <jwt>` header. Issue a token via the OIDC PKCE flow or, for development, via `POST /v1/auth/dev-login`.
+
+<DocsTabs items={["curl", "Python", "TypeScript"]}>
+  <DocsTab>
+    ```bash
+    curl -X POST https://api.worldview.local/v1/auth/dev-login \
+      -H "Content-Type: application/json" \
+      -d '{"email": "you@example.com"}'
+    ```
+  </DocsTab>
+  <DocsTab>
+    ```python
+    import httpx
+
+    res = httpx.post(
+        "https://api.worldview.local/v1/auth/dev-login",
+        json={"email": "you@example.com"},
+    )
+    token = res.json()["access_token"]
+    ```
+  </DocsTab>
+  <DocsTab>
+    ```ts
+    const res = await fetch("https://api.worldview.local/v1/auth/dev-login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "you@example.com" }),
+    });
+    const { access_token } = await res.json();
+    ```
+  </DocsTab>
+</DocsTabs>
+
+## Common response shapes
+
+Every list endpoint returns a `{ items: [...], total: N, has_more: bool }` envelope. Single-resource endpoints return the bare object.
+
+<Callout type="warn" title="Rate limits">
+Free tier: 60 requests/minute per token. Pro: 600/min. Enterprise: custom.
+Exceeded limits return `429` with `Retry-After` in seconds.
+</Callout>
+
+## Where to next
+
+- [Quotes endpoint](/docs/api-reference/quotes)
+- [News endpoint](/docs/api-reference/news)
+- [Chat endpoint](/docs/api-reference/chat)
