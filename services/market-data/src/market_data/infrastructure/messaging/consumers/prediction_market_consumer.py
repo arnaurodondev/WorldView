@@ -78,11 +78,48 @@ class PredictionMarketConsumer(BaseKafkaConsumer[dict]):
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
         # BP-122: detect Confluent Avro wire format (magic byte 0x00) and fall
         # back to plain JSON for non-Confluent messages.
-        if schema_path and raw and raw[0] == 0x00:
+        #
+        # PLAN-0052 platform-QA round 4 (2026-05-01): when `schema_path` is
+        # set, ALWAYS attempt Avro decode first — the prior version only
+        # tried Avro when the magic byte matched, then silently fell
+        # through to `json.loads(raw.decode())`. Polymarket producer
+        # emits Avro-binary records that don't carry the Confluent
+        # framing byte, so the JSON fallback exploded with
+        # `'utf-8' codec can't decode byte 0x84 at position 98` and the
+        # consumer dead-lettered 175 925 messages over 44h. The fix:
+        # try schemaless Avro decode against the local .avsc as a
+        # second tier; only fall back to JSON when both Avro paths fail
+        # AND `schema_path` is None. Failures are logged at WARNING (not
+        # DEBUG) so future regressions stay visible in routine log review.
+        if schema_path and raw:
+            # Tier 1: Confluent wire format (magic 0x00 + 4-byte schema id).
+            if raw[0] == 0x00:
+                try:
+                    return cast("dict[str, Any]", deserialize_confluent_avro(schema_path, raw))
+                except Exception as exc:
+                    logger.warning(
+                        "avro_confluent_deserialize_failed",
+                        schema_path=schema_path,
+                        error=str(exc),
+                    )
+            # Tier 2: schemaless Avro (raw binary against the local schema).
             try:
-                return cast("dict[str, Any]", deserialize_confluent_avro(schema_path, raw))
-            except Exception:
-                logger.debug("avro_deserialize_failed_falling_back_to_json", schema_path=schema_path)
+                import fastavro  # type: ignore[import-untyped]
+
+                from messaging.kafka.serialization_utils import (  # type: ignore[import-untyped]
+                    deserialize_avro,
+                )
+
+                with open(schema_path) as f:
+                    parsed_schema = fastavro.parse_schema(json.load(f))
+                return cast("dict[str, Any]", deserialize_avro(parsed_schema, raw))
+            except Exception as exc:
+                logger.warning(
+                    "avro_schemaless_deserialize_failed",
+                    schema_path=schema_path,
+                    error=str(exc),
+                )
+        # Tier 3: JSON (only when no schema declared OR all Avro attempts failed).
         return cast("dict[str, Any]", json.loads(raw.decode()))
 
     def get_schema_path(self, topic: str) -> str | None:

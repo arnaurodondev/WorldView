@@ -66,6 +66,18 @@ class ProviderDataError(DomainError):
     """Provider returned malformed or unexpected data."""
 
 
+class ProviderUnsupportedSymbol(DomainError):  # noqa: N818
+    """Provider does not have data for the requested symbol/endpoint pair.
+
+    PLAN-0052 platform-QA round 4 (2026-05-01): distinct from
+    ``ProviderDataError`` — a 404 from EODHD on ``/eod/INDU.INDX`` (or
+    similar index/macro endpoints) is NOT a transient or fatal error;
+    it just means EODHD doesn't surface that symbol on that endpoint.
+    Tasks raising this are dead-lettered without polluting the
+    ``fetch_fatal_error`` metric, so on-call alerts stay clean.
+    """
+
+
 class InvalidStateTransition(DomainError):  # noqa: N818
     """An entity state transition is not permitted from its current state."""
 

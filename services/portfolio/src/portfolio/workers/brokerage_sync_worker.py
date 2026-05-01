@@ -128,11 +128,43 @@ class BrokerageTransactionSyncWorker:
         async with httpx.AsyncClient(timeout=10.0, headers=_system_jwt_headers()) as http_client:
             self._http_client = http_client
             while True:
-                try:
-                    with BROKERAGE_SYNC_CYCLE_DURATION.time():
-                        await self.sync_cycle()
-                except Exception as exc:
-                    logger.error("sync_cycle_error", error=str(exc))  # type: ignore[no-any-return]
+                # PLAN-0052 platform-QA round 4 (2026-05-01): bounded
+                # exponential backoff retry. Previously ONE transient
+                # exception (typically a Docker DNS race or SnapTrade API
+                # blip — error `[Errno -2] Name or service not known`)
+                # logged `sync_cycle_error` and skipped the entire cycle,
+                # so the next sync was 4h away. Live state showed 3 such
+                # skips in 12h — TastyTrade holdings going stale because
+                # one DNS hiccup ate the whole window. Three retries with
+                # 30s/60s/120s delays bring the worker back in <4 minutes
+                # of wall-clock without changing the steady-state cadence.
+                # If all 3 retries fail, log the final error and sleep
+                # the full cycle (preserves the pre-fix behavior — no
+                # tighter retry storm than 4h).
+                cycle_succeeded = False
+                for delay_s in (0, 30, 60, 120):
+                    if delay_s:
+                        logger.warning(  # type: ignore[no-any-return]
+                            "sync_cycle_retry",
+                            delay_s=delay_s,
+                        )
+                        await asyncio.sleep(delay_s)
+                    try:
+                        with BROKERAGE_SYNC_CYCLE_DURATION.time():
+                            await self.sync_cycle()
+                        cycle_succeeded = True
+                        break
+                    except Exception as exc:
+                        logger.warning(  # type: ignore[no-any-return]
+                            "sync_cycle_attempt_failed",
+                            attempt_delay_s=delay_s,
+                            error=str(exc),
+                        )
+                if not cycle_succeeded:
+                    logger.error(  # type: ignore[no-any-return]
+                        "sync_cycle_error_exhausted",
+                        retries=3,
+                    )
                 await asyncio.sleep(self._settings.brokerage_sync_cycle_seconds)
 
     async def sync_cycle(self) -> None:

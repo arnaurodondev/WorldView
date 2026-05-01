@@ -14,6 +14,7 @@ from market_ingestion.domain.errors import (
     ProviderDataError,
     ProviderRateLimited,
     ProviderUnavailable,
+    ProviderUnsupportedSymbol,
 )
 from market_ingestion.domain.freshness import EODHD_CREDIT_COST, EODHD_INTRADAY_COST
 from market_ingestion.infrastructure.adapters.providers.base import BaseProviderAdapter
@@ -703,6 +704,22 @@ class EODHDProviderAdapter(BaseProviderAdapter):
         if status >= 500:
             self._record_error(reason="http_error", endpoint=slug)
             raise ProviderUnavailable(f"EODHD server error: HTTP {status} for endpoint '{slug}'")
+        if status == 404:
+            # PLAN-0052 platform-QA round 4 (2026-05-01): a 404 from EODHD
+            # means the symbol+endpoint combination isn't supported by the
+            # provider — NOT a transient error and NOT malformed data.
+            # Treat as `ProviderUnsupportedSymbol` so the caller can dead-
+            # letter without polluting the `fetch_fatal_error` metric. Live
+            # state showed INDU/CCMP and several macro indicators 404-ing
+            # on every cycle, producing a steady stream of red errors that
+            # masked real outages. Logged at WARNING (not ERROR) for the
+            # same reason.
+            logger.warning(
+                "eodhd_symbol_unsupported",
+                endpoint=slug,
+                provider="eodhd",
+            )
+            raise ProviderUnsupportedSymbol(f"EODHD does not support endpoint '{slug}' (HTTP 404)")
         if status >= 400:
             self._record_error(reason="http_error", endpoint=slug)
             raise ProviderDataError(f"EODHD client error: HTTP {status} for endpoint '{slug}'")

@@ -113,7 +113,7 @@ async def _stage3_fuzzy(
     audit: list[MentionResolution],
 ) -> tuple[UUID | None, float]:
     """Stage 3 — fuzzy trigram similarity via pg_trgm."""
-    candidates = await alias_repo.fuzzy_trigram(mention.mention_text, threshold=0.75, top_k=5)
+    candidates = await alias_repo.fuzzy_trigram(mention.mention_text, threshold=0.55, top_k=5)
 
     if not candidates:
         audit.append(
@@ -283,12 +283,25 @@ async def _insert_provisional(
     """
     from sqlalchemy import text  # type: ignore[import-untyped]
 
+    # PLAN-0052 platform-QA round 4 (2026-05-01): use `.value` rather than
+    # `str(enum)` to send the lowercase enum value the DB CHECK constraint
+    # expects. `str(MentionClass.ORGANIZATION)` returns the Python repr
+    # `'MentionClass.ORGANIZATION'`, which fails the CHECK and rolls back
+    # the SAVEPOINT. Combined with the swallowed-exception pattern at the
+    # call site, this was producing 100% silent provisional-insert
+    # failures → empty `provisional_entity_queue` → entity_id_by_ref miss
+    # → empty `relation_evidence_raw`.
+    mention_class_value = (
+        mention.mention_class.value  # type: ignore[union-attr]
+        if hasattr(mention.mention_class, "value")
+        else str(mention.mention_class)
+    )
     result = await intelligence_session.execute(  # type: ignore[attr-defined]
         text(_PROVISIONAL_INSERT_SQL),
         {
             "queue_id": str(common.ids.new_uuid7()),
             "surface": mention.mention_text,
-            "mention_class": str(mention.mention_class),
+            "mention_class": mention_class_value,
             "doc_id": str(mention.doc_id),
             # context_snippet left NULL for now; future work could extract a
             # surrounding-sentence snippet here, but B-3 already does that for
@@ -378,7 +391,13 @@ async def run_entity_resolution_block(
     fuzzy_matches: dict[str, list[tuple[UUID, float]]] = {}
     if stage3_candidates:
         stage3_texts = [m.mention_text for m in stage3_candidates]
-        fuzzy_matches = await alias_repo.batch_fuzzy_trigram(stage3_texts, threshold=0.75, top_k_per_mention=5)
+        # PLAN-0052 platform-QA round 4 (2026-05-01): trigram threshold lowered
+        # 0.75 → 0.55 (matches Stage 3 single-mention path at line 116). The
+        # most common LLM/news pattern is "Microsoft" → "Microsoft Corporation"
+        # (sim ~0.65) — under 0.75 it missed and fell through to the brittle
+        # Stage 4 ANN. The lower threshold catches partial-name matches where
+        # the trigram signal is genuinely strong without inflating false-pos.
+        fuzzy_matches = await alias_repo.batch_fuzzy_trigram(stage3_texts, threshold=0.55, top_k_per_mention=5)
 
     # ── Per-mention classification + Stage 4 for remaining unresolved ─────────
     for mention in mentions:
@@ -483,7 +502,7 @@ async def run_entity_resolution_block(
                 # (Wave B-1) can use it as a synthetic entity id when emitting
                 # relations/events/claims with ``entity_provisional=True``.
                 mention.provisional_queue_id = queue_id
-            except Exception:
+            except Exception as exc:
                 # PLAN-0057 QA iter-1 (DS Finding-4 follow-up): on savepoint
                 # failure (DB outage, unique constraint race, etc.) the queue
                 # row was NOT inserted, so there is no queue_id to stash. If we
@@ -495,12 +514,23 @@ async def run_entity_resolution_block(
                 # Net: the mention would be stuck in a permanent zombie state.
                 # Downgrading to UNRESOLVED restores the correct invariant: no
                 # queue row → unresolved → next worker cycle re-attempts.
+                #
+                # PLAN-0052 platform-QA round 4 (2026-05-01): bare `except:`
+                # was hiding a ~100% provisional-insert failure rate from
+                # `str(mention_class)` returning `MentionClass.X` (Python
+                # repr) instead of the lowercase enum value the DB CHECK
+                # accepts. We now log `exc_info=True` + the exception type
+                # so the next regression of this class doesn't disappear
+                # silently for hours.
                 mention.resolution_outcome = ResolutionOutcome.UNRESOLVED
                 mention.provisional_queue_id = None  # explicit (already None)
                 logger.warning(
                     "entity_resolution.provisional_insert_failed",
                     mention_id=str(mention.mention_id),
                     downgraded_to="unresolved",
+                    exception_type=type(exc).__name__,
+                    exception_message=str(exc),
+                    exc_info=True,
                 )
 
         else:
