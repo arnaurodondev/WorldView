@@ -112,14 +112,14 @@ export default function InstrumentDetailPage() {
     if (bundle.insider) {
       queryClient.setQueryData(["insider-transactions", md_id], bundle.insider);
     }
-    if (bundle.top_news) {
-      // NewsTab keys on entity-news per (entityId, offset). The bundle
-      // returns top-5 — sufficient to prime the FIRST page (offset=0).
-      queryClient.setQueryData(
-        ["entity-news-tab", bundle.entity_id, 0],
-        bundle.top_news,
-      );
-    }
+    // QA-iter1: top_news seed REMOVED. The bundle returns 5 articles for
+    // a "Top related" widget, but NewsTab paginates with NEWS_PAGE_SIZE=20
+    // and reads `total` from the server. Seeding the offset=0 cache key
+    // with a 5-article payload would render NewsTab as if the entire first
+    // page = 5 articles for ~2min (the staleTime). Instead, NewsTab fires
+    // its own /v1/news/entity/{id}?limit=20 query on tab open. The
+    // bundle's top_news is still surfaced if/when an "OverviewTopNews"
+    // widget consumes it directly (separate cache key, no shape conflict).
   }, [bundle, entityId, queryClient]);
 
   // overview reference points at the bundle's overview (or null when bundle
