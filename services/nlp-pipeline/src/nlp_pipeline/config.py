@@ -211,6 +211,14 @@ class Settings(BaseSettings):
     # Auth
     api_gateway_url: str = "http://api-gateway:8000"
 
+    # PLAN-0057 Wave A-1 / BP-303 — service-account secret used by background
+    # workers (e.g. PriceImpactLabellingWorker → MarketDataClient) to mint an
+    # X-Internal-JWT via S9's ``POST /internal/v1/service-token``. Empty default
+    # keeps local dev workflows on ``POST /v1/auth/dev-login``; production
+    # MUST set this (sourced from the same sealed secret as
+    # ``API_GATEWAY_SERVICE_ACCOUNT_TOKEN``).
+    service_account_token: str = ""  # NLP_PIPELINE_SERVICE_ACCOUNT_TOKEN
+
     # F-001: When True, InternalJWTMiddleware decodes JWTs WITHOUT signature
     # verification if the JWKS public key is unavailable. NEVER enable in
     # production — only for E2E tests that run without a full S9 stack.

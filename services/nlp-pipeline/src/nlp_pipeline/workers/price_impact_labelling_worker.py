@@ -62,13 +62,19 @@ async def main() -> None:
         sys.exit(1)
 
     async with httpx.AsyncClient(timeout=10.0) as http_client:
-        # F-101: pass api_gateway_url so MarketDataClient can mint a valid
-        # X-Internal-JWT via /v1/auth/dev-login. Without this, every OHLCV
-        # call returns 401 and article_impact_windows stays empty.
+        # F-101 / BP-303: pass api_gateway_url + (optionally) service-account
+        # secret so MarketDataClient can mint a valid X-Internal-JWT.
+        # When ``service_account_token`` is set, the client calls
+        # ``POST /internal/v1/service-token`` (production-safe). When unset,
+        # it falls back to ``POST /v1/auth/dev-login`` (local-dev convenience).
+        # Without either, every OHLCV call returns 401 and
+        # article_impact_windows stays empty.
         market_client = MarketDataClient(
             http_client,
             settings.market_data_internal_url,
             api_gateway_url=settings.api_gateway_url,
+            service_account_token=settings.service_account_token or None,
+            service_name="nlp-pipeline-price-impact",
         )
         worker = PriceImpactLabellingWorker(
             nlp_session_factory=nlp_sf,

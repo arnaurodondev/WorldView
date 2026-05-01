@@ -8,11 +8,22 @@ logged as warnings so a single bad symbol never aborts the labelling cycle.
 
 PRD-0025 / F-101 fix (2026-04-30): every backend service is guarded by
 ``InternalJWTMiddleware`` and rejects requests lacking a valid X-Internal-JWT
-header with HTTP 401. The worker mints its JWT by calling S9's
-``POST /v1/auth/dev-login`` at startup (and refreshes every ~4 minutes —
-S9 mints 5-minute tokens). When the resulting JWT is forwarded as
-``X-Internal-JWT``, the receiver verifies it against the gateway's JWKS
-endpoint just as it would for any user-initiated request.
+header with HTTP 401. The worker mints its JWT against S9 and forwards the
+resulting RS256 token as ``X-Internal-JWT`` on every OHLCV call; the
+receiver verifies it against the gateway's JWKS endpoint just like any
+user-initiated request.
+
+Token-mint paths (in order of preference):
+  1. ``service_account_token`` set → ``POST /internal/v1/service-token``
+     (PLAN-0057 Wave A-1 / BP-303). The endpoint is available in production
+     because the shared secret IS the auth boundary; no ``app_env`` guard.
+  2. Fallback → ``POST /v1/auth/dev-login``. Only works in non-production
+     (dev-login is hard-blocked when ``app_env == 'production'``); kept as
+     a backwards-compatible local-dev convenience.
+  3. Neither configured → no header sent (legacy 401-and-warn fallback).
+
+Note: ``_token_lock`` is created in ``__init__`` and is therefore loop-bound.
+Use a single ``MarketDataClient`` instance per asyncio loop.
 """
 
 from __future__ import annotations
@@ -67,14 +78,21 @@ class MarketDataClient:
         base_url: str,
         *,
         api_gateway_url: str | None = None,
+        service_account_token: str | None = None,
+        service_name: str = "nlp-pipeline-price-impact",
     ) -> None:
         self._client = client
         self._base_url = base_url.rstrip("/")
-        # F-101: api-gateway base URL for dev-login token bootstrap. When None
-        # we fall back to the legacy "no headers" behaviour — which still
-        # produces 401s on a guarded receiver but lets unit tests run without
-        # mocking the auth round-trip.
+        # F-101: api-gateway base URL for token bootstrap. When None we fall
+        # back to the legacy "no headers" behaviour — which still produces
+        # 401s on a guarded receiver but lets unit tests run without mocking
+        # the auth round-trip.
         self._api_gateway_url = (api_gateway_url or "").rstrip("/")
+        # PLAN-0057 Wave A-1 / BP-303: when set, prefer the production-safe
+        # ``POST /internal/v1/service-token`` path over ``POST /v1/auth/dev-login``.
+        # Empty string is normalised to None so callers can pass either flavour.
+        self._service_account_token: str | None = service_account_token or None
+        self._service_name = service_name
         self._token: str | None = None
         self._token_minted_at: float = 0.0
         self._token_lock = asyncio.Lock()
@@ -82,11 +100,14 @@ class MarketDataClient:
     async def _get_internal_jwt(self) -> str | None:
         """Return a fresh X-Internal-JWT, minting one if cached token is stale.
 
-        F-101: workers don't have the gateway's RS256 private key mounted, so
-        we call ``POST /v1/auth/dev-login`` to obtain a real signed JWT (RS256
-        with kid registered in JWKS). The receiver verifies signature against
-        the gateway's JWKS endpoint — it doesn't care that the token came
-        from dev-login rather than a user OIDC flow.
+        F-101 / BP-303: workers don't have the gateway's RS256 private key
+        mounted, so we call S9 to mint a signed JWT.
+
+        - When ``service_account_token`` is configured → call
+          ``POST /internal/v1/service-token`` with the shared secret. This
+          path works in production (no ``app_env`` guard).
+        - Otherwise → fall back to ``POST /v1/auth/dev-login`` (production
+          returns 403, dev returns a JWT — kept for local-dev convenience).
 
         Returns ``None`` if api-gateway is unreachable or refuses to mint a
         token, in which case the caller falls back to unauthenticated requests
@@ -99,15 +120,27 @@ class MarketDataClient:
             now = time.monotonic()
             if self._token and (now - self._token_minted_at) < _TOKEN_REFRESH_S:
                 return self._token
+
+            # Pick the auth path based on configuration. Both endpoints
+            # respond with the same ``{"access_token": "...", ...}`` shape.
+            if self._service_account_token:
+                url = f"{self._api_gateway_url}/internal/v1/service-token"
+                payload = {
+                    "service_name": self._service_name,
+                    "secret": self._service_account_token,
+                }
+                mint_path = "service-token"
+            else:
+                url = f"{self._api_gateway_url}/v1/auth/dev-login"
+                payload = {}  # type: ignore[assignment]
+                mint_path = "dev-login"
+
             try:
-                resp = await self._client.post(
-                    f"{self._api_gateway_url}/v1/auth/dev-login",
-                    json={},
-                    timeout=5.0,
-                )
+                resp = await self._client.post(url, json=payload, timeout=5.0)
                 if resp.status_code != 200:
                     logger.warning(
                         "market_data_client_token_mint_failed",
+                        mint_path=mint_path,
                         status_code=resp.status_code,
                         body=resp.text[:200],
                     )
@@ -117,11 +150,12 @@ class MarketDataClient:
                     return None
                 self._token = token
                 self._token_minted_at = now
-                logger.debug("market_data_client_token_refreshed")
+                logger.debug("market_data_client_token_refreshed", mint_path=mint_path)
                 return token
             except Exception as exc:
                 logger.warning(
                     "market_data_client_token_mint_error",
+                    mint_path=mint_path,
                     error=str(exc),
                 )
                 return None
