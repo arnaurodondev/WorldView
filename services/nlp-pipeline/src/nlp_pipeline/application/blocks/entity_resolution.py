@@ -5,10 +5,10 @@
   2. Ticker/ISIN match (confidence 0.95)
   3. Fuzzy trigram similarity > 0.75 (confidence = sim * 0.90)
   4. ANN HNSW on entity_embedding_state WHERE view_type='definition'
-     (cosine distance < 0.35, clear margin > 0.10, confidence = (1-dist)*0.80)
+     (cosine distance < 0.35, clear margin > 0.10, confidence = (1-dist)*0.95)
 
-Resolution thresholds:
-  AUTO_RESOLVE  ≥ 0.72 → write entity_mentions.resolved_entity_id
+Resolution thresholds (PLAN-0052 QA-R6 Option C):
+  AUTO_RESOLVE  ≥ 0.62 → write entity_mentions.resolved_entity_id
   PROVISIONAL   ≥ 0.45 → INSERT provisional_entity_queue (UNIQUE on surface+class)
   UNRESOLVED    < 0.45 → preserve mention, NEVER discard
 
@@ -40,7 +40,12 @@ logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 # ── Resolution thresholds (PRD §6.7 Block 9) ─────────────────────────────────
 
-AUTO_RESOLVE_THRESHOLD: float = 0.72
+# PLAN-0052 QA-R6: Option C (threshold 0.72→0.62, multiplier 0.80→0.95).
+# Math: at ANN distance 0.325 (Amazon.com vs Amazon.com Inc) the old formula
+# gave (1-0.325)*0.80 = 0.54 < 0.72 → unresolved.  New: (1-0.325)*0.95 = 0.641
+# > 0.62 → auto-resolves.  Only Stage-4 ANN hits are affected; Stages 1-3 keep
+# their fixed 1.0 / 0.95 / fuzzy*0.90 scores which all exceed 0.62 anyway.
+AUTO_RESOLVE_THRESHOLD: float = 0.62
 PROVISIONAL_THRESHOLD: float = 0.45
 
 # ── Stage confidences ─────────────────────────────────────────────────────────
@@ -48,7 +53,7 @@ PROVISIONAL_THRESHOLD: float = 0.45
 CONFIDENCE_EXACT: float = 1.0
 CONFIDENCE_TICKER_ISIN: float = 0.95
 FUZZY_CONFIDENCE_MULTIPLIER: float = 0.90
-ANN_CONFIDENCE_MULTIPLIER: float = 0.80
+ANN_CONFIDENCE_MULTIPLIER: float = 0.95
 
 # ── ANN resolution thresholds (PRD §6.7 Block 9 Stage 4) ─────────────────────
 

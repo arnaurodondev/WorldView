@@ -354,6 +354,54 @@ html {
   scroll-padding-top: 5rem;
 }
 
+/* ── PLAN-0052 QA-R6: TopBarMarquee — scrolling ticker strip ─────────────
+ *
+ * WHY @keyframes here (not Tailwind plugin):
+ * The animation moves from 0 → -50% of the element's OWN width. Tailwind
+ * cannot express a percentage-of-self value inline; the value is computed
+ * at runtime from the total flex width of the doubled ticker list. A custom
+ * @keyframes with a fixed -50% target is the idiomatic CSS solution.
+ *
+ * WHY var(--marquee-duration):
+ * The duration is set inline on the animated element by TopBarMarquee.tsx
+ * (it scales with ticker count: 6s × N). Using a CSS variable lets the JS
+ * component control timing without a Tailwind plugin or style injection.
+ *
+ * WHY animation-play-state on hover/focus-within:
+ * Pausing on hover lets users read any chip without the strip scrolling past.
+ * focus-within covers keyboard navigation (Tab into the marquee region).
+ *
+ * REDUCED-MOTION HANDLING:
+ * The global prefers-reduced-motion block above already clamps all animation-
+ * duration values to 0.01ms and sets animation-iteration-count: 1. For the
+ * marquee we additionally show the static fallback row (.marquee-static-
+ * fallback) and hide the animated strip so motion-sensitive users get a normal
+ * static price bar rather than a single frozen frame. */
+@keyframes worldview-ticker-scroll {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-50%, 0, 0); }
+}
+
+.marquee-strip {
+  animation: worldview-ticker-scroll var(--marquee-duration, 60s) linear infinite;
+}
+
+/* Pause on hover or keyboard focus inside the marquee region. */
+.marquee-strip:hover,
+.marquee-strip:focus-within {
+  animation-play-state: paused;
+}
+
+/* Reduced-motion: hide the scrolling track, show static fallback. */
+@media (prefers-reduced-motion: reduce) {
+  .marquee-strip {
+    display: none;
+  }
+  .marquee-static-fallback {
+    display: flex !important;
+  }
+}
+
 /* ── 2. Forced colors (Windows High Contrast Mode) ──────────────────── */
 @media (forced-colors: active) {
   :root, .dark {
