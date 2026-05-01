@@ -415,6 +415,9 @@ function EquityCurveCanvas({
   const seriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const [hovered, setHovered] = useState<{ point: PointShape; x: number; y: number } | null>(null);
   const [chartError, setChartError] = useState(false);
+  // QA-iter1: chartReady gates the Reset button + drives the data-push effect's
+  // re-run after async init. Set true once seriesRef.current is assigned.
+  const [chartReady, setChartReady] = useState(false);
 
   // Map each ISO date → PointShape so the crosshair-move handler can resolve
   // the FULL row (cost_basis + data_quality) from the lightweight-charts time
@@ -431,6 +434,17 @@ function EquityCurveCanvas({
     }
     return map;
   }, [points]);
+
+  // QA-iter1 (stale-closure fix): the crosshair-move handler is registered
+  // ONCE in the init effect with the closure capturing the FIRST pointsByTime.
+  // When the user changes period, pointsByTime updates but the handler still
+  // looks up keys in the OLD Map → tooltip shows stale rows. Reading via a
+  // ref kept current via useEffect breaks the closure capture: the handler
+  // always resolves the LATEST Map at fire-time.
+  const pointsByTimeRef = useRef(pointsByTime);
+  useEffect(() => {
+    pointsByTimeRef.current = pointsByTime;
+  }, [pointsByTime]);
 
   // Effect 1: chart init / teardown. Empty-deps because the chart is created
   // once per mount; data updates flow through the second effect.
@@ -473,7 +487,24 @@ function EquityCurveCanvas({
         chartRef.current = chart;
         seriesRef.current = series;
 
-        // Crosshair move → tooltip overlay.
+        // QA-iter1 (init/data race fix): when init resolves AFTER the
+        // data-update effect already ran (the common case — points are in
+        // TanStack cache, render fires effects, this async init resolves a
+        // microtask later), the data effect saw seriesRef.current === null
+        // and bailed. Without this push the chart stayed empty until points
+        // changed. Push the current points + colour now that the series is
+        // ready.
+        series.setData(
+          points.map((p) => ({
+            time: Math.floor(new Date(p.date).getTime() / 1000) as UTCTimestamp,
+            value: p.value,
+          })),
+        );
+        chart.timeScale().fitContent();
+        setChartReady(true);
+
+        // Crosshair move → tooltip overlay. Reads pointsByTimeRef so the
+        // handler always resolves the LATEST Map (period change, refetch).
         chart.subscribeCrosshairMove((param: MouseEventParams) => {
           if (!param.point || param.time == null) {
             setHovered(null);
@@ -484,7 +515,7 @@ function EquityCurveCanvas({
             setHovered(null);
             return;
           }
-          const p = pointsByTime.get(t);
+          const p = pointsByTimeRef.current.get(t);
           if (!p) {
             setHovered(null);
             return;
@@ -555,21 +586,36 @@ function EquityCurveCanvas({
     chartRef.current?.timeScale().fitContent();
   }
 
+  // QA-iter1 a11y: derive a screen-reader-friendly summary of the curve.
+  // The chart canvas is otherwise opaque to AT users.
+  const firstValue = points[0]?.value ?? 0;
+  const lastValue = points[points.length - 1]?.value ?? 0;
+  const chartAriaLabel = `Equity curve, ${points.length} data points, ${
+    isUp ? "up" : "down"
+  } from ${formatPrice(firstValue)} to ${formatPrice(lastValue)}`;
+
   return (
     <div className="relative flex-1 min-h-[180px]">
-      <div ref={containerRef} className="h-full w-full" data-testid="equity-curve-canvas" />
-      {/* Reset-range button — appears top-right; visible only after chart
-          init. Pointer-events-auto overrides the parent's relative-pos
-          stacking. */}
-      <button
-        type="button"
-        onClick={handleResetRange}
-        aria-label="Reset chart range"
-        title="Reset chart range to fit all data"
-        className="absolute right-2 top-2 z-10 rounded-[2px] border border-border/40 bg-card/80 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground backdrop-blur-sm transition-colors hover:text-foreground"
-      >
-        Reset
-      </button>
+      <div
+        ref={containerRef}
+        className="h-full w-full"
+        role="img"
+        aria-label={chartAriaLabel}
+        data-testid="equity-curve-canvas"
+      />
+      {/* Reset-range button — gated on chartReady so pre-init clicks are
+          impossible (avoids the "no-op while chart still loading" UX bug). */}
+      {chartReady && (
+        <button
+          type="button"
+          onClick={handleResetRange}
+          aria-label="Reset chart range"
+          title="Reset chart range to fit all data"
+          className="absolute right-2 top-2 z-10 rounded-[2px] border border-border/40 bg-card/80 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-muted-foreground backdrop-blur-sm transition-colors hover:text-foreground"
+        >
+          Reset
+        </button>
+      )}
       {/* Hover tooltip overlay — positioned to the right of the crosshair so it
           doesn't occlude the line under the cursor. Pointer-events-none
           ensures the chart's own crosshair tracking isn't interrupted. */}
