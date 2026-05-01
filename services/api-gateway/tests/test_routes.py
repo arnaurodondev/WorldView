@@ -168,13 +168,19 @@ async def test_company_overview_propagates_downstream_error(client, mock_clients
 
 
 @pytest.mark.asyncio
-async def test_instrument_page_bundle_composes_all_subresources(client, mock_clients) -> None:
+async def test_instrument_page_bundle_composes_all_subresources(
+    authed_client,
+    authed_mock_clients,
+) -> None:
     """GET /v1/instruments/:id/page-bundle returns the 5 sub-resources.
 
     Verifies the asyncio.gather composition. Each downstream call is dispatched
     to a mock that returns a recognisable shape; the bundle must surface each
     under its named key (overview, fundamentals, technicals, insider, top_news).
+
+    QA-iter1: route now requires auth — uses authed_client with Bearer header.
     """
+    mock_clients = authed_mock_clients
     inst_id = "01900000-0000-7000-8000-000000001005"
 
     inst_data = {"id": inst_id, "symbol": "MSFT", "exchange": "NASDAQ", "is_active": True}
@@ -194,7 +200,7 @@ async def test_instrument_page_bundle_composes_all_subresources(client, mock_cli
         return r
 
     async def _md_dispatch(path: str, **_kwargs: object) -> MagicMock:
-        # Order matters here — more-specific paths must match first.
+        # Order matters — more-specific paths must match first.
         if "ohlcv" in path:
             return _make_resp(ohlcv_data)
         if "quotes" in path:
@@ -203,7 +209,9 @@ async def test_instrument_page_bundle_composes_all_subresources(client, mock_cli
             return _make_resp(profile_data)
         if "technicals-snapshot" in path:
             return _make_resp(technicals_data)
-        if "insider-transactions" in path:
+        # QA-iter1: bundle now hits /insider-transactions-snapshot (was wrong
+        # path /insider-transactions which silently 404'd on market-data).
+        if "insider-transactions-snapshot" in path:
             return _make_resp(insider_data)
         if "fundamentals/" in path and not any(s in path for s in ("technicals", "insider", "company-profile")):
             # General all-sections fundamentals
@@ -220,7 +228,10 @@ async def test_instrument_page_bundle_composes_all_subresources(client, mock_cli
     mock_clients.knowledge_graph.get = AsyncMock(side_effect=_kg_dispatch)
     mock_clients.nlp_pipeline.get = AsyncMock(side_effect=_nlp_dispatch)
 
-    response = await client.get(f"/v1/instruments/{inst_id}/page-bundle")
+    response = await authed_client.get(
+        f"/v1/instruments/{inst_id}/page-bundle",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
     assert response.status_code == 200
 
     body = response.json()
@@ -237,13 +248,17 @@ async def test_instrument_page_bundle_composes_all_subresources(client, mock_cli
 
 
 @pytest.mark.asyncio
-async def test_instrument_page_bundle_degrades_on_partial_failure(client, mock_clients) -> None:
+async def test_instrument_page_bundle_degrades_on_partial_failure(
+    authed_client,
+    authed_mock_clients,
+) -> None:
     """Per-call failure must NOT fail the whole bundle.
 
     If insider/technicals/news downstream services 5xx, the bundle returns
     null for those keys and the rest still populate. This is the contract
     that lets the FE render a partial page instead of seeing a 5xx.
     """
+    mock_clients = authed_mock_clients
     inst_id = "01900000-0000-7000-8000-000000001006"
 
     inst_data = {"id": inst_id, "symbol": "GOOG", "exchange": "NASDAQ", "is_active": True}
@@ -267,7 +282,7 @@ async def test_instrument_page_bundle_degrades_on_partial_failure(client, mock_c
     async def _md_dispatch(path: str, **_kwargs: object) -> MagicMock:
         if "technicals-snapshot" in path:
             return _err(503)  # technicals fails
-        if "insider-transactions" in path:
+        if "insider-transactions-snapshot" in path:
             return _err(503)  # insider fails
         if "ohlcv" in path:
             return _ok(ohlcv_data)
@@ -289,7 +304,10 @@ async def test_instrument_page_bundle_degrades_on_partial_failure(client, mock_c
     mock_clients.nlp_pipeline.get = AsyncMock(side_effect=_nlp_dispatch)
     mock_clients.knowledge_graph.get = AsyncMock(side_effect=_kg_dispatch)
 
-    response = await client.get(f"/v1/instruments/{inst_id}/page-bundle")
+    response = await authed_client.get(
+        f"/v1/instruments/{inst_id}/page-bundle",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
     # Bundle MUST still return 200 — the failed sub-resources are null.
     assert response.status_code == 200
     body = response.json()
@@ -297,6 +315,135 @@ async def test_instrument_page_bundle_degrades_on_partial_failure(client, mock_c
     assert body["technicals"] is None  # downstream 503 → null
     assert body["insider"] is None  # downstream 503 → null
     assert body["top_news"] is None  # downstream 500 → null
+
+
+@pytest.mark.asyncio
+async def test_instrument_page_bundle_overview_failure(
+    authed_client,
+    authed_mock_clients,
+) -> None:
+    """QA-iter1: overview composite itself failing.
+
+    The previous test fixture only ever returned OK for the
+    /instruments/{id} call (which is overview's REQUIRED leg). This test
+    forces THAT call to 503 — overview now propagates DownstreamError
+    inside _safe_overview, which catches it and surfaces overview=null.
+    The bundle still returns 200; the FE branches on null to render its
+    own 'not found' UI rather than crashing.
+    """
+    mock_clients = authed_mock_clients
+    inst_id = "01900000-0000-7000-8000-000000001007"
+
+    def _err(status: int) -> MagicMock:
+        r = MagicMock(spec=httpx.Response)
+        r.status_code = status
+        r.text = "instrument not found"
+        return r
+
+    # Every market-data call 404s — even the required instrument fetch.
+    mock_clients.market_data.get = AsyncMock(return_value=_err(404))
+    mock_clients.knowledge_graph.get = AsyncMock(return_value=_err(404))
+    mock_clients.nlp_pipeline.get = AsyncMock(return_value=_err(404))
+
+    response = await authed_client.get(
+        f"/v1/instruments/{inst_id}/page-bundle",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["instrument_id"] == inst_id
+    assert body["overview"] is None  # required leg failed → overview null
+    assert body["fundamentals"] is None
+    assert body["technicals"] is None
+    assert body["insider"] is None
+    assert body["top_news"] is None
+    # entity_id falls back to instrument_id when overview is null.
+    assert body["entity_id"] == inst_id
+
+
+@pytest.mark.asyncio
+async def test_instrument_page_bundle_uses_kg_resolved_entity_id(
+    authed_client,
+    authed_mock_clients,
+) -> None:
+    """QA-iter1: news must be fetched with the KG-resolved entity_id.
+
+    The original test had KG return entity_id == instrument_id, so the
+    'KG resolution actually reaches news' contract was untested. Here KG
+    returns a DIFFERENT UUID; we verify (a) bundle.entity_id surfaces it,
+    (b) the nlp-pipeline news call was made against THAT entity_id, not
+    instrument_id.
+    """
+    mock_clients = authed_mock_clients
+    inst_id = "01900000-0000-7000-8000-000000001008"
+    kg_entity_id = "01900000-0000-7000-8000-0000000019AA"  # distinct
+
+    inst_data = {"id": inst_id, "symbol": "AMZN", "exchange": "NASDAQ", "is_active": True}
+    profile_data = {"records": [{"data": {"Name": "Amazon", "Currency": "USD"}}]}
+    ohlcv_data = {"items": [], "total": 0, "timeframe": "1d"}
+    quote_data = {"instrument_id": inst_id, "last": "180.00"}
+    fundamentals_data = {"records": []}
+    news_data = {"articles": [], "total": 0}
+
+    def _make_resp(data: dict) -> MagicMock:
+        r = MagicMock(spec=httpx.Response)
+        r.status_code = 200
+        r.json.return_value = data
+        return r
+
+    async def _md_dispatch(path: str, **_kwargs: object) -> MagicMock:
+        if "ohlcv" in path:
+            return _make_resp(ohlcv_data)
+        if "quotes" in path:
+            return _make_resp(quote_data)
+        if "company-profile" in path:
+            return _make_resp(profile_data)
+        if "technicals-snapshot" in path or "insider-transactions-snapshot" in path:
+            return _make_resp(fundamentals_data)
+        if "fundamentals/" in path:
+            return _make_resp(fundamentals_data)
+        return _make_resp(inst_data)
+
+    nlp_calls: list[str] = []
+
+    async def _nlp_dispatch(path: str, **_kwargs: object) -> MagicMock:
+        nlp_calls.append(path)
+        return _make_resp(news_data)
+
+    mock_clients.market_data.get = AsyncMock(side_effect=_md_dispatch)
+    mock_clients.knowledge_graph.get = AsyncMock(
+        return_value=_make_resp({"entity_id": kg_entity_id}),
+    )
+    mock_clients.nlp_pipeline.get = AsyncMock(side_effect=_nlp_dispatch)
+
+    response = await authed_client.get(
+        f"/v1/instruments/{inst_id}/page-bundle",
+        headers={"Authorization": f"Bearer {_DUMMY_JWT}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    # Bundle surfaces the KG-resolved entity_id, not the instrument_id.
+    assert body["entity_id"] == kg_entity_id
+    # The news call was made against the KG entity_id.
+    assert any(
+        kg_entity_id in p for p in nlp_calls
+    ), f"nlp news call should target entity_id={kg_entity_id}; saw paths: {nlp_calls}"
+
+
+@pytest.mark.asyncio
+async def test_instrument_page_bundle_requires_auth(client) -> None:
+    """QA-iter1 security: route must 401 when request.state.user is None.
+
+    OIDCAuthMiddleware does NOT 401 on its own — individual routes enforce
+    auth. The bundle exposes 6 sub-resources including insider data, so an
+    unauthenticated caller must be rejected explicitly.
+
+    The `client` fixture uses the un-authenticated app (no Bearer middleware
+    injected) — request.state.user is None, the route's explicit guard 401s.
+    """
+    inst_id = "01900000-0000-7000-8000-000000001009"
+    response = await client.get(f"/v1/instruments/{inst_id}/page-bundle")
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
