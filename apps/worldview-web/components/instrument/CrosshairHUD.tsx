@@ -107,17 +107,20 @@ export function CrosshairHUD({ chart, candleSeries, volumeSeries, className }: C
 
   return (
     <div
-      role="status"
-      aria-live="off"
+      // role=presentation: the HUD is decorative-overlay for sighted users;
+      // the actual chart data is conveyed through the chart's own a11y
+      // mechanisms. aria-live="off" was wrong with role="status".
+      role="presentation"
       className={cn(
         // Top-left over the chart. Pointer-events-none so it never blocks the
         // chart's own crosshair tracking. WHY backdrop-blur + bg-card/90:
         // legibility on top of dark candlesticks without covering them.
-        "pointer-events-none absolute left-9 top-2 z-20 rounded-[2px] border border-border bg-card/90 px-2 py-1 font-mono text-[10px] tabular-nums shadow-md backdrop-blur-sm",
+        // QA iter-1: bumped body to 11px (institutional readability floor).
+        "pointer-events-none absolute left-9 top-2 z-20 rounded-[2px] border border-border bg-card/90 px-2 py-1 font-mono text-[11px] tabular-nums shadow-md backdrop-blur-sm",
         className,
       )}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 text-[10px]">
         <span className="text-muted-foreground">{formatTime(data.time)}</span>
         <span className={cn(
           "rounded-[2px] px-1",

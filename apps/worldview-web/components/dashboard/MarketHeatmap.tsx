@@ -2,24 +2,17 @@
  * components/dashboard/MarketHeatmap.tsx — GICS sector performance treemap
  *
  * WHY THIS EXISTS: Portfolio managers need instant macro context — which sectors
- * are moving today. The heatmap gives a visual distribution of market forces
- * without reading individual stock data. Finviz/Bloomberg both feature this
- * prominently for the same reason: pattern recognition from color at a glance.
+ * are moving today. Finviz/Bloomberg both feature this prominently for the same
+ * reason: pattern recognition from color at a glance.
  *
- * PLAN-0059 H-3: migrated from a fixed grid (every cell same size) to a true
- * Bruls/Huijsen/van Wijk squarified treemap (lib/treemap.ts) where cell area
- * is proportional to the sector's `instrument_count` (best proxy for sector
- * weight until S9 returns market_cap_weight on the heatmap response).
- *
- * WHY squarified (not flex grid): institutional treemaps communicate TWO axes
- * — direction (color) AND magnitude (size). Equal-cell grids miss the second
- * axis entirely. With squarify, Tech (largest sector by instrument count)
- * visually dominates while Materials (smallest) gets a smaller tile, matching
- * Finviz / Bloomberg conventions.
- *
- * WHY 7-STEP COLOR SCALE:
- * Linear interpolation deep red (−3%) → neutral → deep teal (+3%) maps the
- * typical daily range. Outside ±3% is clipped to max saturation.
+ * PLAN-0059 H-3 + QA iter-1:
+ *   - Migrated from a fixed grid (every cell same size) to a Bruls/Huijsen/
+ *     van Wijk squarified treemap. Cell area ∝ instrument_count (best proxy
+ *     until S9 returns market_cap_weight on the heatmap response).
+ *   - Tiles are KEYBOARD-REACHABLE (regression fix from QA iter-1). Click /
+ *     Enter / Space navigates to the screener filtered by sector.
+ *   - Items array memoised so squarify doesn't re-run on every parent render.
+ *   - Loading state replaced by single fade-in pulse (no relayout snap on data load).
  *
  * WHO USES IT: app/(app)/dashboard/page.tsx
  * DATA SOURCE: S9 GET /v1/market/heatmap → S3 screener grouped by sector
@@ -28,18 +21,20 @@
 
 "use client";
 
+import { useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { heatCellColor } from "@/lib/utils";
-import { Skeleton } from "@/components/ui/skeleton";
-import { SquarifiedTreemap } from "@/components/ui/squarified-treemap";
+import { SquarifiedTreemap, type SquarifiedTreemapItem } from "@/components/ui/squarified-treemap";
 import type { HeatmapSector } from "@/types/api";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function MarketHeatmap() {
   const { accessToken } = useAuth();
+  const router = useRouter();
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["market-heatmap"],
@@ -49,14 +44,20 @@ export function MarketHeatmap() {
     staleTime: 30_000,
   });
 
+  // Memoise items so the treemap doesn't see a fresh array reference each render
+  // (would re-run squarify + remount every tile, losing hover transitions).
+  const items: SquarifiedTreemapItem<HeatmapSector>[] = useMemo(() => {
+    if (!data?.sectors) return [];
+    return data.sectors.map((s) => ({
+      id: s.name,
+      weight: s.instrument_count > 0 ? s.instrument_count : 1,
+      payload: s,
+    }));
+  }, [data]);
+
   if (isLoading) {
-    return (
-      <div className="grid grid-cols-3 gap-1 sm:grid-cols-4 h-56">
-        {Array.from({ length: 11 }).map((_, i) => (
-          <Skeleton key={i} className="h-full" style={{ animationDelay: `${i * 40}ms` }} />
-        ))}
-      </div>
-    );
+    // Single fade-in pulse — no relayout snap when real data arrives.
+    return <div className="h-56 animate-pulse rounded-[2px] bg-muted/20" aria-busy="true" />;
   }
 
   if (isError || !data) {
@@ -67,23 +68,29 @@ export function MarketHeatmap() {
     );
   }
 
-  // Treemap input: weight by instrument_count when present, fall back to 1
-  // so flat-zero sectors still receive a visible tile.
-  const items = data.sectors.map((s) => ({
-    id: s.name,
-    weight: s.instrument_count > 0 ? s.instrument_count : 1,
-    payload: s,
-  }));
-
   return (
-    // Fixed 14rem (224px) height — keeps the treemap inside the dashboard
-    // card without forcing a CLS jump after measurement.
     <div className="h-56">
-      <SquarifiedTreemap
+      <SquarifiedTreemap<HeatmapSector>
         items={items}
         gap={2}
+        minWidth={48}
+        minHeight={28}
         ariaLabel="Sector performance treemap"
-        renderTile={(cell) => <SectorTile sector={cell.item.payload} />}
+        renderTile={(cell) => <SectorTile sector={cell.item.payload} cellWidth={cell.width} />}
+        getTileAriaLabel={(item) => {
+          const s = item.payload;
+          const change =
+            s.change_pct !== null
+              ? `${s.change_pct >= 0 ? "+" : ""}${s.change_pct.toFixed(2)} percent`
+              : "no data";
+          return `${s.name} sector, ${s.instrument_count} instruments, ${change}. Activate to view in screener.`;
+        }}
+        onTileClick={(item) => {
+          // Drill-down: navigate to screener pre-filtered by sector. Existing
+          // screener URL accepts a `sector` query param (kept generic to
+          // survive screener filter-bar refactors).
+          router.push(`/screener?sector=${encodeURIComponent(item.payload.name)}`);
+        }}
       />
     </div>
   );
@@ -91,22 +98,22 @@ export function MarketHeatmap() {
 
 // ── Tile ──────────────────────────────────────────────────────────────────────
 
-function SectorTile({ sector }: { sector: HeatmapSector }) {
+function SectorTile({ sector, cellWidth }: { sector: HeatmapSector; cellWidth: number }) {
   const { background, color } = heatCellColor(sector.change_pct);
+  // Below ~70px, the abbreviation truncates and competes with the percentage —
+  // hide it and lean on the aria-label + tooltip for full identification.
+  const showLabel = cellWidth >= 70;
   return (
     <div
       className="flex h-full w-full flex-col items-center justify-center rounded-[2px] p-1 text-center"
       style={{ backgroundColor: background }}
       title={sector.name}
-      aria-label={`${sector.name} sector, ${sector.instrument_count} instruments, ${
-        sector.change_pct !== null
-          ? `${sector.change_pct >= 0 ? "+" : ""}${sector.change_pct.toFixed(2)} percent`
-          : "no data"
-      }`}
     >
-      <span className="truncate text-[10px] font-medium leading-tight" style={{ color }}>
-        {abbreviateSector(sector.name)}
-      </span>
+      {showLabel && (
+        <span className="truncate text-[10px] font-medium leading-tight" style={{ color }}>
+          {abbreviateSector(sector.name)}
+        </span>
+      )}
       <span className="font-mono text-xs font-semibold tabular-nums" style={{ color }}>
         {sector.change_pct !== null
           ? `${sector.change_pct >= 0 ? "+" : ""}${sector.change_pct.toFixed(2)}%`
@@ -132,5 +139,6 @@ function abbreviateSector(name: string): string {
     Utilities: "Util",
     Energy: "Energy",
   };
-  return abbreviations[name] ?? name.slice(0, 9);
+  // Fallback uses first-word slice to avoid mid-word cuts ("Telecommunications" → "Telecommun").
+  return abbreviations[name] ?? name.split(" ")[0]!.slice(0, 9);
 }
