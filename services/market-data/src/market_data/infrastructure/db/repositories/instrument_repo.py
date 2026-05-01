@@ -160,6 +160,14 @@ class PgInstrumentRepository(InstrumentRepository):
         return cast("int", result.scalar_one())
 
     async def upsert(self, instrument: Instrument) -> Instrument:
+        # PLAN-0057 QA DS-001 / F-DS-06 fix: use atomic OR-merge for the
+        # boolean flags so a race between ohlcv_consumer + quotes_consumer
+        # (both seeing find_by_symbol_exchange == None and racing to INSERT)
+        # never clears the loser's flag. Without this, the second INSERT
+        # becomes an UPDATE that sets {has_ohlcv: False, has_quotes: True,
+        # has_fundamentals: False} — silently clobbering has_ohlcv that the
+        # first INSERT just established. Mirror of update_flags() below.
+        excluded = insert(InstrumentModel).excluded
         stmt = (
             insert(InstrumentModel)
             .values(
@@ -175,9 +183,12 @@ class PgInstrumentRepository(InstrumentRepository):
                 constraint="uq_instruments_symbol_exchange",
                 set_={
                     "security_id": instrument.security_id,
-                    "has_ohlcv": instrument.flags.has_ohlcv,
-                    "has_quotes": instrument.flags.has_quotes,
-                    "has_fundamentals": instrument.flags.has_fundamentals,
+                    "has_ohlcv": case((excluded.has_ohlcv, True), else_=InstrumentModel.has_ohlcv),
+                    "has_quotes": case((excluded.has_quotes, True), else_=InstrumentModel.has_quotes),
+                    "has_fundamentals": case(
+                        (excluded.has_fundamentals, True),
+                        else_=InstrumentModel.has_fundamentals,
+                    ),
                 },
             )
             .returning(InstrumentModel)

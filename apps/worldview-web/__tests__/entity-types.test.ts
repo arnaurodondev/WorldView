@@ -34,22 +34,21 @@ describe("entityTypeToken", () => {
       const token = entityTypeToken(type);
       expect(token.label, `missing label for ${type}`).not.toBe("Entity");
       expect(token.color, `missing colour for ${type}`).not.toBe("#6B7585");
-      // Layout variant must be a known string (not the generic default).
-      expect(token.layout, `missing layout for ${type}`).not.toBe(undefined);
     }
   });
 
   it("returns the same explicit token for legacy 'company'", () => {
+    // PLAN-0057 QA A-003: dropped the dead `layout` field claim — only
+    // assert the consumed surface (label + color) here.
     const token = entityTypeToken("company");
     expect(token.label).toBe("Company");
-    expect(token.layout).toBe("instrument");
+    expect(token.color).toBe("#FFD60A");
   });
 
   it("falls back gracefully for unknown types", () => {
     const token = entityTypeToken("unknown_future_type");
     expect(token.label).toBe("Entity");
     expect(token.color).toBe("#6B7585");
-    expect(token.layout).toBe("default");
   });
 
   it("falls back for null/undefined entity_type", () => {

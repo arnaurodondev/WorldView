@@ -45,24 +45,13 @@ export interface EntityTypeToken {
   label: string;
   /** Tailwind class fragment matching the colour — `text-x bg-y/10 border-z/30`. */
   badgeClass: string;
-  /** Lucide icon used inside avatars and 24×24 type stamps. */
+  /** Lucide icon used inside avatars and 24x24 type stamps. */
   icon: LucideIcon;
-  /**
-   * Layout variant — entity-detail pages use this to decide the hero row
-   * (price chart for instruments, geo map for locations, biography for
-   * persons, …).  See `<EntityDetailHero>` in apps/worldview-web for the
-   * dispatch table.  Kept as a string so unknown types fall through to
-   * "default" without a TypeScript error.
-   */
-  layout:
-    | "instrument"
-    | "person"
-    | "geographic"
-    | "regulator"
-    | "macro"
-    | "topic"
-    | "default";
 }
+// PLAN-0057 QA A-003: a `layout` field claiming "<EntityDetailHero> dispatcher"
+// previously lived here.  No EntityDetailHero exists — the field had zero
+// consumers and was dead API.  When a real entity-detail hero ships, add the
+// field back together with the consumer in the same PR.
 
 // Bloomberg yellow stays reserved for the user's own tradeable instruments —
 // it's the most attention-grabbing colour in the palette and we want it to
@@ -73,7 +62,6 @@ const TOKENS = {
     label: "Instrument",
     badgeClass: "text-[#FFD60A] bg-[#FFD60A]/10 border-[#FFD60A]/30",
     icon: TrendingUp,
-    layout: "instrument" as const,
   },
   // Pre-existing canonicals (PRD-0017 §6) — sectors and industry groups
   // share the indigo family because they're conceptual buckets, not entities
@@ -89,28 +77,24 @@ const TOKENS = {
     label: "Sector",
     badgeClass: "text-indigo-400 bg-indigo-400/10 border-indigo-400/30",
     icon: Layers,
-    layout: "topic" as const,
   },
   industry_group: {
     color: "#A78BFA",
     label: "Industry Group",
     badgeClass: "text-violet-400 bg-violet-400/10 border-violet-400/30",
     icon: Factory,
-    layout: "topic" as const,
   },
   industry: {
     color: "#C084FC",
     label: "Industry",
     badgeClass: "text-purple-400 bg-purple-400/10 border-purple-400/30",
     icon: Hammer,
-    layout: "topic" as const,
   },
   technology_theme: {
     color: "#22D3EE",
     label: "Theme",
     badgeClass: "text-cyan-400 bg-cyan-400/10 border-cyan-400/30",
     icon: Wrench,
-    layout: "topic" as const,
   },
   // PLAN-0057 A-3 seeds added the 9 below — F-1 makes them renderable.
   currency: {
@@ -118,42 +102,36 @@ const TOKENS = {
     label: "Currency",
     badgeClass: "text-emerald-400 bg-emerald-400/10 border-emerald-400/30",
     icon: Banknote,
-    layout: "default" as const,
   },
   regulatory_body: {
     color: "#FB7185",
     label: "Regulator",
     badgeClass: "text-rose-400 bg-rose-400/10 border-rose-400/30",
     icon: Scale,
-    layout: "regulator" as const,
   },
   government_body: {
     color: "#F87171",
     label: "Government",
     badgeClass: "text-red-400 bg-red-400/10 border-red-400/30",
     icon: Landmark,
-    layout: "regulator" as const,
   },
   location: {
     color: "#38BDF8",
     label: "Location",
     badgeClass: "text-sky-400 bg-sky-400/10 border-sky-400/30",
     icon: MapPin,
-    layout: "geographic" as const,
   },
   person: {
     color: "#26A69A",
     label: "Person",
     badgeClass: "text-teal-400 bg-teal-400/10 border-teal-400/30",
     icon: User2,
-    layout: "person" as const,
   },
   financial_institution: {
     color: "#FBBF24",
     label: "Institution",
     badgeClass: "text-amber-400 bg-amber-400/10 border-amber-400/30",
     icon: Building2,
-    layout: "default" as const,
   },
   commodity: {
     // PLAN-0057 QA M-3: previous yellow-700 (#A16207) on bg-zinc-950 measured
@@ -164,21 +142,18 @@ const TOKENS = {
     label: "Commodity",
     badgeClass: "text-amber-500 bg-amber-500/10 border-amber-500/30",
     icon: Coins,
-    layout: "default" as const,
   },
   macroeconomic_indicator: {
     color: "#F472B6",
     label: "Macro Indicator",
     badgeClass: "text-pink-400 bg-pink-400/10 border-pink-400/30",
     icon: Activity,
-    layout: "macro" as const,
   },
   index: {
     color: "#94A3B8",
     label: "Index",
     badgeClass: "text-slate-400 bg-slate-400/10 border-slate-400/30",
     icon: LineChart,
-    layout: "instrument" as const,
   },
   // Legacy aliases retained from the EntityGraph palette so existing graph
   // payloads (which sometimes emit "company" / "event" / "topic") keep
@@ -188,21 +163,18 @@ const TOKENS = {
     label: "Company",
     badgeClass: "text-[#FFD60A] bg-[#FFD60A]/10 border-[#FFD60A]/30",
     icon: TrendingUp,
-    layout: "instrument" as const,
   },
   event: {
     color: "#F59E0B",
     label: "Event",
     badgeClass: "text-amber-500 bg-amber-500/10 border-amber-500/30",
     icon: Flag,
-    layout: "macro" as const,
   },
   topic: {
     color: "#818CF8",
     label: "Topic",
     badgeClass: "text-indigo-400 bg-indigo-400/10 border-indigo-400/30",
     icon: Wrench,
-    layout: "topic" as const,
   },
 } satisfies Record<string, EntityTypeToken>;
 
@@ -213,7 +185,6 @@ const FALLBACK: EntityTypeToken = {
   // Generic Box icon — distinct from `commodity` (Coins) so an unstyled
   // type doesn't get visually confused with a real commodity entity.
   icon: Box,
-  layout: "default",
 };
 
 export type KnownEntityType = keyof typeof TOKENS;
