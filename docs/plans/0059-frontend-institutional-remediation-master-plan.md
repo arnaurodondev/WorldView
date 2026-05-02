@@ -1001,9 +1001,9 @@ Before W0 closes:
 
 ---
 
-## 9. PLAN-0059-G — Performance + Bundle (Wave 4) 🟡 (G-1 partial · G-2 partial · G-3 partial)
+## 9. PLAN-0059-G — Performance + Bundle (Wave 4) 🟡 (G-1 4/5 · G-2 partial · G-3 partial)
 
-**Status: G-1 partial DONE — 2026-05-02 · `RevenueTrendSparklines` + `EarningsHistoryChart` migrated off recharts to hand-rolled SVG. Why hand-rolled (not lightweight-charts): both charts are 110-120px categorical bars (Q1'24 / FY24) — lightweight-charts is built for continuous time series and would fight the API. 3 charts still on recharts (DividendIncomeTimeline / SectorAllocationPanel / RealizedPnLChart) — Pie / stacked bar non-trivial migrations, separate session.**
+**Status: G-1 4/5 DONE — 2026-05-02 · `RevenueTrendSparklines` + `EarningsHistoryChart` + `RealizedPnLChart` + `DividendIncomeTimeline` migrated off recharts to hand-rolled SVG. Pattern: ~50-150 LOC of SVG per chart (preserveAspectRatio="none" + percentage-based tooltip positioning + per-slot invisible hit areas). Why hand-rolled (not lightweight-charts): all four charts are <160px tall with categorical labels (Q1'24 / FY24 / "2026 Q1") — lightweight-charts is built for continuous time series. Last remaining recharts user is `SectorAllocationPanel` (`Treemap`) — deferred to H-3 which scopes the squarified-treemap (Bruls/Huijsen/van Wijk) algorithm port. recharts dep stays in package.json until H-3 ships, but the four migrated routes (/instruments, /portfolio Holdings tab) no longer pull recharts into their bundles.**
 **Status: G-3 partial DONE — 2026-05-02 · `useTransition` on portfolio tab switching (heavy ~7-surface tab body mount no longer freezes the trigger row) · `useDeferredValue` on screener `filteredRows` (sort + render pipeline runs at lower priority than the input that triggered it; 5000-row accumulators no longer block 30-80ms on filter/sort/Load More). Companion G-2 commit 94c7d693 had already covered HeatCell + MiniChart memoisation.**
 
 **Goal:** Drop recharts; dynamic-import all heavy widgets; React 19 patterns; Server Components audit; CI performance budgets.
