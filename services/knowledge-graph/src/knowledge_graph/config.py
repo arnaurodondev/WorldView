@@ -37,6 +37,9 @@ class Settings(BaseSettings):
 
     # Kafka topics — consumed
     kafka_topic_enriched: str = "nlp.article.enriched.v1"
+    # Hot-path provisional enrichment topic (PLAN-0061 Wave E)
+    kafka_topic_provisional_queued: str = "entity.provisional.queued.v1"
+    kafka_consumer_group_provisional_queued: str = "kg-provisional-queued-group"
     kafka_topic_entity_created: str = "entity.canonical.created.v1"
     kafka_topic_instrument_created: str = "market.instrument.created"
     kafka_topic_dataset_fetched: str = "market.dataset.fetched"
@@ -123,10 +126,17 @@ class Settings(BaseSettings):
     worker_provisional_enrichment_max_retries: int = 5  # terminal 'failed' after N failures
 
     # Entity description generation (PRD-0017 §6.5 — DefinitionRefreshWorker)
-    description_provider: str = "none"  # "gemini" | "none"
+    # "deepinfra" → DeepInfraDescriptionAdapter (Qwen3-235B-A22B primary, Qwen3-32B fallback)
+    # "gemini"    → GeminiDescriptionAdapter (gemini-3.1-flash-lite)
+    # "none"      → NullDescriptionAdapter (fallback template, no external calls)
+    description_provider: str = "none"  # KNOWLEDGE_GRAPH_DESCRIPTION_PROVIDER
     gemini_api_key: SecretStr = SecretStr("")
     description_max_monthly_usd: float = 10.0
     description_gemini_concurrency: int = 4
+    # DeepInfra description model IDs (used when description_provider="deepinfra")
+    description_deepinfra_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+    description_deepinfra_fallback_model_id: str = "Qwen/Qwen3-32B"
+    description_deepinfra_concurrency: int = 4
 
     # Market data service (used by Worker 13D-3)
     market_data_base_url: str = "http://market-data:8003"

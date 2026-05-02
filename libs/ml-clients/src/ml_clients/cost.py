@@ -23,10 +23,12 @@ import math
 # ---------------------------------------------------------------------------
 
 PRICING: dict[str, dict[str, dict[str, float]]] = {
-    # DeepInfra — primary chat completion + extraction provider (PRD-0015/0016)
-    # Qwen3-32B: primary RAG chat completion model ($0.08 in / $0.28 out per 1M)
-    # DeepSeek-V4-Flash: structured JSON extraction model ($0.14 in / $0.28 out per 1M)
+    # DeepInfra — primary chat completion + extraction + description provider
+    # Qwen3-235B-A22B-Instruct-2507: entity description generation (MoE 235B / 22B active)
+    # Qwen3-32B: RAG chat completion + description fallback ($0.08 in / $0.28 out per 1M)
+    # DeepSeek-V4-Flash: structured JSON extraction ($0.14 in / $0.28 out per 1M)
     "deepinfra": {
+        "Qwen/Qwen3-235B-A22B-Instruct-2507": {"input": 0.20, "output": 0.60},
         "Qwen/Qwen3-32B": {"input": 0.08, "output": 0.28},
         "deepseek-ai/DeepSeek-V4-Flash": {"input": 0.14, "output": 0.28},
     },

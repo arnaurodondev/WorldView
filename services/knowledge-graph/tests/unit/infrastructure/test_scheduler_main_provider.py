@@ -118,3 +118,95 @@ class TestSchedulerMainExtractionProviderConfig:
         assert s.deepinfra_api_key == "test-extraction-key"
         assert s.deepinfra_extraction_model_id == "deepseek-ai/DeepSeek-V4-Flash"
         assert s.deepinfra_extraction_concurrency == 3
+
+
+class TestBuildDescriptionClientDeepInfra:
+    """Tests for _build_description_client() with DeepInfra provider (BP-092 regression guard)."""
+
+    @pytest.mark.unit
+    def test_deepinfra_provider_returns_deepinfra_adapter(self) -> None:
+        """description_provider='deepinfra' with valid api_key → DeepInfraDescriptionAdapter.
+
+        The scheduler module is pre-imported BEFORE patch.dict so it stays in sys.modules
+        after the patch exits (avoiding prometheus re-registration in subsequent tests).
+        openai is mocked because it is not installed in the KG test environment.
+        """
+        from unittest.mock import MagicMock, patch
+
+        # Pre-import: ensures scheduler module is in sys.modules before patch.dict runs.
+        # patch.dict only removes/restores the specified key (openai); everything else persists.
+        # Without this, the scheduler would be re-imported in subsequent tests causing
+        # duplicate prometheus metric registration.
+        import knowledge_graph.infrastructure.scheduler.scheduler as _sched  # noqa: F401
+
+        mock_openai = MagicMock()
+        mock_openai.Timeout = MagicMock(return_value=MagicMock())
+        mock_openai.AsyncOpenAI.return_value = MagicMock()
+
+        with patch.dict("sys.modules", {"openai": mock_openai}):
+            from knowledge_graph.config import Settings
+            from knowledge_graph.infrastructure.scheduler.scheduler import _build_description_client
+
+            s = Settings(
+                database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db",
+                database_url_read="",
+                storage_access_key="test",
+                storage_secret_key="test",
+                description_provider="deepinfra",
+                deepinfra_api_key="real-api-key",
+            )
+            client = _build_description_client(s)
+
+            assert type(client).__name__ == "DeepInfraDescriptionAdapter"
+            assert type(client).__module__ == "ml_clients.adapters.deepinfra_description"
+
+    @pytest.mark.unit
+    def test_deepinfra_provider_empty_key_returns_null_adapter(self) -> None:
+        """description_provider='deepinfra' with empty api_key → NullDescriptionAdapter (fail-safe)."""
+        from knowledge_graph.config import Settings
+        from knowledge_graph.infrastructure.scheduler.scheduler import _build_description_client
+
+        s = Settings(
+            database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db",
+            database_url_read="",
+            storage_access_key="test",
+            storage_secret_key="test",
+            description_provider="deepinfra",
+            deepinfra_api_key="",  # empty → must fall back to NullDescriptionAdapter
+        )
+        client = _build_description_client(s)
+
+        assert type(client).__name__ == "NullDescriptionAdapter"
+
+    @pytest.mark.unit
+    def test_unknown_provider_returns_null_adapter(self) -> None:
+        """Unrecognised description_provider → NullDescriptionAdapter (no external calls)."""
+        from knowledge_graph.config import Settings
+        from knowledge_graph.infrastructure.scheduler.scheduler import _build_description_client
+
+        s = Settings(
+            database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db",
+            database_url_read="",
+            storage_access_key="test",
+            storage_secret_key="test",
+            description_provider="none",
+        )
+        client = _build_description_client(s)
+
+        assert type(client).__name__ == "NullDescriptionAdapter"
+
+    @pytest.mark.unit
+    def test_deepinfra_description_config_fields_present(self) -> None:
+        """Settings has all 3 DeepInfra description fields with correct defaults."""
+        from knowledge_graph.config import Settings
+
+        s = Settings(
+            database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db",
+            database_url_read="",
+            storage_access_key="test",
+            storage_secret_key="test",
+        )
+        assert s.description_provider == "none"
+        assert s.description_deepinfra_model_id == "Qwen/Qwen3-235B-A22B-Instruct-2507"
+        assert s.description_deepinfra_fallback_model_id == "Qwen/Qwen3-32B"
+        assert s.description_deepinfra_concurrency == 4
