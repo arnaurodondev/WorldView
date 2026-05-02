@@ -671,8 +671,6 @@ class TestDeepSeekExtractionAdapter:
     async def test_timeout_raises_retryable(self, semaphore: asyncio.Semaphore) -> None:
         from ml_clients.adapters.deepseek_extraction import DeepSeekExtractionAdapter
 
-        adapter = DeepSeekExtractionAdapter(api_key="key", semaphore=semaphore)
-
         mock_openai = MagicMock()
 
         class _OpenAIBaseError(Exception):
@@ -699,13 +697,17 @@ class TestDeepSeekExtractionAdapter:
         mock_client.chat.completions.create.side_effect = FakeTimeoutError("timeout")
         mock_openai.AsyncOpenAI.return_value = mock_client
 
+        # Adapter must be created inside patch.dict: __init__ does `import openai`
+        # eagerly, binding self._openai and self._client to the real module. Creating
+        # it outside the mock context means the real cached_property fires during
+        # extract() while sys.modules["openai"] is the MagicMock — raising
+        # ModuleNotFoundError("'openai' is not a package") before the fake error fires.
         with patch.dict("sys.modules", {"openai": mock_openai}), pytest.raises(RetryableError, match="timeout"):
+            adapter = DeepSeekExtractionAdapter(api_key="key", semaphore=semaphore)
             await adapter.extract(_extraction_input())
 
     async def test_rate_limit_raises_retryable(self, semaphore: asyncio.Semaphore) -> None:
         from ml_clients.adapters.deepseek_extraction import DeepSeekExtractionAdapter
-
-        adapter = DeepSeekExtractionAdapter(api_key="key", semaphore=semaphore)
 
         mock_openai = MagicMock()
 
@@ -734,12 +736,11 @@ class TestDeepSeekExtractionAdapter:
         mock_openai.AsyncOpenAI.return_value = mock_client
 
         with patch.dict("sys.modules", {"openai": mock_openai}), pytest.raises(RetryableError, match="429"):
+            adapter = DeepSeekExtractionAdapter(api_key="key", semaphore=semaphore)
             await adapter.extract(_extraction_input())
 
     async def test_4xx_raises_fatal(self, semaphore: asyncio.Semaphore) -> None:
         from ml_clients.adapters.deepseek_extraction import DeepSeekExtractionAdapter
-
-        adapter = DeepSeekExtractionAdapter(api_key="key", semaphore=semaphore)
 
         mock_openai = MagicMock()
 
@@ -768,16 +769,11 @@ class TestDeepSeekExtractionAdapter:
         mock_openai.AsyncOpenAI.return_value = mock_client
 
         with patch.dict("sys.modules", {"openai": mock_openai}), pytest.raises(FatalError, match="4xx"):
+            adapter = DeepSeekExtractionAdapter(api_key="key", semaphore=semaphore)
             await adapter.extract(_extraction_input())
 
     async def test_valid_response_with_deepseek_base_url(self, semaphore: asyncio.Semaphore) -> None:
         from ml_clients.adapters.deepseek_extraction import DeepSeekExtractionAdapter
-
-        adapter = DeepSeekExtractionAdapter(
-            api_key="key",
-            base_url="https://api.deepseek.com/v1",
-            semaphore=semaphore,
-        )
 
         payload = {"extracted": "value"}
         mock_openai = MagicMock()
@@ -801,6 +797,11 @@ class TestDeepSeekExtractionAdapter:
         mock_openai.AsyncOpenAI.side_effect = fake_async_openai
 
         with patch.dict("sys.modules", {"openai": mock_openai}):
+            adapter = DeepSeekExtractionAdapter(
+                api_key="key",
+                base_url="https://api.deepseek.com/v1",
+                semaphore=semaphore,
+            )
             result = await adapter.extract(_extraction_input())
 
         assert result.result == payload
