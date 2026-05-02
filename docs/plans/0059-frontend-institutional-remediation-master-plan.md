@@ -990,8 +990,8 @@ Before W0 closes:
 
 - **F-1 (10d) Universal `<DataTable>`:** Full props interface from master report §5.2; replaces 7 tables; ships density variants, virtualization, frozen rows/cols, multi-sort stack, multi-select + bulk actions, inline edit, group-by + sticky footer totals, saved views, exporters (csv/tsv/xlsx/pdf), context menu, FlashBus integration.
 - **F-2 (8d) Form layer:** RHF + Zod adoption; `<Form>`/`<FormField>` shell; `<NumberInput>` with TradingView shorthand; `<DateRangePicker>`; `<TimePicker tz>`; `<MultiCombobox>`; `<QuickEditPopover>`.
-- **F-3 (2d) `<ContextMenu>` primitive + Action Registry:** 6 categories × 24+ actions; Bloomberg-mnemonic single-letter hotkeys.
-- **F-4 (1.5d) Confirm/Undo Pattern Library:** Three-tier ladder T1/T2/T3; `<DestructiveButton>`.
+- **F-3 (2d) `<ContextMenu>` primitive + Action Registry:** 6 categories × 24+ actions; Bloomberg-mnemonic single-letter hotkeys. ✅ DONE 2026-05-02 — `lib/command-actions.ts` (30 actions, ActionRegistry class, extractMnemonicParts, getScopesForContext), `hooks/useContextMenuActions.ts` (scope-filtered+grouped hook, mnemonicMap), `components/ui/context-menu.tsx` (ActionContextMenu wrapping shadcn base with mnemonic onKeyDown), SemanticHoldingsTable wired with HoldingRowContext; 36 unit tests.
+- **F-4 (1.5d) Confirm/Undo Pattern Library:** Three-tier ladder T1/T2/T3; `<DestructiveButton>`. ✅ DONE 2026-05-02 — `components/ui/confirm-dialog.tsx` (T2 modal, low/medium/high severity), `hooks/useConfirmable.tsx` (T1 toast+undo, T2 modal, T3 redirect to DestructiveButton, isPending, ConfirmDialog component), full tier ladder documented in file-level comment; 12 unit tests.
 - **F-5 (5d) Polish + a11y:** Skeleton variants, EmptyState consolidation, focus management, dialog stacking, sidesheet/popover rules, icon-button aria-label lint, density variants on Button/Input/Select/Tabs/Dialog primitives.
 
 ### Critical tests
