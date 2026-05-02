@@ -926,11 +926,17 @@ Before W0 closes:
 
 ---
 
-## 7. PLAN-0059-E — God-File Decomposition (Wave 2, Track B) ✅ (E-1 + E-2 partial)
+## 7. PLAN-0059-E — God-File Decomposition (Wave 2, Track B) ✅ (E-1 done · E-2 partial · E-3 partial · E-4 done · E-5 done)
 
 **Status: E-1 DONE — 2026-05-02 · 1218 frontend tests pass · typecheck + lint clean · 15-endpoint live curl matrix verified**
 
 **Status: E-2 partial DONE — 2026-05-02 · 1249 frontend tests pass (+31 new kpi unit tests) · typecheck + lint clean · /portfolio renders 200**
+
+**Status: E-3 partial DONE — 2026-05-02 · 1286 frontend tests pass · typecheck + lint clean · /chat renders 200 · 6 chat sub-components extracted**
+
+**Status: E-4 DONE — 2026-05-02 · 1286 frontend tests pass (+18 new active-counts unit tests) · typecheck + lint clean · /screener renders 200**
+
+**Status: E-5 DONE — 2026-05-02 · 1268 frontend tests pass (+19 new movers unit tests) · typecheck + lint clean**
 
 **Goal:** Split `lib/gateway.ts` (2,657 LOC), `app/(app)/portfolio/page.tsx` (1,739), `app/(app)/chat/page.tsx` (1,293), `components/screener/ScreenerFilterBar.tsx` (986), `components/dashboard/WatchlistMoversWidget.tsx` (800).
 **Depends on:** PLAN-0059-C complete (codegen + URL state).
@@ -938,6 +944,12 @@ Before W0 closes:
 **Effort:** 2-3 calendar weeks.
 
 ### Waves
+
+- **E-3 (4d) Chat page decomposition — partial ✅ 2026-05-02:** `app/(app)/chat/page.tsx` reduced from 1,332 LOC → 916 LOC (31% cut). Extracted 6 pure render sub-components + 2 helper modules under `apps/worldview-web/features/chat/`: `components/MessageBubble.tsx` (TypingIndicator + MessageBubble + StreamingBubble), `components/CitationList.tsx` (with `getCitationIcon` heuristic), `components/SlashTurnBlock.tsx`, `components/ThreadItem.tsx` (sidebar row with rename UX), `lib/types.ts` (StreamingMessage / SlashTurn / LogEntry), `lib/starters.ts` (PLACEHOLDER_THREAD_TITLE / STARTER_QUESTIONS / entityStarters). Validated: 1286/1286 vitest pass, typecheck + lint clean, dev-server compiles `/chat` → HTTP 200 in 1.9s. **NOT YET DONE in E-3** (deferred to E-3-followup): `useChatStream(threadId)` hook extraction (the SSE / abort / ref-state path is the highest regression risk in the chat surface — separate session) and `<ConversationView>` shell.
+
+- **E-4 (3d) ScreenerFilterBar split ✅ 2026-05-02:** `components/screener/ScreenerFilterBar.tsx` reduced from 986 LOC → 693 LOC (30% cut). 5 extractions under `apps/worldview-web/features/screener/`: `lib/filter-state.ts` (FilterState + DEFAULT_FILTERS + GICS_SECTORS + CapTier + CAP_TIERS), `lib/active-counts.ts` (`isSet`, `rangeCount`, `countActiveFiltersByGroup`), `lib/__tests__/active-counts.test.ts` (**18 unit tests** covering NaN/Infinity/boolean-false edges, 0-bound treatment, section isolation, top-row exclusion), `components/Section.tsx` (collapsible §0.5 grid-rows wrapper), `components/RangeInput.tsx` (min/max number-pair). FilterState + DEFAULT_FILTERS re-exported from the bar so all existing call sites compile unchanged. Validated: 1286/1286 vitest pass (+18 new), typecheck + lint clean, `/screener` → HTTP 200 in 2.1s. The useReducer migration of the form-state remains for W3 (RHF + Zod).
+
+- **E-5 (2d) WatchlistMoversWidget split ✅ 2026-05-02:** `components/dashboard/WatchlistMoversWidget.tsx` reduced from 800 LOC → 442 LOC (45% cut). 5 extractions under `apps/worldview-web/features/dashboard/`: `lib/movers.ts` (5 pure functions: `buildMoverRows` / `applySectorFilter` / `rankByAbsChangePct` / `splitGainersLosers` / `pickFirstWatchlistByCreatedAt`), `lib/__tests__/movers.test.ts` (**19 unit tests** pinning 1D-vs-1W/1M behaviour, <2-bar / first<=0 edge cases, "loading row stays visible" sector-filter rule, top-N partition rules, deterministic default-watchlist picker), `components/WatchlistMoverRow.tsx` (104 LOC inline → file), `components/WatchlistSummaryStrip.tsx` (73 LOC), `components/BiggestNewsRow.tsx` (30 LOC). Widget body now reads as 4 pure-function calls inside thin useMemo wrappers. Validated: 1268/1268 vitest pass (+19 new), typecheck + lint clean.
 
 - **E-2 (5d) Portfolio page decomposition — partial ✅ 2026-05-02:** `app/(app)/portfolio/page.tsx` reduced from 1,745 LOC → 1,175 LOC (33% cut, 570 LOC removed). Three extractions landed under `apps/worldview-web/features/portfolio/`: (1) `lib/kpi.ts` — pure functions `computePortfolioKPI`, `computeAllocations`, `computeScopeHint`, `livePriceFor`, `formatStalenessAwarePrice` covered by **31 unit tests** in `lib/__tests__/kpi.test.ts` (F-202 top-loser-stays-null, B-2 delisted-instrument fallback, BP-265-aware `realizedPnl=null` while loading, divide-by-zero guards, sector-allocation parity with KPI total). (2) `components/CreatePortfolioDialog.tsx` — extracted dialog (was inline 184 LOC). (3) `components/AddPositionDialog.tsx` — extracted dialog (was inline 213 LOC). Page now imports these and replaces three inline useMemo blocks with calls to the pure functions. Validated: 1249/1249 vitest pass (+31 from E-2), typecheck clean, lint clean, dev-server compiles `/portfolio` to HTTP 200. **NOT YET DONE in E-2:** the 8-query `usePortfolioData` orchestrator hook (full hook extraction deferred — high risk to scramble queryKey/refetchInterval invariants) and the 600+ LOC of tab JSX split into per-tab components. The page is not yet the "<100 LOC orchestrator" the plan calls for; remaining work tracked as E-2-followup.
 

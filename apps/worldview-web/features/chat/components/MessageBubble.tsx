@@ -1,0 +1,135 @@
+"use client";
+
+/**
+ * features/chat/components/MessageBubble.tsx — Single chat message bubble.
+ *
+ * WHY EXTRACTED (PLAN-0059 E-3 partial): this used to be inline in
+ * `app/(app)/chat/page.tsx`. Pure render — no SSE / abort coupling — so
+ * extraction is mechanical. The accompanying TypingIndicator and
+ * StreamingBubble (which share visual chrome) are co-located in this file
+ * so the three "bubble" renderers stay together.
+ *
+ * WAVE E CHANGES (T-E-5-02 + T-E-5-04):
+ *   - Assistant messages now render via <MarkdownContent> (tables, code,
+ *     copy buttons). User messages remain plain (they typed the text).
+ *   - A CitationBar (segmented red/yellow/green confidence strip) sits
+ *     below assistant messages, complementing the existing pill list.
+ */
+
+import { Bot } from "lucide-react";
+import { MarkdownContent } from "@/components/ui/markdown-content";
+import { CitationBar } from "@/components/chat/CitationBar";
+import type { Message } from "@/types/api";
+import { CitationList } from "./CitationList";
+import type { StreamingMessage } from "../lib/types";
+
+/**
+ * TypingIndicator — animated three-dot bubble shown while SSE stream is
+ * active. Finance-grade polish: indicates the LLM is generating, not that
+ * the network stalled.
+ */
+export function TypingIndicator() {
+  return (
+    <div className="flex max-w-[70%] items-end gap-2 self-start">
+      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[2px] bg-primary/20">
+        <Bot className="h-3.5 w-3.5 text-primary" />
+      </div>
+      <div className="rounded-[2px] bg-muted px-4 py-3">
+        <div className="flex gap-1" aria-label="AI is generating a response">
+          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:0ms]" />
+          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:150ms]" />
+          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:300ms]" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function MessageBubble({ message }: { message: Message }) {
+  const isUser = message.role === "user";
+  // WHY anchor prefix: CitationBar segments link to #{prefix}-N anchors that
+  // we inject into the rendered message via `id` attributes. Use the
+  // message_id to namespace anchors per message.
+  const anchorPrefix = `cite-${message.message_id}`;
+
+  return (
+    <div className={`flex flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
+      <div
+        className={`flex max-w-[70%] items-end gap-2 ${isUser ? "flex-row-reverse" : "flex-row"}`}
+      >
+        {!isUser && (
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[2px] bg-primary/20">
+            <Bot className="h-3.5 w-3.5 text-primary" />
+          </div>
+        )}
+
+        <div
+          className={`rounded-[2px] px-4 py-3 text-sm leading-relaxed ${
+            isUser ? "bg-primary/10 text-foreground" : "bg-muted text-foreground"
+          }`}
+        >
+          {/*
+           * User vs assistant rendering split:
+           *  - User: plain <pre> preserves their literal whitespace (a question
+           *    like "compare:\n- AAPL\n- MSFT" reads as written). Markdown
+           *    rendering on user input would mangle "*" wildcards etc.
+           *  - Assistant: MarkdownContent renders tables/lists/code blocks
+           *    consistent with the rest of the app (PLAN-0051 T-E-5-02).
+           */}
+          {isUser ? (
+            <pre className="whitespace-pre-wrap font-sans text-sm">{message.content}</pre>
+          ) : (
+            <div id={anchorPrefix}>
+              <MarkdownContent size="comfortable">{message.content}</MarkdownContent>
+            </div>
+          )}
+
+          <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+            {new Date(message.created_at).toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </p>
+        </div>
+      </div>
+
+      {/* Citation bar + pill list — assistant messages only */}
+      {!isUser && (message.citations?.length ?? 0) > 0 && (
+        <div className="ml-9 max-w-[70%]">
+          {/* WHY both bar AND pills: the bar gives at-a-glance gestalt
+              (mostly green = trust this answer); the pills give the
+              actual click-through link. Different jobs, both useful. */}
+          <CitationBar citations={message.citations} anchorPrefix={anchorPrefix} />
+          <CitationList citations={message.citations} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * StreamingBubble — the in-flight assistant bubble shown while SSE tokens
+ * arrive.
+ *
+ * WHY MarkdownContent here too: the streaming text often contains markdown
+ * partials. Rendering through MarkdownContent gives consistent typography
+ * with the final message. Trade-off: partial markdown sometimes flickers
+ * (e.g. "**bo" before "**bold**" closes), which is acceptable.
+ */
+export function StreamingBubble({ streaming }: { streaming: StreamingMessage }) {
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <div className="flex max-w-[70%] items-end gap-2">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[2px] bg-primary/20">
+          <Bot className="h-3.5 w-3.5 text-primary" />
+        </div>
+        <div className="rounded-[2px] bg-muted px-4 py-3 text-sm leading-relaxed">
+          <MarkdownContent size="comfortable">{streaming.text}</MarkdownContent>
+          {streaming.active && (
+            <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-primary align-middle" />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
