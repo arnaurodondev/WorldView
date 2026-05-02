@@ -26,20 +26,18 @@
  */
 
 "use client";
-// WHY "use client": uses recharts (DOM API), useState, useMemo.
+// WHY "use client": SVG hover state via useState + useMemo on derived
+// chart points + useQuery (TanStack Query is a client-only hook).
+//
+// PLAN-0059 G-1 finish (2026-05-02): migrated off recharts to hand-rolled
+// SVG. The chart renders only two points (period start at 0 → period end at
+// total_realized) — recharts' LineChart + Tooltip + Grid + ReferenceLine
+// pulled the entire library for what is geometrically a line + a dashed
+// horizontal rule. Hand-rolled SVG keeps the visual identical with zero
+// chart-engine surface area.
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-  ReferenceLine,
-} from "recharts";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -178,56 +176,12 @@ export function RealizedPnLChart({ portfolioId }: RealizedPnLChartProps) {
             </span>
           </div>
 
-          {/* Chart */}
+          {/* Chart — hand-rolled SVG (PLAN-0059 G-1 finish) */}
           <div className="h-[160px] px-2 py-1">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart
-                data={chartPoints}
-                margin={{ top: 4, right: 8, left: 4, bottom: 0 }}
-              >
-                <CartesianGrid
-                  strokeDasharray="2 2"
-                  stroke="hsl(var(--border) / 0.4)"
-                  vertical={false}
-                />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <YAxis
-                  tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                  tickLine={false}
-                  axisLine={false}
-                  tickFormatter={(v) => `$${v}`}
-                  width={50}
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: "hsl(var(--card))",
-                    border: "1px solid hsl(var(--border))",
-                    fontSize: 11,
-                    fontFamily: "var(--font-mono, monospace)",
-                  }}
-                  formatter={(value: number) => [formatPrice(value), "Cumulative"]}
-                />
-                {/* Zero line — visual datum so positive vs negative is obvious. */}
-                <ReferenceLine y={0} stroke="hsl(var(--border))" strokeWidth={1} />
-                <Line
-                  type="monotone"
-                  dataKey="cumulative"
-                  stroke={
-                    data.total_realized >= 0
-                      ? "hsl(var(--positive))"
-                      : "hsl(var(--negative))"
-                  }
-                  strokeWidth={2}
-                  dot={{ r: 3 }}
-                  isAnimationActive={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            <RealizedPnLLine
+              chartPoints={chartPoints}
+              isPositive={data.total_realized >= 0}
+            />
           </div>
 
           {/* Per-ticker breakdown table — top contributors & detractors */}
@@ -264,6 +218,214 @@ export function RealizedPnLChart({ portfolioId }: RealizedPnLChartProps) {
             </div>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+// ── Inner SVG line chart ─────────────────────────────────────────────────────
+//
+// WHY EXTRACTED: keeps the hover-tooltip useState close to the SVG it controls
+// and out of the data-fetching wrapper. The chart is a 2-point bracket
+// (period start → period end) over a Y axis that includes 0 as a hard datum
+// so the user sees positive vs negative at a glance.
+
+interface ChartPoint {
+  date: string;
+  cumulative: number;
+}
+
+const VIEW_W = 480;
+const VIEW_H = 160;
+const M_TOP = 8;
+const M_BOTTOM = 18; // X-axis labels
+const M_LEFT = 50; // Y-axis labels need width; matches recharts width=50
+const M_RIGHT = 8;
+const PLOT_W = VIEW_W - M_LEFT - M_RIGHT;
+const PLOT_H = VIEW_H - M_TOP - M_BOTTOM;
+
+function RealizedPnLLine({
+  chartPoints,
+  isPositive,
+}: {
+  chartPoints: ChartPoint[];
+  isPositive: boolean;
+}) {
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
+  // Defensive: if for any reason the wrapper passes <2 points, render a
+  // baseline-only chart rather than crashing the panel.
+  if (chartPoints.length < 2) {
+    return null;
+  }
+
+  // Y-scale must include 0 (zero baseline is meaningful for P&L) and the
+  // cumulative value. We pad the range by 10% so the line never touches the
+  // top/bottom of the plot — a Bloomberg convention for readable lines.
+  const values = chartPoints.map((p) => p.cumulative);
+  const dataMin = Math.min(0, ...values);
+  const dataMax = Math.max(0, ...values);
+  const pad = Math.max(0.5, (dataMax - dataMin) * 0.1);
+  const yMin = dataMin - pad;
+  const yMax = dataMax + pad;
+  const yRange = Math.max(0.01, yMax - yMin);
+
+  // Geometry helpers. xAt distributes points evenly; yAt maps a value into
+  // the plot rectangle.
+  const xAt = (i: number) =>
+    M_LEFT + (i / (chartPoints.length - 1)) * PLOT_W;
+  const yAt = (v: number) =>
+    M_TOP + PLOT_H - ((v - yMin) / yRange) * PLOT_H;
+  const yZero = yAt(0);
+
+  // Polyline path. The chart only has 2 points so this is a single L command,
+  // but writing it as a loop keeps the migration cleanly extensible if the
+  // backend ever grows a per-day series (T-D-4-03 follow-up).
+  const linePath = chartPoints
+    .map((p, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(1)} ${yAt(p.cumulative).toFixed(1)}`)
+    .join(" ");
+
+  // Y-axis label values: yMin / 0 / yMax. Including 0 explicitly is the whole
+  // point of the chart. We round to whole-dollar amounts.
+  const yLabels = [yMin, 0, yMax].map((v) => Math.round(v));
+
+  // X-axis labels — period start (left) and period end (right).
+  const xLabelStart = chartPoints[0].date.slice(0, 10);
+  const xLabelEnd = chartPoints[chartPoints.length - 1].date.slice(0, 10);
+
+  // Stroke colour follows the prior recharts behaviour: green when net
+  // positive, red when net negative.
+  const stroke = isPositive ? "hsl(var(--positive))" : "hsl(var(--negative))";
+
+  return (
+    <div className="relative h-full w-full">
+      <svg
+        viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
+        width="100%"
+        height="100%"
+        preserveAspectRatio="none"
+        role="img"
+        aria-label="Realized P&L cumulative line"
+        onMouseLeave={() => setHoverIdx(null)}
+      >
+        {/* Horizontal grid lines at the three Y-label values — dashed
+            replicates the prior CartesianGrid look. */}
+        {yLabels.map((v) => (
+          <line
+            key={`grid-${v}`}
+            x1={M_LEFT}
+            x2={M_LEFT + PLOT_W}
+            y1={yAt(v)}
+            y2={yAt(v)}
+            stroke="hsl(var(--border) / 0.4)"
+            strokeWidth={1}
+            strokeDasharray="2 2"
+          />
+        ))}
+
+        {/* Y-axis labels — right-aligned just inside the left margin. */}
+        {yLabels.map((v) => (
+          <text
+            key={`ylabel-${v}`}
+            x={M_LEFT - 4}
+            y={yAt(v) + 3}
+            fill="currentColor"
+            fontSize={10}
+            textAnchor="end"
+            className="text-muted-foreground"
+          >
+            ${v}
+          </text>
+        ))}
+
+        {/* Zero baseline — solid (slightly heavier than the dashed grid)
+            because positive vs negative is the whole point of the chart. */}
+        <line
+          x1={M_LEFT}
+          x2={M_LEFT + PLOT_W}
+          y1={yZero}
+          y2={yZero}
+          stroke="hsl(var(--border))"
+          strokeWidth={1}
+        />
+
+        {/* The line itself. */}
+        <path
+          d={linePath}
+          fill="none"
+          stroke={stroke}
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+
+        {/* Endpoint dots — match the recharts dot={{r:3}} look. */}
+        {chartPoints.map((p, i) => (
+          <circle
+            key={`dot-${i}`}
+            cx={xAt(i)}
+            cy={yAt(p.cumulative)}
+            r={3}
+            fill={stroke}
+          />
+        ))}
+
+        {/* X-axis labels — start and end dates. */}
+        <text
+          x={M_LEFT}
+          y={VIEW_H - 4}
+          fill="currentColor"
+          fontSize={10}
+          textAnchor="start"
+          className="text-muted-foreground"
+        >
+          {xLabelStart}
+        </text>
+        <text
+          x={M_LEFT + PLOT_W}
+          y={VIEW_H - 4}
+          fill="currentColor"
+          fontSize={10}
+          textAnchor="end"
+          className="text-muted-foreground"
+        >
+          {xLabelEnd}
+        </text>
+
+        {/* Per-point hit areas around each dot for hover tooltip. We use a
+            generous 20px-wide invisible rectangle so users can tooltip-target
+            without pixel-hunting the 3px dot. */}
+        {chartPoints.map((_, i) => (
+          <rect
+            key={`hit-${i}`}
+            x={xAt(i) - 10}
+            y={M_TOP}
+            width={20}
+            height={PLOT_H}
+            fill="transparent"
+            onMouseEnter={() => setHoverIdx(i)}
+          />
+        ))}
+      </svg>
+
+      {hoverIdx !== null && (
+        <div
+          className="pointer-events-none absolute -translate-x-1/2 rounded-[2px] border border-border bg-card px-2 py-1 font-mono text-[11px]"
+          style={{
+            // Convert the SVG x-coordinate back to a percentage of the wrapper
+            // width so the tooltip tracks even after CSS resize.
+            left: `${(xAt(hoverIdx) / VIEW_W) * 100}%`,
+            top: 4,
+          }}
+          role="tooltip"
+        >
+          <div className="text-muted-foreground">
+            {chartPoints[hoverIdx].date.slice(0, 10)}
+          </div>
+          <div className={isPositive ? "text-positive" : "text-negative"}>
+            {formatPrice(chartPoints[hoverIdx].cumulative)}
+          </div>
+        </div>
       )}
     </div>
   );
