@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
+from structlog.testing import capture_logs
 
 pytestmark = pytest.mark.unit
 
@@ -496,3 +497,161 @@ class TestBatchLimitAndConcurrency:
             await worker.run()
 
         assert max_seen[0] <= 3, f"Max concurrent calls was {max_seen[0]}, expected ≤ 3"
+
+
+# ---------------------------------------------------------------------------
+# P-3: Kafka emit failure must not crash the worker
+# ---------------------------------------------------------------------------
+
+
+class TestProvisionalEnrichmentWorkerKafkaResilience:
+    async def test_kafka_error_does_not_crash(self) -> None:
+        """produce_bytes raising must not propagate out of run() (P-3)."""
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([_make_pending_row()])
+        producer = _make_producer()
+        producer.produce_bytes = MagicMock(side_effect=RuntimeError("kafka down"))
+
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
+
+        with (
+            patch.object(
+                worker,
+                "_extract_entity_profile",
+                return_value={"canonical_name": "Apple Inc.", "entity_type": "financial_instrument"},
+            ),
+            patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
+            patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
+        ):
+            # Must not raise even though produce_bytes raises
+            await worker.run()
+
+    async def test_kafka_error_logs_warning(self) -> None:
+        """produce_bytes raising emits provisional_enrichment_dirtied_emit_failed warning (P-3)."""
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([_make_pending_row()])
+        producer = _make_producer()
+        producer.produce_bytes = MagicMock(side_effect=RuntimeError("kafka down"))
+
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
+
+        with (
+            patch.object(
+                worker,
+                "_extract_entity_profile",
+                return_value={"canonical_name": "Apple Inc.", "entity_type": "financial_instrument"},
+            ),
+            patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
+            patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
+            patch("knowledge_graph.infrastructure.workers.provisional_enrichment.logger") as mock_logger,
+        ):
+            await worker.run()
+
+        warning_events = [c.args[0] for c in mock_logger.warning.call_args_list]
+        assert "provisional_enrichment_dirtied_emit_failed" in warning_events
+
+
+# ---------------------------------------------------------------------------
+# P-5: Success counter increments on enriched rows
+# ---------------------------------------------------------------------------
+
+
+class TestProvisionalEnrichmentSuccessCounter:
+    async def test_success_counter_increments_once_per_enriched_row(self) -> None:
+        """s7_provisional_enrichment_success_total.inc() is called once per resolved row (P-5)."""
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([_make_pending_row()])
+        producer = _make_producer()
+
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
+
+        with (
+            patch.object(
+                worker,
+                "_extract_entity_profile",
+                return_value={"canonical_name": "Apple Inc.", "entity_type": "financial_instrument"},
+            ),
+            patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
+            patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
+            patch(
+                "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_enrichment_success_total"
+            ) as mock_counter,
+        ):
+            await worker.run()
+
+        mock_counter.inc.assert_called_once()
+
+    async def test_success_counter_not_incremented_on_llm_failure(self) -> None:
+        """s7_provisional_enrichment_success_total.inc() is NOT called when LLM returns None (P-5)."""
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([_make_pending_row()])
+
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock())
+
+        with (
+            patch.object(worker, "_extract_entity_profile", return_value=None),
+            patch(
+                "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_enrichment_success_total"
+            ) as mock_counter,
+        ):
+            await worker.run()
+
+        mock_counter.inc.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# P-1: init warning when direct_producer is None (ProvisionalEnrichmentWorker)
+# ---------------------------------------------------------------------------
+
+
+class TestInitWarningNoProducerEnrichmentWorker:
+    def test_provisional_enrichment_worker_warns_when_no_producer(self) -> None:
+        """When direct_producer=None, a WARNING is logged at init time."""
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([])
+
+        with capture_logs() as cap:
+            ProvisionalEnrichmentWorker(
+                session_factory=factory,
+                llm_client=AsyncMock(),
+                direct_producer=None,
+            )
+
+        assert any(
+            e.get("event") == "provisional_enrichment_worker_no_producer" and e.get("log_level") == "warning"
+            for e in cap
+        ), f"Expected warning log not found in: {cap}"
+
+    def test_provisional_enrichment_worker_no_warning_when_producer_present(self) -> None:
+        """When direct_producer is provided, no 'no_producer' warning is logged."""
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([])
+
+        with capture_logs() as cap:
+            ProvisionalEnrichmentWorker(
+                session_factory=factory,
+                llm_client=AsyncMock(),
+                direct_producer=MagicMock(),
+            )
+
+        assert not any(
+            e.get("event") == "provisional_enrichment_worker_no_producer" for e in cap
+        ), f"Unexpected no_producer warning found in: {cap}"

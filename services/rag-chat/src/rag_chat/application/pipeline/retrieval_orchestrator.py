@@ -101,6 +101,8 @@ class ParallelRetrievalOrchestrator:
             tasks.append(self._with_cb("chunk", self._fetch_chunks(resolved_query, plan, query_embedding)))
         if plan.use_relations and query_embedding:
             tasks.append(self._with_cb("relations", self._fetch_relations(query_embedding, entity_ids)))
+        elif plan.use_relations and not query_embedding:
+            log.warning("retrieval_relations_skipped_no_embedding")
         if plan.use_graph:
             for eid in entity_ids[:_MAX_GRAPH_ENTITIES]:
                 tasks.append(self._with_cb("graph", self._fetch_graph(eid)))
@@ -382,7 +384,7 @@ class ParallelRetrievalOrchestrator:
         )
         if not instrument_id:
             return []
-        highlights, _earnings, quote = await asyncio.gather(
+        highlights, earnings, quote = await asyncio.gather(
             asyncio.wait_for(self._s3.get_fundamentals_highlights(instrument_id), timeout=self._timeout),
             asyncio.wait_for(self._s3.get_earnings(instrument_id), timeout=self._timeout),
             asyncio.wait_for(self._s3.get_quote(instrument_id), timeout=self._timeout),
@@ -419,6 +421,24 @@ class ParallelRetrievalOrchestrator:
                     trust_weight=DEFAULT_TRUST_WEIGHTS["financial"],
                     citation_meta=CitationMeta(
                         title=f"{ticker} Quote",
+                        url=None,
+                        source_name="Market Data",
+                        published_at=None,
+                        entity_name=ticker,
+                    ),
+                )
+            )
+        if isinstance(earnings, dict) and earnings:
+            text = f"Earnings data for {ticker}: {earnings}"
+            items.append(
+                RetrievedItem.create(
+                    item_id=f"financial:{ticker}:earnings",
+                    item_type=ItemType.financial,
+                    text=text,
+                    score=0.90,
+                    trust_weight=DEFAULT_TRUST_WEIGHTS["earnings_data"],
+                    citation_meta=CitationMeta(
+                        title=f"{ticker} Earnings",
                         url=None,
                         source_name="Market Data",
                         published_at=None,
