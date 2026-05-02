@@ -46,6 +46,10 @@ import {
 } from "react";
 import { createGateway, GatewayError } from "@/lib/gateway";
 import type { UserProfile } from "@/types/api";
+import {
+  broadcastSignout,
+  subscribeSignout,
+} from "@/lib/auth/session-channel";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -305,7 +309,37 @@ export function AuthProvider({ children }: AuthProviderProps) {
       // Logout API errors are non-fatal — local state is already cleared above
       // The httpOnly cookie will expire naturally (15 min → 1 day depending on config)
     }
+
+    // PLAN-0059 B-6: tell every other tab the session is dead. Posting AFTER
+    // the local clear means a peer tab cannot race with us and re-broadcast a
+    // stale "still logged in" signal mid-tear-down. Best-effort — peer tabs
+    // that miss the signal will fall back to silent-refresh-fails-401 within
+    // the access-token TTL (≤15 min) anyway.
+    broadcastSignout();
   };
+
+  // PLAN-0059 B-6: react to peer-tab signouts. When ANY other tab posts a
+  // signout message, we clear local in-memory auth state immediately so the
+  // unattended tab cannot keep issuing authenticated requests. We do NOT
+  // re-broadcast (would loop) and we do NOT call gw.logout() (peer already
+  // revoked the server-side cookie).
+  //
+  // WHY useEffect with [] deps: subscribe once per AuthProvider mount; the
+  // teardown closes the BroadcastChannel so React Strict-Mode double-invoke
+  // does not leak channels.
+  useEffect(() => {
+    const unsubscribe = subscribeSignout(() => {
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      setAccessToken(null);
+      setUser(null);
+      setIsAuthenticated(false);
+    });
+    return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <AuthContext.Provider
