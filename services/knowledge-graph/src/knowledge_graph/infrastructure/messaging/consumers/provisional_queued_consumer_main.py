@@ -111,6 +111,18 @@ async def main() -> None:
         usage_logger=kg_usage_logger,
     )
 
+    # Wire direct Kafka producer for entity.dirtied.v1 (fire-and-forget post-commit).
+    direct_producer = None
+    try:
+        from confluent_kafka import Producer as _RawProducer  # type: ignore[import-untyped]
+
+        from knowledge_graph.infrastructure.messaging.direct_producer import ConfluentDirectProducer
+
+        direct_producer = ConfluentDirectProducer(_RawProducer({"bootstrap.servers": settings.kafka_bootstrap_servers}))
+        log.info("kg_pq_consumer_direct_producer_ready")
+    except Exception:
+        log.warning("kg_pq_consumer_direct_producer_unavailable_dirtied_disabled", exc_info=True)
+
     config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=settings.kafka_consumer_group_provisional_queued,
@@ -123,6 +135,7 @@ async def main() -> None:
         embed_model_id=settings.embedding_model_id,
         max_retries=settings.worker_provisional_enrichment_max_retries,
         dedup_client=valkey,
+        direct_producer=direct_producer,
     )
 
     try:
