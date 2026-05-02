@@ -11,20 +11,27 @@ from ml_clients.cost import PRICING, estimate_cost, estimate_tokens_from_text
 
 
 @pytest.mark.unit
-def test_estimate_cost_deepinfra() -> None:
-    """1000 in + 500 out with DeepInfra deepseek model."""
-    # input:  1000 / 1_000_000 * 0.69  = 0.00069
-    # output:  500 / 1_000_000 * 2.19  = 0.001095
-    # total  = 0.001785
-    result = estimate_cost("deepinfra", "deepseek-r1-distill-qwen-32b", 1000, 500)
-    assert abs(result - 0.001785) < 1e-9
+def test_estimate_cost_deepinfra_qwen3() -> None:
+    """1000 in + 500 out with DeepInfra Qwen3-32B."""
+    # input:  1000 / 1_000_000 * 0.08  = 0.00008
+    # output:  500 / 1_000_000 * 0.28  = 0.00014
+    # total  = 0.00022
+    result = estimate_cost("deepinfra", "Qwen/Qwen3-32B", 1000, 500)
+    assert abs(result - 0.00022) < 1e-9
 
 
 @pytest.mark.unit
-def test_estimate_cost_deepinfra_1m_tokens() -> None:
-    """1M in + 1M out = 0.69 + 2.19 = 2.88."""
-    result = estimate_cost("deepinfra", "deepseek-r1-distill-qwen-32b", 1_000_000, 1_000_000)
-    assert abs(result - 2.88) < 1e-9
+def test_estimate_cost_deepinfra_qwen3_1m_tokens() -> None:
+    """1M in + 1M out = 0.08 + 0.28 = 0.36."""
+    result = estimate_cost("deepinfra", "Qwen/Qwen3-32B", 1_000_000, 1_000_000)
+    assert abs(result - 0.36) < 1e-9
+
+
+@pytest.mark.unit
+def test_estimate_cost_deepinfra_v4_flash() -> None:
+    """1M in + 1M out with DeepSeek-V4-Flash = 0.14 + 0.28 = 0.42."""
+    result = estimate_cost("deepinfra", "deepseek-ai/DeepSeek-V4-Flash", 1_000_000, 1_000_000)
+    assert abs(result - 0.42) < 1e-9
 
 
 @pytest.mark.unit
@@ -55,14 +62,14 @@ def test_estimate_cost_unknown_provider() -> None:
 @pytest.mark.unit
 def test_estimate_cost_unknown_model_known_provider() -> None:
     """Known provider but unknown (non-wildcard) model returns 0.0."""
-    # deepinfra has no wildcard — unknown model → 0.0
+    # deepinfra has exact-match entries only — unknown model → 0.0
     result = estimate_cost("deepinfra", "gpt-4o-mini", 1000, 500)
     assert result == 0.0
 
 
 @pytest.mark.unit
 def test_estimate_cost_openrouter() -> None:
-    """OpenRouter deepseek uses the same rates as DeepInfra deepseek."""
+    """OpenRouter deepseek fallback model pricing ($0.69/$2.19 per 1M)."""
     result = estimate_cost("openrouter", "deepseek/deepseek-r1-distill-qwen-32b", 1_000_000, 1_000_000)
     assert abs(result - 2.88) < 1e-9
 

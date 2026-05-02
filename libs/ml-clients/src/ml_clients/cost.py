@@ -23,11 +23,14 @@ import math
 # ---------------------------------------------------------------------------
 
 PRICING: dict[str, dict[str, dict[str, float]]] = {
-    # DeepInfra — primary chat completion provider (PRD-0015/0016)
+    # DeepInfra — primary chat completion + extraction provider (PRD-0015/0016)
+    # Qwen3-32B: primary RAG chat completion model ($0.08 in / $0.28 out per 1M)
+    # DeepSeek-V4-Flash: structured JSON extraction model ($0.14 in / $0.28 out per 1M)
     "deepinfra": {
-        "deepseek-r1-distill-qwen-32b": {"input": 0.69, "output": 2.19},
+        "Qwen/Qwen3-32B": {"input": 0.08, "output": 0.28},
+        "deepseek-ai/DeepSeek-V4-Flash": {"input": 0.14, "output": 0.28},
     },
-    # OpenRouter — secondary chat completion provider
+    # OpenRouter — secondary chat completion provider (fallback path)
     "openrouter": {
         "deepseek/deepseek-r1-distill-qwen-32b": {"input": 0.69, "output": 2.19},
     },

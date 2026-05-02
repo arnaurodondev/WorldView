@@ -38,6 +38,12 @@ s6_claims_extracted_total = prometheus_client.Counter(
     "Total claims extracted by deep LLM extraction (Block 10)",
 )
 
+s6_extraction_entity_ref_hallucinated_total = prometheus_client.Counter(
+    "s6_extraction_entity_ref_hallucinated_total",
+    "Entity refs produced by the extraction LLM that were not in the entities list "
+    "(hallucination signal — refs invented by the model rather than copied from input)",
+)
+
 nlp_sectioning_fallback_total = prometheus_client.Counter(
     "nlp_sectioning_fallback_total",
     "Times the synthetic (fallback) sectioner was used because source_type was unknown",
