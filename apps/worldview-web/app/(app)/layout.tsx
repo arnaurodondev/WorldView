@@ -49,6 +49,9 @@ import { AskAiPanel } from "@/components/shell/AskAiPanel";
 import { HotkeyProvider } from "@/contexts/HotkeyContext";
 import { GlobalHotkeyBindings } from "@/components/shell/GlobalHotkeyBindings";
 import { HotkeyCheatSheet } from "@/components/shell/HotkeyCheatSheet";
+// PLAN-0059 B-6 — fixed-position banner that detects new build deploys and
+// prompts the user to reload. Polls /api/version every 60s; user-driven reload.
+import { ForceUpdateBanner } from "@/components/shell/ForceUpdateBanner";
 // PLAN-0053 Wave G — feedback widget mounted at the shell so every
 // authenticated page exposes the floating Send-Feedback button + modal.
 import { FeedbackButton } from "@/components/feedback/FeedbackButton";
@@ -255,6 +258,10 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
       {/* HotkeyCheatSheet — `?` overlay; auto-derives content from the registry. */}
       <HotkeyCheatSheet />
+
+      {/* B-6: ForceUpdateBanner is a fixed-position overlay; mounting it
+          alongside other globals avoids layout-tree pollution. */}
+      <ForceUpdateBanner />
 
       <WorkspaceProvider>
         {/* WHY flex flex-col h-screen: pins the layout to viewport height so the
