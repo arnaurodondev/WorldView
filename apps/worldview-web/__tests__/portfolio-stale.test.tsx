@@ -23,6 +23,9 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+// PLAN-0059 C-6: PortfolioPage uses nuqs URL state; tests need the testing
+// adapter to stub the router.
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import PortfolioPage from "@/app/(app)/portfolio/page";
 
 // ── Next.js navigation mock ────────────────────────────────────────────────────
@@ -247,7 +250,11 @@ function makeQueryClient() {
  */
 function wrapper({ children }: { children: React.ReactNode }) {
   const qc = makeQueryClient();
-  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+  return (
+    <NuqsTestingAdapter searchParams="">
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    </NuqsTestingAdapter>
+  );
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
