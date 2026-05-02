@@ -926,7 +926,9 @@ Before W0 closes:
 
 ---
 
-## 7. PLAN-0059-E — God-File Decomposition (Wave 2, Track B)
+## 7. PLAN-0059-E — God-File Decomposition (Wave 2, Track B) ✅ (E-1 partial)
+
+**Status: E-1 DONE — 2026-05-02 · 1218 frontend tests pass · typecheck + lint clean · 15-endpoint live curl matrix verified**
 
 **Goal:** Split `lib/gateway.ts` (2,657 LOC), `app/(app)/portfolio/page.tsx` (1,739), `app/(app)/chat/page.tsx` (1,293), `components/screener/ScreenerFilterBar.tsx` (986), `components/dashboard/WatchlistMoversWidget.tsx` (800).
 **Depends on:** PLAN-0059-C complete (codegen + URL state).
@@ -935,7 +937,7 @@ Before W0 closes:
 
 ### Waves
 
-- **E-1 (5d) Gateway split:** `lib/api/{client,auth,instruments,portfolios,watchlists,alerts,screener,chat,brokerage,markets}.ts`. Keep `lib/gateway.ts` as thin re-export shim for one wave; kill in E-2. CI rule: `lib/api/*.ts` >350 LOC fails build.
+- **E-1 (5d) Gateway split ✅ — 2026-05-02:** `lib/api/{_client,auth,instruments,knowledge-graph,news,screener,portfolios,watchlists,alerts,chat,prediction-markets,dashboard,brokerage,search,feedback}.ts`. `lib/gateway.ts` reduced from 2,906 LOC monolith → 103-LOC shim that imports each factory and merges them via spread, preserving the `createGateway`/`GatewayError`/`Gateway` surface. All ~91 import sites unchanged. Cross-domain `this.X()` calls (search→instruments, watchlists self-refs) use explicit `this:` interface types to avoid circular `ReturnType` traps. 15 modules avg 212 LOC; largest (`portfolios.ts` 667, `instruments.ts` 407) over the 350-LOC plan target — incremental further-split deferred (CI gate not added in this wave to avoid shipping a failing gate). E-2 will kill the shim. Validated end-to-end: 1218/1218 vitest pass, dev-login + 14 representative endpoint curls (auth/instruments/news/screener/portfolios/watchlists/alerts/chat/prediction-markets/dashboard/brokerage/feedback/knowledge-graph/search) all return expected status codes. 2× parallel QA agents (behavioral parity + type/import surface) returned clean.
 - **E-2 (5d) Portfolio page decomposition:** `features/portfolio/{components,hooks,queries,lib}/`. `usePortfolioKPI(portfolioId)` hook + `lib/kpi.ts` pure functions + tests. Page <100 LOC orchestrator.
 - **E-3 (4d) Chat page decomposition:** `useChatStream(threadId)` (or `@vercel/ai-sdk useChat`); `<ThreadSidebar>`, `<ConversationView>`, `<MessageComposer>`, `<CitationPanel>`. Slash command parsing → `lib/chat/parseSlashCommand.ts`.
 - **E-4 (3d) ScreenerFilterBar split:** Per-section subcomponents + `useReducer` filter state (W3 will migrate to RHF+Zod).
