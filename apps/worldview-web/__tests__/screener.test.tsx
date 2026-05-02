@@ -28,6 +28,9 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+// PLAN-0059 C-6: ScreenerPage uses nuqs URL state (sector + capTier).
+// Tests need NuqsTestingAdapter to stub the router.
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { HeatCell } from "@/components/screener/HeatCell";
 import ScreenerPage from "@/app/(app)/screener/page";
 
@@ -140,7 +143,11 @@ vi.mock("@/hooks/useAuth", () => ({
 function makeWrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return function Wrapper({ children }: { children: React.ReactNode }) {
-    return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+    return (
+      <NuqsTestingAdapter searchParams="">
+        <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+      </NuqsTestingAdapter>
+    );
   };
 }
 

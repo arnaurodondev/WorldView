@@ -35,6 +35,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+// PLAN-0059 C-6: URL-state for the two highest-cardinality screener filters
+// (sector + cap tier). The full FilterState (25+ fields) intentionally stays
+// in component state — encoding it would yield unreadable URLs. The two
+// dimensions exposed here are what traders most often share via deep-link
+// ("look at my Energy / Mid-cap screen"). Saved Screens cover the rest.
+import { useQueryState, parseAsString, parseAsStringLiteral } from "nuqs";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { ScreenerTable, type SortState, type SortableKey } from "@/components/screener/ScreenerTable";
@@ -273,11 +279,48 @@ function sortResults(results: ScreenerResult[], sort: SortState): ScreenerResult
 export default function ScreenerPage() {
   const { accessToken } = useAuth();
 
+  // ── URL-backed dimensions (C-6) ───────────────────────────────────────────
+  // WHY just sector + capTier: these are the top-level "axis" filters most
+  // often shared via link. parseAsString accepts any GICS string (the bar's
+  // own validation rejects unknowns). parseAsStringLiteral pins capTier to
+  // the typed enum.
+  const [urlSector, setUrlSector] = useQueryState(
+    "sector",
+    parseAsString.withDefault("").withOptions({ clearOnDefault: true }),
+  );
+  const [urlCapTier, setUrlCapTier] = useQueryState(
+    "capTier",
+    parseAsStringLiteral(["ALL", "LARGE", "MID", "SMALL"] as const)
+      .withDefault("ALL")
+      .withOptions({ clearOnDefault: true }),
+  );
+
   // ── Applied filters — committed state that triggers the S9 query ──────────
   // WHY "applied" vs "pending": filter form state in ScreenerFilterBar is pending
   // until the user clicks Apply. Separating them prevents partial inputs from
   // firing API calls.
-  const [appliedFilters, setAppliedFilters] = useState<FilterState>(DEFAULT_FILTERS);
+  // Lazy initialiser merges URL params into DEFAULT_FILTERS so a deep-link
+  // pre-applies the URL-backed dimensions on first paint without an extra
+  // render cycle.
+  const [appliedFilters, setAppliedFilters] = useState<FilterState>(() => ({
+    ...DEFAULT_FILTERS,
+    sector: urlSector,
+    capTier: urlCapTier,
+  }));
+
+  // Keep the URL in sync when applied filters change for the URL-backed
+  // dimensions. Other filters intentionally stay out of the URL (see comment
+  // on the import above).
+  useEffect(() => {
+    if (appliedFilters.sector !== urlSector) {
+      void setUrlSector(appliedFilters.sector || "");
+    }
+    if (appliedFilters.capTier !== urlCapTier) {
+      void setUrlCapTier(appliedFilters.capTier);
+    }
+    // Read the URL for changes too — when the user hits back/forward the URL
+    // updates first; reflect that into appliedFilters so the table re-queries.
+  }, [appliedFilters.sector, appliedFilters.capTier, urlSector, urlCapTier, setUrlSector, setUrlCapTier]);
 
   // ── Filter panel open/closed ──────────────────────────────────────────────
   // WHY default false (collapsed): terminal UIs default to maximum data density.

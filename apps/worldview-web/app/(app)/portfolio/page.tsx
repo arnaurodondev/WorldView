@@ -31,9 +31,15 @@
 
 "use client";
 // WHY "use client": useState (dialog open/close + equity-curve period),
-// hook drives TanStack Query, child components include Radix portals.
+// hook drives TanStack Query, child components include Radix portals,
+// and nuqs URL state hooks are browser-only.
 
 import { useState } from "react";
+// PLAN-0059 C-6: useQueryState backs the active-tab + equity-period in the
+// URL so deep-links round-trip ("share my Holdings view at 1Y period").
+// `parseAsStringLiteral` constrains the value to the allowed set; an
+// unknown URL value falls back to the default instead of crashing.
+import { useQueryState, parseAsStringLiteral } from "nuqs";
 
 import { useAuth } from "@/hooks/useAuth";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -81,7 +87,34 @@ export default function PortfolioPage() {
   // ── F-P-003: hoisted equity-curve period state ────────────────────────
   // WHY 3M default: matches Bloomberg PORT default — long enough to show a
   // meaningful trend without compressing the most recent moves.
-  const [equityPeriod, setEquityPeriod] = useState<PeriodLabel>("3M");
+  // C-6: backed by URL `?period=` so deep-links round-trip. `clearOnDefault`
+  // keeps the URL clean when the user is on the default — no `?period=3M`
+  // noise on first visit.
+  const [equityPeriod, setEquityPeriod] = useQueryState(
+    "period",
+    parseAsStringLiteral([
+      "1W",
+      "1M",
+      "3M",
+      "6M",
+      "1Y",
+      "All",
+    ] as const satisfies readonly PeriodLabel[])
+      .withDefault("3M")
+      .withOptions({ clearOnDefault: true }),
+  );
+
+  // ── C-6: URL-backed active tab ──────────────────────────────────────────
+  // WHY URL state for the tab: traders share specific views ("look at the
+  // transaction history for AAPL") and expect back/forward to navigate
+  // between tabs. WHY clearOnDefault: omitting `?tab=holdings` from the URL
+  // when Holdings is active keeps the canonical /portfolio link short.
+  const [activeTab, setActiveTab] = useQueryState(
+    "tab",
+    parseAsStringLiteral(["holdings", "transactions", "watchlist"] as const)
+      .withDefault("holdings")
+      .withOptions({ clearOnDefault: true }),
+  );
 
   // ── Data orchestrator ──────────────────────────────────────────────────
   // All 8 queries + derived KPI/allocations/scope hint live in the hook.
@@ -225,7 +258,16 @@ export default function PortfolioPage() {
       {/* WHY flex-1 min-h-0: tabs must fill the remaining space below the
           KPI strip. min-h-0 is required so the overflow-y-auto inside the
           tab content can actually create a scroll area. */}
-      <Tabs defaultValue="holdings" className="flex flex-col flex-1 min-h-0">
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) =>
+          // The Radix Tabs onValueChange emits whatever string the trigger
+          // declares; the parser already narrows it to the union, but a
+          // belt-and-braces cast keeps TS strict-mode happy.
+          setActiveTab(v as "holdings" | "transactions" | "watchlist")
+        }
+        className="flex flex-col flex-1 min-h-0"
+      >
         {/* WHY shrink-0 on TabsList: prevents the tab bar from shrinking
             when the tab content grows. WHY bg-card: the tab bar is page
             chrome — keeps it tonally aligned with the KPI strip and

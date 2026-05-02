@@ -17,6 +17,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { useState, type ReactNode } from "react";
 import { Toaster } from "sonner";
+// PLAN-0059 C-6: nuqs URL-state adapter. The Next.js App-Router adapter wires
+// useQueryState* hooks into Next's router so back/forward buttons work and
+// deep-links round-trip without the page authors writing any router glue.
+// Mounted at the very top of the tree so any descendant (sidebar, modal,
+// chart) can adopt URL-backed state without further wiring.
+import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AlertStreamProvider } from "@/contexts/AlertStreamContext";
 // PLAN-0059-C C-3: ApiClientProvider memoises createGateway(accessToken) so
@@ -63,10 +69,15 @@ export function Providers({ children }: ProvidersProps) {
   const [queryClient] = useState(() => makeQueryClient());
 
   return (
-    // WHY QueryClientProvider wraps AuthProvider: Auth state depends on React Query
-    // only indirectly (via the gateway client), but placing QueryClient at the top
-    // ensures any future auth-related queries (e.g., user profile refresh) have access.
-    // AuthProvider must be INSIDE QueryClientProvider for this reason.
+    // C-6: NuqsAdapter wraps everything else so any component in the tree
+    // can call useQueryState/useQueryStates without further provider
+    // configuration. The adapter does NOT render any DOM — it only wires
+    // nuqs's internals to Next.js router events.
+    <NuqsAdapter>
+    {/* WHY QueryClientProvider wraps AuthProvider: Auth state depends on React Query
+        only indirectly (via the gateway client), but placing QueryClient at the top
+        ensures any future auth-related queries (e.g., user profile refresh) have access.
+        AuthProvider must be INSIDE QueryClientProvider for this reason. */}
     <QueryClientProvider client={queryClient}>
       {/* AuthProvider: manages OIDC session state (accessToken, user, isAuthenticated).
           Must wrap all children so protected layouts can read auth state via useAuth(). */}
@@ -114,5 +125,6 @@ export function Providers({ children }: ProvidersProps) {
         <ReactQueryDevtools initialIsOpen={false} />
       )}
     </QueryClientProvider>
+    </NuqsAdapter>
   );
 }
