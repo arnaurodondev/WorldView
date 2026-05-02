@@ -85,3 +85,8 @@ s7_insider_transactions_skipped_total = Counter(
     "Total insider transactions skipped by Worker 13D-8 (non-executive title, no name), by reason.",
     ["reason"],
 )
+
+s7_provisional_enrichment_failed_total = Counter(
+    "s7_provisional_enrichment_failed_total",
+    "Total provisional entity queue rows transitioned to terminal 'failed' status (max retries exceeded).",
+)
