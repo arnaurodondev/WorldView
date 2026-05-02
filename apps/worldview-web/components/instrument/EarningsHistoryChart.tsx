@@ -32,17 +32,18 @@
  */
 
 "use client";
-// WHY "use client": uses useQuery for earnings fetch.
+// WHY "use client": uses useQuery for earnings fetch + useState for the
+// hover-tooltip index.
+//
+// PLAN-0059 G-1 (2026-05-02): migrated off recharts to a hand-rolled SVG.
+// Rationale identical to RevenueTrendSparklines — this is an 8-bar
+// categorical chart at 110px tall; pulling in a chart library for
+// rendering 8 rectangles + a tooltip is a needless ~50KB gz tax.
+// lightweight-charts is the canonical replacement for time-series, but
+// fiscal-year buckets aren't a continuous time axis so it doesn't fit.
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  Tooltip,
-  ResponsiveContainer,
-  Cell,
-} from "recharts";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -87,32 +88,18 @@ function formatFiscalYear(dateStr: string): string {
   return `FY${String(date.getUTCFullYear()).slice(2)}`;
 }
 
-// ── Custom tooltip ─────────────────────────────────────────────────────────────
-
-function EpsTooltip({
-  active,
-  payload,
-  label,
-}: {
-  active?: boolean;
-  payload?: { value: number | null }[];
-  label?: string;
-}) {
-  if (!active || !payload?.length) return null;
-  const eps = payload[0]?.value;
-  return (
-    <div className="rounded-[2px] border border-border bg-popover px-2 py-1.5 text-[10px] font-mono">
-      <p className="mb-0.5 font-medium text-foreground">{label}</p>
-      {eps != null ? (
-        <p className={eps >= 0 ? "text-positive" : "text-negative"}>
-          EPS: ${eps.toFixed(2)}
-        </p>
-      ) : (
-        <p className="text-muted-foreground">EPS: —</p>
-      )}
-    </div>
-  );
-}
+// ── SVG chart geometry ────────────────────────────────────────────────────────
+// Fixed 480×110 viewbox with internal margins. preserveAspectRatio="none" on
+// the rendered <svg> stretches it to the panel width; the 1:1 viewbox keeps
+// the bar widths well-proportioned at any size.
+const VIEW_W = 480;
+const VIEW_H = 110;
+const M_TOP = 4;
+const M_BOTTOM = 14;
+const M_LEFT = 8;
+const M_RIGHT = 8;
+const PLOT_W = VIEW_W - M_LEFT - M_RIGHT;
+const PLOT_H = VIEW_H - M_TOP - M_BOTTOM;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -189,40 +176,167 @@ export function EarningsHistoryChart({ instrumentId }: EarningsHistoryChartProps
         </span>
       </div>
 
-      {/* ── Bar chart ───────────────────────────────────────────────────── */}
-      <div className="pt-1">
-        <ResponsiveContainer width="100%" height={110}>
-          <BarChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
-            <XAxis
-              dataKey="label"
-              tick={{ fontSize: 9, fontFamily: "monospace", fill: "hsl(var(--muted-foreground))" }}
-              axisLine={false}
-              tickLine={false}
-              interval="preserveStartEnd"
+      {/* ── Bar chart (hand-rolled SVG) ─────────────────────────────────── */}
+      <ChartBars chartData={chartData} />
+    </div>
+  );
+}
+
+// ── Inner SVG bar chart ───────────────────────────────────────────────────────
+// Extracted into its own component so the hover-state useState is co-located
+// with the SVG it controls and not coupled to the data-fetching wrapper.
+
+function ChartBars({
+  chartData,
+}: {
+  chartData: { label: string; eps: number | null }[];
+}) {
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
+  // Y scale must accommodate negatives — a loss-year bar grows DOWN from
+  // the zero line. Compute min/max defensively across the actual data.
+  const values = chartData
+    .map((d) => d.eps)
+    .filter((v): v is number => v != null);
+  const dataMin = values.length ? Math.min(0, ...values) : 0;
+  const dataMax = values.length ? Math.max(0, ...values) : 1;
+  const range = Math.max(0.01, dataMax - dataMin);
+
+  const slotW = PLOT_W / chartData.length;
+  const barW = Math.min(36, slotW * 0.7);
+  const xCenter = (i: number) => M_LEFT + slotW * i + slotW / 2;
+  // Y-coordinate of the EPS-zero baseline within the plot area.
+  const yZero = M_TOP + PLOT_H - ((0 - dataMin) / range) * PLOT_H;
+  const yEps = (v: number) => M_TOP + PLOT_H - ((v - dataMin) / range) * PLOT_H;
+
+  return (
+    <div className="relative pt-1" data-testid="eps-trend-chart">
+      <svg
+        viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
+        width="100%"
+        height={VIEW_H}
+        preserveAspectRatio="none"
+        role="img"
+        aria-label="Annual EPS history"
+        onMouseLeave={() => setHoverIdx(null)}
+      >
+        {chartData.map((d, i) => {
+          // Bar geometry: positive bars grow UP from zero line, negative bars
+          // grow DOWN. Null-EPS records render as a faint placeholder so the
+          // X-axis spacing stays consistent.
+          const x = xCenter(i) - barW / 2;
+          if (d.eps == null) {
+            return (
+              <rect
+                key={`bar-${i}`}
+                x={x}
+                y={yZero - 1}
+                width={barW}
+                height={2}
+                fill={COLOR_NEUTRAL}
+              />
+            );
+          }
+          const y = d.eps >= 0 ? yEps(d.eps) : yZero;
+          const h = Math.abs(yEps(d.eps) - yZero);
+          const fill = d.eps >= 0 ? COLOR_POSITIVE : COLOR_NEGATIVE;
+          const stroke = d.eps >= 0 ? COLOR_POSITIVE_STROKE : COLOR_NEGATIVE_STROKE;
+          return (
+            <rect
+              key={`bar-${i}`}
+              x={x}
+              y={y}
+              width={barW}
+              height={Math.max(0, h)}
+              fill={fill}
+              stroke={stroke}
+              strokeWidth={1}
             />
-            <Tooltip content={<EpsTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
-            <Bar dataKey="eps" maxBarSize={36} radius={[1, 1, 0, 0]}>
-              {chartData.map((entry, index) => {
-                // WHY conditional color per cell: green = profitable year,
-                // red = loss year, muted = no data. Per-cell coloring uses
-                // recharts Cell component (not a single Bar fill).
-                const eps = entry.eps;
-                const fill =
-                  eps == null ? COLOR_NEUTRAL : eps >= 0 ? COLOR_POSITIVE : COLOR_NEGATIVE;
-                const stroke =
-                  eps == null
-                    ? "transparent"
-                    : eps >= 0
-                      ? COLOR_POSITIVE_STROKE
-                      : COLOR_NEGATIVE_STROKE;
-                return (
-                  <Cell key={`cell-${index}`} fill={fill} stroke={stroke} strokeWidth={1} />
-                );
-              })}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+          );
+        })}
+
+        {/* Zero baseline — only visible when the series spans positive AND
+            negative values, which is when it carries information. */}
+        {dataMin < 0 && dataMax > 0 && (
+          <line
+            x1={M_LEFT}
+            x2={M_LEFT + PLOT_W}
+            y1={yZero}
+            y2={yZero}
+            stroke="rgba(255,255,255,0.15)"
+            strokeWidth={1}
+            strokeDasharray="2 2"
+          />
+        )}
+
+        {/* X-axis labels — first + last only */}
+        <text
+          x={xCenter(0)}
+          y={VIEW_H - 2}
+          fill="currentColor"
+          fontSize={9}
+          fontFamily="monospace"
+          textAnchor="middle"
+          className="text-muted-foreground"
+        >
+          {chartData[0].label}
+        </text>
+        {chartData.length > 1 && (
+          <text
+            x={xCenter(chartData.length - 1)}
+            y={VIEW_H - 2}
+            fill="currentColor"
+            fontSize={9}
+            fontFamily="monospace"
+            textAnchor="middle"
+            className="text-muted-foreground"
+          >
+            {chartData[chartData.length - 1].label}
+          </text>
+        )}
+
+        {/* Per-slot hit areas — wider than the bar so users don't
+            pixel-hunt a 30px target. */}
+        {chartData.map((_, i) => (
+          <rect
+            key={`hit-${i}`}
+            x={M_LEFT + slotW * i}
+            y={M_TOP}
+            width={slotW}
+            height={PLOT_H}
+            fill="transparent"
+            onMouseEnter={() => setHoverIdx(i)}
+          />
+        ))}
+      </svg>
+
+      {hoverIdx !== null && (
+        <div
+          className="pointer-events-none absolute -translate-x-1/2 rounded-[2px] border border-border bg-popover px-2 py-1.5 text-[10px] font-mono"
+          style={{
+            left: `${(xCenter(hoverIdx) / VIEW_W) * 100}%`,
+            top: 4,
+          }}
+          role="tooltip"
+        >
+          <p className="mb-0.5 font-medium text-foreground">
+            {chartData[hoverIdx].label}
+          </p>
+          {chartData[hoverIdx].eps != null ? (
+            <p
+              className={
+                chartData[hoverIdx].eps! >= 0
+                  ? "text-positive"
+                  : "text-negative"
+              }
+            >
+              EPS: ${chartData[hoverIdx].eps!.toFixed(2)}
+            </p>
+          ) : (
+            <p className="text-muted-foreground">EPS: —</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
