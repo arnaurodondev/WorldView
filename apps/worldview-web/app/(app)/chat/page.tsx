@@ -76,7 +76,6 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SlashCommandAutocomplete } from "@/components/chat/SlashCommandAutocomplete";
-import { parseInput } from "@/lib/chat/slash-commands";
 import { downloadThread } from "@/lib/chat/export-thread";
 import type { Thread, Message } from "@/types/api";
 
@@ -98,11 +97,7 @@ import {
   STARTER_QUESTIONS,
   entityStarters,
 } from "@/features/chat/lib/starters";
-import type {
-  StreamingMessage,
-  SlashTurn,
-  LogEntry,
-} from "@/features/chat/lib/types";
+import { useChatStream } from "@/features/chat/hooks/useChatStream";
 
 // ── Main page component ───────────────────────────────────────────────────────
 
@@ -150,10 +145,7 @@ export default function ChatPage() {
 
   // ── Thread list state ──────────────────────────────────────────────────────
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
-  const [localMessages, setLocalMessages] = useState<LogEntry[]>([]);
-  const [streaming, setStreaming] = useState<StreamingMessage | null>(null);
   const [input, setInput] = useState("");
-  const [chatError, setChatError] = useState<string | null>(null);
 
   // ── Thread search (T-E-5-03) ──────────────────────────────────────────────
   // WHY two states: `searchInput` reacts immediately to typing (controlled
@@ -163,7 +155,6 @@ export default function ChatPage() {
   const [searchQuery, setSearchQuery] = useState("");
 
   // ── Refs ───────────────────────────────────────────────────────────────────
-  const abortRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // PLAN-0053 T-F-6-05: preserve thread sidebar scroll across refetches.
@@ -198,26 +189,44 @@ export default function ChatPage() {
     staleTime: 0,
   });
 
+  // ── SSE chat stream ───────────────────────────────────────────────────────
+  // PLAN-0059 E-3 follow-up: the entire send/stream/abort lifecycle moved to
+  // `useChatStream`. The page just wires the inputs (auth token, active
+  // thread id, refetcher) and reads the resulting view state.
+  const {
+    localMessages,
+    setLocalMessages,
+    streaming,
+    chatError,
+    isStreaming,
+    send,
+    cancel: handleCancelStream,
+    resetForThread,
+  } = useChatStream({
+    accessToken,
+    activeThreadId,
+    setActiveThreadId,
+    refetchThreads: () => {
+      void refetchThreads();
+    },
+  });
+
   // ── Effects ────────────────────────────────────────────────────────────────
 
   // Sync activeThread messages into localMessages when the thread query succeeds.
+  // STAYS AT PAGE LEVEL: this depends on TanStack Query data (`activeThread`)
+  // which is owned by the page. The hook only manages transient streaming
+  // state — historical messages come from the server cache.
   useEffect(() => {
     if (activeThread && activeThread.thread_id === activeThreadId && !streaming) {
       setLocalMessages(activeThread.messages);
     }
-  }, [activeThread, activeThreadId, streaming]);
+  }, [activeThread, activeThreadId, streaming, setLocalMessages]);
 
   // Auto-scroll to bottom on new tokens / messages.
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [localMessages, streaming?.text]);
-
-  // Cancel any in-flight stream on unmount.
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort();
-    };
-  }, []);
 
   // Debounce searchInput → searchQuery (200ms per task spec).
   useEffect(() => {
@@ -294,23 +303,22 @@ export default function ChatPage() {
   const handleNewChat = useCallback(() => {
     const newId = crypto.randomUUID();
     setActiveThreadId(newId);
-    setLocalMessages([]);
-    setStreaming(null);
-    setChatError(null);
+    // resetForThread aborts in-flight stream + clears messages/error in the hook.
+    resetForThread();
     setInput("");
     setTimeout(() => textareaRef.current?.focus(), 50);
-  }, []);
+  }, [resetForThread]);
 
-  const handleSelectThread = useCallback((threadId: string) => {
-    if (abortRef.current) {
-      abortRef.current.abort();
-      abortRef.current = null;
-    }
-    setActiveThreadId(threadId);
-    setStreaming(null);
-    setChatError(null);
-    setInput("");
-  }, []);
+  const handleSelectThread = useCallback(
+    (threadId: string) => {
+      // resetForThread aborts the active stream so its tokens don't bleed
+      // into the newly-selected thread's log.
+      resetForThread();
+      setActiveThreadId(threadId);
+      setInput("");
+    },
+    [resetForThread],
+  );
 
   const handleDeleteThread = useCallback(
     async (threadId: string, e: React.MouseEvent) => {
@@ -319,15 +327,15 @@ export default function ChatPage() {
         await createGateway(accessToken).deleteThread(threadId);
         if (activeThreadId === threadId) {
           setActiveThreadId(null);
-          setLocalMessages([]);
-          setStreaming(null);
+          // Hook owns the messages + streaming bubble for the active thread.
+          resetForThread();
         }
         void refetchThreads();
       } catch {
         // Silently fail — the thread may already be gone
       }
     },
-    [accessToken, activeThreadId, refetchThreads],
+    [accessToken, activeThreadId, refetchThreads, resetForThread],
   );
 
   /**
@@ -402,163 +410,18 @@ export default function ChatPage() {
   }, [activeThread, localMessages]);
 
   /**
-   * handleSend — POST to /v1/chat/stream and consume the SSE response.
+   * handleSend — page-side wrapper around `useChatStream.send`.
    *
-   * PLAN-0051 T-E-5-01: BEFORE the LLM call, try parseInput. If it returns
-   * a ParsedCommand, render an inline SlashCommandCard turn and skip the
-   * round-trip to the LLM entirely.
+   * The hook owns the slash-command branch + LLM SSE flow. Here we only
+   * pull the current input, clear it (UX expectation: the textarea empties
+   * the moment the user hits Enter), then delegate.
    */
   const handleSend = useCallback(async () => {
     const question = input.trim();
-    if (!question || streaming || !accessToken) return;
-
-    // ── Slash command short-circuit ───────────────────────────────────────
-    const parsed = parseInput(question);
-    if (parsed) {
-      // Append a slash turn to the local log; don't call the LLM.
-      let threadId = activeThreadId;
-      if (!threadId) {
-        threadId = crypto.randomUUID();
-        setActiveThreadId(threadId);
-      }
-      const turn: SlashTurn = {
-        kind: "slash",
-        message_id: crypto.randomUUID(),
-        command: parsed,
-        input: question,
-        created_at: new Date().toISOString(),
-      };
-      setLocalMessages((prev) => [...prev, turn]);
-      setInput("");
-      setChatError(null);
-      return;
-    }
-
-    // ── Standard LLM path ─────────────────────────────────────────────────
-    let threadId = activeThreadId;
-    if (!threadId) {
-      threadId = crypto.randomUUID();
-      setActiveThreadId(threadId);
-    }
-
-    const userMessage: Message = {
-      message_id: crypto.randomUUID(),
-      thread_id: threadId,
-      role: "user",
-      content: question,
-      created_at: new Date().toISOString(),
-      citations: [],
-    };
-
-    setLocalMessages((prev) => [...prev, userMessage]);
+    if (!question) return;
     setInput("");
-    setChatError(null);
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setStreaming({ text: "", active: true });
-
-    try {
-      const response = await fetch("/api/v1/chat/stream", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ message: question, thread_id: threadId }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Stream request failed: ${response.status} ${response.statusText}`);
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new Error("Response body is null — server did not return a stream");
-      }
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let finalContent = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const payload = line.slice(6);
-
-          if (payload === "[DONE]") {
-            setStreaming(null);
-            if (finalContent) {
-              const assistantMessage: Message = {
-                message_id: crypto.randomUUID(),
-                thread_id: threadId!,
-                role: "assistant",
-                content: finalContent,
-                created_at: new Date().toISOString(),
-                citations: [],
-              };
-              setLocalMessages((prev) => [...prev, assistantMessage]);
-            }
-            void refetchThreads();
-            return;
-          }
-
-          try {
-            const parsedToken = JSON.parse(payload) as { text?: string; token?: string };
-            const chunk = parsedToken.text ?? parsedToken.token;
-            if (chunk) {
-              finalContent += chunk;
-              setStreaming((prev) =>
-                prev ? { ...prev, text: prev.text + chunk } : prev,
-              );
-            }
-          } catch {
-            // Non-JSON line (keep-alive comment, empty line) — skip silently
-          }
-        }
-      }
-
-      setStreaming(null);
-      if (finalContent) {
-        const assistantMessage: Message = {
-          message_id: crypto.randomUUID(),
-          thread_id: threadId!,
-          role: "assistant",
-          content: finalContent + "\n\n[Response interrupted]",
-          created_at: new Date().toISOString(),
-          citations: [],
-        };
-        setLocalMessages((prev) => [...prev, assistantMessage]);
-      }
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
-        setStreaming(null);
-        return;
-      }
-      setStreaming(null);
-      setChatError(
-        err instanceof Error ? err.message : "Chat request failed. Please try again.",
-      );
-    } finally {
-      abortRef.current = null;
-    }
-  }, [input, streaming, accessToken, activeThreadId, refetchThreads]);
-
-  const handleCancelStream = useCallback(() => {
-    if (abortRef.current) {
-      abortRef.current.abort();
-      abortRef.current = null;
-    }
-    setStreaming(null);
-  }, []);
+    await send(question);
+  }, [input, send]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -569,7 +432,6 @@ export default function ChatPage() {
 
   // ── Derived state ──────────────────────────────────────────────────────────
 
-  const isStreaming = streaming !== null;
   const isSendDisabled = !input.trim() || isStreaming || !accessToken;
   const showAutocomplete = input.trimStart().startsWith("/") && !input.includes("\n");
 
