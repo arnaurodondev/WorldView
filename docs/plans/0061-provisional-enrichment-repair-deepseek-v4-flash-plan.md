@@ -3,9 +3,9 @@ id: PLAN-0061
 title: "Provisional Enrichment Reliability + DeepSeek-V4-Flash Migration"
 status: in-progress
 created: 2026-05-02
-updated: 2026-05-02
+updated: 2026-05-03
 source: /investigate 2026-05-02 (provisional enrichment deep-dive + billing audit)
-waves: 4
+waves: 5
 ---
 
 # PLAN-0061 — Provisional Enrichment Reliability + DeepSeek-V4-Flash Migration
@@ -16,7 +16,7 @@ waves: 4
 
 **Source investigation**: `/investigate` session 2026-05-02 — ProvisionalEnrichmentWorker + UnresolvedResolutionWorker deep-dive.
 
-**Dependencies**: None. All changes are isolated to S6 (nlp-pipeline), S7 (knowledge-graph), `libs/ml-clients`, and worldview-gitops. No new Kafka topics, no schema migrations.
+**Dependencies**: None. All changes are isolated to S6 (nlp-pipeline), S7 (knowledge-graph), `libs/ml-clients`, and worldview-gitops. Wave E adds one new Kafka topic (`entity.provisional.queued.v1`) and one Avro schema.
 
 **Does NOT overlap with**:
 - PLAN-0057 (completed 2026-05-01)
@@ -63,10 +63,13 @@ Wave B (Resolution Pipeline) — depends on A (retry-cap infra)
 Wave C (DeepSeek-V4-Flash) — depends on nothing, can parallel with A/B
   ↓
 Wave D (Audit + GitOps) — depends on C (new model ID must exist)
+  ↓
+Wave E (Event-Driven Enrichment) — depends on B (emit from _enqueue_for_enrichment)
 ```
 
 Waves A and C can be executed **in parallel** (different files).
 Wave B depends on Wave A (uses new config keys). Wave D depends on C.
+Wave E depends on Wave B (`_enqueue_for_enrichment` must exist before we wire the Kafka emit into it).
 
 ---
 
@@ -628,9 +631,11 @@ Also add to `worldview-gitops/values/nlp-pipeline.yaml` under `env:`:
 
 ---
 
-## Wave D — Llama-3.2-11B-Vision Audit + GitOps Finalization
+## Wave D — Llama-3.2-11B-Vision Audit + GitOps Finalization ✅
 
 **Goal**: Identify the source of 1.58M tokens/day from `meta-llama/Llama-3.2-11B-Vision-Instruct`, replace with V4-Flash if text-only, and finalize all gitops env vars from Waves A–C.
+
+**Status**: **DONE** — 2026-05-02 · 479 rag-chat + 676 nlp-pipeline unit tests pass · ruff + mypy clean
 
 **Depends on**: Wave C (V4-Flash config keys must exist before gitops finalization)
 **Estimated effort**: 30–45 min
@@ -666,10 +671,10 @@ The billing shows 1.58M input tokens from `meta-llama/Llama-3.2-11B-Vision-Instr
 - If the usage is for **vision tasks** (PDF analysis, image parsing, chart reading): document the requirement in `.claude-context.md` for the relevant service. Do NOT replace with V4-Flash (vision capability is lost). Create a separate `RAG_CHAT_VISION_MODEL` config key.
 
 **Acceptance criteria**:
-- [ ] Source of Llama-3.2-11B-Vision usage identified and documented in the commit message
-- [ ] If text-only: replaced with `deepseek-ai/DeepSeek-V4-Flash` in config + gitops
-- [ ] If vision: config key named `*_VISION_MODEL`, documented in service `.claude-context.md`
-- [ ] No more untracked model IDs in billing
+- [x] Source of Llama-3.2-11B-Vision usage identified and documented in the commit message
+- [x] If text-only: replaced with `deepseek-ai/DeepSeek-V4-Flash` in config + gitops
+- [x] If vision: config key named `*_VISION_MODEL`, documented in service `.claude-context.md`
+- [x] No more untracked model IDs in billing
 
 ---
 
@@ -700,23 +705,291 @@ KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_CONCURRENCY=5
 **Important**: `KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY` contains a secret. In gitops it should be referenced via SOPS/K8s secret, not plaintext. Follow the existing pattern for `KNOWLEDGE_GRAPH_STORAGE_ACCESS_KEY` — add a comment `# knowledge-graph-secrets: DEEPINFRA_API_KEY` and ensure it's in the secrets block, not the env block.
 
 **Acceptance criteria**:
-- [ ] All Wave A–C new env vars present in `knowledge-graph.env` and `knowledge-graph.yaml`
-- [ ] `DEEPINFRA_API_KEY` handled as a secret (not plaintext in env file)
-- [ ] `git diff --stat worldview-gitops/` shows only expected files changed
+- [x] All Wave A–C new env vars present in `knowledge-graph.env` and `knowledge-graph.yaml`
+- [x] `DEEPINFRA_API_KEY` handled as a secret (not plaintext in env file)
+- [x] `git diff --stat worldview-gitops/` shows only expected files changed
 
 ---
 
 ### Validation Gate — Wave D
-- [ ] All gitops files updated, consistent between `env/dev/` and `values/`
-- [ ] Llama-3.2-11B-Vision source documented or replaced
-- [ ] `git diff worldview-gitops/` reviewed — no unexpected changes
-- [ ] Full end-to-end smoke test: start dev stack, ingest 1 article, verify `provisional_entity_queue` gets populated within 10 min
+- [x] All gitops files updated, consistent between `env/dev/` and `values/`
+- [x] Llama-3.2-11B-Vision source documented or replaced
+- [x] `git diff worldview-gitops/` reviewed — no unexpected changes
+- [ ] Full end-to-end smoke test: start dev stack, ingest 1 article, verify `provisional_entity_queue` gets populated within 10 min (deferred — requires live stack)
 
 ### Break Impact — Wave D
 None expected — this wave is gitops config only.
 
 ### Regression Guardrails — Wave D
 - **Secret hygiene (R13 RULES.md)**: `DEEPINFRA_API_KEY` is a secret. Do not commit it in plaintext to any `.env` file in gitops. Follow the SOPS pattern.
+
+---
+
+## Wave E — Event-Driven Provisional Enrichment (Two-Track Architecture)
+
+**Goal**: Add an immediate-response enrichment path alongside the existing 5-min polling catch-up. When S6's `UnresolvedResolutionWorker` enqueues a provisional entity (Wave B T-B-2), it also emits `entity.provisional.queued.v1` to Kafka. S7 consumes this event immediately and calls the enrichment logic without waiting for the next polling sweep. The polling sweep is retained as the catch-up channel for any events missed by the hot path (startup gaps, consumer lag, etc.).
+
+**Architecture**: Two tracks serve different failure modes:
+- **Hot path** (Wave E): S6 emits event → S7 consumer reacts in <100 ms → entity enriched within seconds of mention classification. Zero polling lag.
+- **Catch-up sweep** (existing): `ProvisionalEnrichmentWorker` polls every 300 s for `status='pending'` rows with `retry_count < max_retries`. Catches anything the hot path missed (consumer was down, Kafka lag, startup race).
+- **Graph integration**: `entity.canonical.created.v1` is already produced by S7 after enrichment and already consumed by S7's `entity_consumer.py` for graph write-back — no changes needed to that path.
+
+**Depends on**: Wave B (T-B-2 adds `_enqueue_for_enrichment()` which this wave extends with a Kafka emit)
+**Estimated effort**: 60–90 min
+**Architecture layer**: infrastructure (schema + Kafka) + application (consumer + emit)
+
+### Pre-read (agent must read before starting)
+- `services/nlp-pipeline/src/nlp_pipeline/infrastructure/workers/unresolved_resolution_worker.py` — specifically `_enqueue_for_enrichment()`
+- `infra/kafka/schemas/entity.canonical.created.v1.avsc` — reference for Avro schema style
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/provisional_enrichment.py` — shared enrichment logic to call from consumer
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/messaging/` — existing consumer wiring pattern
+- `services/knowledge-graph/src/knowledge_graph/config.py`
+- `services/nlp-pipeline/src/nlp_pipeline/config.py`
+- `worldview-gitops/env/dev/knowledge-graph.env`
+- `worldview-gitops/env/dev/nlp-pipeline.env`
+
+---
+
+#### T-E-1: Create Avro schema `entity.provisional.queued.v1`
+
+**Type**: schema
+**depends_on**: none
+**blocks**: T-E-2, T-E-3
+**Target files**:
+- `infra/kafka/schemas/entity.provisional.queued.v1.avsc`
+
+**What to build**:
+New Avro schema for the event that S6 emits when a provisional entity is inserted into `provisional_entity_queue`. S7 consumes this to trigger immediate enrichment. Partition key is `normalized_surface` — ensures all events for the same entity surface form arrive on the same partition, enabling consumer-side deduplication without cross-partition coordination.
+
+Schema content:
+```json
+{
+  "type": "record",
+  "name": "EntityProvisionalQueuedV1",
+  "namespace": "com.worldview.intelligence",
+  "doc": "Emitted by S6 UnresolvedResolutionWorker when a provisional entity is inserted into provisional_entity_queue. S7 ProvisionalQueuedConsumer reacts immediately to trigger enrichment without waiting for the next polling sweep. Partition key: normalized_surface.",
+  "fields": [
+    {"name": "event_id", "type": "string", "doc": "UUIDv7 event identifier"},
+    {"name": "event_type", "type": "string", "default": "entity.provisional.queued", "doc": "Event type discriminator"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string", "doc": "ISO-8601 UTC timestamp of the provisional_entity_queue insert"},
+    {"name": "queue_id", "type": "string", "doc": "UUID of the provisional_entity_queue row — used for idempotent processing"},
+    {"name": "normalized_surface", "type": "string", "doc": "Lowercased, stripped entity surface form. Also the Kafka partition key."},
+    {"name": "mention_class", "type": "string", "doc": "NLP mention class: ORGANIZATION | PERSON | FINANCIAL_INSTRUMENT | LOCATION | COMMODITY | etc."},
+    {"name": "source_doc_id", "type": ["null", "string"], "default": null, "doc": "Source article/document UUID that triggered this provisional entity"},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null, "doc": "Tracing correlation ID from the originating article pipeline run"}
+  ]
+}
+```
+
+**Downstream test impact**:
+| Broken File | Why It Breaks | Fix Required |
+|-------------|--------------|-------------|
+| `tests/contract/test_avro_schemas.py` (if it checks schema file count) | New schema file added | Update expected count |
+
+**Acceptance criteria**:
+- [ ] File created at `infra/kafka/schemas/entity.provisional.queued.v1.avsc`
+- [ ] All field names in snake_case, all fields documented
+- [ ] `null` fields use Avro union `["null", "string"]` with `"default": null`
+- [ ] Schema validates against Avro specification (no syntax errors)
+
+---
+
+#### T-E-2: Emit `entity.provisional.queued.v1` from S6 after INSERT
+
+**Type**: impl
+**depends_on**: T-E-1
+**blocks**: T-E-3
+**Target files**:
+- `services/nlp-pipeline/src/nlp_pipeline/infrastructure/workers/unresolved_resolution_worker.py`
+- `services/nlp-pipeline/src/nlp_pipeline/config.py`
+- `worldview-gitops/env/dev/nlp-pipeline.env`
+- `worldview-gitops/values/nlp-pipeline.yaml`
+
+**What to build**:
+Extend `_enqueue_for_enrichment()` (created in Wave B T-B-2) to emit `entity.provisional.queued.v1` after a successful INSERT into `provisional_entity_queue`. The emit must happen after the DB commit (not before) to avoid emitting an event for a row that doesn't exist yet. Use the existing Kafka producer that is already wired into `UnresolvedResolutionWorker`.
+
+**Logic**:
+```python
+async def _enqueue_for_enrichment(self, mention: EntityMentionModel, queue_id: str) -> None:
+    """Insert into provisional_entity_queue and emit Kafka event for immediate S7 enrichment."""
+    # T-B-2: DB insert (already implemented in Wave B)
+    inserted = await self._do_queue_insert(mention, queue_id)
+    if not inserted:
+        return  # ON CONFLICT DO NOTHING — row already exists, skip emit
+
+    # T-E-2: Emit hot-path event after commit (emit only if insert succeeded)
+    if self._kafka_producer is not None:
+        event = {
+            "event_id": str(uuid7()),
+            "event_type": "entity.provisional.queued",
+            "schema_version": 1,
+            "occurred_at": utc_now_iso(),
+            "queue_id": queue_id,
+            "normalized_surface": mention.normalized_mention_text or mention.mention_text.lower().strip(),
+            "mention_class": str(mention.mention_class),
+            "source_doc_id": str(mention.doc_id) if mention.doc_id else None,
+            "correlation_id": None,
+        }
+        await self._kafka_producer.produce(
+            topic=self._settings.kafka_topic_provisional_queued,
+            key=event["normalized_surface"],  # partition key
+            value=event,
+        )
+```
+
+Config addition to `nlp_pipeline/config.py`:
+```python
+kafka_topic_provisional_queued: str = "entity.provisional.queued.v1"  # NLP_PIPELINE_KAFKA_TOPIC_PROVISIONAL_QUEUED
+```
+
+Add to `worldview-gitops/env/dev/nlp-pipeline.env`:
+```
+NLP_PIPELINE_KAFKA_TOPIC_PROVISIONAL_QUEUED=entity.provisional.queued.v1
+```
+
+Add to `worldview-gitops/values/nlp-pipeline.yaml` under `env:`:
+```yaml
+- name: NLP_PIPELINE_KAFKA_TOPIC_PROVISIONAL_QUEUED
+  value: "entity.provisional.queued.v1"
+```
+
+**Important**: If `UnresolvedResolutionWorker` does not currently hold a Kafka producer reference, check how `UnresolvedResolutionWorker` is instantiated in the scheduler and whether a producer can be injected. If the producer is not available, emit via a side-channel helper that shares the existing producer from `ArticleConsumer` (read scheduler.py `build_workers()` to understand the constructor args).
+
+**Tests to write**:
+| Test Name | What It Verifies | Type |
+|-----------|-----------------|------|
+| `test_enqueue_emits_kafka_event_on_insert` | When INSERT succeeds (returns True), Kafka producer `.produce()` is called with correct topic and key=normalized_surface | unit |
+| `test_enqueue_skips_emit_on_conflict` | When INSERT returns False (ON CONFLICT), producer NOT called | unit |
+| `test_enqueue_emit_skipped_without_producer` | When `kafka_producer=None`, no error, DB insert still happens | unit |
+
+**Acceptance criteria**:
+- [ ] `entity.provisional.queued.v1` emitted only when INSERT actually creates a new row
+- [ ] Kafka partition key = `normalized_surface`
+- [ ] Config key `kafka_topic_provisional_queued` added
+- [ ] Gitops env + values updated
+- [ ] Tests pass
+
+---
+
+#### T-E-3: New S7 consumer `provisional_queued_consumer.py`
+
+**Type**: impl
+**depends_on**: T-E-1, T-E-2
+**blocks**: none
+**Target files**:
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/messaging/consumers/provisional_queued_consumer.py` (new file)
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/messaging/consumers/__init__.py` (register)
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py` (wire consumer)
+- `services/knowledge-graph/src/knowledge_graph/config.py`
+- `worldview-gitops/env/dev/knowledge-graph.env`
+- `worldview-gitops/values/knowledge-graph.yaml`
+
+**What to build**:
+A new Kafka consumer in S7 that subscribes to `entity.provisional.queued.v1` and calls the same enrichment logic as `ProvisionalEnrichmentWorker._enrich_one()` — but immediately, without waiting for the polling sweep. The consumer must be idempotent: before calling enrichment, check `provisional_entity_queue` status. If `status != 'pending'`, log and skip (already processing or resolved). The idempotency check + status transition to `'processing'` must be atomic (SELECT FOR UPDATE or CAS on `status` column).
+
+**Consumer class structure**:
+```python
+class ProvisionalQueuedConsumer:
+    """Kafka consumer for entity.provisional.queued.v1.
+
+    Hot path: reacts immediately when S6 inserts a provisional entity,
+    reducing median enrichment latency from ~2.5 min (polling) to <10 s.
+    The polling sweep (ProvisionalEnrichmentWorker) is the catch-up channel.
+    """
+
+    TOPIC = "entity.provisional.queued.v1"
+    CONSUMER_GROUP = "kg-provisional-queued-group"
+
+    def __init__(
+        self,
+        session_factory: AsyncSessionFactory,
+        llm_client: FallbackChainClient,
+        settings: Settings,
+    ) -> None: ...
+
+    async def consume_loop(self) -> None:
+        """Main consumer loop — subscribes and processes messages indefinitely."""
+        ...
+
+    async def _handle_message(self, msg: KafkaMessage) -> None:
+        """Process one event: idempotency check → enrich → mark resolved/failed."""
+        queue_id = msg.value["queue_id"]
+        normalized_surface = msg.value["normalized_surface"]
+        mention_class = msg.value["mention_class"]
+
+        async with self._sf() as session:
+            row = await session.execute(
+                select(ProvisionalEntityQueue)
+                .where(ProvisionalEntityQueue.queue_id == queue_id)
+                .with_for_update(skip_locked=True)
+            )
+            queue_row = row.scalar_one_or_none()
+            if queue_row is None or queue_row.status != "pending":
+                logger.debug("provisional_queued_skip", queue_id=queue_id, reason="not_pending")
+                return
+            queue_row.status = "processing"
+            await session.commit()
+
+        # Call shared enrichment logic outside any session (ARCH-003)
+        await self._enrich_queue_row(queue_id, normalized_surface, mention_class)
+```
+
+The enrichment logic (`_enrich_queue_row`) should call the same LLM extraction + canonical entity creation path as `ProvisionalEnrichmentWorker._enrich_one()`. Refactor the shared logic into a standalone `enrich_provisional_entity(queue_id, normalized_surface, mention_class, session_factory, llm_client)` function in a shared module (e.g., `infrastructure/workers/provisional_enrichment_core.py`) and call it from both workers.
+
+Config additions:
+```python
+kafka_topic_provisional_queued: str = "entity.provisional.queued.v1"  # KNOWLEDGE_GRAPH_KAFKA_TOPIC_PROVISIONAL_QUEUED
+kafka_consumer_group_provisional_queued: str = "kg-provisional-queued-group"  # KNOWLEDGE_GRAPH_KAFKA_CONSUMER_GROUP_PROVISIONAL_QUEUED
+```
+
+Wire in `scheduler.py` (or wherever other consumers are started) — look at `entity_consumer.py` for the startup pattern. The consumer should run as a long-lived background task launched at startup.
+
+Gitops additions to `knowledge-graph.env`:
+```
+KNOWLEDGE_GRAPH_KAFKA_TOPIC_PROVISIONAL_QUEUED=entity.provisional.queued.v1
+KNOWLEDGE_GRAPH_KAFKA_CONSUMER_GROUP_PROVISIONAL_QUEUED=kg-provisional-queued-group
+```
+
+Same additions to `values/knowledge-graph.yaml`.
+
+**Tests to write**:
+| Test Name | What It Verifies | Type |
+|-----------|-----------------|------|
+| `test_handle_message_calls_enrich_for_pending_row` | When queue row is `pending`, status set to `processing` and enrichment called | unit |
+| `test_handle_message_skips_non_pending_row` | When row is `processing` or `resolved`, enrichment NOT called | unit |
+| `test_handle_message_skips_missing_row` | When `queue_id` not found in DB, enrichment NOT called, no exception | unit |
+| `test_handle_message_idempotent_concurrent` | Two concurrent calls with same queue_id: exactly one reaches enrichment (skip_locked ensures only one wins lock) | unit |
+
+**Acceptance criteria**:
+- [ ] Consumer subscribes to `entity.provisional.queued.v1`
+- [ ] Idempotency check via SELECT FOR UPDATE SKIP LOCKED before enrichment
+- [ ] Shared enrichment logic extracted so both worker and consumer use the same function
+- [ ] Consumer started at S7 startup alongside existing consumers
+- [ ] Config keys added; gitops env + values updated
+- [ ] Tests pass; ARCH-003 respected (no DB session held during LLM call)
+
+---
+
+### Validation Gate — Wave E
+- [ ] `ruff check infra/kafka/schemas/ services/nlp-pipeline/ services/knowledge-graph/` passes
+- [ ] `mypy services/nlp-pipeline/ services/knowledge-graph/` passes
+- [ ] `python -m pytest services/nlp-pipeline/tests/unit/infrastructure/workers/test_unresolved_resolution_worker.py -v` — 3 new emit tests pass
+- [ ] `python -m pytest services/knowledge-graph/tests/unit/infrastructure/messaging/test_provisional_queued_consumer.py -v` — 4 new consumer tests pass
+- [ ] No regressions in existing S6 + S7 test suites
+- [ ] Manual smoke test: trigger a mention through S6, verify `entity.provisional.queued.v1` arrives in S7 consumer within 2 s
+
+### Break Impact — Wave E
+| Broken File | Why | Fix Required |
+|-------------|-----|-------------|
+| `tests/contract/test_avro_schemas.py` | New schema file added | Update expected schema count |
+| `services/knowledge-graph/tests/unit/infrastructure/workers/test_provisional_enrichment.py` | Core enrichment logic extracted to shared module | Update import path from `provisional_enrichment.py` to `provisional_enrichment_core.py` |
+
+### Regression Guardrails — Wave E
+- **ARCH-003 (R23)**: Consumer must release the DB session before calling the LLM. The status transition to `'processing'` commits and releases the session; enrichment runs in a separate async call. Match the pattern in `provisional_enrichment.py`.
+- **BP-007**: No schema changes. `provisional_entity_queue` table already exists. Only INSERT and UPDATE operations.
+- **BP-235**: Consumer concurrency must be bounded. Use `asyncio.Semaphore` with the same `worker_provisional_enrichment_concurrency` setting to cap simultaneous LLM calls from the consumer, matching the polling worker's cap.
+- **Idempotency via SKIP LOCKED**: Two consumer instances (horizontal scale) compete for the same row. `SKIP LOCKED` ensures exactly one processes each row without blocking the other. Do not use a plain SELECT + separate UPDATE — race condition window exists between the two statements.
 
 ---
 

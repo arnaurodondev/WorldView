@@ -57,7 +57,7 @@ PROVISIONAL_THRESHOLD: float = 0.45
 # DB level, but the retry_count counter would still be bumped, and the
 # savepoint overhead accumulates.  This guard skips even attempting the INSERT
 # once 5 rows already exist in the window, reducing unnecessary DB round-trips.
-MAX_PROVISIONAL_PER_HOUR: int = 5
+MAX_PROVISIONAL_PER_HOUR: int = 15
 
 # ── Stage confidences ─────────────────────────────────────────────────────────
 
