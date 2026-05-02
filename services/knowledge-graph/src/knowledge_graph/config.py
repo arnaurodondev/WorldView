@@ -115,8 +115,10 @@ class Settings(BaseSettings):
     worker_embedding_refresh_interval_s: int = 10800  # 3 h
     worker_partition_interval_s: int = 86400  # 24 h (also runs at startup)
     # Dedicated provisional enrichment worker controls (PLAN-0061 T-A-1/A-3/A-4)
-    worker_provisional_enrichment_interval_s: int = 600  # 10 min
-    worker_provisional_enrichment_batch_size: int = 50  # rows per cycle
+    # interval: 300s = 5 min catch-up sweep; hot path handled by entity.provisional.queued.v1 consumer (Wave E)
+    # batch: 500 — V4-Flash at concurrency=5 drains 500 in ~3-8 min; old 50-row cap was set for Ollama
+    worker_provisional_enrichment_interval_s: int = 300  # 5 min
+    worker_provisional_enrichment_batch_size: int = 500  # rows per cycle
     worker_provisional_enrichment_concurrency: int = 5  # concurrent LLM calls
     worker_provisional_enrichment_max_retries: int = 5  # terminal 'failed' after N failures
 
