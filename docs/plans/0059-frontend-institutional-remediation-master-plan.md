@@ -826,9 +826,10 @@ Before W0 closes:
 
 ---
 
-## 4. PLAN-0059-B — Workflow Grammar (Wave 1, Track A) ✅ (B-1/B-2/B-3/B-5 partial)
+## 4. PLAN-0059-B — Workflow Grammar (Wave 1, Track A) ✅ (B-1/B-2/B-3/B-5/B-6 partial)
 **Status: B-1 + B-2 + B-3 + B-5 (mnemonics) DONE — 2026-04-30 · 934 tests pass · lint+typecheck clean**
-**Deferred to follow-up:** B-3 command palette `>action` mode (needs Action Registry — its own scope), B-4 SymbolBar (needs S9 recents endpoint), B-6 idle/session/multi-tab.
+**Status: B-6 DONE — 2026-05-02 · 1301 frontend tests pass (+8 new — session-channel + ForceUpdateBanner) · typecheck + lint clean · build OK · cross-tab signout BroadcastChannel + force-update banner shipped (idle-lock + activity broadcast already shipped earlier under I-6).**
+**Deferred to dedicated waves:** B-3 command palette `>action` mode (needs Action Registry from F-3 — its own scope), B-4 SymbolBar (needs S9 recents endpoint — backend dependency).
 
 **Goal:** Implement the keyboard-driven, command-driven, symbol-first interaction grammar that defines an institutional terminal. Closes the single most damaging signal of the audit ("dead StatusBar shortcuts").
 **Depends on:** PLAN-0059-A complete.
@@ -862,9 +863,11 @@ Before W0 closes:
 
 ---
 
-## 5. PLAN-0059-C — Contract Spine (Wave 1, Track B) ✅ (C-2/C-3/C-4/C-5 partial)
+## 5. PLAN-0059-C — Contract Spine (Wave 1, Track B) ✅ (C-2/C-3/C-4/C-5/C-6 partial)
 
 **Status**: **PARTIAL DONE** — 2026-04-30 · 1,017 frontend tests pass · ruff/lint/typecheck clean
+**Status: C-6 DONE — 2026-05-02 · 1309 frontend tests pass (+8 new url-state) · typecheck + lint clean · build OK · nuqs 2.4.3 shipped on portfolio (tab + period) and screener (sector + capTier). Schema doc: `docs/ui/URL_STATE.md`.**
+**Deferred to dedicated wave:** C-1 OpenAPI codegen (needs backend OpenAPI ergonomics + CI gate).
 
 **Goal:** Establish typed, drift-free contracts between frontend and backend. Eliminate hand-typing, scattered query keys, recomputed gateway factories, and four parallel formatters.
 **Depends on:** PLAN-0059-A complete.
@@ -998,7 +1001,10 @@ Before W0 closes:
 
 ---
 
-## 9. PLAN-0059-G — Performance + Bundle (Wave 4)
+## 9. PLAN-0059-G — Performance + Bundle (Wave 4) 🟡 (G-1 partial · G-2 partial · G-3 partial)
+
+**Status: G-1 partial DONE — 2026-05-02 · `RevenueTrendSparklines` + `EarningsHistoryChart` migrated off recharts to hand-rolled SVG. Why hand-rolled (not lightweight-charts): both charts are 110-120px categorical bars (Q1'24 / FY24) — lightweight-charts is built for continuous time series and would fight the API. 3 charts still on recharts (DividendIncomeTimeline / SectorAllocationPanel / RealizedPnLChart) — Pie / stacked bar non-trivial migrations, separate session.**
+**Status: G-3 partial DONE — 2026-05-02 · `useTransition` on portfolio tab switching (heavy ~7-surface tab body mount no longer freezes the trigger row) · `useDeferredValue` on screener `filteredRows` (sort + render pipeline runs at lower priority than the input that triggered it; 5000-row accumulators no longer block 30-80ms on filter/sort/Load More). Companion G-2 commit 94c7d693 had already covered HeatCell + MiniChart memoisation.**
 
 **Goal:** Drop recharts; dynamic-import all heavy widgets; React 19 patterns; Server Components audit; CI performance budgets.
 **Depends on:** PLAN-0059-F (primitive layer stable).
