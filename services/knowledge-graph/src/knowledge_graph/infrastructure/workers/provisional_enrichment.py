@@ -1,7 +1,10 @@
 """Worker 13E: Provisional entity enrichment (PRD §6.7 Block 13E / §14.2).
 
-Runs every 10 minutes.  Processes ``provisional_entity_queue`` rows with
-``status='pending'``:
+Runs every 5 minutes (catch-up sweep). Hot path handled by
+ProvisionalQueuedConsumer which reacts to entity.provisional.queued.v1 events
+emitted by S6 UnresolvedResolutionWorker (PLAN-0061 Wave E).
+
+Processes ``provisional_entity_queue`` rows with ``status='pending'``:
   1. Use ExtractionClient (FallbackChainClient) to generate entity profile
      (canonical_name, entity_type, ticker, ISIN).
   2. INSERT into canonical_entities.
@@ -15,6 +18,9 @@ Runs every 10 minutes.  Processes ``provisional_entity_queue`` rows with
 
 LLM alias collision validation: reject an LLM-generated alias if it maps
 to a different entity in entity_aliases.
+
+Shared enrichment logic lives in provisional_enrichment_core.py so the
+hot-path ProvisionalQueuedConsumer can reuse the same LLM + DB steps.
 """
 
 from __future__ import annotations
@@ -23,12 +29,8 @@ import asyncio
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
-from common.ids import new_uuid7  # type: ignore[import-untyped]
-from common.time import utc_now  # type: ignore[import-untyped]
-from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
-    EntityEmbeddingStateRepository,
-)
 from knowledge_graph.infrastructure.metrics.prometheus import s7_provisional_enrichment_failed_total
+from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -40,7 +42,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _DEFAULT_EMBED_MODEL_ID = "nomic-embed-text"
-_EXTRACT_MODEL_ID = "kg-entity-profile-v1"
 
 
 class DirectProducerProtocol(Protocol):
@@ -105,13 +106,9 @@ class ProvisionalEnrichmentWorker:
         enriched = 0
         failed = 0
 
-        # Accumulate entity_ids that need entity.dirtied.v1 — produced AFTER commit
-        # to avoid orphaned Kafka messages when the DB transaction fails.
         entity_ids_to_dirty: list[UUID] = []
 
         # ── Phase 1: Read pending rows, then release the session ──
-        # retry_count is fetched so Phase 3 can decide 'pending' vs 'failed' in Python
-        # without a second DB round-trip.  PLAN-0061 T-A-3.
         pending_rows: list[tuple[UUID, str, str, str, int]] = []
         async with self._sf() as session:
             result = await session.execute(
@@ -140,9 +137,6 @@ FOR UPDATE SKIP LOCKED
                     ),
                 )
 
-            # Mark rows as 'processing' to prevent other workers from picking them
-            # up after we release the FOR UPDATE lock.  This is safe because the
-            # lock is still held until commit.
             for queue_id, _, _, _, _ in pending_rows:
                 await session.execute(
                     text("""
@@ -156,8 +150,6 @@ WHERE queue_id = :queue_id
         # Session released — no DB connection held during LLM calls.
 
         # ── Phase 2: LLM extraction + embedding (no session held) ──
-        # asyncio.gather with a semaphore lets up to self._concurrency LLM calls
-        # run concurrently while bounding inflight requests.  PLAN-0061 T-A-4.
         semaphore = asyncio.Semaphore(self._concurrency)
 
         async def _enrich_one(
@@ -209,8 +201,10 @@ WHERE queue_id = :queue_id
                         entity_id = None
 
                     if entity_id:
+                        from sqlalchemy import text as sa_text
+
                         await session.execute(
-                            text("""
+                            sa_text("""
 UPDATE provisional_entity_queue
 SET status = 'resolved', assigned_entity_id = :entity_id, resolved_at = now()
 WHERE queue_id = :queue_id
@@ -220,7 +214,7 @@ WHERE queue_id = :queue_id
                         entity_ids_to_dirty.append(entity_id)
                         enriched += 1
                     else:
-                        await self._apply_retry(session, text, queue_id, retry_count)
+                        await self._apply_retry(session, queue_id, retry_count)
                         failed += 1
                 except Exception as exc:
                     logger.error(  # type: ignore[no-any-return]
@@ -228,13 +222,12 @@ WHERE queue_id = :queue_id
                         queue_id=str(queue_id),
                         error=str(exc),
                     )
-                    await self._apply_retry(session, text, queue_id, retry_count)
+                    await self._apply_retry(session, queue_id, retry_count)
                     failed += 1
 
             await session.commit()
 
-        # Produce entity.dirtied.v1 AFTER successful DB commit to guarantee
-        # no orphaned Kafka messages if the transaction rolled back.
+        # Produce entity.dirtied.v1 AFTER successful DB commit.
         import json
 
         for dirty_id in entity_ids_to_dirty:
@@ -254,35 +247,18 @@ WHERE queue_id = :queue_id
     async def _apply_retry(
         self,
         session: Any,
-        text: Any,
         queue_id: UUID,
         retry_count: int,
     ) -> None:
         """Increment retry_count; transition to 'failed' when max_retries is reached.
 
-        PLAN-0061 T-A-3: rows that exhaust retries get a terminal 'failed' status
-        so they are never picked up again (SELECT WHERE retry_count < :max_retries).
+        Delegates SQL to core.apply_retry_transition; increments the Prometheus
+        counter here so test patch paths (which mock this module's counter) remain
+        unchanged.
         """
-        new_count = retry_count + 1
-        if new_count >= self._max_retries:
-            await session.execute(
-                text("""
-UPDATE provisional_entity_queue
-SET retry_count = retry_count + 1, status = 'failed'
-WHERE queue_id = :queue_id
-"""),
-                {"queue_id": str(queue_id)},
-            )
+        transitioned_to_failed = await core.apply_retry_transition(session, queue_id, retry_count, self._max_retries)
+        if transitioned_to_failed:
             s7_provisional_enrichment_failed_total.inc()
-        else:
-            await session.execute(
-                text("""
-UPDATE provisional_entity_queue
-SET retry_count = retry_count + 1, status = 'pending'
-WHERE queue_id = :queue_id
-"""),
-                {"queue_id": str(queue_id)},
-            )
 
     async def _persist_enrichment(
         self,
@@ -292,104 +268,15 @@ WHERE queue_id = :queue_id
         profile: dict[str, Any],
         embedding: list[float] | None = None,
     ) -> UUID | None:
-        """Persist an LLM-extracted entity profile to intelligence_db.
-
-        This method only performs DB writes — no external HTTP/LLM calls.
-        The LLM extraction and embedding HTTP calls are done in Phase 2,
-        completely outside any DB session (ARCH-003 fix).
-        """
-        from sqlalchemy import text
-
-        from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
-            CanonicalEntityRepository,
+        """Delegate to core.persist_enrichment (session-only, no HTTP calls)."""
+        return await core.persist_enrichment(
+            session=session,
+            queue_id=queue_id,
+            mention_text=mention_text,
+            profile=profile,
+            embedding=embedding,
+            embed_model_id=self._embed_model_id,
         )
-        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias import (
-            EntityAliasRepository,
-        )
-        from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
-            OutboxRepository,
-        )
-
-        canonical_name: str = profile.get("canonical_name") or mention_text
-        entity_type: str = profile.get("entity_type") or str(profile.get("mention_class", "unknown"))
-        ticker: str | None = profile.get("ticker")
-        isin: str | None = profile.get("isin")
-
-        # ---- Step 1: Create canonical entity ----
-        entity_repo = CanonicalEntityRepository(session)
-        entity_id = await entity_repo.create(  # type: ignore[attr-defined]
-            canonical_name=canonical_name,
-            entity_type=entity_type,
-            ticker=ticker,
-            isin=isin,
-        )
-
-        # ---- Step 2: Insert mechanical aliases ----
-        alias_repo = EntityAliasRepository(session)
-        normalized_name = canonical_name.lower().strip()
-        await alias_repo.insert(entity_id, canonical_name, normalized_name, "EXACT", "provisional_enrichment")
-
-        if ticker:
-            await alias_repo.insert(entity_id, ticker, ticker.upper(), "TICKER", "provisional_enrichment")
-        if isin:
-            await alias_repo.insert(entity_id, isin, isin.upper(), "ISIN", "provisional_enrichment")
-
-        # ---- Step 3: LLM-generated supplementary aliases (with collision check) ----
-        llm_aliases: list[str] = profile.get("aliases") or []
-        for alias in llm_aliases[:5]:  # Cap at 5 LLM aliases
-            normalized = alias.lower().strip()
-            existing = await alias_repo.find_exact(normalized)
-            if existing and existing["entity_id"] != entity_id:
-                logger.warning(  # type: ignore[no-any-return]
-                    "provisional_enrichment_alias_collision",
-                    alias=alias,
-                    existing_entity_id=str(existing["entity_id"]),
-                    new_entity_id=str(entity_id),
-                )
-                continue  # Reject — collision with different entity
-            await alias_repo.insert(entity_id, alias, normalized, "LLM", "provisional_enrichment")
-
-        # ---- Step 4: Ensure entity_embedding_state rows (2 for non-company, 3 for financial_instrument) ----
-        emb_repo = EntityEmbeddingStateRepository(session)
-        await emb_repo.ensure_rows_exist(entity_id, entity_type)
-
-        # ---- Step 5: Write pre-computed embedding (computed in Phase 2, outside session) ----
-        if canonical_name and embedding is not None:
-            await self._write_embedding(entity_id, canonical_name, embedding, emb_repo)
-
-        # ---- Step 6: Unblock relation_evidence_raw rows ----
-        await session.execute(
-            text("""
-UPDATE relation_evidence_raw
-SET entity_provisional = false,
-    subject_entity_id  = :entity_id
-WHERE provisional_queue_id = :queue_id
-  AND entity_provisional   = true
-"""),
-            {"entity_id": str(entity_id), "queue_id": str(queue_id)},
-        )
-
-        # ---- Step 7: Emit entity.canonical.created.v1 via outbox ----
-        outbox_repo = OutboxRepository(session)
-        import json
-
-        payload = json.dumps(
-            {
-                "event_id": str(new_uuid7()),
-                "entity_id": str(entity_id),
-                "canonical_name": canonical_name,
-                "entity_type": entity_type,
-                "provisional_queue_id": str(queue_id),
-            },
-        ).encode()
-
-        await outbox_repo.append(
-            topic="entity.canonical.created.v1",
-            partition_key=str(entity_id),
-            payload_avro=payload,
-        )
-
-        return entity_id  # type: ignore[no-any-return]
 
     async def _extract_entity_profile(
         self,
@@ -397,63 +284,13 @@ WHERE provisional_queue_id = :queue_id
         mention_class: str,
         context_snippet: str,
     ) -> dict[str, Any] | None:
-        from ml_clients.dataclasses import ExtractionInput  # type: ignore[import-untyped]
-        from prompts.knowledge.entity_profile import ENTITY_PROFILE  # type: ignore[import-untyped]
-
-        inp = ExtractionInput(
-            prompt=ENTITY_PROFILE.render(name=mention_text, entity_class=mention_class),
-            context=context_snippet,
-            output_schema={
-                "canonical_name": "string",
-                "entity_type": "string",
-                "ticker": "string|null",
-                "isin": "string|null",
-                "aliases": "list[string]",
-            },
-            model_id=_EXTRACT_MODEL_ID,
-        )
-        result = await self._llm.extract(inp, entity_id=None)
-        if result is None:
-            return None
-        return result.result  # type: ignore[return-value]
+        """Delegate to core.extract_entity_profile."""
+        return await core.extract_entity_profile(self._llm, mention_text, mention_class, context_snippet)
 
     async def _compute_embedding(
         self,
         entity_id: UUID | None,
         source_text: str,
     ) -> list[float] | None:
-        """Compute definition embedding via LLM HTTP call (no session needed).
-
-        Called in Phase 2 outside any DB session to avoid holding connections
-        during external I/O (ARCH-003).
-        """
-        from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]
-
-        inp = EmbeddingInput(text=source_text, model_id=self._embed_model_id)
-        outputs = await self._llm.embed([inp], entity_id=entity_id)
-        return outputs[0].embedding if outputs else None
-
-    async def _write_embedding(
-        self,
-        entity_id: UUID,
-        source_text: str,
-        embedding: list[float] | None,
-        emb_repo: EntityEmbeddingStateRepository,
-    ) -> None:
-        """Write a pre-computed embedding to the DB (session-only, no HTTP)."""
-        from datetime import timedelta
-
-        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
-            VIEW_DEFINITION,
-            sha256_hex,
-        )
-
-        await emb_repo.upsert(
-            entity_id,
-            VIEW_DEFINITION,
-            embedding=embedding,
-            model_id=self._embed_model_id if embedding else None,
-            source_text=source_text,
-            source_hash=sha256_hex(source_text),
-            next_refresh_at=utc_now() + timedelta(days=90),  # type: ignore[no-any-return, operator]
-        )
+        """Delegate to core.compute_embedding."""
+        return await core.compute_embedding(self._llm, entity_id, source_text, self._embed_model_id)

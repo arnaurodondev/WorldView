@@ -1,0 +1,56 @@
+{
+  "type": "record",
+  "name": "EntityProvisionalQueuedV1",
+  "namespace": "com.worldview.intelligence",
+  "doc": "Emitted by S6 UnresolvedResolutionWorker when a provisional entity is inserted into provisional_entity_queue. S7 ProvisionalQueuedConsumer reacts immediately to trigger enrichment without waiting for the next polling sweep. Partition key: normalized_surface.",
+  "fields": [
+    {
+      "name": "event_id",
+      "type": "string",
+      "doc": "UUIDv7 event identifier"
+    },
+    {
+      "name": "event_type",
+      "type": "string",
+      "default": "entity.provisional.queued",
+      "doc": "Event type discriminator"
+    },
+    {
+      "name": "schema_version",
+      "type": "int",
+      "default": 1
+    },
+    {
+      "name": "occurred_at",
+      "type": "string",
+      "doc": "ISO-8601 UTC timestamp of the provisional_entity_queue insert"
+    },
+    {
+      "name": "queue_id",
+      "type": "string",
+      "doc": "UUID of the provisional_entity_queue row — used for idempotent processing"
+    },
+    {
+      "name": "normalized_surface",
+      "type": "string",
+      "doc": "Lowercased, stripped entity surface form. Also the Kafka partition key."
+    },
+    {
+      "name": "mention_class",
+      "type": "string",
+      "doc": "NLP mention class: ORGANIZATION | PERSON | FINANCIAL_INSTRUMENT | LOCATION | COMMODITY | etc."
+    },
+    {
+      "name": "source_doc_id",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Source article/document UUID that triggered this provisional entity"
+    },
+    {
+      "name": "correlation_id",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Tracing correlation ID from the originating article pipeline run"
+    }
+  ]
+}

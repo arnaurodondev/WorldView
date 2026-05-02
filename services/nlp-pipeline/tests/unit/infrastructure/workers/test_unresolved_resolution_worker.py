@@ -1035,13 +1035,15 @@ class TestEnqueueForEnrichment:
         assert result is None
 
     async def test_executes_sql_and_returns_queue_id(self) -> None:
+        # SQL changed from DO UPDATE to DO NOTHING RETURNING — worker now calls
+        # scalar_one_or_none() (returns None on conflict, UUID str on new insert).
         settings = _make_settings()
         mention = _make_mention(mention_text="OpenAI")
         queue_id = uuid.uuid4()
 
         intel_sf, intel_session = _make_intel_sf()
         execute_result = MagicMock()
-        execute_result.scalar_one = MagicMock(return_value=str(queue_id))
+        execute_result.scalar_one_or_none = MagicMock(return_value=str(queue_id))
         intel_session.execute = AsyncMock(return_value=execute_result)
 
         nlp_sf, _ = _make_nlp_sf()
@@ -1152,3 +1154,97 @@ class TestEntityCreatedEnqueues:
 
         assert stats.noise == 1
         mock_enqueue.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0061 Wave E — entity.provisional.queued.v1 Kafka emit
+# ---------------------------------------------------------------------------
+
+
+class TestEnqueueKafkaEmit:
+    """_enqueue_for_enrichment emits entity.provisional.queued.v1 on new insert."""
+
+    async def test_emits_event_when_new_row_inserted(self) -> None:
+        """When scalar_one_or_none returns a UUID, producer.produce_bytes is called."""
+        settings = _make_settings()
+        mention = _make_mention(mention_text="Stripe Inc")
+        queue_id = uuid.uuid4()
+
+        intel_sf, intel_session = _make_intel_sf()
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=str(queue_id))
+        intel_session.execute = AsyncMock(return_value=execute_result)
+
+        producer = MagicMock()
+        nlp_sf, _ = _make_nlp_sf()
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=nlp_sf,
+            settings=settings,
+            intel_session_factory=intel_sf,
+            direct_producer=producer,
+        )
+
+        with patch("common.ids.new_uuid7", return_value=queue_id):
+            result = await worker._enqueue_for_enrichment(mention)
+
+        assert result == queue_id
+        producer.produce_bytes.assert_called_once()
+        call_kwargs = producer.produce_bytes.call_args.kwargs
+        assert call_kwargs["topic"] == settings.kafka_topic_provisional_queued
+        import json
+
+        payload = json.loads(call_kwargs["value"])
+        assert payload["queue_id"] == str(queue_id)
+        # mention_class is already a string (mention.mention_class is set to enum.value in _make_mention)
+        assert payload["mention_class"] == mention.mention_class
+
+    async def test_no_emit_when_conflict(self) -> None:
+        """When scalar_one_or_none returns None (conflict), no event is emitted."""
+        settings = _make_settings()
+        mention = _make_mention(mention_text="Duplicate Corp")
+
+        intel_sf, intel_session = _make_intel_sf()
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=None)
+        intel_session.execute = AsyncMock(return_value=execute_result)
+
+        producer = MagicMock()
+        nlp_sf, _ = _make_nlp_sf()
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=nlp_sf,
+            settings=settings,
+            intel_session_factory=intel_sf,
+            direct_producer=producer,
+        )
+
+        result = await worker._enqueue_for_enrichment(mention)
+
+        assert result is None
+        producer.produce_bytes.assert_not_called()
+
+    async def test_no_emit_when_producer_not_configured(self) -> None:
+        """When direct_producer is None, no exception is raised on new insert."""
+        settings = _make_settings()
+        mention = _make_mention(mention_text="TestCo")
+        queue_id = uuid.uuid4()
+
+        intel_sf, intel_session = _make_intel_sf()
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none = MagicMock(return_value=str(queue_id))
+        intel_session.execute = AsyncMock(return_value=execute_result)
+
+        nlp_sf, _ = _make_nlp_sf()
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=nlp_sf,
+            settings=settings,
+            intel_session_factory=intel_sf,
+            direct_producer=None,
+        )
+
+        with patch("common.ids.new_uuid7", return_value=queue_id):
+            result = await worker._enqueue_for_enrichment(mention)
+
+        assert result == queue_id  # still returns the queue_id

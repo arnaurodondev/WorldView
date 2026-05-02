@@ -21,7 +21,7 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 import httpx
@@ -92,6 +92,18 @@ if TYPE_CHECKING:
 
     from nlp_pipeline.config import Settings
     from nlp_pipeline.infrastructure.nlp_db.models import EntityMentionModel
+
+
+class DirectProducerProtocol(Protocol):
+    """Structural type for a direct Kafka producer.
+
+    Implemented by the confluent-kafka adapter in the worker main module.
+    Structural subtyping (Protocol) so tests can pass any object with a
+    matching produce_bytes signature without inheritance.
+    """
+
+    def produce_bytes(self, *, topic: str, key: bytes, value: bytes) -> None: ...
+
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -186,8 +198,11 @@ _CLASSIFICATION_PROMPT_TEMPLATE = (
 )
 
 # SQL for enqueuing a newly-discovered entity mention into intelligence_db for
-# S7 ProvisionalEnrichmentWorker to process. ON CONFLICT is idempotent:
+# S7 ProvisionalEnrichmentWorker to process. ON CONFLICT DO NOTHING is idempotent:
 # same (surface, class) pair shares one queue row.
+# RETURNING only fires on a new INSERT (not on conflict), so scalar_one_or_none()
+# returns None when the row already existed — the caller skips the Kafka emit in
+# that case to avoid duplicate events for already-queued entities (Wave E logic).
 _PROVISIONAL_ENQUEUE_SQL = """
 INSERT INTO provisional_entity_queue
     (queue_id, mention_text, normalized_surface, mention_class, source_doc_id, context_snippet)
@@ -201,7 +216,7 @@ VALUES
         CAST(:ctx AS text)
     )
 ON CONFLICT (normalized_surface, mention_class)
-DO UPDATE SET retry_count = provisional_entity_queue.retry_count
+DO NOTHING
 RETURNING queue_id
 """
 
@@ -227,11 +242,15 @@ class UnresolvedResolutionWorker:
         *,
         intel_session_factory: async_sessionmaker[AsyncSession] | None = None,
         usage_logger: LlmUsageLogProtocol | None = None,
+        direct_producer: DirectProducerProtocol | None = None,
     ) -> None:
         self._nlp_sf = nlp_session_factory
         self._settings = settings
         self._intel_sf = intel_session_factory
         self._usage_logger = usage_logger
+        # Optional Kafka producer for entity.provisional.queued.v1 hot-path events.
+        # When None, only the polling sweep picks up new rows (no hot path).
+        self._direct_producer = direct_producer
 
     # ------------------------------------------------------------------
     # Public API
@@ -490,34 +509,58 @@ class UnresolvedResolutionWorker:
     async def _enqueue_for_enrichment(self, mention: EntityMentionModel) -> UUID | None:
         """Insert mention into provisional_entity_queue for S7 KG enrichment.
 
-        Uses intel_session_factory - the queue lives in intelligence_db.
-        ON CONFLICT DO UPDATE is idempotent for same (surface, class) pair.
-        Returns the queue_id, or None if intel_session_factory is not configured.
+        Uses intel_session_factory — the queue lives in intelligence_db.
+        ON CONFLICT DO NOTHING is idempotent for same (surface, class) pair.
+
+        Returns the queue_id of a NEWLY inserted row, or None if:
+          - intel_session_factory is not configured, OR
+          - the row already existed (conflict — queue_id returned for existing row
+            via scalar_one_or_none returning None).
+
+        When a new row is inserted AND a direct_producer is available, emits
+        entity.provisional.queued.v1 so S7 ProvisionalQueuedConsumer can start
+        enrichment immediately without waiting for the next polling sweep.
         """
         if self._intel_sf is None:
             return None
 
+        import json
+
         from sqlalchemy import text as sa_text
 
         import common.ids  # type: ignore[import-untyped]
+        import common.time  # type: ignore[import-untyped]
 
         mention_class_value = (
             mention.mention_class.value if hasattr(mention.mention_class, "value") else str(mention.mention_class)
         )
+        new_queue_id = str(common.ids.new_uuid7())
 
         async with self._intel_sf() as intel_session:  # type: ignore[misc]
             result = await intel_session.execute(
                 sa_text(_PROVISIONAL_ENQUEUE_SQL),
                 {
-                    "queue_id": str(common.ids.new_uuid7()),
+                    "queue_id": new_queue_id,
                     "surface": mention.mention_text,
                     "mention_class": mention_class_value,
                     "doc_id": str(mention.doc_id),
                     "ctx": None,
                 },
             )
-            queue_id_str = result.scalar_one()
+            # scalar_one_or_none() returns None when ON CONFLICT DO NOTHING fires
+            # (no row was inserted → no RETURNING output).  This distinguishes a
+            # new insert from a duplicate-surface conflict.
+            queue_id_str = result.scalar_one_or_none()
             await intel_session.commit()
+
+        if queue_id_str is None:
+            # Row already existed — no event needed (consumer would be a no-op).
+            logger.debug(
+                "unresolved_enqueue_conflict_skipped",
+                mention_id=str(mention.mention_id),
+                surface=mention.mention_text,
+            )
+            return None
 
         queue_id = UUID(str(queue_id_str))
         logger.debug(
@@ -525,6 +568,38 @@ class UnresolvedResolutionWorker:
             mention_id=str(mention.mention_id),
             queue_id=str(queue_id),
         )
+
+        # Hot-path event: emit entity.provisional.queued.v1 so S7 consumer can
+        # start enrichment immediately.  Fire-and-forget — producer failure is
+        # non-fatal (polling sweep will still pick up the row).
+        if self._direct_producer is not None:
+            normalized_surface = (mention.mention_text or "").lower().strip()
+            event_payload = json.dumps(
+                {
+                    "event_id": str(common.ids.new_uuid7()),
+                    "event_type": "entity.provisional.queued",
+                    "schema_version": 1,
+                    "occurred_at": common.time.utc_now().isoformat(),
+                    "queue_id": str(queue_id),
+                    "normalized_surface": normalized_surface,
+                    "mention_class": mention_class_value,
+                    "source_doc_id": str(mention.doc_id) if mention.doc_id else None,
+                    "correlation_id": None,
+                }
+            ).encode()
+            try:
+                self._direct_producer.produce_bytes(
+                    topic=self._settings.kafka_topic_provisional_queued,
+                    key=normalized_surface.encode(),
+                    value=event_payload,
+                )
+            except Exception:
+                logger.warning(
+                    "unresolved_provisional_queued_emit_failed",
+                    queue_id=str(queue_id),
+                    exc_info=True,
+                )
+
         return queue_id
 
     async def _phase2_llm_classify(
