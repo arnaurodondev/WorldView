@@ -27,6 +27,7 @@ import json
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
+from knowledge_graph.infrastructure.metrics.prometheus import s7_provisional_queue_stuck_total
 from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     BaseKafkaConsumer,
@@ -103,6 +104,11 @@ class ProvisionalQueuedConsumer(BaseKafkaConsumer[None]):
         self._producer = direct_producer
         self._dedup_client = dedup_client
         self._dedup_prefix = f"kg:dedup:{config.group_id}"
+        if direct_producer is None:
+            logger.warning(  # type: ignore[no-any-return]
+                "provisional_queued_consumer_no_producer",
+                message="direct_producer is None — entity.dirtied.v1 will not be emitted after enrichment",
+            )
 
     # ------------------------------------------------------------------
     # Core processing
@@ -341,6 +347,7 @@ async def _fail_safe_retry(
             await core.apply_retry_transition(session, queue_id, retry_count, max_retries)
             await session.commit()
     except Exception:
+        s7_provisional_queue_stuck_total.inc()
         logger.error(  # type: ignore[no-any-return]
             "provisional_queued_retry_transition_failed",
             queue_id=str(queue_id),

@@ -90,3 +90,13 @@ s7_provisional_enrichment_failed_total = Counter(
     "s7_provisional_enrichment_failed_total",
     "Total provisional entity queue rows transitioned to terminal 'failed' status (max retries exceeded).",
 )
+
+s7_provisional_enrichment_success_total = Counter(
+    "s7_provisional_enrichment_success_total",
+    "Total provisional entity queue rows successfully enriched and transitioned to 'resolved' status.",
+)
+
+s7_provisional_queue_stuck_total = Counter(
+    "s7_provisional_queue_stuck_total",
+    "Total provisional entity queue rows stuck in 'processing' due to retry transition failure.",
+)

@@ -124,13 +124,28 @@ class EntityCreatedConsumer(BaseKafkaConsumer[None]):
         if self._dedup_client is None:
             return False
         key = f"{self._dedup_prefix}:{event_id}"
-        return bool(await self._dedup_client.exists(key))
+        try:
+            return bool(await self._dedup_client.exists(key))
+        except Exception:
+            logger.warning(  # type: ignore[no-any-return]
+                "entity_consumer_dedup_check_failed",
+                event_id=event_id,
+                exc_info=True,
+            )
+            return False  # prefer at-least-once on dedup failure
 
     async def mark_processed(self, event_id: str) -> None:
         if self._dedup_client is None:
             return
         key = f"{self._dedup_prefix}:{event_id}"
-        await self._dedup_client.set(key, "1", ex=86400)
+        try:
+            await self._dedup_client.set(key, "1", ex=86400)
+        except Exception:
+            logger.warning(  # type: ignore[no-any-return]
+                "entity_consumer_dedup_mark_failed",
+                event_id=event_id,
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Failure tracking

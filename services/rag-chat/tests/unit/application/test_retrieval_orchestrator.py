@@ -391,3 +391,86 @@ async def test_cb_disabled_no_breakers(
 
     items = await orch.retrieve(plan, resolved, request, query_embedding=[0.1] * 768)
     assert len(items) == 1
+
+
+# ── Bug R-1: earnings included in financial results ───────────────────────────
+
+
+@pytest.mark.unit
+async def test_financial_includes_earnings(
+    orchestrator: ParallelRetrievalOrchestrator,
+    s3: AsyncMock,
+) -> None:
+    """R-1: earnings data is assembled into a RetrievedItem (was silently discarded)."""
+    s3.find_instrument_by_ticker.return_value = "inst-1"
+    s3.get_fundamentals_highlights.return_value = {"revenue": 100}
+    s3.get_earnings.return_value = {"eps": 1.5, "quarter": "Q1-2026"}
+    s3.get_quote.return_value = {"price": 150.0}
+
+    entity = _make_entity(ticker="AAPL")
+    plan = _make_plan(use_financial=True)
+    resolved = _make_resolved_query([entity])
+    request = _make_request()
+
+    items = await orchestrator.retrieve(plan, resolved, request)
+
+    item_ids = [i.item_id for i in items]
+    assert any("earnings" in iid for iid in item_ids), f"No earnings item found in {item_ids}"
+
+    earnings_items = [i for i in items if "earnings" in i.item_id]
+    assert len(earnings_items) == 1
+    assert "Earnings data" in earnings_items[0].text
+
+
+@pytest.mark.unit
+async def test_financial_earnings_exception_is_graceful(
+    orchestrator: ParallelRetrievalOrchestrator,
+    s3: AsyncMock,
+) -> None:
+    """R-1 edge case: get_earnings TimeoutError does not crash; highlights and quote still returned."""
+    s3.find_instrument_by_ticker.return_value = "inst-1"
+    s3.get_fundamentals_highlights.return_value = {"revenue": 100}
+    s3.get_earnings.side_effect = TimeoutError("earnings upstream timed out")
+    s3.get_quote.return_value = {"price": 150.0}
+
+    entity = _make_entity(ticker="AAPL")
+    plan = _make_plan(use_financial=True)
+    resolved = _make_resolved_query([entity])
+    request = _make_request()
+
+    items = await orchestrator.retrieve(plan, resolved, request)
+
+    item_ids = [i.item_id for i in items]
+    # highlights and quote items must still be present
+    assert any("highlights" in iid for iid in item_ids), f"No highlights item in {item_ids}"
+    assert any("quote" in iid for iid in item_ids), f"No quote item in {item_ids}"
+    # earnings item must NOT be present (exception treated as non-dict)
+    assert not any("earnings" in iid for iid in item_ids), f"Unexpected earnings item in {item_ids}"
+
+
+# ── Bug R-2: warning logged when relations skipped due to no embedding ─────────
+
+
+@pytest.mark.unit
+async def test_relations_skipped_no_embedding_logs_warning(
+    orchestrator: ParallelRetrievalOrchestrator,
+    s7: AsyncMock,
+) -> None:
+    """R-2: use_relations=True with query_embedding=None logs a warning and returns []."""
+    import structlog.testing
+
+    entity = _make_entity()
+    plan = _make_plan(use_relations=True, entity_ids=(entity.entity_id,))
+    resolved = _make_resolved_query([entity])
+    request = _make_request()
+
+    with structlog.testing.capture_logs() as cap:
+        items = await orchestrator.retrieve(plan, resolved, request, query_embedding=None)
+
+    assert items == []
+    s7.search_relations.assert_not_awaited()
+
+    warning_events = [e["event"] for e in cap if e.get("log_level") == "warning"]
+    assert (
+        "retrieval_relations_skipped_no_embedding" in warning_events
+    ), f"Expected warning not found; captured log events: {warning_events}"
