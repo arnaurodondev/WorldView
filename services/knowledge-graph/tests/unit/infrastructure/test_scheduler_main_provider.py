@@ -80,3 +80,41 @@ class TestSchedulerMainEmbeddingProviderSelection:
         assert adapter is not None
         # Verify the expected dimension constant matches the KG vector(1024) column
         assert adapter.EXPECTED_DIMENSION == 1024
+
+
+class TestSchedulerMainExtractionProviderConfig:
+    """Tests for DeepInfra extraction provider config (PLAN-0061 T-C-2)."""
+
+    @pytest.mark.unit
+    def test_deepinfra_extraction_config_fields_present(self) -> None:
+        """Config has all four DeepInfra extraction fields with correct defaults."""
+        from knowledge_graph.config import Settings
+
+        s = Settings(
+            database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db",
+            database_url_read="",
+            storage_access_key="test",
+            storage_secret_key="test",
+        )
+        assert s.deepinfra_api_key == ""
+        assert s.deepinfra_extraction_model_id == "deepseek-ai/DeepSeek-V4-Flash"
+        assert s.deepinfra_extraction_base_url == "https://api.deepinfra.com/v1/openai"
+        assert s.deepinfra_extraction_concurrency == 5
+
+    @pytest.mark.unit
+    def test_deepinfra_extraction_config_can_be_set(self) -> None:
+        """deepinfra_api_key can be set (triggers non-empty check in scheduler_main)."""
+        from knowledge_graph.config import Settings
+
+        s = Settings(
+            database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db",
+            database_url_read="",
+            storage_access_key="test",
+            storage_secret_key="test",
+            deepinfra_api_key="test-extraction-key",
+            deepinfra_extraction_model_id="deepseek-ai/DeepSeek-V4-Flash",
+            deepinfra_extraction_concurrency=3,
+        )
+        assert s.deepinfra_api_key == "test-extraction-key"
+        assert s.deepinfra_extraction_model_id == "deepseek-ai/DeepSeek-V4-Flash"
+        assert s.deepinfra_extraction_concurrency == 3

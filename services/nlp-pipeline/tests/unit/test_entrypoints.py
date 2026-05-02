@@ -55,6 +55,10 @@ def _mock_settings(**overrides: object) -> MagicMock:
     s.storage_endpoint = "http://localhost:9000"
     s.storage_access_key = "key"
     s.storage_secret_key = "secret"  # noqa: S105
+    # Empty string → DeepInfra branch skipped (tests cover lifecycle, not adapter wiring)
+    s.extraction_api_key = ""
+    s.extraction_api_base_url = "http://api.deepinfra.com/v1/openai"
+    s.extraction_api_model_id = "deepseek-ai/DeepSeek-V4-Flash"
     for k, v in overrides.items():
         setattr(s, k, v)
     return s

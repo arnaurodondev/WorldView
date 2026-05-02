@@ -79,6 +79,18 @@ class Settings(BaseSettings):
     embedding_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # KNOWLEDGE_GRAPH_EMBEDDING_API_BASE_URL
     embedding_api_model_id: str = "BAAI/bge-large-en-v1.5"  # KNOWLEDGE_GRAPH_EMBEDDING_API_MODEL_ID
 
+    # DeepInfra extraction (PLAN-0061 T-C-2) — primary extraction slot in FallbackChainClient.
+    # When deepinfra_api_key is set, a DeepSeekExtractionAdapter is instantiated and placed
+    # at position 0 in the extraction chain (before Ollama and Gemini).
+    # KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY — set via secret; empty = extraction chain skips DeepInfra
+    deepinfra_api_key: str = ""
+    # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_MODEL_ID
+    deepinfra_extraction_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"
+    # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_BASE_URL
+    deepinfra_extraction_base_url: str = "https://api.deepinfra.com/v1/openai"
+    # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_CONCURRENCY
+    deepinfra_extraction_concurrency: int = 5
+
     # Observability (STANDARDS.md §5)
     log_level: str = "INFO"
     log_json: bool = True

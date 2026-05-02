@@ -171,3 +171,111 @@ class TestFallbackChainLlmLogging:
         # Should log with success=False
         call_kwargs = usage_logger.log.call_args.kwargs
         assert call_kwargs["success"] is False
+
+
+class TestFallbackChainDeepInfraExtraction:
+    """Tests for DeepInfra primary extraction slot (PLAN-0061 T-C-1)."""
+
+    def test_deepinfra_called_first_when_set(self) -> None:
+        """DeepInfra is tried before Ollama when deepinfra_extraction is set."""
+        from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
+        from ml_clients.dataclasses import ExtractionInput
+
+        deepinfra = _make_extraction_client()
+        ollama = _make_extraction_client()
+        client = FallbackChainClient(
+            deepinfra_extraction=deepinfra,
+            ollama_extraction=ollama,
+            retry_delays_deepinfra=(),
+            retry_delays_ollama=(),
+            retry_delays_gemini=(),
+        )
+        inp = ExtractionInput(prompt="p", context="c", output_schema={}, model_id="m")
+        result = asyncio.run(client.extract(inp))
+        assert result is not None
+        deepinfra.extract.assert_awaited_once()
+        ollama.extract.assert_not_awaited()
+
+    def test_falls_back_to_ollama_when_deepinfra_fails(self) -> None:
+        """DeepInfra failure → Ollama is called."""
+        from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
+        from ml_clients.dataclasses import ExtractionInput
+
+        deepinfra = _make_extraction_client(fail=True)
+        ollama = _make_extraction_client()
+        client = FallbackChainClient(
+            deepinfra_extraction=deepinfra,
+            ollama_extraction=ollama,
+            retry_delays_deepinfra=(),
+            retry_delays_ollama=(),
+            retry_delays_gemini=(),
+        )
+        inp = ExtractionInput(prompt="p", context="c", output_schema={}, model_id="m")
+        result = asyncio.run(client.extract(inp))
+        assert result is not None
+        ollama.extract.assert_awaited_once()
+
+    def test_falls_back_to_gemini_when_deepinfra_and_ollama_fail(self) -> None:
+        """DeepInfra + Ollama both fail → Gemini is called."""
+        from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
+        from ml_clients.dataclasses import ExtractionInput
+
+        deepinfra = _make_extraction_client(fail=True)
+        ollama = _make_extraction_client(fail=True)
+        gemini = _make_extraction_client()
+        client = FallbackChainClient(
+            deepinfra_extraction=deepinfra,
+            ollama_extraction=ollama,
+            gemini_extraction=gemini,
+            retry_delays_deepinfra=(),
+            retry_delays_ollama=(),
+            retry_delays_gemini=(),
+        )
+        inp = ExtractionInput(prompt="p", context="c", output_schema={}, model_id="m")
+        result = asyncio.run(client.extract(inp))
+        assert result is not None
+        gemini.extract.assert_awaited_once()
+
+    def test_deepinfra_cost_logged(self) -> None:
+        """Successful DeepInfra call logs a non-zero estimated_cost_usd."""
+        from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
+        from ml_clients.dataclasses import ExtractionInput
+
+        deepinfra = _make_extraction_client()
+        usage_logger = AsyncMock()
+        usage_logger.log = AsyncMock(return_value=None)
+        client = FallbackChainClient(
+            deepinfra_extraction=deepinfra,
+            usage_logger=usage_logger,
+            retry_delays_deepinfra=(),
+            retry_delays_ollama=(),
+            retry_delays_gemini=(),
+        )
+        # Prompt long enough that cost > 0
+        inp = ExtractionInput(
+            prompt="extract financial events from this document " * 100,
+            context="Apple reported record revenue of $120 billion in Q4 2025.",
+            output_schema={},
+            model_id="m",
+        )
+        asyncio.run(client.extract(inp))
+        call_kwargs = usage_logger.log.call_args.kwargs
+        assert call_kwargs["estimated_cost_usd"] > 0.0
+        assert call_kwargs["provider"] == "deepinfra"
+
+    def test_no_deepinfra_falls_through_to_ollama(self) -> None:
+        """When deepinfra_extraction=None, Ollama is called directly (backward-compat)."""
+        from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
+        from ml_clients.dataclasses import ExtractionInput
+
+        ollama = _make_extraction_client()
+        client = FallbackChainClient(
+            ollama_extraction=ollama,
+            retry_delays_deepinfra=(),
+            retry_delays_ollama=(),
+            retry_delays_gemini=(),
+        )
+        inp = ExtractionInput(prompt="p", context="c", output_schema={}, model_id="m")
+        result = asyncio.run(client.extract(inp))
+        assert result is not None
+        ollama.extract.assert_awaited_once()

@@ -41,11 +41,13 @@ class DeepInfraCompletionAdapter:
         *,
         http_client: httpx.AsyncClient | None = None,
         timeout: float = 30.0,
+        thinking: bool = True,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self.model_id: str = model  # expose for orchestrator model tracking
         self._timeout = timeout
+        self._thinking = thinking
         self._client = http_client or httpx.AsyncClient(
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=timeout,
@@ -59,13 +61,19 @@ class DeepInfraCompletionAdapter:
         temperature: float = 0.1,
     ) -> AsyncIterator[str]:
         """Yield text chunks from DeepInfra streaming endpoint."""
-        payload = {
+        payload: dict[str, object] = {
             "model": self._model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": True,
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        # Qwen3 thinking mode: model reasons internally before answering.
+        # The <think>...</think> block is stripped by _ThinkBlockFilter in the
+        # orchestrator before tokens reach the user. Only beneficial for
+        # reasoning-heavy tasks (financial analysis, multi-hop queries).
+        if self._thinking:
+            payload["chat_template_kwargs"] = {"thinking": True}
         async with self._client.stream(
             "POST",
             f"{_BASE_URL}/chat/completions",

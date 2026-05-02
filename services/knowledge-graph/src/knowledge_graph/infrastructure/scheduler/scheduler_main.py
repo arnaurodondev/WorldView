@@ -101,10 +101,31 @@ async def main() -> None:
 
     kg_usage_logger = SessionScopedKgUsageLogger(write_factory)
 
+    # Build DeepInfra extraction adapter when API key is configured (PLAN-0061 T-C-2).
+    # When present this becomes slot-0 in the extraction chain (DeepInfra → Ollama → Gemini).
+    deepinfra_ext: Any = None
+    if settings.deepinfra_api_key:
+        from ml_clients.adapters.deepseek_extraction import DeepSeekExtractionAdapter  # type: ignore[import-not-found]
+
+        deepinfra_ext = DeepSeekExtractionAdapter(
+            api_key=settings.deepinfra_api_key,
+            model_id=settings.deepinfra_extraction_model_id,
+            base_url=settings.deepinfra_extraction_base_url,
+            semaphore=asyncio.Semaphore(settings.deepinfra_extraction_concurrency),
+        )
+        log.info(
+            "kg_extraction_deepinfra_adapter_selected",
+            model_id=settings.deepinfra_extraction_model_id,
+        )
+    else:
+        log.info("kg_extraction_deepinfra_key_absent_using_ollama_gemini_chain")
+
     llm_client = FallbackChainClient(
+        deepinfra_extraction=deepinfra_ext,
         ollama_embedding=embed_client,
         # Gemini embedding / extraction adapters are wired only when keys are
         # present; for now the selected embedding adapter is sufficient.
+        retry_delays_deepinfra=(5.0, 15.0),
         retry_delays_ollama=(5.0, 30.0),  # shorter delays for scheduler context
         usage_logger=kg_usage_logger,
     )
