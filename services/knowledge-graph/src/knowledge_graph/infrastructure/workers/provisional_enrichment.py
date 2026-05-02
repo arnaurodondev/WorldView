@@ -19,6 +19,7 @@ to a different entity in entity_aliases.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
@@ -27,6 +28,7 @@ from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
     EntityEmbeddingStateRepository,
 )
+from knowledge_graph.infrastructure.metrics.prometheus import s7_provisional_enrichment_failed_total
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -37,7 +39,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
-_BATCH_LIMIT = 20
 _DEFAULT_EMBED_MODEL_ID = "nomic-embed-text"
 _EXTRACT_MODEL_ID = "kg-entity-profile-v1"
 
@@ -59,6 +60,10 @@ class ProvisionalEnrichmentWorker:
         entity_dirtied_topic: Topic name for entity.dirtied.v1.
         embedding_model_id: Model ID passed to EmbeddingInput (default: nomic-embed-text).
                            Set via KNOWLEDGE_GRAPH_EMBEDDING_MODEL_ID env var.
+        batch_limit:       Max rows fetched per cycle (default 50). PLAN-0061 T-A-4.
+        max_retries:       Rows exceeding this failure count become 'failed' (terminal).
+                           PLAN-0061 T-A-3.
+        concurrency:       Max concurrent LLM calls in Phase 2. PLAN-0061 T-A-4.
 
     """
 
@@ -70,6 +75,9 @@ class ProvisionalEnrichmentWorker:
         entity_dirtied_topic: str = "entity.dirtied.v1",
         embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
         usage_logger: LlmUsageLogProtocol | None = None,
+        batch_limit: int = 50,
+        max_retries: int = 5,
+        concurrency: int = 5,
     ) -> None:
         self._sf = session_factory
         self._embed_model_id = embedding_model_id
@@ -82,6 +90,9 @@ class ProvisionalEnrichmentWorker:
         # write *additional* per-worker rows when needed and so injection-time
         # tests can assert the logger was threaded through ``build_workers``.
         self._usage_logger = usage_logger
+        self._batch_limit = batch_limit
+        self._max_retries = max_retries
+        self._concurrency = concurrency
 
     async def run(self) -> None:
         """Enrich pending provisional entity queue entries.
@@ -99,19 +110,22 @@ class ProvisionalEnrichmentWorker:
         entity_ids_to_dirty: list[UUID] = []
 
         # ── Phase 1: Read pending rows, then release the session ──
-        pending_rows: list[tuple[UUID, str, str, str]] = []
+        # retry_count is fetched so Phase 3 can decide 'pending' vs 'failed' in Python
+        # without a second DB round-trip.  PLAN-0061 T-A-3.
+        pending_rows: list[tuple[UUID, str, str, str, int]] = []
         async with self._sf() as session:
             result = await session.execute(
                 text("""
 SELECT queue_id, mention_text, normalized_surface, mention_class,
-       context_snippet, source_doc_id
+       context_snippet, source_doc_id, retry_count
 FROM provisional_entity_queue
 WHERE status = 'pending'
+  AND retry_count < :max_retries
 ORDER BY created_at
 LIMIT :limit
 FOR UPDATE SKIP LOCKED
 """),
-                {"limit": _BATCH_LIMIT},
+                {"limit": self._batch_limit, "max_retries": self._max_retries},
             )
             rows = result.fetchall()
 
@@ -122,13 +136,14 @@ FOR UPDATE SKIP LOCKED
                         str(row[1]),  # mention_text
                         str(row[3]),  # mention_class
                         str(row[4]) if row[4] else "",  # context_snippet
+                        int(row[6]) if row[6] is not None else 0,  # retry_count
                     ),
                 )
 
             # Mark rows as 'processing' to prevent other workers from picking them
             # up after we release the FOR UPDATE lock.  This is safe because the
             # lock is still held until commit.
-            for queue_id, _, _, _ in pending_rows:
+            for queue_id, _, _, _, _ in pending_rows:
                 await session.execute(
                     text("""
 UPDATE provisional_entity_queue
@@ -141,31 +156,46 @@ WHERE queue_id = :queue_id
         # Session released — no DB connection held during LLM calls.
 
         # ── Phase 2: LLM extraction + embedding (no session held) ──
-        # Each entry produces either an enrichment result or None (failure).
-        # Both the LLM profile extraction AND the embedding HTTP call happen here,
-        # completely outside any DB session (ARCH-003).
-        enrichment_results: list[tuple[UUID, str, str, str, dict[str, Any] | None, list[float] | None]] = []
-        for queue_id, mention_text, mention_class, context_snippet in pending_rows:
-            try:
-                profile = await self._extract_entity_profile(mention_text, mention_class, context_snippet)
-                # Pre-compute embedding while we have no session open
-                embedding: list[float] | None = None
-                if profile is not None:
-                    canonical_name = profile.get("canonical_name") or mention_text
-                    if canonical_name:
-                        embedding = await self._compute_embedding(None, canonical_name)
-                enrichment_results.append((queue_id, mention_text, mention_class, context_snippet, profile, embedding))
-            except Exception as exc:
-                logger.error(  # type: ignore[no-any-return]
-                    "provisional_enrichment_error",
-                    queue_id=str(queue_id),
-                    error=str(exc),
-                )
-                enrichment_results.append((queue_id, mention_text, mention_class, context_snippet, None, None))
+        # asyncio.gather with a semaphore lets up to self._concurrency LLM calls
+        # run concurrently while bounding inflight requests.  PLAN-0061 T-A-4.
+        semaphore = asyncio.Semaphore(self._concurrency)
+
+        async def _enrich_one(
+            row: tuple[UUID, str, str, str, int],
+        ) -> tuple[UUID, str, str, str, int, dict[str, Any] | None, list[float] | None]:
+            queue_id, mention_text, mention_class, context_snippet, retry_count = row
+            async with semaphore:
+                try:
+                    profile = await self._extract_entity_profile(mention_text, mention_class, context_snippet)
+                    embedding: list[float] | None = None
+                    if profile is not None:
+                        canonical_name = profile.get("canonical_name") or mention_text
+                        if canonical_name:
+                            embedding = await self._compute_embedding(None, canonical_name)
+                    return (queue_id, mention_text, mention_class, context_snippet, retry_count, profile, embedding)
+                except Exception as exc:
+                    logger.error(  # type: ignore[no-any-return]
+                        "provisional_enrichment_error",
+                        queue_id=str(queue_id),
+                        error=str(exc),
+                    )
+                    return (queue_id, mention_text, mention_class, context_snippet, retry_count, None, None)
+
+        enrichment_results: list[tuple[UUID, str, str, str, int, dict[str, Any] | None, list[float] | None]] = list(
+            await asyncio.gather(*[_enrich_one(r) for r in pending_rows])
+        )
 
         # ── Phase 3: Write results in a new session ──
         async with self._sf() as session:
-            for queue_id, mention_text, _mention_class, _context_snippet, profile, embedding in enrichment_results:
+            for (
+                queue_id,
+                mention_text,
+                _mention_class,
+                _context_snippet,
+                retry_count,
+                profile,
+                embedding,
+            ) in enrichment_results:
                 try:
                     if profile is not None:
                         entity_id = await self._persist_enrichment(
@@ -190,15 +220,7 @@ WHERE queue_id = :queue_id
                         entity_ids_to_dirty.append(entity_id)
                         enriched += 1
                     else:
-                        # LLM failed; increment retry_count and reset status
-                        await session.execute(
-                            text("""
-UPDATE provisional_entity_queue
-SET retry_count = retry_count + 1, status = 'pending'
-WHERE queue_id = :queue_id
-"""),
-                            {"queue_id": str(queue_id)},
-                        )
+                        await self._apply_retry(session, text, queue_id, retry_count)
                         failed += 1
                 except Exception as exc:
                     logger.error(  # type: ignore[no-any-return]
@@ -206,15 +228,7 @@ WHERE queue_id = :queue_id
                         queue_id=str(queue_id),
                         error=str(exc),
                     )
-                    # Reset to pending so the row is retried on the next cycle
-                    await session.execute(
-                        text("""
-UPDATE provisional_entity_queue
-SET retry_count = retry_count + 1, status = 'pending'
-WHERE queue_id = :queue_id
-"""),
-                        {"queue_id": str(queue_id)},
-                    )
+                    await self._apply_retry(session, text, queue_id, retry_count)
                     failed += 1
 
             await session.commit()
@@ -236,6 +250,39 @@ WHERE queue_id = :queue_id
             enriched=enriched,
             failed=failed,
         )
+
+    async def _apply_retry(
+        self,
+        session: Any,
+        text: Any,
+        queue_id: UUID,
+        retry_count: int,
+    ) -> None:
+        """Increment retry_count; transition to 'failed' when max_retries is reached.
+
+        PLAN-0061 T-A-3: rows that exhaust retries get a terminal 'failed' status
+        so they are never picked up again (SELECT WHERE retry_count < :max_retries).
+        """
+        new_count = retry_count + 1
+        if new_count >= self._max_retries:
+            await session.execute(
+                text("""
+UPDATE provisional_entity_queue
+SET retry_count = retry_count + 1, status = 'failed'
+WHERE queue_id = :queue_id
+"""),
+                {"queue_id": str(queue_id)},
+            )
+            s7_provisional_enrichment_failed_total.inc()
+        else:
+            await session.execute(
+                text("""
+UPDATE provisional_entity_queue
+SET retry_count = retry_count + 1, status = 'pending'
+WHERE queue_id = :queue_id
+"""),
+                {"queue_id": str(queue_id)},
+            )
 
     async def _persist_enrichment(
         self,

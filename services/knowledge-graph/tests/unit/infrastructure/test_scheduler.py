@@ -30,6 +30,8 @@ def _make_settings() -> MagicMock:
     s.worker_fundamentals_refresh_interval_s = 60
     s.worker_embedding_refresh_interval_s = 60
     s.worker_partition_interval_s = 3600
+    s.worker_age_sync_interval_s = 60
+    s.worker_provisional_enrichment_interval_s = 600  # PLAN-0061 T-A-1
     return s
 
 
@@ -89,3 +91,36 @@ class TestWorkerCrashInstrumentation:
             await stub()
 
         mock_counter.labels.assert_not_called()
+
+
+class TestProvisionalEnrichmentInterval:
+    @pytest.mark.asyncio
+    async def test_provisional_enrichment_uses_dedicated_interval(self) -> None:
+        """Scheduler wires 'worker_13e_provisional' to worker_provisional_enrichment_interval_s.
+
+        T-A-1: The old wiring used worker_embedding_refresh_interval_s (10800s = 3h).
+        The correct interval is worker_provisional_enrichment_interval_s (600s = 10min).
+        We verify by checking add_job() was called with seconds=600 for that job ID.
+        """
+        s = _make_settings()
+        s.worker_embedding_refresh_interval_s = 9999  # wrong key — must NOT be used
+        s.worker_provisional_enrichment_interval_s = 600  # correct key
+
+        scheduler = _make_scheduler(workers={})
+        scheduler._settings = s
+
+        captured: list[dict] = []
+
+        def _capture_add_job(fn, trigger, *, seconds, id, max_instances, coalesce):  # noqa: A002
+            captured.append({"seconds": seconds, "id": id})
+
+        with patch.object(scheduler._scheduler, "add_job", side_effect=_capture_add_job):
+            scheduler._register_jobs()
+
+        prov = next((c for c in captured if c["id"] == "worker_13e_provisional"), None)
+        assert prov is not None, "worker_13e_provisional job must be registered"
+        assert prov["seconds"] == 600, (
+            f"Expected 600s interval for worker_13e_provisional, got {prov['seconds']}. "
+            "The job must use worker_provisional_enrichment_interval_s, not "
+            "worker_embedding_refresh_interval_s."
+        )

@@ -101,7 +101,7 @@ class KnowledgeGraphScheduler:
             ("definition_embedding", s.worker_definition_refresh_interval_s, "worker_13d1_definition"),
             ("narrative_embedding", s.worker_narrative_refresh_interval_s, "worker_13d2_narrative"),
             ("fundamentals_embedding", s.worker_fundamentals_refresh_interval_s, "worker_13d3_fundamentals"),
-            ("provisional_enrichment", s.worker_embedding_refresh_interval_s, "worker_13e_provisional"),
+            ("provisional_enrichment", s.worker_provisional_enrichment_interval_s, "worker_13e_provisional"),
             ("partition_management", s.worker_partition_interval_s, "worker_13f_partition"),
             ("age_sync", s.worker_age_sync_interval_s, "worker_13f_age_sync"),
         ]
@@ -246,12 +246,9 @@ def build_workers(
                     llm_client,
                     embedding_model_id=embed_model,
                     usage_logger=usage_logger,
-                ),
-                "worker_13e_provisional": ProvisionalEnrichmentWorker(
-                    session_factory,
-                    llm_client,
-                    embedding_model_id=embed_model,
-                    usage_logger=usage_logger,
+                    batch_limit=settings.worker_provisional_enrichment_batch_size,
+                    max_retries=settings.worker_provisional_enrichment_max_retries,
+                    concurrency=settings.worker_provisional_enrichment_concurrency,
                 ),
                 "embedding_refresh": EmbeddingRefreshWorker(
                     session_factory,
