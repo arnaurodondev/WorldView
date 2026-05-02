@@ -27,19 +27,16 @@
  */
 
 "use client";
-// WHY "use client": uses recharts (a browser-only DOM API), useState, useMemo.
+// WHY "use client": SVG hover state via useState + useMemo + TanStack Query.
+//
+// PLAN-0059 G-1 finish (2026-05-02): migrated off recharts to a hand-rolled
+// SVG bar chart. Same rationale as RealizedPnLChart and the earlier two
+// migrations — 4 quarterly bars (Q1..Q4) at 140px tall is too small to
+// justify a chart library, and the categorical X-axis ("2026 Q1") doesn't
+// fit lightweight-charts' continuous-time-series model.
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-} from "recharts";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -198,47 +195,9 @@ export function DividendIncomeTimeline({
 
       {!isLoading && ytdTotal > 0 && (
         <>
-          {/* ── Bar chart ──────────────────────────────────────────────── */}
-          {/* WHY h-[140px]: enough vertical room for 4 bars to read clearly
-              without dominating the holdings tab. The ResponsiveContainer
-              handles width responsively. */}
+          {/* ── Bar chart (hand-rolled SVG) ───────────────────────────── */}
           <div className="h-[140px] px-2 py-1">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={quarterly} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
-                {/* WHY no axis lines / dashed grid: matches the rest of the
-                    portfolio analytics charts (terminal density, minimal
-                    chrome). The grid is a faint horizontal reference only. */}
-                <CartesianGrid strokeDasharray="2 2" stroke="hsl(var(--border) / 0.4)" vertical={false} />
-                <XAxis
-                  dataKey="quarter"
-                  tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <YAxis
-                  tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                  tickLine={false}
-                  axisLine={false}
-                  tickFormatter={(v) => `$${v}`}
-                  width={50}
-                />
-                <Tooltip
-                  cursor={{ fill: "hsl(var(--muted) / 0.3)" }}
-                  contentStyle={{
-                    background: "hsl(var(--card))",
-                    border: "1px solid hsl(var(--border))",
-                    fontSize: 11,
-                    fontFamily: "var(--font-mono, monospace)",
-                  }}
-                  formatter={(value: number) => [formatPrice(value), "Dividends"]}
-                />
-                {/* WHY bg-primary fill: dividends are positive cashflow — using
-                    the primary brand colour signals "this is a good thing"
-                    without overloading the positive-green semantic that's
-                    reserved for P&L. */}
-                <Bar dataKey="total" fill="hsl(var(--primary))" radius={[2, 2, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <DividendQuarterlyBars quarterly={quarterly} />
           </div>
 
           {/* ── Per-ticker breakdown table ─────────────────────────────── */}
@@ -357,5 +316,154 @@ function SortableHeader({
         </span>
       )}
     </th>
+  );
+}
+
+// ── Inner SVG quarterly-bars chart ───────────────────────────────────────────
+//
+// WHY EXTRACTED: keeps the hover-tooltip useState close to the SVG it controls
+// without forcing the data-fetching wrapper to re-render on every hover.
+
+const VIEW_W = 480;
+const VIEW_H = 140;
+const M_TOP = 6;
+const M_BOTTOM = 18; // X-axis labels
+const M_LEFT = 50; // Y-axis labels need width
+const M_RIGHT = 4;
+const PLOT_W = VIEW_W - M_LEFT - M_RIGHT;
+const PLOT_H = VIEW_H - M_TOP - M_BOTTOM;
+
+function DividendQuarterlyBars({ quarterly }: { quarterly: QuarterBucket[] }) {
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
+  // Y-scale: dividends are non-negative so the bottom is always 0. The top
+  // pads ~10% over the max so the tallest bar doesn't touch the chart edge.
+  const max = Math.max(0, ...quarterly.map((q) => q.total));
+  const yMax = max > 0 ? max * 1.1 : 1;
+
+  const slotW = PLOT_W / quarterly.length;
+  const barW = Math.min(48, slotW * 0.6);
+  const xCenter = (i: number) => M_LEFT + slotW * i + slotW / 2;
+  const yAt = (v: number) => M_TOP + PLOT_H - (v / yMax) * PLOT_H;
+
+  // Three Y-axis labels: 0, half, max. Whole-dollar rounding matches the
+  // recharts default tickFormatter `$${v}` output.
+  const yLabels = [0, Math.round(yMax / 2), Math.round(yMax)];
+
+  return (
+    <div className="relative h-full w-full">
+      <svg
+        viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
+        width="100%"
+        height="100%"
+        preserveAspectRatio="none"
+        role="img"
+        aria-label="Quarterly dividend income"
+        onMouseLeave={() => setHoverIdx(null)}
+      >
+        {/* Dashed horizontal grid at each Y-label value. */}
+        {yLabels.map((v) => (
+          <line
+            key={`grid-${v}`}
+            x1={M_LEFT}
+            x2={M_LEFT + PLOT_W}
+            y1={yAt(v)}
+            y2={yAt(v)}
+            stroke="hsl(var(--border) / 0.4)"
+            strokeWidth={1}
+            strokeDasharray="2 2"
+          />
+        ))}
+
+        {/* Y-axis labels — right-aligned just inside the left margin. */}
+        {yLabels.map((v) => (
+          <text
+            key={`ylabel-${v}`}
+            x={M_LEFT - 4}
+            y={yAt(v) + 3}
+            fill="currentColor"
+            fontSize={10}
+            textAnchor="end"
+            className="text-muted-foreground"
+          >
+            ${v}
+          </text>
+        ))}
+
+        {/* Bars — primary yellow because dividends are positive cashflow.
+            Reserves the positive-green / negative-red palette for P&L. */}
+        {quarterly.map((q, i) => {
+          const x = xCenter(i) - barW / 2;
+          const y = yAt(q.total);
+          const h = M_TOP + PLOT_H - y;
+          // Hover state: the active bar has a slightly darker fill so the
+          // user gets visual confirmation the tooltip is targeting it.
+          const fill =
+            hoverIdx === i
+              ? "hsl(var(--primary) / 0.85)"
+              : "hsl(var(--primary))";
+          return (
+            <rect
+              key={`bar-${i}`}
+              x={x}
+              y={y}
+              width={barW}
+              height={Math.max(0, h)}
+              fill={fill}
+              // Top corners rounded to 2px — matches recharts radius={[2,2,0,0]}.
+              rx={1}
+              ry={1}
+            />
+          );
+        })}
+
+        {/* X-axis quarter labels — render all four (Q1/Q2/Q3/Q4 are short). */}
+        {quarterly.map((q, i) => (
+          <text
+            key={`xlabel-${i}`}
+            x={xCenter(i)}
+            y={VIEW_H - 4}
+            fill="currentColor"
+            fontSize={10}
+            textAnchor="middle"
+            className="text-muted-foreground"
+          >
+            {q.quarter}
+          </text>
+        ))}
+
+        {/* Per-bar hit areas — span the full slot so hover works on the
+            empty (zero-height) bars too. */}
+        {quarterly.map((_, i) => (
+          <rect
+            key={`hit-${i}`}
+            x={M_LEFT + slotW * i}
+            y={M_TOP}
+            width={slotW}
+            height={PLOT_H}
+            fill="transparent"
+            onMouseEnter={() => setHoverIdx(i)}
+          />
+        ))}
+      </svg>
+
+      {hoverIdx !== null && (
+        <div
+          className="pointer-events-none absolute -translate-x-1/2 rounded-[2px] border border-border bg-card px-2 py-1 font-mono text-[11px]"
+          style={{
+            left: `${(xCenter(hoverIdx) / VIEW_W) * 100}%`,
+            top: 4,
+          }}
+          role="tooltip"
+        >
+          <div className="text-muted-foreground">
+            {quarterly[hoverIdx].quarter}
+          </div>
+          <div className="text-foreground tabular-nums">
+            {formatPrice(quarterly[hoverIdx].total)}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
