@@ -926,9 +926,11 @@ Before W0 closes:
 
 ---
 
-## 7. PLAN-0059-E — God-File Decomposition (Wave 2, Track B) ✅ (E-1 partial)
+## 7. PLAN-0059-E — God-File Decomposition (Wave 2, Track B) ✅ (E-1 + E-2 partial)
 
 **Status: E-1 DONE — 2026-05-02 · 1218 frontend tests pass · typecheck + lint clean · 15-endpoint live curl matrix verified**
+
+**Status: E-2 partial DONE — 2026-05-02 · 1249 frontend tests pass (+31 new kpi unit tests) · typecheck + lint clean · /portfolio renders 200**
 
 **Goal:** Split `lib/gateway.ts` (2,657 LOC), `app/(app)/portfolio/page.tsx` (1,739), `app/(app)/chat/page.tsx` (1,293), `components/screener/ScreenerFilterBar.tsx` (986), `components/dashboard/WatchlistMoversWidget.tsx` (800).
 **Depends on:** PLAN-0059-C complete (codegen + URL state).
@@ -936,6 +938,8 @@ Before W0 closes:
 **Effort:** 2-3 calendar weeks.
 
 ### Waves
+
+- **E-2 (5d) Portfolio page decomposition — partial ✅ 2026-05-02:** `app/(app)/portfolio/page.tsx` reduced from 1,745 LOC → 1,175 LOC (33% cut, 570 LOC removed). Three extractions landed under `apps/worldview-web/features/portfolio/`: (1) `lib/kpi.ts` — pure functions `computePortfolioKPI`, `computeAllocations`, `computeScopeHint`, `livePriceFor`, `formatStalenessAwarePrice` covered by **31 unit tests** in `lib/__tests__/kpi.test.ts` (F-202 top-loser-stays-null, B-2 delisted-instrument fallback, BP-265-aware `realizedPnl=null` while loading, divide-by-zero guards, sector-allocation parity with KPI total). (2) `components/CreatePortfolioDialog.tsx` — extracted dialog (was inline 184 LOC). (3) `components/AddPositionDialog.tsx` — extracted dialog (was inline 213 LOC). Page now imports these and replaces three inline useMemo blocks with calls to the pure functions. Validated: 1249/1249 vitest pass (+31 from E-2), typecheck clean, lint clean, dev-server compiles `/portfolio` to HTTP 200. **NOT YET DONE in E-2:** the 8-query `usePortfolioData` orchestrator hook (full hook extraction deferred — high risk to scramble queryKey/refetchInterval invariants) and the 600+ LOC of tab JSX split into per-tab components. The page is not yet the "<100 LOC orchestrator" the plan calls for; remaining work tracked as E-2-followup.
 
 - **E-1 (5d) Gateway split ✅ — 2026-05-02:** `lib/api/{_client,auth,instruments,knowledge-graph,news,screener,portfolios,watchlists,alerts,chat,prediction-markets,dashboard,brokerage,search,feedback}.ts`. `lib/gateway.ts` reduced from 2,906 LOC monolith → 103-LOC shim that imports each factory and merges them via spread, preserving the `createGateway`/`GatewayError`/`Gateway` surface. All ~91 import sites unchanged. Cross-domain `this.X()` calls (search→instruments, watchlists self-refs) use explicit `this:` interface types to avoid circular `ReturnType` traps. 15 modules avg 212 LOC; largest (`portfolios.ts` 667, `instruments.ts` 407) over the 350-LOC plan target — incremental further-split deferred (CI gate not added in this wave to avoid shipping a failing gate). E-2 will kill the shim. Validated end-to-end: 1218/1218 vitest pass, dev-login + 14 representative endpoint curls (auth/instruments/news/screener/portfolios/watchlists/alerts/chat/prediction-markets/dashboard/brokerage/feedback/knowledge-graph/search) all return expected status codes. 2× parallel QA agents (behavioral parity + type/import surface) returned clean.
 - **E-2 (5d) Portfolio page decomposition:** `features/portfolio/{components,hooks,queries,lib}/`. `usePortfolioKPI(portfolioId)` hook + `lib/kpi.ts` pure functions + tests. Page <100 LOC orchestrator.
