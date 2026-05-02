@@ -8341,3 +8341,19 @@ See `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/provisi
 - **Metric**: Add a counter for transitions to terminal status (`*_failed_total`). Absence of this metric in a worker is a signal the pattern is missing.
 
 ---
+
+## BP-311 — DeepInfra Model Availability Mismatch: Config Defaults Referencing Unavailable Models
+
+**Pattern**: A service config defaults to a specific DeepInfra model ID (e.g., `Llama-3.2-1B-Instruct`, `Llama-3.2-3B-Instruct`) that is not available on the account, causing all API calls to fail silently with a model-not-found 404 that is swallowed by the fallback chain or logged but never alerted.
+
+**Root Cause**: Model availability on DeepInfra depends on account tier. A developer who confirmed a model available on one account tier may hardcode its ID; when the account tier changes or the model is retired, every dependent worker silently falls back to Ollama CPU without any alert.
+
+**Discovered**: PLAN-0061 Wave D — `Llama-3.2-1B-Instruct` (rag-chat classification) and `Llama-3.2-3B-Instruct` (nlp-pipeline relevance scoring + unresolved resolution) were both unavailable. All calls were failing at the API level.
+
+**Fix**: Replace unavailable model IDs with the confirmed-available `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo`. Standardize all classification tasks to a single confirmed model to reduce drift.
+
+### Prevention
+
+- **Rule**: When changing a DeepInfra model ID default in config, verify availability via a live curl call (`curl https://api.deepinfra.com/v1/openai/chat/completions -d '{"model": "<id>", ...}'`) before committing.
+- **Verification test**: Each service that uses a DeepInfra API model should have a smoke-test or startup probe that validates the model ID responds with 200. A 404 on startup should emit a WARNING log with the exact model ID and a fallback indication.
+- **Single source of truth**: Keep a confirmed-available model list per DeepInfra account in `.claude-context.md` or `docs/MASTER_PLAN.md`. Never derive defaults from documentation alone.
