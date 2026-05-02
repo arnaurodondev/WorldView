@@ -145,9 +145,18 @@ export function ConfirmDialog({
 
   /**
    * handleConfirm — fires onConfirm then closes dialog.
-   * WHY close AFTER onConfirm: if onConfirm throws (e.g., API error), the
-   * dialog stays open so the user can retry. If we closed first and the
-   * action failed silently, the user would not know what happened.
+   *
+   * WHY dialog closes immediately (not after async resolution): onConfirm is
+   * called with `void` by useConfirmable, so any async outcome (success or
+   * error) resolves after this function returns. The dialog always closes on
+   * click. Errors are surfaced via toast (not by keeping the dialog open).
+   * This is intentional: for T2 severity, the user has already confirmed —
+   * holding the dialog open on network error would be confusing. The toast
+   * error + retry button pattern is simpler and matches Radix/shadcn UX norms.
+   *
+   * If your use case needs a loading state (dialog stays open while async runs),
+   * use `onConfirm` that does NOT `void`-wrap the promise and add an `isPending`
+   * prop to disable the confirm button — this component supports it via `disabled`.
    */
   function handleConfirm() {
     onConfirm();

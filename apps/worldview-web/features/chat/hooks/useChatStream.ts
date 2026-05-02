@@ -132,6 +132,12 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
   // overwriting the controller does not trigger re-renders.
   const abortRef = useRef<AbortController | null>(null);
 
+  // WHY isStreamingRef: `streaming` state in useCallback closures is a stale
+  // snapshot — programmatic double-send sees streaming=null in both closures and
+  // passes the guard twice, orphaning the first AbortController. The ref is
+  // always current so the guard is race-free regardless of batching semantics.
+  const isStreamingRef = useRef(false);
+
   // Cancel any in-flight stream on unmount. Without this, a fast nav-away
   // would leak a half-read fetch + a setState that fires after unmount,
   // emitting React's "set state on an unmounted component" warning.
@@ -193,7 +199,8 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
       const question = rawInput.trim();
       // Same guards the page used to enforce: empty input, mid-stream,
       // or unauthenticated → silent no-op.
-      if (!question || streaming || !accessToken) return;
+      // WHY isStreamingRef (not streaming state): see isStreamingRef comment above.
+      if (!question || isStreamingRef.current || !accessToken) return;
 
       // ── Slash command short-circuit ───────────────────────────────────
       const parsed = parseInput(question);
@@ -239,8 +246,14 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
 
       const controller = new AbortController();
       abortRef.current = controller;
+      isStreamingRef.current = true;
       setStreaming({ text: "", active: true });
 
+      // `reader` declared outside try so the finally block can cancel it
+      // on all exit paths (done / [DONE] / error / exception / abort).
+      // WHY reader.cancel() matters: without it the ReadableStream stays locked
+      // after early return, preventing the connection from returning to the pool.
+      let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
       try {
         const response = await fetch("/api/v1/chat/stream", {
           method: "POST",
@@ -258,7 +271,7 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
           );
         }
 
-        const reader = response.body?.getReader();
+        reader = response.body?.getReader() ?? null;
         if (!reader) {
           throw new Error(
             "Response body is null — server did not return a stream",
@@ -268,9 +281,36 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         const decoder = new TextDecoder();
         let buffer = "";
         let finalContent = "";
+        // SSE events carry an optional `event:` field before their `data:` line.
+        // We track the pending event name so each data payload is routed correctly.
+        let pendingEventName = "";
+        // Citations received via the `citations` SSE event, applied to the
+        // final assistant message once the stream ends.
+        let pendingCitations: Message["citations"] = [];
+
+        // Helper: finalise the stream and promote the bubble to a message.
+        const finalize = (interrupted = false) => {
+          setStreaming(null);
+          if (finalContent || pendingCitations.length > 0) {
+            const assistantMessage: Message = {
+              message_id: crypto.randomUUID(),
+              thread_id: threadId,
+              role: "assistant",
+              content: interrupted
+                ? finalContent + "\n\n[Response interrupted]"
+                : finalContent,
+              created_at: new Date().toISOString(),
+              citations: pendingCitations,
+            };
+            setLocalMessages((prev) => [...prev, assistantMessage]);
+          }
+          refetchThreads();
+        };
 
         // Read loop: SSE frames are newline-delimited; we split on \n,
         // keep the trailing partial in `buffer` for the next pump.
+        // Each SSE event may have an `event:` field before its `data:` line.
+        // We read both so we can demultiplex token/citations/done/error events.
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -280,64 +320,84 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
           buffer = lines.pop() ?? "";
 
           for (const line of lines) {
+            // Capture the event type for the next data line.
+            if (line.startsWith("event: ")) {
+              pendingEventName = line.slice(7).trim();
+              continue;
+            }
+
             if (!line.startsWith("data: ")) continue;
             const payload = line.slice(6);
 
+            // Consume and reset the pending event name for this data line.
+            const eventName = pendingEventName;
+            pendingEventName = "";
+
+            // `done` event: backend signals clean end-of-stream.
+            if (eventName === "done") {
+              finalize();
+              return;
+            }
+
+            // Legacy [DONE] sentinel — backward compat with older backends.
             if (payload === "[DONE]") {
-              // Normal termination. Promote the streaming bubble to a
-              // proper assistant message and refresh the threads list so
-              // the sidebar shows the new last_msg_at.
-              setStreaming(null);
-              if (finalContent) {
-                const assistantMessage: Message = {
-                  message_id: crypto.randomUUID(),
-                  thread_id: threadId,
-                  role: "assistant",
-                  content: finalContent,
-                  created_at: new Date().toISOString(),
-                  citations: [],
-                };
-                setLocalMessages((prev) => [...prev, assistantMessage]);
-              }
-              refetchThreads();
+              finalize();
               return;
             }
 
             try {
-              const parsedToken = JSON.parse(payload) as {
-                text?: string;
-                token?: string;
-              };
-              const chunk = parsedToken.text ?? parsedToken.token;
-              if (chunk) {
-                finalContent += chunk;
-                // Functional update: prev may have been replaced by a
-                // concurrent setState (e.g. cancel() racing the read loop).
-                setStreaming((prev) =>
-                  prev ? { ...prev, text: prev.text + chunk } : prev,
-                );
+              const data = JSON.parse(payload) as Record<string, unknown>;
+
+              if (
+                eventName === "token" ||
+                (!eventName && ("text" in data || "token" in data))
+              ) {
+                // Token chunk — append to the streaming bubble immediately.
+                const chunk = (data.text ?? data.token) as string | undefined;
+                if (chunk) {
+                  finalContent += chunk;
+                  // Functional update: prev may have been replaced by a
+                  // concurrent setState (e.g. cancel() racing the read loop).
+                  setStreaming((prev) =>
+                    prev ? { ...prev, text: prev.text + chunk } : prev,
+                  );
+                }
+              } else if (eventName === "citations") {
+                // WHY validate before accepting: the data is from an SSE frame
+                // over a server-controlled stream. A compromised S8 backend could
+                // inject citations with javascript: URLs that CitationList renders
+                // as <a href>. We only accept objects with valid https?:/mailto: URLs.
+                if (Array.isArray(data)) {
+                  pendingCitations = data.filter(
+                    (c): c is NonNullable<Message["citations"]>[number] =>
+                      typeof c === "object" &&
+                      c !== null &&
+                      typeof (c as Record<string, unknown>).url === "string" &&
+                      /^(https?:|mailto:)/i.test(
+                        (c as Record<string, unknown>).url as string,
+                      ),
+                  );
+                }
+              } else if (eventName === "error") {
+                const msg =
+                  typeof data.message === "string"
+                    ? data.message
+                    : "Stream error from server";
+                setChatError(msg);
+                setStreaming(null);
+                return;
               }
+              // status, contradictions, metadata — no UI action needed yet;
+              // accepted silently so the parser never throws on them.
             } catch {
               // Non-JSON line — keep-alive comment, blank line, etc. Skip.
             }
           }
         }
 
-        // Reader exhausted without a [DONE] sentinel — server closed early.
-        // Preserve whatever tokens we did receive but flag the truncation
-        // so the user sees the partial answer is intentional.
-        setStreaming(null);
-        if (finalContent) {
-          const assistantMessage: Message = {
-            message_id: crypto.randomUUID(),
-            thread_id: threadId,
-            role: "assistant",
-            content: finalContent + "\n\n[Response interrupted]",
-            created_at: new Date().toISOString(),
-            citations: [],
-          };
-          setLocalMessages((prev) => [...prev, assistantMessage]);
-        }
+        // Reader exhausted without a `done` event — server closed early.
+        // Preserve whatever tokens we did receive but flag the truncation.
+        finalize(/* interrupted */ finalContent.length > 0);
       } catch (err) {
         // AbortError is the EXPECTED outcome of cancel() / unmount — it is
         // not an error condition, so we swallow it and only clear the
@@ -347,16 +407,38 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
           return;
         }
         setStreaming(null);
+        // WHY map to generic message: raw err.message can contain internal
+        // hostnames, HTTP response bodies, or status text leaked by reverse
+        // proxies. These would surface in error-monitoring SDKs (Sentry, Datadog)
+        // as PII/infra details. We map known error codes to safe user-facing strings.
+        const statusMatch =
+          err instanceof Error ? err.message.match(/^Stream request failed: (\d+)/) : null;
+        const statusCode = statusMatch ? parseInt(statusMatch[1], 10) : 0;
         setChatError(
-          err instanceof Error
-            ? err.message
-            : "Chat request failed. Please try again.",
+          statusCode === 401
+            ? "Session expired — please sign in again."
+            : statusCode >= 500
+              ? "Server error — please try again."
+              : statusCode > 0
+                ? "Request failed — please try again."
+                : "Chat request failed. Please try again.",
         );
       } finally {
+        isStreamingRef.current = false;
         abortRef.current = null;
+        // WHY reader.cancel(): releases the ReadableStream lock so the
+        // underlying network connection returns to the pool. Without this,
+        // each early return (done/[DONE]/error/abort) leaves the stream locked.
+        if (reader) {
+          reader.cancel().catch(() => {
+            // cancel() can throw if the stream is already errored — swallow silently.
+          });
+        }
       }
     },
-    [accessToken, activeThreadId, refetchThreads, setActiveThreadId, streaming],
+    // WHY no `streaming` dep: we read isStreamingRef.current for the guard
+    // (ref-based, always current) so the closure doesn't need to re-bind.
+    [accessToken, activeThreadId, refetchThreads, setActiveThreadId],
   );
 
   return {

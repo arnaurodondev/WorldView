@@ -21,6 +21,11 @@
  */
 
 "use client";
+// WHY "use client": uses useLayoutEffect + useEffect (ResizeObserver) which are
+// browser-only APIs. ResizeObserver observes the container's pixel dimensions at
+// runtime so squarify() receives a real px bounding box — unavailable in Node.js
+// Server Component rendering. useLayoutEffect fires synchronously after paint to
+// avoid a layout flash on first measure.
 
 import * as React from "react";
 import { squarify, type TreemapCell } from "@/lib/treemap";

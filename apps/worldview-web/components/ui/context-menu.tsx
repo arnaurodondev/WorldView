@@ -351,9 +351,13 @@ export function ActionContextMenu({ children, row, className }: ActionContextMen
           div around it — so the right-click hit area exactly matches the row.
           asChild forwards the ContextMenuPrimitive.Trigger behaviour onto
           children without adding an extra DOM element. */}
+      {/* WHY children directly (no Fragment wrapper): Radix asChild uses
+          SlotClone which merges Trigger props onto the single ReactElement
+          child. A Fragment wrapper swallows the merged props — onContextMenu
+          never reaches the DOM node, so right-click does nothing. The child
+          must be a single element (SemanticHoldingsTable guarantees <tr>). */}
       <ContextMenuPrimitive.Trigger asChild className={className}>
-        {/* React requires a single child for asChild */}
-        <>{children}</>
+        {children}
       </ContextMenuPrimitive.Trigger>
 
       <ContextMenuContent onKeyDown={handleMnemonicKeyDown}>
