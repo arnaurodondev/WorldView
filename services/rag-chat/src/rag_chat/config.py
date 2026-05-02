@@ -57,18 +57,11 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = None  # fallback: configurable via openrouter_completion_model
 
     # ── Intent classification (DeepInfra GPU) ─────────────────────────────────
-    # PLAN-0052 platform-QA round 5 (2026-05-01): switched default 8B → 1B.
-    # Llama-3.2-1B-Instruct is ~6x smaller, completes in ~1.2s, and is more
-    # than capable of the small classification task ("which intent template
-    # does this query map to?"). Live probe confirmed availability on our
-    # DeepInfra account (the 8B was the only model documented as confirmed
-    # in project memory, but the lowercase `llama` path unlocks the 1B/3B
-    # variants too). Saves ~80% on classification tokens vs the 8B.
-    # WHY 1B over 3B: classification is a 1-token decision; the 1B's accuracy
-    # is sufficient and the cost/latency floor matters more here. We keep 3B
-    # available as a config override for installations that need higher
-    # accuracy (e.g. ambiguous multi-intent queries).
-    deepinfra_classification_model: str = "meta-llama/Llama-3.2-1B-Instruct"
+    # PLAN-0061 Wave D (2026-05-02): Llama-3.2-1B/3B are not available on this
+    # DeepInfra account. Confirmed available: Meta-Llama-3.1-8B-Instruct-Turbo
+    # (~100-200ms GPU, 8B param, ~$0.02/M tokens — sufficient for a 1-token
+    # intent decision and the same model used for classification across S6/S8).
+    deepinfra_classification_model: str = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
 
     # ── External reranker (Cohere — replaces bge-reranker-v2-m3 Ollama) ───────
     # WHY: bge-reranker-v2-m3 is not in the Ollama registry (ollama pull fails),
