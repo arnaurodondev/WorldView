@@ -23,6 +23,7 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-309](#bp-309) | Worker pipeline / classification without consequence | Worker classifies mention as real entity (`ENTITY_CREATED`) but writes no downstream effect — no `provisional_entity_queue` insert, no canonical entity created — classified items silently vanish | `UnresolvedResolutionWorker._process_mention()` (S6); any classification worker whose positive-outcome branch has no downstream write |
 | [BP-261](#bp-261) | Config / GitOps drift | `docker.env` files in the worldview repo are COPIES of `worldview-gitops/env/dev/*.env`; changes made only to the local copy drift from the source of truth and are lost on next `setup-dev.sh` run | All services; `scripts/setup-dev.sh`; `worldview-gitops/env/dev/` |
 | [BP-241](#bp-241) | Alert / Valkey dedup | Resetting Kafka offsets for replay doesn't clear Valkey dedup keys — all events silently deduplicated; `alert_db.alerts` stays empty | `services/alert/src/alert/infrastructure/messaging/consumers/intelligence_consumer.py`; any consumer with Valkey-backed dedup |
 | [BP-240](#bp-240) | Alert / inter-service auth | `S1Client._headers()` sends `X-Internal-Token` after PRD-0025 migrated S1 to `X-Internal-JWT` — every watchlist call returns 401; no alert ever created; best-effort client silently swallows error | `services/alert/src/alert/infrastructure/clients/s1_client.py`; any service client not updated when upstream migrates to RS256 JWT |
@@ -8205,3 +8206,138 @@ return n * sign;
 - For ANY financial / numeric parser that supports multiple sign-syntaxes, write a truth table (paren × inner-sign × leading-+ × negative-suffix) in the test file.
 - Test the FOUR specifically problematic inputs: `(N)`, `-N`, `(-N)`, `(+N)`.
 - In code review, if a parser has both `negate` and `signMul` variables, demand a single derived `sign` and a test asserting all combinations.
+
+---
+
+## BP-308 — Backend/Frontend Field-Name Drift in Nested Payloads (Citation `source` vs `source_name`)
+
+**Category**: Contract drift / serialization
+**Severity**: HIGH (page-crashing on user click)
+**First seen**: 2026-05-01 (chat thread click error)
+**Services**: rag-chat (S8) → S9 → worldview-web
+
+**Symptoms**:
+- Clicking an old chat thread throws `TypeError: Cannot read properties of undefined (reading 'toLowerCase')` at `chat/page.tsx`.
+- Citations show as blank or `0%` relevance, or the assistant message panel fails to render.
+- Affected only threads that contain at least one assistant message with citations — empty/new threads work fine, masking the bug from new-user smoke tests.
+
+**Root cause**:
+The rag-chat `ThreadDetailResponse` serialises citations with the canonical `{ id, source_name, confidence, item_type, entity_name, ... }` shape (see `services/rag-chat/src/rag_chat/api/routes/threads.py::_citation_to_dict`). The frontend `Citation` type in `apps/worldview-web/types/api.ts` and consumers (`chat/page.tsx`, `CitationBar`, `CitationList`) still use the legacy `{ article_id, source, relevance_score }` names from PRD-0028. There is no contract test pinning the wire shape on either side, so the drift went unnoticed until a thread with citations was opened.
+
+The same family caused the earlier `getThreads()` envelope mismatch — see comment in `lib/gateway.ts:1937`. That fix only patched the LIST shape; the per-thread DETAIL shape still leaks the canonical citation fields.
+
+**Example**:
+```ts
+// Bad — direct passthrough
+async getThread(id: string): Promise<Thread> {
+  return apiFetch<Thread>(`/v1/threads/${id}`, { token });
+}
+// chat/page.tsx then crashes:
+const src = cite.source.toLowerCase(); // cite.source is undefined
+```
+
+```ts
+// Good — gateway-level normalization
+async getThread(id: string): Promise<Thread> {
+  const raw = await apiFetch<Thread>(`/v1/threads/${id}`, { token });
+  return normalizeThread(raw); // maps source_name→source, id→article_id, confidence→relevance_score
+}
+```
+
+**Fix**:
+1. Add a per-payload normalizer at the gateway boundary (single point of translation).
+2. Make it tolerant: prefer legacy fields if present, fall back to canonical, default to safe empty strings/zeros so `.toLowerCase()` etc. cannot crash.
+3. Apply to every endpoint that returns the same nested type (here: `getThread` AND `updateThread`, since PATCH also returns `ThreadDetailResponse`).
+4. Add a regression test pinning the contract — see `__tests__/gateway.test.ts::"createGateway() — getThread citation normalization"`.
+
+**Prevention**:
+- Whenever a frontend type and a backend Pydantic schema describe "the same object" but live in different repos/files, treat the gateway's per-endpoint mapper as a hard interface — do NOT use `apiFetch<FrontendType>` as identity. Always normalize.
+- Code review red flag: a gateway method whose body is a single `apiFetch<T>(...)` for any endpoint that returns nested objects with field names that differ from the frontend type. Single-level primitive returns are fine; nested object trees are not.
+- Smoke test for chat-like features must include "open an existing record with prior data," not just "create a new one then look at it."
+
+**Regression test**: `apps/worldview-web/__tests__/gateway.test.ts::"createGateway() — getThread citation normalization"` (3 cases: canonical → legacy mapping, pathological/empty citation, idempotent legacy passthrough).
+
+---
+
+## BP-309 — Classification Without Consequence: Positive Outcome Branch Writes Nothing
+
+**Category**: Worker pipeline / silent data loss
+**Severity**: HIGH (entire entity detection→enrichment pipeline broken; detected entities never created)
+**First seen**: 2026-05-02 (investigation into ProvisionalEnrichmentWorker receiving zero items)
+**Services**: S6 nlp-pipeline (`UnresolvedResolutionWorker`)
+
+### Symptom
+
+`UnresolvedResolutionWorker` processes unresolved entity mentions, runs LLM binary classification, and classifies many mentions as `ENTITY_CREATED` (a real finance-domain entity not yet in the platform). However, `provisional_entity_queue` in `intelligence_db` remains empty. `ProvisionalEnrichmentWorker` (S7) therefore has nothing to process. No new `canonical_entities` are ever created from article mentions.
+
+The worker logs `resolution_outcome=ENTITY_CREATED` at normal rates, so no error surface is visible — the bug is a silent no-op.
+
+### Root cause
+
+`_process_mention()` handles the `ENTITY_CREATED` outcome by updating the mention status only:
+
+```python
+# services/nlp-pipeline/src/nlp_pipeline/infrastructure/workers/unresolved_resolution_worker.py
+if outcome == ResolutionOutcome.ENTITY_CREATED:
+    await self._repo.update_mention_status(mention.id, "entity_created")
+    # ← no provisional_entity_queue insert; no entity created
+```
+
+There is no `_enqueue_for_enrichment()` call. The `provisional_entity_queue` table (in `intelligence_db`) is never written. S7's `ProvisionalEnrichmentWorker` reads from that queue and finds it perpetually empty.
+
+A second contributing bug: `_phase1_cascade()` is a stub that always returns `False`, meaning every mention that should match an existing entity also falls through to LLM classification, amplifying the volume of misrouted `ENTITY_CREATED` outcomes.
+
+### Fix
+
+Two changes required (see PLAN-0061 Wave B):
+
+1. **Implement `_phase1_cascade()`**: query `intel_session_factory` via `EntityResolutionBlock.resolve_single()` — if a match is found, update mention as `RESOLVED` and return; do not call the LLM.
+
+2. **Add `_enqueue_for_enrichment()` to the `ENTITY_CREATED` branch**: insert a row into `provisional_entity_queue` with `(entity_name, entity_type, source_article_id, mention_id)` so that S7's `ProvisionalEnrichmentWorker` can pick it up.
+
+### Prevention
+
+- **Rule**: Any worker with a classification/routing outcome that is named after an entity state (e.g. `ENTITY_CREATED`, `NEW_RECORD`, `ACCEPTED`) MUST write to at least one persistence layer in that branch. If a branch writes nothing, it is a bug unless that branch explicitly represents "discard" (e.g. `NOISE`, `DUPLICATE`).
+- **Code review checklist**: For every `if outcome == X` branch in a classification worker, verify a `await self._repo.*` or `await session.execute(insert(...))` call exists in the body.
+- **Test pattern**: Write an integration test that: (1) inserts a mention, (2) mocks the LLM to return `ENTITY_CREATED`, (3) asserts `provisional_entity_queue` has one row after the worker runs.
+
+---
+
+## BP-310 — Unbounded Retry Loop: Periodic Worker Without a Failure Terminal State
+
+**Service**: Any periodic worker (knowledge-graph S7, nlp-pipeline S6, ...)
+**Severity**: MEDIUM (silent throughput erosion; no crash, no alert)
+**Detected**: PLAN-0061 investigation 2026-05-02
+
+### Symptoms
+
+- A queue row is picked up every cycle but never makes forward progress (LLM returns `None`, downstream API down, etc.).
+- `retry_count` keeps incrementing with no upper bound.
+- The worker's per-cycle log shows `failed=N` monotonically, but `enriched=0` — no entities are created.
+- Healthy rows in the queue are delayed because poison rows consume concurrency slots every cycle.
+
+### Root Cause
+
+The `ProvisionalEnrichmentWorker` Phase 3 failure branch unconditionally reset status to `'pending'` regardless of `retry_count`:
+
+```sql
+UPDATE provisional_entity_queue
+SET retry_count = retry_count + 1, status = 'pending'
+WHERE queue_id = :queue_id
+```
+
+Any row whose LLM extraction consistently returns `None` (malformed mention, hallucinated class, downstream model outage) will retry on every cycle indefinitely, consuming a concurrency slot each time.
+
+### Fix
+
+Add a `max_retries` threshold (default 5). When `retry_count + 1 >= max_retries`, set `status = 'failed'` (terminal — the Phase 1 SELECT guards `WHERE retry_count < :max_retries` so the row is never fetched again). Emit a Prometheus counter (`s7_provisional_enrichment_failed_total`) to make the failure visible.
+
+See `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/provisional_enrichment.py` — `_apply_retry()`.
+
+### Prevention
+
+- **Rule**: Every queue-draining periodic worker MUST have a `max_retries` config key and a terminal failure status. A queue row that can never succeed must not block healthy rows forever.
+- **Code review checklist**: When reviewing a `WHERE status = 'pending'` SELECT + subsequent retry UPDATE, ask: "What happens on the 100th failure of the same row?" If the answer is "it retries again", add a cap.
+- **Metric**: Add a counter for transitions to terminal status (`*_failed_total`). Absence of this metric in a worker is a signal the pattern is missing.
+
+---

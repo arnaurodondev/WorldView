@@ -102,6 +102,11 @@ class Settings(BaseSettings):
     worker_fundamentals_refresh_interval_s: int = 7200  # 2 h
     worker_embedding_refresh_interval_s: int = 10800  # 3 h
     worker_partition_interval_s: int = 86400  # 24 h (also runs at startup)
+    # Dedicated provisional enrichment worker controls (PLAN-0061 T-A-1/A-3/A-4)
+    worker_provisional_enrichment_interval_s: int = 600  # 10 min
+    worker_provisional_enrichment_batch_size: int = 50  # rows per cycle
+    worker_provisional_enrichment_concurrency: int = 5  # concurrent LLM calls
+    worker_provisional_enrichment_max_retries: int = 5  # terminal 'failed' after N failures
 
     # Entity description generation (PRD-0017 §6.5 — DefinitionRefreshWorker)
     description_provider: str = "none"  # "gemini" | "none"

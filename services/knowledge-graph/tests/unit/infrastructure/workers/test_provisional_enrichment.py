@@ -8,10 +8,16 @@ Phase 1 reads pending rows + marks 'processing' + commits (releases session).
 Phase 2 does LLM extraction + embedding outside any session.
 Phase 3 opens a new session to persist results + commits.
 Tests patch _extract_entity_profile (Phase 2 LLM) and _persist_enrichment (Phase 3 DB).
+
+PLAN-0061 additions:
+- retry_count column in SELECT (row index 6)
+- max_retries cap: rows at limit transition to 'failed' (terminal)
+- batch_limit / concurrency constructor params
 """
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
@@ -59,8 +65,8 @@ def _make_producer() -> MagicMock:
     return producer
 
 
-def _make_pending_row() -> tuple:
-    """Return a fake DB row matching the SELECT column order."""
+def _make_pending_row(retry_count: int = 0) -> tuple:
+    """Return a fake DB row matching the SELECT column order (incl. retry_count)."""
     return (
         str(_QUEUE_ID),  # queue_id
         "Apple Inc.",  # mention_text
@@ -68,11 +74,12 @@ def _make_pending_row() -> tuple:
         "financial_instrument",  # mention_class
         "Apple is a tech company",  # context_snippet
         None,  # source_doc_id
+        retry_count,  # retry_count (PLAN-0061 T-A-3)
     )
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Original tests (unchanged behaviour, constructor gains keyword-only defaults)
 # ---------------------------------------------------------------------------
 
 
@@ -336,3 +343,156 @@ class TestProvisionalEnrichmentWorkerNoProducer:
         ):
             # Should not raise even though producer is None
             await worker.run()
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0061 T-A-3: retry cap + terminal 'failed' status
+# ---------------------------------------------------------------------------
+
+
+class TestRetryCapAndFailedStatus:
+    async def test_retry_cap_transitions_to_failed(self) -> None:
+        """Row at max_retries-1 + LLM None → Phase 3 UPDATE sets status='failed'.
+
+        T-A-3: After retry_count+1 >= max_retries the row must become terminal.
+        """
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        # retry_count=4, max_retries=5 → next count (5) >= 5 → 'failed'
+        session, factory = _make_session_with_rows([_make_pending_row(retry_count=4)])
+
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), max_retries=5)
+
+        with (
+            patch.object(worker, "_extract_entity_profile", return_value=None),
+            patch(
+                # patch where the name is used (already imported at module level)
+                "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_enrichment_failed_total"
+            ) as mock_counter,
+        ):
+            await worker.run()
+
+        # Verify that the Phase 3 execute was called with SQL containing 'failed'
+        execute_calls = session.execute.call_args_list
+        failed_calls = [c for c in execute_calls if "failed" in str(c.args[0] if c.args else "")]
+        assert len(failed_calls) >= 1, "Expected an UPDATE setting status='failed'"
+        mock_counter.inc.assert_called_once()
+
+    async def test_retry_below_cap_stays_pending(self) -> None:
+        """Row below max_retries + LLM None → status stays 'pending' (not 'failed').
+
+        T-A-3: Row with retry_count=2 < max_retries=5 should be re-queued.
+        """
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        # retry_count=2, max_retries=5 → next count (3) < 5 → 'pending'
+        session, factory = _make_session_with_rows([_make_pending_row(retry_count=2)])
+
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), max_retries=5)
+
+        with (
+            patch.object(worker, "_extract_entity_profile", return_value=None),
+            patch(
+                "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_enrichment_failed_total"
+            ) as mock_counter,
+        ):
+            await worker.run()
+
+        execute_calls = session.execute.call_args_list
+        # Must NOT have any 'failed' update
+        failed_calls = [c for c in execute_calls if "failed" in str(c.args[0] if c.args else "")]
+        assert len(failed_calls) == 0, "Row below cap must NOT be set to 'failed'"
+        # pending update must be present
+        pending_calls = [c for c in execute_calls if "pending" in str(c.args[0] if c.args else "")]
+        assert len(pending_calls) >= 1, "Row below cap must be reset to 'pending'"
+        mock_counter.inc.assert_not_called()
+
+    async def test_phase1_select_includes_max_retries_param(self) -> None:
+        """Phase 1 SELECT passes max_retries to the WHERE clause.
+
+        T-A-3: The SQL must gate on retry_count < :max_retries so exhausted
+        rows are never fetched again.
+        """
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        session, factory = _make_session_with_rows([])
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), max_retries=7)
+        await worker.run()
+
+        # Phase 1 execute call params must include max_retries=7
+        execute_calls = session.execute.call_args_list
+        select_params = [
+            c.args[1]
+            for c in execute_calls
+            if len(c.args) > 1 and isinstance(c.args[1], dict) and "max_retries" in c.args[1]
+        ]
+        assert select_params, "Phase 1 SELECT must pass max_retries as a SQL parameter"
+        assert select_params[0]["max_retries"] == 7
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0061 T-A-4: configurable batch_limit + concurrent Phase 2
+# ---------------------------------------------------------------------------
+
+
+class TestBatchLimitAndConcurrency:
+    async def test_batch_limit_passed_to_select(self) -> None:
+        """Phase 1 SELECT passes batch_limit as the LIMIT parameter.
+
+        T-A-4: The hardcoded constant _BATCH_LIMIT is gone; the constructor
+        param drives the query.
+        """
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        session, factory = _make_session_with_rows([])
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), batch_limit=15)
+        await worker.run()
+
+        execute_calls = session.execute.call_args_list
+        limit_params = [
+            c.args[1] for c in execute_calls if len(c.args) > 1 and isinstance(c.args[1], dict) and "limit" in c.args[1]
+        ]
+        assert limit_params, "Phase 1 SELECT must pass batch_limit via 'limit' param"
+        assert limit_params[0]["limit"] == 15
+
+    async def test_concurrency_limits_simultaneous_llm_calls(self) -> None:
+        """Phase 2 never exceeds `concurrency` simultaneous _extract_entity_profile calls.
+
+        T-A-4: asyncio.gather with a semaphore must cap inflight LLM calls.
+        """
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        # 10 rows, concurrency=3 → at most 3 extract calls active at any instant.
+        rows = [_make_pending_row() for _ in range(10)]
+        _session, factory = _make_session_with_rows(rows)
+
+        active = [0]
+        max_seen = [0]
+
+        async def _mock_extract(*_args: object, **_kwargs: object) -> dict:
+            active[0] += 1
+            max_seen[0] = max(max_seen[0], active[0])
+            await asyncio.sleep(0)  # yield so other coroutines can enter
+            active[0] -= 1
+            return {"canonical_name": "Ent", "entity_type": "org"}
+
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), concurrency=3)
+
+        with (
+            patch.object(worker, "_extract_entity_profile", side_effect=_mock_extract),
+            patch.object(worker, "_compute_embedding", return_value=None),
+            patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
+        ):
+            await worker.run()
+
+        assert max_seen[0] <= 3, f"Max concurrent calls was {max_seen[0]}, expected ≤ 3"
