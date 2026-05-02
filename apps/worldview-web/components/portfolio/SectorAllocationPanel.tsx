@@ -13,15 +13,26 @@
  * asset type (equity/ETF/cash) gives instrument-class view. Both together answer
  * "what kind of risk am I running?"
  *
+ * PLAN-0059 H-3 (2026-05-02): Migrated off recharts `Treemap` component to the
+ * new hand-rolled `SquarifiedTreemap` component (components/ui/squarified-treemap.tsx)
+ * which uses the Bruls/Huijsen/van Wijk squarified algorithm from lib/treemap.ts.
+ * WHY: recharts was the last remaining consumer of the library in worldview-web.
+ * Removing it eliminates ~140KB gz from the main bundle. The squarified layout
+ * also produces better aspect-ratio tiles than recharts' algorithm for financial
+ * sector data (closer to 1:1 instead of the sliver problem at ~1% allocations).
+ *
  * WHO USES IT: app/(app)/portfolio/page.tsx — Holdings tab, below the table
  * DATA SOURCE: Computed from SemanticHoldingsTable props (sectors + values)
  * DESIGN REFERENCE: PRD-0031 §8.3 Sector Allocation, Wave 4
  */
 
 "use client";
+// WHY "use client": uses useState for the treemap/bars view toggle.
 
-import { useState } from "react";
-import { Treemap, ResponsiveContainer } from "recharts";
+import { useMemo, useState } from "react";
+// SquarifiedTreemap: hand-rolled Bruls/Huijsen/van Wijk layout component
+// (replaces recharts Treemap — see file-level comment above)
+import { SquarifiedTreemap, type SquarifiedTreemapItem } from "@/components/ui/squarified-treemap";
 
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { cn } from "@/lib/utils";
@@ -200,141 +211,133 @@ function sectorTileColor(returnPct: number | null | undefined): string {
   return `hsl(var(--negative) / ${alpha.toFixed(2)})`;
 }
 
-interface TreemapTileData {
-  name: string;
-  size: number;
-  pct: number;
-  dailyReturnPct: number | null | undefined;
-}
-
 /**
- * SectorTreemap — recharts-based treemap visualisation.
+ * SectorTreemapTile — renders the content inside each squarified treemap cell.
  *
- * WHY recharts (not d3-treemap directly): the codebase already pulls
- * recharts for the BarChart and equity-curve components — adding a second
- * tree-laying lib would be redundant weight. Recharts' Treemap is built on
- * d3-hierarchy under the hood and gives us the tile geometry for free.
+ * WHY a separate component (not inline renderTile): isolating the tile logic
+ * keeps SectorTreemap's JSX readable and allows testing the tile rendering
+ * independently.
  *
- * WHY a custom content renderer: the default content shows recharts' built-in
- * tile labels which don't render the dual percent + sector pattern well
- * inside small tiles. A custom shape lets us drop labels gracefully on
- * narrow tiles (≤80px wide) while keeping them on the larger ones.
+ * Label visibility heuristics — derived from real-world tile rendering:
+ *   - <60px cell width  → no label (sliver — too narrow for any text)
+ *   - <100px cell width → name only (one line; pct would crowd it)
+ *   - ≥100px wide + ≥36px tall → name + pct stacked (full information)
+ *
+ * The return label (e.g. "+1.23% today") is appended to the pct line when
+ * `dailyReturnPct` is non-null, matching the Bloomberg-style "sector tile"
+ * convention where colour alone isn't enough for accessibility.
  */
-function SectorTreemap({ items }: { items: SectorAllocationItem[] }) {
-  // recharts Treemap consumes `dataKey="size"` so we map our shape into
-  // {name, size, pct, dailyReturnPct} — keeping pct + return on the node
-  // so the custom tile renderer can colour and label without extra prop
-  // drilling.
-  const treemapData: TreemapTileData[] = items.map((it) => ({
-    name: it.label,
-    size: it.pct, // tile area driven by % of portfolio
-    pct: it.pct,
-    dailyReturnPct: it.dailyReturnPct,
-  }));
+function SectorTreemapTile({
+  cellWidth,
+  cellHeight,
+  item,
+}: {
+  cellWidth: number;
+  cellHeight: number;
+  item: SectorAllocationItem;
+}) {
+  const fill = sectorTileColor(item.dailyReturnPct);
+  const showLabel = cellWidth >= 60 && cellHeight >= 24;
+  const showPct = cellWidth >= 100 && cellHeight >= 36;
+
+  const returnLabel =
+    item.dailyReturnPct == null
+      ? null
+      : `${item.dailyReturnPct >= 0 ? "+" : ""}${item.dailyReturnPct.toFixed(2)}%`;
+
+  // WHY title attribute on the outer div: provides a browser-native tooltip
+  // on hover, surfacing full sector name + pct + return for narrow tiles
+  // where labels are hidden. CSS tooltip would require extra markup; the
+  // native title is zero-cost and works everywhere.
+  const tooltipText = `${item.label} — ${item.pct.toFixed(1)}% of portfolio${
+    returnLabel ? ` · ${returnLabel} today` : ""
+  }`;
 
   return (
-    <div className="h-[220px] w-full" data-testid="sector-treemap">
-      <ResponsiveContainer width="100%" height="100%">
-        <Treemap
-          data={treemapData}
-          dataKey="size"
-          stroke="hsl(var(--background))"
-          // The default fill is overridden by our content renderer; setting
-          // it here is a fallback for any rendering edge case.
-          fill="hsl(var(--primary) / 0.4)"
-          isAnimationActive={false}
-          content={<TreemapTile />}
-        />
-      </ResponsiveContainer>
+    // WHY h-full w-full: the parent SquarifiedTreemap positions each cell
+    // absolutely with exact pixel dimensions — the tile must fill its slot.
+    <div
+      className="relative h-full w-full overflow-hidden rounded-[1px]"
+      style={{
+        backgroundColor: fill,
+        // 1px background-colour border between adjacent tiles so the
+        // layout grid is legible even when colours are very close.
+        boxShadow: "inset 0 0 0 1px hsl(var(--background))",
+      }}
+      title={tooltipText}
+    >
+      {showLabel && (
+        // WHY font-mono: all financial data should use tabular-nums / mono
+        // so the user can scan across tiles at a glance without the variable-
+        // width text breaking the visual rhythm.
+        <span
+          className="absolute left-[5px] top-[5px] block max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[10px] font-semibold leading-tight text-foreground"
+          style={{ pointerEvents: "none" }}
+        >
+          {item.label}
+        </span>
+      )}
+      {showPct && (
+        <span
+          className="absolute left-[5px] top-[19px] block font-mono text-[9px] tabular-nums text-muted-foreground"
+          style={{ pointerEvents: "none" }}
+        >
+          {/* WHY toFixed(1): one decimal place matches Bloomberg PORT's
+              allocation display — enough precision without crowding. */}
+          {item.pct.toFixed(1)}%{returnLabel ? ` · ${returnLabel}` : ""}
+        </span>
+      )}
     </div>
   );
 }
 
 /**
- * TreemapTile — custom tile renderer for the recharts Treemap.
+ * SectorTreemap — squarified treemap of portfolio sector allocation.
  *
- * WHY custom: the default tile content renders the name centred but ignores
- * tile size, so 1% slivers get a label that overflows. We branch on width
- * to either show name+pct, name only, or no label — the user can always
- * hover to see the full info.
+ * PLAN-0059 H-3: uses SquarifiedTreemap (lib/treemap.ts Bruls/Huijsen/van Wijk
+ * algorithm) instead of recharts Treemap. The squarified algorithm packs cells
+ * to aspect ratio ≈1, so even a 1% sector still gets a recognisable tile
+ * (instead of the recharts sliver problem at low allocations).
+ *
+ * WHY `useMemo` on items: SquarifiedTreemap memoises the squarify result by
+ * reference equality of `items`. Without useMemo, a fresh array is passed on
+ * every parent render and the treemap re-runs the layout on every keystroke
+ * in the view-toggle row above.
  */
-// recharts injects geometry props at runtime; types are declared loose to
-// stay decoupled from internal recharts shapes.
-interface TreemapTileProps {
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-  name?: string;
-  pct?: number;
-  dailyReturnPct?: number | null;
-}
-function TreemapTile(props: TreemapTileProps) {
-  const { x = 0, y = 0, width = 0, height = 0, name, pct, dailyReturnPct } = props;
-  const fill = sectorTileColor(dailyReturnPct);
-
-  // Label visibility heuristics — derived from real-world tile rendering:
-  //   - <60px width → no label (sliver)
-  //   - <100px width → name only (one line)
-  //   - otherwise → name + pct stacked
-  const showLabel = width >= 60 && height >= 24;
-  const showPct = width >= 100 && height >= 36;
-
-  // Defensive: pct may be undefined on the synthetic root node injected by
-  // recharts. Treat it as 0 for the label.
-  const safePct = pct ?? 0;
-  const safeName = name ?? "";
-  const returnLabel =
-    dailyReturnPct == null
-      ? null
-      : `${dailyReturnPct >= 0 ? "+" : ""}${dailyReturnPct.toFixed(2)}%`;
+function SectorTreemap({ items }: { items: SectorAllocationItem[] }) {
+  // Map our domain type to SquarifiedTreemapItem — `weight` drives the cell
+  // area proportionally; `payload` carries the full item for the tile renderer.
+  const treemapItems: SquarifiedTreemapItem<SectorAllocationItem>[] = useMemo(
+    () =>
+      items.map((it) => ({
+        id: it.label, // stable key — sector names don't change within a render
+        weight: it.pct, // tile area ∝ % of portfolio
+        payload: it,
+      })),
+    [items],
+  );
 
   return (
-    <g>
-      <rect
-        x={x}
-        y={y}
-        width={width}
-        height={height}
-        fill={fill}
-        stroke="hsl(var(--background))"
-        strokeWidth={1}
-      >
-        <title>
-          {`${safeName} — ${safePct.toFixed(1)}% of portfolio${
-            returnLabel ? ` · ${returnLabel} today` : ""
-          }`}
-        </title>
-      </rect>
-      {showLabel && (
-        <text
-          x={x + 6}
-          y={y + 14}
-          fill="hsl(var(--foreground))"
-          fontSize={10}
-          fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
-          fontWeight={600}
-          // pointer-events:none so the title-tooltip on the rect still
-          // surfaces even when the cursor is over the label text.
-          style={{ pointerEvents: "none" }}
-        >
-          {safeName}
-        </text>
-      )}
-      {showPct && (
-        <text
-          x={x + 6}
-          y={y + 28}
-          fill="hsl(var(--muted-foreground))"
-          fontSize={9}
-          fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
-          style={{ pointerEvents: "none" }}
-        >
-          {safePct.toFixed(1)}%
-          {returnLabel ? ` · ${returnLabel}` : ""}
-        </text>
-      )}
-    </g>
+    // WHY h-[220px]: matches the prior recharts height exactly so the
+    // Holdings tab layout doesn't shift when the component re-renders.
+    // WHY data-testid="sector-treemap": existing portfolio tests target
+    // this attribute — must be preserved (R19 never delete tests).
+    <div className="h-[220px] w-full" data-testid="sector-treemap">
+      <SquarifiedTreemap<SectorAllocationItem>
+        items={treemapItems}
+        gap={2}
+        minWidth={32}
+        minHeight={20}
+        ariaLabel="Sector allocation treemap"
+        renderTile={(cell) => (
+          <SectorTreemapTile
+            cellWidth={cell.width}
+            cellHeight={cell.height}
+            item={cell.item.payload}
+          />
+        )}
+      />
+    </div>
   );
 }
 
