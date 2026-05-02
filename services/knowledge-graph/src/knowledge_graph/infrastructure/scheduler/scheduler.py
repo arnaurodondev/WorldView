@@ -102,6 +102,7 @@ class KnowledgeGraphScheduler:
             ("narrative_embedding", s.worker_narrative_refresh_interval_s, "worker_13d2_narrative"),
             ("fundamentals_embedding", s.worker_fundamentals_refresh_interval_s, "worker_13d3_fundamentals"),
             ("provisional_enrichment", s.worker_provisional_enrichment_interval_s, "worker_13e_provisional"),
+            ("embedding_refresh", s.worker_embedding_refresh_interval_s, "worker_13f_embedding"),
             ("partition_management", s.worker_partition_interval_s, "worker_13f_partition"),
             ("age_sync", s.worker_age_sync_interval_s, "worker_13f_age_sync"),
         ]
@@ -264,37 +265,62 @@ def build_workers(
 def _build_description_client(settings: Settings, valkey_client: Any | None = None) -> Any:
     """Construct the EntityDescriptionClient based on ``KNOWLEDGE_GRAPH_DESCRIPTION_PROVIDER``.
 
-    - ``"gemini"`` → ``GeminiDescriptionAdapter`` with the configured API key and cost cap.
-    - anything else → ``NullDescriptionAdapter`` (no external calls; fallback template always used).
+    - ``"deepinfra"`` → ``DeepInfraDescriptionAdapter`` (Qwen3-235B-A22B primary, Qwen3-32B fallback).
+    - ``"gemini"``    → ``GeminiDescriptionAdapter`` (gemini-3.1-flash-lite).
+    - anything else  → ``NullDescriptionAdapter`` (no external calls; fallback template always used).
 
     Args:
     ----
         settings:      Service configuration.
         valkey_client:  ValkeyClient for atomic cost tracking (G-005 fix).
-                        Passed as ``cost_tracker`` to ``GeminiDescriptionAdapter``.
 
     """
     import asyncio
 
     from ml_clients.description_client import NullDescriptionAdapter  # type: ignore[import-untyped]
 
-    if settings.description_provider.lower() != "gemini":
-        return NullDescriptionAdapter()
+    provider = settings.description_provider.lower()
 
-    api_key = settings.gemini_api_key.get_secret_value()
-    if not api_key:
-        logger.warning(  # type: ignore[no-any-return]
-            "description_client_gemini_key_missing",
-            message="KNOWLEDGE_GRAPH_GEMINI_API_KEY is empty; falling back to NullDescriptionAdapter",
+    if provider == "deepinfra":
+        api_key = settings.deepinfra_api_key
+        if not api_key:
+            logger.warning(  # type: ignore[no-any-return]
+                "description_client_deepinfra_key_missing",
+                message="KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY is empty; falling back to NullDescriptionAdapter",
+            )
+            return NullDescriptionAdapter()
+
+        from ml_clients.adapters.deepinfra_description import (
+            DeepInfraDescriptionAdapter,  # type: ignore[import-untyped]
         )
-        return NullDescriptionAdapter()
 
-    from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter  # type: ignore[import-untyped]
+        semaphore = asyncio.Semaphore(settings.description_deepinfra_concurrency)
+        return DeepInfraDescriptionAdapter(
+            api_key=api_key,
+            primary_model_id=settings.description_deepinfra_model_id,
+            fallback_model_id=settings.description_deepinfra_fallback_model_id,
+            semaphore=semaphore,
+            cost_tracker=valkey_client,
+            max_monthly_usd=settings.description_max_monthly_usd,
+        )
 
-    semaphore = asyncio.Semaphore(settings.description_gemini_concurrency)
-    return GeminiDescriptionAdapter(
-        api_key=api_key,
-        semaphore=semaphore,
-        cost_tracker=valkey_client,
-        max_monthly_usd=settings.description_max_monthly_usd,
-    )
+    if provider == "gemini":
+        api_key = settings.gemini_api_key.get_secret_value()
+        if not api_key:
+            logger.warning(  # type: ignore[no-any-return]
+                "description_client_gemini_key_missing",
+                message="KNOWLEDGE_GRAPH_GEMINI_API_KEY is empty; falling back to NullDescriptionAdapter",
+            )
+            return NullDescriptionAdapter()
+
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter  # type: ignore[import-untyped]
+
+        semaphore = asyncio.Semaphore(settings.description_gemini_concurrency)
+        return GeminiDescriptionAdapter(
+            api_key=api_key,
+            semaphore=semaphore,
+            cost_tracker=valkey_client,
+            max_monthly_usd=settings.description_max_monthly_usd,
+        )
+
+    return NullDescriptionAdapter()

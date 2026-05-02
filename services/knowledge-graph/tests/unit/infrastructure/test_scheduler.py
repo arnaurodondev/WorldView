@@ -124,3 +124,94 @@ class TestProvisionalEnrichmentInterval:
             "The job must use worker_provisional_enrichment_interval_s, not "
             "worker_embedding_refresh_interval_s."
         )
+
+
+class TestEmbeddingRefreshRegistration:
+    """Regression guard for BP-092: Worker instantiated but never registered in _register_jobs().
+
+    Worker 13F (EmbeddingRefreshWorker) was instantiated in build_workers() but never
+    added to the jobs list in _register_jobs(), causing ALL relation_summaries.summary_embedding
+    to remain NULL and the HNSW ANN search to return zero results.
+    """
+
+    def test_embedding_refresh_job_is_registered(self) -> None:
+        """_register_jobs() must include worker_13f_embedding with the correct interval."""
+        s = _make_settings()
+        s.worker_embedding_refresh_interval_s = 10800
+
+        scheduler = _make_scheduler(workers={})
+        scheduler._settings = s
+
+        captured: list[dict] = []
+
+        def _capture_add_job(fn, trigger, *, seconds, id, max_instances, coalesce):  # noqa: A002
+            captured.append({"seconds": seconds, "id": id})
+
+        with patch.object(scheduler._scheduler, "add_job", side_effect=_capture_add_job):
+            scheduler._register_jobs()
+
+        job = next((c for c in captured if c["id"] == "worker_13f_embedding"), None)
+        assert job is not None, (
+            "worker_13f_embedding must be registered in _register_jobs(). "
+            "Without it, relation_summaries.summary_embedding stays NULL and "
+            "HNSW ANN search on relations returns empty results (BP-092)."
+        )
+        assert job["seconds"] == 10800, (
+            f"Expected 10800s interval for worker_13f_embedding, got {job['seconds']}. "
+            "Must use worker_embedding_refresh_interval_s."
+        )
+
+    def test_all_ten_jobs_registered(self) -> None:
+        """_register_jobs() must register exactly 10 jobs — no worker left unscheduled."""
+        expected_ids = {
+            "worker_13a_confidence",
+            "worker_13b_contradiction",
+            "worker_13c_summary",
+            "worker_13d1_definition",
+            "worker_13d2_narrative",
+            "worker_13d3_fundamentals",
+            "worker_13e_provisional",
+            "worker_13f_embedding",
+            "worker_13f_partition",
+            "worker_13f_age_sync",
+        }
+
+        scheduler = _make_scheduler(workers={})
+
+        captured_ids: set[str] = set()
+
+        def _capture_add_job(fn, trigger, *, seconds, id, max_instances, coalesce):  # noqa: A002
+            captured_ids.add(id)
+
+        with patch.object(scheduler._scheduler, "add_job", side_effect=_capture_add_job):
+            scheduler._register_jobs()
+
+        missing = expected_ids - captured_ids
+        assert not missing, (
+            f"The following jobs were NOT registered: {missing}. " "All 10 workers must be scheduled (BP-092)."
+        )
+
+    def test_embedding_refresh_uses_dedicated_interval_not_provisional(self) -> None:
+        """worker_13f_embedding must use worker_embedding_refresh_interval_s, not provisional."""
+        s = _make_settings()
+        s.worker_embedding_refresh_interval_s = 10800
+        s.worker_provisional_enrichment_interval_s = 300  # different value
+
+        scheduler = _make_scheduler(workers={})
+        scheduler._settings = s
+
+        captured: list[dict] = []
+
+        def _capture_add_job(fn, trigger, *, seconds, id, max_instances, coalesce):  # noqa: A002
+            captured.append({"seconds": seconds, "id": id})
+
+        with patch.object(scheduler._scheduler, "add_job", side_effect=_capture_add_job):
+            scheduler._register_jobs()
+
+        emb = next((c for c in captured if c["id"] == "worker_13f_embedding"), None)
+        assert emb is not None
+        assert emb["seconds"] == 10800, (
+            f"worker_13f_embedding uses wrong interval {emb['seconds']}; "
+            "must be worker_embedding_refresh_interval_s=10800, not "
+            "worker_provisional_enrichment_interval_s=300."
+        )

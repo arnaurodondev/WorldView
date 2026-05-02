@@ -53,6 +53,21 @@ async def main() -> None:
         log.error("unresolved_resolution_worker_startup_failed", error=str(exc))
         sys.exit(1)
 
+    # Build a direct Kafka producer for the entity.provisional.queued.v1 hot-path
+    # event (PLAN-0061 Wave E).  confluent-kafka is a dep of nlp-pipeline.
+    # Wrapped in a thin adapter so the worker only sees the produce_bytes Protocol.
+    from confluent_kafka import Producer as _KafkaProducer  # type: ignore[import-untyped]
+
+    class _DirectProducerAdapter:
+        def __init__(self, producer: _KafkaProducer) -> None:
+            self._p = producer
+
+        def produce_bytes(self, *, topic: str, key: bytes, value: bytes) -> None:
+            self._p.produce(topic=topic, key=key, value=value)
+            self._p.poll(0)  # trigger delivery callbacks (non-blocking)
+
+    direct_producer = _DirectProducerAdapter(_KafkaProducer({"bootstrap.servers": settings.kafka_bootstrap_servers}))
+
     # PLAN-0057 A-5 / F-CRIT-03: thread a session-scoped usage logger so every
     # Phase-2 Ollama / DeepInfra classification call writes a row to
     # nlp_db.llm_usage_log.  Until this fix the table was permanently empty.
@@ -61,6 +76,7 @@ async def main() -> None:
         settings=settings,
         intel_session_factory=intel_sf,
         usage_logger=SessionScopedNlpUsageLogger(nlp_sf),
+        direct_producer=direct_producer,
     )
 
     # Reset any stuck-escalated mentions from a previous crash (one-time startup call).

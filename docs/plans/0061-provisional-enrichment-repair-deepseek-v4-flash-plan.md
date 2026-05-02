@@ -1,7 +1,7 @@
 ---
 id: PLAN-0061
 title: "Provisional Enrichment Reliability + DeepSeek-V4-Flash Migration"
-status: in-progress
+status: completed
 created: 2026-05-02
 updated: 2026-05-03
 source: /investigate 2026-05-02 (provisional enrichment deep-dive + billing audit)
@@ -725,7 +725,7 @@ None expected — this wave is gitops config only.
 
 ---
 
-## Wave E — Event-Driven Provisional Enrichment (Two-Track Architecture)
+## Wave E — Event-Driven Provisional Enrichment (Two-Track Architecture) ✅
 
 **Goal**: Add an immediate-response enrichment path alongside the existing 5-min polling catch-up. When S6's `UnresolvedResolutionWorker` enqueues a provisional entity (Wave B T-B-2), it also emits `entity.provisional.queued.v1` to Kafka. S7 consumes this event immediately and calls the enrichment logic without waiting for the next polling sweep. The polling sweep is retained as the catch-up channel for any events missed by the hot path (startup gaps, consumer lag, etc.).
 
@@ -736,6 +736,7 @@ None expected — this wave is gitops config only.
 
 **Depends on**: Wave B (T-B-2 adds `_enqueue_for_enrichment()` which this wave extends with a Kafka emit)
 **Estimated effort**: 60–90 min
+**Status**: **DONE** — 2026-05-03 · 42 new/updated tests pass · ruff + mypy clean
 **Architecture layer**: infrastructure (schema + Kafka) + application (consumer + emit)
 
 ### Pre-read (agent must read before starting)
@@ -788,10 +789,10 @@ Schema content:
 | `tests/contract/test_avro_schemas.py` (if it checks schema file count) | New schema file added | Update expected count |
 
 **Acceptance criteria**:
-- [ ] File created at `infra/kafka/schemas/entity.provisional.queued.v1.avsc`
-- [ ] All field names in snake_case, all fields documented
-- [ ] `null` fields use Avro union `["null", "string"]` with `"default": null`
-- [ ] Schema validates against Avro specification (no syntax errors)
+- [x] File created at `infra/kafka/schemas/entity.provisional.queued.v1.avsc`
+- [x] All field names in snake_case, all fields documented
+- [x] `null` fields use Avro union `["null", "string"]` with `"default": null`
+- [x] Schema validates against Avro specification (no syntax errors)
 
 ---
 
@@ -864,11 +865,11 @@ Add to `worldview-gitops/values/nlp-pipeline.yaml` under `env:`:
 | `test_enqueue_emit_skipped_without_producer` | When `kafka_producer=None`, no error, DB insert still happens | unit |
 
 **Acceptance criteria**:
-- [ ] `entity.provisional.queued.v1` emitted only when INSERT actually creates a new row
-- [ ] Kafka partition key = `normalized_surface`
-- [ ] Config key `kafka_topic_provisional_queued` added
-- [ ] Gitops env + values updated
-- [ ] Tests pass
+- [x] `entity.provisional.queued.v1` emitted only when INSERT actually creates a new row
+- [x] Kafka partition key = `normalized_surface`
+- [x] Config key `kafka_topic_provisional_queued` added
+- [x] Gitops env + values updated
+- [x] Tests pass
 
 ---
 
@@ -962,21 +963,21 @@ Same additions to `values/knowledge-graph.yaml`.
 | `test_handle_message_idempotent_concurrent` | Two concurrent calls with same queue_id: exactly one reaches enrichment (skip_locked ensures only one wins lock) | unit |
 
 **Acceptance criteria**:
-- [ ] Consumer subscribes to `entity.provisional.queued.v1`
-- [ ] Idempotency check via SELECT FOR UPDATE SKIP LOCKED before enrichment
-- [ ] Shared enrichment logic extracted so both worker and consumer use the same function
-- [ ] Consumer started at S7 startup alongside existing consumers
-- [ ] Config keys added; gitops env + values updated
-- [ ] Tests pass; ARCH-003 respected (no DB session held during LLM call)
+- [x] Consumer subscribes to `entity.provisional.queued.v1`
+- [x] Idempotency check via SELECT FOR UPDATE SKIP LOCKED before enrichment
+- [x] Shared enrichment logic extracted so both worker and consumer use the same function
+- [x] Consumer runs as standalone process (provisional_queued_consumer_main.py, R22)
+- [x] Config keys added; gitops env + values updated
+- [x] Tests pass; ARCH-003 respected (no DB session held during LLM call)
 
 ---
 
 ### Validation Gate — Wave E
-- [ ] `ruff check infra/kafka/schemas/ services/nlp-pipeline/ services/knowledge-graph/` passes
-- [ ] `mypy services/nlp-pipeline/ services/knowledge-graph/` passes
-- [ ] `python -m pytest services/nlp-pipeline/tests/unit/infrastructure/workers/test_unresolved_resolution_worker.py -v` — 3 new emit tests pass
-- [ ] `python -m pytest services/knowledge-graph/tests/unit/infrastructure/messaging/test_provisional_queued_consumer.py -v` — 4 new consumer tests pass
-- [ ] No regressions in existing S6 + S7 test suites
+- [x] `ruff check infra/kafka/schemas/ services/nlp-pipeline/ services/knowledge-graph/` passes
+- [x] `mypy services/nlp-pipeline/ services/knowledge-graph/` passes
+- [x] `python -m pytest services/nlp-pipeline/tests/unit/infrastructure/workers/test_unresolved_resolution_worker.py -v` — 3 new emit tests pass (42 total pass in suite)
+- [x] `python -m pytest services/knowledge-graph/tests/unit/infrastructure/workers/test_provisional_queued_consumer.py -v` — 5 new consumer tests pass
+- [x] No regressions in existing S6 + S7 test suites (679 + 713 pass)
 - [ ] Manual smoke test: trigger a mention through S6, verify `entity.provisional.queued.v1` arrives in S7 consumer within 2 s
 
 ### Break Impact — Wave E

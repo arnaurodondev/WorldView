@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     # Topics (produced)
     topic_article_enriched: str = "nlp.article.enriched.v1"
     topic_signal_detected: str = "nlp.signal.detected.v1"
+    kafka_topic_provisional_queued: str = "entity.provisional.queued.v1"  # NLP_PIPELINE_KAFKA_TOPIC_PROVISIONAL_QUEUED
     # PLAN-0057 D-1 (F-CRIT-08): the legacy ``topic_claim_extracted`` setting
     # was removed along with the orphan ``claim.extracted`` producer. Claims
     # now flow exclusively via ``nlp.article.enriched.v1.raw_claims``.
