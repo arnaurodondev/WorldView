@@ -10,9 +10,10 @@ Tests:
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
+from structlog.testing import capture_logs
 
 pytestmark = pytest.mark.unit
 
@@ -242,3 +243,120 @@ class TestDirtiedEmit:
 
         payload = json.loads(call_kwargs["value"])
         assert payload["entity_id"] == str(_ENTITY_ID)
+
+
+# ---------------------------------------------------------------------------
+# P-1: init warning when direct_producer is None
+# ---------------------------------------------------------------------------
+
+
+class TestInitWarningNoProducer:
+    def test_provisional_queued_consumer_warns_when_no_producer(self) -> None:
+        """When direct_producer=None, a WARNING is logged at init time."""
+        from knowledge_graph.infrastructure.messaging.consumers.provisional_queued_consumer import (
+            ProvisionalQueuedConsumer,
+        )
+
+        from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+
+        config = ConsumerConfig(
+            bootstrap_servers="localhost:9092",
+            group_id="kg-provisional-queued-group",
+            topics=["entity.provisional.queued.v1"],
+        )
+        _, factory = _make_session_factory(pending_row=None)
+
+        with capture_logs() as cap:
+            ProvisionalQueuedConsumer(
+                config=config,
+                session_factory=factory,
+                llm_client=MagicMock(),
+                direct_producer=None,
+            )
+
+        assert any(
+            e.get("event") == "provisional_queued_consumer_no_producer" and e.get("log_level") == "warning" for e in cap
+        ), f"Expected warning log not found in: {cap}"
+
+    def test_provisional_queued_consumer_no_warning_when_producer_present(self) -> None:
+        """When direct_producer is provided, no 'no_producer' warning is logged."""
+        from knowledge_graph.infrastructure.messaging.consumers.provisional_queued_consumer import (
+            ProvisionalQueuedConsumer,
+        )
+
+        from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+
+        config = ConsumerConfig(
+            bootstrap_servers="localhost:9092",
+            group_id="kg-provisional-queued-group",
+            topics=["entity.provisional.queued.v1"],
+        )
+        _, factory = _make_session_factory(pending_row=None)
+
+        with capture_logs() as cap:
+            ProvisionalQueuedConsumer(
+                config=config,
+                session_factory=factory,
+                llm_client=MagicMock(),
+                direct_producer=MagicMock(),
+            )
+
+        assert not any(
+            e.get("event") == "provisional_queued_consumer_no_producer" for e in cap
+        ), f"Unexpected no_producer warning found in: {cap}"
+
+
+# ---------------------------------------------------------------------------
+# P-2: _fail_safe_retry increments stuck counter on DB failure
+# ---------------------------------------------------------------------------
+
+
+class TestFailSafeRetryStuckCounter:
+    async def test_fail_safe_retry_failure_increments_stuck_counter(self) -> None:
+        """When _fail_safe_retry DB call fails, s7_provisional_queue_stuck_total is incremented."""
+        from knowledge_graph.infrastructure.messaging.consumers.provisional_queued_consumer import (
+            _fail_safe_retry,
+        )
+
+        broken_sf = MagicMock(side_effect=RuntimeError("db down"))
+
+        _counter_path = (
+            "knowledge_graph.infrastructure.messaging.consumers"
+            ".provisional_queued_consumer.s7_provisional_queue_stuck_total"
+        )
+        with patch(_counter_path) as mock_counter:
+            await _fail_safe_retry(broken_sf, uuid4(), 0, 5)
+
+        mock_counter.inc.assert_called_once()
+
+    async def test_fail_safe_retry_no_increment_on_success(self) -> None:
+        """When _fail_safe_retry succeeds, stuck counter is NOT incremented."""
+        from knowledge_graph.infrastructure.messaging.consumers.provisional_queued_consumer import (
+            _fail_safe_retry,
+        )
+
+        session = AsyncMock()
+        session.commit = AsyncMock()
+
+        def _make_cm():
+            cm = AsyncMock()
+            cm.__aenter__ = AsyncMock(return_value=session)
+            cm.__aexit__ = AsyncMock(return_value=False)
+            return cm
+
+        factory = MagicMock(side_effect=lambda: _make_cm())
+
+        _counter_path = (
+            "knowledge_graph.infrastructure.messaging.consumers"
+            ".provisional_queued_consumer.s7_provisional_queue_stuck_total"
+        )
+        with (
+            patch(_counter_path) as mock_counter,
+            patch(
+                "knowledge_graph.infrastructure.workers.provisional_enrichment_core.apply_retry_transition",
+                new=AsyncMock(return_value=False),
+            ),
+        ):
+            await _fail_safe_retry(factory, uuid4(), 0, 5)
+
+        mock_counter.inc.assert_not_called()

@@ -29,7 +29,10 @@ import asyncio
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
-from knowledge_graph.infrastructure.metrics.prometheus import s7_provisional_enrichment_failed_total
+from knowledge_graph.infrastructure.metrics.prometheus import (
+    s7_provisional_enrichment_failed_total,
+    s7_provisional_enrichment_success_total,
+)
 from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -85,6 +88,11 @@ class ProvisionalEnrichmentWorker:
         self._llm = llm_client
         self._producer = direct_producer
         self._dirtied_topic = entity_dirtied_topic
+        if direct_producer is None:
+            logger.warning(  # type: ignore[no-any-return]
+                "provisional_enrichment_worker_no_producer",
+                message="direct_producer is None — entity.dirtied.v1 will not be emitted after enrichment",
+            )
         # PLAN-0057 A-5 / F-CRIT-03: optional cost logger.  In practice the
         # FallbackChainClient already calls ``usage_logger.log()`` on every
         # embed/extract attempt — this attribute exists so call-site code can
@@ -212,6 +220,7 @@ WHERE queue_id = :queue_id
                             {"entity_id": str(entity_id), "queue_id": str(queue_id)},
                         )
                         entity_ids_to_dirty.append(entity_id)
+                        s7_provisional_enrichment_success_total.inc()
                         enriched += 1
                     else:
                         await self._apply_retry(session, queue_id, retry_count)
@@ -232,11 +241,18 @@ WHERE queue_id = :queue_id
 
         for dirty_id in entity_ids_to_dirty:
             if self._producer:
-                self._producer.produce_bytes(
-                    topic=self._dirtied_topic,
-                    key=str(dirty_id).encode(),
-                    value=json.dumps({"entity_id": str(dirty_id)}).encode(),
-                )
+                try:
+                    self._producer.produce_bytes(
+                        topic=self._dirtied_topic,
+                        key=str(dirty_id).encode(),
+                        value=json.dumps({"entity_id": str(dirty_id)}).encode(),
+                    )
+                except Exception:
+                    logger.warning(  # type: ignore[no-any-return]
+                        "provisional_enrichment_dirtied_emit_failed",
+                        entity_id=str(dirty_id),
+                        exc_info=True,
+                    )
 
         logger.info(  # type: ignore[no-any-return]
             "provisional_enrichment_worker_complete",

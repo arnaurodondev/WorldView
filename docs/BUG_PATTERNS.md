@@ -8357,3 +8357,39 @@ See `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/provisi
 - **Rule**: When changing a DeepInfra model ID default in config, verify availability via a live curl call (`curl https://api.deepinfra.com/v1/openai/chat/completions -d '{"model": "<id>", ...}'`) before committing.
 - **Verification test**: Each service that uses a DeepInfra API model should have a smoke-test or startup probe that validates the model ID responds with 200. A 404 on startup should emit a WARNING log with the exact model ID and a fallback indication.
 - **Single source of truth**: Keep a confirmed-available model list per DeepInfra account in `.claude-context.md` or `docs/MASTER_PLAN.md`. Never derive defaults from documentation alone.
+
+---
+
+## BP-312 — Worker Instantiated but Not Registered in Scheduler
+
+**Pattern**: A worker class is correctly instantiated in `build_workers()` and stored in the `workers` dict, but its key is **never added to the `_register_jobs()` job list**. The worker object is created at startup, holds resources, but never runs. Dependent data stays in its initial `NULL`/empty state forever.
+
+**Root Cause**: `build_workers()` and `_register_jobs()` are maintained independently. Adding a new worker requires editing both functions. It is easy to update `build_workers()` and forget `_register_jobs()`, especially when the worker key is a new name. There is no startup assertion that every worker key has a corresponding scheduled job.
+
+**Discovered**: Twice in S7 (knowledge-graph):
+1. PLAN-0061 Wave A — `provisional_enrichment` worker: instantiated in `build_workers()` but missing from `_register_jobs()`. Result: all provisional entities stayed in `status='provisional'` forever.
+2. Fix-bug session 2026-05-02 — `embedding_refresh` worker: same pattern. Result: all `relation_summaries.summary_embedding` stayed `NULL`; HNSW ANN search on relations always returned 0 results; the RAG relation context path was completely dark.
+
+**Example**:
+```python
+# build_workers() — correctly creates the worker:
+workers["embedding_refresh"] = EmbeddingRefreshWorker(session_factory, llm_client)
+
+# _register_jobs() — BUG: this entry is missing!
+jobs = [
+    ("confidence_recompute", s.worker_confidence_interval_s, "worker_13a_confidence"),
+    # ... all other workers ...
+    # ("embedding_refresh", s.worker_embedding_refresh_interval_s, "worker_13f_embedding"),  ← missing!
+]
+```
+
+**Fix**: Add the missing `(job_name, interval_setting, job_id)` tuple to the `jobs` list in `_register_jobs()`.
+
+**Regression test**: `test_scheduler.py::TestEmbeddingRefreshRegistration::test_all_ten_jobs_registered` — asserts that every expected `job_id` appears in the set of registered jobs.
+
+### Prevention
+
+- **Rule**: Every key added to the `workers` dict in `build_workers()` MUST have a corresponding entry in the `jobs` list in `_register_jobs()`. These two functions are a coupled pair.
+- **Test**: `test_all_ten_jobs_registered` verifies the full set of expected job IDs. When adding a new worker, update this test's `expected_ids` set — a failing test is your first signal of a missing registration.
+- **Code review**: When reviewing a `build_workers()` addition, immediately check whether `_register_jobs()` was also updated. If not, block the PR.
+- **Observability**: At startup, log the full list of registered job IDs at INFO level. Cross-reference against the keys in `build_workers()` in the startup log. A missing key is immediately visible in the startup trace.

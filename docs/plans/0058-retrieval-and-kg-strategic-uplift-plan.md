@@ -101,6 +101,41 @@ Cross-wave invariants:
 
 ---
 
+---
+
+### Wave B2 — Extended Instrument & Company Seeding (~2 000 entities)
+
+**Wave intent**: Seed the canonical entity table with the universe of financially-relevant companies and instruments so that Stage-1 (exact alias) and Stage-2 (ticker/ISIN) matching resolves the vast majority of article entity mentions without touching the provisional queue. Migration 0009 covered systemic entities (currencies, regulators, indices, macro indicators, locations, persons, financial institutions). This wave adds the **company/instrument layer** that drives >80% of financial article content.
+
+**Dependencies**: Wave B (migration 0009 already applied). Produces the seeded state that all subsequent waves' eval metrics are measured against.
+
+**Implementation approach**: Option A — static hardcoded SQL in a new Alembic data migration (`0013_seed_extended_instruments.py` or next available slot). Each entity block follows the exact pattern of migration 0009: `canonical_entities` INSERT + `entity_aliases` rows (EXACT + TICKER + ISIN where applicable) + `entity_embedding_state` rows (`next_refresh_at = now()` so the embedding worker refreshes on startup). All inserts are guarded with `ON CONFLICT DO NOTHING` for idempotency.
+
+**Tasks**:
+
+| ID | Task | Coverage | Acceptance |
+|---|---|---|---|
+| **B2-1** | S&P 500 companies — full list with canonical_name, ticker (NYSE/NASDAQ), ISIN (US-prefix), exchange. Aliases: canonical name (EXACT), ticker (TICKER), common short name (EXACT). | ~500 companies | Stage-2 (ticker) hit rate for major US company mentions ≥ 95% |
+| **B2-2** | Major US & global ETFs — SPY, QQQ, IWM, GLD, TLT, HYG, AGG, XLF, XLE, XLK, XLU, XLI, XLV, XLY, XLP, VTI, VEA, VWO, EEM, EFA, BND, LQD, IEF, SHY, ARKK, ARKG, ARKW, ARKF, SQQQ, TQQQ + iShares/Vanguard equivalents. | ~60 ETFs | Stage-1/2 match for all named ETFs |
+| **B2-3** | Major international stocks not already in S&P 500 — ASML, SAP, LVMH, Nestlé, TSMC, Samsung Electronics, Sony, Keyence, Toyota, SoftBank, Alibaba, Tencent, BHP, Rio Tinto, Shell, BP, Unilever, AstraZeneca, HSBC, Barclays, BNP Paribas, Deutsche Bank, Allianz, Siemens, BASF, Volkswagen, Airbus (~150 entries). | ~150 companies | Stage-1/2 for top-50 international mentions ≥ 80% |
+| **B2-4** | Spanish market — IBEX 35 full list + IBEX Medium Cap top 30: Banco Santander (SAN), BBVA, Inditex (ITX), Telefónica (TEF), Repsol (REP), Iberdrola (IBE), CaixaBank (CABK), Bankinter (BKT), Amadeus IT (AMS), ACS, Ferrovial (FER), Cellnex (CLNX), Endesa (ELE), Naturgy (NTGY), Mapfre (MAP), Solaria, Grifols (GRF), Viscofan, Melia Hotels, Fluidra + Medium Cap additions. Aliases include full name, ticker (BME), and common English rendering. | ~65 companies | Spanish stock mentions resolve ≥ 90% at Stage 1/2 |
+| **B2-5** | Additional key persons not in migration 0009 — CFOs of S&P 100 companies (~50), major hedge fund managers (Ray Dalio, Ken Griffin, Steve Cohen, David Tepper, Paul Singer, David Einhorn, Seth Klarman, Michael Burry ~20), additional politicians affecting markets (Treasury secretaries, finance ministers of G7 countries ~20). | ~90 persons | Person mentions that went to provisional queue → Stage-1 match |
+| **B2-6** | Seed `entity_embedding_state` rows with `next_refresh_at = now()` for ALL entities added in B2-1..B2-5. Verify S7 embedding worker picks them up on first cycle. | All B2 entities | `SELECT count(*) FROM entity_embedding_state WHERE next_refresh_at <= now()` increases after migration |
+| **B2-7** | Post-seed verification script `scripts/check_seed_coverage.py` — queries `s6_entity_resolved_total{method="exact"}` + `s6_entity_resolved_total{method="ticker"}` ratios against a fixed set of 100 known article entity mentions; reports hit rate per class. Add to CI as an informational job (not blocking). | — | Script runs; hit rate reported; expected ≥ 85% for instruments |
+
+**Total entities added**: ~870 new canonicals; ~2 100 entity_aliases rows (canonical EXACT + ticker + ISIN + common variants).
+
+**Validation**:
+- Migration applies cleanly against the dev stack (`alembic upgrade head`).
+- `SELECT count(*) FROM canonical_entities` increases by ~870.
+- `SELECT count(*) FROM entity_aliases` increases by ~2 100.
+- After 24h soak: `s6_entity_resolved_total{method="exact"} + method="ticker"` represents ≥ 80% of all resolution events (shift from ANN/fuzzy to Stage 1/2).
+- `s6_extraction_entity_ref_hallucinated_total` counter stays near zero (entity list provided to extraction prompt is now complete, so model rarely invents refs).
+
+**Wave B2 exit gate**: Migration applied; all entities have embedding_state rows; instrument hit rate ≥ 85% on verification script; no new mypy/ruff errors.
+
+---
+
 ## Phase 2 — Make it Measurable
 
 **Phase entry gate**: Phase 1 invariants holding for 7 days continuous.
