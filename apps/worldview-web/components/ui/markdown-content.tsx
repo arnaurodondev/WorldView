@@ -101,18 +101,29 @@ export function MarkdownContent({
           p: ({ children: c }) => <p className={t.p}>{c}</p>,
           li: ({ children: c }) => <li className={t.li}>{c}</li>,
           // ── Links — primary colour, underline on hover only ────────────────
-          a: ({ children: c, href }) => (
-            <a
-              href={href}
-              className="text-primary hover:underline"
-              // WHY noopener+noreferrer: any LLM-rendered link could be hostile;
-              // strip referrer + opener to avoid leaking session info.
-              target={href?.startsWith("http") ? "_blank" : undefined}
-              rel={href?.startsWith("http") ? "noopener noreferrer" : undefined}
-            >
-              {c}
-            </a>
-          ),
+          a: ({ children: c, href }) => {
+            // WHY blocklist dangerous schemes (not allowlist): ReactMarkdown
+            // does not sanitize href protocols. An LLM or compromised S8 backend
+            // could emit `javascript:alert(1)` URIs that execute on click.
+            // We block only executable-code schemes (javascript:, data:, vbscript:)
+            // and allow everything else: https:, http:, mailto:, relative paths,
+            // #anchors. An allowlist would incorrectly strip relative navigation.
+            // `target=_blank` + `rel=noopener noreferrer` strips referrer+opener
+            // on external links to prevent session-info leakage.
+            const isDangerous =
+              href != null && /^(javascript:|data:|vbscript:)/i.test(href.trim());
+            const safeHref = isDangerous ? undefined : href;
+            return (
+              <a
+                href={safeHref}
+                className="text-primary hover:underline"
+                target={safeHref?.startsWith("http") ? "_blank" : undefined}
+                rel={safeHref?.startsWith("http") ? "noopener noreferrer" : undefined}
+              >
+                {c}
+              </a>
+            );
+          },
           // ── Tables — border-collapse + zebra rows ──────────────────────────
           table: ({ children: c }) => (
             <table

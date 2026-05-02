@@ -40,7 +40,14 @@ import { useChatStream } from "../useChatStream";
  * tests then `await waitFor(...)` to observe the intermediate state.
  */
 function makeReader(frames: string[]): {
-  reader: { read: () => Promise<{ done: boolean; value?: Uint8Array }> };
+  reader: {
+    read: () => Promise<{ done: boolean; value?: Uint8Array }>;
+    // WHY cancel: useChatStream calls reader.cancel() in the finally block on all
+    // exit paths to release the ReadableStream lock. Without this method the hook
+    // throws "reader.cancel is not a function" in tests even when the stream
+    // completed successfully.
+    cancel: () => Promise<void>;
+  };
   encoder: TextEncoder;
 } {
   const encoder = new TextEncoder();
@@ -54,6 +61,7 @@ function makeReader(frames: string[]): {
       i += 1;
       return Promise.resolve({ done: false, value: chunk });
     },
+    cancel: vi.fn().mockResolvedValue(undefined),
   };
   return { reader, encoder };
 }
@@ -120,6 +128,10 @@ function makeAbortableReader(): {
         pendingRejects.push(reject);
       });
     },
+    // WHY cancel: useChatStream calls reader.cancel() in the finally block to
+    // release the ReadableStream lock. The abortable reader must expose it so
+    // abort + unmount tests don't throw "cancel is not a function".
+    cancel: vi.fn().mockResolvedValue(undefined),
   };
 
   function pushChunk(text: string) {
@@ -346,8 +358,12 @@ describe("useChatStream", () => {
     });
 
     expect(result.current.streaming).toBeNull();
-    expect(result.current.chatError).toMatch(/500/);
-    expect(result.current.chatError).toMatch(/Internal Server Error/);
+    // WHY generic message check: useChatStream maps HTTP status codes to safe
+    // user-facing strings rather than forwarding raw statusText, to avoid leaking
+    // internal hostnames or reverse-proxy details into client error logs.
+    // A 5xx maps to "Server error — please try again."
+    expect(result.current.chatError).toMatch(/Server error/);
+    expect(result.current.chatError).toMatch(/try again/);
   });
 
   it("AbortError thrown from fetch is swallowed silently (no chatError)", async () => {

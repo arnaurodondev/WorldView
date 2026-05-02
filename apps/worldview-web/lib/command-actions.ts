@@ -315,7 +315,11 @@ actionRegistry.register({
 
 actionRegistry.register({
   id: "navigate.instrument-earnings",
-  label: "View Earnings",
+  // WHY label "Earnings" (not "View Earnings"): extractMnemonicParts finds the
+  // FIRST occurrence of the mnemonic letter (case-insensitive). "View Earnings"
+  // with mnemonic "E" would underline the 'e' in "Vi[e]w", not in "[E]arnings".
+  // Bloomberg's DES/ERN/GP convention underlines the letter in the key noun.
+  label: "Earnings",
   description: "Navigate to the instrument detail page on the Financials tab.",
   category: "Navigate",
   scopes: ["row"],
@@ -496,7 +500,10 @@ actionRegistry.register({
   },
   run({ row, navigate }) {
     if (!row || row.kind !== "holding") return;
-    navigate?.(`/portfolio?trade=sell&ticker=${encodeURIComponent(row.ticker)}&holding=${row.holdingId}`);
+    // WHY encodeURIComponent on holdingId: holdingId is a UUIDv7 from the server
+    // and in practice contains only hex+hyphens. We encode defensively to prevent
+    // query-parameter injection if the value ever comes from a less-trusted path.
+    navigate?.(`/portfolio?trade=sell&ticker=${encodeURIComponent(row.ticker)}&holding=${encodeURIComponent(row.holdingId)}`);
   },
 });
 
@@ -703,9 +710,9 @@ actionRegistry.register({
   description: "Open the AI chat panel to ask questions about this instrument.",
   category: "View",
   scopes: ["row"],
-  // WHY mnemonic "/": Bloomberg uses "/" to open the search/command bar. We
-  // mirror that convention — pressing "/" in the context menu opens the AI chat
-  // panel, which is the nearest equivalent to Bloomberg's CHAT function.
+  // WHY mnemonic "I": Bloomberg's AI/Chat equivalent is accessed via "CHAT".
+  // "I" maps to "Intelligence/Insights" — the institutional convention for
+  // AI-assisted analysis panels. "/" is not a valid mnemonic (must be [a-zA-Z0-9]).
   mnemonic: "I",
   run({ row, navigate }) {
     if (!row) return;

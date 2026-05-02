@@ -27,10 +27,17 @@ import { useConfirmable } from "@/hooks/useConfirmable";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-// Mock sonner toast so we can inspect calls without rendering the DOM
-vi.mock("sonner", () => ({
-  toast: vi.fn(),
-}));
+// Mock sonner toast so we can inspect calls without rendering the DOM.
+// WHY Object.assign: sonner's `toast` is a function with attached methods
+// (dismiss, success, error, etc.). A plain vi.fn() creates a function with no
+// properties — toast.dismiss(id) would throw "not a function". Object.assign
+// copies dismiss onto the mock fn so useConfirmable can call toast.dismiss(toastId)
+// to remove the Undo button before the action fires.
+vi.mock("sonner", () => {
+  const mockFn = vi.fn() as ReturnType<typeof vi.fn> & { dismiss: ReturnType<typeof vi.fn> };
+  mockFn.dismiss = vi.fn();
+  return { toast: mockFn };
+});
 
 // Mock confirm-dialog so we don't need the full Radix Dialog DOM in tests
 vi.mock("@/components/ui/confirm-dialog", () => ({
