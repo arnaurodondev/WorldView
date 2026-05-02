@@ -47,6 +47,10 @@ vi.mock("lightweight-charts", () => ({
       fitContent: vi.fn(),
       timeToCoordinate: vi.fn(() => null),
       coordinateToTime: vi.fn(() => null),
+      // OHLCVChart anchors the initial visible range via setVisibleLogicalRange
+      // (replaces the older fitContent call) — mock keeps the chart init from
+      // throwing in jsdom.
+      setVisibleLogicalRange: vi.fn(),
     })),
     subscribeCrosshairMove: vi.fn(),
     unsubscribeCrosshairMove: vi.fn(),
