@@ -255,9 +255,11 @@ Without a cap, a row with malformed mention text that consistently causes LLM to
 
 ---
 
-## Wave B — UnresolvedResolutionWorker: Phase 1 Cascade + Entity Creation
+## Wave B — UnresolvedResolutionWorker: Phase 1 Cascade + Entity Creation ✅
 
 **Goal**: Implement the two missing behaviors that cause the worker to waste LLM budget on every mention (Phase 1 stub) and to classify entities without ever creating them (ENTITY_CREATED gap).
+
+**Status**: **DONE** — 2026-05-02 · 9 new tests (27 total pass) · ruff + mypy clean
 
 **Depends on**: Wave A (retry-cap infra in place before we insert new provisional_queue rows)
 **Estimated effort**: 60–90 min
@@ -389,10 +391,10 @@ Check `nlp_db` models to confirm the `provisional_entity_queue` table is accessi
 ---
 
 ### Validation Gate — Wave B
-- [ ] `ruff check services/nlp-pipeline/` passes
-- [ ] `mypy services/nlp-pipeline/` passes
-- [ ] `python -m pytest services/nlp-pipeline/tests/unit/infrastructure/workers/ -v` — minimum 6 new tests
-- [ ] No regressions in `services/nlp-pipeline/tests/`
+- [x] `ruff check services/nlp-pipeline/` passes
+- [x] `mypy services/nlp-pipeline/` passes
+- [x] `python -m pytest services/nlp-pipeline/tests/unit/infrastructure/workers/ -v` — 9 new tests added (27 total pass)
+- [x] No regressions in `services/nlp-pipeline/tests/` (665 pass excluding pre-existing env-missing deepseek test)
 
 ### Break Impact — Wave B
 | Broken File | Why | Fix Required |

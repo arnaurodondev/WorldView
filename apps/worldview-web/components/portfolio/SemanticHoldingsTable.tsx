@@ -35,6 +35,8 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, formatPercentUnsigned } from "@/lib/utils";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+import { ActionContextMenu } from "@/components/ui/context-menu";
+import type { HoldingRowContext } from "@/lib/command-actions";
 import type { Holding } from "@/types/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -331,7 +333,23 @@ export function SemanticHoldingsTable({
 
         {/* ── Data rows ─────────────────────────────────────────────────── */}
         <tbody className="divide-y divide-border/30">
-          {sortedRows.map(({ h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChangeValue, dayChangePct }) => (
+          {sortedRows.map(({ h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChangeValue, dayChangePct }) => {
+            // Build the row context for the action registry.
+            // WHY typed as HoldingRowContext (not the union RowContextKind):
+            // we know at compile time this is a holdings table row. Providing
+            // the full context allows actions like "Sell" to gate on row.kind
+            // and "Copy Ticker" to read row.ticker without extra lookups.
+            const holdingRowCtx: HoldingRowContext = {
+              kind: "holding",
+              holdingId: h.holding_id,
+              portfolioId: h.portfolio_id,
+              instrumentId: h.instrument_id,
+              entityId: h.entity_id,
+              ticker: h.ticker,
+              name: h.name,
+            };
+
+            return (
             // F-P-013 (PLAN-0051 W6): row key is ``holding_id`` (a stable
             // UUIDv7), NOT the array index. WHY: when the table re-sorts on
             // a column click, index-based keys force React to re-render
@@ -339,18 +357,24 @@ export function SemanticHoldingsTable({
             // the WEIGHT bars briefly flicker as their widths re-animate.
             // Using the holding_id keeps row identity stable across sorts
             // so React only moves rows in the DOM rather than re-mounting.
-            <tr
-              key={h.holding_id}
-              className="h-[22px] hover:bg-muted/40 cursor-pointer transition-colors"
-              onClick={() => router.push(`/instruments/${encodeURIComponent(h.entity_id)}`)}
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  router.push(`/instruments/${encodeURIComponent(h.entity_id)}`);
-                }
-              }}
-            >
+            //
+            // F-3 (PLAN-0059): each row is wrapped in ActionContextMenu so
+            // right-clicking opens the registry-driven context menu with ≥4
+            // actions: Copy Ticker, Add to Watchlist, View Earnings, Open in
+            // Workspace, and more depending on scope. The menu is keyboard-
+            // accessible via mnemonic letters (Bloomberg convention).
+            <ActionContextMenu key={h.holding_id} row={holdingRowCtx}>
+              <tr
+                className="h-[22px] hover:bg-muted/40 cursor-pointer transition-colors"
+                onClick={() => router.push(`/instruments/${encodeURIComponent(h.entity_id)}`)}
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    router.push(`/instruments/${encodeURIComponent(h.entity_id)}`);
+                  }
+                }}
+              >
               {/* Ticker */}
               <td className="px-2 font-mono text-[11px] tabular-nums text-primary font-medium">
                 {h.ticker}
@@ -469,7 +493,9 @@ export function SemanticHoldingsTable({
                 {sector ?? "—"}
               </td>
             </tr>
-          ))}
+            </ActionContextMenu>
+            );
+          })}
         </tbody>
 
         {/* ── Total row ─────────────────────────────────────────────────── */}

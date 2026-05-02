@@ -22,6 +22,7 @@ import json
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import httpx
 
@@ -183,6 +184,26 @@ _CLASSIFICATION_PROMPT_TEMPLATE = (
     'Concrete examples: {{"is_entity": true, "reason": "named regulator"}} '
     'or {{"is_entity": false, "reason": "generic noun phrase"}}.'
 )
+
+# SQL for enqueuing a newly-discovered entity mention into intelligence_db for
+# S7 ProvisionalEnrichmentWorker to process. ON CONFLICT is idempotent:
+# same (surface, class) pair shares one queue row.
+_PROVISIONAL_ENQUEUE_SQL = """
+INSERT INTO provisional_entity_queue
+    (queue_id, mention_text, normalized_surface, mention_class, source_doc_id, context_snippet)
+VALUES
+    (
+        CAST(:queue_id AS uuid),
+        CAST(:surface AS varchar(500)),
+        lower(trim(CAST(:surface AS varchar(500)))),
+        CAST(:mention_class AS varchar(50)),
+        CAST(:doc_id AS uuid),
+        CAST(:ctx AS text)
+    )
+ON CONFLICT (normalized_surface, mention_class)
+DO UPDATE SET retry_count = provisional_entity_queue.retry_count
+RETURNING queue_id
+"""
 
 
 @dataclass(frozen=True)
@@ -374,6 +395,9 @@ class UnresolvedResolutionWorker:
                     ResolutionOutcome.ENTITY_CREATED.value,
                 )
                 await session.commit()
+            # T-B-2 (PLAN-0061): enqueue for S7 ProvisionalEnrichmentWorker so
+            # this newly-discovered entity gets a canonical entry created.
+            await self._enqueue_for_enrichment(mention)
             stats.entity_created += 1
         elif outcome == ResolutionOutcome.NOISE:
             mention.resolution_outcome = ResolutionOutcome.NOISE.value
@@ -400,11 +424,108 @@ class UnresolvedResolutionWorker:
             stats.errors += 1
 
     async def _phase1_cascade(self, mention: EntityMentionModel) -> bool:
-        """Attempt cascade re-resolution. Returns True if resolved."""
-        # Phase 1 cascade re-resolution is a best-effort, no-cost operation.
-        # Full cascade integration requires S7 intelligence_db access and is
-        # deferred to a follow-up task. Return False (not resolved) for now.
-        return False
+        """Attempt Stages 1-3 entity resolution cascade. Returns True if resolved.
+
+        Stage 4 (ANN/embedding) is skipped - no embedding client is available
+        in this worker. ARCH-003: intel_session released before nlp_session write.
+        """
+        if self._intel_sf is None:
+            return False
+
+        import nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention as _em
+        from nlp_pipeline.infrastructure.intelligence_db.repositories.entity_alias import (
+            EntityAliasRepository,
+        )
+
+        surface = (mention.mention_text or "").strip()
+        if not surface:
+            return False
+
+        entity_id: UUID | None = None
+        confidence: float = 0.0
+        stage: int = 0
+
+        async with self._intel_sf() as intel_session:  # type: ignore[misc]
+            alias_repo = EntityAliasRepository(intel_session)
+
+            # Stage 1: exact alias match (confidence=1.0)
+            entity_id = await alias_repo.exact_match(surface)
+            if entity_id is not None:
+                confidence = 1.0
+                stage = 1
+
+            # Stage 2: ticker/ISIN lookup (confidence=0.95)
+            if entity_id is None:
+                entity_id = await alias_repo.ticker_isin_match(ticker=surface, isin=None)
+                if entity_id is not None:
+                    confidence = 0.95
+                    stage = 2
+
+            # Stage 3: fuzzy trigram similarity (confidence = sim * 0.90)
+            if entity_id is None:
+                fuzzy_hits = await alias_repo.fuzzy_trigram(surface)
+                if fuzzy_hits:
+                    entity_id, sim = fuzzy_hits[0]
+                    confidence = sim * 0.90
+                    stage = 3
+
+        if entity_id is None:
+            return False
+
+        # ARCH-003: intel_session released above; acquire nlp_session for write
+        async with self._nlp_sf() as nlp_session:
+            repo = _em.EntityMentionRepository(nlp_session)
+            await repo.resolve(mention.mention_id, entity_id, confidence, stage)
+            await nlp_session.commit()
+
+        logger.debug(
+            "unresolved_phase1_resolved",
+            mention_id=str(mention.mention_id),
+            entity_id=str(entity_id),
+            stage=stage,
+            confidence=round(confidence, 4),
+        )
+        return True
+
+    async def _enqueue_for_enrichment(self, mention: EntityMentionModel) -> UUID | None:
+        """Insert mention into provisional_entity_queue for S7 KG enrichment.
+
+        Uses intel_session_factory - the queue lives in intelligence_db.
+        ON CONFLICT DO UPDATE is idempotent for same (surface, class) pair.
+        Returns the queue_id, or None if intel_session_factory is not configured.
+        """
+        if self._intel_sf is None:
+            return None
+
+        from sqlalchemy import text as sa_text
+
+        import common.ids  # type: ignore[import-untyped]
+
+        mention_class_value = (
+            mention.mention_class.value if hasattr(mention.mention_class, "value") else str(mention.mention_class)
+        )
+
+        async with self._intel_sf() as intel_session:  # type: ignore[misc]
+            result = await intel_session.execute(
+                sa_text(_PROVISIONAL_ENQUEUE_SQL),
+                {
+                    "queue_id": str(common.ids.new_uuid7()),
+                    "surface": mention.mention_text,
+                    "mention_class": mention_class_value,
+                    "doc_id": str(mention.doc_id),
+                    "ctx": None,
+                },
+            )
+            queue_id_str = result.scalar_one()
+            await intel_session.commit()
+
+        queue_id = UUID(str(queue_id_str))
+        logger.debug(
+            "unresolved_enqueued_for_enrichment",
+            mention_id=str(mention.mention_id),
+            queue_id=str(queue_id),
+        )
+        return queue_id
 
     async def _phase2_llm_classify(
         self,

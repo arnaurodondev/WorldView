@@ -791,3 +791,364 @@ def test_classification_prompt_handles_missing_context_gracefully() -> None:
     )
     assert "OpenAI" in rendered
     assert "(no surrounding context available)" in rendered
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0061 Wave B — _phase1_cascade() real implementation tests
+# ---------------------------------------------------------------------------
+
+
+def _make_intel_sf() -> tuple[MagicMock, AsyncMock]:
+    """Return (intel_session_factory, session) mocks."""
+    session = AsyncMock()
+    session.commit = AsyncMock()
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=cm), session
+
+
+def _make_nlp_sf() -> tuple[MagicMock, AsyncMock]:
+    """Return (nlp_session_factory, session) mocks."""
+    session = AsyncMock()
+    session.commit = AsyncMock()
+    cm = AsyncMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=cm), session
+
+
+class TestPhase1CascadeStage1:
+    """Stage 1: exact alias match resolves the mention."""
+
+    async def test_exact_match_resolves_and_returns_true(self) -> None:
+        settings = _make_settings()
+        mention = _make_mention(mention_text="Apple Inc.")
+        entity_id = uuid.uuid4()
+
+        intel_sf, _ = _make_intel_sf()
+        nlp_sf, nlp_session = _make_nlp_sf()
+
+        alias_repo = AsyncMock()
+        alias_repo.exact_match = AsyncMock(return_value=entity_id)
+        alias_repo.ticker_isin_match = AsyncMock(return_value=None)
+        alias_repo.fuzzy_trigram = AsyncMock(return_value=[])
+
+        em_repo = AsyncMock()
+        em_repo.resolve = AsyncMock()
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=nlp_sf,
+            settings=settings,
+            intel_session_factory=intel_sf,
+        )
+
+        with (
+            patch(
+                "nlp_pipeline.infrastructure.intelligence_db.repositories.entity_alias.EntityAliasRepository",
+                return_value=alias_repo,
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention.EntityMentionRepository",
+                return_value=em_repo,
+            ),
+        ):
+            resolved = await worker._phase1_cascade(mention)
+
+        assert resolved is True
+        alias_repo.exact_match.assert_awaited_once_with("Apple Inc.")
+        # Stage 2+3 must NOT have been called once Stage 1 hit
+        alias_repo.ticker_isin_match.assert_not_awaited()
+        alias_repo.fuzzy_trigram.assert_not_awaited()
+        em_repo.resolve.assert_awaited_once_with(mention.mention_id, entity_id, 1.0, 1)
+        nlp_session.commit.assert_awaited_once()
+
+
+class TestPhase1CascadeStage2:
+    """Stage 2: ticker/ISIN match resolves the mention when Stage 1 misses."""
+
+    async def test_ticker_match_resolves_and_returns_true(self) -> None:
+        settings = _make_settings()
+        mention = _make_mention(mention_text="AAPL")
+        entity_id = uuid.uuid4()
+
+        intel_sf, _ = _make_intel_sf()
+        nlp_sf, nlp_session = _make_nlp_sf()
+
+        alias_repo = AsyncMock()
+        alias_repo.exact_match = AsyncMock(return_value=None)
+        alias_repo.ticker_isin_match = AsyncMock(return_value=entity_id)
+        alias_repo.fuzzy_trigram = AsyncMock(return_value=[])
+
+        em_repo = AsyncMock()
+        em_repo.resolve = AsyncMock()
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=nlp_sf,
+            settings=settings,
+            intel_session_factory=intel_sf,
+        )
+
+        with (
+            patch(
+                "nlp_pipeline.infrastructure.intelligence_db.repositories.entity_alias.EntityAliasRepository",
+                return_value=alias_repo,
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention.EntityMentionRepository",
+                return_value=em_repo,
+            ),
+        ):
+            resolved = await worker._phase1_cascade(mention)
+
+        assert resolved is True
+        alias_repo.ticker_isin_match.assert_awaited_once_with(ticker="AAPL", isin=None)
+        alias_repo.fuzzy_trigram.assert_not_awaited()
+        em_repo.resolve.assert_awaited_once_with(mention.mention_id, entity_id, 0.95, 2)
+        nlp_session.commit.assert_awaited_once()
+
+
+class TestPhase1CascadeStage3:
+    """Stage 3: fuzzy trigram resolves the mention when Stages 1+2 miss."""
+
+    async def test_fuzzy_match_resolves_and_returns_true(self) -> None:
+        settings = _make_settings()
+        mention = _make_mention(mention_text="Berkshire Hathaway")
+        entity_id = uuid.uuid4()
+        sim = 0.88
+
+        intel_sf, _ = _make_intel_sf()
+        nlp_sf, nlp_session = _make_nlp_sf()
+
+        alias_repo = AsyncMock()
+        alias_repo.exact_match = AsyncMock(return_value=None)
+        alias_repo.ticker_isin_match = AsyncMock(return_value=None)
+        alias_repo.fuzzy_trigram = AsyncMock(return_value=[(entity_id, sim)])
+
+        em_repo = AsyncMock()
+        em_repo.resolve = AsyncMock()
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=nlp_sf,
+            settings=settings,
+            intel_session_factory=intel_sf,
+        )
+
+        with (
+            patch(
+                "nlp_pipeline.infrastructure.intelligence_db.repositories.entity_alias.EntityAliasRepository",
+                return_value=alias_repo,
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention.EntityMentionRepository",
+                return_value=em_repo,
+            ),
+        ):
+            resolved = await worker._phase1_cascade(mention)
+
+        assert resolved is True
+        expected_confidence = round(sim * 0.90, 4)
+        actual_call = em_repo.resolve.call_args
+        assert actual_call.args[0] == mention.mention_id
+        assert actual_call.args[1] == entity_id
+        assert round(actual_call.args[2], 4) == expected_confidence
+        assert actual_call.args[3] == 3
+        nlp_session.commit.assert_awaited_once()
+
+
+class TestPhase1CascadeNoHit:
+    """All stages miss -> returns False, no resolve() called."""
+
+    async def test_no_hit_returns_false(self) -> None:
+        settings = _make_settings()
+        mention = _make_mention(mention_text="xyzzy-unknown-entity")
+
+        intel_sf, _ = _make_intel_sf()
+        nlp_sf, nlp_session = _make_nlp_sf()
+
+        alias_repo = AsyncMock()
+        alias_repo.exact_match = AsyncMock(return_value=None)
+        alias_repo.ticker_isin_match = AsyncMock(return_value=None)
+        alias_repo.fuzzy_trigram = AsyncMock(return_value=[])
+
+        em_repo = AsyncMock()
+        em_repo.resolve = AsyncMock()
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=nlp_sf,
+            settings=settings,
+            intel_session_factory=intel_sf,
+        )
+
+        with (
+            patch(
+                "nlp_pipeline.infrastructure.intelligence_db.repositories.entity_alias.EntityAliasRepository",
+                return_value=alias_repo,
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention.EntityMentionRepository",
+                return_value=em_repo,
+            ),
+        ):
+            resolved = await worker._phase1_cascade(mention)
+
+        assert resolved is False
+        em_repo.resolve.assert_not_awaited()
+        nlp_session.commit.assert_not_awaited()
+
+    async def test_no_intel_sf_returns_false(self) -> None:
+        """If intel_session_factory is None, cascade is skipped and returns False."""
+        settings = _make_settings()
+        mention = _make_mention(mention_text="Apple")
+        nlp_sf, _ = _make_nlp_sf()
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=nlp_sf,
+            settings=settings,
+            intel_session_factory=None,
+        )
+
+        resolved = await worker._phase1_cascade(mention)
+        assert resolved is False
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0061 Wave B — _enqueue_for_enrichment() tests
+# ---------------------------------------------------------------------------
+
+
+class TestEnqueueForEnrichment:
+    """_enqueue_for_enrichment() inserts into provisional_entity_queue."""
+
+    async def test_returns_none_when_no_intel_sf(self) -> None:
+        settings = _make_settings()
+        mention = _make_mention()
+        nlp_sf, _ = _make_nlp_sf()
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=nlp_sf,
+            settings=settings,
+            intel_session_factory=None,
+        )
+
+        result = await worker._enqueue_for_enrichment(mention)
+        assert result is None
+
+    async def test_executes_sql_and_returns_queue_id(self) -> None:
+        settings = _make_settings()
+        mention = _make_mention(mention_text="OpenAI")
+        queue_id = uuid.uuid4()
+
+        intel_sf, intel_session = _make_intel_sf()
+        execute_result = MagicMock()
+        execute_result.scalar_one = MagicMock(return_value=str(queue_id))
+        intel_session.execute = AsyncMock(return_value=execute_result)
+
+        nlp_sf, _ = _make_nlp_sf()
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=nlp_sf,
+            settings=settings,
+            intel_session_factory=intel_sf,
+        )
+
+        with patch("common.ids.new_uuid7", return_value=queue_id):
+            result = await worker._enqueue_for_enrichment(mention)
+
+        assert result == queue_id
+        intel_session.execute.assert_awaited_once()
+        intel_session.commit.assert_awaited_once()
+        # Confirm the SQL params included surface and doc_id
+        call_params = intel_session.execute.call_args.args[1]
+        assert call_params["surface"] == "OpenAI"
+        assert call_params["doc_id"] == str(mention.doc_id)
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0061 Wave B — ENTITY_CREATED branch enqueues for KG enrichment
+# ---------------------------------------------------------------------------
+
+
+class TestEntityCreatedEnqueues:
+    """ENTITY_CREATED outcome triggers _enqueue_for_enrichment()."""
+
+    async def test_entity_created_calls_enqueue(self) -> None:
+        """When LLM returns is_entity=True, _enqueue_for_enrichment is called once."""
+        settings = _make_settings(ollama_url="http://localhost:11434")
+        mention = _make_mention(mention_class=MentionClass.ORGANIZATION, mention_text="Stripe Inc")
+
+        nlp_sf, nlp_session = _make_nlp_sf()
+
+        em_repo = AsyncMock()
+        em_repo.get_unresolved_batch = AsyncMock(return_value=[mention])
+        em_repo.get_unresolved_batch_with_context = AsyncMock(return_value=_wrap([mention]))
+        em_repo.mark_batch_escalated = AsyncMock()
+        em_repo.update_resolution_outcome = AsyncMock()
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(return_value={"response": '{"is_entity": true, "reason": "fintech company"}'})
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=nlp_sf,
+            settings=settings,
+            intel_session_factory=None,  # enqueue returns None without intel_sf
+        )
+
+        with (
+            patch(
+                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention.EntityMentionRepository",
+                return_value=em_repo,
+            ),
+            patch("httpx.AsyncClient", return_value=mock_client),
+            patch.object(worker, "_enqueue_for_enrichment", new=AsyncMock(return_value=None)) as mock_enqueue,
+        ):
+            stats = await worker.run_once()
+
+        assert stats.entity_created == 1
+        mock_enqueue.assert_awaited_once_with(mention)
+
+    async def test_noise_does_not_call_enqueue(self) -> None:
+        """NOISE outcome must NOT call _enqueue_for_enrichment."""
+        settings = _make_settings()
+        mention = _make_mention(mention_class=MentionClass.ORGANIZATION, mention_text="the company")
+
+        nlp_sf, _ = _make_nlp_sf()
+
+        em_repo = AsyncMock()
+        em_repo.get_unresolved_batch_with_context = AsyncMock(return_value=_wrap([mention]))
+        em_repo.mark_batch_escalated = AsyncMock()
+        em_repo.update_resolution_outcome = AsyncMock()
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(return_value={"response": '{"is_entity": false, "reason": "generic phrase"}'})
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=nlp_sf,
+            settings=settings,
+            intel_session_factory=None,
+        )
+
+        with (
+            patch(
+                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention.EntityMentionRepository",
+                return_value=em_repo,
+            ),
+            patch("httpx.AsyncClient", return_value=mock_client),
+            patch.object(worker, "_enqueue_for_enrichment", new=AsyncMock(return_value=None)) as mock_enqueue,
+        ):
+            stats = await worker.run_once()
+
+        assert stats.noise == 1
+        mock_enqueue.assert_not_awaited()
