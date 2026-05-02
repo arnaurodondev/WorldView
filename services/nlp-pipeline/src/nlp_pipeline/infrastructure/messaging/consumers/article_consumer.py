@@ -64,6 +64,7 @@ from nlp_pipeline.infrastructure.metrics.prometheus import (
     record_entity_resolved,
     s6_claims_extracted_total,
     s6_embeddings_created_total,
+    s6_extraction_entity_ref_hallucinated_total,
     s6_ner_mentions_total,
     s6_ollama_queue_depth_current,
 )
@@ -927,6 +928,27 @@ async def _enqueue_enriched(
         # else: UNRESOLVED with no queue id (truly unknown surface) — still
         # excluded from the lookup so downstream relations referring to it
         # are dropped (no synthetic id to point to).
+
+    # Hallucination detection: count entity_refs produced by the LLM that are NOT
+    # in the known-entities lookup. These are refs the model invented rather than
+    # copying from the {entities} list we provided in the prompt. A non-zero count
+    # here indicates model drift and should be monitored in Grafana.
+    _all_llm_refs: set[str] = set()
+    for _rel in extraction_result.get("relations", []):
+        if isinstance(_rel, dict):
+            _all_llm_refs.add(str(_rel.get("subject_ref", "")).lower().strip())
+            _all_llm_refs.add(str(_rel.get("object_ref", "")).lower().strip())
+    for _evt in extraction_result.get("events", []):
+        if isinstance(_evt, dict):
+            for _ref in _evt.get("entity_refs") or []:
+                _all_llm_refs.add(str(_ref).lower().strip())
+    for _clm in extraction_result.get("claims", []):
+        if isinstance(_clm, dict):
+            _all_llm_refs.add(str(_clm.get("entity_ref", "")).lower().strip())
+    _all_llm_refs.discard("")
+    _hallucinated = sum(1 for _r in _all_llm_refs if _r not in entity_id_by_ref)
+    if _hallucinated > 0:
+        s6_extraction_entity_ref_hallucinated_total.inc(_hallucinated)
 
     raw_relations = _build_raw_relations(extraction_result.get("relations", []), entity_id_by_ref, provisional_refs)
     raw_events = _build_raw_events(extraction_result.get("events", []), entity_id_by_ref, provisional_refs)

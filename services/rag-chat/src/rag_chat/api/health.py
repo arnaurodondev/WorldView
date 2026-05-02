@@ -104,13 +104,13 @@ async def providers_status(request: Request) -> dict[str, Any]:
             "name": "deepinfra",
             "available": (settings.deepinfra_api_key is not None) and not cache.get("deepinfra_failed", False),
             "last_failure_at": cache.get("deepinfra_last_failure"),
-            "model": "deepseek-r1-distill-qwen-32b",
+            "model": settings.completion_model,
         },
         {
             "name": "openrouter",
             "available": (settings.openrouter_api_key is not None) and not cache.get("openrouter_failed", False),
             "last_failure_at": cache.get("openrouter_last_failure"),
-            "model": "deepseek/deepseek-r1-distill-qwen-32b",
+            "model": settings.openrouter_completion_model,
         },
         {
             "name": "ollama",

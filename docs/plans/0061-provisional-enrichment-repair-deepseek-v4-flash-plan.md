@@ -407,9 +407,11 @@ Check `nlp_db` models to confirm the `provisional_entity_queue` table is accessi
 
 ---
 
-## Wave C — DeepSeek-V4-Flash Integration
+## Wave C — DeepSeek-V4-Flash Integration ✅
 
 **Goal**: Add `deepseek-ai/DeepSeek-V4-Flash` as the primary extraction provider in `FallbackChainClient` (for S7 entity profile enrichment) and as the NLP deep extraction model (replacing `Meta-Llama-3.1-8B-Instruct` for structured JSON extraction tasks). Binary classification tasks (relevance scoring, intent, entity noise classification) stay on `Meta-Llama-3.1-8B-Instruct` — they are simpler yes/no decisions where the 7× lower cost outweighs any quality delta.
+
+**Status**: **DONE** — 2026-05-02 · 7 new tests (13 fallback-chain + 6 scheduler-provider = 19 total) · ruff + mypy clean
 
 **Depends on**: none (can run in parallel with Waves A and B)
 **Estimated effort**: 45–60 min
@@ -605,13 +607,13 @@ Also add to `worldview-gitops/values/nlp-pipeline.yaml` under `env:`:
 ---
 
 ### Validation Gate — Wave C
-- [ ] `ruff check libs/ml-clients/` passes
-- [ ] `mypy libs/ml-clients/` passes
-- [ ] `python -m pytest libs/ml-clients/tests/ -v` — minimum 5 new tests, no regressions
-- [ ] `ruff check services/knowledge-graph/` passes
-- [ ] `mypy services/knowledge-graph/` passes
-- [ ] `python -m pytest services/knowledge-graph/tests/unit/ -v` — minimum 2 new tests, no regressions
-- [ ] gitops files updated
+- [x] `ruff check libs/ml-clients/` passes
+- [x] `mypy libs/ml-clients/` passes
+- [x] `python -m pytest libs/ml-clients/tests/ -v` — 54 unit tests pass (1 new V4-Flash pricing test)
+- [x] `ruff check services/knowledge-graph/` passes
+- [x] `mypy services/knowledge-graph/` passes
+- [x] `python -m pytest services/knowledge-graph/tests/unit/ -v` — 699 pass (5 new fallback-chain + 2 scheduler-provider tests)
+- [x] gitops files updated (nlp-pipeline + knowledge-graph)
 
 ### Break Impact — Wave C
 | Broken File | Why | Fix Required |
