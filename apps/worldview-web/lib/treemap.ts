@@ -105,6 +105,13 @@ export function squarify<T>(
 
   while (i < sorted.length) {
     const shortSide = Math.min(cur.width, cur.height);
+    // WHY guard ≤ 0: floating-point accumulated subtractions can reduce the
+    // working rectangle to a degenerate size (shortSide ≈ 0 or negative).
+    // Division by shortSide in rowDepth = rowAreaPx / shortSide would yield
+    // ±Infinity, producing cells with Infinity coordinates that browsers
+    // coerce to 0 — piling multiple tiles at the origin. We break early so
+    // only sub-pixel-sized tail items are omitted (not visible at any scale).
+    if (shortSide <= 0) break;
     const row: TreemapInput<T>[] = [];
     let rowSum = 0;
     let bestWorst = Infinity;

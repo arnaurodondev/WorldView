@@ -141,6 +141,14 @@ export function useConfirmable(config: UseConfirmableConfig): UseConfirmableRetu
   // Shared: true while the async action is executing (between confirm and resolution)
   const [isPending, setIsPending] = React.useState(false);
 
+  // WHY isPendingRef (alongside state): the state value is a snapshot captured
+  // in each useCallback closure. When a T1 timer fires it calls the `runAction`
+  // that was captured at execute() time — that closure always sees isPending=false
+  // regardless of current React state. The ref is always current, so reading
+  // isPendingRef.current inside runAction gives the real live value and prevents
+  // double-execution when two timers or a timer+T2-confirm race.
+  const isPendingRef = React.useRef(false);
+
   // T1: ref to the pending setTimeout so we can cancel it on Undo
   // WHY useRef (not useState): the timer ID doesn't need to trigger a re-render
   // when it changes. useRef is the correct tool for imperative side-effect state.
@@ -158,21 +166,30 @@ export function useConfirmable(config: UseConfirmableConfig): UseConfirmableRetu
    *
    * WHY separate helper: both T1 (after timer) and T2 (after confirm) call this
    * with the same error-recovery logic. Centralising avoids duplication.
+   *
+   * WHY isPendingRef.current guard (not state): runAction is captured in timer
+   * callbacks. The state snapshot in the closure is stale by the time the timer
+   * fires; only the ref reflects the live value. See isPendingRef above.
    */
   const runAction = React.useCallback(async () => {
-    if (isPending) return; // Guard: don't start a second execution while first is running
+    if (isPendingRef.current) return; // Guard using ref — survives stale closures
+    isPendingRef.current = true;
     setIsPending(true);
     try {
       await action();
     } catch (err) {
       // WHY reset isPending on error: the trigger button must re-enable so the
       // user can retry. Leaving isPending=true permanently locks the UI.
+      // Log error type only — never log the full err object which may contain
+      // financial data (position sizes, tickers, portfolio IDs) that would leak
+      // into error-monitoring SDKs (Sentry, Datadog) as PII.
       // eslint-disable-next-line no-console
-      console.error("[useConfirmable] action threw:", err);
+      console.error("[useConfirmable] action threw:", err instanceof Error ? err.message : String(err));
     } finally {
+      isPendingRef.current = false;
       setIsPending(false);
     }
-  }, [action, isPending]);
+  }, [action]); // WHY no isPending dep: we read isPendingRef.current instead
 
   /**
    * execute — tier router. Picks T1/T2/T3 based on severity.
@@ -199,14 +216,12 @@ export function useConfirmable(config: UseConfirmableConfig): UseConfirmableRetu
         undoTimerRef.current = null;
       }
 
-      undoTimerRef.current = setTimeout(() => {
-        undoTimerRef.current = null;
-        void runAction();
-      }, undoWindowMs);
-
-      // WHY use sonner's toast (not custom): sonner supports the `action` option
-      // which adds a button to the toast. We use this for the Undo button.
-      toast(label, {
+      // WHY capture toastId: we dismiss the toast programmatically when the
+      // timer fires so the Undo button disappears at exactly the moment the
+      // action starts. Without this, the Undo button remains visible while the
+      // action is already running — a false affordance that misleads users into
+      // thinking Undo still works when it no longer does (DS reliability pattern).
+      const toastId = toast(label, {
         description: description ?? "Click Undo to cancel.",
         duration: undoWindowMs,
         action: {
@@ -220,6 +235,14 @@ export function useConfirmable(config: UseConfirmableConfig): UseConfirmableRetu
           },
         },
       });
+
+      undoTimerRef.current = setTimeout(() => {
+        undoTimerRef.current = null;
+        // Dismiss the toast before running the action so the Undo button
+        // disappears atomically with the action starting (no false affordance).
+        toast.dismiss(toastId);
+        void runAction();
+      }, undoWindowMs);
     } else if (severity === "medium") {
       // ── T2: Modal Confirm ───────────────────────────────────────────────────
       // Simply open the dialog. The dialog's Confirm button calls runAction.
@@ -238,49 +261,50 @@ export function useConfirmable(config: UseConfirmableConfig): UseConfirmableRetu
     }
   }, [isPending, severity, label, description, undoWindowMs, runAction]);
 
+  // WHY dialogOpenRef (for BoundConfirmDialog): React useMemo/useCallback with
+  // `dialogOpen` in deps recreates the component function every time the dialog
+  // opens or closes. React compares component type by identity — a new function
+  // on each render causes Radix Dialog to UNMOUNT+REMOUNT, destroying its focus
+  // trap and exit animation. We break the dep by reading a ref inside the
+  // component body instead (ref reads are not tracked by React's closure diff).
+  const dialogOpenRef = React.useRef(dialogOpen);
+  dialogOpenRef.current = dialogOpen;
+
   /**
-   * BoundConfirmDialog — the ConfirmDialog component with state bound from
-   * this hook closure.
+   * BoundConfirmDialog — stable React.FC that wraps ConfirmDialog with state
+   * from this hook.
    *
-   * WHY memoize the component: we create a new React.FC each render; without
-   * memo the parent re-renders every time any hook state changes, causing the
-   * dialog to flicker. useMemo stabilises the component reference.
+   * WHY useCallback (not useMemo): we want a stable function reference that only
+   * changes when the dialog's static config (label, description, severity) changes,
+   * NOT when dialogOpen toggles. Reading dialogOpen via dialogOpenRef inside the
+   * component body makes the component stable while always seeing fresh open state.
    *
    * WHY a function component (not just JSX): the caller places <ConfirmDialog />
-   * anywhere in their JSX tree. Returning a component gives them flexibility on
-   * positioning (e.g., inside a table row vs. at the page root).
+   * anywhere in their JSX tree, giving them flexibility on z-index positioning.
    *
    * WHY render null for T1/T3: T1 uses toast (no JSX component); T3 should not
    * be used via this hook. Rendering null is the clearest signal.
    */
-  const BoundConfirmDialog: React.FC = React.useMemo(() => {
-    if (severity !== "medium") {
-      // T1 or T3: no dialog component needed
-      return function NoOpDialog() {
-        return null;
-      };
-    }
-
-    // T2: return the ConfirmDialog wired to this hook's state
-    return function T2Dialog() {
+  const BoundConfirmDialog: React.FC = React.useCallback(
+    function T2Dialog() {
+      if (severity !== "medium") return null;
       return (
         <ConfirmDialog
-          open={dialogOpen}
+          open={dialogOpenRef.current}
           onOpenChange={setDialogOpen}
           title={label}
           description={description ?? "Are you sure you want to proceed?"}
           severity={severity}
           onConfirm={() => void runAction()}
           // WHY onConfirm calls runAction (not action directly): runAction handles
-          // isPending state tracking and error recovery. Calling action() directly
-          // would bypass those guards.
+          // isPendingRef guard and error recovery. Calling action() directly bypasses those.
         />
       );
-    };
-    // WHY include dialogOpen: the memo must re-run when dialogOpen changes so
-    // the rendered dialog sees the updated open state.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [severity, dialogOpen, label, description, runAction]);
+    },
+    // WHY no dialogOpen dep: we read dialogOpenRef.current to keep component
+    // identity stable across open/close cycles (see WHY above).
+    [severity, label, description, runAction],
+  );
 
   return {
     execute,

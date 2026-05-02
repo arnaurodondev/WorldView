@@ -50,6 +50,29 @@ vi.mock("@/lib/gateway", () => ({
   })),
 }));
 
+// ── lightweight-charts mock — EquityCurveChart uses createChart which relies
+// on Canvas API; jsdom has no Canvas so we mock the whole library to prevent
+// the "Value is null" uncaught exception that otherwise makes pnpm test exit 1
+// even though all assertions pass. Same pattern used in equity-curve-empty-state.test.tsx.
+vi.mock("lightweight-charts", () => ({
+  createChart: vi.fn(() => ({
+    addSeries: vi.fn(() => ({ setData: vi.fn(), applyOptions: vi.fn() })),
+    applyOptions: vi.fn(),
+    timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
+    priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
+    subscribeCrosshairMove: vi.fn(),
+    unsubscribeCrosshairMove: vi.fn(),
+    remove: vi.fn(),
+  })),
+  LineSeries: "LineSeries",
+  CandlestickSeries: "CandlestickSeries",
+  HistogramSeries: "HistogramSeries",
+  ColorType: { Solid: "Solid" },
+  CrosshairMode: { Normal: 1 },
+  LineStyle: { Solid: 0 },
+  PriceScaleMode: { Logarithmic: 1 },
+}));
+
 // ── next/navigation mock — capture URL replace calls. ───────────────────────
 const mockReplace = vi.fn();
 const mockSearchParams = new URLSearchParams();
