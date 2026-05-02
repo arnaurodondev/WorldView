@@ -54,6 +54,8 @@
 // which is fine because state is local — nothing crosses the network until Apply.
 
 import { useState } from "react";
+import { ChevronDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 import {
   Select,
   SelectContent,
@@ -61,105 +63,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ChevronDown } from "lucide-react";
-import { cn } from "@/lib/utils";
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── PLAN-0059 E-4 — extracted constants / types / sub-components / counts ─────
+// The bar used to hold all of these inline (~310 LOC). They now live under
+// `features/screener/`. Pure helpers `isSet` / `rangeCount` /
+// `countActiveFiltersByGroup` are unit-tested in
+// `features/screener/lib/__tests__/active-counts.test.ts` (18 tests).
+import {
+  GICS_SECTORS,
+  CAP_TIERS,
+  DEFAULT_FILTERS,
+  type FilterState,
+} from "@/features/screener/lib/filter-state";
+import { countActiveFiltersByGroup } from "@/features/screener/lib/active-counts";
+import { Section } from "@/features/screener/components/Section";
+import { RangeInput } from "@/features/screener/components/RangeInput";
 
-/**
- * GICS sectors — 11 official sectors. Showing them as a dropdown matches
- * Bloomberg EQUITY SCREEN and Finviz sector filter conventions.
- */
-const GICS_SECTORS = [
-  "Information Technology",
-  "Health Care",
-  "Financials",
-  "Consumer Discretionary",
-  "Consumer Staples",
-  "Communication Services",
-  "Industrials",
-  "Materials",
-  "Real Estate",
-  "Utilities",
-  "Energy",
-] as const;
-
-/** CapTier — market cap filter tiers matching S9 screener backend expectations */
-type CapTier = "ALL" | "LARGE" | "MID" | "SMALL";
-
-const CAP_TIERS: Array<{ value: CapTier; label: string; description: string }> = [
-  { value: "ALL",   label: "All",   description: "No market cap filter" },
-  { value: "LARGE", label: "Large", description: "> $10B" },
-  { value: "MID",   label: "Mid",   description: "$2B–$10B" },
-  { value: "SMALL", label: "Small", description: "< $2B" },
-];
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-/**
- * FilterState — full union of every filter control on the panel.
- *
- * Numeric ranges use `*Min`/`*Max` pairs; either side is optional so users can
- * specify "P/E < 20" without setting a min, etc. The empty string is also
- * tolerated in the UI (rendered → undefined when serialising the request).
- *
- * Three categories of fields are tagged inline with comments:
- *   SERVER_SIDE  — sent verbatim to S9 → S3 fundamentals/screen
- *   CLIENT_FILTER — applied AFTER fetch on the returned ScreenerResult[] (technical / signals)
- *   BACKEND_PENDING — input rendered but disabled in UI (gap documented in audit)
- *
- * Keeping all three on the same FilterState shape keeps the parent integration
- * trivial (no second state object) and lets the user's saved screens (Part 2)
- * round-trip every filter even when some are not yet wired.
- */
-export interface FilterState {
-  // ── Existing top-row filters ────────────────────────────────────────────────
-  search: string;
-  sector: string;    // "" = all sectors
-  capTier: CapTier;
-
-  // ── Valuation (SERVER_SIDE) ─────────────────────────────────────────────────
-  peMin?: number;        peMax?: number;        // pe_ratio
-  pbMin?: number;        pbMax?: number;        // pb_ratio
-  psMin?: number;        psMax?: number;        // price_sales_ttm
-  divYieldMin?: number;  divYieldMax?: number;  // dividend_yield (decimal: 0.015 = 1.5%)
-
-  // ── Profitability ──────────────────────────────────────────────────────────
-  roeMin?: number;          roeMax?: number;          // roe_ttm (SERVER_SIDE)
-  grossMarginMin?: number;  grossMarginMax?: number;  // BACKEND_PENDING (gross_profit/revenue not derived)
-  netMarginMin?: number;    netMarginMax?: number;    // profit_margin (SERVER_SIDE)
-  opMarginMin?: number;     opMarginMax?: number;     // operating_margin_ttm (SERVER_SIDE)
-
-  // ── Growth (SERVER_SIDE) ───────────────────────────────────────────────────
-  revGrowthMin?: number;       revGrowthMax?: number;       // quarterly_revenue_growth_yoy
-  earningsGrowthMin?: number;  earningsGrowthMax?: number;  // quarterly_earnings_growth_yoy
-
-  // ── Leverage (BACKEND_PENDING — both ratios un-derived; see audit) ─────────
-  debtEquityMin?: number;     debtEquityMax?: number;
-  currentRatioMin?: number;   currentRatioMax?: number;
-
-  // ── Technical (CLIENT_FILTER unless noted) ─────────────────────────────────
-  above50dMa?: boolean;            // CLIENT_FILTER (no `50d_ma` field on response yet)
-  rsiMin?: number;                 // CLIENT_FILTER
-  rsiMax?: number;                 // CLIENT_FILTER
-  volumeRatioMin?: number;         // CLIENT_FILTER (1, 1.5, 2 — vs 30d avg)
-  distFrom52wHighMax?: number;     // CLIENT_FILTER (% — e.g. "within 5% of 52W high" → max=5)
-  distFrom52wLowMin?: number;      // CLIENT_FILTER (% — "at least X% above 52W low")
-
-  // ── News & Signals (CLIENT_FILTER TODO — fields not on response) ───────────
-  newsVelocity7dMin?: number;      // CLIENT_FILTER TODO (S6 signals)
-  controversyMin?: number;         // CLIENT_FILTER TODO
-  controversyMax?: number;         // CLIENT_FILTER TODO
-  recentEarningsDays?: 7 | 30;     // CLIENT_FILTER TODO (S3 earnings calendar)
-  insiderActivity?: "BUYING" | "SELLING" | "BOTH";  // CLIENT_FILTER TODO (S4 insider)
-}
-
-/** DEFAULT_FILTERS — used by the page initial state and the Reset button. */
-export const DEFAULT_FILTERS: FilterState = {
-  search: "",
-  sector: "",
-  capTier: "ALL",
-};
+// Re-export FilterState + DEFAULT_FILTERS so existing call sites that import
+// from `@/components/screener/ScreenerFilterBar` keep compiling unchanged.
+export { DEFAULT_FILTERS, type FilterState } from "@/features/screener/lib/filter-state";
 
 interface ScreenerFilterBarProps {
   /** Current open/collapsed state of the OUTER panel — parent-controlled to allow external toggle */
@@ -178,201 +100,6 @@ interface ScreenerFilterBarProps {
   isLoading: boolean;
 }
 
-// ── Section sub-component ─────────────────────────────────────────────────────
-
-/**
- * Section — one collapsible group of related filter inputs.
- *
- * WHY a sub-component: each of the four fundamental sections + technical + news
- * has identical chrome (header with name + active-count badge + chevron, then
- * a grid of inputs). Extracting it keeps the parent JSX scannable and ensures
- * every section uses the same animation, padding, and a11y semantics.
- *
- * WHY children pattern (not a config object): inputs vary per section
- * (pairs of min/max numbers, a checkbox, a select). Children give us full
- * flexibility without inventing a 7th DSL.
- */
-function Section({
-  title,
-  activeCount,
-  defaultOpen = false,
-  children,
-}: {
-  title: string;
-  /** Number of active filters in this section — shown as a small badge */
-  activeCount: number;
-  /** Whether the section is open by default — true for sections users hit most */
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  const sectionId = `screener-section-${title.replace(/\s+/g, "-").toLowerCase()}`;
-
-  return (
-    <div className="border-b border-border/60">
-      {/* Section header — clickable row */}
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={sectionId}
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full h-7 items-center justify-between px-2 hover:bg-white/[0.03] transition-colors"
-      >
-        <div className="flex items-center gap-2">
-          {/* WHY 10px ALL CAPS: matches DESIGN_SYSTEM.md §section labels exactly */}
-          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
-            {title}
-          </span>
-          {activeCount > 0 && (
-            // Badge — primary tint pill showing active filter count.
-            // WHY only when >0: empty badges add noise; the absence itself communicates "no filters set".
-            <span
-              className="inline-flex items-center justify-center min-w-[14px] h-[14px] px-1 text-[9px] font-mono tabular-nums bg-primary/15 text-primary rounded-[2px]"
-              aria-label={`${activeCount} active filter${activeCount === 1 ? "" : "s"} in ${title}`}
-            >
-              {activeCount}
-            </span>
-          )}
-        </div>
-        <ChevronDown
-          className={cn(
-            "h-3 w-3 text-muted-foreground transition-transform duration-150",
-            open && "rotate-180",
-          )}
-          aria-hidden
-        />
-      </button>
-
-      {/* Section body — uses the §0.5 grid-rows trick for cheap collapse animation */}
-      <div
-        id={sectionId}
-        role="region"
-        aria-label={title}
-        className="grid overflow-hidden transition-[grid-template-rows] duration-200 ease-out"
-        style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
-      >
-        <div className="overflow-hidden min-h-0">
-          <div className="px-2 py-2">{children}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── RangeInput sub-component ──────────────────────────────────────────────────
-
-/**
- * RangeInput — a "min / max" pair of number inputs with a label.
- *
- * WHY a wrapper: every fundamental filter is a min/max range. Extracting this
- * dedupes ~24 lines per filter and centralises the ARIA + styling rules.
- *
- * WHY type="number" + step "any": the user might enter integers (P/E 20),
- * decimals (yield 0.025), or percentages (revenue growth 0.15). step="any"
- * tells the browser not to apply integer-only validation. We re-parse on blur.
- *
- * WHY parseValue returns undefined: the FilterState uses `?: number` so an
- * empty string must clear the field, not write NaN.
- */
-function RangeInput({
-  label,
-  hint,
-  disabled = false,
-  disabledReason,
-  min,
-  max,
-  onMin,
-  onMax,
-}: {
-  label: string;
-  /** Optional hint shown right of the label (e.g. "%" or "decimal") */
-  hint?: string;
-  /** Disable both inputs (used for backend-pending filters) */
-  disabled?: boolean;
-  /** Tooltip-style title shown on hover when disabled */
-  disabledReason?: string;
-  min: number | undefined;
-  max: number | undefined;
-  onMin: (v: number | undefined) => void;
-  onMax: (v: number | undefined) => void;
-}) {
-  // WHY parseValue: number inputs return strings; we coerce ""→undefined and other strings via parseFloat
-  function parseValue(s: string): number | undefined {
-    const trimmed = s.trim();
-    if (trimmed === "") return undefined;
-    const n = Number(trimmed);
-    return Number.isFinite(n) ? n : undefined;
-  }
-
-  const id = `f-${label.replace(/[^a-z0-9]/gi, "-").toLowerCase()}`;
-
-  return (
-    <div className="flex items-center gap-2">
-      {/* Label — fixed width so all input pairs in a section align vertically */}
-      <label
-        htmlFor={`${id}-min`}
-        className={cn(
-          "text-[10px] font-mono uppercase tracking-[0.06em] w-24 shrink-0",
-          disabled ? "text-muted-foreground/50" : "text-muted-foreground",
-        )}
-        title={disabled ? disabledReason : undefined}
-      >
-        {label}
-        {hint && <span className="ml-1 text-muted-foreground/50 normal-case tracking-normal">({hint})</span>}
-      </label>
-      {/* Min/Max inputs — h-6 px-1.5 per the brief */}
-      <input
-        id={`${id}-min`}
-        aria-label={`${label} minimum`}
-        type="number"
-        step="any"
-        placeholder="min"
-        disabled={disabled}
-        title={disabled ? disabledReason : undefined}
-        value={min ?? ""}
-        onChange={(e) => onMin(parseValue(e.target.value))}
-        className="h-6 w-20 px-1.5 text-[11px] font-mono tabular-nums bg-background border border-border rounded-[2px] text-foreground placeholder:text-muted-foreground/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))] disabled:cursor-not-allowed"
-      />
-      <span className="text-[10px] text-muted-foreground/60 font-mono">–</span>
-      <input
-        id={`${id}-max`}
-        aria-label={`${label} maximum`}
-        type="number"
-        step="any"
-        placeholder="max"
-        disabled={disabled}
-        title={disabled ? disabledReason : undefined}
-        value={max ?? ""}
-        onChange={(e) => onMax(parseValue(e.target.value))}
-        className="h-6 w-20 px-1.5 text-[11px] font-mono tabular-nums bg-background border border-border rounded-[2px] text-foreground placeholder:text-muted-foreground/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))] disabled:cursor-not-allowed"
-      />
-      {disabled && (
-        <span className="text-[9px] font-mono uppercase tracking-[0.06em] text-warning/80">
-          backend pending
-        </span>
-      )}
-    </div>
-  );
-}
-
-// ── Active count helpers ──────────────────────────────────────────────────────
-
-/**
- * isSet — a filter is "active" when defined AND not the all/empty sentinel.
- * The Section badges count active filters per group so the user sees state at a glance.
- */
-function isSet(v: unknown): boolean {
-  if (v === undefined || v === null) return false;
-  if (typeof v === "string") return v !== "" && v !== "ALL";
-  if (typeof v === "number") return Number.isFinite(v);
-  if (typeof v === "boolean") return v === true;
-  return true;
-}
-
-function rangeCount(min: number | undefined, max: number | undefined): number {
-  return (isSet(min) ? 1 : 0) + (isSet(max) ? 1 : 0);
-}
-
 // ── ScreenerFilterBar ─────────────────────────────────────────────────────────
 
 export function ScreenerFilterBar({
@@ -389,40 +116,19 @@ export function ScreenerFilterBar({
   // the user is still typing. Only onApply commits them to the parent.
   const [form, setForm] = useState<FilterState>(DEFAULT_FILTERS);
 
-  // ── Per-section active counts ───────────────────────────────────────────────
-  // Computed each render — cheap (≤20 boolean checks). Used by Section badges.
-  const valuationCount =
-    rangeCount(form.peMin, form.peMax) +
-    rangeCount(form.pbMin, form.pbMax) +
-    rangeCount(form.psMin, form.psMax) +
-    rangeCount(form.divYieldMin, form.divYieldMax);
-
-  const profitabilityCount =
-    rangeCount(form.roeMin, form.roeMax) +
-    rangeCount(form.grossMarginMin, form.grossMarginMax) +
-    rangeCount(form.netMarginMin, form.netMarginMax) +
-    rangeCount(form.opMarginMin, form.opMarginMax);
-
-  const growthCount =
-    rangeCount(form.revGrowthMin, form.revGrowthMax) +
-    rangeCount(form.earningsGrowthMin, form.earningsGrowthMax);
-
-  const leverageCount =
-    rangeCount(form.debtEquityMin, form.debtEquityMax) +
-    rangeCount(form.currentRatioMin, form.currentRatioMax);
-
-  const technicalCount =
-    (form.above50dMa ? 1 : 0) +
-    rangeCount(form.rsiMin, form.rsiMax) +
-    (isSet(form.volumeRatioMin) ? 1 : 0) +
-    (isSet(form.distFrom52wHighMax) ? 1 : 0) +
-    (isSet(form.distFrom52wLowMin) ? 1 : 0);
-
-  const newsCount =
-    (isSet(form.newsVelocity7dMin) ? 1 : 0) +
-    rangeCount(form.controversyMin, form.controversyMax) +
-    (isSet(form.recentEarningsDays) ? 1 : 0) +
-    (isSet(form.insiderActivity) ? 1 : 0);
+  // ── Per-section active counts (PLAN-0059 E-4 pure helper) ─────────────────
+  // Single pass over FilterState produces all 6 section badge counts. Cheap
+  // (≤30 boolean checks) so we don't memoise. Pinned by 18 unit tests in
+  // features/screener/lib/__tests__/active-counts.test.ts.
+  const counts = countActiveFiltersByGroup(form);
+  const {
+    valuation: valuationCount,
+    profitability: profitabilityCount,
+    growth: growthCount,
+    leverage: leverageCount,
+    technical: technicalCount,
+    news: newsCount,
+  } = counts;
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 

@@ -48,7 +48,7 @@ import {
   useRealizedPnL,
   defaultRealizedPnLRange,
 } from "@/hooks/useRealizedPnL";
-import { formatPrice, cn } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import type { Portfolio } from "@/types/api";
 
 // ── Portfolio components ──────────────────────────────────────────────────────
