@@ -96,467 +96,25 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 
 // ── Terminal primitives ───────────────────────────────────────────────────────
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 
-// ── Create Portfolio Dialog ───────────────────────────────────────────────────
+// ── PLAN-0059 E-2 — extracted dialogs + pure KPI/allocation logic ─────────────
+// WHY extracted: page.tsx was 1,745 LOC and held two complete dialog
+// components inline plus ~150 LOC of derived-state useMemo blocks. Pulling
+// the dialogs out (each owns its own form state) and the KPI/allocation
+// math out (pure functions, unit-tested in features/portfolio/lib/__tests__/
+// kpi.test.ts) cut the page by ~600 LOC and made the math testable in
+// isolation. See PLAN-0059 §7 (E-2) and the kpi.ts file header for context.
+import { CreatePortfolioDialog } from "@/features/portfolio/components/CreatePortfolioDialog";
+import { AddPositionDialog } from "@/features/portfolio/components/AddPositionDialog";
+import {
+  computePortfolioKPI,
+  computeAllocations,
+  computeScopeHint,
+} from "@/features/portfolio/lib/kpi";
 
-/**
- * CreatePortfolioDialog — modal for creating a new manually-managed portfolio.
- *
- * WHY a separate component (not inline JSX in the page): isolating dialog state
- * (name input, loading, error) keeps the parent page component clean. The dialog
- * has its own mini state machine: idle → submitting → success/error.
- *
- * DATA FLOW:
- *   1. User types a portfolio name
- *   2. On submit → calls gateway.createPortfolio(name)
- *   3. On success → calls onSuccess(newPortfolio) so the page can select it
- *   4. Parent invalidates ["portfolios"] query → TanStack Query refetches the list
- *
- * WHY onOpenChange instead of onClose: shadcn Dialog uses onOpenChange(false) to
- * signal close — from both the X button and the overlay click. This pattern is
- * idiomatic for shadcn dialogs throughout this app.
- */
-interface CreatePortfolioDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSuccess: (portfolio: Portfolio) => void;
-  accessToken: string | null | undefined;
-}
-
-function CreatePortfolioDialog({
-  open,
-  onOpenChange,
-  onSuccess,
-  accessToken,
-}: CreatePortfolioDialogProps) {
-  // Local form state — only lives while the dialog is mounted
-  const [name, setName] = useState("");
-  const [currency, setCurrency] = useState("USD");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // handleSubmit — async handler that calls S9 POST /v1/portfolios
-  const handleSubmit = useCallback(async () => {
-    // WHY trim + guard: whitespace-only names would pass server validation but look
-    // wrong in the UI. Catch it client-side for instant feedback (no network round-trip).
-    const trimmedName = name.trim();
-    if (!trimmedName) {
-      setError("Portfolio name is required.");
-      return;
-    }
-
-    setIsSubmitting(true);
-    setError(null);
-
-    try {
-      // createPortfolio sends POST /v1/portfolios to S9, which injects owner_user_id
-      // from the JWT claim before forwarding to S1. We only send name + currency.
-      const newPortfolio = await createGateway(accessToken).createPortfolio(
-        trimmedName,
-        currency,
-      );
-
-      // Reset form state before closing so the dialog is clean on next open
-      setName("");
-      setCurrency("USD");
-      setError(null);
-
-      // Notify parent: it will invalidate ["portfolios"] and select the new portfolio
-      onSuccess(newPortfolio);
-    } catch (err) {
-      // WHY string cast: GatewayError.message is a string, but unknown errors may not be.
-      // We extract the message or fall back to a generic string rather than crashing.
-      const message = err instanceof Error ? err.message : "Failed to create portfolio.";
-      setError(message);
-    } finally {
-      // Always clear loading state, even if the request failed
-      setIsSubmitting(false);
-    }
-  }, [name, currency, accessToken, onSuccess]);
-
-  // handleOpenChange — reset form when dialog is closed externally (X or overlay)
-  const handleOpenChange = useCallback(
-    (nextOpen: boolean) => {
-      if (!nextOpen) {
-        // Don't reset if a submission is in progress — user may have hit overlay by accident
-        if (!isSubmitting) {
-          setName("");
-          setCurrency("USD");
-          setError(null);
-        }
-      }
-      onOpenChange(nextOpen);
-    },
-    [isSubmitting, onOpenChange],
-  );
-
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent
-        // WHY max-w-sm: a portfolio creation form only has 2 fields — it doesn't
-        // need a wide modal. Narrow dialogs feel more intentional than wide ones.
-        className="max-w-sm bg-card border-border"
-      >
-        <DialogHeader>
-          <DialogTitle className="text-[13px] font-mono uppercase tracking-[0.08em]">
-            New Portfolio
-          </DialogTitle>
-        </DialogHeader>
-
-        {/* ── Form fields ───────────────────────────────────────────── */}
-        <div className="space-y-4 py-2">
-          {/* Portfolio name */}
-          <div className="space-y-1.5">
-            <Label
-              htmlFor="portfolio-name"
-              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
-            >
-              Name
-            </Label>
-            <Input
-              id="portfolio-name"
-              placeholder="e.g. Main Portfolio"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              // WHY onKeyDown: allow pressing Enter to submit (standard form UX).
-              // Avoid wrapping in a <form> element since we're inside a Dialog with
-              // its own focus management — nested form elements cause accessibility issues.
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !isSubmitting) void handleSubmit();
-              }}
-              disabled={isSubmitting}
-              // WHY autoFocus: the modal just opened and the name field is the only
-              // required input. Focus it immediately so the user can start typing.
-              autoFocus
-              className="h-8 text-[12px] font-mono bg-background border-border"
-            />
-          </div>
-
-          {/* Currency — defaults to USD; most users won't change this */}
-          <div className="space-y-1.5">
-            <Label
-              htmlFor="portfolio-currency"
-              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
-            >
-              Currency
-            </Label>
-            <Input
-              id="portfolio-currency"
-              placeholder="USD"
-              value={currency}
-              onChange={(e) => setCurrency(e.target.value.toUpperCase())}
-              disabled={isSubmitting}
-              maxLength={3}
-              // WHY toUpperCase(): S1 validates that currency is a 3-letter uppercase
-              // code. Convert on change so the user can type lowercase without errors.
-              className="h-8 text-[12px] font-mono bg-background border-border w-24"
-            />
-          </div>
-
-          {/* Inline error — only shown when submission fails */}
-          {error && (
-            <p className="text-[11px] text-destructive font-mono">{error}</p>
-          )}
-        </div>
-
-        <DialogFooter className="gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => handleOpenChange(false)}
-            disabled={isSubmitting}
-            className="text-[11px] font-mono"
-          >
-            Cancel
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => void handleSubmit()}
-            disabled={isSubmitting || !name.trim()}
-            // WHY font-mono: all action text in terminal UI uses monospace for consistency
-            className="text-[11px] font-mono"
-          >
-            {isSubmitting ? "Creating…" : "Create Portfolio"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ── Add Position Dialog ───────────────────────────────────────────────────────
-
-/**
- * AddPositionDialog — modal for manually adding a new position to a portfolio.
- *
- * WHY a BUY transaction (not a direct "add holding" call): S1 has no dedicated
- * endpoint for creating holdings. Holdings are derived from transaction history —
- * a BUY transaction increases (or creates) a holding. This mirrors how a real
- * broker records a purchase. See gateway.addPosition() for the S1 mapping.
- *
- * TICKER RESOLUTION FLOW:
- *   1. User types a ticker (e.g. "AAPL")
- *   2. On submit → searchInstruments("AAPL") → gets instrument_id
- *   3. addPosition(portfolioId, instrument_id, qty, price) → POST /v1/transactions
- *   4. On success → invalidate ["holdings", portfolioId] so the table refreshes
- *
- * WHY resolve ticker server-side (not via user-supplied instrument_id):
- * Instrument IDs are internal UUIDs — they're not meaningful to a user.
- * Letting users type tickers and resolving them to instrument_ids at submit time
- * is the standard UX for all finance terminals (Bloomberg, Schwab, etc.).
- *
- * WHY no autocomplete on the ticker field: adding a dependency on a live search
- * query inside a modal is complex. The simpler approach is to resolve on submit and
- * show an error if the ticker doesn't exist (same flow as Bloomberg CMD line entry).
- * Autocomplete can be added later as a UX enhancement.
- */
-interface AddPositionDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSuccess: () => void;
-  portfolioId: string;
-  accessToken: string | null | undefined;
-}
-
-function AddPositionDialog({
-  open,
-  onOpenChange,
-  onSuccess,
-  portfolioId,
-  accessToken,
-}: AddPositionDialogProps) {
-  // Form field state
-  const [ticker, setTicker] = useState("");
-  const [quantity, setQuantity] = useState("");
-  const [avgPrice, setAvgPrice] = useState("");
-
-  // Submission state
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSubmit = useCallback(async () => {
-    // ── Validate inputs before hitting the network ──────────────────────
-    const trimmedTicker = ticker.trim().toUpperCase();
-    const parsedQty = parseFloat(quantity);
-    const parsedPrice = parseFloat(avgPrice);
-
-    if (!trimmedTicker) {
-      setError("Ticker symbol is required.");
-      return;
-    }
-    if (isNaN(parsedQty) || parsedQty <= 0) {
-      setError("Quantity must be a positive number.");
-      return;
-    }
-    // WHY avgPrice optional: some traders enter positions at cost=0 (e.g., gifted shares,
-    // or when exact cost basis is unknown). We allow empty/zero but not negative.
-    const costBasis = isNaN(parsedPrice) ? 0 : parsedPrice;
-    if (costBasis < 0) {
-      setError("Average price cannot be negative.");
-      return;
-    }
-
-    setIsSubmitting(true);
-    setError(null);
-
-    const gw = createGateway(accessToken);
-
-    try {
-      // ── Step 1: resolve ticker → instrument_id ─────────────────────────
-      // WHY search with limit=1: we only need the best match (exact ticker match
-      // is ranked first by S3's instrument search).
-      const searchResult = await gw.searchInstruments(trimmedTicker, 1);
-      const instrument = searchResult.results[0];
-
-      if (!instrument) {
-        // WHY user-facing error (not throw): the user may have mistyped the ticker.
-        // Show an inline error with guidance rather than crashing the dialog.
-        setError(`Ticker "${trimmedTicker}" not found. Check the symbol and try again.`);
-        setIsSubmitting(false);
-        return;
-      }
-
-      // ── Step 2: add the position via a BUY transaction ─────────────────
-      // gateway.addPosition() maps to POST /v1/transactions with direction=BUY.
-      // The response is the created transaction (we don't need to use it here
-      // — we just care that the request succeeded so we can refetch holdings).
-      await gw.addPosition(
-        portfolioId,
-        instrument.instrument_id,
-        parsedQty,
-        costBasis,
-      );
-
-      // Reset form on success
-      setTicker("");
-      setQuantity("");
-      setAvgPrice("");
-      setError(null);
-
-      // Notify parent to invalidate ["holdings", portfolioId] so the table updates
-      onSuccess();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to add position.";
-      setError(message);
-    } finally {
-      setIsSubmitting(false);
-    }
-  }, [ticker, quantity, avgPrice, portfolioId, accessToken, onSuccess]);
-
-  const handleOpenChange = useCallback(
-    (nextOpen: boolean) => {
-      if (!nextOpen && !isSubmitting) {
-        // Clear form on close so the dialog is fresh on next open
-        setTicker("");
-        setQuantity("");
-        setAvgPrice("");
-        setError(null);
-      }
-      onOpenChange(nextOpen);
-    },
-    [isSubmitting, onOpenChange],
-  );
-
-  // WHY disable submit when ticker is empty: quantity and price have sensible
-  // defaults (empty = 0), but a ticker-less submission would always fail at
-  // the search step. Disable early to prevent a wasted network round-trip.
-  const canSubmit = ticker.trim().length > 0 && !isSubmitting;
-
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-sm bg-card border-border">
-        <DialogHeader>
-          <DialogTitle className="text-[13px] font-mono uppercase tracking-[0.08em]">
-            Add Position
-          </DialogTitle>
-        </DialogHeader>
-
-        <div className="space-y-4 py-2">
-          {/* Ticker symbol — the primary identifier traders use */}
-          <div className="space-y-1.5">
-            <Label
-              htmlFor="position-ticker"
-              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
-            >
-              Ticker
-            </Label>
-            <Input
-              id="position-ticker"
-              placeholder="e.g. AAPL"
-              value={ticker}
-              onChange={(e) => setTicker(e.target.value.toUpperCase())}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && canSubmit) void handleSubmit();
-              }}
-              disabled={isSubmitting}
-              autoFocus
-              // WHY toUpperCase(): tickers are always uppercase in financial systems.
-              // Converting as-you-type prevents "aapl" from failing the S3 search lookup.
-              className="h-8 text-[12px] font-mono bg-background border-border"
-            />
-          </div>
-
-          {/* Quantity — number of shares */}
-          <div className="space-y-1.5">
-            <Label
-              htmlFor="position-quantity"
-              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
-            >
-              Quantity
-            </Label>
-            <Input
-              id="position-quantity"
-              type="number"
-              placeholder="e.g. 10"
-              value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
-              disabled={isSubmitting}
-              min="0.00000001"
-              step="any"
-              // WHY step="any": S1 stores quantity as Decimal(18,8). Users may have
-              // fractional shares (e.g., crypto or fractional equity programs like Robinhood).
-              className="h-8 text-[12px] font-mono tabular-nums bg-background border-border"
-            />
-          </div>
-
-          {/* Average price — cost basis per share */}
-          <div className="space-y-1.5">
-            <Label
-              htmlFor="position-avg-price"
-              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
-            >
-              Avg Price <span className="text-muted-foreground/60">(optional)</span>
-            </Label>
-            <Input
-              id="position-avg-price"
-              type="number"
-              placeholder="e.g. 185.42"
-              value={avgPrice}
-              onChange={(e) => setAvgPrice(e.target.value)}
-              disabled={isSubmitting}
-              min="0"
-              step="any"
-              // WHY optional: some users add positions without knowing exact cost basis
-              // (gifted shares, inherited positions). Defaults to 0.
-              className="h-8 text-[12px] font-mono tabular-nums bg-background border-border"
-            />
-          </div>
-
-          {/* Inline error message */}
-          {error && (
-            <p className="text-[11px] text-destructive font-mono">{error}</p>
-          )}
-        </div>
-
-        <DialogFooter className="gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => handleOpenChange(false)}
-            disabled={isSubmitting}
-            className="text-[11px] font-mono"
-          >
-            Cancel
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => void handleSubmit()}
-            disabled={!canSubmit}
-            className="text-[11px] font-mono"
-          >
-            {isSubmitting ? "Adding…" : "Add Position"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * formatStalenessAwarePrice — prefix "~" when a quote is stale/delayed.
- *
- * WHY module-internal (not exported): only the portfolio page uses this helper.
- * Tests in portfolio-stale.test.tsx mirror this function locally for isolated
- * unit testing; integration tests verify the "~" appears in rendered output.
- *
- * WHY "~" before "$": "~$185.42" reads as "approximately $185.42" — a universal
- * approximation signal that doesn't require a tooltip to understand.
- */
-function formatStalenessAwarePrice(price: number, freshness?: string): string {
-  const isStale = freshness != null && freshness !== "live";
-  return isStale ? `~${formatPrice(price)}` : formatPrice(price);
-}
-// WHY unused-variable suppress: formatStalenessAwarePrice is passed to
-// SemanticHoldingsTable via the quotes object (freshness field), not called here
-// directly. It's preserved for the stale indicator test mirror.
-void formatStalenessAwarePrice;
 
 // ── PortfolioPage ─────────────────────────────────────────────────────────────
 
@@ -920,173 +478,44 @@ export default function PortfolioPage() {
     [holdings, holdingOverviews],
   );
 
-  // ── KPI computations ─────────────────────────────────────────────────────
-  const kpi = useMemo(() => {
-    let totalValue = 0;
-    let totalCost = 0;
-    let dayPnl: number | null = null;
-    let topGainer: { ticker: string; pnlPct: number } | null = null;
-    let topLoser: { ticker: string; pnlPct: number } | null = null;
+  // ── KPI / allocation / scope-hint (PLAN-0059 E-2) ────────────────────────
+  // The math used to live as ~150 LOC of inline useMemo blocks here. It now
+  // lives in features/portfolio/lib/kpi.ts as pure functions covered by
+  // 31 unit tests (see kpi.test.ts). Behavior pinned by those tests:
+  //   - F-202: top-loser stays null when every position is profitable
+  //   - B-2:   delisted instruments (price=0) fall back to current_price
+  //            instead of computing pnlPct = -100%
+  //   - BP-265 awareness: realizedPnl is null while transactions load
+  //            (UI renders "—"), 0 only when the array is genuinely empty
+  // Each useMemo wraps a pure call so React still memoises across renders.
+  const kpi = useMemo(
+    () => computePortfolioKPI(enrichedHoldings, holdingsQuotes, transactionsResp),
+    [enrichedHoldings, holdingsQuotes, transactionsResp],
+  );
 
-    // WHY use enrichedHoldings (not raw holdings): enrichedHoldings has ticker/name
-    // populated from company overviews. topGainer/topLoser display ticker in the KPI strip.
-    for (const h of enrichedHoldings) {
-      const q = holdingsQuotes[h.instrument_id];
-      // WHY q.price>0 (B-2): a delisted instrument (e.g., a fully-sold position
-      // like VTV) returns price:0 from the batch endpoint. The previous nullish
-      // chain treated 0 as a real value and computed pnlPct = -100% — incorrectly
-      // flagging the position as the day's biggest loser.
-      const livePrice =
-        q?.price && q.price > 0
-          ? q.price
-          : h.current_price ?? h.average_cost;
-      totalValue += livePrice * h.quantity;
-      totalCost += h.average_cost * h.quantity;
+  // WHY separate memo from kpi: holdingOverviews resolves later than
+  // holdingsQuotes (extra round-trip per holding). Keeping allocations in
+  // its own memo means the KPI strip updates immediately when quotes
+  // arrive, while SectorAllocationPanel fills in asynchronously without
+  // blocking the KPI strip.
+  const { bySector, byType } = useMemo(
+    () => computeAllocations(enrichedHoldings, holdingOverviews, holdingsQuotes),
+    [enrichedHoldings, holdingOverviews, holdingsQuotes],
+  );
 
-      // WHY null-guard on today's P&L: if no quotes have resolved yet (batch
-      // query pending), we can't compute day P&L — show "—" rather than $0.
-      if (q?.change != null) {
-        dayPnl = (dayPnl ?? 0) + q.change * h.quantity;
-      }
-
-      // Compute unrealised P&L% for top gainer / loser detection
-      const pnlPct =
-        h.average_cost > 0
-          ? ((livePrice - h.average_cost) / h.average_cost) * 100
-          : 0;
-
-      // Top gainer = highest positive pnlPct; only assign when > 0.
-      // F-202 fix (PLAN-0048 QA iter-1): symmetric guard for top loser —
-      // when every position is profitable, the previous Math.min logic
-      // selected the smallest gainer (e.g. MSFT +1.70%) and labelled it
-      // "Top Loser", which mis-signalled to the trader that MSFT was DOWN
-      // 1.70%. A loser must have negative pnlPct, otherwise the tile
-      // should display "—" (handled in PortfolioKPIStrip when topLoser=null).
-      if (pnlPct > 0 && (topGainer == null || pnlPct > topGainer.pnlPct)) {
-        topGainer = { ticker: h.ticker, pnlPct };
-      }
-      if (pnlPct < 0 && (topLoser == null || pnlPct < topLoser.pnlPct)) {
-        topLoser = { ticker: h.ticker, pnlPct };
-      }
-    }
-
-    const unrealisedPnl = totalValue - totalCost;
-    const unrealisedPnlPct = totalCost > 0 ? unrealisedPnl / totalCost : 0;
-
-    // ── Realized P&L from SELL transactions ─────────────────────────────
-    // WHY use holdings average_cost (not a separate cost-basis ledger): S1 stores
-    // average_cost per holding as a running FIFO average. For closed positions the
-    // holding row is removed from holdings; we can only compute realized P&L for
-    // instruments that STILL have an open position (i.e., partial sells). Fully
-    // closed positions are not captured here — this is an approximation that's
-    // still the most useful single number traders can act on.
-    //
-    // WHY skip if avgCost == null: instrument_id on the transaction may not match
-    // any current holding (position fully closed). Skip those — we can't infer cost
-    // basis without the holding row.
-    const costByInstrument = Object.fromEntries(
-      enrichedHoldings.map((h) => [h.instrument_id, h.average_cost]),
-    );
-    let realizedPnl = 0;
-    for (const tx of transactionsResp?.transactions ?? []) {
-      if (tx.type !== "SELL") continue;
-      const avgCost = costByInstrument[tx.instrument_id];
-      if (avgCost == null) continue; // can't compute for closed/unknown positions
-      realizedPnl += (tx.price - avgCost) * tx.quantity;
-    }
-    // WHY null when no transactions loaded vs 0: if transactionsResp is undefined
-    // (query still pending) we'd emit $0, misleading traders into thinking there's
-    // no realized P&L. Emit null instead so the tile renders "—".
-    const realizedPnlOrNull = transactionsResp != null ? realizedPnl : null;
-
-    return {
-      totalValue,
-      dayPnl,
-      unrealisedPnl,
-      unrealisedPnlPct,
-      topGainer,
-      topLoser,
-      positionCount: enrichedHoldings.length,
-      realizedPnl: realizedPnlOrNull,
-    };
-  }, [enrichedHoldings, holdingsQuotes, transactionsResp]);
-
-  // ── Sector / type allocation (derived from holdings + company overviews) ──
-  // WHY separate useMemo (not inlined with kpi): holdingOverviews resolves later
-  // than holdingsQuotes (it's an extra network round-trip per holding). Keeping it
-  // in a separate memo means the KPI strip updates immediately when quotes arrive,
-  // while the SectorAllocationPanel fills in asynchronously without blocking the KPI.
-  const { bySector, byType } = useMemo(() => {
-    if (!enrichedHoldings.length || !holdingOverviews) return { bySector: [], byType: [] };
-
-    // Build market value per instrument using the same live-price logic as KPI
-    const valueByInstrument: Record<string, number> = {};
-    const totalVal = enrichedHoldings.reduce((sum, h) => {
-      const q = holdingsQuotes[h.instrument_id];
-      // WHY three-way fallback: live quote → server-enriched current_price → cost basis
-      // This mirrors the KPI memo's price logic so sector weights are consistent with
-      // the total value shown in the KPI strip.
-      const price =
-        q?.price && q.price > 0 ? q.price : h.current_price ?? h.average_cost;
-      const val = price * h.quantity;
-      valueByInstrument[h.instrument_id] = val;
-      return sum + val;
-    }, 0);
-
-    // WHY guard on totalVal === 0: division by zero produces NaN pct values which
-    // would render as "NaN%" in the UI. Return empty arrays instead.
-    if (totalVal === 0) return { bySector: [], byType: [] };
-
-    // Group holdings by GICS sector, summing their market values
-    const sectorMap: Record<string, number> = {};
-    for (const h of enrichedHoldings) {
-      // WHY "Unknown" fallback: holdingOverviews[id] is null when the overview
-      // request failed or the instrument has no sector classification. "Unknown"
-      // is more honest than silently dropping the position from the chart.
-      const sector = holdingOverviews[h.instrument_id]?.sector ?? "Unknown";
-      sectorMap[sector] = (sectorMap[sector] ?? 0) + (valueByInstrument[h.instrument_id] ?? 0);
-    }
-
-    const bySector = Object.entries(sectorMap)
-      .map(([label, value]) => ({ label, value, pct: (value / totalVal) * 100 }))
-      .sort((a, b) => b.pct - a.pct); // largest sector first
-
-    // WHY a single "Equity" byType bar: the portfolio currently only supports equity
-    // holdings (stocks/ETFs). If fixed-income or crypto support is added later,
-    // update this to use an instrument type field from the overview.
-    const byType = [{ label: "Equity", value: totalVal, pct: 100 }];
-
-    return { bySector, byType };
-  }, [enrichedHoldings, holdingOverviews, holdingsQuotes]); // enrichedHoldings already merges holding+overview
-
-  // ── F-021: scope hint for the active portfolio ─────────────────────────
-  // WHY a separate memo: the hint depends on (a) whether the active
-  // portfolio is the root aggregate, (b) the count of non-root active
-  // portfolios, and (c) the count of unique positions in the enriched
-  // holdings list. Computing inline in JSX would re-evaluate on every
-  // render — useMemo keeps it stable across unrelated re-renders.
-  // WHY before the early returns: rules-of-hooks requires every hook
-  // to run on every render. Hoisting this above the conditional render
-  // branches keeps the hook order stable.
-  const scopeHint = useMemo<string | null>(() => {
-    if (!activePortfolio) return null;
-    if (activeIsRoot) {
-      const subCount =
-        sortedPortfolios?.filter((p) => p.kind !== "root").length ?? 0;
-      // Use enrichedHoldings.length — already de-duplicated by instrument
-      // when fanning out across sub-portfolios in the root branch.
-      const positionCount = enrichedHoldings.length;
-      return `Viewing All Accounts — ${subCount} portfolio${subCount === 1 ? "" : "s"}, ${positionCount} unique position${positionCount === 1 ? "" : "s"}`;
-    }
-    if (activePortfolio.kind === "brokerage") {
-      // We don't surface the brokerage name here (that lives on the
-      // Brokerages tab); the kind label is enough for at-a-glance scope.
-      return "Brokerage portfolio";
-    }
-    // For "manual" we render no sub-line — the portfolio name in the
-    // selector is the only context the user needs.
-    return null;
-  }, [activePortfolio, activeIsRoot, sortedPortfolios, enrichedHoldings.length]);
+  // F-021 scope hint — rendered under the portfolio selector. WHY hoisted
+  // above the early returns: rules-of-hooks requires every hook to run on
+  // every render. Skipping it inside conditional branches breaks hook order.
+  const scopeHint = useMemo(
+    () =>
+      computeScopeHint(
+        activePortfolio,
+        activeIsRoot,
+        sortedPortfolios,
+        enrichedHoldings.length,
+      ),
+    [activePortfolio, activeIsRoot, sortedPortfolios, enrichedHoldings.length],
+  );
 
   // ── Loading state ────────────────────────────────────────────────────────
   if (portfoliosLoading || (holdingsLoading && !holdingsResp)) {
@@ -1458,7 +887,13 @@ export default function PortfolioPage() {
               ))}
             </div>
           ) : (
-            <div className="p-2">
+            // WHY min-h-full: TabsContent is `flex-1`, so the scroll container
+            // is taller than its children when the tab content is short. Without
+            // min-h-full, the unfilled portion of the scroll container shows the
+            // page background (terminal-dark = black) above and below the data,
+            // which the user perceives as "half the screen is black". Forcing the
+            // wrapper to fill the parent's height eliminates that empty band.
+            <div className="min-h-full p-2">
               {/* PLAN-0053 T-B-2-04: Cash management card just below the KPI
                   strip — at-a-glance dry-powder + cash drag awareness. */}
               <CashManagementCard portfolioId={activePortfolioId} />
