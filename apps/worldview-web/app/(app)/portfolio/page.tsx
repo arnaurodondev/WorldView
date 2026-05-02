@@ -34,7 +34,7 @@
 // hook drives TanStack Query, child components include Radix portals,
 // and nuqs URL state hooks are browser-only.
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 // PLAN-0059 C-6: useQueryState backs the active-tab + equity-period in the
 // URL so deep-links round-trip ("share my Holdings view at 1Y period").
 // `parseAsStringLiteral` constrains the value to the allowed set; an
@@ -115,6 +115,16 @@ export default function PortfolioPage() {
       .withDefault("holdings")
       .withOptions({ clearOnDefault: true }),
   );
+
+  // PLAN-0059 G-3: tab switches mount/unmount whole panel trees (Holdings
+  // alone renders ~7 child surfaces — equity-curve chart, holdings table,
+  // sector treemap, recent activity, dividend timeline, analytics section).
+  // Wrapping setActiveTab in useTransition lets React render the new tab in
+  // a low-priority pass — the trigger button keeps responding to clicks /
+  // keyboard during the heavy mount, instead of feeling momentarily frozen.
+  // `isPending` is exposed so the active trigger can show a subtle pending
+  // affordance if/when designs ever ask for one.
+  const [, startTabTransition] = useTransition();
 
   // ── Data orchestrator ──────────────────────────────────────────────────
   // All 8 queries + derived KPI/allocations/scope hint live in the hook.
@@ -260,12 +270,14 @@ export default function PortfolioPage() {
           tab content can actually create a scroll area. */}
       <Tabs
         value={activeTab}
-        onValueChange={(v) =>
-          // The Radix Tabs onValueChange emits whatever string the trigger
-          // declares; the parser already narrows it to the union, but a
-          // belt-and-braces cast keeps TS strict-mode happy.
-          setActiveTab(v as "holdings" | "transactions" | "watchlist")
-        }
+        onValueChange={(v) => {
+          // G-3: defer the heavy tab-body render so the trigger row stays
+          // interactive while React mounts the new TabsContent tree.
+          // Inside startTransition the cast keeps TS strict-mode happy.
+          startTabTransition(() => {
+            void setActiveTab(v as "holdings" | "transactions" | "watchlist");
+          });
+        }}
         className="flex flex-col flex-1 min-h-0"
       >
         {/* WHY shrink-0 on TabsList: prevents the tab bar from shrinking

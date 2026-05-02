@@ -33,7 +33,14 @@
 // WHY "use client": uses useState (filter state, sort state, accumulator), TanStack Query
 // (S9 data fetching), and next/navigation (row click routing — used inside ScreenerTable).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
 // PLAN-0059 C-6: URL-state for the two highest-cardinality screener filters
 // (sector + cap tier). The full FilterState (25+ fields) intentionally stays
@@ -449,7 +456,19 @@ export default function ScreenerPage() {
     () => applyClientFilters(accumulator, appliedFilters),
     [accumulator, appliedFilters],
   );
-  const sortedRows = useMemo(() => sortResults(filteredRows, sort), [filteredRows, sort]);
+
+  // PLAN-0059 G-3: useDeferredValue tells React to schedule the heavy
+  // sort + downstream table render at a lower priority than the input that
+  // triggered the change. When `filteredRows` changes (Apply clicked,
+  // accumulator grew via Load More, sort key flipped), the table body
+  // re-renders LATE — meanwhile the filter bar / sort header / Load More
+  // button keep responding instantly. With 5000-row accumulators the
+  // sort+memoization pass otherwise blocks the main thread for 30-80ms.
+  const deferredFilteredRows = useDeferredValue(filteredRows);
+  const sortedRows = useMemo(
+    () => sortResults(deferredFilteredRows, sort),
+    [deferredFilteredRows, sort],
+  );
 
   // ── Sparklines (PLAN-0051 T-B-2-09) ───────────────────────────────────────
   // WHY only fetch when the sparkline column is visible: bandwidth/latency
