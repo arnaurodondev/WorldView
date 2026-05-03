@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -67,6 +68,21 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+
+def _find_schema_dir() -> Path:
+    """Locate ``infra/kafka/schemas/`` whether running locally or in Docker."""
+    relative = Path("infra") / "kafka" / "schemas"
+    for base in Path(__file__).resolve().parents:
+        candidate = base / relative
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
+
+
+_SCHEMA_DIR = _find_schema_dir()
+_ARTICLE_ENRICHED_TOPIC = "nlp.article.enriched.v1"
+_ARTICLE_ENRICHED_SCHEMA_PATH = str(_SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
 
 
 # ---------------------------------------------------------------------------
@@ -147,9 +163,28 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
         # PLAN-0031 B-2: extraction_model_id from S6 enriched event payload
         extraction_model_id: str | None = value.get("extraction_model_id")
 
-        raw_relations_data: list[dict[str, Any]] = value.get("raw_relations", [])
-        raw_events_data: list[dict[str, Any]] = value.get("raw_events", [])
-        raw_claims_data: list[dict[str, Any]] = value.get("raw_claims", [])
+        # PLAN-0062 Wave B: Avro envelope transports raw arrays as JSON strings
+        # (raw_relations_json/raw_events_json/raw_claims_json).  Legacy JSON
+        # producers used direct list fields (raw_relations / raw_events /
+        # raw_claims) — fall back to those when the new fields are absent so
+        # in-flight legacy messages still materialise correctly.
+        from contracts.events.nlp.article_enriched import decode_raw_array  # type: ignore[import-untyped]
+
+        raw_relations_data: list[dict[str, Any]] = (
+            decode_raw_array(value.get("raw_relations_json"))
+            if value.get("raw_relations_json") is not None
+            else value.get("raw_relations", [])
+        )
+        raw_events_data: list[dict[str, Any]] = (
+            decode_raw_array(value.get("raw_events_json"))
+            if value.get("raw_events_json") is not None
+            else value.get("raw_events", [])
+        )
+        raw_claims_data: list[dict[str, Any]] = (
+            decode_raw_array(value.get("raw_claims_json"))
+            if value.get("raw_claims_json") is not None
+            else value.get("raw_claims", [])
+        )
 
         # Parse incoming relation dicts into typed objects
         raw_relations = _parse_raw_relations(raw_relations_data)
@@ -351,9 +386,27 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
     # ------------------------------------------------------------------
 
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
+        """Decode nlp.article.enriched.v1 events.
+
+        PLAN-0062 Wave B: Confluent-Avro on the wire (5-byte magic header +
+        Avro body), with JSON fallback for legacy messages produced before
+        the cutover.  The fallback path emits a warning so we can quantify
+        residual JSON traffic and remove the branch once it decays to zero.
+        """
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
+
+        path = schema_path or _ARTICLE_ENRICHED_SCHEMA_PATH
+        if raw and raw[:1] == b"\x00":
+            return deserialize_confluent_avro(path, raw)  # type: ignore[no-any-return]
+        logger.warning(  # type: ignore[no-any-return]
+            "enriched_consumer_legacy_json_payload",
+            message="nlp.article.enriched.v1 message lacks Confluent magic byte; using JSON fallback",
+        )
         return json.loads(raw)  # type: ignore[no-any-return]
 
     def get_schema_path(self, topic: str) -> str | None:
+        if topic == _ARTICLE_ENRICHED_TOPIC:
+            return _ARTICLE_ENRICHED_SCHEMA_PATH
         return None
 
     def extract_event_id(self, value: dict[str, Any]) -> str:

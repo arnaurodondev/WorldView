@@ -13,6 +13,7 @@ Backfill suppression is delegated to :class:`AlertFanoutUseCase`.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
@@ -35,6 +36,24 @@ _KNOWN_TOPICS: frozenset[str] = frozenset(
         "intelligence.contradiction.v1",
     },
 )
+
+
+def _find_schema_dir() -> Path:
+    """Locate ``infra/kafka/schemas/`` whether running locally or in Docker."""
+    relative = Path("infra") / "kafka" / "schemas"
+    for base in Path(__file__).resolve().parents:
+        candidate = base / relative
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
+
+
+_SCHEMA_DIR = _find_schema_dir()
+_TOPIC_SCHEMA_PATHS: dict[str, str] = {
+    "nlp.signal.detected.v1": str(_SCHEMA_DIR / "nlp.signal.detected.v1.avsc"),
+    "graph.state.changed.v1": str(_SCHEMA_DIR / "graph.state.changed.v1.avsc"),
+    "intelligence.contradiction.v1": str(_SCHEMA_DIR / "intelligence.contradiction.v1.avsc"),
+}
 
 
 # ── Minimal no-op UoW ─────────────────────────────────────────────────────────
@@ -233,10 +252,32 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
     # ── Serialization ─────────────────────────────────────────────────────────
 
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
+        """Decode events from any of the three intelligence topics.
+
+        PLAN-0062 Wave C: AVRO_FIRST decode driven by the Confluent magic
+        byte (0x00).  When ``schema_path`` is provided (set by the base
+        consumer's ``_handle_message`` via ``get_schema_path``) the Avro path
+        decodes against that schema.  Falls back to JSON for legacy
+        producers — this is logged so we can quantify residual JSON traffic.
+        """
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
+
+        if raw and raw[:1] == b"\x00" and schema_path:
+            return deserialize_confluent_avro(schema_path, raw)  # type: ignore[no-any-return]
+        if raw and raw[:1] == b"\x00":
+            logger.warning(  # type: ignore[no-any-return]
+                "intelligence_consumer.avro_payload_without_schema",
+                message="Confluent magic byte present but no schema_path resolved; falling back to JSON parse",
+            )
+        else:
+            logger.warning(  # type: ignore[no-any-return]
+                "intelligence_consumer.legacy_json_payload",
+                message="message lacks Confluent magic byte; using JSON fallback",
+            )
         return json.loads(raw)  # type: ignore[no-any-return]
 
     def get_schema_path(self, topic: str) -> str | None:
-        return None
+        return _TOPIC_SCHEMA_PATHS.get(topic)
 
     def extract_event_id(self, value: dict[str, Any]) -> str:
         return str(value.get("event_id", ""))
