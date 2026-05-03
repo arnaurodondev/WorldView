@@ -153,11 +153,8 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
         # in the collapsed card view and the full narrative when expanded.
         # ``None`` when the LLM didn't emit the two-tier divider (legacy fallback).
         "summary": result.get("summary"),
-        # PLAN-0049 T-A-1-04: pass through structured fields. Both default to
-        # None / [] when the use case couldn't parse them — frontend then falls
-        # back to MarkdownContent over narrative (graceful degradation).
-        # Truncate to max_length=240 to guard against LLM over-generating.
-        "headline": (result.get("headline") or "")[:240] or None,
+        # PLAN-0049 T-A-1-04: sections for structured render (falls back to []
+        # for pre-W4 cached responses; frontend degrades to MarkdownContent).
         "sections": result.get("sections", []),
         # PLAN-0062-W4: confidence score and lead text
         "confidence": confidence,
@@ -266,9 +263,6 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
         "generated_at": result["generated_at"],
         "cached": False,
         "entity_id": entity_id,
-        # PLAN-0049 T-A-1-04: structured render fields for the frontend.
-        # Truncate to max_length=240 to guard against LLM over-generating.
-        "headline": (result.get("headline") or "")[:240] or None,
         "sections": result.get("sections", []),
         # PLAN-0062-W4: confidence score and lead text
         "confidence": instrument_confidence,
