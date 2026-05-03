@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -25,28 +24,12 @@ from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.application.ports.repositories import (
     TOPIC_GRAPH_STATE_CHANGED,
 )
-
-
-def _find_schema_dir() -> Path:
-    """Locate ``infra/kafka/schemas/`` whether running locally or in Docker.
-
-    Same walk-up strategy used by every producer module in this codebase
-    (see ``contradiction.py``, ``provisional_enrichment_core.py``, …).  PLAN-0062
-    audit follow-up F-006 — F-007 will consolidate this into a shared lib.
-    """
-    relative = Path("infra") / "kafka" / "schemas"
-    for base in Path(__file__).resolve().parents:
-        candidate = base / relative
-        if candidate.is_dir():
-            return candidate
-    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
-
+from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 
 # PLAN-0062 audit follow-up F-006: serialize the graph.state.changed.v1 outbox
 # payload to Confluent-Avro wire format instead of JSON.
-_SCHEMA_DIR = _find_schema_dir()
-_GRAPH_STATE_CHANGED_SCHEMA_PATH = str(_SCHEMA_DIR / "graph.state.changed.v1.avsc")
-_ENTITY_DIRTIED_SCHEMA_PATH = str(_SCHEMA_DIR / "entity.dirtied.v1.avsc")
+_GRAPH_STATE_CHANGED_SCHEMA_PATH = get_schema_path("graph.state.changed.v1.avsc")
+_ENTITY_DIRTIED_SCHEMA_PATH = get_schema_path("entity.dirtied.v1.avsc")
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession

@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from market_data.domain.entities import PredictionMarket, PredictionMarketSnapshot
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
+from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 from messaging.topics import MARKET_PREDICTION  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
@@ -23,18 +23,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-# Walk up the directory tree to find infra/kafka/schemas/ — works both in development
-# (repo root is a few levels up) and in Docker (schemas copied to /app/infra/kafka/schemas/).
-def _find_schema_dir() -> Path:
-    relative = Path("infra") / "kafka" / "schemas"
-    for base in Path(__file__).resolve().parents:
-        candidate = base / relative
-        if candidate.is_dir():
-            return candidate
-    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
-
-
-_SCHEMA_DIR = _find_schema_dir()
+_SCHEMA_DIR = find_schema_dir()
 _GROUP_ID = "market-data-prediction-markets"
 
 

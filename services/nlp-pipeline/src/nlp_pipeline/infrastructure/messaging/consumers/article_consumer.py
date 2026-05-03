@@ -25,7 +25,6 @@ import json
 import re
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import common.ids  # type: ignore[import-untyped]
@@ -36,6 +35,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from nlp_pipeline.application.blocks.deep_extraction import run_deep_extraction_block
 from nlp_pipeline.application.blocks.embeddings import run_embeddings_block
 from nlp_pipeline.application.blocks.entity_resolution import run_entity_resolution_block
@@ -109,18 +109,7 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 _TOPIC = "content.article.stored.v1"
 
 
-# Walk up the directory tree to find infra/kafka/schemas/ — works both in development
-# (repo root is a few levels up) and in Docker (schemas copied to /app/infra/kafka/schemas/).
-def _find_schema_dir() -> Path:
-    relative = Path("infra") / "kafka" / "schemas"
-    for base in Path(__file__).resolve().parents:
-        candidate = base / relative
-        if candidate.is_dir():
-            return candidate
-    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
-
-
-_SCHEMA_DIR = _find_schema_dir()
+_SCHEMA_DIR = find_schema_dir()
 
 # Default source trust weight — used when intelligence_db source_trust_weights table
 # is not queried. Contribution = 0.20 * 0.5 = 0.10 to routing score.
