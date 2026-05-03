@@ -527,13 +527,17 @@ async def me(request: Request) -> Response:
         # `user` shape comes from InternalJWTMiddleware — see middleware.py.
         # Cast through dict to keep the return type aligned with the verified
         # OIDC path above (sub, user_id, tenant_id, email, email_verified).
-        u: dict[str, Any] = dict(user) if isinstance(user, dict) else {
-            "sub": getattr(user, "sub", ""),
-            "user_id": getattr(user, "user_id", ""),
-            "tenant_id": getattr(user, "tenant_id", ""),
-            "email": getattr(user, "email", ""),
-            "email_verified": bool(getattr(user, "email_verified", False)),
-        }
+        u: dict[str, Any] = (
+            dict(user)
+            if isinstance(user, dict)
+            else {
+                "sub": getattr(user, "sub", ""),
+                "user_id": getattr(user, "user_id", ""),
+                "tenant_id": getattr(user, "tenant_id", ""),
+                "email": getattr(user, "email", ""),
+                "email_verified": bool(getattr(user, "email_verified", False)),
+            }
+        )
         return JSONResponse(
             status_code=200,
             content={

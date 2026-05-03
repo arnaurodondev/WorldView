@@ -90,13 +90,13 @@ class SnapTradeClient:
         # Lazy import — SDK imports are slow; kept inside __init__ so the module
         # can be imported without SDK installed (e.g. during linting in CI).
         from snaptrade_client import ApiClient, Configuration  # type: ignore[import-untyped]
-        from snaptrade_client.apis.tags.account_information_api import (
-            AccountInformationApi,  # type: ignore[import-untyped]
+        from snaptrade_client.apis.tags.account_information_api import (  # type: ignore[import-untyped]
+            AccountInformationApi,
         )
         from snaptrade_client.apis.tags.authentication_api import AuthenticationApi  # type: ignore[import-untyped]
         from snaptrade_client.apis.tags.connections_api import ConnectionsApi  # type: ignore[import-untyped]
-        from snaptrade_client.apis.tags.transactions_and_reporting_api import (
-            TransactionsAndReportingApi,  # type: ignore[import-untyped]
+        from snaptrade_client.apis.tags.transactions_and_reporting_api import (  # type: ignore[import-untyped]
+            TransactionsAndReportingApi,
         )
 
         _config = Configuration(client_id=client_id, consumer_key=consumer_key)

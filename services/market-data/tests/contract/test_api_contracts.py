@@ -192,17 +192,22 @@ class TestQuoteResponseContract:
         assert resp.last is None
 
     def test_batch_request_min_max_length(self) -> None:
-        """BatchQuoteRequest enforces min_length=1 and max_length=200 (F-SEC-006)."""
+        """BatchQuoteRequest enforces min_length=1, max_length=200, and UUID validation (F-SEC-006)."""
         from market_data.api.schemas.quotes import BatchQuoteRequest
         from pydantic import ValidationError
 
-        # Valid
-        req = BatchQuoteRequest(instrument_ids=["instr-001"])
+        # Valid — must be a UUID string (validator added after F-SEC-006)
+        valid_uuid = "01922b00-0000-7000-8000-000000000001"
+        req = BatchQuoteRequest(instrument_ids=[valid_uuid])
         assert len(req.instrument_ids) == 1
 
         # Empty list should fail
         with pytest.raises(ValidationError):
             BatchQuoteRequest(instrument_ids=[])
+
+        # Non-UUID should fail (F-SEC-006 UUID validation)
+        with pytest.raises(ValidationError, match="valid UUIDs"):
+            BatchQuoteRequest(instrument_ids=["instr-001"])
 
 
 # ── TestFundamentalsResponseContract ─────────────────────────────────────────

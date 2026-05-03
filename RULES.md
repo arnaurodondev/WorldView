@@ -247,6 +247,22 @@ the primary. The `ReadOnlyUnitOfWork` has no `commit()` or `rollback()` methods 
 will catch any misuse at type-check time. API route handlers MUST use `ReadUoWDep` for
 read-only endpoints and `UoWDep` for mutating endpoints.
 
+### R29: MUST update `libs/tools/capability_manifest.yaml` for every tool change
+**Why**: The capability manifest is the contract between the LLM and the tool layer.
+When a tool is added, removed, or its parameters change, the LLM's system prompt must
+reflect the current state — an out-of-sync manifest causes silent capability failures
+where the LLM calls tools that no longer exist or passes invalid parameters (producing
+a malformed tool response with no error surfaced to the user). Enforcement:
+- Adding a new tool → add a YAML entry with `name`, `description`, `parameters`,
+  `trust_weight`, and at least 2 `example_queries` before the PR is merged
+- Changing a tool's parameters → update the YAML entry in the same commit
+- Removing a tool → remove the YAML entry; also remove it from the architecture test
+  baseline in `tests/architecture/test_tool_manifest_sync.py`
+Enforced by `tests/architecture/test_tool_manifest_sync.py` (checks that every function
+registered in `ToolRegistry` has a corresponding YAML entry with a matching parameter
+schema, and every YAML entry has a registered implementation — no orphaned entries or
+unregistered tools are allowed).
+
 ---
 
 ## Summary Table
@@ -280,3 +296,4 @@ read-only endpoints and `UoWDep` for mutating endpoints.
 | R25 | Architecture | MUST NOT |
 | R26 | Infrastructure | MUST NOT |
 | R27 | Architecture | MUST |
+| R29 | Architecture | MUST |
