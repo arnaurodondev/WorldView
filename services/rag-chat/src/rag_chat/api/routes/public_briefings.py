@@ -4,6 +4,14 @@ Called via S9 proxy. Auth enforced by InternalJWTMiddleware (PRD-0025).
 Generates on-demand briefings with Valkey caching (24h TTL).
 
 R25: This route imports only from the application layer (schemas + domain errors).
+
+PLAN-0062-W4 (T-W4-C-01):
+- Cache keys bumped to v2 to avoid serving stale pre-W4 cached briefs
+  (which lack confidence/lead/BriefBullet citations) to the new frontend.
+  Key format: "briefing:morning:v2:{user_id}" and
+              "briefing:instrument:v2:{entity_id}:{user_id}".
+- confidence and lead from the use case result are propagated into the
+  response and logged for observability.
 """
 
 from __future__ import annotations
@@ -74,17 +82,23 @@ def _to_uuid(value: str) -> UUID:
 async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
     """Generate or retrieve a cached morning market briefing.
 
-    - Checks Valkey cache (key: ``briefing:morning:{user_id}``, TTL: 24h)
+    - Checks Valkey cache (key: ``briefing:morning:v2:{user_id}``, TTL: 24h)
     - If cached: returns immediately with ``cached=True``
     - If not: generates via GenerateBriefingUseCase with default market context
     - On generation failure: returns 503
 
     Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025).
+
+    PLAN-0062-W4: cache key bumped to v2 to avoid serving stale pre-W4 cached briefs
+    (which have string bullets instead of BriefBullet objects). The old
+    "briefing:morning:{user_id}" keys will simply expire naturally.
     """
     user_id = _extract_user_id(request)
     tenant_id = _extract_tenant_id(request)
     valkey = _get_valkey(request)
-    cache_key = f"briefing:morning:{user_id}"
+    # WHY v2: PLAN-0062-W4 changed BriefSection.bullets from list[str] to
+    # list[BriefBullet]. Cached pre-W4 responses must not be served to W4+ clients.
+    cache_key = f"briefing:morning:v2:{user_id}"
 
     # ── Check Valkey cache ────────────────────────────────────────────────────
     if valkey is not None:
@@ -120,6 +134,10 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
         log.error("briefing_generation_failed", error=str(e), user_id=user_id)  # type: ignore[no-any-return]
         raise HTTPException(status_code=503, detail="Briefing generation unavailable") from e
 
+    # PLAN-0062-W4: extract confidence + lead from use case result and propagate.
+    confidence = result.get("confidence", 1.0)
+    lead = result.get("lead")
+
     response_data = {
         # execute_public_morning() returns 'content' (not 'narrative') — map to schema field
         "narrative": result.get("content", ""),
@@ -139,12 +157,22 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
         # back to MarkdownContent over narrative (graceful degradation).
         "headline": result.get("headline"),
         "sections": result.get("sections", []),
+        # PLAN-0062-W4: confidence score and lead text
+        "confidence": confidence,
+        "lead": lead,
     }
+
+    log.info(  # type: ignore[no-any-return]
+        "morning_briefing_route_complete",
+        user_id=user_id,
+        confidence=confidence,
+        lead_present=lead is not None,
+    )
 
     # ── Write to cache ────────────────────────────────────────────────────────
     if valkey is not None:
         try:
-            await valkey.set(cache_key, json.dumps(response_data), ex=_CACHE_TTL)
+            await valkey.set(cache_key, json.dumps(response_data, default=str), ex=_CACHE_TTL)
         except Exception as e:
             log.warning("briefing_cache_write_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
 
@@ -155,17 +183,20 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
 async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBriefingResponse:
     """Generate or retrieve a cached instrument-specific briefing.
 
-    - Checks Valkey cache (key: ``briefing:instrument:{entity_id}:{user_id}``, TTL: 24h)
+    - Checks Valkey cache (key: ``briefing:instrument:v2:{entity_id}:{user_id}``, TTL: 24h)
     - If cached: returns immediately with ``cached=True``
     - If not: generates via GenerateBriefingUseCase with entity-focused context
     - On generation failure: returns 503
 
     Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025).
+
+    PLAN-0062-W4: cache key bumped to v2 (same rationale as morning briefing).
     """
     user_id = _extract_user_id(request)
     tenant_id = _extract_tenant_id(request)  # noqa: F841 — reserved for future cache-key scope
     valkey = _get_valkey(request)
-    cache_key = f"briefing:instrument:{entity_id}:{user_id}"
+    # WHY v2: PLAN-0062-W4 cache key bump — see morning briefing comment above.
+    cache_key = f"briefing:instrument:v2:{entity_id}:{user_id}"
 
     # ── Check Valkey cache ────────────────────────────────────────────────────
     if valkey is not None:
@@ -216,6 +247,10 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
         )
         raise HTTPException(status_code=503, detail="Briefing generation unavailable") from e
 
+    # PLAN-0062-W4: extract confidence + lead from use case result.
+    instrument_confidence = result.get("confidence", 1.0)
+    instrument_lead = result.get("lead")
+
     response_data = {
         # execute_public_instrument() returns 'content' (not 'narrative') — map to schema field
         "narrative": result.get("content", result.get("narrative", "")),
@@ -227,12 +262,23 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
         # PLAN-0049 T-A-1-04: structured render fields for the frontend.
         "headline": result.get("headline"),
         "sections": result.get("sections", []),
+        # PLAN-0062-W4: confidence score and lead text
+        "confidence": instrument_confidence,
+        "lead": instrument_lead,
     }
+
+    log.info(  # type: ignore[no-any-return]
+        "instrument_briefing_route_complete",
+        entity_id=entity_id,
+        user_id=user_id,
+        confidence=instrument_confidence,
+        lead_present=instrument_lead is not None,
+    )
 
     # ── Write to cache ────────────────────────────────────────────────────────
     if valkey is not None:
         try:
-            await valkey.set(cache_key, json.dumps(response_data), ex=_CACHE_TTL)
+            await valkey.set(cache_key, json.dumps(response_data, default=str), ex=_CACHE_TTL)
         except Exception as e:
             log.warning("briefing_cache_write_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
 

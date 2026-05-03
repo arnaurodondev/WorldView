@@ -36,12 +36,17 @@ _BRIEFING_RESULT = {
 # Mock return value from GenerateBriefingUseCase.execute_public_morning()
 # NOTE: execute_public_morning() returns 'content' (not 'narrative') — the route
 # maps content → narrative when building the PublicBriefingResponse.
+# PLAN-0062-W4: added confidence + lead fields to the mock return value so the
+# route can propagate them without a KeyError.
 _MORNING_RESULT = {
     "content": "Morning market overview for today.",
     "risk_summary": {"concentration_score": 0.0},
     "entity_mentions": [],
     "citations": [],
     "generated_at": "2026-04-19T12:00:00+00:00",
+    "confidence": 0.85,
+    "lead": "Markets opened higher on strong jobs data.",
+    "sections": [],
 }
 
 # JWT token for authenticated requests — decoded without verification in unit tests
@@ -153,6 +158,9 @@ async def test_morning_briefing_writes_cache(settings: RagChatSettings) -> None:
     app.state.valkey.set.assert_awaited_once()
     call_args = app.state.valkey.set.call_args
     assert call_args.kwargs.get("ex") == 86400
+    # PLAN-0062-W4: verify v2 cache key is used (not legacy v1 key)
+    cache_key_arg = call_args.args[0] if call_args.args else call_args.kwargs.get("key", "")
+    assert "v2" in cache_key_arg or "morning" in str(call_args)
 
 
 # ── Morning briefing — cached ─────────────────────────────────────────────────
@@ -356,3 +364,119 @@ async def test_instrument_briefing_entity_not_found_404(settings: RagChatSetting
         )
     assert resp.status_code == 404
     assert "not found" in resp.json()["detail"].lower()
+
+
+# ── PLAN-0062-W4 — confidence + lead propagation (T-W4-C-01) ──────────────────
+
+
+async def test_morning_briefing_propagates_confidence(settings: RagChatSettings) -> None:
+    """The route must propagate confidence from the UC result into the response body."""
+    app = _make_app(settings)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
+    assert resp.status_code == 200
+    body = resp.json()
+    # WHY: confidence=0.85 is set in _MORNING_RESULT mock; the route must pass it through
+    assert "confidence" in body
+    assert 0.0 <= body["confidence"] <= 1.0
+
+
+async def test_morning_briefing_propagates_lead(settings: RagChatSettings) -> None:
+    """The route must propagate lead from the UC result into the response body."""
+    app = _make_app(settings)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
+    body = resp.json()
+    assert "lead" in body
+    # The mock returns "Markets opened higher on strong jobs data." as the lead
+    assert body["lead"] == "Markets opened higher on strong jobs data."
+
+
+async def test_morning_briefing_v2_cache_key(settings: RagChatSettings) -> None:
+    """Cache key must use v2 format (not legacy v1) — PLAN-0062-W4 cache bump."""
+    app = _make_app(settings)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
+    # Inspect the key passed to valkey.set
+    set_call = app.state.valkey.set.call_args
+    # set is called as set(key, json_data, ex=TTL) — first positional arg is the key
+    actual_key = set_call.args[0] if set_call.args else ""
+    assert actual_key.startswith("briefing:morning:v2:")
+
+
+async def test_instrument_briefing_v2_cache_key(settings: RagChatSettings) -> None:
+    """Instrument cache key must use v2 format — PLAN-0062-W4 cache bump."""
+    app = _make_app(settings)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/api/v1/briefings/instrument/entity-999", headers=_JWT_HEADERS)
+    set_call = app.state.valkey.set.call_args
+    actual_key = set_call.args[0] if set_call.args else ""
+    assert actual_key.startswith("briefing:instrument:v2:")
+
+
+async def test_stale_v1_cache_key_falls_through_to_generation(settings: RagChatSettings) -> None:
+    """If the old v1 cache key has data but v2 does not, the route generates a new brief.
+
+    This simulates the post-deploy scenario: old cache had "briefing:morning:{user_id}"
+    but the new code reads "briefing:morning:v2:{user_id}" — Valkey returns None for
+    the v2 key, so the UC is called (cache miss → generate).
+    """
+    # Valkey.get always returns None (cache miss for v2 key)
+    app = _make_app(settings, valkey_get_result=None)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
+    assert resp.status_code == 200
+    # UC must have been called (not served from cache)
+    app.state.briefing_uc.execute_public_morning.assert_awaited_once()
+    assert resp.json()["cached"] is False
+
+
+async def test_morning_briefing_confidence_default_on_missing_uc_field(
+    settings: RagChatSettings,
+) -> None:
+    """Route defaults confidence to 1.0 when UC result lacks the field."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from rag_chat.app import create_app
+
+    app = create_app(settings)
+    mock_uc = MagicMock()
+    # UC result WITHOUT confidence field — simulates old UC code
+    mock_uc.execute_public_morning = AsyncMock(
+        return_value={
+            "content": "Brief text.",
+            "risk_summary": {},
+            "entity_mentions": [],
+            "citations": [],
+            "generated_at": "2026-05-03T10:00:00+00:00",
+            "sections": [],
+            # No 'confidence' or 'lead' keys
+        }
+    )
+    mock_uc.execute = AsyncMock()
+    app.state.briefing_uc = mock_uc
+    app.state.chat_orchestrator = MagicMock()
+    mock_valkey = MagicMock()
+    mock_valkey.get = AsyncMock(return_value=None)
+    mock_valkey.set = AsyncMock()
+    app.state.valkey = mock_valkey
+
+    import jwt as _jwt
+
+    token = _jwt.encode(
+        {"sub": str(_USER_ID), "tenant_id": str(_TENANT_ID), "role": "user"},
+        "secret",
+        algorithm="HS256",
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/briefings/morning", headers={"X-Internal-JWT": token})
+    body = resp.json()
+    # Default confidence=1.0 when not in UC result
+    assert body["confidence"] == 1.0
+    assert body["lead"] is None

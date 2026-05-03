@@ -50,6 +50,12 @@ import Link from "next/link";
 // can pass it as `remarkPlugins`. It's a tiny module — no point lazy-loading.
 import dynamic from "next/dynamic";
 import remarkGfm from "remark-gfm";
+// PLAN-0062-W4 T-W4-E-01: StructuredBrief replaces the inline brief.sections.map
+// block in the expanded view. This shared component handles BriefBullet citation
+// chips, confidence badge, and variant-specific layout so MorningBriefCard only
+// needs to decide WHEN to show the structured view (sections non-empty) vs the
+// markdown fallback (sections empty or absent).
+import { StructuredBrief } from "@/components/brief/StructuredBrief";
 
 // QA-iter1: hoist remark plugins to module scope. Inline `[remarkGfm]`
 // passed as a prop creates a NEW array reference on every render, which
@@ -94,7 +100,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 // WHY import BriefingResponse (not MorningBrief): PLAN-0034 unified the briefing
 // response type — both morning and instrument briefs now return BriefingResponse
 // which includes citations, risk_summary, and cached flag.
-import type { BriefingResponse, BriefingCitation } from "@/types/api";
+// WHY also import BriefCitation and BriefingCitation: PLAN-0062-W4 changed the
+// citations array to emit BriefCitation objects (with document_id). We keep the
+// BriefingCitation import for the legacy back-compat filter in topStories below.
+import type { BriefingResponse, BriefCitation, BriefingCitation } from "@/types/api";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -230,6 +239,8 @@ export function MorningBriefCard() {
   // a deep-link to the instrument page lets traders jump from the brief to the
   // instrument detail page without searching. Applied to BOTH summary and
   // narrative for consistent navigation behaviour.
+  // WHY ?? []: entity_mentions is now optional in BriefingResponse (PLAN-0062-W4).
+  // The field may be absent in W4+ responses that don't populate it.
   const linkifyEntities = (text: string): string =>
     (brief.entity_mentions ?? []).reduce((acc, mention) => {
       if (!mention.name) return acc;
@@ -263,7 +274,12 @@ export function MorningBriefCard() {
   // WHY filter then slice: only "article" citations have URLs we can navigate
   // to. Events and alerts lack a destination so we exclude them from the strip.
   // The first 3 articles are already ordered by relevance from the backend.
-  const topStories: BriefingCitation[] = (brief.citations ?? [])
+  //
+  // WHY cast to (BriefCitation | BriefingCitation): the citations array is a
+  // union type after PLAN-0062-W4 — W4+ responses emit BriefCitation (with
+  // document_id); pre-W4 cached responses emit BriefingCitation (with source_id).
+  // Both shapes share source_type, title, and url — the only fields this strip uses.
+  const topStories: (BriefCitation | BriefingCitation)[] = (brief.citations ?? [])
     .filter((c) => c.source_type === "article" && c.url)
     .slice(0, TOP_STORIES_LIMIT);
 
@@ -377,38 +393,28 @@ export function MorningBriefCard() {
               </ReactMarkdown>
             </div>
           ) : brief.sections && brief.sections.length > 0 ? (
-            // ── Expanded view (structured): PLAN-0049 T-D-4-01 ──
-            // When the backend's section parser succeeded we render polished
-            // section cards instead of raw markdown — gives the brief a
-            // Bloomberg-grade typographic hierarchy (heading + bullets).
-            // WHY data-testid="brief-section" (PLAN-0049 T-D-4-06): the
-            // stabilization E2E spec asserts that EITHER ≥1 brief-section OR
-            // a brief-narrative is rendered after expansion. The marker
-            // disambiguates the two branches without coupling the test to
-            // class names (which churn) or section copy (LLM-dependent).
-            <div className="flex flex-col gap-2">
-              {brief.sections.map((sec, i) => (
-                <section
-                  key={`${sec.title}-${i}`}
-                  className="border-l-2 border-primary/40 pl-2"
-                  data-testid="brief-section"
-                >
-                  <h3 className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                    {sec.title}
-                  </h3>
-                  <ul className="m-0 list-none p-0">
-                    {sec.bullets.map((b, j) => (
-                      <li
-                        key={j}
-                        className="relative pl-2 text-[10px] leading-snug text-foreground/90 before:absolute before:left-0 before:top-1.5 before:h-[3px] before:w-[3px] before:rounded-full before:bg-primary/60"
-                      >
-                        {b}
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ))}
-            </div>
+            // ── Expanded view (structured): PLAN-0062-W4 T-W4-E-01 ──
+            // WHY StructuredBrief (not inline map): the shared StructuredBrief
+            // component handles BriefBullet citation chips, confidence badge,
+            // lead rendering, and variant-specific layout. Using it here means
+            // any citation-gate improvements are reflected across all four
+            // surfaces simultaneously rather than requiring 4 separate edits.
+            //
+            // WHY variant="full": this is the fully expanded card view — use the
+            // maximum-fidelity layout with citation chips per bullet, lead block,
+            // and confidence badge when confidence is low.
+            //
+            // WHY data-testid via StructuredBrief: StructuredBrief emits
+            // data-testid="structured-brief" and data-testid="brief-section" per
+            // section — satisfying the PLAN-0049 T-D-4-06 E2E assertion that
+            // "EITHER ≥1 brief-section OR a brief-narrative is rendered after
+            // expansion". The marker set is a superset of the old inline markers.
+            <StructuredBrief
+              lead={brief.lead}
+              sections={brief.sections}
+              confidence={brief.confidence}
+              variant="full"
+            />
           ) : (
             // ── Expanded view (fallback): brief.narrative as raw markdown ──
             // Used when sections[] is empty (parser couldn't structure the
@@ -443,7 +449,10 @@ export function MorningBriefCard() {
             >
               {topStories.map((story) => (
                 <Link
-                  key={story.source_id}
+                  // WHY back-compat key: W4+ BriefCitation has `document_id`;
+                  // pre-W4 BriefingCitation has `source_id`. Use whichever is
+                  // populated, falling back to title as a last resort.
+                  key={"document_id" in story ? story.document_id : story.source_id}
                   href={story.url ?? "#"}
                   // WHY target=_blank: news article URLs go to external
                   // publishers — opening in a new tab keeps the dashboard

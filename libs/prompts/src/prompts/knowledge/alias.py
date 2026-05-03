@@ -50,6 +50,7 @@ def sanitize_description(raw: str | None) -> str:
     no_ctrl = _CONTROL_CHARS_RE.sub("", raw)
     return _WHITESPACE_RUN_RE.sub(" ", no_ctrl).strip()
 
+
 # The template is split into a header + four labelled examples + the actual
 # input section.  Each example uses double-braces ``{{`` / ``}}`` because the
 # template engine treats single braces as parameters; the JSON output examples

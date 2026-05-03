@@ -8492,3 +8492,92 @@ a sync `Result`-like mock, which matches SQLAlchemy's actual behavior.
 - **Audit**: If a test file has `session = AsyncMock()` without an explicit
   `execute.return_value`, any repository that calls `scalar_one_or_none()` or
   `all()` on the result is a latent bug.
+
+---
+
+## BP-319 — Stale Docker Image Blocks Alembic Upgrade After New Migration Added
+
+**Service**: `intelligence-migrations` (also applies to any service with Alembic)
+**Symptom**: `alembic upgrade head` exits with `Can't locate revision identified by 'NNNN'`; `intelligence-migrations` container exits 255; 15+ downstream services stay in `Created` state.
+
+### Mechanism
+
+`make dev` runs `docker compose up -d` without rebuilding images. If a new migration file is committed after the last `make dev-rebuild`, the Docker image lacks that script. The database was already migrated to that revision in a previous session, so Alembic finds the DB at version `NNNN` but cannot locate it in the image's version tree.
+
+### Fix
+
+Rebuild only the affected migration image (fast, uses layer cache):
+
+```bash
+docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.dev.yml \
+    build intelligence-migrations
+docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.dev.yml \
+    --profile infra up -d --force-recreate intelligence-migrations
+```
+
+Or run `make dev` (which now uses `--build` and will rebuild changed images automatically).
+
+### Prevention
+
+- `make dev` now uses `--build` flag, which rebuilds images when source files change (uses Docker layer cache — fast for unchanged layers).
+- The `--build` flag is the key difference from plain `up -d`. Never use bare `up -d` for a dev restart.
+
+---
+
+## BP-320 — Docker Compose v5 `up -d` Leaves Services in `Created` State
+
+**Service**: All services (platform-wide)
+**Symptom**: After `docker compose up -d --force-recreate`, many containers are in `Created` state and never progress to `Up`. Running `up -d` again doesn't help.
+
+### Mechanism
+
+Docker Compose v5.1.1 in detached (`-d`) mode exits before all dependency health checks resolve for the full 60+ container stack. Containers created by `--force-recreate` land in `Created` state (container object exists, process not started). A subsequent `up -d` does not start `Created`-state containers the same way it starts `Exited`-state containers.
+
+`docker start <container>` or `docker ps -aq --filter status=created | xargs docker start` bypasses the dependency wait and starts them directly.
+
+### Fix
+
+```bash
+# After any up -d run that leaves containers in Created state:
+docker ps -aq --filter status=created | xargs -r docker start
+```
+
+`make dev` now includes this as a cleanup step after `up -d --build`.
+
+### Prevention
+
+- `make dev` appends `docker ps -aq --filter status=created | xargs -r docker start` to catch any remaining `Created`-state containers.
+- Avoid `up -d --force-recreate` directly; prefer `make dev` (which handles both the build and the Created-state fix).
+
+---
+
+## BP-321 — Grafana Alloy Service Filter Omits New Container: Logs Silently Dropped
+
+**Context**: `infra/alloy/config.alloy` uses a `loki.relabel` block with a `keep` rule that whitelists specific container names. New services added to the platform will have their logs silently dropped by Loki until explicitly added to this filter.
+
+**Example**: `worldview-web` (frontend container) was not in the keep regex. All frontend access logs, startup messages, and warnings were forwarded to Loki's write endpoint but discarded at the relabeling stage.
+
+**Symptoms**: `make monitoring` + Grafana shows all backend services but no frontend logs; `{service="worldview-web"}` query returns empty even with the container running.
+
+### Root cause
+
+`infra/alloy/config.alloy`:
+```alloy
+rule {
+  source_labels = ["__meta_docker_container_name"]
+  regex         = "/(portfolio|...|alert).*"   # worldview-web missing
+  action        = "keep"
+}
+```
+
+### Fix
+
+Add the new service name to the alternation in the `keep` rule regex. After editing the config, restart the monitoring stack:
+```bash
+make monitoring-down && make monitoring
+```
+
+### Prevention
+
+- When scaffolding a new service with `/scaffold-service` or `/scaffold-frontend`, immediately add the service's container name to the Alloy keep regex as part of the scaffold checklist.
+- The second relabel rule auto-derives the `service` label from the container name (e.g., `worldview-web-1` → `service="worldview-web"`), so no other config changes are needed.

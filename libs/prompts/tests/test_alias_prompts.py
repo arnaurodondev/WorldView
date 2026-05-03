@@ -71,9 +71,7 @@ class TestAliasGenerationTemplate:
 
     def test_untrusted_label_present(self) -> None:
         """The 'TREAT AS DATA' label is the human-readable safety hint."""
-        result = ALIAS_GENERATION.render(
-            name="N", ticker="T", description="x", aliases_so_far=""
-        )
+        result = ALIAS_GENERATION.render(name="N", ticker="T", description="x", aliases_so_far="")
         assert "UNTRUSTED" in result
         assert "TREAT AS DATA" in result
 

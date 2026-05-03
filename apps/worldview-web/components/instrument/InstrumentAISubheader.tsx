@@ -45,6 +45,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 // cannot accommodate.
 import { MarkdownContent } from "@/components/ui/markdown-content";
 import type { BriefingResponse } from "@/types/api";
+// PLAN-0062-W4 T-W4-E-02: StructuredBrief renders W4+ sections (BriefBullet
+// with citation chips) in the expanded subheader. Falls back to MarkdownContent
+// for pre-W4 cached responses that have no sections array.
+import { StructuredBrief } from "@/components/brief/StructuredBrief";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -153,8 +157,13 @@ export function InstrumentAISubheader({ entityId }: InstrumentAISubheaderProps) 
   // brief is guaranteed non-null here (isLoading=false, isError=false, brief exists)
   // WHY .narrative (not .content): BriefingResponse.narrative is the canonical field
   // per types/api.ts — mirrors S8 PublicBriefingResponse.narrative.
-  const previewText = brief!.narrative.slice(0, PREVIEW_CHARS);
-  const hasMore = brief!.narrative.length > PREVIEW_CHARS;
+  //
+  // WHY prefer lead for preview (PLAN-0062-W4 T-W4-E-02): when the W4 lead block
+  // is present it is a 1-2 sentence executive summary — perfect for the 120-char
+  // preview row. Falling back to narrative.slice keeps pre-W4 cached responses working.
+  const previewSource = brief!.lead || brief!.narrative;
+  const previewText = previewSource.slice(0, PREVIEW_CHARS);
+  const hasMore = previewSource.length > PREVIEW_CHARS;
 
   return (
     // WHY border-l-2 border-l-primary: yellow-left-border is the AI content marker
@@ -195,13 +204,28 @@ export function InstrumentAISubheader({ entityId }: InstrumentAISubheaderProps) 
         style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
       >
         <div className="overflow-hidden">
-          {/* WHY MarkdownContent (T-D-4-02): renders S8's markdown brief with
-              the same typography as MorningBriefCard expanded view +
-              IntelligenceTab brief block. Plain <p> rendering left raw "##"
-              and "*" characters visible in the UI. The "compact" size variant
-              uses 10px base font, matching the dense subheader band. */}
+          {/* WHY two-tier expanded path (PLAN-0062-W4 T-W4-E-02):
+              - W4+ sections present: StructuredBrief renders citation chips per bullet.
+                variant="inline" is used here so the expanded panel stays horizontally
+                compact (subheader band, not a full card). Only lead + section count
+                is shown; full sections are available via the instrument detail tab.
+              - No sections (pre-W4): MarkdownContent as before — renders narrative markdown
+                with compact typography. */}
           <div className="px-2 py-2">
-            <MarkdownContent size="compact">{brief!.narrative}</MarkdownContent>
+            {brief!.sections && brief!.sections.length > 0 ? (
+              // WHY variant="compact": the subheader expanded state is still constrained —
+              // "compact" suppresses citation chips in bullets and uses smaller spacing so
+              // the band doesn't grow to card height. The lead block is still shown.
+              <StructuredBrief
+                lead={brief!.lead}
+                sections={brief!.sections}
+                confidence={brief!.confidence}
+                variant="compact"
+              />
+            ) : (
+              // Fallback: pre-W4 brief with no sections — render markdown narrative.
+              <MarkdownContent size="compact">{brief!.narrative}</MarkdownContent>
+            )}
           </div>
         </div>
       </div>

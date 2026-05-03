@@ -27,6 +27,11 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+// PLAN-0062-W4 T-W4-E-03: StructuredBrief renders W4+ sections with citation
+// chips in the expanded workspace panel. When sections is empty/absent the
+// component falls back to the existing plain-text preview path — no behaviour
+// regression for pre-W4 cached responses.
+import { StructuredBrief } from "@/components/brief/StructuredBrief";
 
 export function WorkspaceBriefWidget() {
   const { accessToken } = useAuth();
@@ -67,8 +72,12 @@ export function WorkspaceBriefWidget() {
   // per the api.ts type definition — mirrors S8's PublicBriefingResponse.narrative.
   // Guard defensively against empty strings from failed/timed-out LLM generation.
   const briefText = data.narrative ?? "";
+  // WHY prefer lead for preview (PLAN-0062-W4 T-W4-E-03): when the W4 lead block
+  // is present it's a 1-2 sentence executive summary — far better collapsed preview
+  // than the first 120 chars of the full narrative (which may start mid-section).
+  const previewSource = data.lead || briefText;
 
-  if (!briefText) {
+  if (!briefText && !previewSource) {
     return (
       <div className="border-l-2 border-primary bg-primary/10 px-2 py-1">
         <p className="text-[11px] text-muted-foreground">Morning brief not yet generated.</p>
@@ -78,7 +87,7 @@ export function WorkspaceBriefWidget() {
 
   // WHY first 120 chars for preview: gives enough context (~1 sentence) to judge
   // whether to expand without spoiling the full analysis.
-  const preview = briefText.length > 120 ? `${briefText.slice(0, 120)}…` : briefText;
+  const preview = previewSource.length > 120 ? `${previewSource.slice(0, 120)}…` : previewSource;
 
   return (
     // WHY border-primary / bg-primary/10: design-token equivalents of the AI accent.
@@ -123,9 +132,24 @@ export function WorkspaceBriefWidget() {
         }}
       >
         <div className="overflow-hidden">
-          <p className="px-2 py-2 text-[13px] text-foreground leading-relaxed">
-            {briefText}
-          </p>
+          {/* WHY two-tier expanded path (PLAN-0062-W4 T-W4-E-03):
+              - W4+ sections present: StructuredBrief renders lead + structured sections.
+                variant="compact" keeps the workspace panel density (small text, no chips).
+              - No sections: plain text paragraph as before — no regression for pre-W4. */}
+          {data.sections && data.sections.length > 0 ? (
+            <div className="px-2 py-2">
+              <StructuredBrief
+                lead={data.lead}
+                sections={data.sections}
+                confidence={data.confidence}
+                variant="compact"
+              />
+            </div>
+          ) : (
+            <p className="px-2 py-2 text-[13px] text-foreground leading-relaxed">
+              {briefText}
+            </p>
+          )}
         </div>
       </div>
     </div>

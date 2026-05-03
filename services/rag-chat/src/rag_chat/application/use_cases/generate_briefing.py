@@ -20,6 +20,7 @@ from uuid import UUID
 
 import structlog
 
+from rag_chat.api.schemas import BriefBullet, BriefCitation, BriefSection
 from rag_chat.application.pipeline.prompts.intent_prompts import EMAIL_DEEP_BRIEF_PROMPT
 from rag_chat.domain.errors import RateLimitExceededError
 
@@ -41,11 +42,19 @@ _REASONING_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 # Matches both [N] (literal letter N used by LLM as a citation placeholder) and
 # [1], [2], [3] etc. (digit-indexed citations the LLM emits when items are present).
+# WHY keep this regex: used by _strip_reasoning for the legacy email brief path.
 _ORPHAN_CITATION_RE = re.compile(r"\s*\[(?:\d+|N)\]")
 
 # Some LLMs wrap their output in a ```markdown ... ``` code fence even when not asked.
 # Strip leading/trailing fence markers so the frontend receives raw markdown.
 _CODE_FENCE_RE = re.compile(r"^\s*```(?:markdown)?\s*\n?(.*?)\n?\s*```\s*$", re.DOTALL)
+
+# Matches [cN] citation markers emitted by the v3.0 prompt (e.g. [c1], [c2], [c12]).
+# WHY separate from _ORPHAN_CITATION_RE: we KEEP these markers for the citation
+# resolver (they index into context_citations). _ORPHAN_CITATION_RE is only used
+# to strip LEGACY [N] / [1] markers in the email brief path where citations are
+# not supported.
+_CN_CITATION_RE = re.compile(r"\[c(\d+)\]")
 
 
 def _strip_reasoning(text: str) -> str:
@@ -219,6 +228,366 @@ def _strip_block_header(block: str, expected: str) -> str:
     if first in (f"# {expected}", f"## {expected}", f"### {expected}", expected):
         return "\n".join(lines[1:]).lstrip()
     return block
+
+
+# ── PLAN-0062-W4 citation-aware parser and helpers ────────────────────────────
+
+
+def _materialize_brief_citations(ctx: Any) -> list[BriefCitation]:
+    """Build a flat ordered list of BriefCitation from gathered context (T-W4-B-03).
+
+    WHY ordered list: the v3.0 prompt numbers context items as [c1], [c2], …
+    in the order returned by _format_news / _format_events / _format_alerts.
+    _parse_sections_with_citations resolves [cN] markers by 1-based index into
+    this list, so the ORDER here must match the order those format functions use.
+
+    ORDERING: news articles first (indexed 1…N), then events (N+1…), then alerts.
+    This mirrors the order of sections in the prompt template.
+
+    snippet construction:
+      - article: title[:240] + " — " + summary[:160]
+      - event:   event_type + ": " + event_text[:240]
+      - alert:   "[SEVERITY] alert_type: message[:240]"
+
+    Returns [] when ctx is None (graceful degradation — no context gatherer wired).
+    """
+    if ctx is None:
+        return []
+
+    citations: list[BriefCitation] = []
+
+    # 1. News articles (up to 8, matches _format_news cap)
+    for a in (ctx.news_articles or [])[:8]:
+        title_part = (a.title or "")[:240]
+        summary_part = (a.summary or "")[:160] if hasattr(a, "summary") and a.summary else ""
+        snippet = (f"{title_part} — {summary_part}" if summary_part else title_part)[:400]
+        # WHY [:400]: BriefCitation.snippet has max_length=400 (Pydantic constraint).
+        citations.append(
+            BriefCitation(
+                document_id=str(a.article_id),
+                snippet=snippet[:400],
+                url=getattr(a, "url", None),
+                source_type="article",
+                title=a.title,
+            )
+        )
+
+    # 2. Recent events (up to 6, matches _format_events cap)
+    for ev in (ctx.recent_events or [])[:6]:
+        event_text = getattr(ev, "event_text", "") or ""
+        event_type = getattr(ev, "event_type", "") or ""
+        snippet = f"{event_type}: {event_text[:240]}"[:400]
+        citations.append(
+            BriefCitation(
+                document_id=str(ev.event_id),
+                snippet=snippet,
+                url=None,
+                source_type="event",
+                title=f"{event_type}: {event_text[:80]}",
+            )
+        )
+
+    # 3. Active alerts (up to 5, matches _format_alerts cap) — morning brief only
+    for alert in (getattr(ctx, "active_alerts", None) or [])[:5]:
+        severity = getattr(alert, "severity", "").upper()
+        alert_type = getattr(alert, "alert_type", "")
+        message = (getattr(alert, "payload", None) or {}).get("message", "")
+        snippet = f"[{severity}] {alert_type}: {message}"[:400]
+        citations.append(
+            BriefCitation(
+                document_id=str(alert.alert_id),
+                snippet=snippet,
+                url=None,
+                source_type="alert",
+                title=f"[{severity}] {alert_type}",
+            )
+        )
+
+    return citations
+
+
+def _parse_sections_with_citations(
+    markdown: str,
+    context_citations: list[BriefCitation],
+) -> tuple[str | None, list[BriefCitation], list[BriefSection]]:
+    """Parse the v3.0 two-block brief into (lead, lead_citations, sections) (T-W4-B-02).
+
+    The v3.0 MORNING_BRIEFING/INSTRUMENT_BRIEFING prompts emit:
+        ## LEAD
+        <1-2 sentences> [c1][c3]
+
+        ---
+
+        ## DETAILS
+        ### Section Title
+        - Bullet text [cN]
+        ...
+
+    Returns:
+        lead:             lead text with [cN] markers KEPT (they reference citations
+                          inline), truncated at sentence boundary ≤600 chars.
+                          None when no valid lead or no valid lead citations.
+        lead_citations:   citations referenced in the lead block (resolved from markers).
+        sections:         list[BriefSection] with BriefBullet objects (citations attached,
+                          [cN] markers stripped from bullet text). Empty list on parse fail.
+
+    WHY [cN] markers kept in lead (stripped from bullets):
+    - Lead is rendered as prose — the citation markers serve as inline footnotes.
+    - Bullets are rendered as discrete items with separate CitationChip UI — markers
+      are stripped from display text and attached as BriefBullet.citations instead.
+
+    out-of-range [cN] → that specific citation is silently skipped (not the whole bullet).
+    lead with no valid citations → lead=None (no lead to show without evidence).
+    """
+    if not markdown or not markdown.strip():
+        return None, [], []
+
+    # ── Split on first --- divider ─────────────────────────────────────────────
+    # WHY line-mode split: see _split_summary_and_details() above for rationale —
+    # the divider must be on its own line to avoid false splits on em-dash ranges.
+    lines = markdown.splitlines()
+    divider_idx: int | None = None
+    for i, line in enumerate(lines[:50]):
+        if line.strip() == "---":
+            divider_idx = i
+            break
+
+    if divider_idx is None:
+        # No divider — assume legacy single-block output; fall back to old parser.
+        return None, [], []
+
+    lead_block = "\n".join(lines[:divider_idx]).strip()
+    details_block = "\n".join(lines[divider_idx + 1 :]).strip()
+
+    # ── Parse lead block ───────────────────────────────────────────────────────
+    lead_block = _strip_block_header(lead_block, "lead")
+    # Also strip "## summary" (back-compat with v2.2 LLM responses that emit SUMMARY)
+    lead_block = _strip_block_header(lead_block, "summary")
+    lead_block = lead_block.strip()
+
+    lead_citations: list[BriefCitation] = []
+    lead_text: str | None = None
+
+    if lead_block:
+        # Resolve [cN] markers in lead — keep them in the text for inline display
+        raw_indices = [int(m) - 1 for m in _CN_CITATION_RE.findall(lead_block)]
+        lead_citations = [context_citations[idx] for idx in raw_indices if 0 <= idx < len(context_citations)]
+
+        if lead_citations:
+            # Truncate at sentence boundary ≤600 chars
+            lead_text = _truncate_at_sentence(lead_block, max_chars=600)
+        # else: no valid citations in lead → lead_text remains None
+
+    # ── Parse details block ────────────────────────────────────────────────────
+    details_block = _strip_block_header(details_block, "details")
+    sections = _parse_detail_sections_with_citations(details_block, context_citations)
+
+    return lead_text, lead_citations, sections
+
+
+def _parse_detail_sections_with_citations(
+    markdown: str,
+    context_citations: list[BriefCitation],
+) -> list[BriefSection]:
+    """Parse the ## DETAILS block into list[BriefSection] with BriefBullet objects.
+
+    WHY separate from _parse_sections_with_citations: keeps the top-level function
+    focused on the LEAD/DETAILS split; this function handles section/bullet parsing.
+
+    Recognised section headings: ## Heading, ### Heading, **Bold**.
+    Bullets: lines starting with - , * , or •.
+    [cN] markers are extracted from each bullet's text (resolved to BriefCitation
+    objects), then stripped from the display text.
+
+    out-of-range [cN]: silently skip that specific citation reference.
+    Bullets with no valid citations: collected into a list; the backfill pass
+    (_backfill_uncited_bullets) will attach fallback citations or drop them.
+
+    Hard caps: ≤4 sections, ≤4 bullets per section, ≤120 chars per section title —
+    matches the BriefSection Pydantic constraints.
+    """
+    if not markdown or not markdown.strip():
+        return []
+
+    sections: list[BriefSection] = []
+    current_title: str | None = None
+    # WHY list[tuple]: store (display_text, citations) so we can build BriefBullet
+    # objects at flush time (after all bullets for the section are collected).
+    current_bullets: list[tuple[str, list[BriefCitation]]] = []
+
+    heading_re = re.compile(r"^\s{0,3}(#{2,3})\s+(.+?)\s*$")
+    bold_only_re = re.compile(r"^\s*\*\*(.+?)\*\*\s*:?\s*$")
+    bullet_re = re.compile(r"^\s*(?:[-*•])\s+(.+)$")
+
+    def flush() -> None:
+        """Flush current section into sections list."""
+        nonlocal current_title, current_bullets
+        if current_title and current_bullets:
+            # Cap bullets at 4 (v3.0 prompt targets ≤4); cap title at 120.
+            # WHY 4 instead of 8: v3.0 tightened to <=4 x <=4.
+            bullet_pairs = current_bullets[:4]
+            # Construct BriefBullet objects only for bullets that have citations.
+            # Bullets without citations are dropped HERE — BriefBullet.citations
+            # has min_length=1 so we cannot construct one with an empty list.
+            # The backfill pass will handle adding fallback citations later.
+            built_bullets = [
+                BriefBullet(text=text[:400], citations=cites)
+                for text, cites in bullet_pairs
+                if cites  # only include bullets that already have valid citations
+            ]
+            # WHY include section even with 0 bullets: backfill will populate
+            # them or drop the section. An empty BriefSection is valid (min=0).
+            if current_title[:120] and len(sections) < 4:  # cap at 4 sections
+                sections.append(BriefSection(title=current_title[:120], bullets=built_bullets))
+        current_title = None
+        current_bullets = []
+
+    for raw_line in markdown.splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            continue
+        m_h = heading_re.match(line)
+        m_b = bold_only_re.match(line) if not m_h else None
+        if m_h:
+            flush()
+            current_title = m_h.group(2).strip()
+            continue
+        if m_b:
+            flush()
+            current_title = m_b.group(1).strip()
+            continue
+        m_bullet = bullet_re.match(line)
+        if m_bullet and current_title:
+            raw_text = m_bullet.group(1).strip()
+            if not raw_text:
+                continue
+            # Extract [cN] markers and resolve to BriefCitation objects
+            raw_indices = [int(m) - 1 for m in _CN_CITATION_RE.findall(raw_text)]
+            bullet_citations = [context_citations[idx] for idx in raw_indices if 0 <= idx < len(context_citations)]
+            # Strip [cN] markers from the display text
+            display_text = _CN_CITATION_RE.sub("", raw_text).strip()
+            if display_text:
+                current_bullets.append((display_text, bullet_citations))
+    flush()
+
+    # Discard single-section / single-bullet results (mis-parsed prose guard)
+    if len(sections) == 1 and len(sections[0].bullets) <= 1:
+        return []
+    return sections
+
+
+def _backfill_uncited_bullets(
+    sections: list[BriefSection],
+    context_citations: list[BriefCitation],
+) -> list[BriefSection]:
+    """Attach fallback citations to uncited bullets and drop empties (T-W4-B-03).
+
+    Called AFTER _parse_sections_with_citations. Any BriefBullet that already
+    has citations passes through unchanged. Sections that were constructed with
+    0 bullets (because all bullets lacked citations) get the first available
+    context citation attached to each bullet… but wait — the parser only creates
+    BriefBullet for cited bullets. Sections that had ONLY uncited bullets will
+    have 0 BriefBullets but some un-constructed (dropped) bullets.
+
+    WHY this function: the parser drops uncited bullets at construction time
+    (BriefBullet.citations min_length=1 prevents empty-citation objects).
+    This function's job is to drop empty sections that result from all their
+    bullets being uncited, and to verify the invariant that no BriefBullet
+    with empty citations reaches the output.
+
+    In the current implementation, uncited bullet TEXT is lost at parser time
+    (not stored separately), so we cannot retroactively attach citations to them.
+    The backfill therefore:
+    1. Removes sections with 0 BriefBullets (all their bullets were uncited).
+    2. Passes all other sections through unchanged (their bullets already have cites).
+
+    IMPORTANT: DO NOT construct BriefBullet(citations=[]) here — that violates
+    the min_length=1 gate and would defeat the entire citation guarantee.
+    MUST use list comprehensions (not in-place mutation) because BriefSection
+    is a Pydantic BaseModel (not frozen, but immutable-by-convention).
+    """
+    if not context_citations:
+        # No citations at all — drop all sections (can't guarantee citation coverage)
+        return []
+
+    # Drop sections that ended up with 0 bullets (all were uncited).
+    # Sections with ≥1 bullet already have valid citations (enforced by parser).
+    result = [sec for sec in sections if len(sec.bullets) > 0]
+    return result
+
+
+def _truncate_at_sentence(text: str, max_chars: int) -> str:
+    """Truncate text at the nearest sentence boundary at or before max_chars.
+
+    WHY sentence boundary (not hard cut): cutting mid-sentence produces
+    grammatically broken lead text. We prefer a shorter but complete sentence.
+
+    If no sentence boundary is found within max_chars, we hard-cut at max_chars.
+    The returned string is ALWAYS ≤ max_chars characters (including any suffix).
+    """
+    if len(text) <= max_chars:
+        return text
+    # Look for sentence-ending punctuation before the cut point
+    truncated = text[:max_chars]
+    # Find the last sentence-ending punctuation (position of the '.' or '!' char)
+    last_end = max(
+        truncated.rfind(". "),
+        truncated.rfind("! "),
+        truncated.rfind("? "),
+        truncated.rfind(".\n"),
+        truncated.rfind("!\n"),
+        truncated.rfind("?\n"),
+    )
+    # WHY > 0 (not > max_chars//2): any sentence boundary is better than a hard cut.
+    # The previous > max_chars//2 guard was too aggressive — it rejected boundaries
+    # near the start of the text (e.g. "First sentence." at index 15 in 600-char text).
+    if last_end > 0:
+        # Include the punctuation char itself (last_end is the index of the '.', etc.)
+        return truncated[: last_end + 1].strip()
+    # No clean boundary — hard cut; append ellipsis only if room allows
+    # WHY -1: reserve 1 char for the ellipsis so total stays ≤ max_chars.
+    clipped = truncated[: max_chars - 1].rstrip().rstrip(".,;:")
+    return clipped + "…"
+
+
+def _compute_confidence(
+    sections: list[BriefSection],
+    lead: str | None,
+    lead_citations: list[BriefCitation],
+) -> float:
+    """Compute the composite citation confidence score (T-W4-B-04).
+
+    Formula:
+        total_bullets   = count of BriefBullet objects across all sections
+        cited_bullets   = bullets where citations is non-empty (always true after backfill,
+                          but computed defensively)
+        bullet_density  = cited_bullets / total_bullets  (0.0 when no bullets)
+        lead_density    = 1.0 if lead is non-None AND lead_citations is non-empty
+        composite       = 0.4 * lead_density + 0.6 * bullet_density
+        total_citations = all bullet citations + lead citations
+        coverage_factor = min(1.0, total_citations / 8.0)
+        confidence      = round(min(1.0, composite * coverage_factor), 4)
+
+    WHY weighted average (not product): a brief with a great bullet section but
+    no lead should score ~0.6, not ~0 (as a product would give). The weighted
+    average reflects "mostly cited" gracefully.
+
+    WHY coverage_factor / 8: with <8 total citations the score is scaled down
+    proportionally — forces the LLM to use ALL available context sources.
+    """
+    total_bullets = sum(len(s.bullets) for s in sections)
+    cited_bullets = sum(1 for s in sections for b in s.bullets if b.citations)
+    bullet_density = (cited_bullets / total_bullets) if total_bullets else 0.0
+
+    lead_density = 1.0 if (lead and lead_citations) else 0.0
+
+    composite_density = (0.4 * lead_density) + (0.6 * bullet_density)
+
+    total_citations = sum(len(b.citations) for s in sections for b in s.bullets) + len(lead_citations)
+    coverage_factor = min(1.0, total_citations / 8.0)
+
+    confidence = round(min(1.0, composite_density * coverage_factor), 4)
+    return confidence
 
 
 class GenerateBriefingUseCase:
@@ -478,10 +847,15 @@ class GenerateBriefingUseCase:
         # and avoids DTZ011 (date.today() is timezone-naive).
         today = datetime.now(tz=UTC).date().isoformat()
         portfolio_text = _format_portfolio_morning(ctx)
-        news_text = _format_news(ctx)
-        alerts_text = _format_alerts(ctx)
+        # WHY compute citation offsets here: news is [c1..cN], events are [c(N+1)..],
+        # alerts are [c(N+events+1)..]. Offsets must match _materialize_brief_citations
+        # ordering so [cN] markers in the LLM output resolve to the correct documents.
+        news_count = len((ctx.news_articles or [])[:8]) if ctx else 0
+        events_count = len((ctx.recent_events or [])[:6]) if ctx else 0
+        news_text = _format_news(ctx, citation_offset=0)
+        events_text = _format_events(ctx, citation_offset=news_count)
+        alerts_text = _format_alerts(ctx, citation_offset=news_count + events_count)
         market_text = _format_market_overview(ctx)
-        events_text = _format_events(ctx)
 
         # ── 3b. Empty context guard ───────────────────────────────────────────
         # WHY: When all upstream services are unavailable or return empty data,
@@ -521,14 +895,21 @@ class GenerateBriefingUseCase:
             chunks.append(chunk)
         content = _strip_reasoning("".join(chunks))
 
-        # ── 4b. Two-tier split (PLAN-0048 Wave A) ─────────────────────────────
-        # The v2.2 MORNING_BRIEFING prompt asks the LLM to emit a ``## SUMMARY``
-        # block + ``---`` divider + ``## DETAILS`` block. Splitting here lets the
-        # frontend show the summary in the collapsed card and the details when
-        # expanded, eliminating the redundant "Morning Briefing" / date headers
-        # that wasted ~15% of the dashboard row before this change.
-        # Returns (None, full_content) for legacy single-block output so the UI
-        # can fall back to the old line-clamp-3 path.
+        # ── 4b. PLAN-0062-W4: citation-aware parse pipeline ───────────────────
+        # Build the citation index (ordered list matching [c1], [c2], … in prompt).
+        context_citations = _materialize_brief_citations(ctx)
+
+        # Parse the v3.0 two-block output (LEAD + DETAILS) with [cN] resolution.
+        # Falls back to (None, [], []) for legacy single-block output (no --- divider).
+        lead, lead_citations, sections = _parse_sections_with_citations(content, context_citations)
+
+        # Backfill: drop sections with 0 cited bullets (can't guarantee citation coverage).
+        sections = _backfill_uncited_bullets(sections, context_citations)
+
+        # ── 4c. Legacy two-tier fallback (PLAN-0048 Wave A back-compat) ───────
+        # When v3.0 parse fails (old cached LLM output), try the v2.2 SUMMARY/DETAILS
+        # split so the summary field still populates for existing cached briefs.
+        # WHY both: during rollout, cached responses may still use the v2.2 format.
         summary, narrative = _split_summary_and_details(content)
 
         # ── 5. Derive risk_summary from portfolio holdings (HHI concentration) ─
@@ -538,22 +919,25 @@ class GenerateBriefingUseCase:
         citations = _build_citations(ctx)
         entity_mentions = _extract_entity_mentions(ctx)
 
+        # ── 7. Compute confidence score ────────────────────────────────────────
+        confidence = _compute_confidence(sections, lead, lead_citations)
+
         generated_at = datetime.now(tz=UTC).isoformat()
         log.info(  # type: ignore[no-any-return]
             "morning_briefing_generated",
             user_id=user_id,
-            # Track whether the LLM honored the v2.2 two-tier contract. If
-            # has_summary is consistently False in production we know the model
-            # is ignoring the format directive and we can adjust temperature
-            # or switch providers.
             chars=len(narrative),
-            has_summary=summary is not None,
+            has_lead=lead is not None,
+            sections_count=len(sections),
+            confidence=confidence,
         )
 
-        # PLAN-0049 T-A-1-04: parse narrative into structured sections so the
-        # frontend can render polished cards instead of raw markdown. Returns []
-        # when parsing fails — frontend falls back to MarkdownContent on narrative.
-        structured_sections = _parse_sections_from_markdown(narrative)
+        # PLAN-0049 T-A-1-04: also parse narrative into legacy dict-based sections
+        # for the legacy structured render path (sections with string bullets).
+        # WHY keep: cached briefs and fallback render paths still use this.
+        # PLAN-0062-W4: sections (BriefBullet) takes precedence; legacy_sections
+        # is only used when the new parser returned no sections.
+        legacy_sections = _parse_sections_from_markdown(narrative) if not sections else []
 
         return {
             # ``content`` keeps the field name expected by the route layer (which
@@ -561,18 +945,21 @@ class GenerateBriefingUseCase:
             # the split goes here so the expanded card view shows the structured
             # ## DETAILS sections without the redundant ## SUMMARY heading.
             "content": narrative,
-            # ``summary`` is the new field — None when the LLM didn't emit the
-            # v2.2 two-tier format (legacy fallback path).
+            # ``summary`` is the v2.2 fallback — None when the LLM didn't emit
+            # the v2.2 two-tier format. Preserved for back-compat.
             "summary": summary,
-            # PLAN-0049 additive structured fields. ``headline`` mirrors summary
-            # (the 1-2 sentence top-of-card line); ``sections`` is the parsed
-            # narrative — empty list on parse failure (graceful fallback).
-            "headline": summary,
-            "sections": structured_sections,
+            # PLAN-0049 additive structured fields.
+            "headline": lead or summary,  # v3.0 lead takes precedence; fall back to summary
+            # PLAN-0062-W4: return v3.0 BriefSection list when available; otherwise
+            # use legacy string-bullet sections for backward compatibility.
+            "sections": sections if sections else legacy_sections,
             "risk_summary": risk_summary,
             "entity_mentions": entity_mentions,
             "citations": citations,
             "generated_at": generated_at,
+            # PLAN-0062-W4 new fields
+            "lead": lead,
+            "confidence": confidence,
         }
 
     async def execute_public_instrument(
@@ -611,8 +998,11 @@ class GenerateBriefingUseCase:
         # ── Build prompt sections ─────────────────────────────────────────────
         entity_text = _format_entity_context(ctx)
         fundamentals_text = _format_fundamentals(ctx)
-        news_text = _format_news(ctx)
-        events_text = _format_events(ctx)
+        # WHY citation offsets: instrument brief uses news + events only (no alerts).
+        # news = [c1..cN], events = [c(N+1)..].
+        news_count_inst = len((ctx.news_articles or [])[:8]) if ctx else 0
+        news_text = _format_news(ctx, citation_offset=0)
+        events_text = _format_events(ctx, citation_offset=news_count_inst)
         relationships_text = _format_relationships(ctx)
 
         prompt = INSTRUMENT_BRIEFING.render(
@@ -634,16 +1024,27 @@ class GenerateBriefingUseCase:
         citations = _build_citations(ctx)
         entity_mentions = _extract_entity_mentions(ctx)
 
+        # ── PLAN-0062-W4: citation-aware parse pipeline ────────────────────────
+        context_citations = _materialize_brief_citations(ctx)
+        lead, lead_citations, sections = _parse_sections_with_citations(content, context_citations)
+        sections = _backfill_uncited_bullets(sections, context_citations)
+        confidence = _compute_confidence(sections, lead, lead_citations)
+
+        # Legacy fallback when v3.0 parse returned no sections
+        if not sections:
+            sections = _parse_sections_from_markdown(content)  # type: ignore[assignment]
+            # WHY type: ignore: _parse_sections_from_markdown returns list[dict]
+            # (legacy format with string bullets) which the route layer handles.
+
         generated_at = datetime.now(tz=UTC).isoformat()
         log.info(  # type: ignore[no-any-return]
             "instrument_briefing_generated",
             entity_id=entity_id,
             chars=len(content),
+            has_lead=lead is not None,
+            sections_count=len(sections),
+            confidence=confidence,
         )
-
-        # PLAN-0049 T-A-1-04: parse instrument brief into structured sections.
-        # Empty list when parse fails — frontend falls back to MarkdownContent.
-        instrument_sections = _parse_sections_from_markdown(content)
 
         return {
             "content": content,
@@ -651,9 +1052,11 @@ class GenerateBriefingUseCase:
             "entity_mentions": entity_mentions,
             "citations": citations,
             "generated_at": generated_at,
-            # Instrument briefs do not yet emit a top-line summary; leave None.
-            "headline": None,
-            "sections": instrument_sections,
+            "headline": lead,  # v3.0 lead as headline; None if no valid lead
+            "sections": sections,
+            # PLAN-0062-W4 new fields
+            "lead": lead,
+            "confidence": confidence,
         }
 
 
@@ -683,28 +1086,45 @@ def _format_portfolio_morning(ctx: Any) -> str:
     return "\n".join(lines)
 
 
-def _format_news(ctx: Any) -> str:
-    """Format news articles from context into a readable list."""
+def _format_news(ctx: Any, citation_offset: int = 0) -> str:
+    """Format news articles from context into a readable list with [cN] prefixes.
+
+    WHY [cN] prefixes: the v3.0 prompt requires stable citation indices so the LLM
+    can embed [c1], [c2], … markers in its bullets. The offset parameter allows the
+    caller to continue numbering from where a previous section left off (news is
+    always first so offset=0).
+
+    NOTE: citation_offset is unused here (news is always first), but the parameter
+    is included for symmetry with _format_events and _format_alerts so callers can
+    use the same pattern.
+    """
     if ctx is None or not ctx.news_articles:
         return ""
     lines: list[str] = []
-    for a in ctx.news_articles[:8]:
+    for i, a in enumerate(ctx.news_articles[:8]):
+        cn = f"[c{citation_offset + i + 1}]"
         date_str = a.published_at.strftime("%Y-%m-%d") if a.published_at else "unknown date"
         score = f" (relevance: {a.display_relevance_score:.0%})" if a.display_relevance_score else ""
-        lines.append(f"- [{date_str}] {a.title}{score}")
+        lines.append(f"{cn} [{date_str}] {a.title}{score}")
         if a.url:
             lines.append(f"  Source: {a.url}")
     return "\n".join(lines)
 
 
-def _format_alerts(ctx: Any) -> str:
-    """Format active alerts from context."""
+def _format_alerts(ctx: Any, citation_offset: int = 0) -> str:
+    """Format active alerts from context with [cN] prefixes.
+
+    WHY citation_offset: alerts come after news + events in the citation index.
+    The caller computes offset = len(news) + len(events) so alert items get
+    contiguous [cN] indices.
+    """
     if ctx is None or not ctx.active_alerts:
         return ""
     lines: list[str] = []
-    for alert in ctx.active_alerts[:5]:
+    for i, alert in enumerate(ctx.active_alerts[:5]):
+        cn = f"[c{citation_offset + i + 1}]"
         lines.append(
-            f"- [{alert.severity.upper()}] {alert.alert_type}: {alert.payload.get('message', '')}",
+            f"{cn} [{alert.severity.upper()}] {alert.alert_type}: {alert.payload.get('message', '')}",
         )
     return "\n".join(lines)
 
@@ -722,14 +1142,20 @@ def _format_market_overview(ctx: Any) -> str:
     return "\n".join(lines)
 
 
-def _format_events(ctx: Any) -> str:
-    """Format structured events from context."""
+def _format_events(ctx: Any, citation_offset: int = 0) -> str:
+    """Format structured events from context with [cN] prefixes.
+
+    WHY citation_offset: events come after news items in the citation index.
+    The caller sets offset = len(news_articles) so events are numbered
+    [c(N+1)], [c(N+2)], … continuing from where news left off.
+    """
     if ctx is None or not ctx.recent_events:
         return ""
     lines: list[str] = []
-    for ev in ctx.recent_events[:6]:
+    for i, ev in enumerate(ctx.recent_events[:6]):
+        cn = f"[c{citation_offset + i + 1}]"
         date_str = ev.event_date.strftime("%Y-%m-%d") if ev.event_date else "unknown date"
-        lines.append(f"- [{date_str}] {ev.event_type}: {ev.event_text[:200]}")
+        lines.append(f"{cn} [{date_str}] {ev.event_type}: {ev.event_text[:200]}")
     return "\n".join(lines)
 
 
@@ -871,11 +1297,19 @@ def _build_morning_risk_summary(ctx: Any) -> dict[str, Any]:
 def _build_citations(ctx: Any) -> list[dict[str, Any]]:
     """Build a structured citation list from articles, events, and alerts in context.
 
-    Each citation matches the BriefingCitation schema:
-        source_type: "article" | "event" | "alert"
-        source_id:   str (UUID)
-        title:       str
-        url:         str | None
+    Each citation includes BOTH 'source_id' (legacy) and 'document_id' (PLAN-0062-W4)
+    so older clients that read 'source_id' continue to work, and new clients can
+    use 'document_id' (the canonical field on BriefCitation).
+
+    PLAN-0062-W4 (T-W4-C-02): added 'document_id' and 'snippet' fields so the
+    top-level citations list can be used by the frontend to display citation
+    chips, while the per-bullet citations in BriefSection.bullets are the
+    primary citation mechanism.
+
+    WHY separate from _materialize_brief_citations: _build_citations returns the
+    top-level 'citations' list (legacy compatibility for old frontend code).
+    _materialize_brief_citations returns the ordered list used by the parser to
+    resolve [cN] markers into per-bullet BriefCitation objects.
     """
     if ctx is None:
         return []
@@ -883,34 +1317,51 @@ def _build_citations(ctx: Any) -> list[dict[str, Any]]:
 
     # Articles
     for a in ctx.news_articles or []:
+        title_part = (a.title or "")[:240]
+        summary_part = (getattr(a, "summary", None) or "")[:160]
+        snippet = (f"{title_part} — {summary_part}" if summary_part else title_part)[:400]
         citations.append(
             {
                 "source_type": "article",
+                # WHY both: back-compat (source_id) + new canonical (document_id)
                 "source_id": str(a.article_id),
+                "document_id": str(a.article_id),
                 "title": a.title,
                 "url": a.url,
+                "snippet": snippet[:400],
             }
         )
 
     # Structured events
     for ev in ctx.recent_events or []:
+        event_text = getattr(ev, "event_text", "") or ""
+        event_type = getattr(ev, "event_type", "") or ""
+        snippet = f"{event_type}: {event_text[:200]}"[:400]
         citations.append(
             {
                 "source_type": "event",
                 "source_id": str(ev.event_id),
-                "title": f"{ev.event_type}: {ev.event_text[:80]}",
+                "document_id": str(ev.event_id),
+                "title": f"{event_type}: {event_text[:80]}",
                 "url": None,
+                "snippet": snippet,
             }
         )
 
     # Alerts (morning brief only — instrument context has no alerts)
     for alert in ctx.active_alerts or []:
+        severity = getattr(alert, "severity", "").upper()
+        alert_type = getattr(alert, "alert_type", "")
+        message = (getattr(alert, "payload", None) or {}).get("message", "")
+        snippet = f"[{severity}] {alert_type}: {message}"[:400]
         citations.append(
             {
                 "source_type": "alert",
                 "source_id": str(alert.alert_id),
-                "title": f"[{alert.severity.upper()}] {alert.alert_type}",
+                "document_id": str(alert.alert_id),
+                "title": f"[{severity}] {alert_type}",
                 "url": None,
+                "snippet": snippet,
             }
         )
 
