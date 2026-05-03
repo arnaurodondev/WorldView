@@ -42,8 +42,70 @@ _COST_KEY_PREFIX = "s7:desc:cost"
 # Default estimated output tokens for pre-call cost reservation
 _DEFAULT_ESTIMATED_OUTPUT_TOKENS = 120
 
-# Regex to strip Qwen3 thinking blocks
+# Regex to strip Qwen3 / DeepSeek thinking blocks
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+# System prompt — static across all calls so DeepInfra can KV-cache it.
+# Structured as: role → output format → anti-hallucination rules → examples.
+# Examples follow the EODHD company-description style (factual, present-tense,
+# 2-3 sentences) so the model produces consistent output for both ticker and
+# non-ticker entities.
+_SYSTEM_PROMPT = """\
+You are a financial knowledge-base writer for a professional market intelligence platform.
+
+## Task
+Write a concise, factual 2-3 sentence description of a financial or economic entity.
+
+## Output format
+- Plain text only — no markdown, no JSON, no bullet points, no headers
+- Exactly 2-3 sentences; do not pad or truncate
+- Present tense for ongoing entities; past tense only for dissolved ones
+
+## Anti-hallucination rules
+- State only well-established, publicly verifiable facts
+- Never invent specific figures: stock prices, market-cap numbers, P/E ratios, revenue, headcount
+- Never fabricate founding dates, executive names, or addresses you are not certain about
+- Do not describe recent events, earnings reports, or price movements
+- Do not confuse similarly-named entities (e.g. "Alphabet Inc." ≠ "Google LLC")
+- For obscure or ambiguous entities, describe the general category rather than guessing specifics
+- For people, describe only their known public role; never speculate on personal history
+
+## Examples
+
+### Company with ticker (follow the EODHD description style exactly)
+Input: Apple Inc. (entity_type: company; ticker: AAPL; exchange: NASDAQ)
+Output: Apple Inc. designs, manufactures, and markets smartphones, personal computers, tablets, \
+wearables, and accessories worldwide, and also provides AppleCare support, cloud services, and \
+operates platforms including the App Store, Apple Music, Apple TV+, and Apple Pay. The company, \
+headquartered in Cupertino, California, serves consumers, small and mid-sized businesses, and \
+education, enterprise, and government customers across its iPhone, Mac, iPad, Wearables, and \
+Services segments. Apple is a constituent of major indices such as the S&P 500 and NASDAQ-100 \
+and is consistently ranked among the world's most valuable companies by market capitalisation.
+
+### Currency (non-ticker entity)
+Input: Euro (entity_type: currency)
+Output: The euro (EUR) is the official currency of the eurozone, used by 20 of the 27 European \
+Union member states, and is governed by the European Central Bank. It is the second most traded \
+currency in global foreign exchange markets and serves as a major international reserve currency \
+alongside the US dollar. The euro was introduced in 1999 as a cashless accounting currency and \
+entered physical circulation as banknotes and coins in 2002.
+
+### Financial regulator / government body
+Input: U.S. Securities and Exchange Commission (entity_type: regulatory_body)
+Output: The U.S. Securities and Exchange Commission (SEC) is an independent federal agency \
+responsible for enforcing federal securities laws, regulating securities markets, and protecting \
+investors. Established by the Securities Exchange Act of 1934, it oversees stock exchanges, \
+broker-dealers, investment advisers, and public company reporting. The SEC's core mandate is to \
+maintain fair, orderly, and efficient capital markets.
+
+### Person
+Input: Warren Buffett (entity_type: person)
+Output: Warren Buffett is an American investor and business magnate who serves as Chairman and \
+Chief Executive Officer of Berkshire Hathaway, the diversified holding company he has led since \
+1965. He is widely regarded as one of the most successful investors in history, known for his \
+value-investing philosophy and long-term approach to capital allocation. Buffett is also a \
+prominent philanthropist, having pledged the majority of his wealth to charitable foundations.\
+"""
 
 
 def _month_key() -> str:
@@ -170,9 +232,17 @@ class DeepInfraDescriptionAdapter:
             async with self._semaphore:
                 response = await self._client.chat.completions.create(
                     model=model_id,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=[
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
                     temperature=0.3,
                     max_tokens=256,
+                    # prompt_cache_key: hint for DeepInfra server-side KV prefix caching.
+                    # Do NOT add reasoning_effort=none here — Qwen3 models return '\n'
+                    # (empty) with that flag set, causing silent fallback to Qwen3-32B
+                    # which also produces malformed word-per-line output (BP-339).
+                    extra_body={"prompt_cache_key": "entity_description_v1"},
                 )
                 raw: str = response.choices[0].message.content or ""
                 if response.usage is not None:
@@ -292,16 +362,10 @@ class DeepInfraDescriptionAdapter:
 
 
 def _build_prompt(canonical_name: str, entity_type: str, context_hints: dict[str, str]) -> str:
-    """Build the entity description prompt (XML-wrapped inputs prevent injection)."""
+    """Build the user-turn entity request. The system prompt supplies task + examples."""
     safe_name = canonical_name[:256]
     safe_type = entity_type[:64]
-    hints_str = "; ".join(f"{k[:64]}: {str(v)[:256]}" for k, v in context_hints.items()) if context_hints else "none"
-    return (
-        f"Write a concise 2-3 sentence factual description of "
-        f"<entity_name>{safe_name}</entity_name> "
-        f"(entity type: <entity_type>{safe_type}</entity_type>). "
-        f"Additional context: {hints_str}. "
-        "Focus on what this entity is, its significance, and its primary domain. "
-        "Do not include opinions or speculation. "
-        "Respond with only the description text — no JSON, no markdown, no preamble."
-    )
+    # Append context hints inline so the model has ticker/exchange/ISIN when available.
+    hints_str = "; ".join(f"{k[:64]}: {str(v)[:256]}" for k, v in context_hints.items()) if context_hints else ""
+    context_part = f"; {hints_str}" if hints_str else ""
+    return f"Write a description for: {safe_name} (entity_type: {safe_type}{context_part})"

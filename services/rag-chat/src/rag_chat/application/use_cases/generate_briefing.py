@@ -133,7 +133,15 @@ def _split_summary_and_details(content: str) -> tuple[str | None, str]:
     # frontend chrome already labels these regions, so the headers would
     # double-decorate the rendered output.
     summary_block = _strip_block_header(summary_block, "summary")
+    # v3.0 LLM output uses "## LEAD" (not "## SUMMARY") for the first block.
+    # Strip it here so the collapsed card view shows clean prose, not an H2 heading.
+    summary_block = _strip_block_header(summary_block, "lead")
     details_block = _strip_block_header(details_block, "details")
+
+    # Strip [cN] citation markers from the summary — they're produced by the v3.0
+    # prompt for inline citation tracking but are meaningless to end-users in the
+    # collapsed card view (the resolved source chips appear in the expanded view).
+    summary_block = _CN_CITATION_RE.sub("", summary_block).strip()
 
     # Defensive: if the summary block is empty after stripping, fall back to
     # treating the full content as narrative. An empty summary would render as

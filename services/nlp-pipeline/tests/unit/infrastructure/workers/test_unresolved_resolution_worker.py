@@ -25,6 +25,7 @@ from nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention import (
 )
 from nlp_pipeline.infrastructure.workers.unresolved_resolution_worker import (
     _CLASSIFICATION_PROMPT_TEMPLATE,
+    _CLASSIFICATION_SYSTEM_PROMPT,
     UnresolvedResolutionWorker,
     WorkerStats,
 )
@@ -543,18 +544,15 @@ class TestDeepInfraProviderPath:
 
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=resp_mock)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        worker = UnresolvedResolutionWorker(
-            nlp_session_factory=MagicMock(),
-            settings=settings,
-        )
 
         with patch(
             "nlp_pipeline.infrastructure.workers.unresolved_resolution_worker.httpx.AsyncClient",
             return_value=mock_client,
         ):
+            worker = UnresolvedResolutionWorker(
+                nlp_session_factory=MagicMock(),
+                settings=settings,
+            )
             outcome, reason = await worker._phase2_llm_classify(mention)
 
         assert outcome == ResolutionOutcome.ENTITY_CREATED
@@ -573,18 +571,15 @@ class TestDeepInfraProviderPath:
 
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=resp_mock)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        worker = UnresolvedResolutionWorker(
-            nlp_session_factory=MagicMock(),
-            settings=settings,
-        )
 
         with patch(
             "nlp_pipeline.infrastructure.workers.unresolved_resolution_worker.httpx.AsyncClient",
             return_value=mock_client,
         ):
+            worker = UnresolvedResolutionWorker(
+                nlp_session_factory=MagicMock(),
+                settings=settings,
+            )
             outcome, reason = await worker._phase2_llm_classify(mention)
 
         assert outcome == ResolutionOutcome.NOISE
@@ -602,18 +597,15 @@ class TestDeepInfraProviderPath:
 
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=resp_mock)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        worker = UnresolvedResolutionWorker(
-            nlp_session_factory=MagicMock(),
-            settings=settings,
-        )
 
         with patch(
             "nlp_pipeline.infrastructure.workers.unresolved_resolution_worker.httpx.AsyncClient",
             return_value=mock_client,
         ):
+            worker = UnresolvedResolutionWorker(
+                nlp_session_factory=MagicMock(),
+                settings=settings,
+            )
             outcome, _ = await worker._phase2_llm_classify(mention)
 
         assert outcome == ResolutionOutcome.UNRESOLVED
@@ -726,57 +718,50 @@ async def test_phase2_llm_classify_passes_context_to_external_provider() -> None
 
     mock_client = AsyncMock()
     mock_client.post = AsyncMock(return_value=resp_mock)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-
-    worker = UnresolvedResolutionWorker(
-        nlp_session_factory=MagicMock(),
-        settings=s,
-    )
 
     ctx = "Singapore central bank press release | Rate decision"
     with patch(
         "nlp_pipeline.infrastructure.workers.unresolved_resolution_worker.httpx.AsyncClient",
         return_value=mock_client,
     ):
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=MagicMock(),
+            settings=s,
+        )
         outcome, _reason = await worker._phase2_llm_classify(mention, context_sentence=ctx)
 
     assert outcome == ResolutionOutcome.ENTITY_CREATED
     chat_messages = mock_client.post.await_args.kwargs["json"]["messages"]
-    sent_prompt = chat_messages[0]["content"]
-    # Both surface and context must reach the external provider.
-    assert "MAS" in sent_prompt
-    assert "Singapore central bank" in sent_prompt
+    # System message [0] carries the static classification prompt.
+    # User message [1] carries the per-mention SURFACE + CONTEXT.
+    user_content = chat_messages[1]["content"]
+    assert "MAS" in user_content
+    assert "Singapore central bank" in user_content
 
 
 def test_classification_prompt_template_includes_all_four_worked_examples() -> None:
-    """Snapshot: anti-regression on the four examples burned into the prompt.
+    """Snapshot: anti-regression on the four examples burned into the system prompt.
 
-    If any of these four signature substrings disappears from the prompt,
-    we have silently regressed F-CRIT-05's recall fix.  The exact strings
-    are pulled verbatim from the audit fix-design report.
+    The worked examples live in _CLASSIFICATION_SYSTEM_PROMPT (static prefix sent
+    as the system role).  _CLASSIFICATION_PROMPT_TEMPLATE is only the dynamic
+    SURFACE/CONTEXT user turn.  If any of these four signature substrings disappears
+    from the system prompt, we have silently regressed F-CRIT-05's recall fix.
     """
-    rendered = _CLASSIFICATION_PROMPT_TEMPLATE.format(
-        surface="placeholder-surface",
-        context="placeholder-context",
-    )
+    prompt = _CLASSIFICATION_SYSTEM_PROMPT
     # Positive examples
-    assert "iShares Core S&P 500 ETF" in rendered
-    assert "Singapore's MAS raised the benchmark rate" in rendered
+    assert "iShares Core S&P 500 ETF" in prompt
+    assert "Singapore's MAS raised the benchmark rate" in prompt
     # Negative examples
-    assert "the company would miss guidance" in rendered
-    assert "Q3 revenue rose 8% year-over-year" in rendered
+    assert "the company would miss guidance" in prompt
+    assert "Q3 revenue rose 8% year-over-year" in prompt
     # Domain coverage signals
-    assert "subsidiary" in rendered
-    assert "ETF" in rendered
-    assert "regulator" in rendered
+    assert "subsidiary" in prompt
+    assert "ETF" in prompt
+    assert "regulator" in prompt
     # The old "Wikipedia article" criterion must NOT come back.
-    assert "Wikipedia" not in rendered
+    assert "Wikipedia" not in prompt
     # Final response instruction must be present and unambiguous.
-    # The actual prompt phrasing is "Respond with a single JSON object ONLY"
-    # — match on the substantive token "JSON object ONLY" so it survives
-    # minor prompt rewording without breaking the anti-regression intent.
-    assert "JSON object ONLY" in rendered or "JSON ONLY" in rendered
+    assert "JSON object ONLY" in prompt or "JSON ONLY" in prompt
 
 
 def test_classification_prompt_handles_missing_context_gracefully() -> None:
