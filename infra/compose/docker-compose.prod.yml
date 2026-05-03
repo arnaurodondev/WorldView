@@ -1,23 +1,225 @@
 ---
-# docker-compose.prod.yml — Production overrides
+# docker-compose.prod.yml — Production overlay: Traefik TLS ingress + hardened env
+#
+# Architecture:
+#   - Traefik v3 handles TLS termination via Let's Encrypt ACME (HTTP-01 challenge).
+#   - Public services (api-gateway, worldview-web, alert WS, grafana) route through
+#     Traefik. All other infra ports are removed so nothing is exposed on the host.
+#   - The frontend (worldview-web) is included here for single-server deployments.
+#     For Vercel + Hetzner split deployments, deploy worldview-web to Vercel separately
+#     and exclude it from this compose by removing its service block or overriding its
+#     profile to something not in the --profile list.
+#
+# Required env vars (set in a prod.env file or your shell before running):
+#   DOMAIN          — root domain, e.g. worldview.example.com
+#   ACME_EMAIL      — email for Let's Encrypt expiry notifications
+#   ZITADEL_URL     — production Zitadel OIDC issuer URL
+#   ZITADEL_CLIENT_ID — Zitadel OIDC client ID (default: worldview-web)
+#
+# Optional env vars (have sensible defaults):
+#   NEXT_PUBLIC_WS_BASE_URL — defaults to wss://ws.${DOMAIN}
 #
 # Usage:
-#   docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.prod.yml --profile infra up -d
+#   DOMAIN=worldview.example.com ACME_EMAIL=ops@example.com \
+#     docker compose -f infra/compose/docker-compose.yml \
+#                    -f infra/compose/docker-compose.prod.yml \
+#                    --profile infra up -d
 #
-# Overrides:
-#   - Forces OIDC discovery (not optional)
-#   - Enables secure cookies
-#   - Removes debug mode from all services
+# WHY Traefik and not nginx:
+#   Traefik has first-class Docker provider support — it reads container labels to
+#   configure routes automatically, eliminating manual nginx.conf editing. Let's
+#   Encrypt renewal is automatic. WebSocket proxying (needed for S10 alert WS) works
+#   without special config: Traefik forwards Upgrade/Connection headers by default.
 #
-# IMPORTANT: This file requires real credentials in services/*/configs/docker.env.
-# Use scripts/fetch-secrets.sh --env prod to populate them from worldview-config.
+# WHY NOT a static traefik.yml:
+#   Static config via CLI args keeps all Traefik config in one place (this file).
+#   No extra volume mount needed; all routing is in container labels.
 
 name: worldview
 
 services:
+  # ── Traefik — TLS-terminating edge router ─────────────────────────────────
+  # Binds 80 + 443. All other public ports are removed from other services.
+  # Let's Encrypt certificates are stored in a named volume (survives container restarts).
+  traefik:
+    image: traefik:v3.3
+    profiles: [infra, all]
+    restart: unless-stopped
+    command:
+      # Docker provider: reads labels from containers on this Docker host.
+      # exposedByDefault=false: only containers with traefik.enable=true are routed.
+      - --providers.docker=true
+      - --providers.docker.exposedByDefault=false
+      - --providers.docker.network=worldview_traefik
+
+      # HTTP entrypoint: receives plain HTTP, immediately redirects to HTTPS.
+      # WHY keep port 80 open: Let's Encrypt HTTP-01 challenge requires it.
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entryPoint.to=websecure
+      - --entrypoints.web.http.redirections.entryPoint.scheme=https
+      - --entrypoints.web.http.redirections.entryPoint.permanent=true
+
+      # HTTPS entrypoint: all public traffic lands here.
+      - --entrypoints.websecure.address=:443
+
+      # Let's Encrypt ACME via HTTP-01 challenge (port 80 must be reachable).
+      # Certificates are renewed automatically 30 days before expiry.
+      - --certificatesresolvers.le.acme.httpChallenge=true
+      - --certificatesresolvers.le.acme.httpChallenge.entryPoint=web
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+
+      # Access log: one line per request in JSON. Useful for Grafana Alloy ingestion.
+      - --accesslog=true
+      - --accesslog.format=json
+
+      # Global log level (INFO in prod; set to DEBUG locally if needed)
+      - --log.level=INFO
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Docker socket (read-only): Traefik watches container start/stop events.
+      # WHY read-only: Traefik only needs to read labels, never write to the socket.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Persist Let's Encrypt certificates across restarts and redeploys.
+      - traefik_letsencrypt:/letsencrypt
+    networks:
+      - default        # Can reach backend services on the internal compose network
+      - traefik        # Public-facing network; only Traefik + public services join this
+
+  # ── Override api-gateway: Traefik routing, no direct port exposure ─────────
   api-gateway:
+    ports: !override []    # Remove 8000:8000 — all traffic via Traefik
+    networks:
+      - default
+      - traefik
     environment:
+      # Harden: require Zitadel OIDC discovery, enable secure cookies, disable debug.
       API_GATEWAY_OIDC_DISCOVERY_OPTIONAL: "false"
       API_GATEWAY_COOKIE_SECURE: "true"
       API_GATEWAY_DEBUG: "false"
       API_GATEWAY_LOG_LEVEL: INFO
+    labels:
+      - traefik.enable=true
+      # Route: api.${DOMAIN} → api-gateway:8000 (REST API + OIDC callback)
+      - traefik.http.routers.api-gw.rule=Host(`api.${DOMAIN:-example.com}`)
+      - traefik.http.routers.api-gw.entrypoints=websecure
+      - traefik.http.routers.api-gw.tls.certresolver=le
+      - traefik.http.services.api-gw.loadbalancer.server.port=8000
+      # Security header: max body size (prevent request smuggling / large uploads)
+      - traefik.http.middlewares.api-compress.compress=true
+      - traefik.http.routers.api-gw.middlewares=api-compress
+
+  # ── Override worldview-web: Traefik routing, production HTTPS vars ─────────
+  # NOTE: For Vercel deployments, comment out or remove this service block and
+  # set Vercel build-time env vars:
+  #   NEXT_PUBLIC_WS_BASE_URL=wss://ws.${DOMAIN}
+  #   API_GATEWAY_URL=https://api.${DOMAIN}  (server-side rewrites fetch from this)
+  worldview-web:
+    ports: !override []    # Remove 3001:3001 — all traffic via Traefik
+    networks:
+      - default
+      - traefik
+    environment:
+      # Server-side rewrites use Docker-internal address; Vercel deployments must
+      # set this to the public HTTPS URL (https://api.${DOMAIN}) instead.
+      API_GATEWAY_URL: http://api-gateway:8000
+      # wss:// triggers the upgrade-insecure-requests CSP + HSTS headers (BP-324).
+      # This MUST be set to wss:// in any HTTPS deployment.
+      NEXT_PUBLIC_WS_BASE_URL: ${NEXT_PUBLIC_WS_BASE_URL:-wss://ws.${DOMAIN:-example.com}}
+      NEXT_PUBLIC_ZITADEL_URL: ${ZITADEL_URL}
+      NEXT_PUBLIC_ZITADEL_CLIENT_ID: ${ZITADEL_CLIENT_ID:-worldview-web}
+    labels:
+      - traefik.enable=true
+      # Route: ${DOMAIN} and www.${DOMAIN} → worldview-web:3001
+      - traefik.http.routers.frontend.rule=Host(`${DOMAIN:-example.com}`) || Host(`www.${DOMAIN:-example.com}`)
+      - traefik.http.routers.frontend.entrypoints=websecure
+      - traefik.http.routers.frontend.tls.certresolver=le
+      - traefik.http.services.frontend.loadbalancer.server.port=3001
+      # www → apex redirect
+      - traefik.http.middlewares.www-redirect.redirectregex.regex=^https://www\.(.+)
+      - traefik.http.middlewares.www-redirect.redirectregex.replacement=https://$${1}
+      - traefik.http.middlewares.www-redirect.redirectregex.permanent=true
+      - traefik.http.routers.frontend.middlewares=www-redirect
+
+  # ── Override alert: Traefik WebSocket routing ─────────────────────────────
+  # Traefik natively proxies WebSocket connections. No special config needed —
+  # it forwards the Upgrade: websocket and Connection: upgrade headers automatically.
+  # The frontend connects via: wss://ws.${DOMAIN}/ws/alerts
+  alert:
+    ports: !override []    # Remove 8010:8010
+    networks:
+      - default
+      - traefik
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.alert-ws.rule=Host(`ws.${DOMAIN:-example.com}`)
+      - traefik.http.routers.alert-ws.entrypoints=websecure
+      - traefik.http.routers.alert-ws.tls.certresolver=le
+      - traefik.http.services.alert-ws.loadbalancer.server.port=8010
+
+  # ── Override rag-chat: no direct port exposure in production ──────────────
+  rag-chat:
+    ports: !override []    # Remove 8008:8008 — only accessible through api-gateway proxy
+
+  # ── Override monitoring: Grafana public, others internal-only ─────────────
+  grafana:
+    ports: !override []    # Remove 3000:3000
+    networks:
+      - default
+      - traefik
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN:-example.com}`)
+      - traefik.http.routers.grafana.entrypoints=websecure
+      - traefik.http.routers.grafana.tls.certresolver=le
+      - traefik.http.services.grafana.loadbalancer.server.port=3000
+
+  # Remove direct ports for monitoring internals — not public-facing.
+  prometheus:
+    ports: !override []
+
+  loki:
+    ports: !override []
+
+  tempo:
+    ports: !override []
+
+  alertmanager:
+    ports: !override []
+
+  # ── Close all infra ports — internal access only ───────────────────────────
+  # Databases and message brokers must never be reachable from the public internet.
+  postgres:
+    ports: !override []
+
+  kafka:
+    ports: !override []
+
+  schema-registry:
+    ports: !override []
+
+  valkey:
+    ports: !override []
+
+  minio:
+    ports: !override []    # S3 API accessed internally; MinIO console is not public
+
+  # Ollama / GLiNER are inference-only, no public routes.
+  ollama:
+    ports: !override []
+
+networks:
+  # traefik: network shared between Traefik and the services it routes.
+  # Named worldview_traefik to avoid collision with other stacks on the same host.
+  # External = false means Docker Compose creates and owns it.
+  traefik:
+    name: worldview_traefik
+
+volumes:
+  traefik_letsencrypt:
+    # Let's Encrypt certificate storage. Named so it survives compose down/up.
+    # WARNING: deleting this volume forces a full ACME re-registration. Let's
+    # Encrypt rate-limits issuances (5 certs per domain per week). Do not delete
+    # unless you are sure you understand the rate-limit implications.

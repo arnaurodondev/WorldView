@@ -424,29 +424,48 @@ docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compo
 
 ## Pre-Deployment Checklist (Before Hetzner / Production)
 
+Production deployment uses Docker Compose + Traefik (not Kubernetes). See
+`infra/gitops/docs/production-deployment.md` for the full first-deploy runbook.
+
 ### Tier 1 — Always Run (< 5 minutes)
 
 ```bash
-./scripts/ci-local.sh                    # Full local CI (lint → schemas → arch → unit)
-./scripts/test-secrets.sh                # Scan for exposed secrets
+make qa                                  # lint + typecheck + unit tests
 ```
 
-### Tier 2 — Before First Deploy (< 30 minutes)
+### Tier 2 — Before First Deploy on Hetzner (< 15 minutes)
 
 ```bash
-./scripts/test-docker-builds.sh          # Verify all Dockerfiles build
-./scripts/ci-local.sh --job validate-helm  # Lint Helm charts
-./scripts/ci-local.sh --job validate-tofu  # Validate OpenTofu HCL
+# Validate the merged production compose config locally (no containers started):
+DOMAIN=worldview.example.com ACME_EMAIL=ops@example.com \
+  docker compose \
+    -f infra/compose/docker-compose.yml \
+    -f infra/compose/docker-compose.prod.yml \
+    --profile infra config > /dev/null && echo "Config valid"
+
+# Confirm NEXT_PUBLIC_WS_BASE_URL will be wss:// in the merged config (BP-324):
+DOMAIN=worldview.example.com ACME_EMAIL=ops@example.com \
+  docker compose \
+    -f infra/compose/docker-compose.yml \
+    -f infra/compose/docker-compose.prod.yml \
+    --profile infra config | grep NEXT_PUBLIC_WS_BASE_URL
+# Expected: NEXT_PUBLIC_WS_BASE_URL: wss://ws.worldview.example.com
 ```
 
-### Tier 3 — Local Kubernetes Smoke Test (< 2 hours)
+### Tier 3 — Post-Deploy Smoke Tests
+
+Run from Hetzner server after `make prod` completes:
 
 ```bash
-# Prerequisites: brew install k3d kubectl helm
-./scripts/test-docker-builds.sh
-./scripts/local-k8s.sh create
-./scripts/local-k8s.sh deploy-infra
-./scripts/local-k8s.sh deploy-service api-gateway
-./scripts/local-k8s.sh test-ingress
-./scripts/local-k8s.sh destroy
+# From worldview-gitops (after cloning on server):
+export DOMAIN=worldview.example.com
+./scripts/verify-prod-health.sh
+
+# Manual checks:
+curl -I https://${DOMAIN}                # → 200
+curl -I https://api.${DOMAIN}/v1/health  # → 200
+curl -I http://${DOMAIN}                 # → 301 to https:// (Traefik redirect)
+
+# Verify no infra ports are directly exposed (should all be empty):
+ss -tlnp | grep -E "8000|5432|6379|9092"
 ```

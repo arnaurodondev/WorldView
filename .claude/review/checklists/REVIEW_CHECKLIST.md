@@ -114,6 +114,9 @@
 - [ ] New consumer, worker, scheduler, or dispatcher entry points have corresponding entries in `infra/compose/docker-compose.yml` (profiles: `[infra, all]`) and `infra/compose/docker-compose.test.yml`
 - [ ] New services have a Dockerfile, `configs/docker.env`, correct `build.context: ../..`, and healthcheck
 - [ ] Build context is `../..` (repo root) — never the service directory alone (Dockerfiles COPY from `libs/`)
+- [ ] When editing `docker-compose.prod.yml`: port overrides use `!override []` (not additive merge) — `ports:` without `!override` in an overlay file ADDS ports rather than replacing them, leaving infra ports exposed in production
+- [ ] New public-facing services in production have Traefik labels (`traefik.enable=true`, router rule, TLS cert resolver, service port) and are added to the `traefik` network
+- [ ] New services with `prod.env.example` added to `services/<name>/configs/` so worldview-gitops can provide prod values
 
 ## 7c. Observability Correctness
 
@@ -178,6 +181,8 @@ Mark N/A for pure backend changes.
 - [ ] `switch` statements over string values from external APIs have a `default` branch — BP-250
 - [ ] Python `StrEnum` values (lowercase) are normalized with `.toUpperCase()` before comparison against TypeScript uppercase unions — BP-250
 - [ ] SSE streams use `AbortController` with cleanup on unmount (HR-039)
+- [ ] **HTTPS-only headers (`upgrade-insecure-requests`, `Strict-Transport-Security`) are gated on actual HTTPS deployment, NOT `NODE_ENV === "production"`** — BP-324. Use `NEXT_PUBLIC_WS_BASE_URL.startsWith("wss://")` as the HTTPS signal. Sending these over HTTP breaks ALL static assets in Chrome/Safari (sub-resources silently upgraded to failing HTTPS).
+- [ ] **`style-src` in CSP includes `'nonce-N'` when `x-nonce` is set in middleware** — BP-323. Next.js 15 auto-adds `nonce` to `<link rel="stylesheet">` elements; Safari blocks stylesheets if `style-src` has no matching nonce-source.
 
 ### 10f. Dark Theme Compliance
 - [ ] All colors use CSS variables from `docs/ui/DESIGN_SYSTEM.md §2` — no hardcoded hex (HR-037)

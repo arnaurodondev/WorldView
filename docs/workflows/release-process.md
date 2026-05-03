@@ -56,6 +56,62 @@ Maintained in `CHANGELOG.md` at the repo root. Format:
 
 ---
 
+## Deploy Production — Hetzner Docker Compose
+
+Production runs on Hetzner with Docker Compose and Traefik v3 for TLS termination.
+Full setup is in `infra/gitops/docs/hetzner-setup.md` and `infra/gitops/docs/production-deployment.md`.
+
+### Required env vars (export or add to `~/.bashrc` on Hetzner server)
+
+```bash
+export DOMAIN=worldview.example.com     # root domain
+export ACME_EMAIL=ops@example.com       # Let's Encrypt notifications
+export ZITADEL_URL=https://<instance>.zitadel.cloud
+```
+
+### Update workflow (subsequent deploys)
+
+```bash
+# On Hetzner server:
+cd /opt/worldview/worldview
+git pull origin main                    # pull latest code
+
+# If env files changed in worldview-gitops:
+cd /opt/worldview/worldview-gitops && git pull && ./scripts/setup-prod.sh
+cd /opt/worldview/worldview
+
+make prod-rebuild                       # rebuild images + force-recreate all services
+```
+
+### First deploy
+
+```bash
+# 1. Clone repos on Hetzner server (see infra/gitops/docs/hetzner-setup.md)
+# 2. Run setup-prod.sh to copy env files
+# 3. Start the stack:
+make prod
+# 4. Verify after ~60s for Let's Encrypt:
+./infra/gitops/scripts/verify-prod-health.sh  # or from worldview-gitops
+```
+
+### Zero-downtime update for stateless services
+
+```bash
+# Update api-gateway without restarting other services:
+COMPOSE_PROD="docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.prod.yml --profile infra"
+$COMPOSE_PROD build api-gateway
+$COMPOSE_PROD up -d --no-deps api-gateway
+```
+
+### Rollback
+
+```bash
+git checkout <previous-commit>
+make prod-rebuild
+```
+
+---
+
 ## Pre-release Checklist
 
 - [ ] All CI checks pass on the release branch
@@ -66,3 +122,5 @@ Maintained in `CHANGELOG.md` at the repo root. Format:
 - [ ] No `TODO` or `FIXME` in changed files
 - [ ] Documentation updated for new features
 - [ ] Container images build successfully
+- [ ] `docker-compose.prod.yml` config is valid: `DOMAIN=x ACME_EMAIL=y docker compose -f ... config > /dev/null`
+- [ ] `NEXT_PUBLIC_WS_BASE_URL` will be `wss://` in production compose (BP-324)

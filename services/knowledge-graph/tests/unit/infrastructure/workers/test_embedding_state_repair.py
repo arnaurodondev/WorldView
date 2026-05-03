@@ -137,9 +137,9 @@ class TestRepairMissingEmbeddingState:
         factory = _make_session_factory(rows)
 
         stats = asyncio.run(repair_missing_embedding_state(factory))
-        assert stats["checked"] == _PAGE_SIZE * 2 + 1, (
-            f"expected {_PAGE_SIZE * 2 + 1} canonicals processed, got {stats['checked']}"
-        )
+        assert (
+            stats["checked"] == _PAGE_SIZE * 2 + 1
+        ), f"expected {_PAGE_SIZE * 2 + 1} canonicals processed, got {stats['checked']}"
         assert stats["inserted"] == (_PAGE_SIZE * 2 + 1) * 2  # 2 view types per non-instrument
 
     def test_iteration_cap_protects_against_runaway_loop(self) -> None:

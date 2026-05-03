@@ -1,4 +1,4 @@
-.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down schema-set-compat qa qa-exhaustive qa-exhaustive-backend qa-exhaustive-frontend qa-live-stack qa-contract dev dev-down dev-reset dev-logs dev-ps dev-rebuild dev-clean seed
+.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down schema-set-compat qa qa-exhaustive qa-exhaustive-backend qa-exhaustive-frontend qa-live-stack qa-contract dev dev-down dev-reset dev-logs dev-ps dev-rebuild dev-clean seed prod prod-down prod-rebuild
 
 # ── Default target ────────────────────────────────────────────────────────────
 
@@ -26,6 +26,11 @@ help:
 	@echo "  make dev                                   Start full Docker Compose dev stack"
 	@echo "  make dev-clean                             Remove local docker.env files"
 	@echo "  make seed                                  Load sample data"
+	@echo ""
+	@echo "Production (Hetzner single-server, Traefik TLS):"
+	@echo "  DOMAIN=worldview.example.com ACME_EMAIL=ops@example.com make prod"
+	@echo "  make prod-down"
+	@echo "  make prod-rebuild"
 
 # ── Lint ──────────────────────────────────────────────────────────────────────
 
@@ -137,8 +142,11 @@ test-arch:
 # See: https://github.com/your-org/worldview-gitops/blob/main/scripts/setup-dev.sh
 
 ## Start the full development stack (all services + dev tools + MailHog)
+## Kills any local process holding port 3001 first so worldview-web always wins.
 dev:
-	$(COMPOSE_DEV) up -d
+	@lsof -ti :3001 | xargs -r kill -9 2>/dev/null || true
+	$(COMPOSE_DEV) up -d --build
+	@docker ps -aq --filter status=created | xargs -r docker start 2>/dev/null || true
 	@echo ""
 	@echo "🚀 Worldview dev stack is running!"
 	@echo ""
@@ -170,8 +178,10 @@ dev-ps:
 
 ## Rebuild all images without cache and restart
 dev-rebuild:
+	@lsof -ti :3001 | xargs -r kill -9 2>/dev/null || true
 	$(COMPOSE_DEV) build --no-cache
 	$(COMPOSE_DEV) up -d --force-recreate
+	@docker ps -aq --filter status=created | xargs -r docker start 2>/dev/null || true
 
 ## Remove local docker.env files (re-run setup-dev.sh from worldview-gitops to restore)
 dev-clean:
@@ -205,3 +215,52 @@ monitoring-down:
 	$(COMPOSE_MONITORING) down
 
 .PHONY: monitoring monitoring-down
+
+# ── Production stack (Hetzner single-server with Traefik TLS) ───────────────
+#
+# Required env vars: DOMAIN, ACME_EMAIL
+# Optional: ZITADEL_URL, ZITADEL_CLIENT_ID, NEXT_PUBLIC_WS_BASE_URL
+#
+# Example:
+#   export DOMAIN=worldview.example.com
+#   export ACME_EMAIL=ops@example.com
+#   export ZITADEL_URL=https://auth.example.com
+#   make prod
+#
+# For Vercel + Hetzner split: comment out worldview-web in docker-compose.prod.yml
+# and deploy the Next.js app to Vercel with the corresponding env vars.
+
+COMPOSE_PROD := docker compose \
+  -f infra/compose/docker-compose.yml \
+  -f infra/compose/docker-compose.prod.yml \
+  --profile infra
+
+## Start the full production stack with Traefik TLS (requires DOMAIN + ACME_EMAIL).
+## Builds images and starts all services. First run pulls Let's Encrypt certificates.
+prod:
+	@if [ -z "$(DOMAIN)" ]; then echo "ERROR: DOMAIN is not set. Example: DOMAIN=worldview.example.com make prod"; exit 1; fi
+	@if [ -z "$(ACME_EMAIL)" ]; then echo "ERROR: ACME_EMAIL is not set. Example: ACME_EMAIL=ops@example.com make prod"; exit 1; fi
+	$(COMPOSE_PROD) up -d --build
+	@docker ps -aq --filter status=created | xargs -r docker start 2>/dev/null || true
+	@echo ""
+	@echo "Worldview production stack is running!"
+	@echo ""
+	@echo "  App:        https://$(DOMAIN)"
+	@echo "  API:        https://api.$(DOMAIN)"
+	@echo "  WebSocket:  wss://ws.$(DOMAIN)"
+	@echo "  Grafana:    https://grafana.$(DOMAIN)  (admin/admin — change immediately)"
+	@echo ""
+	@echo "Traefik is obtaining Let's Encrypt certificates. Allow 30-60s on first start."
+	@echo "Check certificate status: docker logs worldview-traefik-1 2>&1 | grep acme"
+
+## Stop the production stack (graceful 10s timeout)
+prod-down:
+	$(COMPOSE_PROD) down --timeout 10
+
+## Rebuild all images and restart the production stack (zero-downtime not guaranteed)
+prod-rebuild:
+	@if [ -z "$(DOMAIN)" ]; then echo "ERROR: DOMAIN is not set."; exit 1; fi
+	@if [ -z "$(ACME_EMAIL)" ]; then echo "ERROR: ACME_EMAIL is not set."; exit 1; fi
+	$(COMPOSE_PROD) build --no-cache
+	$(COMPOSE_PROD) up -d --force-recreate
+	@docker ps -aq --filter status=created | xargs -r docker start 2>/dev/null || true

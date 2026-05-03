@@ -333,17 +333,6 @@ When Zitadel is not configured (`OIDC_DISCOVERY_OPTIONAL=true` and no OIDC issue
 
 ---
 
-## Docker
-
-No Dockerfile yet — production deployment via Node.js server is pending. Will follow:
-
-```dockerfile
-# Build: node:20-alpine → pnpm build → .next/
-# Run:   node:20-alpine → next start --port 3001
-```
-
----
-
 ## Design Resources
 
 | Resource | Purpose |

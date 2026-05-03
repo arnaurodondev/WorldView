@@ -14,8 +14,9 @@ class TestDeepExtraction:
 
     def test_contains_json_instruction(self) -> None:
         result = DEEP_EXTRACTION.render(entities="none identified", text="sample text")
-        assert "Return JSON" in result
-        assert "events, claims, and relations" in result
+        # v1.1 changed "Return JSON" to "Return the JSON object above" (more specific)
+        assert "Return the JSON object" in result
+        assert "Output the JSON object only" in result
 
     def test_missing_entities_raises(self) -> None:
         with pytest.raises(ValueError, match="entities"):
@@ -26,7 +27,8 @@ class TestDeepExtraction:
             DEEP_EXTRACTION.render(entities="AAPL")
 
     def test_version_is_semver(self) -> None:
-        assert DEEP_EXTRACTION.version == "1.0"
+        # v1.1: updated in feat(plan-0061-wave-c) for DeepSeek-V4-Flash compatibility
+        assert DEEP_EXTRACTION.version == "1.1"
 
     def test_frozen(self) -> None:
         with pytest.raises(AttributeError):
