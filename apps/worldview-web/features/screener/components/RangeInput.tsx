@@ -15,14 +15,40 @@
  *
  * WHY parseValue returns undefined on empty: the FilterState uses
  * `?: number` so an empty string must clear the field, not write NaN.
+ *
+ * WHY tooltip prop (PLAN-0059 screener remediation): institutional traders
+ * and quant analysts know P/E and ROE, but domain newcomers confuse
+ * P/B with P/S, and don't know that dividend_yield is stored as a decimal.
+ * An Info icon beside the label surfaces the full metric explanation on
+ * hover without adding text that would clutter the compact filter bar.
+ *
+ * WHY minPlaceholder / maxPlaceholder: concrete example values teach the
+ * expected input format (e.g. "e.g. 0.05" for a decimal yield, not "5").
  */
 
+import { Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 export interface RangeInputProps {
   label: string;
   /** Optional hint shown right of the label (e.g. "%" or "decimal") */
   hint?: string;
+  /**
+   * Explanatory tooltip text shown on the Info icon beside the label.
+   * Written for a non-specialist; explains what the metric is and what
+   * "good" or "notable" values look like. Renders nothing when omitted.
+   */
+  tooltip?: string;
+  /** Placeholder for the min input (e.g. "e.g. 10"). */
+  minPlaceholder?: string;
+  /** Placeholder for the max input (e.g. "e.g. 50"). */
+  maxPlaceholder?: string;
   /** Disable both inputs (used for backend-pending filters). */
   disabled?: boolean;
   /** Tooltip-style title shown on hover when disabled. */
@@ -36,6 +62,9 @@ export interface RangeInputProps {
 export function RangeInput({
   label,
   hint,
+  tooltip,
+  minPlaceholder = "min",
+  maxPlaceholder = "max",
   disabled = false,
   disabledReason,
   min,
@@ -60,16 +89,38 @@ export function RangeInput({
       <label
         htmlFor={`${id}-min`}
         className={cn(
-          "text-[10px] font-mono uppercase tracking-[0.06em] w-24 shrink-0",
+          "text-[10px] font-mono uppercase tracking-[0.06em] w-24 shrink-0 flex items-center gap-0.5",
           disabled ? "text-muted-foreground/50" : "text-muted-foreground",
         )}
         title={disabled ? disabledReason : undefined}
       >
-        {label}
-        {hint && (
-          <span className="ml-1 text-muted-foreground/50 normal-case tracking-normal">
-            ({hint})
-          </span>
+        <span className="truncate">
+          {label}
+          {hint && (
+            <span className="ml-1 text-muted-foreground/50 normal-case tracking-normal">
+              ({hint})
+            </span>
+          )}
+        </span>
+        {/* WHY Info icon + Tooltip: institutional users know the ratios; quant
+          * newcomers often confuse P/B with book value or enter percentages
+          * instead of decimals. The icon surfaces context without cluttering
+          * the compact label column. Uses shadcn Tooltip (Radix) so it works
+          * on keyboard / screen-reader too. */}
+        {tooltip && (
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Info
+                  className="h-[10px] w-[10px] shrink-0 text-muted-foreground/40 hover:text-muted-foreground cursor-help"
+                  aria-label={`About ${label}`}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="right" align="start">
+                {tooltip}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
       </label>
       {/* Min/Max inputs — h-6 px-1.5 per the brief */}
@@ -78,7 +129,7 @@ export function RangeInput({
         aria-label={`${label} minimum`}
         type="number"
         step="any"
-        placeholder="min"
+        placeholder={minPlaceholder}
         disabled={disabled}
         title={disabled ? disabledReason : undefined}
         value={min ?? ""}
@@ -91,7 +142,7 @@ export function RangeInput({
         aria-label={`${label} maximum`}
         type="number"
         step="any"
-        placeholder="max"
+        placeholder={maxPlaceholder}
         disabled={disabled}
         title={disabled ? disabledReason : undefined}
         value={max ?? ""}

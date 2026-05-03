@@ -140,6 +140,21 @@ export interface DataTableProps<TData> {
 
   // Row interaction
   onRowClick?: (row: TData) => void;
+  /**
+   * rowWrapper — optional render-prop that wraps each row node.
+   * Use when per-row context must come from a React component that
+   * needs row data (e.g., ActionContextMenu for holdings).
+   * Mutually exclusive with `contextMenu` — if both are provided,
+   * rowWrapper takes precedence.
+   */
+  rowWrapper?: (row: TData, node: React.ReactNode) => React.ReactNode;
+  /**
+   * rowClassName — optional per-row className factory.
+   * Called with the row data; return a string (or undefined) to add
+   * extra Tailwind classes to that row's container div.
+   * Used by TransactionsTable to visually de-emphasise placeholder rows.
+   */
+  rowClassName?: (row: TData) => string | undefined;
 
   // Misc
   className?: string;
@@ -165,6 +180,8 @@ export function DataTable<TData>({
   onColumnVisibilityChange,
   contextMenu,
   onRowClick,
+  rowWrapper,
+  rowClassName,
   className,
   virtualize,
 }: DataTableProps<TData>) {
@@ -336,6 +353,8 @@ export function DataTable<TData>({
           // accent + faint tint, NOT a heavy fill (which reads as "highlighted/warning").
           isSelected &&
             "bg-primary/[0.04] shadow-[inset_2px_0_0_hsl(var(--primary))]",
+          // Per-row custom class (e.g., muted for placeholder transaction rows).
+          rowClassName?.(row.original),
         )}
       >
         {cells.map((cell, cellIdx) => (
@@ -351,6 +370,17 @@ export function DataTable<TData>({
         ))}
       </div>
     );
+
+    // rowWrapper takes precedence over the built-in contextMenu array.
+    // Used when the caller needs a fully custom per-row context (e.g.,
+    // ActionContextMenu for holdings rows).
+    if (rowWrapper) {
+      return (
+        <React.Fragment key={row.id}>
+          {rowWrapper(row.original, node)}
+        </React.Fragment>
+      );
+    }
 
     if (!contextMenu || contextMenu.length === 0) return node;
     return (
