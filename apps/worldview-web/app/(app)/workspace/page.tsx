@@ -38,9 +38,10 @@
 // WHY "use client": uses WorkspaceContext + SymbolLinkingContext hooks (client state),
 // useEffect for the URL-import path, and react-resizable-panels (browser drag events).
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { SymbolLinkingProvider } from "@/contexts/SymbolLinkingContext";
+import { WorkspaceSymbolProvider, useWorkspaceSymbol } from "@/contexts/WorkspaceSymbolContext";
 import { WorkspaceTabs } from "@/components/workspace/WorkspaceTabs";
 // PLAN-0059 G-2: WorkspaceGrid stays statically imported. Considered for
 // dynamic-import (it pulls react-resizable-panels + every panel widget) but
@@ -141,6 +142,116 @@ function appendWorkspaceToStorage(
   }
 }
 
+// ── WorkspaceSymbolBar ─────────────────────────────────────────────────────────
+
+/**
+ * WorkspaceSymbolBar — Bloomberg-style workspace-level symbol input.
+ *
+ * WHY THIS EXISTS: Bloomberg Terminal has a "Security" input at the top of each
+ * workspace. Typing a symbol there simultaneously updates ALL panels — chart,
+ * fundamentals, news — to show the entered ticker. This component replicates that
+ * UX, broadcast via WorkspaceSymbolContext.
+ *
+ * WHY a local inputValue state (separate from broadcastSymbol):
+ * We only broadcast when the user presses Enter or clears with Escape. While the
+ * user is typing (inputValue changes), panels should NOT switch symbols on every
+ * keystroke — that would cause a torrent of API calls for partial inputs like
+ * "A", "AA", "AAP", "AAPL". Separate local state lets us commit on Enter only.
+ *
+ * WHY uppercase on onChange: financial tickers are always uppercase. Real-time
+ * uppercasing prevents the jarring "I have to hold Shift" friction.
+ *
+ * WHY Escape to clear: matching Bloomberg's keyboard behaviour — Escape is the
+ * universal "cancel" key in terminal UIs, and clearing the broadcast symbol
+ * restores per-panel colour-group linking.
+ *
+ * WHO USES IT: WorkspacePageInner (rendered above the tab strip + grid)
+ */
+function WorkspaceSymbolBar() {
+  const { broadcastSymbol, setBroadcastSymbol } = useWorkspaceSymbol();
+
+  // WHY local inputValue: see file-level comment above. We hold the transient
+  // typed value here and only commit it to the context on Enter.
+  const [inputValue, setInputValue] = useState(broadcastSymbol ?? "");
+
+  return (
+    // WHY border-b border-border/40: subtle divider between this bar and the
+    // tab strip below. Half opacity so it doesn't compete with the tab strip's
+    // own bottom border.
+    <div className="flex items-center gap-2 border-b border-border/40 bg-card/30 px-3 py-1.5">
+      {/* WHY "Symbol" label in uppercase muted text: mirrors Bloomberg's "Security:"
+          label style — compact, terminal-weight, non-intrusive. */}
+      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        Symbol
+      </span>
+
+      {/* ── Symbol input ───────────────────────────────────────────────── */}
+      {/*
+       * WHY w-24 (96px): wide enough for a 5-char ticker (e.g., "GOOGL") plus
+       * a 3-char exchange suffix (e.g., ".US") without overflow. Narrow enough
+       * to stay unobtrusive beside the label.
+       *
+       * WHY rounded-[2px]: matches the terminal-quality 2px border-radius used
+       * on all buttons and inputs in the workspace (DESIGN_SYSTEM.md §2.1).
+       *
+       * WHY font-mono uppercase: tickers are displayed in monospace uppercase
+       * throughout the terminal. This input matches that convention so the text
+       * style doesn't shift when the value is committed.
+       */}
+      <input
+        data-testid="workspace-symbol-input"
+        value={inputValue}
+        onChange={(e) => setInputValue(e.target.value.toUpperCase())}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            // WHY trim: guards against "AAPL " (trailing space from auto-complete)
+            setBroadcastSymbol(inputValue.trim() || null);
+          }
+          if (e.key === "Escape") {
+            // WHY clear both: Escape resets both the local input AND the broadcast
+            // symbol so panels revert to their per-panel linked symbols.
+            setBroadcastSymbol(null);
+            setInputValue("");
+          }
+        }}
+        placeholder="e.g. AAPL"
+        className="h-6 w-24 rounded-[2px] border border-border/40 bg-transparent px-2 font-mono text-[11px] uppercase text-foreground placeholder:text-muted-foreground/40 focus:border-primary/50 focus:outline-none"
+        aria-label="Broadcast symbol to all panels"
+      />
+
+      {/* ── Clear button — only shown when a symbol is broadcast ───────── */}
+      {/*
+       * WHY conditional render (not always visible): an always-visible clear
+       * button would waste space when nothing is broadcast. Showing it only
+       * when broadcastSymbol is set matches the Bloomberg "clear the security"
+       * affordance which appears only when a security is active.
+       */}
+      {broadcastSymbol && (
+        <button
+          onClick={() => {
+            setBroadcastSymbol(null);
+            setInputValue("");
+          }}
+          aria-label="Clear broadcast symbol"
+          className="text-[10px] text-muted-foreground hover:text-foreground"
+        >
+          ×
+        </button>
+      )}
+
+      {/* ── Usage hint ─────────────────────────────────────────────────── */}
+      {/*
+       * WHY dimmed hint text (not tooltip): the bar is always visible — a
+       * tooltip requires hover. The hint is tiny (10px, 40% opacity) so it
+       * reads as ambient help, not primary content.
+       */}
+      <span className="text-[10px] text-muted-foreground/40">
+        Press Enter to push symbol to all panels
+      </span>
+    </div>
+  );
+}
+
 // ── Inner page — reads from WorkspaceContext (provided by layout.tsx) ──────────
 
 /**
@@ -217,55 +328,67 @@ function WorkspacePageInner() {
     // WHY flex-col h-full: the workspace content area must fill the shell's main
     // content region (flex-1 in the layout). h-full ensures PanelGroup can calculate
     // viewport-relative heights for its resize calculations.
-    <div className="flex flex-col h-full min-h-0">
-      {/* ── Workspace tab strip + Wave C controls (Share + Template) ────── */}
-      {/*
-       * WHY a flex row wrapping WorkspaceTabs + Share + Template buttons:
-       * Share/Template are workspace-LEVEL actions that pair naturally with
-       * the tab strip. Sticking them at the right end of the same row keeps
-       * all workspace-management affordances in one visual zone.
-       *
-       * WHY shrink-0 on the buttons but flex-1 on WorkspaceTabs: when the
-       * tab strip overflows (many tabs), it scrolls horizontally inside its
-       * own bounds without pushing the action buttons off-screen.
-       */}
-      {/*
-       * WHY no border-b here (and no flex wrapper): WorkspaceTabs already
-       * applies border-b border-border to its 32px tab strip. We render the
-       * Share/Template buttons as a separate row beneath the tab strip to
-       * avoid layout conflicts with WorkspaceTabs' internal flex/overflow
-       * handling. The 24px utility row is just enough to comfortably hold
-       * two text buttons without dominating the layout.
-       */}
-      <WorkspaceTabs />
-      {activeWorkspace && (
-        <div className="flex h-6 shrink-0 items-center justify-end gap-1 border-b border-border bg-background px-2">
-          <NewFromTemplateDialog onCreate={handleCreateFromTemplate} />
-          <ShareWorkspaceDialog config={activeWorkspace} />
-        </div>
-      )}
+    //
+    // WHY WorkspaceSymbolProvider here (not in layout.tsx): broadcast symbol is
+    // workspace-session-local. Placing the provider at this level means the symbol
+    // state resets when the user navigates away from /workspace — correct behaviour.
+    // Each workspace tab switch does NOT reset it (they're all inside this one
+    // WorkspacePageInner instance); only navigating away from /workspace resets.
+    <WorkspaceSymbolProvider>
+      <div className="flex flex-col h-full min-h-0">
+        {/* ── Bloomberg-style workspace symbol bar ─────────────────────── */}
+        {/*
+         * WHY above WorkspaceTabs: the symbol bar is a workspace-level control
+         * that persists across tab switches (same broadcastSymbol applies to all
+         * workspace tabs until explicitly cleared). Rendering it above the tab
+         * strip makes this hierarchy visually obvious — it's a workspace property,
+         * not a per-tab property.
+         */}
+        <WorkspaceSymbolBar />
 
-      {/* ── Resizable panel grid ────────────────────────────────────────── */}
-      {/*
-       * WHY SymbolLinkingProvider wraps WorkspaceGrid: symbol linking is workspace-
-       * scoped. When the active workspace changes (via tab click), WorkspaceTabs
-       * updates WorkspaceContext.activeWorkspaceId, causing a re-render here.
-       * Using the workspaceId as key resets SymbolLinkingProvider on workspace switch.
-       */}
-      {activeWorkspace ? (
-        <SymbolLinkingProvider key={activeWorkspace.id}>
-          <div className="flex-1 min-h-0">
-            <WorkspaceGrid workspace={activeWorkspace} />
+        {/* ── Workspace tab strip + Wave C controls (Share + Template) ── */}
+        {/*
+         * WHY no border-b here (and no flex wrapper): WorkspaceTabs already
+         * applies border-b border-border to its 32px tab strip. We render the
+         * Share/Template buttons as a separate row beneath the tab strip to
+         * avoid layout conflicts with WorkspaceTabs' internal flex/overflow
+         * handling. The 24px utility row is just enough to comfortably hold
+         * two text buttons without dominating the layout.
+         */}
+        <WorkspaceTabs />
+        {activeWorkspace && (
+          <div className="flex h-6 shrink-0 items-center justify-end gap-1 border-b border-border bg-background px-2">
+            <NewFromTemplateDialog onCreate={handleCreateFromTemplate} />
+            <ShareWorkspaceDialog config={activeWorkspace} />
           </div>
-        </SymbolLinkingProvider>
-      ) : (
-        // WHY inline empty state: §0.5 bans large centered empty states.
-        // If no workspace is active (edge case), show a single line of text.
-        <p className="px-2 py-1 text-[11px] text-muted-foreground">
-          No workspace active. Add a workspace via the tab strip.
-        </p>
-      )}
-    </div>
+        )}
+
+        {/* ── Resizable panel grid ──────────────────────────────────────── */}
+        {/*
+         * WHY SymbolLinkingProvider wraps WorkspaceGrid: symbol linking is workspace-
+         * scoped. When the active workspace changes (via tab click), WorkspaceTabs
+         * updates WorkspaceContext.activeWorkspaceId, causing a re-render here.
+         * Using the workspaceId as key resets SymbolLinkingProvider on workspace switch.
+         *
+         * WHY SymbolLinkingProvider is INSIDE WorkspaceSymbolProvider: the broadcast
+         * symbol context must be available to WorkspaceChartWidget. Both providers
+         * are workspace-scoped; the ordering (outer=Symbol, inner=Linking) is arbitrary.
+         */}
+        {activeWorkspace ? (
+          <SymbolLinkingProvider key={activeWorkspace.id}>
+            <div className="flex-1 min-h-0">
+              <WorkspaceGrid workspace={activeWorkspace} />
+            </div>
+          </SymbolLinkingProvider>
+        ) : (
+          // WHY inline empty state: §0.5 bans large centered empty states.
+          // If no workspace is active (edge case), show a single line of text.
+          <p className="px-2 py-1 text-[11px] text-muted-foreground">
+            No workspace active. Add a workspace via the tab strip.
+          </p>
+        )}
+      </div>
+    </WorkspaceSymbolProvider>
   );
 }
 

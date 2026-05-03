@@ -14,9 +14,9 @@
  *
  * COVERAGE:
  *   - Each template references only valid panel_types
- *   - 5 templates exist (no accidental duplicates or omissions)
+ *   - 6 templates exist (5 original + Quad View added in Wave H-5)
  *   - Each template has unique id, non-empty name + description
- *   - Dialog renders 5 cards
+ *   - Dialog renders 6 cards
  *   - Dialog fires onCreate with the correct template on click
  *   - Dialog auto-closes after a click
  *   - findTemplate returns the right template / undefined on miss
@@ -58,8 +58,11 @@ const VALID_PANEL_TYPES: ReadonlySet<PanelType> = new Set([
 // ── Tests: template data integrity ───────────────────────────────────────────
 
 describe("WORKSPACE_TEMPLATES — data integrity", () => {
-  it("exports exactly 5 templates", () => {
-    expect(WORKSPACE_TEMPLATES).toHaveLength(5);
+  it("exports exactly 6 templates", () => {
+    // WHY 6 (not 5): Wave H-5 added the Quad View template (id="quad") to the set.
+    // The previous count of 5 covered: day-trader, research, swing-trader,
+    // news-junkie, investor. Quad View is the 6th.
+    expect(WORKSPACE_TEMPLATES).toHaveLength(6);
   });
 
   it("every template has a unique id", () => {
@@ -125,7 +128,8 @@ describe("NewFromTemplateDialog", () => {
     ).toBeInTheDocument();
   });
 
-  it("opens the dialog on trigger click and renders 5 template cards", async () => {
+  it("opens the dialog on trigger click and renders 6 template cards", async () => {
+    // WHY 6 cards: Wave H-5 added the Quad View template. See "exports exactly 6" above.
     const user = userEvent.setup();
     render(<NewFromTemplateDialog onCreate={vi.fn()} />);
 
@@ -141,6 +145,8 @@ describe("NewFromTemplateDialog", () => {
     expect(screen.getByTestId("template-card-swing-trader")).toBeInTheDocument();
     expect(screen.getByTestId("template-card-news-junkie")).toBeInTheDocument();
     expect(screen.getByTestId("template-card-investor")).toBeInTheDocument();
+    // WHY also check quad: Wave H-5 added this template; its card must appear.
+    expect(screen.getByTestId("template-card-quad")).toBeInTheDocument();
   });
 
   it("fires onCreate with the chosen template when a card is clicked", async () => {
