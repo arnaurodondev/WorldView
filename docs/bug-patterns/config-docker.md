@@ -960,3 +960,43 @@ Set `KNOWLEDGE_GRAPH_CYPHER_ENABLED=true` in `services/knowledge-graph/configs/d
 **Regression test**: manual validation — `docker logs knowledge-graph-scheduler | grep age_sync` should show `age_sync_worker_complete` not `age_sync_worker_disabled`
 
 ---
+
+### BP-346: Stale Container Missing Module Added After Last Build
+
+**Category**: Config & Docker
+**Severity**: CRITICAL
+**First seen**: 2026-05-03
+**Services**: knowledge-graph
+
+**Symptoms**:
+- Consumer container appears healthy (`Up X hours (healthy)`) but emits `ModuleNotFoundError` for every Kafka message
+- Zero records being created in downstream tables despite active Kafka topic traffic
+- Container logs show `kafka_message_failed_retryable` + `kafka_unexpected_error` with `attempt: 1` in a loop
+
+**Root cause**:
+A Python module (`contracts.events.nlp.article_enriched`) was added to a shared library after the Docker image was last built. The container image's `.venv` was built from the old library code and does not include the new subpackage. Because Docker caches the build and the image tag (`latest`) is reused, the running container is silently out of date.
+
+**Example**:
+```
+ModuleNotFoundError: No module named 'contracts.events'
+```
+in `enriched_consumer.py` line 27:
+```python
+from contracts.events.nlp.article_enriched import decode_raw_array
+```
+even though `libs/contracts/src/contracts/events/nlp/article_enriched.py` exists in the source tree.
+
+**Fix**:
+```bash
+docker compose build <service-name>
+docker compose up -d --no-deps <service-name>
+```
+
+**Prevention**:
+- After adding a new Python module to a shared library, rebuild ALL containers that import that library
+- Add a CI step that checks the installed package version in the running container against the source version on startup
+- Log the installed `contracts` package version at consumer startup: `importlib.metadata.version("contracts")` — this makes version drift immediately visible in logs
+
+**Regression test**: observe `kafka_consumer_started` log + successful `enriched_article_processed` after rebuild
+
+---
