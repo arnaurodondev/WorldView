@@ -93,7 +93,28 @@ class ListSignalsUseCase:
         items: list[SignalData] = []
         for row in rows:
             try:
-                payload = json.loads(row["payload_avro"])
+                # PLAN-0062 F-006 read-side compatibility: outbox rows written
+                # *after* the producer migration carry Confluent-Avro framed
+                # bytes (5-byte ``\x00<schema-id>`` header + Avro body).
+                # Pre-migration rows are still raw JSON bytes — sniff the magic
+                # byte and dispatch.  The Avro branch is preferred; the JSON
+                # fallback exists only until legacy rows drain.
+                # TODO PLAN-0062-followup: drop JSON branch once legacy outbox rows drain.
+                raw = row["payload_avro"]
+                if isinstance(raw, bytes | bytearray) and raw[:1] == b"\x00":
+                    from messaging.kafka.schema_paths import (  # type: ignore[import-untyped]
+                        get_schema_path,
+                    )
+                    from messaging.kafka.serialization_utils import (  # type: ignore[import-untyped]
+                        deserialize_confluent_avro,
+                    )
+
+                    payload = deserialize_confluent_avro(
+                        get_schema_path("nlp.signal.detected.v1.avsc"),
+                        bytes(raw),
+                    )
+                else:
+                    payload = json.loads(raw)
                 items.append(
                     SignalData(
                         signal_id=UUID(payload.get("event_id", str(row["event_id"]))),
@@ -117,7 +138,13 @@ class ListSignalsUseCase:
                     ),
                 )
             except Exception:
-                _log.debug("signals.list_skip_malformed_payload", exc_info=True)
+                # PLAN-0062 F-006: silent drops are unacceptable for produced
+                # signals — promote to ``warning`` with a stable event name so
+                # the metric is observable in production logs.
+                _log.warning(
+                    "signals_list_skip_malformed_payload",
+                    exc_info=True,
+                )
                 continue
 
         return items, int(total)

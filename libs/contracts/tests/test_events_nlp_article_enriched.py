@@ -106,6 +106,29 @@ class TestRoundTrip:
         decoded = decode_raw_array(encoded)
         assert decoded == items
 
+    # ── PLAN-0062 F-009: edge cases for decode_raw_array ──────────────────
+
+    def test_decode_raw_array_non_list_root(self) -> None:
+        """A JSON object root (not list) decodes to ``[]`` — the helper is
+        forgiving so a malformed extraction does not crash the consumer.
+        """
+        assert decode_raw_array('{"a": 1}') == []
+
+    def test_decode_raw_array_filters_non_dict_items(self) -> None:
+        """List items that are not dicts (ints, strings, nested lists) are
+        silently dropped; only dict items survive.
+        """
+        assert decode_raw_array('[1, 2, {"k": "v"}]') == [{"k": "v"}]
+
+    def test_decode_raw_array_oversized_returns_empty(self) -> None:
+        """A blob > 16 MiB returns ``[]`` immediately — defence-in-depth
+        against poison messages.
+        """
+        # 17 MiB JSON list — still well-formed but over the cap.
+        oversized = "[" + ",".join(['{"k":"v"}'] * 1) + "]"
+        oversized = oversized + " " * (17 * 1024 * 1024)
+        assert decode_raw_array(oversized) == []
+
 
 class TestAvroSerialization:
     def test_to_dict_serializes_with_fastavro(self) -> None:

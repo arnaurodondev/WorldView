@@ -293,6 +293,28 @@ class TestPersistEnrichment:
         kwargs = repos.outbox_append.call_args.kwargs
         assert kwargs["topic"] == "entity.canonical.created.v1"
 
+        # PLAN-0062 F-016: outbox payload must be Confluent-Avro framed
+        # (5-byte ``\x00<schema-id>`` header + Avro body), not raw JSON.
+        # Mirrors the assertion pattern in tests/.../test_contradiction.py
+        # so producer-side R28 enforcement is regression-tested at the
+        # outbox-row construction site.
+        from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
+        from messaging.kafka.serialization_utils import (  # type: ignore[import-untyped]
+            deserialize_confluent_avro,
+        )
+
+        payload_avro = kwargs["payload_avro"]
+        assert isinstance(payload_avro, bytes)
+        assert payload_avro[:1] == b"\x00", (
+            f"Expected Confluent magic byte, got 0x{payload_avro[0]:02x} "
+            "— producer is still emitting raw JSON (R28 violation)."
+        )
+        decoded = deserialize_confluent_avro(
+            get_schema_path("entity.canonical.created.v1.avsc"),
+            payload_avro,
+        )
+        assert decoded.get("entity_id") == str(entity_id)
+
     async def test_skips_ticker_and_isin_when_absent(self) -> None:
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 

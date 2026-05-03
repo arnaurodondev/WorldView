@@ -381,8 +381,43 @@ class TestAvroDeserialization:
     def test_falls_back_to_json_for_legacy_payload(self) -> None:
         import json
 
+        from structlog.testing import capture_logs
+
         consumer, _ = _make_consumer()
         schema_path = consumer.get_schema_path("intelligence.contradiction.v1")
         legacy = json.dumps({"event_id": "x", "event_type": "intelligence.contradiction"}).encode()
-        decoded = consumer.deserialize_value(legacy, schema_path=schema_path)
+        # PLAN-0062 F-021: every JSON-fallback hit must emit a structured warning.
+        with capture_logs() as logs:
+            decoded = consumer.deserialize_value(legacy, schema_path=schema_path)
         assert decoded["event_type"] == "intelligence.contradiction"
+        warnings = [le for le in logs if le.get("event") == "intelligence_consumer.legacy_json_payload"]
+        assert warnings, "expected intelligence_consumer.legacy_json_payload warning"
+
+    # ── PLAN-0062 F-018: oversized JSON-fallback payload ─────────────────
+
+    @pytest.mark.unit
+    def test_json_fallback_oversized_payload_raises_malformed_data_error(self) -> None:
+        """A JSON-fallback payload above the 16 MiB cap must raise
+        :class:`MalformedDataError` BEFORE ``json.loads`` is called.
+        """
+        from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
+
+        consumer, _ = _make_consumer()
+        schema_path = consumer.get_schema_path("intelligence.contradiction.v1")
+        payload = b'{"x":"' + b"a" * (17 * 1024 * 1024) + b'"}'
+        with pytest.raises(MalformedDataError):
+            consumer.deserialize_value(payload, schema_path=schema_path)
+
+    # ── PLAN-0062 F-015: malformed Avro raises non-JSONDecodeError ────────
+
+    @pytest.mark.unit
+    def test_malformed_avro_raises(self) -> None:
+        """Magic byte present + truncated body — must NOT route to JSON path."""
+        consumer, _ = _make_consumer()
+        schema_path = consumer.get_schema_path("intelligence.contradiction.v1")
+        garbage = b"\x00\x00\x00\x00\x01\x42"
+        with pytest.raises(Exception) as exc_info:
+            consumer.deserialize_value(garbage, schema_path=schema_path)
+        import json
+
+        assert not isinstance(exc_info.value, json.JSONDecodeError)

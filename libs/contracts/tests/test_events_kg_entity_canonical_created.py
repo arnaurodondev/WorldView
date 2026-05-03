@@ -74,6 +74,20 @@ class TestSchemaAlignment:
                 return
         pytest.fail("event_type missing from schema")
 
+    def test_alias_texts_default_is_empty_list(self) -> None:
+        """PLAN-0062 F-012: ``alias_texts`` must default to ``[]`` so producers
+        omitting the field do not break Confluent Schema Registry compatibility
+        and consumers can rely on a stable empty default.
+        """
+        schema = _load_schema()
+        for f in schema["fields"]:
+            if f["name"] == "alias_texts":
+                assert (
+                    f.get("default", "MISSING") == []
+                ), f"alias_texts default expected [] but got {f.get('default', 'MISSING')!r}"
+                return
+        pytest.fail("alias_texts missing from schema")
+
 
 # ---------------------------------------------------------------------------
 # Round-trip
