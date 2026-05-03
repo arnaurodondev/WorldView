@@ -95,6 +95,7 @@ _EXTRACTION_SCHEMA: dict[str, object] = {
                     "predicate": {"type": "string"},
                     "object_ref": {"type": "string"},
                     "confidence": {"type": "number"},
+                    "evidence_text": {"type": "string"},
                     "entity_provisional": {"type": "boolean"},
                     "provisional_queue_id": {"type": ["string", "null"]},
                 },

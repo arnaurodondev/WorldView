@@ -100,7 +100,7 @@ class DeepSeekExtractionAdapter:
                         ],
                         response_format={"type": "json_object"},
                         temperature=0.0,
-                        max_tokens=512,
+                        max_tokens=2048,
                         extra_body={
                             "reasoning_effort": "none",
                             "prompt_cache_key": "kg_extraction_v1",
