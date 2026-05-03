@@ -6,7 +6,7 @@ from prompts._base import PromptTemplate
 
 DEEP_EXTRACTION = PromptTemplate(
     name="deep_extraction",
-    version="1.1",
+    version="1.2",
     description=(
         "Structured financial intelligence extraction prompt for DeepSeek-V4-Flash / "
         "OpenAI-compatible models. Extracts events, claims, and relations from a document passage."
@@ -29,7 +29,14 @@ DEEP_EXTRACTION = PromptTemplate(
         " | PRODUCT_LAUNCH | LEGAL | MACRO | ANALYST_RATING | CAPITAL_RAISE | OTHER\n"
         "  claim_type: REVENUE_GROWTH | MARGIN_CHANGE | EPS_BEAT | EPS_MISS | GUIDANCE_RAISE"
         " | GUIDANCE_CUT | HEADCOUNT_CHANGE | DEBT_CHANGE | OTHER\n"
-        "  polarity: positive | negative | neutral | mixed\n\n"
+        "  polarity: positive | negative | neutral | mixed\n"
+        "  predicate (relation type — pick the closest match, no other values allowed):\n"
+        "    acquired_by | analyst_rating | board_member_of | competes_with | corporate_action\n"
+        "    | credit_rating | earnings_guidance | earnings_released | employs | has_executive\n"
+        "    | headquartered_in | investment_in | is_in_industry | is_in_sector | issues_debt\n"
+        "    | listed_on | market_share_claim | operates_in_country | owns_stake_in | partner_of\n"
+        "    | price_target | produces | regulates | revenue_from_country | sentiment_signal\n"
+        "    | subsidiary_of | supplier_of\n\n"
         "DATES: valid_from / valid_to must be ISO-8601 (YYYY-MM-DD) copied verbatim from the "
         "text. If no date appears in the text, set to null. Never estimate or calculate a date.\n\n"
         "NUMERICAL VALUES: financial figures (percentages, amounts, counts) must appear "

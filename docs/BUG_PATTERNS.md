@@ -19,7 +19,7 @@
 | [Testing](bug-patterns/testing.md) | `bug-patterns/testing.md` | 26 | pytest, AsyncMock, fixtures, Vitest, pre-commit, CI |
 | [Frontend](bug-patterns/frontend.md) | `bug-patterns/frontend.md` | 29 | React, Next.js, WebSocket/SSE, TypeScript, CSS |
 | [Config & Docker](bug-patterns/config-docker.md) | `bug-patterns/config-docker.md` | 28 | pydantic-settings, Docker, Compose, env vars, images |
-| [ML & LLM](bug-patterns/ml-llm.md) | `bug-patterns/ml-llm.md` | 25 | Ollama, GLiNER, DeepInfra, embeddings, LLM prompt patterns |
+| [ML & LLM](bug-patterns/ml-llm.md) | `bug-patterns/ml-llm.md` | 26 | Ollama, GLiNER, DeepInfra, embeddings, LLM prompt patterns |
 | [Observability](bug-patterns/observability.md) | `bug-patterns/observability.md` | 9 | Prometheus, Grafana, Alertmanager, structlog, OTel |
 | [Workers & Schedulers](bug-patterns/worker-scheduler.md) | `bug-patterns/worker-scheduler.md` | 36 | task scheduling, lease patterns, backfill, watermarks, rate limiting |
 | [API & Contracts](bug-patterns/api-contracts.md) | `bug-patterns/api-contracts.md` | 21 | FastAPI, Pydantic, API contract drift, PRD assumptions, gateways |
@@ -333,6 +333,7 @@
 | BP-336 | `user.tab()` Inside Radix Dialog Focus Trap Does Not Reliably Fire Blur on NumberInput in jsdom | Frontend | [bug-patterns/frontend.md](bug-patterns/frontend.md#bp-336) |
 | BP-337 | Qwen3.x `reasoning_content` bleed-through: `reasoning_effort=none` silently ignored → thinking chain read as response → JSON parse fails | ML & LLM | [bug-patterns/ml-llm.md](bug-patterns/ml-llm.md#bp-337) |
 | BP-338 | Small-model (≤1B) alias-list repetition truncates JSON at max_tokens — partial-JSON recovery strips aliases array to preserve scalar fields | ML & LLM | [bug-patterns/ml-llm.md](bug-patterns/ml-llm.md#bp-338) |
+| BP-339 | `reasoning_effort=none` on Qwen3.x description models: primary returns `'\n'` (empty), fallback outputs words separated by `\n\n` — NEVER pass `reasoning_effort` to Qwen3 description adapter | ML & LLM | [bug-patterns/ml-llm.md](bug-patterns/ml-llm.md#bp-339) |
 
 ---
 

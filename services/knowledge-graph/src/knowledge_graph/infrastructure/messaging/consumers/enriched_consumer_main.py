@@ -64,12 +64,26 @@ async def main() -> None:
     # Valkey for dedup
     valkey = create_valkey_client_from_url(settings.valkey_url)
 
-    # Embedding client (required — exits if unavailable)
-    embedding_client = OllamaEmbeddingAdapter(
+    # Embedding client (required — exits if unavailable).
+    # _EmbeddingBridgeClient wraps OllamaEmbeddingAdapter (batch EmbeddingInput API)
+    # to satisfy the canonicalization block's embed(str) -> list[float] protocol.
+    # The adapter's embed() takes list[EmbeddingInput]; passing a bare str causes it
+    # to iterate characters, crashing with "'str' has no attribute 'instruction_prefix'".
+    _raw_embedding_adapter = OllamaEmbeddingAdapter(
         base_url=settings.ollama_base_url,
         model_id=settings.embedding_model_id,
         semaphore=asyncio.Semaphore(4),
     )
+    _embedding_model_id = settings.embedding_model_id
+
+    from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
+
+    class _EmbeddingBridgeClient:
+        async def embed(self, text: str) -> list[float]:  # type: ignore[override]
+            outputs = await _raw_embedding_adapter.embed([EmbeddingInput(text=text, model_id=_embedding_model_id)])
+            return outputs[0].embedding
+
+    embedding_client: object = _EmbeddingBridgeClient()
 
     # Direct Kafka producer for entity.dirtied.v1 (produced outside outbox).
     # ConfluentDirectProducer wraps confluent_kafka.Producer to expose

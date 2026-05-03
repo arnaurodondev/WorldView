@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from contracts.events.nlp.article_enriched import decode_raw_array  # type: ignore[import-untyped]
 from knowledge_graph.application.blocks.canonicalization import (
     CanonicalizationResult,
     EmbeddingClientProtocol,
@@ -198,8 +199,6 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
         # producers used direct list fields (raw_relations / raw_events /
         # raw_claims) — fall back to those when the new fields are absent so
         # in-flight legacy messages still materialise correctly.
-        from contracts.events.nlp.article_enriched import decode_raw_array  # type: ignore[import-untyped]
-
         raw_relations_data: list[dict[str, Any]] = (
             decode_raw_array(value.get("raw_relations_json"))
             if value.get("raw_relations_json") is not None

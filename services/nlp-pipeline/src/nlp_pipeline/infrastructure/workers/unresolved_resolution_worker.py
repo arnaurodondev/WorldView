@@ -258,6 +258,11 @@ class UnresolvedResolutionWorker:
         # Optional Kafka producer for entity.provisional.queued.v1 hot-path events.
         # When None, only the polling sweep picks up new rows (no hot path).
         self._direct_producer = direct_producer
+        # Persistent HTTP client for DeepInfra classification calls (Fix C).
+        # A single client reuses TCP connections across all per-mention calls,
+        # which allows DeepInfra's server-side KV prefix cache to activate via
+        # prompt_cache_key (cache misses when every call creates a new client).
+        self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(settings.unresolved_resolution_llm_timeout_s))
 
     # ------------------------------------------------------------------
     # Public API
@@ -772,72 +777,72 @@ class UnresolvedResolutionWorker:
 
         Returns (ResolutionOutcome, noise_reason | None).
         """
-        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_s)) as client:
-            try:
-                response = await asyncio.wait_for(
-                    client.post(
-                        f"{api_base_url.rstrip('/')}/chat/completions",
-                        headers={"Authorization": f"Bearer {api_key}"},
-                        json={
-                            "model": api_model_id,
-                            "messages": [
-                                {"role": "system", "content": _CLASSIFICATION_SYSTEM_PROMPT},
-                                {"role": "user", "content": user_content},
-                            ],
-                            "response_format": {"type": "json_object"},
-                            "temperature": 0.0,
-                            "max_tokens": 128,
-                            # reasoning_effort=none: disables Qwen3.x chain-of-thought so
-                            # the answer goes to content (not reasoning_content). Saves
-                            # 1-3s and token cost on a binary classification task.
-                            "reasoning_effort": "none",
-                            # prompt_cache_key: DeepInfra caches the system-prompt prefix
-                            # KV tensors when requests share the same key. Cost is charged
-                            # only for new (user-role) tokens after the first cache miss.
-                            "prompt_cache_key": "entity_classification_v1",
-                        },
-                    ),
-                    timeout=timeout_s,
-                )
-                response.raise_for_status()
-                msg = response.json()["choices"][0]["message"]
-                # With reasoning_effort=none the answer is in content (reasoning_content=null).
-                # Fallback to reasoning_content for models that don't honour reasoning_effort.
-                raw = msg.get("content") or msg.get("reasoning_content") or ""
-                parsed = _extract_json_object(raw)
-                is_entity = bool(parsed.get("is_entity", False))
-                reason: str | None = str(parsed.get("reason", "")) or None
-            except (json.JSONDecodeError, KeyError, ValueError) as parse_exc:
-                # F-103 fix: surface the raw LLM response so failures are diagnosable.
-                logger.warning(
-                    "unresolved_resolution_json_parse_failure",
-                    mention_id=str(mention.mention_id),
-                    surface=mention.mention_text[:80] if mention.mention_text else None,
-                    raw=raw[:500] if isinstance(raw, str) else repr(raw)[:500],
-                    error=str(parse_exc),
-                    provider="deepinfra",
-                )
-                if self._usage_logger is not None:
-                    asyncio.create_task(  # fire-and-forget  # noqa: RUF006
-                        self._usage_logger.log(
-                            model_id=api_model_id,
-                            provider="deepinfra",
-                            capability="extraction",
-                            tokens_in=0,
-                            tokens_out=0,
-                            latency_ms=0,
-                            estimated_cost_usd=0.0,
-                            success=False,
-                        )
+        client = self._http_client
+        try:
+            response = await asyncio.wait_for(
+                client.post(
+                    f"{api_base_url.rstrip('/')}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={
+                        "model": api_model_id,
+                        "messages": [
+                            {"role": "system", "content": _CLASSIFICATION_SYSTEM_PROMPT},
+                            {"role": "user", "content": user_content},
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.0,
+                        "max_tokens": 128,
+                        # reasoning_effort=none: disables Qwen3.x chain-of-thought so
+                        # the answer goes to content (not reasoning_content). Saves
+                        # 1-3s and token cost on a binary classification task.
+                        "reasoning_effort": "none",
+                        # prompt_cache_key: DeepInfra caches the system-prompt prefix
+                        # KV tensors when requests share the same key. Cost is charged
+                        # only for new (user-role) tokens after the first cache miss.
+                        "prompt_cache_key": "entity_classification_v1",
+                    },
+                ),
+                timeout=timeout_s,
+            )
+            response.raise_for_status()
+            msg = response.json()["choices"][0]["message"]
+            # With reasoning_effort=none the answer is in content (reasoning_content=null).
+            # Fallback to reasoning_content for models that don't honour reasoning_effort.
+            raw = msg.get("content") or msg.get("reasoning_content") or ""
+            parsed = _extract_json_object(raw)
+            is_entity = bool(parsed.get("is_entity", False))
+            reason: str | None = str(parsed.get("reason", "")) or None
+        except (json.JSONDecodeError, KeyError, ValueError) as parse_exc:
+            # F-103 fix: surface the raw LLM response so failures are diagnosable.
+            logger.warning(
+                "unresolved_resolution_json_parse_failure",
+                mention_id=str(mention.mention_id),
+                surface=mention.mention_text[:80] if mention.mention_text else None,
+                raw=raw[:500] if isinstance(raw, str) else repr(raw)[:500],
+                error=str(parse_exc),
+                provider="deepinfra",
+            )
+            if self._usage_logger is not None:
+                asyncio.create_task(  # fire-and-forget  # noqa: RUF006
+                    self._usage_logger.log(
+                        model_id=api_model_id,
+                        provider="deepinfra",
+                        capability="extraction",
+                        tokens_in=0,
+                        tokens_out=0,
+                        latency_ms=0,
+                        estimated_cost_usd=0.0,
+                        success=False,
                     )
-                return ResolutionOutcome.UNRESOLVED, None
-            except Exception:
-                logger.warning(
-                    "unresolved_resolution_external_api_error",
-                    mention_id=str(mention.mention_id),
-                    exc_info=True,
                 )
-                return ResolutionOutcome.UNRESOLVED, None
+            return ResolutionOutcome.UNRESOLVED, None
+        except Exception:
+            logger.warning(
+                "unresolved_resolution_external_api_error",
+                mention_id=str(mention.mention_id),
+                exc_info=True,
+            )
+            return ResolutionOutcome.UNRESOLVED, None
 
         # Log usage (success)
         if self._usage_logger is not None:
