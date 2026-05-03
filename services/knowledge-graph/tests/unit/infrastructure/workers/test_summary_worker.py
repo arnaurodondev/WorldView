@@ -15,8 +15,17 @@ _EV_REPO = "knowledge_graph.infrastructure.intelligence_db.repositories.relation
 _SUM_REPO = "knowledge_graph.infrastructure.intelligence_db.repositories.relation_summary.RelationSummaryRepository"
 
 
-def _make_session(stale_relations: list, evidence_rows: list, existing_summary: dict | None) -> tuple:
-    """Return (sf, _session, rel_repo, ev_repo, sum_repo)."""
+def _make_session(
+    stale_relations: list,
+    evidence_rows: list,
+    existing_summary: dict | None,
+    *,
+    raw_fallback_rows: list | None = None,
+) -> tuple:
+    """Return (sf, _session, rel_repo, ev_repo, sum_repo).
+
+    ``raw_fallback_rows`` is what ``get_raw_for_relation_id`` returns (default []).
+    """
     session = AsyncMock()
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
@@ -30,6 +39,7 @@ def _make_session(stale_relations: list, evidence_rows: list, existing_summary: 
 
     mock_ev_repo = AsyncMock()
     mock_ev_repo.get_all_for_relation = AsyncMock(return_value=evidence_rows)
+    mock_ev_repo.get_raw_for_relation_id = AsyncMock(return_value=raw_fallback_rows or [])
 
     mock_summary_repo = AsyncMock()
     mock_summary_repo.get_current = AsyncMock(return_value=existing_summary)
@@ -141,3 +151,102 @@ class TestSummaryWorkerHashSkip:
 
         llm.extract.assert_not_awaited()
         mock_sum.insert_new.assert_not_awaited()
+
+
+class TestSummaryWorkerRawFallback:
+    """BP-343: SummaryWorker falls back to relation_evidence_raw when immutable table is empty."""
+
+    def test_falls_back_to_raw_when_immutable_empty(self) -> None:
+        """get_all_for_relation returns [] → get_raw_for_relation_id called and used."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        raw_rows = [
+            {"evidence_text": "Apple reported record revenue.", "canonicalized_evidence_text": None},
+            {"evidence_text": "Tim Cook cited iPhone sales growth.", "canonicalized_evidence_text": None},
+        ]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000010"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(
+            stale_relations,
+            [],  # immutable table empty
+            None,
+            raw_fallback_rows=raw_rows,
+        )
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(
+            return_value=ExtractionOutput(
+                result={"summary": "Apple had strong performance."},
+                raw_response="ok",
+                model_id="m",
+            )
+        )
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm)
+            asyncio.run(worker.run())
+
+        mock_ev.get_raw_for_relation_id.assert_awaited_once()
+        llm.extract.assert_awaited_once()
+        mock_sum.insert_new.assert_awaited_once()
+
+    def test_skips_when_both_tables_empty(self) -> None:
+        """Both immutable and raw return [] → LLM never called."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000011"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(
+            stale_relations,
+            [],
+            None,
+            raw_fallback_rows=[],
+        )
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock()
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm)
+            asyncio.run(worker.run())
+
+        mock_ev.get_raw_for_relation_id.assert_awaited_once()
+        llm.extract.assert_not_awaited()
+        mock_sum.insert_new.assert_not_awaited()
+
+    def test_uses_immutable_when_present_does_not_query_raw(self) -> None:
+        """When immutable table has rows, raw fallback is never queried."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        immutable_rows = [{"evidence_text": "Apple grew revenue.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000012"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(
+            stale_relations,
+            immutable_rows,
+            None,
+            raw_fallback_rows=[{"evidence_text": "should not be used", "canonicalized_evidence_text": None}],
+        )
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(
+            return_value=ExtractionOutput(result={"summary": "ok"}, raw_response="ok", model_id="m")
+        )
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm)
+            asyncio.run(worker.run())
+
+        mock_ev.get_raw_for_relation_id.assert_not_awaited()
+        llm.extract.assert_awaited_once()

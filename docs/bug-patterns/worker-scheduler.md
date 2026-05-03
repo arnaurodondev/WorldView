@@ -977,3 +977,52 @@ Capture both fields end-to-end:
 ---
 
 ---
+
+### BP-343: SummaryWorker Always Produces Zero Summaries — Missing Evidence Promotion Step
+
+**Category**: Workers & Schedulers
+**Severity**: HIGH
+**First seen**: 2026-05-03
+**Services**: knowledge-graph (S7)
+
+**Symptoms**:
+- `summary_worker_complete summaries_created=0 summaries_skipped=0` every run
+- 26 relations have `summary_stale=true AND confidence IS NOT NULL` but nothing is processed
+- `relation_evidence` table is always empty (0 rows) despite `relation_evidence_raw` having 100+ rows
+
+**Root cause**:
+Two compounding failures:
+1. `RelationEvidenceRepository.insert_immutable()` has zero callers anywhere in the codebase — the "promotion step" from `relation_evidence_raw` → `relation_evidence` was designed but never implemented in any worker
+2. `relation_evidence_raw` had no `evidence_text` column, and `insert_raw()` silently dropped `RawRelation.evidence_text` even though the enriched consumer parsed it from Kafka messages
+Result: `SummaryWorker.get_all_for_relation()` queries `relation_evidence` → always 0 rows → always skips every relation
+
+**Example**:
+```python
+# Bad: SummaryWorker queries only the immutable table (always empty)
+evidence_rows = await ev_repo.get_all_for_relation(relation_id, limit=10)
+if not evidence_rows:
+    continue  # Always hits this — no summaries ever produced
+
+# Good: Fall back to raw staging table until promotion is implemented
+evidence_rows = await ev_repo.get_all_for_relation(relation_id, limit=10)
+if not evidence_rows:
+    evidence_rows = await ev_repo.get_raw_for_relation_id(relation_id, limit=10)
+if not evidence_rows:
+    continue
+```
+
+**Fix**:
+1. Migration 0019: `ALTER TABLE relation_evidence_raw ADD COLUMN evidence_text TEXT`
+2. `insert_raw()`: add `evidence_text: str | None = None` parameter, include in INSERT
+3. `materialize_graph()`: pass `evidence_text=rel.evidence_text` to `insert_raw()`
+4. Add `get_raw_for_relation_id(relation_id, limit)` to `RelationEvidenceRepository` — JOINs `relations` to resolve triple, queries `relation_evidence_raw`
+5. `SummaryWorker.run()`: use `get_raw_for_relation_id()` as fallback when `get_all_for_relation()` returns empty
+
+**Prevention**:
+- Any repository method that has zero callers across the codebase is a red flag — grep for the method name before shipping
+- When designing a two-stage pipeline (raw → immutable), implement both stages in the same PR or the pipeline silently produces no output
+- Add a `SELECT COUNT(*) FROM relation_evidence` to the worker's log output as a health check
+
+**Regression test**: `services/knowledge-graph/tests/unit/infrastructure/workers/test_summary_worker.py::TestSummaryWorkerRawFallback`
+
+---
