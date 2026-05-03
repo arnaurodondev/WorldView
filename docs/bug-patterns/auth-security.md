@@ -2,7 +2,7 @@
 
 > **Category**: auth-security
 > **Description**: JWT/OIDC middleware, SSRF, XSS, injection attacks, tenant isolation, CSP headers, auth bypass, RS256/HS256
-> **Count**: 28 patterns
+> **Count**: 29 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -907,5 +907,59 @@ Removed `'strict-dynamic'` from `script-src`. Security impact is minimal:
 - If `'strict-dynamic'` is required for a hardened deployment, add `export const dynamic = 'force-dynamic'` to every page/layout that must use nonces; otherwise omit `'strict-dynamic'`
 - Add to CI: assert `'strict-dynamic'` absent in `Content-Security-Policy` response header
 - Test file: `apps/worldview-web/__tests__/middleware-csp.test.ts`
+
+---
+
+## BP-341: Scheduler workers call internal services without X-Internal-JWT → 401 on all requests
+
+**Date discovered**: 2026-05-03
+**Service affected**: `knowledge-graph` (FundamentalsRefreshWorker), potentially any scheduler-only process
+
+**Category**: Auth & Security
+**Severity**: HIGH (worker silently skips all entities, no fundamentals embeddings produced)
+
+### Symptom
+
+- `fundamentals_refresh_market_data_unavailable` logged for every ticker entity
+- Prior to instrument_id fix: `earnings_fetch_error status_code=401` for every call
+- Worker reports `refreshed=0 earnings_events_inserted=0 relations_upserted=0`
+- Market-data service logs: `InternalJWTMiddleware: missing Authorization header`
+
+### Root Cause
+
+The `FundamentalsRefreshWorker` creates a bare `httpx.AsyncClient` with no headers. All backend services behind `InternalJWTMiddleware` (market-data, content-store, etc.) require `X-Internal-JWT` in the request header. Scheduler processes have no framework-provided JWT injection — they must generate system JWTs explicitly.
+
+In dev, `MARKET_DATA_INTERNAL_JWT_SKIP_VERIFICATION=true` means any HS256 JWT is accepted (no signature verification). The fix is to generate a minimal HS256 JWT at client construction time.
+
+### Fix
+
+```python
+# At module level in the worker
+import jwt, time
+
+_INTERNAL_JWT_DEV_KEY = "dev-skip-verification-key-for-kg-fundamentals"  # noqa: S105
+
+def _system_jwt_headers() -> dict[str, str]:
+    now = int(time.time())
+    token = jwt.encode(
+        {"iss": "worldview-gateway", "sub": "system:kg-fundamentals-refresh",
+         "user_id": "00000000-0000-0000-0000-000000000000",
+         "tenant_id": "00000000-0000-0000-0000-000000000000",
+         "role": "system", "iat": now, "exp": now + 86400},
+        _INTERNAL_JWT_DEV_KEY, algorithm="HS256",
+    )
+    return {"X-Internal-JWT": token}
+
+# In worker.run():
+http = self._http or _httpx.AsyncClient(timeout=15.0, headers=_system_jwt_headers())
+```
+
+### Prevention
+
+- Any scheduler worker that calls an internal service MUST generate a system JWT — check for `X-Internal-JWT` in the client construction
+- Reference pattern: `services/portfolio/src/portfolio/workers/brokerage_sync_worker.py` `_system_jwt_headers()`
+- For production: the signing key should come from settings (not hardcoded) and `SKIP_VERIFICATION=false`
+
+**Regression test**: `tests/unit/infrastructure/workers/test_fundamentals_refresh_worker.py::TestFundamentalsRefreshWorkerS3Failure::test_successful_fetch_calls_upsert`
 
 ---
