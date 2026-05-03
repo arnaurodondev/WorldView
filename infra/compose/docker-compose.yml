@@ -221,7 +221,7 @@ services:
     environment:
       INTELLIGENCE_DB_URL: "postgresql://postgres:postgres@postgres:5432/intelligence_db"
       EMBEDDING_BASE_URL: "http://ollama:11434"
-      EMBEDDING_MODEL: "bge-large-en-v1.5"
+      EMBEDDING_MODEL: "bge-large:latest"
     restart: "no"
 
   # ── Portfolio migrations (one-shot) ──────────────────────────────────────────
@@ -1657,6 +1657,32 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.insider_transactions_dataset_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # PLAN-0068 Wave A-1 — Consumer 13D-9: earnings calendar events
+  knowledge-graph-earnings-calendar-dataset-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.earnings_calendar_dataset_consumer_main"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]

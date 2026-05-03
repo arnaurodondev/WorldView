@@ -4,6 +4,7 @@
  */
 
 import type {
+  EarningsCalendarResponse,
   EconomicCalendarResponse,
   MarketHeatmapResponse,
   TopMoversResponse,
@@ -160,6 +161,39 @@ export function createDashboardApi(t: string | undefined) {
       return apiFetch<EconomicCalendarResponse>("/v1/fundamentals/economic-calendar", {
         token: t,
       });
+    },
+
+    /**
+     * getEarningsCalendar — upcoming company earnings events (consumer 13D-9)
+     *
+     * WHY separate from getEconomicCalendar: earnings events are corporate
+     * (event_type=corporate in S7 temporal_events) while economic events are
+     * macro (event_type=macro). S9 enforces this split — the proxy injects
+     * event_type=corporate and strips any caller-supplied override (BP-340).
+     *
+     * WHY optional date params: the EarningsCalendarWidget uses the S7 default
+     * window (today + 7 days) when no params are supplied; callers can supply
+     * from_date/to_date to scope a custom range (e.g. the full earnings season
+     * view in a future page).
+     *
+     * DATA SOURCE: S9 GET /v1/fundamentals/earnings-calendar. PLAN-0068 Wave A-2.
+     */
+    getEarningsCalendar(params?: {
+      from_date?: string;
+      to_date?: string;
+      limit?: number;
+    }): Promise<EarningsCalendarResponse> {
+      // Build query string from optional params — only include keys with values
+      // so we never send ?from_date=undefined which confuses some FastAPI validators.
+      const qs = new URLSearchParams();
+      if (params?.from_date) qs.set("from_date", params.from_date);
+      if (params?.to_date) qs.set("to_date", params.to_date);
+      if (params?.limit != null) qs.set("limit", String(params.limit));
+      const query = qs.toString();
+      return apiFetch<EarningsCalendarResponse>(
+        `/v1/fundamentals/earnings-calendar${query ? `?${query}` : ""}`,
+        { token: t },
+      );
     },
 
     /**

@@ -81,6 +81,10 @@ class EventType(StrEnum):
 
     Values are lowercase to match the DB CHECK constraint and the Avro schema field
     ``temporal_event_type``.  Use ``EventType.MACRO`` (not ``"MACRO"``) in all code.
+
+    CORPORATE — added by PLAN-0068 Wave A-1 for earnings calendar events ingested
+    from Finnhub via the EarningsCalendarDatasetConsumer (consumer 13D-9).
+    Requires intelligence-migrations 0018 (adds 'corporate' to the CHECK constraint).
     """
 
     GEOPOLITICAL = "geopolitical"
@@ -89,6 +93,7 @@ class EventType(StrEnum):
     SANCTIONS = "sanctions"
     NATURAL_DISASTER = "natural_disaster"
     OTHER = "other"
+    CORPORATE = "corporate"
 
 
 class ExposureType(StrEnum):
