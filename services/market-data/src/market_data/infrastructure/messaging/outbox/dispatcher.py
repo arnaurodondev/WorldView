@@ -25,7 +25,6 @@ from __future__ import annotations
 import dataclasses
 import uuid as _uuid
 from decimal import Decimal
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from messaging.kafka.dispatcher.base import BaseOutboxDispatcher, DispatcherConfig  # type: ignore[import-untyped]
@@ -34,6 +33,7 @@ from messaging.kafka.producer import (  # type: ignore[import-untyped]
     OutboxEventValueSerializer,
     build_serializing_producer,
 )
+from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from messaging.kafka.schema_registry import (  # type: ignore[import-untyped]
     SchemaRegistryConfig,
     build_schema_registry_client,
@@ -46,20 +46,7 @@ if TYPE_CHECKING:
     from market_data.config import Settings
 
 
-# Canonical Avro schemas live in infra/kafka/schemas/ at the repo root.
-# Walk up the directory tree to find the schemas directory — works in both the
-# development source tree (src/ layout) and the Docker container (installed package).
-def _find_schema_dir() -> Path:
-    relative = Path("infra") / "kafka" / "schemas"
-    for base in Path(__file__).resolve().parents:
-        candidate = base / relative
-        if candidate.is_dir():
-            return candidate
-    msg = f"Could not locate infra/kafka/schemas/ from {__file__}"
-    raise FileNotFoundError(msg)
-
-
-_SCHEMA_DIR = _find_schema_dir()
+_SCHEMA_DIR = find_schema_dir()
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 # ── Static event-type → topic routing ────────────────────────────────────────

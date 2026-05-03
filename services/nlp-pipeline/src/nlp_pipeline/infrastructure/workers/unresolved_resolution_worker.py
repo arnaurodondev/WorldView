@@ -21,30 +21,16 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 import httpx
 
+from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome
 from observability import get_logger  # type: ignore[import-untyped]
 
-
-# Walk up the directory tree to find infra/kafka/schemas/ — works both in
-# development (repo root is a few levels up) and in Docker (schemas copied to
-# /app/infra/kafka/schemas/).  Mirror of the helper in ``article_consumer.py``.
-def _find_schema_dir() -> Path:
-    relative = Path("infra") / "kafka" / "schemas"
-    for base in Path(__file__).resolve().parents:
-        candidate = base / relative
-        if candidate.is_dir():
-            return candidate
-    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
-
-
-_SCHEMA_DIR = _find_schema_dir()
-_PROVISIONAL_QUEUED_SCHEMA_PATH = str(_SCHEMA_DIR / "entity.provisional.queued.v1.avsc")
+_PROVISIONAL_QUEUED_SCHEMA_PATH = get_schema_path("entity.provisional.queued.v1.avsc")
 
 # F-103 fix (2026-04-30): tolerant JSON extractor.
 # DeepInfra/Ollama models occasionally return JSON wrapped in ```json fences```

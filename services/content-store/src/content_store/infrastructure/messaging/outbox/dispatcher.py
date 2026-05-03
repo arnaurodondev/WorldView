@@ -7,7 +7,6 @@ Extends BaseOutboxDispatcher following BP-001: uses OutboxEventValueSerializer
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from content_store.infrastructure.messaging.outbox.unit_of_work import SqlAlchemyUnitOfWork
@@ -17,6 +16,7 @@ from messaging.kafka.producer import (
     OutboxEventValueSerializer,
     build_serializing_producer,
 )
+from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from messaging.kafka.serializer import AvroSerializerConfig, build_avro_serializer
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -28,17 +28,7 @@ if TYPE_CHECKING:
     from messaging.kafka.dispatcher.base import UnitOfWorkWithOutboxProtocol
 
 
-def _find_schema_dir() -> Path:
-    relative = Path("infra") / "kafka" / "schemas"
-    for base in Path(__file__).resolve().parents:
-        candidate = base / relative
-        if candidate.is_dir():
-            return candidate
-    msg = f"Could not locate infra/kafka/schemas/ from {__file__}"
-    raise FileNotFoundError(msg)
-
-
-_SCHEMA_DIR = _find_schema_dir()
+_SCHEMA_DIR = find_schema_dir()
 logger = get_logger(__name__)
 
 

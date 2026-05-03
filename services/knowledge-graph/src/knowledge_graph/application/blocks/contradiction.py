@@ -15,7 +15,6 @@ Writes ``relation_contradiction_links`` and emits
 from __future__ import annotations
 
 import dataclasses
-from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -24,19 +23,9 @@ from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.application.ports.repositories import (
     TOPIC_CONTRADICTION,
 )
+from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 
-
-def _find_schema_dir() -> Path:
-    """Locate ``infra/kafka/schemas/`` whether running locally or in Docker."""
-    relative = Path("infra") / "kafka" / "schemas"
-    for base in Path(__file__).resolve().parents:
-        candidate = base / relative
-        if candidate.is_dir():
-            return candidate
-    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
-
-
-_CONTRADICTION_SCHEMA_PATH = str(_find_schema_dir() / "intelligence.contradiction.v1.avsc")
+_CONTRADICTION_SCHEMA_PATH = get_schema_path("intelligence.contradiction.v1.avsc")
 
 if TYPE_CHECKING:
     from knowledge_graph.application.ports.repositories import (

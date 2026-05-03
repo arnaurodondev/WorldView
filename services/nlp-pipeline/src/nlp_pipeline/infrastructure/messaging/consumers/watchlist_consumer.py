@@ -10,7 +10,6 @@ PRD §6.7 Block 5 watchlist signal sourcing.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -20,6 +19,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -32,22 +32,7 @@ _EVENT_ITEM_ADDED = "watchlist.item_added"
 _EVENT_ITEM_DELETED = "watchlist.item_deleted"
 
 
-# F-102 fix (2026-04-30 / BP-122 lineage): producer (S1 portfolio) emits
-# Confluent-Avro framed bytes (5-byte header: 0x00 magic + 4-byte schema id).
-# A bare ``json.loads(raw)`` triggers Python's RFC-4627 encoding sniff and
-# explodes on the leading nulls. Locate the schema file the same way the
-# article_consumer does so we can decode the wire format properly.
-def _find_schema_dir() -> Path:
-    relative = Path("infra") / "kafka" / "schemas"
-    for base in Path(__file__).resolve().parents:
-        candidate = base / relative
-        if candidate.is_dir():
-            return candidate
-    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
-
-
-_SCHEMA_DIR = _find_schema_dir()
-_WATCHLIST_SCHEMA_PATH = str(_SCHEMA_DIR / "portfolio.watchlist.updated.v1.avsc")
+_WATCHLIST_SCHEMA_PATH = get_schema_path("portfolio.watchlist.updated.v1.avsc")
 
 
 class _NoOpUnitOfWork:

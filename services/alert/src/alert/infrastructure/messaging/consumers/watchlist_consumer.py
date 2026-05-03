@@ -12,7 +12,6 @@ Behaviour:
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
@@ -21,6 +20,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -32,21 +32,7 @@ _TOPIC = "portfolio.watchlist.updated.v1"
 _EVENT_TYPE_DELETED = "watchlist.item_deleted"
 
 
-# F-102 fix (BP-122): same Confluent-Avro decoder pattern as S6 watchlist
-# consumer. Producer (S1) emits `\x00` magic + 4-byte schema id + Avro
-# binary. Without explicit handling, ``json.loads(raw)`` autodetected
-# UTF-32-BE on the leading nulls and dead-lettered every event.
-def _find_schema_dir() -> Path:
-    relative = Path("infra") / "kafka" / "schemas"
-    for base in Path(__file__).resolve().parents:
-        candidate = base / relative
-        if candidate.is_dir():
-            return candidate
-    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
-
-
-_SCHEMA_DIR = _find_schema_dir()
-_WATCHLIST_SCHEMA_PATH = str(_SCHEMA_DIR / "portfolio.watchlist.updated.v1.avsc")
+_WATCHLIST_SCHEMA_PATH = get_schema_path("portfolio.watchlist.updated.v1.avsc")
 
 
 # ── Minimal no-op UoW ─────────────────────────────────────────────────────────

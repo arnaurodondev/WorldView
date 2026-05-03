@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC, date, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from market_data.domain.entities import FundamentalsRecord, Instrument, Security
@@ -21,6 +20,7 @@ from market_data.infrastructure.db.metric_extractor import extract_metrics
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
+from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
@@ -42,18 +42,7 @@ _PRIMARY_TICKER_RE_PAT = re.compile(r"^[A-Z0-9.\-:]{1,20}$")
 _ISIN_RE_PAT = re.compile(r"^[A-Z0-9]{12}$")
 
 
-# Walk up the directory tree to find infra/kafka/schemas/ — works both in development
-# (repo root is a few levels up) and in Docker (schemas copied to /app/infra/kafka/schemas/).
-def _find_schema_dir() -> Path:
-    relative = Path("infra") / "kafka" / "schemas"
-    for base in Path(__file__).resolve().parents:
-        candidate = base / relative
-        if candidate.is_dir():
-            return candidate
-    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
-
-
-_SCHEMA_DIR = _find_schema_dir()
+_SCHEMA_DIR = find_schema_dir()
 _TOPIC = "market.dataset.fetched"
 _DATASET_TYPE = "fundamentals"  # market-ingestion: DatasetType.FUNDAMENTALS = "fundamentals" (lowercase)
 _GROUP_ID = "market-data-fundamentals"

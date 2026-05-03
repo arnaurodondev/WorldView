@@ -13,7 +13,6 @@ Backfill suppression is delegated to :class:`AlertFanoutUseCase`.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
@@ -22,6 +21,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -38,21 +38,10 @@ _KNOWN_TOPICS: frozenset[str] = frozenset(
 )
 
 
-def _find_schema_dir() -> Path:
-    """Locate ``infra/kafka/schemas/`` whether running locally or in Docker."""
-    relative = Path("infra") / "kafka" / "schemas"
-    for base in Path(__file__).resolve().parents:
-        candidate = base / relative
-        if candidate.is_dir():
-            return candidate
-    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
-
-
-_SCHEMA_DIR = _find_schema_dir()
 _TOPIC_SCHEMA_PATHS: dict[str, str] = {
-    "nlp.signal.detected.v1": str(_SCHEMA_DIR / "nlp.signal.detected.v1.avsc"),
-    "graph.state.changed.v1": str(_SCHEMA_DIR / "graph.state.changed.v1.avsc"),
-    "intelligence.contradiction.v1": str(_SCHEMA_DIR / "intelligence.contradiction.v1.avsc"),
+    "nlp.signal.detected.v1": get_schema_path("nlp.signal.detected.v1.avsc"),
+    "graph.state.changed.v1": get_schema_path("graph.state.changed.v1.avsc"),
+    "intelligence.contradiction.v1": get_schema_path("intelligence.contradiction.v1.avsc"),
 }
 
 
