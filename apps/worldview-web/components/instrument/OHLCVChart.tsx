@@ -308,6 +308,101 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   const vwapRef = useRef<ISeriesApi<"Line"> | null>(null);                // VWAP line (main price pane)
   const volMA20Ref = useRef<ISeriesApi<"Line"> | null>(null);             // Volume MA20 (volume pane)
   const vwapLineRef = useRef<ISeriesApi<"Line"> | null>(null);            // VWAP anchored (main pane, vol submenu)
+  // PLAN-0059 H-2: compare overlay series ref — null when no compare active.
+  // WHY ref (not state): series handles are mutable lightweight-charts objects;
+  // storing in state would trigger re-renders on every setData() call.
+  const compareSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+
+  // ── PLAN-0059 H-2: Compare overlay state ──────────────────────────────────
+  // WHY three states (not one object): each piece changes at a different time.
+  // showCompareInput: controlled by the +CMP button (open/close the popover).
+  // compareInput: the text typed in the popover input (ephemeral, reset on submit).
+  // compareInstrumentId: the resolved instrument_id after searchInstruments resolves.
+  const [showCompareInput, setShowCompareInput] = useState(false);
+  const [compareInput, setCompareInput] = useState("");
+  const [compareInstrumentId, setCompareInstrumentId] = useState<string | null>(null);
+
+  // ── PLAN-0059 H-2: Compare overlay OHLCV query ────────────────────────────
+  // WHY enabled on compareInstrumentId (not compareInput): we only fetch after
+  // the instrument has been resolved via searchInstruments. Fetching on raw
+  // ticker text would trigger on every keystroke and produce noisy requests.
+  const { data: compareData } = useQuery({
+    queryKey: ["ohlcv", compareInstrumentId, timeframe],
+    queryFn: () =>
+      createGateway(accessToken).getOHLCV(compareInstrumentId!, { timeframe }),
+    enabled: !!accessToken && !!compareInstrumentId,
+    staleTime: 60_000,
+  });
+
+  // ── PLAN-0059 H-2: Apply compare series data when resolved ────────────────
+  // WHY effect (not inline): compareData arrives async from the useQuery hook.
+  // We react to it by adding/updating a LineSeries on the already-mounted chart.
+  // Using an effect with [compareData] dep is the canonical pattern.
+  useEffect(() => {
+    if (!compareData?.bars?.length || !chartRef.current) return;
+
+    async function addCompareSeries() {
+      try {
+        const { LineSeries } = await import("lightweight-charts");
+        // WHY removeSeries before re-adding: if the user submits a second compare
+        // ticker while one is already active, we need to remove the old series first.
+        // removeSeries is idempotent — calling on a null ref is guarded above.
+        if (compareSeriesRef.current && chartRef.current) {
+          chartRef.current.removeSeries(compareSeriesRef.current);
+          compareSeriesRef.current = null;
+        }
+        if (!chartRef.current) return;
+        const compareSeries = chartRef.current.addSeries(LineSeries, {
+          // WHY amber (#F59E0B): visually distinct from the green/red candlesticks
+          // and from the blue MA lines. Amber signals "overlay / reference" context.
+          color: "#F59E0B",
+          lineWidth: 1,
+          priceScaleId: "compare",
+          // WHY "compare" priceScaleId (not "right"): the compare ticker has a
+          // different absolute price scale. Sharing the right scale with the main
+          // series would cause one of them to render as a flat line.
+        });
+        compareSeriesRef.current = compareSeries;
+
+        // Normalise compare bars to percentage-change relative to first close.
+        // WHY normalise: the compare overlay purpose is to show relative performance
+        // — not absolute price. A $700 BRK.A overlaid on $180 AAPL would hide all
+        // AAPL price action. Normalising to % gain from first bar solves this.
+        const bars = compareData!.bars;
+        const baseClose = bars[0]?.close ?? 1;
+        const normalised = bars.map((b) => ({
+          time: Math.floor(new Date(b.timestamp).getTime() / 1000) as UTCTimestamp,
+          value: ((b.close - baseClose) / baseClose) * 100,
+        }));
+        compareSeries.setData(normalised);
+      } catch {
+        // WHY silent catch: compare overlay failure must not crash the main chart.
+        // The primary series is already rendered; losing the overlay is non-fatal.
+      }
+    }
+
+    void addCompareSeries();
+  }, [compareData]);
+
+  // ── PLAN-0059 H-2: Handle compare ticker submit ────────────────────────────
+  // WHY separate handler (not inline): the function body calls createGateway
+  // which requires accessToken — keeping it outside JSX avoids capturing stale
+  // closure values through multiple re-renders.
+  const handleCompareSubmit = useCallback(async () => {
+    const ticker = compareInput.trim().toUpperCase();
+    if (!ticker) return;
+    try {
+      const results = await createGateway(accessToken).searchInstruments(ticker, 1);
+      const first = results?.results?.[0];
+      if (first?.instrument_id) {
+        setCompareInstrumentId(first.instrument_id);
+      }
+    } catch {
+      // WHY silent catch: search failure must not crash the chart.
+    }
+    setShowCompareInput(false);
+    setCompareInput("");
+  }, [accessToken, compareInput]);
 
   // PLAN-0053 T-A-1-01: stabilise placeholderData reference. A fresh object
   // literal on every render makes React Query return a new `data` reference,
@@ -446,53 +541,49 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         });
         ma200SeriesRef.current = ma200Series;
 
-        // ── Wave C: Indicator series (all hidden by default) ───────────────
+        // ── PLAN-0059 H-1: Indicator series — true pane isolation ─────────
+        // WHY chart.addPane(): in lightweight-charts v5 each call creates a new
+        // independent canvas pane below the main price pane (pane 0). Each pane
+        // has its own y-axis so oscillators like RSI (0-100) and OBV (volume
+        // units) don't distort the price y-axis. The 3rd arg to addSeries is the
+        // zero-based pane index: 0 = price pane, 1 = RSI, 2 = MACD, etc.
+        // This replaces the old priceScaleId approach which shared a single canvas
+        // and used scaleMargins to carve out sub-regions — not true pane isolation.
 
-        // RSI — orange line in a dedicated sub-pane (0-100 scale separate from price)
-        // WHY priceScaleId "rsi": creates a separate price scale for the RSI oscillator
-        // so it doesn't affect the candlestick Y axis range.
-        const rsiSeries = chart.addSeries(LineSeries,{
+        // RSI — amber line, pane 1 (0-100 scale, overbought/oversold levels)
+        chart.addPane();  // creates pane index 1
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const rsiSeries = (chart as any).addSeries(LineSeries,{
           color: "#F59E0B",           // amber — oscillator convention
           lineWidth: 1,
-          priceScaleId: "rsi",
           visible: false,
-        });
-        chart.priceScale("rsi").applyOptions({
-          scaleMargins: { top: 0.85, bottom: 0 },
-          // WHY autoScale:false: RSI is always 0-100. AutoScale would shrink the
-          // range to the actual RSI values (e.g., 30-70) and lose the overbought/
-          // oversold context. We let the scale clamp naturally via the data range.
-          autoScale: true,
-        });
+        }, 1) as ISeriesApi<"Line">;
         rsiPaneRef.current = rsiSeries;
 
-        // MACD — three series: MACD line (purple), signal line (orange), histogram (teal/red)
-        // WHY priceScaleId "macd": separate sub-pane below price and RSI
-        const macdLine = chart.addSeries(LineSeries,{
+        // MACD — three series (line + signal + histogram), pane 2
+        chart.addPane();  // creates pane index 2
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const macdLine = (chart as any).addSeries(LineSeries,{
           color: "#A78BFA",           // purple-400 — MACD line (TradingView convention)
           lineWidth: 1,
-          priceScaleId: "macd",
           visible: false,
-        });
-        const macdSignal = chart.addSeries(LineSeries,{
+        }, 2) as ISeriesApi<"Line">;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const macdSignal = (chart as any).addSeries(LineSeries,{
           color: "#F59E0B",           // amber — signal line
           lineWidth: 1,
-          priceScaleId: "macd",
           visible: false,
-        });
-        const macdHist = chart.addSeries(HistogramSeries,{
+        }, 2) as ISeriesApi<"Line">;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const macdHist = (chart as any).addSeries(HistogramSeries,{
           color: "#26A69A",           // teal/red per bar in data
-          priceScaleId: "macd",
           visible: false,
-        });
-        chart.priceScale("macd").applyOptions({
-          scaleMargins: { top: 0.75, bottom: 0.05 },
-        });
+        }, 2) as ISeriesApi<"Histogram">;
         macdLineRef.current = macdLine;
         macdSignalRef.current = macdSignal;
         macdHistRef.current = macdHist;
 
-        // Bollinger Bands — three lines on the main price scale
+        // Bollinger Bands — three lines on the main price scale (pane 0)
         // WHY priceScaleId "right": BB overlays the candlesticks (same scale)
         // WHY dashed style: distinguishes BB from the solid MA50/MA200 lines
         const bbUpper = chart.addSeries(LineSeries,{
@@ -519,47 +610,41 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         bbMiddleRef.current = bbMiddle;
         bbLowerRef.current = bbLower;
 
-        // ATR — green line in a sub-pane (absolute $ volatility measure)
-        const atrSeries = chart.addSeries(LineSeries,{
+        // ATR — green line, pane 3 (absolute $ volatility — not comparable to price)
+        chart.addPane();  // creates pane index 3
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const atrSeries = (chart as any).addSeries(LineSeries,{
           color: "#10B981",           // emerald-500 — volatility = green convention
           lineWidth: 1,
-          priceScaleId: "atr",
           visible: false,
-        });
-        chart.priceScale("atr").applyOptions({
-          scaleMargins: { top: 0.8, bottom: 0 },
-        });
+        }, 3) as ISeriesApi<"Line">;
         atrRef.current = atrSeries;
 
-        // Stochastic — %K (teal) and %D (red) in a sub-pane
-        const stochK = chart.addSeries(LineSeries,{
+        // Stochastic — %K (teal) and %D (red), pane 4
+        chart.addPane();  // creates pane index 4
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const stochK = (chart as any).addSeries(LineSeries,{
           color: "#26A69A",           // teal — %K fast line
           lineWidth: 1,
-          priceScaleId: "stoch",
           visible: false,
-        });
-        const stochD = chart.addSeries(LineSeries,{
+        }, 4) as ISeriesApi<"Line">;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const stochD = (chart as any).addSeries(LineSeries,{
           color: "#EF5350",           // red — %D slow signal line
           lineWidth: 1,
-          priceScaleId: "stoch",
           visible: false,
-        });
-        chart.priceScale("stoch").applyOptions({
-          scaleMargins: { top: 0.8, bottom: 0 },
-        });
+        }, 4) as ISeriesApi<"Line">;
         stochKRef.current = stochK;
         stochDRef.current = stochD;
 
-        // OBV — sky-blue line on a separate OBV scale (cumulative volume units)
-        const obvSeries = chart.addSeries(LineSeries,{
+        // OBV — sky-blue line, pane 5 (cumulative volume — scale incompatible with price)
+        chart.addPane();  // creates pane index 5
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const obvSeries = (chart as any).addSeries(LineSeries,{
           color: "#38BDF8",           // sky-400 — OBV (volume-based, not price)
           lineWidth: 1,
-          priceScaleId: "obv",
           visible: false,
-        });
-        chart.priceScale("obv").applyOptions({
-          scaleMargins: { top: 0.75, bottom: 0.05 },
-        });
+        }, 5) as ISeriesApi<"Line">;
         obvRef.current = obvSeries;
 
         // VWAP — pink line overlaid on the main price scale
@@ -647,6 +732,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
       vwapRef.current = null;
       volMA20Ref.current = null;
       vwapLineRef.current = null;
+      compareSeriesRef.current = null;
       setConverters(null);
     };
   }, []); // WHY empty deps: chart init runs once on mount, cleanup on unmount
@@ -950,6 +1036,52 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         >
           log
         </button>
+
+        {/* PLAN-0059 H-2: Compare overlay button (+CMP).
+            WHY data-testid="toolbar-compare": the H-2 test finds this button
+            by testid to open the compare popover (the text "+CMP" is too short
+            to be reliably found by aria role alone across different markup shapes). */}
+        <div className="relative ml-2 flex items-center">
+          <button
+            data-testid="toolbar-compare"
+            onClick={() => setShowCompareInput((v) => !v)}
+            className={`rounded-[2px] px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors ${
+              showCompareInput || compareInstrumentId
+                ? "text-foreground ring-1 ring-border bg-transparent"
+                : "text-muted-foreground/70 hover:text-foreground"
+            }`}
+            aria-pressed={showCompareInput}
+            aria-label="Toggle compare overlay"
+            title="Compare with another instrument"
+          >
+            +CMP
+          </button>
+
+          {/* Compare input popover — floats below the toolbar button */}
+          {showCompareInput && (
+            <div className="absolute top-full left-0 z-20 mt-0.5 flex items-center gap-1 rounded-[2px] border border-border bg-card px-2 py-1 shadow-md">
+              <input
+                type="text"
+                aria-label="Enter ticker to compare"
+                placeholder="MSFT"
+                autoFocus
+                value={compareInput}
+                onChange={(e) => setCompareInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleCompareSubmit();
+                  if (e.key === "Escape") setShowCompareInput(false);
+                }}
+                className="h-5 w-20 rounded-[2px] border border-border bg-background px-1 font-mono text-[10px] text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/50"
+              />
+              <button
+                onClick={() => void handleCompareSubmit()}
+                className="h-5 rounded-[2px] bg-primary/20 px-2 font-mono text-[10px] text-primary hover:bg-primary/30"
+              >
+                Go
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* Chart overlay controls — right side of toolbar.
             QA iter-1: wrapping div with ml-auto anchors the cluster right

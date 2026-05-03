@@ -8,7 +8,7 @@
  * 1. WorkspaceTabs are rendered inside the workspace page
  * 2. The active workspace's rows are rendered as panels
  * 3. Panels can be closed via the close button (removePanelFromWorkspace)
- * 4. The Add Panel button opens a panel type selection dialog
+ * 4. The Add Panel button opens the slide-in panel type tray (Wave H-5: replaced dialog)
  * 5. Empty active workspace shows inline empty state text
  *
  * WHY MOCK HEAVY DEPENDENCIES: OHLCVChart (canvas), EntityGraphPanel (WebGL),
@@ -231,19 +231,28 @@ describe("WorkspacePage — workspace switching", () => {
 });
 
 describe("WorkspacePage — add panel", () => {
-  it("opens an Add Panel dialog when the Add Panel button is clicked", async () => {
+  it("opens the Add Panel slide-in tray when the Add Panel button is clicked", async () => {
     const user = userEvent.setup();
     render(<WorkspacePage />, { wrapper: makeWrapper() });
 
-    await user.click(screen.getByRole("button", { name: /add panel/i }));
+    // WHY getByRole with exact name: after the tray opens, it renders a
+    // "Close add panel tray" button whose label also matches /add panel/i.
+    // Exact name "Add panel" matches only the toggle button.
+    await user.click(screen.getByRole("button", { name: "Add panel" }));
 
-    // WHY check for dialog role: WorkspaceGrid renders a shadcn Dialog when
-    // the Add Panel button is clicked. The dialog contains an h2 DialogTitle
-    // with "Add Panel" text. We scope to role="heading" to avoid ambiguity with
-    // the trigger button (which also contains the text "Add Panel").
+    // WHY check aria-expanded (not a dialog role): Wave H-5 replaced the
+    // shadcn Dialog with a slide-in tray (HTML5 DnD, no @dnd-kit). The tray
+    // renders as a fixed div (not a dialog role). The button's aria-expanded
+    // attribute is the accessible signal that the tray is open.
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: /add panel/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Add panel" }),
+      ).toHaveAttribute("aria-expanded", "true");
     });
+
+    // WHY also check the tray DOM node: verifies the tray element itself is in
+    // the document (data-testid guarantees the correct element).
+    expect(screen.getByTestId("add-panel-tray")).toBeInTheDocument();
   });
 });
 

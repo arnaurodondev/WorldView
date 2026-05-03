@@ -52,6 +52,11 @@ vi.mock("@react-sigma/core", () => ({
       getEdgeAttributes: vi.fn(() => ({ label: "CEO_OF", weight: 0.9 })),
       degree: vi.fn(() => 3),
     })),
+    // WHY setSettings/refresh: EntityGraph H-4 adds FilterController which calls
+    // sigma.setSettings({edgeReducer, nodeReducer}) + sigma.refresh() on mount.
+    // Without these stubs, FilterController throws "setSettings is not a function".
+    setSettings: vi.fn(),
+    refresh: vi.fn(),
   })),
 }));
 

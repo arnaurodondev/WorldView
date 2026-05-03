@@ -72,14 +72,20 @@ const mockFitContent = vi.fn();
 
 // PLAN-0059 H-1: lightweight-charts v5 — series creation now goes through
 // chart.addSeries(SeriesDefinition, opts). Mock provides the same shape.
+// addPane + removeSeries added for H-1 pane isolation.
 vi.mock("lightweight-charts", () => ({
   createChart: vi.fn(() => ({
     addSeries: vi.fn(() => ({
       setData: mockSetData,
       applyOptions: mockApplyOptions,
     })),
+    addPane: vi.fn(),
+    removeSeries: vi.fn(),
     applyOptions: mockApplyOptions,
+    priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
     timeScale: vi.fn(() => ({ fitContent: mockFitContent })),
+    subscribeCrosshairMove: vi.fn(),
+    unsubscribeCrosshairMove: vi.fn(),
     remove: mockRemove,
   })),
   CandlestickSeries: "CandlestickSeries",

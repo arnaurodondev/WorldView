@@ -39,6 +39,11 @@ vi.mock("lightweight-charts", () => ({
       setData: vi.fn(),
       applyOptions: vi.fn(),
     })),
+    // PLAN-0059 H-1: addPane() is now called for each oscillator sub-pane.
+    // Without this stub the initChart() call throws "chart.addPane is not a
+    // function", which sets chartError=true and removes all toolbar DOM nodes.
+    addPane: vi.fn(),
+    removeSeries: vi.fn(),
     priceScale: vi.fn(() => ({
       applyOptions: vi.fn(),
     })),
