@@ -85,6 +85,13 @@ class DeepSeekExtractionAdapter:
                     # JSON object server-side, ``temperature=0`` removes
                     # sampling variance, ``max_tokens=2048`` covers the
                     # extraction schema with comfortable headroom.
+                    # extra_body (DeepInfra extensions):
+                    # reasoning_effort=none — disables Qwen3.x chain-of-thought so the
+                    #   answer goes to content (not reasoning_content), saving latency
+                    #   and tokens on extraction tasks where reasoning adds no value.
+                    # prompt_cache_key — DeepInfra caches the system-prompt prefix KV
+                    #   tensors across requests sharing the same key; only new (user-role)
+                    #   tokens are billed after the initial cache-miss call.
                     response = await self._client.chat.completions.create(
                         model=self._model_id,
                         messages=[
@@ -94,6 +101,10 @@ class DeepSeekExtractionAdapter:
                         response_format={"type": "json_object"},
                         temperature=0.0,
                         max_tokens=2048,
+                        extra_body={
+                            "reasoning_effort": "none",
+                            "prompt_cache_key": "kg_extraction_v1",
+                        },
                     )
                     # Capture actual token usage from API response when available.
                     # cached_tokens: DeepInfra KV prefix cache hit count — non-zero when
@@ -103,7 +114,10 @@ class DeepSeekExtractionAdapter:
                         tokens_out = response.usage.completion_tokens or 0
                         details = getattr(response.usage, "prompt_tokens_details", None)
                         tokens_cached = getattr(details, "cached_tokens", 0) or 0
-                    raw_response: str = response.choices[0].message.content or ""
+                    # With reasoning_effort=none the answer is in content.
+                    # Fallback to reasoning_content for models that ignore reasoning_effort.
+                    msg = response.choices[0].message
+                    raw_response: str = msg.content or getattr(msg, "reasoning_content", None) or ""
                     finish_reason: str | None = getattr(response.choices[0], "finish_reason", None)
                     logger.info(
                         "deepseek_extraction_completed",

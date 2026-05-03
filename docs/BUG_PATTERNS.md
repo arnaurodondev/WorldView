@@ -13,7 +13,7 @@
 | Category | File | Patterns | Description |
 |----------|------|----------|-------------|
 | [Kafka & Messaging](bug-patterns/kafka-messaging.md) | `bug-patterns/kafka-messaging.md` | 35 | Kafka, Avro, outbox, DLQ, Schema Registry |
-| [Database & ORM](bug-patterns/database-orm.md) | `bug-patterns/database-orm.md` | 49 | SQLAlchemy, asyncpg, Alembic, PostgreSQL, pgvector |
+| [Database & ORM](bug-patterns/database-orm.md) | `bug-patterns/database-orm.md` | 42 | SQLAlchemy, asyncpg, Alembic, PostgreSQL, pgvector |
 | [Async & Concurrency](bug-patterns/async-concurrency.md) | `bug-patterns/async-concurrency.md` | 14 | asyncio, event loops, concurrency, React concurrent mode |
 | [Auth & Security](bug-patterns/auth-security.md) | `bug-patterns/auth-security.md` | 28 | JWT/OIDC, SSRF, XSS, tenant isolation, CSP, middleware |
 | [Testing](bug-patterns/testing.md) | `bug-patterns/testing.md` | 26 | pytest, AsyncMock, fixtures, Vitest, pre-commit, CI |
@@ -328,6 +328,7 @@
 | BP-331 | Screener Revenue Column Always Blank: `revenue_usd` Nested Under `metrics`, Not Top-Level | Frontend | [bug-patterns/frontend.md](bug-patterns/frontend.md#bp-331) |
 | BP-332 | TanStack Controlled Sort Race: `getNextSortingOrder()` Captures Stale State Outside Updater When `useDeferredValue` Deferred Pass Is Pending | Frontend | [bug-patterns/frontend.md](bug-patterns/frontend.md#bp-332) |
 | BP-333 | Embedding Model Name Mismatch (HuggingFace ID vs Ollama Tag) Silently Disables ANN Seeder | Config & Docker | [bug-patterns/config-docker.md](bug-patterns/config-docker.md#bp-331) |
+| BP-334 | Provisional Enrichment Alias Duplicate on Recovery Sweep — bare INSERT in `EntityAliasRepository.insert()` hits existing alias after stale-processing reset | Database & ORM | [bug-patterns/database-orm.md](bug-patterns/database-orm.md#bp-334) |
 
 ---
 

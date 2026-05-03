@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
+from contracts.events.nlp.article_enriched import encode_raw_array  # type: ignore[import-untyped]
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     BaseKafkaConsumer,
     ConsumerConfig,
@@ -960,9 +961,6 @@ async def _enqueue_enriched(
     # while still gaining schema enforcement on the metadata fields.  KG
     # ``EnrichedArticleConsumer`` JSON-decodes these back into RawRelation /
     # RawEvent / RawClaim dataclasses.
-    from contracts.events.nlp.article_enriched import encode_raw_array  # type: ignore[import-untyped]
-    from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
-
     payload: dict[str, Any] = {
         "event_id": str(common.ids.new_uuid7()),
         "event_type": "nlp.article.enriched",

@@ -86,12 +86,22 @@ LIMIT 1
         normalized_alias_text: str,
         alias_type: str,
         source: str | None = None,
-    ) -> UUID:
-        """Insert a new alias row, returning alias_id."""
+    ) -> UUID | None:
+        """Insert a new alias row, returning alias_id (None on conflict).
+
+        Uses ON CONFLICT DO NOTHING on the partial unique index
+        (entity_id, normalized_alias_text, alias_type) WHERE is_active = true
+        so callers that attempt to re-insert an existing active alias (e.g.
+        provisional_enrichment_core after a recovery sweep) silently succeed
+        instead of raising UniqueViolationError and aborting the batch session.
+        """
         result = await self._session.execute(
             text("""
 INSERT INTO entity_aliases (entity_id, alias_text, normalized_alias_text, alias_type, source)
 VALUES (:entity_id, :alias_text, :normalized_alias_text, :alias_type, :source)
+ON CONFLICT (entity_id, normalized_alias_text, alias_type)
+WHERE is_active = true
+DO NOTHING
 RETURNING alias_id
 """),
             {
@@ -103,7 +113,7 @@ RETURNING alias_id
             },
         )
         row = result.fetchone()
-        return UUID(str(row[0]))  # type: ignore[index]
+        return UUID(str(row[0])) if row else None
 
     async def get_for_entity(self, entity_id: UUID) -> list[dict[str, object]]:
         """Fetch all active aliases for an entity."""

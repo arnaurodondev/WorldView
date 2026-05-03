@@ -61,7 +61,7 @@ class EntityAliasRepository:
                 text(
                     "SELECT entity_id FROM canonical_entities "
                     "WHERE ticker = :ticker "
-                    "AND (:exchange IS NULL OR exchange = :exchange) "
+                    "AND (CAST(:exchange AS TEXT) IS NULL OR exchange = :exchange) "
                     "LIMIT 1",
                 ),
                 {"ticker": ticker, "exchange": exchange},

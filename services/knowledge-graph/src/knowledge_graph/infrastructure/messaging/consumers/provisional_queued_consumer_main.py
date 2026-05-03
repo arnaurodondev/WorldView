@@ -103,9 +103,20 @@ async def main() -> None:
     else:
         log.info("kg_pq_consumer_extraction_deepinfra_key_absent_using_ollama_gemini_chain")
 
+    from ml_clients.adapters.ollama_extraction import OllamaExtractionAdapter  # type: ignore[import-not-found]
+
+    _ollama_ext_model = "qwen3:0.6b"
+    ollama_ext = OllamaExtractionAdapter(
+        base_url=settings.ollama_base_url,
+        model_id=_ollama_ext_model,
+        semaphore=asyncio.Semaphore(1),
+    )
+    log.info("kg_pq_consumer_extraction_ollama_fallback_wired", model_id=_ollama_ext_model)
+
     llm_client = FallbackChainClient(
         deepinfra_extraction=deepinfra_ext,
         ollama_embedding=embed_client,
+        ollama_extraction=ollama_ext,
         retry_delays_deepinfra=(5.0, 15.0),
         retry_delays_ollama=(5.0, 30.0),
         usage_logger=kg_usage_logger,
