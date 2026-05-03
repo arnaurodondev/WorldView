@@ -480,3 +480,85 @@ async def test_morning_briefing_confidence_default_on_missing_uc_field(
     # Default confidence=1.0 when not in UC result
     assert body["confidence"] == 1.0
     assert body["lead"] is None
+
+
+# ── BP-322 — cache serialization round-trip ───────────────────────────────────
+
+
+async def test_cache_write_uses_model_dump_json(settings: RagChatSettings) -> None:
+    """Cache write must use model_dump_json() — NOT json.dumps(..., default=str).
+
+    WHY: json.dumps(..., default=str) stringifies BriefSection/BriefBullet Pydantic
+    objects to their Python repr (BP-322), which cannot be re-deserialized on read.
+    model_dump_json() serialises nested models to proper JSON dicts.
+    """
+    app = _make_app(settings)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
+
+    set_call = app.state.valkey.set.call_args
+    # Second positional arg is the serialized payload
+    cached_payload = set_call.args[1] if len(set_call.args) > 1 else ""
+    # model_dump_json produces valid JSON — must be parseable
+    import json
+
+    parsed = json.loads(cached_payload)
+    # sections must be dicts, not Python repr strings like "BriefSection(title=...)"
+    for sec in parsed.get("sections", []):
+        assert isinstance(sec, dict), f"Section serialized as non-dict (BP-322): {type(sec)}"
+
+
+async def test_cache_read_round_trip_with_w4_sections(settings: RagChatSettings) -> None:
+    """Cache hit with W4 BriefBullet sections must deserialise correctly (BP-322 regression guard)."""
+    from rag_chat.api.schemas import BriefBullet, BriefCitation, BriefSection, PublicBriefingResponse
+
+    # Simulate a cache value written by model_dump_json() containing W4 bullet format
+    w4_brief = PublicBriefingResponse(
+        narrative="## LEAD\nTest lead [c1].\n---\n## DETAILS\n### Section\n- Bullet [c1]",
+        risk_summary={},
+        citations=[],
+        generated_at="2026-05-03T10:00:00+00:00",
+        cached=False,
+        sections=[
+            BriefSection(
+                title="Test Section",
+                bullets=[
+                    BriefBullet(
+                        text="Market moved higher on strong data",
+                        citations=[
+                            BriefCitation(
+                                document_id="01900000-0000-7000-0000-000000000001",
+                                snippet="Article headline — Article summary excerpt",
+                                url="https://example.com/article/1",
+                                source_type="article",
+                                title="Article headline",
+                            )
+                        ],
+                    )
+                ],
+            )
+        ],
+        confidence=0.85,
+        lead="Test lead [c1].",
+    )
+    cached_json = w4_brief.model_dump_json()
+
+    app = _make_app(settings, valkey_get_result=cached_json)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/v1/briefings/morning", headers=_JWT_HEADERS)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cached"] is True
+    assert len(body["sections"]) == 1
+    assert body["sections"][0]["title"] == "Test Section"
+    # Bullets must be dicts with citations (not strings)
+    bullet = body["sections"][0]["bullets"][0]
+    assert isinstance(bullet, dict)
+    assert bullet["text"] == "Market moved higher on strong data"
+    assert len(bullet["citations"]) == 1
+    assert bullet["citations"][0]["source_type"] == "article"
+    # UC must NOT have been called (cache hit)
+    app.state.briefing_uc.execute_public_morning.assert_not_awaited()

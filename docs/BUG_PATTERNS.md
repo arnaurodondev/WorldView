@@ -8581,3 +8581,43 @@ make monitoring-down && make monitoring
 
 - When scaffolding a new service with `/scaffold-service` or `/scaffold-frontend`, immediately add the service's container name to the Alloy keep regex as part of the scaffold checklist.
 - The second relabel rule auto-derives the `service` label from the container name (e.g., `worldview-web-1` → `service="worldview-web"`), so no other config changes are needed.
+
+
+---
+
+## BP-322 — `json.dumps(..., default=str)` Stringifies Pydantic Models: Cache Round-Trip Breaks
+
+**Context**: A FastAPI route stores response data in Valkey (Redis) using `json.dumps(response_data, default=str)`. The response data dict contains Pydantic model objects (e.g., `BriefSection`, `BriefBullet`) as field values. `default=str` converts these to Python repr strings (`"BriefSection(title='...', bullets=[...])"`) rather than JSON dicts. On cache read, `json.loads` returns these repr strings, and `PublicBriefingResponse(**data)` fails with a Pydantic `ValidationError: Input should be a valid dictionary or instance of BriefSection`.
+
+**Symptoms**:
+- Every cache hit produces `briefing_cache_read_failed` warning
+- Briefing endpoint generates a new LLM call on every request (no cache benefit)
+- `briefing_cache_read_failed` log shows `"Input should be a valid dictionary or instance of BriefSection [type=model_type, input_value='title=\\'...\\' bullets=[...]\"]"'`
+
+**Example**: `json.dumps({"sections": [BriefSection(title="Macro", bullets=[BriefBullet(text="...", citations=[...])])]}, default=str)` produces `{"sections": ["BriefSection(title='Macro', bullets=[BriefBullet(...)])"]}`.
+
+### Root cause
+
+`json.dumps` with `default=str` calls `str()` on non-serializable objects. Pydantic models have a `__str__` that returns their Python repr, not a JSON-compatible dict.
+
+### Fix
+
+Use Pydantic's native serialization for cache round-trips:
+
+```python
+# Write: use model_dump_json() — Pydantic handles nested models correctly
+resp = PublicBriefingResponse(**response_data)
+await valkey.set(cache_key, resp.model_dump_json(), ex=ttl)
+
+# Read: use model_validate_json() — avoids json.loads + **data
+raw = cached.decode("utf-8") if isinstance(cached, bytes) else cached
+resp = PublicBriefingResponse.model_validate_json(raw)
+resp.cached = True
+return resp
+```
+
+### Prevention
+
+- **Never** use `json.dumps(..., default=str)` to cache Pydantic model instances — they serialize to repr strings, not JSON.
+- If you must use raw `json.dumps` for caching, call `.model_dump()` on each Pydantic object first, or use `model_dump_json()` on the top-level response.
+- Add a test that round-trips the cached format: `assert ModelClass.model_validate_json(resp.model_dump_json()) == resp`.

@@ -16,7 +16,6 @@ PLAN-0062-W4 (T-W4-C-01):
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from uuid import UUID
 
@@ -107,9 +106,11 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
             if cached:
                 # Valkey returns bytes or str — decode if needed
                 raw = cached.decode("utf-8") if isinstance(cached, bytes) else cached
-                data = json.loads(raw)
-                data["cached"] = True
-                return PublicBriefingResponse(**data)
+                # WHY model_validate_json: avoids the json.loads + **data pattern that
+                # breaks when sections are stored as Python repr strings (BP-319).
+                resp = PublicBriefingResponse.model_validate_json(raw)
+                resp.cached = True
+                return resp
         except Exception as e:
             # Cache miss or deserialization failure — proceed to generation.
             log.warning("briefing_cache_read_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
@@ -155,7 +156,8 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
         # PLAN-0049 T-A-1-04: pass through structured fields. Both default to
         # None / [] when the use case couldn't parse them — frontend then falls
         # back to MarkdownContent over narrative (graceful degradation).
-        "headline": result.get("headline"),
+        # Truncate to max_length=240 to guard against LLM over-generating.
+        "headline": (result.get("headline") or "")[:240] or None,
         "sections": result.get("sections", []),
         # PLAN-0062-W4: confidence score and lead text
         "confidence": confidence,
@@ -169,14 +171,19 @@ async def get_morning_briefing(request: Request) -> PublicBriefingResponse:
         lead_present=lead is not None,
     )
 
+    resp = PublicBriefingResponse(**response_data)
+
     # ── Write to cache ────────────────────────────────────────────────────────
+    # WHY model_dump_json: avoids json.dumps(..., default=str) which stringifies
+    # Pydantic models (BriefSection, BriefBullet) to repr strings that cannot be
+    # re-deserialized on cache read (BP-319).
     if valkey is not None:
         try:
-            await valkey.set(cache_key, json.dumps(response_data, default=str), ex=_CACHE_TTL)
+            await valkey.set(cache_key, resp.model_dump_json(), ex=_CACHE_TTL)
         except Exception as e:
             log.warning("briefing_cache_write_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
 
-    return PublicBriefingResponse(**response_data)
+    return resp
 
 
 @router.get("/briefings/instrument/{entity_id}", response_model=PublicBriefingResponse)
@@ -204,9 +211,9 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
             cached = await valkey.get(cache_key)
             if cached:
                 raw = cached.decode("utf-8") if isinstance(cached, bytes) else cached
-                data = json.loads(raw)
-                data["cached"] = True
-                return PublicBriefingResponse(**data)
+                resp = PublicBriefingResponse.model_validate_json(raw)
+                resp.cached = True
+                return resp
         except Exception as e:
             log.warning("briefing_cache_read_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
 
@@ -260,7 +267,8 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
         "cached": False,
         "entity_id": entity_id,
         # PLAN-0049 T-A-1-04: structured render fields for the frontend.
-        "headline": result.get("headline"),
+        # Truncate to max_length=240 to guard against LLM over-generating.
+        "headline": (result.get("headline") or "")[:240] or None,
         "sections": result.get("sections", []),
         # PLAN-0062-W4: confidence score and lead text
         "confidence": instrument_confidence,
@@ -275,11 +283,13 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
         lead_present=instrument_lead is not None,
     )
 
+    instr_resp = PublicBriefingResponse(**response_data)
+
     # ── Write to cache ────────────────────────────────────────────────────────
     if valkey is not None:
         try:
-            await valkey.set(cache_key, json.dumps(response_data, default=str), ex=_CACHE_TTL)
+            await valkey.set(cache_key, instr_resp.model_dump_json(), ex=_CACHE_TTL)
         except Exception as e:
             log.warning("briefing_cache_write_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
 
-    return PublicBriefingResponse(**response_data)
+    return instr_resp
