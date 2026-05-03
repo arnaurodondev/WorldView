@@ -101,7 +101,8 @@ export function EarningsCalendarWidget() {
           error. Muted text avoids making the dashboard look broken. */}
       {isError && (
         // WHY px-3 py-2: T-F-6-03 standardised inner content padding
-        <p className="flex-1 px-3 py-2 text-sm text-muted-foreground">
+        // WHY text-[11px]: terminal data rows use 11px density — text-sm (14px) is consumer app scale (Bloomberg convention)
+        <p className="flex-1 px-3 py-2 text-[11px] text-muted-foreground">
           Earnings calendar unavailable — events will appear once earnings data is ingested.
         </p>
       )}
@@ -113,7 +114,8 @@ export function EarningsCalendarWidget() {
       {!isLoading && !isError && events.length === 0 && (
         // WHY px-3 py-2: T-F-6-03 standardised inner content padding
         <div className="flex flex-1 flex-col gap-0.5 px-3 py-2">
-          <p className="text-xs text-muted-foreground">No upcoming earnings events scheduled.</p>
+          {/* WHY text-[10px]: terminal labels/metadata use 10px density — text-xs (12px) is consumer app scale (Bloomberg convention) */}
+          <p className="text-[10px] text-muted-foreground">No upcoming earnings events scheduled.</p>
           <p className="text-[10px] text-muted-foreground/60">
             Earnings calendar data populates as company reporting schedules are ingested.
           </p>

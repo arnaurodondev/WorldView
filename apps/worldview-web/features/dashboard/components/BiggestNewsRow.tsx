@@ -55,8 +55,11 @@ export function BiggestNewsRow({ news }: BiggestNewsRowProps) {
       {/* Newspaper icon + ticker chip pinned left so the title can truncate
           without pushing context off-screen. */}
       <Newspaper className="h-3 w-3 shrink-0 text-warning" aria-hidden="true" />
+      {/* WHY font-semibold (was font-bold): 700-weight at 10px causes blotchy subpixel
+          rendering on dark themes — 600-weight is the maximum for terminal chrome text
+          at small sizes (Bloomberg density rule) */}
       {news.ticker && (
-        <span className="shrink-0 font-mono text-[10px] font-bold uppercase tabular-nums text-foreground">
+        <span className="shrink-0 font-mono text-[10px] font-semibold uppercase tabular-nums text-foreground">
           {news.ticker}
         </span>
       )}

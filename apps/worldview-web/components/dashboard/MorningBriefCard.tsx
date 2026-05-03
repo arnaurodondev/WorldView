@@ -200,7 +200,8 @@ export function MorningBriefCard() {
             title="Retry"
             aria-label="Retry loading brief"
           >
-            <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} />
+            {/* WHY strokeWidth={1.5}: terminal icon convention — thinner strokes match 11px data density; default 2px looks heavy at h-3 w-3 */}
+            <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} strokeWidth={1.5} />
           </button>
         </div>
       </div>
@@ -326,7 +327,8 @@ export function MorningBriefCard() {
                 title="Refresh morning brief"
                 aria-label="Refresh morning brief"
               >
-                <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} />
+                {/* WHY strokeWidth={1.5}: terminal icon convention — thinner strokes match 11px data density; default 2px looks heavy at h-3 w-3 */}
+            <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} strokeWidth={1.5} />
               </button>
             </>
           )}
@@ -359,7 +361,11 @@ export function MorningBriefCard() {
       <div className="flex-1 overflow-auto px-1 py-0.5">
         {/* WHY shared ReactMarkdown classes: both collapsed and expanded use the
             same markdown styling so the transition between states is seamless. */}
-        <div className="text-[10px] leading-snug text-foreground/90 [&_a]:text-primary [&_a]:hover:underline [&_h1]:mb-0.5 [&_h1]:text-[9px] [&_h1]:font-semibold [&_h1]:uppercase [&_h1]:tracking-[0.08em] [&_h1]:text-muted-foreground [&_h2]:mb-0 [&_h2]:mt-1.5 [&_h2]:text-[9px] [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-[0.08em] [&_h2]:text-muted-foreground [&_h3]:mt-0.5 [&_h3]:text-[10px] [&_h3]:font-medium [&_li]:leading-snug [&_p]:mt-0.5 [&_strong]:font-semibold [&_ul]:mt-0.5 [&_ul]:pl-3">
+        {/* WHY prose overrides: ReactMarkdown default styles use browser defaults — h2 at 1.5em
+            (~21px), paragraph margin-bottom 16px. On a terminal card these create blog-like
+            spacing that breaks data density. These overrides enforce 10-11px headers, 1.4
+            line-height, and tight paragraph margins matching Bloomberg briefing panels. */}
+        <div className="text-[10px] leading-snug text-foreground/90 [&_a]:text-primary [&_a]:hover:underline [&_h1]:mb-0.5 [&_h1]:text-[9px] [&_h1]:font-semibold [&_h1]:uppercase [&_h1]:tracking-[0.08em] [&_h1]:text-muted-foreground [&_h2]:mb-0.5 [&_h2]:mt-2 [&_h2]:text-[10px] [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-[0.08em] [&_h2]:text-muted-foreground [&_h3]:mb-0.5 [&_h3]:text-[10px] [&_h3]:font-semibold [&_h3]:uppercase [&_h3]:tracking-[0.06em] [&_h3]:text-muted-foreground [&_li]:leading-[1.4] [&_li]:text-[11px] [&_p]:mb-1 [&_p]:leading-[1.4] [&_strong]:font-semibold [&_ul]:mb-1 [&_ul]:pl-3">
           {!expanded ? (
             // ── Collapsed view: brief.summary rendered at full readability ──
             // WHY no line-clamp when summary is present: the v2.2 prompt

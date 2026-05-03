@@ -81,7 +81,10 @@ export const AskAiButton = forwardRef<HTMLButtonElement, AskAiButtonProps>(
         // the hint when the global ⌘K handler ships.
         title="Ask AI"
       >
-        <Sparkles className="h-3 w-3" aria-hidden="true" />
+        {/* WHY strokeWidth={1.5}: terminal icon hairline rule — default 2px stroke
+            is too heavy at the 12px Sparkles size within a 24px button. 1.5px
+            matches the Bell and User icon weight in TopBar for visual rhythm. */}
+        <Sparkles className="h-3 w-3" strokeWidth={1.5} aria-hidden="true" />
         AI
       </button>
     );

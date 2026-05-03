@@ -390,7 +390,10 @@ function SectorTile({
           {/* Top line — sector abbreviation. WHY truncate: at very narrow
               widths (e.g. flat sector at MIN_WEIGHT) the label could overflow
               and break the tile layout — truncate keeps it 1 line max. */}
-          <span className="w-full truncate text-center font-mono text-[11px] font-bold uppercase tabular-nums">
+          {/* WHY font-semibold (was font-bold): 700-weight at 11px causes blotchy subpixel
+              rendering on dark themes — 600-weight is the maximum for terminal chrome text
+              at small sizes (Bloomberg density rule) */}
+          <span className="w-full truncate text-center font-mono text-[11px] font-semibold uppercase tabular-nums">
             {abbreviation}
           </span>
           {/* Bottom line — % change. text-[10px] keeps it secondary to the

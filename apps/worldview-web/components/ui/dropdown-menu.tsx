@@ -32,7 +32,9 @@ const DropdownMenuSubTrigger = React.forwardRef<
   <DropdownMenuPrimitive.SubTrigger
     ref={ref}
     className={cn(
-      "flex cursor-default select-none items-center gap-2 rounded-[2px] px-2 py-1.5 text-sm outline-none focus:bg-muted data-[state=open]:bg-muted",
+      // WHY text-[11px] (was text-sm=14px): terminal density rule — sub-trigger
+      // must match DropdownMenuItem density (11px); both are menu items visually.
+      "flex cursor-default select-none items-center gap-2 rounded-[2px] px-2 py-1.5 text-[11px] outline-none focus:bg-muted data-[state=open]:bg-muted",
       inset && "pl-8",
       className,
     )}
@@ -94,7 +96,10 @@ const DropdownMenuItem = React.forwardRef<
   <DropdownMenuPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex cursor-default select-none items-center gap-2 rounded-[2px] px-2 py-1.5 text-sm outline-none transition-colors",
+      // WHY text-[11px] (was text-sm=14px): Bloomberg terminal density rule —
+      // all dropdown menu items must match the 11px chrome standard.
+      // text-sm at 14px reads as a consumer-app dropdown, not a terminal control.
+      "relative flex cursor-default select-none items-center gap-2 rounded-[2px] px-2 py-1.5 text-[11px] outline-none transition-colors",
       "focus:bg-muted focus:text-foreground",
       "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       inset && "pl-8",
@@ -142,7 +147,9 @@ const DropdownMenuCheckboxItem = React.forwardRef<
   <DropdownMenuPrimitive.CheckboxItem
     ref={ref}
     className={cn(
-      "relative flex cursor-default select-none items-center rounded-[2px] py-1.5 pl-8 pr-2 text-sm outline-none transition-colors focus:bg-muted data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      // WHY text-[11px] (was text-sm=14px): CheckboxItem is a menu item —
+      // must match DropdownMenuItem terminal density (11px).
+      "relative flex cursor-default select-none items-center rounded-[2px] py-1.5 pl-8 pr-2 text-[11px] outline-none transition-colors focus:bg-muted data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className,
     )}
     checked={checked}
@@ -165,7 +172,9 @@ const DropdownMenuRadioItem = React.forwardRef<
   <DropdownMenuPrimitive.RadioItem
     ref={ref}
     className={cn(
-      "relative flex cursor-default select-none items-center rounded-[2px] py-1.5 pl-8 pr-2 text-sm outline-none transition-colors focus:bg-muted data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      // WHY text-[11px] (was text-sm=14px): RadioItem is a menu item —
+      // must match DropdownMenuItem terminal density (11px).
+      "relative flex cursor-default select-none items-center rounded-[2px] py-1.5 pl-8 pr-2 text-[11px] outline-none transition-colors focus:bg-muted data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className,
     )}
     {...props}
