@@ -465,3 +465,64 @@ class TestEnrichedConsumerClaimsE2E:
         assert len(claims) == 2, f"Expected 2 claims, got {len(claims)}"
         assert claims[0].claim_type == "analyst_rating"
         assert claims[1].claim_type == "revenue_guidance"
+
+
+class TestEnrichedConsumerAvroDeserialization:
+    """PLAN-0062 Wave B: Confluent-Avro wire format with JSON fallback."""
+
+    @pytest.mark.unit
+    def test_decodes_confluent_avro_payload(self) -> None:
+        from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import (
+            _ARTICLE_ENRICHED_SCHEMA_PATH,
+        )
+
+        from messaging.kafka.serialization_utils import serialize_confluent_avro
+
+        consumer = _make_consumer()
+        record = {
+            "event_id": "01900000-0000-7000-0000-000000000020",
+            "event_type": "nlp.article.enriched",
+            "schema_version": 1,
+            "occurred_at": "2026-05-03T12:00:00+00:00",
+            "doc_id": "01234567-89ab-7def-8012-aaaaaaaaaaaa",
+            "source_type": "news",
+            "published_at": None,
+            "is_backfill": False,
+            "routing_tier": "deep",
+            "routing_score": 0.7,
+            "section_count": 1,
+            "chunk_count": 2,
+            "mention_count": 3,
+            "resolved_entity_ids": [],
+            "relation_count": 0,
+            "claim_count": 0,
+            "event_count": 0,
+            "provisional_entity_count": 0,
+            "extraction_model_id": None,
+            "raw_relations_json": '[{"subject_entity_id": "x"}]',
+            "raw_events_json": None,
+            "raw_claims_json": None,
+            "correlation_id": None,
+        }
+        wire_bytes = serialize_confluent_avro(_ARTICLE_ENRICHED_SCHEMA_PATH, record)
+        decoded = consumer.deserialize_value(wire_bytes)
+
+        assert decoded["doc_id"] == record["doc_id"]
+        assert decoded["routing_tier"] == "deep"
+        assert decoded["raw_relations_json"] == '[{"subject_entity_id": "x"}]'
+
+    @pytest.mark.unit
+    def test_falls_back_to_json_for_legacy_payload(self) -> None:
+        import json
+
+        consumer = _make_consumer()
+        legacy = json.dumps(
+            {
+                "event_id": "x",
+                "doc_id": "01234567-89ab-7def-8012-aaaaaaaaaaaa",
+                "raw_relations": [{"subject_entity_id": "y"}],
+            },
+        ).encode()
+        decoded = consumer.deserialize_value(legacy)
+        assert decoded["doc_id"] == "01234567-89ab-7def-8012-aaaaaaaaaaaa"
+        assert decoded["raw_relations"][0]["subject_entity_id"] == "y"

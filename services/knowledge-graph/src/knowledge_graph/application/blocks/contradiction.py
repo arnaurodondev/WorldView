@@ -15,7 +15,7 @@ Writes ``relation_contradiction_links`` and emits
 from __future__ import annotations
 
 import dataclasses
-import json
+from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -24,6 +24,19 @@ from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.application.ports.repositories import (
     TOPIC_CONTRADICTION,
 )
+
+
+def _find_schema_dir() -> Path:
+    """Locate ``infra/kafka/schemas/`` whether running locally or in Docker."""
+    relative = Path("infra") / "kafka" / "schemas"
+    for base in Path(__file__).resolve().parents:
+        candidate = base / relative
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
+
+
+_CONTRADICTION_SCHEMA_PATH = str(_find_schema_dir() / "intelligence.contradiction.v1.avsc")
 
 if TYPE_CHECKING:
     from knowledge_graph.application.ports.repositories import (
@@ -136,7 +149,13 @@ async def detect_and_record_contradictions(
             detected_at=now,
         )
 
-        # Emit intelligence.contradiction.v1 via outbox
+        # Emit intelligence.contradiction.v1 via outbox.
+        # PLAN-0062 Wave C: write Confluent-Avro wire-format bytes (5-byte
+        # magic header + Avro body) so the alert IntelligenceConsumer can
+        # decode via deserialize_confluent_avro.  The dispatcher emits the
+        # bytes verbatim — the producer is responsible for the full envelope.
+        from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
+
         contradiction_payload = {
             "event_id": str(new_uuid7()),
             "event_type": "intelligence.contradiction",
@@ -154,7 +173,7 @@ async def detect_and_record_contradictions(
         await outbox_repo.append(
             topic=TOPIC_CONTRADICTION,
             partition_key=str(subject_entity_id),
-            payload_avro=json.dumps(contradiction_payload).encode(),
+            payload_avro=serialize_confluent_avro(_CONTRADICTION_SCHEMA_PATH, contradiction_payload),
         )
 
         results.append(

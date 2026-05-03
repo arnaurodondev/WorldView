@@ -14,6 +14,7 @@ to allow independent scaling and consumer-group offsets.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -31,6 +32,21 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+
+def _find_schema_dir() -> Path:
+    """Locate ``infra/kafka/schemas/`` whether running locally or in Docker."""
+    relative = Path("infra") / "kafka" / "schemas"
+    for base in Path(__file__).resolve().parents:
+        candidate = base / relative
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
+
+
+_SCHEMA_DIR = _find_schema_dir()
+_ENTITY_CANONICAL_CREATED_TOPIC = "entity.canonical.created.v1"
+_ENTITY_CANONICAL_CREATED_SCHEMA_PATH = str(_SCHEMA_DIR / "entity.canonical.created.v1.avsc")
 
 
 # ---------------------------------------------------------------------------
@@ -184,9 +200,27 @@ class EntityCreatedConsumer(BaseKafkaConsumer[None]):
     # ------------------------------------------------------------------
 
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
+        """Decode entity.canonical.created.v1 events.
+
+        PLAN-0062 Wave A: Confluent-Avro on the wire (5-byte header + Avro
+        body), with a JSON fallback to keep the consumer compatible with any
+        legacy messages from before the producer cutover.  The fallback path
+        emits a warning so we can quantify residual JSON traffic.
+        """
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
+
+        path = schema_path or _ENTITY_CANONICAL_CREATED_SCHEMA_PATH
+        if raw and raw[:1] == b"\x00":
+            return deserialize_confluent_avro(path, raw)  # type: ignore[no-any-return]
+        logger.warning(  # type: ignore[no-any-return]
+            "entity_consumer_legacy_json_payload",
+            message="entity.canonical.created.v1 message lacks Confluent magic byte; using JSON fallback",
+        )
         return json.loads(raw)  # type: ignore[no-any-return]
 
     def get_schema_path(self, topic: str) -> str | None:
+        if topic == _ENTITY_CANONICAL_CREATED_TOPIC:
+            return _ENTITY_CANONICAL_CREATED_SCHEMA_PATH
         return None
 
     def extract_event_id(self, value: dict[str, Any]) -> str:

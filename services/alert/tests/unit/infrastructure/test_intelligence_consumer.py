@@ -135,9 +135,14 @@ class TestIntelligenceConsumer:
         assert result["event_id"] == "abc"
 
     @pytest.mark.unit
-    def test_get_schema_path_returns_none(self) -> None:
+    def test_get_schema_path_returns_path_for_signal_topic(self) -> None:
         consumer, _ = _make_consumer()
-        assert consumer.get_schema_path("nlp.signal.detected.v1") is None
+        assert consumer.get_schema_path("nlp.signal.detected.v1") is not None
+
+    @pytest.mark.unit
+    def test_get_schema_path_returns_none_for_unknown_topic(self) -> None:
+        consumer, _ = _make_consumer()
+        assert consumer.get_schema_path("unknown.topic.v1") is None
 
     @pytest.mark.unit
     async def test_is_duplicate_no_client(self) -> None:
@@ -332,3 +337,52 @@ class TestIntelligenceConsumerMarketImpactScore:
 
         call_kwargs = mock_fanout.execute.call_args.kwargs
         assert call_kwargs["market_impact_score"] == pytest.approx(0.0)
+
+
+class TestAvroDeserialization:
+    """PLAN-0062 Wave C: Confluent-Avro on the wire for intelligence.contradiction.v1."""
+
+    @pytest.mark.unit
+    def test_get_schema_path_returns_path_for_known_topics(self) -> None:
+        consumer, _ = _make_consumer()
+        assert consumer.get_schema_path("intelligence.contradiction.v1") is not None
+        assert consumer.get_schema_path("nlp.signal.detected.v1") is not None
+        assert consumer.get_schema_path("graph.state.changed.v1") is not None
+        assert consumer.get_schema_path("unknown.topic.v1") is None
+
+    @pytest.mark.unit
+    def test_decodes_confluent_avro_contradiction(self) -> None:
+        from messaging.kafka.serialization_utils import serialize_confluent_avro
+
+        consumer, _ = _make_consumer()
+        schema_path = consumer.get_schema_path("intelligence.contradiction.v1")
+        assert schema_path is not None
+        record = {
+            "event_id": "01900000-0000-7000-0000-000000000030",
+            "event_type": "intelligence.contradiction",
+            "schema_version": 1,
+            "occurred_at": "2026-05-03T12:00:00+00:00",
+            "subject_entity_id": "01234567-89ab-7def-8012-345678901234",
+            "claim_type": "analyst_rating",
+            "new_claim_id": "01234567-89ab-7def-8012-aaaaaaaaaaaa",
+            "contradicting_claim_id": "01234567-89ab-7def-8012-bbbbbbbbbbbb",
+            "contradiction_strength": 0.7,
+            "affected_relation_ids": [],
+            "is_backfill": False,
+            "correlation_id": None,
+        }
+        wire_bytes = serialize_confluent_avro(schema_path, record)
+        decoded = consumer.deserialize_value(wire_bytes, schema_path=schema_path)
+        assert decoded["subject_entity_id"] == record["subject_entity_id"]
+        assert decoded["claim_type"] == "analyst_rating"
+        assert decoded["contradiction_strength"] == pytest.approx(0.7)
+
+    @pytest.mark.unit
+    def test_falls_back_to_json_for_legacy_payload(self) -> None:
+        import json
+
+        consumer, _ = _make_consumer()
+        schema_path = consumer.get_schema_path("intelligence.contradiction.v1")
+        legacy = json.dumps({"event_id": "x", "event_type": "intelligence.contradiction"}).encode()
+        decoded = consumer.deserialize_value(legacy, schema_path=schema_path)
+        assert decoded["event_type"] == "intelligence.contradiction"

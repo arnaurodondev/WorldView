@@ -377,21 +377,32 @@ class TestEnqueueEnriched:
         outbox_repo.add.assert_called_once()
         call_kwargs = outbox_repo.add.call_args
         assert call_kwargs.kwargs["topic"] == "nlp.article.enriched.v1"
-        payload = json.loads(call_kwargs.kwargs["payload_avro"])
+        # PLAN-0062 Wave B: payload is now Confluent-Avro wire format (5-byte
+        # magic header + Avro body) — decode via the same helper the consumer
+        # uses.  Empty raw_* arrays serialise as ``raw_*_json = None`` per
+        # ``encode_raw_array``'s contract (the Avro union picks the null branch).
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import _SCHEMA_DIR
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        wire_bytes = call_kwargs.kwargs["payload_avro"]
+        assert wire_bytes[:1] == b"\x00", "Confluent-Avro magic byte missing"
+        schema_path = str(_SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
+        payload = deserialize_confluent_avro(schema_path, wire_bytes)
         assert payload["doc_id"] == str(doc_id)
         assert payload["routing_tier"] == "medium"
         assert payload["event_type"] == "nlp.article.enriched"
-        # KG-001 / KG-002 closure: enriched payload MUST include the actual extracted
-        # data arrays so S7 can materialise relations, events, and claims.
-        # KG-002 (dedicated claim.extracted consumer) is closed because claims now
-        # flow via this enriched event's raw_claims array.
-        assert "raw_relations" in payload, "KG-001: raw_relations must be present in enriched payload"
-        assert "raw_events" in payload, "KG-001: raw_events must be present in enriched payload"
-        assert "raw_claims" in payload, "KG-002 closure: raw_claims must be present in enriched payload"
-        # With empty extraction_result, all arrays must be empty lists (not missing/None).
-        assert payload["raw_relations"] == []
-        assert payload["raw_events"] == []
-        assert payload["raw_claims"] == []
+        # KG-001 / KG-002 closure: enriched payload MUST carry the extracted
+        # arrays so S7 can materialise relations, events, and claims.  Under
+        # Avro encoding they are transported as JSON-string fields (PLAN-0062
+        # Wave B); empty arrays serialise as None per the encode_raw_array
+        # contract.
+        assert "raw_relations_json" in payload
+        assert "raw_events_json" in payload
+        assert "raw_claims_json" in payload
+        assert payload["raw_relations_json"] is None
+        assert payload["raw_events_json"] is None
+        assert payload["raw_claims_json"] is None
 
 
 # ── D-004: nlp commit failure logging (T-A-2-04) ─────────────────────────────
