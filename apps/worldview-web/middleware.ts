@@ -20,10 +20,12 @@
  *      tags they emit) AND the response Content-Security-Policy header.
  *   3. `strict-dynamic` lets the nonced scripts dynamically load further
  *      modules without each one needing its own nonce.
- *   4. Style-src keeps `'unsafe-inline'` because Tailwind's JIT injects
- *      inline `<style>` tags that cannot easily be nonced under React 19 SSR.
- *      Per Next.js team guidance — script CSP is the high-value target;
- *      style nonce is a follow-up if/when stylesheets are externalised.
+ *   4. Style-src has both `'unsafe-inline'` (Tailwind JIT inline <style>)
+ *      AND `'nonce-N'`. Next.js 15 auto-adds the nonce attribute to every
+ *      <link rel="stylesheet"> when x-nonce is set. Safari blocks these
+ *      stylesheets unless style-src also contains the matching nonce-source —
+ *      it does NOT fall back to 'self' when a nonce attribute is present.
+ *      Without 'nonce-N' in style-src the entire page renders unstyled.
  *
  * PERFORMANCE: middleware adds ~0.3ms per request for the nonce generation
  * + header copy. Negligible at the request scale we run.
@@ -50,7 +52,19 @@ function generateNonce(): string {
   return btoa(s);
 }
 
+// Log every inbound request so Docker logs (`docker logs worldview-worldview-web-1`)
+// show access traffic. Uses console.warn because production builds strip
+// console.log (next.config.ts removeConsole) but preserve warn + error.
+// Format mirrors Next.js dev-mode output for easy scanning.
+function logRequest(request: NextRequest): void {
+  const ts = new Date().toISOString();
+  const method = request.method;
+  const path = request.nextUrl.pathname + (request.nextUrl.search || "");
+  console.warn(`[access] ${ts} ${method} ${path}`);
+}
+
 export function middleware(request: NextRequest): NextResponse {
+  logRequest(request);
   const nonce = generateNonce();
 
   // The CSP header. Differences from the previous next.config.ts version:
@@ -66,13 +80,28 @@ export function middleware(request: NextRequest): NextResponse {
 
   const cspDirectives = [
     "default-src 'self'",
-    // strict-dynamic: scripts loaded by an already-nonced root script inherit
-    // trust; explicit hosts in script-src are ignored when strict-dynamic is
-    // present, so this is the modern stronger pattern.
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval'`,
-    // Style-src keeps 'unsafe-inline' — Tailwind JIT injection makes nonced
-    // styles impractical without a major refactor. Documented limitation.
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    // 'unsafe-eval' is required by the Next.js webpack runtime (dynamic requires).
+    // WHY NO 'strict-dynamic' — BP-325: Next.js prerenderers (SSG / ISR) cache HTML
+    // at BUILD time before any per-request nonce exists. At request time the
+    // middleware generates a fresh nonce and injects it into the CSP header, but the
+    // prerendered HTML has NO nonce attributes on its <script> tags. With
+    // 'strict-dynamic' in script-src, 'self' is silently disabled — every nonce-less
+    // script is blocked, React never hydrates, and every prerendered page appears as
+    // plain unstyled HTML with no interactivity.
+    // Removing 'strict-dynamic' restores 'self', allowing all /_next/static/*.js
+    // chunks to execute regardless of whether they carry a nonce attribute.
+    // Nonces remain in the directive to authorise Next.js's inline RSC flight
+    // payload scripts (which DO have nonce attributes). External-script XSS is still
+    // blocked because we have no wildcard hosts and no 'unsafe-inline'.
+    `script-src 'self' 'nonce-${nonce}' 'unsafe-eval'`,
+    // Style-src: 'unsafe-inline' for Tailwind JIT <style> injection (can't be
+    // nonced without major refactor). 'nonce-N' added because Next.js 15
+    // automatically attaches a nonce attribute to <link rel="stylesheet">
+    // elements when x-nonce is set. Safari (and strict Chrome) require a
+    // matching nonce-source in style-src when the element carries a nonce —
+    // falling back to 'self' is NOT guaranteed. Without this, ALL stylesheets
+    // are silently blocked and the page renders as plain unstyled HTML.
+    `style-src 'self' 'unsafe-inline' 'nonce-${nonce}' https://fonts.googleapis.com`,
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' https://*.eodhd.com https://*.clearbit.com data: blob:",
     `connect-src 'self' ws://${wsOrigin} wss://${wsOrigin}`,
@@ -83,8 +112,18 @@ export function middleware(request: NextRequest): NextResponse {
     // form-action locked to 'self' — credentials cannot be exfiltrated by an
     // injected form pointing to an external endpoint.
     "form-action 'self'",
-    // upgrade-insecure-requests in production only (localhost http breaks otherwise).
-    ...(process.env.NODE_ENV === "production" ? ["upgrade-insecure-requests"] : []),
+    // upgrade-insecure-requests only when the app is actually behind HTTPS.
+    // ROOT CAUSE OF BP-324: NODE_ENV=production is set in the Docker dev container
+    // (required for Next.js standalone mode) but the container serves HTTP.
+    // upgrade-insecure-requests causes Chrome/Safari to upgrade ALL sub-resource
+    // requests (CSS/JS) from http://localhost:3001/... to https://localhost:3001/...
+    // No HTTPS server exists → SSL handshake fails → every static asset gets
+    // net::ERR_SSL_PROTOCOL_ERROR → page renders completely unstyled with no JS.
+    // Navigation requests are exempt from the upgrade (HTML loads fine),
+    // which is why content was visible but the page was broken.
+    // FIX: use NEXT_PUBLIC_WS_BASE_URL as the HTTPS signal — wss:// means TLS
+    // deployment; ws:// means HTTP (local dev Docker). Never use NODE_ENV alone.
+    ...(wsBase.startsWith("wss://") ? ["upgrade-insecure-requests"] : []),
   ].join("; ");
 
   // Forward the nonce to the rendering server components via a request header.

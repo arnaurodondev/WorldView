@@ -42,8 +42,7 @@ def upgrade() -> None:
         """
     )
     op.execute(
-        "COMMENT ON COLUMN sources.config_hash IS "
-        "'Generated SHA-256 of canonical config — drives dedup constraint.'"
+        "COMMENT ON COLUMN sources.config_hash IS " "'Generated SHA-256 of canonical config — drives dedup constraint.'"
     )
 
     # Dedup constraint. (source_type, config_hash) uniquely identifies a logical source;

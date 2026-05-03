@@ -23,6 +23,8 @@
 
 | ID | Category | Symptom (error message or behaviour) | Affected areas |
 |----|----------|---------------------------------------|----------------|
+| [BP-325](#bp-325) | Next.js CSP / prerendering incompatibility | `'strict-dynamic'` in `script-src` disables `'self'`; Next.js prerendered HTML has no nonce attributes on scripts; every script blocked → React never hydrates → plain unstyled HTML | `apps/worldview-web/middleware.ts`; any nonce-based CSP middleware added to a Next.js app that uses SSG or ISR |
+| [BP-324](#bp-324) | LLM adapter / plan optimistic assumption | Plan says "LLM emits tool_use blocks" but the LLM adapter has no `tools` parameter — the entire tool-use loop is a dead code path silently doing nothing | `DeepInfraCompletionAdapter`, `OpenRouterAdapter`; any plan that adds a capability to the application layer and assumes the infrastructure adapter already supports it |
 | [BP-309](#bp-309) | Worker pipeline / classification without consequence | Worker classifies mention as real entity (`ENTITY_CREATED`) but writes no downstream effect — no `provisional_entity_queue` insert, no canonical entity created — classified items silently vanish | `UnresolvedResolutionWorker._process_mention()` (S6); any classification worker whose positive-outcome branch has no downstream write |
 | [BP-261](#bp-261) | Config / GitOps drift | `docker.env` files in the worldview repo are COPIES of `worldview-gitops/env/dev/*.env`; changes made only to the local copy drift from the source of truth and are lost on next `setup-dev.sh` run | All services; `scripts/setup-dev.sh`; `worldview-gitops/env/dev/` |
 | [BP-241](#bp-241) | Alert / Valkey dedup | Resetting Kafka offsets for replay doesn't clear Valkey dedup keys — all events silently deduplicated; `alert_db.alerts` stays empty | `services/alert/src/alert/infrastructure/messaging/consumers/intelligence_consumer.py`; any consumer with Valkey-backed dedup |
@@ -8621,3 +8623,153 @@ return resp
 - **Never** use `json.dumps(..., default=str)` to cache Pydantic model instances — they serialize to repr strings, not JSON.
 - If you must use raw `json.dumps` for caching, call `.model_dump()` on each Pydantic object first, or use `model_dump_json()` on the top-level response.
 - Add a test that round-trips the cached format: `assert ModelClass.model_validate_json(resp.model_dump_json()) == resp`.
+
+---
+
+## BP-323 — CSP `style-src` Missing Nonce Silently Blocks All Stylesheets (Safari + Next.js 15 nonce middleware)
+
+**Category**: Security / Config
+**Severity**: HIGH (entire page renders as unstyled plain HTML — looks like a broken build)
+**First seen**: 2026-05-03
+**Services**: worldview-web (frontend)
+
+**Symptoms**:
+- Page renders correct content but completely unstyled: white background, default fonts, bullet-point nav lists
+- CSS files return HTTP 200 with valid Tailwind content via `curl`; the issue is browser-only
+- Consistent in Safari; Chrome is more lenient and may allow stylesheets anyway
+- Browser console: `Refused to load stylesheet ... violates Content-Security-Policy: "style-src 'self' 'unsafe-inline'"`
+
+**Root cause**:
+Next.js 15 App Router automatically adds a `nonce="N"` attribute to every `<link rel="stylesheet">` element when the middleware sets the `x-nonce` request header. Safari (and strict Chrome) require `style-src` to contain a matching `'nonce-N'` source when the element carries a nonce attribute — they do **NOT** fall through to `'self'` as a fallback when a nonce is present. Result: ALL stylesheets are blocked and the page is completely unstyled.
+
+**Example**:
+```typescript
+// Bad — style-src missing nonce; Safari blocks all <link nonce="..."> stylesheets
+`style-src 'self' 'unsafe-inline'`
+
+// Good — nonce in BOTH script-src and style-src
+`style-src 'self' 'unsafe-inline' 'nonce-${nonce}'`
+```
+
+**Fix applied**: `apps/worldview-web/middleware.ts` — added `'nonce-${nonce}'` to the `style-src` directive.
+
+**Prevention**:
+- Whenever Next.js uses nonce-based CSP (sets `x-nonce` in middleware), include the nonce in **both** `script-src` AND `style-src`
+- "Style nonce is a follow-up" is NOT safe — it breaks Safari from day one silently
+- Add to security audit checklist: verify `style-src` nonce parity with `script-src` when nonce middleware is present
+
+---
+
+## BP-324 — LLM Adapter Optimistic Assumption: Plan Adds Application-Layer Feature, Adapter Never Updated
+
+**Symptom**: A plan adds a new capability (e.g., tool-calling, structured JSON output) to the application layer and specifies that the LLM will "emit tool_use blocks". The tool-use loop is coded, wired, and tested. At runtime: no tools are ever called, the LLM just generates text, and no errors are surfaced — silent no-op.
+
+**Root cause**: The plan assumed the LLM infrastructure adapter (`DeepInfraCompletionAdapter`, `OpenRouterAdapter`) already supports the new API feature (e.g., OpenAI `tools` parameter). The adapter was never updated. The Protocol port's `chat_with_tools()` method exists in the interface but was never implemented in the concrete adapter. Since the application layer only sees the Protocol, it compiles and passes mypy — the missing implementation is invisible at development time.
+
+**PLAN-0066 instance**: Wave H defined `ChatOrchestratorUseCase._tool_use_path()` and `ToolExecutor`, but `deepinfra_adapter.py` payload was never updated to include `tools: list[dict]`. Result: the tool-use path ran but the LLM never called any tools.
+
+**Prevention**:
+- When a plan adds a new application-layer capability that depends on LLM adapter support, the FIRST task in Wave 1 must be the adapter update — not an application-layer task
+- Architecture test: add `test_deepinfra_adapter_implements_llm_chat_provider` that checks `isinstance(deepinfra_adapter, LlmChatProvider)` at test time (not just Protocol runtime check)
+- In plan pre-flight gate: if a plan uses `tool_use` / `chat_with_tools` / any new LLM API feature, explicitly verify the adapter implements it by reading the adapter source file before writing any wave tasks
+
+**Affected areas**: `services/rag-chat/src/rag_chat/infrastructure/llm/deepinfra_adapter.py`; `openrouter_adapter.py`; `ollama_adapter.py`; `provider_chain.py`; any plan that adds a new application-layer LLM feature and does not read the concrete adapter implementation before writing tasks.
+
+---
+
+## BP-324 — `NODE_ENV=production` Used as HTTPS Guard Causes `upgrade-insecure-requests` to Break All Static Assets
+
+**Category**: Config / Security
+**Severity**: CRITICAL (entire frontend non-functional — no CSS, no JS)
+**First seen**: 2026-05-03
+**Services**: worldview-web (frontend)
+
+**Symptoms**:
+- All CSS and JS requests in the browser show "no response" / `net::ERR_SSL_PROTOCOL_ERROR` in DevTools
+- Page renders correct HTML content (SSR) but completely unstyled, no interactivity
+- `curl http://localhost:3001/_next/static/…` returns HTTP 200 — issue is browser-only
+- HTML page loads fine because `upgrade-insecure-requests` **exempts top-level navigations**
+
+**Root cause**:
+`NODE_ENV=production` is required for Next.js standalone mode but was also used as a proxy for "we are on HTTPS." Two HTTPS-only directives were gated on it:
+1. `upgrade-insecure-requests` in CSP — tells browsers to upgrade ALL sub-resource HTTP requests to HTTPS
+2. `Strict-Transport-Security` header — tells browsers to never use HTTP for this origin
+
+When the Docker dev container serves HTTP, `upgrade-insecure-requests` causes Chrome/Safari to request `https://localhost:3001/_next/static/…` instead of `http://`. No HTTPS server exists → SSL handshake fails → all static assets fail silently.
+
+**Example**:
+```typescript
+// Bad — NODE_ENV conflates "optimized build" with "HTTPS deployment"
+...(process.env.NODE_ENV === "production" ? ["upgrade-insecure-requests"] : []),
+
+// Good — use the WS URL scheme as the HTTPS signal
+...(wsBase.startsWith("wss://") ? ["upgrade-insecure-requests"] : []),
+```
+
+**Fix applied** (`apps/worldview-web/middleware.ts` + `apps/worldview-web/next.config.ts`):
+Gate both `upgrade-insecure-requests` and HSTS on `NEXT_PUBLIC_WS_BASE_URL.startsWith("wss://")`.
+- Docker dev: `NEXT_PUBLIC_WS_BASE_URL=ws://localhost:8010` → HTTPS headers disabled
+- Production: `NEXT_PUBLIC_WS_BASE_URL=wss://…` → HTTPS headers enabled
+
+**Prevention**:
+- NEVER use `NODE_ENV === "production"` alone to gate `upgrade-insecure-requests` or `Strict-Transport-Security`
+- Any HTTPS-only browser directive must be gated on a variable that represents the actual deployment SCHEME
+- Review checklist: HTTPS security headers must use an HTTPS-specific guard, not `NODE_ENV`
+- Add a smoke test: assert `upgrade-insecure-requests` is absent in CSP when `NEXT_PUBLIC_WS_BASE_URL` is `ws://`
+
+---
+
+## BP-325 — `'strict-dynamic'` in CSP `script-src` Blocks All Scripts on Next.js Prerendered Pages
+
+**Category**: Next.js CSP / prerendering incompatibility
+**Severity**: CRITICAL — full JS failure on every prerendered page
+**Affected areas**: `apps/worldview-web/middleware.ts`; any nonce-based CSP middleware on a Next.js app using SSG or ISR
+
+**Symptoms**:
+- Page renders visually (CSS loads) but has zero interactivity
+- React never hydrates — client components stay as their Suspense fallback (spinner)
+- DevTools Console shows CSP violation: "Refused to execute script ... because 'strict-dynamic' ..."
+- Only affects pages with `x-nextjs-cache: HIT` or `Cache-Control: s-maxage=...` (prerendered)
+- Dynamically-rendered pages (SSR, `Cache-Control: no-store`) work fine
+
+**Root cause**:
+The CSP3 spec for `'strict-dynamic'` explicitly disables all host-based allowlists including `'self'` when present in `script-src`. Only scripts with a matching nonce or those dynamically created by an already-trusted script are allowed.
+
+Next.js prerenderers (SSG/ISR) generate and cache HTML at build time. No per-request nonce exists at build time, so the prerendered HTML has **no nonce attributes** on any `<script>` tag. At request time, the middleware generates a fresh nonce and injects it into the `Content-Security-Policy` response header — but the cached HTML still has nonce-less scripts.
+
+With `'strict-dynamic'` in effect:
+- `'self'` is disabled → `/_next/static/*.js` chunks can't execute
+- No nonced root script exists → no trust propagation
+- Result: **every script on the page is blocked**
+
+```typescript
+// Bad — 'strict-dynamic' disables 'self'; prerendered pages have no nonces
+`script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval'`,
+
+// Good — remove 'strict-dynamic' so 'self' honours same-origin chunks
+`script-src 'self' 'nonce-${nonce}' 'unsafe-eval'`,
+```
+
+**Verification**:
+```bash
+curl -s -I http://localhost:3001/login | grep x-nextjs-cache
+# x-nextjs-cache: HIT  ← prerendered page — won't have nonce attributes
+
+curl -s http://localhost:3001/login | grep '<script' | head -5
+# <script src="/_next/static/chunks/...js" async=""></script>  ← NO nonce!
+# vs. SSR pages: nonce="AbCdEf==" present on every script tag
+```
+
+**Fix applied** (`apps/worldview-web/middleware.ts`):
+Removed `'strict-dynamic'` from `script-src`. Security impact is minimal:
+- `'self'` covers all legitimate Next.js chunks (same-origin)
+- `'unsafe-inline'` is still absent → raw inline XSS scripts are still blocked
+- `'nonce-${nonce}'` remains, authorising the inline RSC flight-payload scripts
+  that Next.js emits on dynamically-rendered pages (those DO have nonces)
+- External-domain script injection is still blocked (no wildcard hosts)
+
+**Prevention**:
+- NEVER combine `'strict-dynamic'` with a nonce-based CSP middleware in a Next.js app unless EVERY page is forced to dynamic rendering (`export const dynamic = 'force-dynamic'`)
+- If `'strict-dynamic'` is required for a hardened deployment, add `export const dynamic = 'force-dynamic'` to every page/layout that must use nonces; otherwise omit `'strict-dynamic'`
+- Add to CI: assert `'strict-dynamic'` absent in `Content-Security-Policy` response header
+- Test file: `apps/worldview-web/__tests__/middleware-csp.test.ts`

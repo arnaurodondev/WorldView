@@ -136,8 +136,12 @@ const nextConfig: NextConfig = {
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           // Disable browser features we never use.
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
-          // HSTS only in production — localhost breaks with HSTS preload.
-          ...(process.env.NODE_ENV === "production"
+          // HSTS only when actually deployed on HTTPS — not just when NODE_ENV=production.
+          // NODE_ENV=production is set in the Docker dev container for standalone mode
+          // but the container serves HTTP. Sending HSTS over HTTP is wrong per RFC 6797
+          // (browsers should ignore it, but some don't). Use NEXT_PUBLIC_WS_BASE_URL
+          // as the HTTPS signal: wss:// = TLS deployment, ws:// = HTTP.
+          ...((process.env.NEXT_PUBLIC_WS_BASE_URL ?? "ws://").startsWith("wss://")
             ? [{ key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" }]
             : []),
         ],

@@ -29,7 +29,10 @@ if TYPE_CHECKING:
 # Path to the shared Avro schema file
 _SCHEMA_PATH: Path = (
     Path(__file__).resolve().parents[8]  # worldview root
-    / "infra" / "kafka" / "schemas" / "market.dataset.fetched.avsc"
+    / "infra"
+    / "kafka"
+    / "schemas"
+    / "market.dataset.fetched.avsc"
 )
 
 

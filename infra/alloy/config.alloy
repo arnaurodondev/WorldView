@@ -43,9 +43,10 @@ loki.relabel "docker" {
 
   // Keep only worldview application containers — drop infra noise (Kafka,
   // Zookeeper, Postgres, MinIO, etc.) to reduce Loki volume. (F-031)
+  // worldview-web added 2026-05-03: frontend logs were silently dropped.
   rule {
     source_labels = ["__meta_docker_container_name"]
-    regex         = "/(portfolio|market-ingestion|market-data|content-ingestion|content-store|api-gateway|nlp-pipeline|knowledge-graph|rag-chat|alert).*"
+    regex         = "/(portfolio|market-ingestion|market-data|content-ingestion|content-store|api-gateway|nlp-pipeline|knowledge-graph|rag-chat|alert|worldview-web).*"
     action        = "keep"
   }
 
