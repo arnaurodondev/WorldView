@@ -824,7 +824,19 @@ class TestEnqueueSignalEvents:
         assert kwargs["topic"] == "nlp.signal.detected.v1"
         assert kwargs["partition_key"] == str(signal.entity_id)  # type: ignore[union-attr]
 
-        payload = json.loads(kwargs["payload_avro"])
+        # PLAN-0062 F-006: outbox payload is Confluent-Avro framed bytes
+        # (5-byte ``\x00<schema-id>`` header + Avro body), not raw JSON.
+        from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
+        from messaging.kafka.serialization_utils import (  # type: ignore[import-untyped]
+            deserialize_confluent_avro,
+        )
+
+        raw_payload = kwargs["payload_avro"]
+        assert raw_payload[:1] == b"\x00", "expected Confluent-Avro framed bytes"
+        payload = deserialize_confluent_avro(
+            get_schema_path("nlp.signal.detected.v1.avsc"),
+            raw_payload,
+        )
         assert payload["event_type"] == "nlp.signal.detected"
         assert payload["claim_id"] == str(signal.signal_id)  # type: ignore[union-attr]
         assert payload["subject_entity_id"] == str(signal.entity_id)  # type: ignore[union-attr]

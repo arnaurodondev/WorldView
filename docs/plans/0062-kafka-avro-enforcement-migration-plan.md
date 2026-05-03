@@ -118,7 +118,7 @@ Once the baseline is empty, harden the architecture test:
 | Task | File | Action |
 |------|------|--------|
 | T-D-1 | `tests/architecture/test_kafka_avro_enforcement.py` | After `JSON_CONSUMER_BASELINE = {}` is in main, **remove the baseline-lookup code path** so the test is unconditional: any pure-JSON `deserialize_value` is a build failure. |
-| T-D-2 | `RULES.md` | Add **Hard Rule 18 — All Kafka contracts use Avro**: every topic has a registered `.avsc`; producer uses `serialize_confluent_avro`; consumer uses `deserialize_confluent_avro` (or `deserialize_avro` for non-Confluent envelopes). Pure JSON serialization on Kafka is forbidden. |
+| T-D-2 | `RULES.md` | Add **Hard Rule R28 — All Kafka contracts use Avro**: every topic has a registered `.avsc`; producer uses `serialize_confluent_avro`; consumer uses `deserialize_confluent_avro` (or `deserialize_avro` for non-Confluent envelopes). Pure JSON serialization on Kafka is forbidden. |
 | T-D-3 | `docs/STANDARDS.md` | Add a §3.x section documenting the canonical-model layout (`canonical/` for entity payloads vs `events/<domain>/` for trigger events) and the producer/consumer helper functions. |
 | T-D-4 | `docs/BUG_PATTERNS.md` | Add BP-307 — *"JSON-only Kafka consumer hides schema-evolution bugs"* — with reference to PLAN-0062. |
 
@@ -162,5 +162,5 @@ Total: ~5–6 days of focused work.
 This plan is complete when:
 1. `JSON_CONSUMER_BASELINE` in `tests/architecture/test_kafka_avro_enforcement.py` is empty.
 2. The baseline-lookup code path is removed (Wave D-1) so the test is unconditional.
-3. RULES.md Hard Rule 18 is in main.
+3. RULES.md Hard Rule R28 is in main.
 4. Every topic in the platform has a registered `.avsc` AND a corresponding canonical model in `libs/contracts`.

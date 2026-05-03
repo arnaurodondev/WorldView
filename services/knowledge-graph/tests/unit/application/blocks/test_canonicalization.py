@@ -282,10 +282,15 @@ class TestPropose:
         assert call_kwargs["topic"] == "relation.type.proposed.v1"
 
     def test_propose_payload_contains_proposed_type(self) -> None:
-        import json
-
+        # PLAN-0062 F-006: outbox payload is Confluent-Avro framed bytes
+        # (5-byte ``\x00<schema-id>`` header + Avro body), not raw JSON.
         from knowledge_graph.application.blocks.canonicalization import (
             canonicalize_relation_type,
+        )
+
+        from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
+        from messaging.kafka.serialization_utils import (  # type: ignore[import-untyped]
+            deserialize_confluent_avro,
         )
 
         outbox = _make_outbox_repo()
@@ -302,6 +307,11 @@ class TestPropose:
             )
         )
         raw_payload = outbox.append.call_args.kwargs["payload_avro"]
-        payload = json.loads(raw_payload)
+        # Confluent magic byte present → decode via Avro path.
+        assert raw_payload[:1] == b"\x00", "expected Confluent-Avro framed bytes"
+        payload = deserialize_confluent_avro(
+            get_schema_path("relation.type.proposed.v1.avsc"),
+            raw_payload,
+        )
         assert payload["proposed_type"] == "invented_by"
         assert payload["semantic_mode"] == "TEMPORAL_CLAIM"

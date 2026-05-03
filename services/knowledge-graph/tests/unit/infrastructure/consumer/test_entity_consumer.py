@@ -62,6 +62,8 @@ class TestAvroDeserialization:
     def test_falls_back_to_json_for_legacy_payload(self) -> None:
         import json
 
+        from structlog.testing import capture_logs
+
         consumer = _make_consumer()
         legacy = json.dumps(
             {
@@ -71,5 +73,24 @@ class TestAvroDeserialization:
             },
         ).encode()
 
-        decoded = consumer.deserialize_value(legacy)  # type: ignore[union-attr]
+        # PLAN-0062 F-021: every JSON-fallback hit must emit a structured warning
+        # so we can quantify residual JSON traffic and remove the branch when
+        # it decays to zero.
+        with capture_logs() as logs:
+            decoded = consumer.deserialize_value(legacy)  # type: ignore[union-attr]
         assert decoded["entity_id"] == "01234567-89ab-7def-8012-345678901234"
+        warnings = [le for le in logs if le.get("event") == "entity_consumer_legacy_json_payload"]
+        assert warnings, "expected entity_consumer_legacy_json_payload warning"
+
+    # ── PLAN-0062 F-018: JSON-fallback oversized payload ─────────────────
+
+    def test_json_fallback_oversized_payload_raises_malformed_data_error(self) -> None:
+        """A JSON-fallback payload above the 16 MiB cap must raise
+        :class:`MalformedDataError` BEFORE ``json.loads`` is called.
+        """
+        from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
+
+        consumer = _make_consumer()
+        payload = b'{"x":"' + b"a" * (17 * 1024 * 1024) + b'"}'
+        with pytest.raises(MalformedDataError):
+            consumer.deserialize_value(payload)  # type: ignore[union-attr]

@@ -464,6 +464,70 @@ When in doubt, ask whether the payload corresponds to a row in some
 service's database — if yes, it goes under `canonical/`; if it is
 purely an event-of-something-happened, it goes under `events/<domain>/`.
 
+#### Schema-id default (known limitation)
+
+`serialize_confluent_avro(schema_path, record, schema_id=0)` defaults the
+4-byte schema-id portion of the Confluent header to `0`. This is **invalid**
+in a real Confluent Schema Registry — registry IDs start at 1 and are
+assigned per registered subject. Internal consumers ignore the id (they load
+the schema from disk via `get_schema_path`), so this is fine for in-platform
+traffic, but external interoperability (ksqlDB, kafka-connect, third-party
+consumers) requires producers to pass the real registry-issued id.
+Reference: PLAN-0062 audit F-009.
+
+#### No CI Schema Registry compat-check (known limitation)
+
+CI runs `fastavro.parse_schema()` for **syntax** validation only — it does
+NOT execute a registry-vs-PR compatibility test. Non-additive schema
+changes (renamed fields, removed fields, narrowed types) therefore pass CI
+and only fail at deploy time when the registry rejects the new subject
+version. Consider adding `check-compatibility` against a local
+schema-registry container in CI.
+Reference: PLAN-0062 audit F-010.
+
+### 3.7.2 Transporting heterogeneous arrays through flat Avro records
+
+Some payloads are intrinsically heterogeneous — for example,
+`nlp.article.enriched.v1` carries arrays of `raw_relations`, `raw_events`,
+and `raw_claims` whose member shapes vary based on extractor mode. Two
+designs are available: nested Avro records (one record per shape) or a
+flat record with a JSON-string field per heterogeneous array. The flat
+JSON-string approach is the project's preferred workaround when:
+
+- The array's element schema is unstable (under active extraction-prompt
+  iteration), AND
+- The payload still passes through the same R28 Confluent-Avro envelope.
+
+**Pattern**:
+
+- The `.avsc` schema declares `<name>_json: ["null", "string"]` with
+  `default: null`. The legacy nested-record fields are kept alongside as
+  `["null", {"type": "array", ...}]` for backward compatibility.
+- Producer side: `encode_raw_array(items)` from
+  `contracts.events.nlp.article_enriched` — JSON-encodes the list and
+  returns `None` for empty input so empty arrays do not bloat the wire.
+- Consumer side: `decode_raw_array(blob)` — returns `[]` on every error
+  branch (missing, invalid JSON, non-list root, oversized) AND emits a
+  structured warning so silent drops are observable.
+- Defence-in-depth: a 16 MiB hard cap (`_MAX_RAW_ARRAY_BYTES`) bounds the
+  decoder against poison messages.
+
+**When to use**:
+
+- Mixed-shape arrays under prompt-engineering churn.
+- Payloads where the element shape is best documented in the canonical
+  model (not the wire schema).
+
+**When NOT to use**:
+
+- Arrays of stable, homogeneous records — those should be modelled as
+  proper Avro nested records so the registry enforces the contract.
+- Arrays > 16 MiB — split into a separate topic instead of bypassing the
+  cap.
+
+Both helpers are forgiving (`[]` on error) AND observable (warning per
+drop branch). Cross-link: `BUG_PATTERNS.md` BP-313.
+
 ### 3.8 Valkey — ALWAYS use `messaging.valkey.ValkeyClient`
 
 ```python

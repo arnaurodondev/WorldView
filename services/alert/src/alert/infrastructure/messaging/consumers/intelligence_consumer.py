@@ -44,6 +44,11 @@ _TOPIC_SCHEMA_PATHS: dict[str, str] = {
     "intelligence.contradiction.v1": get_schema_path("intelligence.contradiction.v1.avsc"),
 }
 
+# PLAN-0062 F-018: defence-in-depth bound on the unbounded ``json.loads`` read.
+# 16 MiB cap on the JSON-fallback path to prevent OOM from a poison legacy
+# message.
+_MAX_JSON_FALLBACK_BYTES = 16 * 1024 * 1024
+
 
 # ── Minimal no-op UoW ─────────────────────────────────────────────────────────
 
@@ -272,6 +277,11 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
             "intelligence_consumer.legacy_json_payload",
             message="message lacks Confluent magic byte; using JSON fallback",
         )
+        # PLAN-0062 F-018: cap JSON-fallback to 16 MiB before ``json.loads``.
+        if len(raw) > _MAX_JSON_FALLBACK_BYTES:
+            raise MalformedDataError(
+                f"JSON fallback payload exceeds cap ({len(raw)} > {_MAX_JSON_FALLBACK_BYTES})",
+            )
         return json.loads(raw)  # type: ignore[no-any-return]
 
     def get_schema_path(self, topic: str) -> str | None:
