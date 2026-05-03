@@ -120,9 +120,25 @@ async def main() -> None:
     else:
         log.info("kg_extraction_deepinfra_key_absent_using_ollama_gemini_chain")
 
+    # Ollama extraction adapter — CPU fallback for provisional entity enrichment.
+    # Slot-1 in the chain: DeepInfra (GPU, ~100-300ms) → Ollama (CPU, ~2-5s).
+    # Without this, the chain is empty when no DeepInfra key is present, leaving
+    # all provisional_entity_queue rows stuck in pending/failed forever.
+    # Model: qwen3:0.6b — same as local S6 classification path (already pulled on Ollama).
+    from ml_clients.adapters.ollama_extraction import OllamaExtractionAdapter  # type: ignore[import-not-found]
+
+    _ollama_extraction_model = "qwen3:0.6b"
+    ollama_ext = OllamaExtractionAdapter(
+        base_url=settings.ollama_base_url,
+        model_id=_ollama_extraction_model,
+        semaphore=asyncio.Semaphore(1),
+    )
+    log.info("kg_extraction_ollama_fallback_wired", model_id=_ollama_extraction_model)
+
     llm_client = FallbackChainClient(
         deepinfra_extraction=deepinfra_ext,
         ollama_embedding=embed_client,
+        ollama_extraction=ollama_ext,
         # Gemini embedding / extraction adapters are wired only when keys are
         # present; for now the selected embedding adapter is sufficient.
         retry_delays_deepinfra=(5.0, 15.0),
