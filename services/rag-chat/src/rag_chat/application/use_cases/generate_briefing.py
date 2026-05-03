@@ -948,8 +948,6 @@ class GenerateBriefingUseCase:
             # ``summary`` is the v2.2 fallback — None when the LLM didn't emit
             # the v2.2 two-tier format. Preserved for back-compat.
             "summary": summary,
-            # PLAN-0049 additive structured fields.
-            "headline": lead or summary,  # v3.0 lead takes precedence; fall back to summary
             # PLAN-0062-W4: return v3.0 BriefSection list when available; otherwise
             # use legacy string-bullet sections for backward compatibility.
             "sections": sections if sections else legacy_sections,
@@ -1052,7 +1050,6 @@ class GenerateBriefingUseCase:
             "entity_mentions": entity_mentions,
             "citations": citations,
             "generated_at": generated_at,
-            "headline": lead,  # v3.0 lead as headline; None if no valid lead
             "sections": sections,
             # PLAN-0062-W4 new fields
             "lead": lead,

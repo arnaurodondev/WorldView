@@ -1192,19 +1192,17 @@ export interface BriefingResponse {
   generated_at: string;
   cached: boolean;
   entity_id: string | null;
-  // PLAN-0049 T-A-1-04 — structured render fields. ``sections`` is populated
-  // when the backend's _parse_sections_from_markdown() succeeded; ``[]`` when
-  // it couldn't parse, in which case the frontend falls back to MarkdownContent
-  // over ``narrative``. ``headline`` mirrors ``summary`` for the top-of-card line.
-  headline?: string | null;
+  // Structured sections — populated when the backend parsed the ## DETAILS
+  // block; ``[]`` on legacy/parse-failure paths (frontend falls back to
+  // MarkdownContent over ``narrative``).
   sections?: BriefSection[];
   // PLAN-0062-W4 T-W4-D-01 — confidence + lead fields.
-  // ``confidence`` is a [0.0, 1.0] score reflecting citation density and
-  // breadth. ``lead`` is the 1-2 sentence executive summary extracted from the
-  // ## LEAD block of the v3.0 prompt output.
-  // WHY optional: pre-W4 cached responses (served from the v2 cache key) lack
-  // these fields. The frontend renders the confidence badge only when present,
-  // and falls back to `summary` when `lead` is absent.
+  // ``confidence`` is a [0.0, 1.0] score reflecting citation density and breadth.
+  // ``lead`` is the 1-3 sentence executive summary from the ## LEAD block of the
+  // v3.0 prompt output, with inline [cN] citation markers.
+  // WHY optional: pre-W4 cached responses lack these fields. The frontend renders
+  // the confidence badge only when present, and falls back to ``summary`` when
+  // ``lead`` is absent.
   confidence?: number;
   lead?: string | null;
 }
