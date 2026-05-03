@@ -224,10 +224,47 @@ const INVESTOR: WorkspaceTemplate = {
   },
 };
 
+/**
+ * QUAD_VIEW — 2×2 grid for simultaneous multi-asset monitoring.
+ *
+ * WHY this layout: institutional desks often need to watch 4 independent data
+ * surfaces at the same time — chart context, live news feed, screener for new
+ * setups, and portfolio P&L — without any single panel dominating. The 2-row ×
+ * 2-panel structure gives equal screen real estate to all four surfaces.
+ *
+ * WHY chart + news in row 1, screener + portfolio in row 2: top-row items
+ * (chart, news) are "reactive" — they update on market events. Bottom-row
+ * items (screener, portfolio) are "exploratory" — the trader reviews them
+ * deliberately. This visual hierarchy matches natural eye-movement (top = watch,
+ * bottom = inspect) on a widescreen monitor.
+ *
+ * HOW EQUAL-HEIGHT WORKS: WorkspaceGrid detects when a workspace has exactly
+ * 2 rows each with exactly 2 panels and applies defaultSize="50%" to both
+ * row panels so the 2×2 grid starts perfectly balanced.
+ */
+const QUAD_VIEW: WorkspaceTemplate = {
+  id: "quad",
+  name: "Quad View",
+  description: "4 panels in a 2×2 grid — chart, news, screener, and portfolio side by side.",
+  config: {
+    name: "Quad View",
+    rows: [
+      makeRow([
+        makePanel("quad", "chart", 0),
+        makePanel("quad", "news", 1),
+      ]),
+      makeRow([
+        makePanel("quad", "screener", 2),
+        makePanel("quad", "portfolio", 3),
+      ]),
+    ],
+  },
+};
+
 // ── Public exports ────────────────────────────────────────────────────────────
 
 /**
- * WORKSPACE_TEMPLATES — the 5 canonical templates shown in NewFromTemplateDialog.
+ * WORKSPACE_TEMPLATES — the 6 canonical templates shown in NewFromTemplateDialog.
  *
  * WHY exported as a const array (not a function): templates are static; making
  * them a function would invite the temptation to inject runtime data, breaking
@@ -240,6 +277,7 @@ export const WORKSPACE_TEMPLATES: WorkspaceTemplate[] = [
   SWING_TRADER,
   NEWS_JUNKIE,
   INVESTOR,
+  QUAD_VIEW,
 ];
 
 /**

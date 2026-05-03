@@ -1034,11 +1034,11 @@ Before W0 closes:
 
 ### Waves
 
-- **H-1 (2d) lightweight-charts v5 upgrade:** API factory pattern rewrite (~14 series creation calls in OHLCVChart).
-- **H-2 (3d) OHLCV power features:** Crosshair HUD, log scale, compare overlay, earnings/news/alert markers, range selector, EquityCurveChart Brush.
+- **H-1 (2d) lightweight-charts v5 upgrade:** API factory pattern rewrite (~14 series creation calls in OHLCVChart). ✅ DONE 2026-05-03
+- **H-2 (3d) OHLCV power features:** Crosshair HUD, log scale, compare overlay, earnings/news/alert markers, range selector, EquityCurveChart Brush. ✅ DONE 2026-05-03
 - **H-3 (1.5d) Squarified treemap:** `lib/treemap.ts` Bruls/Huijsen/van Wijk algorithm; collapses MarketHeatmap + SectorHeatmapWidget. ✅ DONE 2026-05-02
-- **H-4 (2d) Knowledge Graph filters:** Filter pills, edge-strength slider, search input, layout switcher, drill-down side-panel.
-- **H-5 (4d) Workspace v2:** Quad template + workspace SymbolBar + drag-tray Add Panel + chord splits.
+- **H-4 (2d) Knowledge Graph filters:** Filter pills, edge-strength slider, search input, layout switcher, drill-down side-panel. ✅ DONE 2026-05-03
+- **H-5 (4d) Workspace v2:** Quad template + workspace SymbolBar + drag-tray Add Panel + chord splits. ✅ DONE 2026-05-03
 - **H-6 (5d) Multi-monitor pop-out:** `Maximize2` + `Pop out` icon; `window.open` + BroadcastChannel sync; detached-window persistence.
 - **H-7 (5d) Workspace S9 sync:** 3-tier (localStorage + S9 durable + share-link).
 

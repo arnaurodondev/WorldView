@@ -17,6 +17,15 @@
  * useRegisterEvents, useSigma) MUST be called inside <SigmaContainer> — they rely
  * on the sigma React Context. We hoist state via callbacks to the parent EntityGraph.
  *
+ * PLAN-0059 Wave H-4: Added interactive filter controls:
+ *   - Filter pills (by relationship category: all/executive/investor/supplier/customer/competitor)
+ *   - Edge-strength slider (min weight threshold 0–100%)
+ *   - Node search input (dims non-matching nodes in sigma via nodeReducer)
+ *   - Layout switcher (force = ForceAtlas2, hierarchical = degree-tier layout)
+ *   - FilterController: a dedicated sigma child component that pushes filter
+ *     state into sigma.setSettings({ edgeReducer, nodeReducer }) on every change,
+ *     bypassing React re-render of the heavy SigmaContainer.
+ *
  * WHO USES IT: components/instrument/IntelligenceTab.tsx (Intelligence tab, loaded via next/dynamic)
  * DATA SOURCE: S9 GET /v1/entities/{entityId}/graph?depth=2
  * DESIGN REFERENCE: PRD-0028 §6.5 Intelligence tab, ADR-F-08
@@ -30,7 +39,9 @@ import forceAtlas2 from "graphology-layout-forceatlas2";
 // Without this, the canvas may not fill the container correctly on first render.
 import "@react-sigma/core/lib/style.css";
 import { useRouter } from "next/navigation";
+import { TrendingUp, Network } from "lucide-react";
 import type { EntityGraph as EntityGraphData } from "@/types/api";
+import { Slider } from "@/components/ui/slider";
 
 // ── Node type → color map ─────────────────────────────────────────────────────
 // WHY these exact values: match the Midnight Pro palette (global.css --primary: #FFD60A).
@@ -44,6 +55,56 @@ import type { EntityGraph as EntityGraphData } from "@/types/api";
 import { ENTITY_TYPE_COLOR_MAP } from "@/lib/entity-types";
 
 const NODE_DEFAULT_COLOR = "#6B7585";
+
+// ── Filter pill types (PLAN-0059 Wave H-4) ───────────────────────────────────
+// WHY "as const": gives a tuple literal type so RelationFilter is narrowly typed
+// to the actual values ("all" | "executive" | ...) rather than string.
+const RELATION_TYPES = ["all", "executive", "investor", "supplier", "customer", "competitor"] as const;
+type RelationFilter = (typeof RELATION_TYPES)[number];
+
+// ── matchesRelFilter: maps a pill category to edge label patterns ─────────────
+// WHY pattern-based (not exact-match): relation labels vary by data source.
+// "CEO_OF", "EXECUTIVE_CHAIR", "CHIEF_EXEC" all map to "executive" because
+// they all contain the relevant stems. Uppercase comparison avoids case drift.
+function matchesRelFilter(label: string, filter: RelationFilter): boolean {
+  const upper = label.toUpperCase();
+  switch (filter) {
+    case "all":
+      return true;
+    case "executive":
+      // WHY these stems: covers CEO_OF, CFO_OF, CTO_OF, COO_OF, EXECUTIVE_CHAIR,
+      // EXEC_DIRECTOR, OFFICER_OF, DIRECTOR_OF — all executive relationship types
+      // used by the knowledge graph pipeline (S6 extraction).
+      return (
+        upper.includes("CEO") ||
+        upper.includes("CFO") ||
+        upper.includes("CTO") ||
+        upper.includes("COO") ||
+        upper.includes("CHAIR") ||
+        upper.includes("EXEC") ||
+        upper.includes("OFFICER") ||
+        upper.includes("DIRECTOR")
+      );
+    case "investor":
+      // WHY "HOLDS": covers HOLDS_STAKE, HOLDS_SHARES, HOLDS_POSITION
+      return (
+        upper.includes("INVEST") ||
+        upper.includes("SHAREHOLDER") ||
+        upper.includes("HOLDS") ||
+        upper.includes("OWNED")
+      );
+    case "supplier":
+      // WHY "MANUFACTUR" + "PRODUCES": supply chain edges use both naming conventions
+      return upper.includes("SUPPL") || upper.includes("MANUFACTUR") || upper.includes("PRODUCES");
+    case "customer":
+      return upper.includes("CUSTOMER") || upper.includes("CLIENT") || upper.includes("USES");
+    case "competitor":
+      return upper.includes("COMPET") || upper.includes("RIVAL");
+    default:
+      // TypeScript exhaustiveness guard — should never reach here given the const union
+      return true;
+  }
+}
 
 // ── Tooltip state types ───────────────────────────────────────────────────────
 
@@ -165,15 +226,18 @@ function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover }: GraphEventsPr
   return null;
 }
 
-// ── GraphLoader — builds graphology graph and runs ForceAtlas2 ────────────────
+// ── GraphLoader — builds graphology graph and runs layout ─────────────────────
 // WHY separate: useLoadGraph must be inside <SigmaContainer> context.
+// PLAN-0059 H-4: accepts `layout` prop to switch between force (ForceAtlas2)
+// and hierarchical (degree-tier) layout algorithms.
 
 interface GraphLoaderProps {
   data: EntityGraphData;
   centerEntityId: string;
+  layout: "force" | "hierarchical";
 }
 
-function GraphLoader({ data, centerEntityId }: GraphLoaderProps) {
+function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) {
   const loadGraph = useLoadGraph();
 
   useEffect(() => {
@@ -236,31 +300,122 @@ function GraphLoader({ data, centerEntityId }: GraphLoaderProps) {
       }
     }
 
-    // ── Run ForceAtlas2 layout ────────────────────────────────────────────────
-    // WHY synchronous (not worker): The worker variant is async and requires
-    // a separate Worker file. Synchronous FA2 runs in <50ms for ≤100 nodes —
-    // acceptable for our use case. Worker is only needed for 500+ node graphs.
+    // ── Run layout ────────────────────────────────────────────────────────────
     if (graph.order > 0) {
-      // WHY inferSettings: automatically calibrates gravity, scaling, slow-down
-      // based on graph density (order/edges ratio). We then override gravity
-      // to a lower value to spread nodes more evenly across the canvas.
-      const fa2Settings = forceAtlas2.inferSettings(graph);
-      forceAtlas2.assign(graph, {
-        iterations: 100,
-        settings: {
-          ...fa2Settings,
-          gravity: 0.1,         // WHY low gravity: prevents all nodes collapsing to center
-          adjustSizes: true,    // WHY adjustSizes: prevents node overlap by using node.size
-          // WHY Barnes-Hut only for large graphs: the approximation improves O(n²)→O(n log n)
-          // but introduces layout error at small scales. Only enable for 50+ nodes.
-          barnesHutOptimize: graph.order > 50,
-        },
-      });
+      if (layout === "hierarchical") {
+        // WHY degree-tier hierarchical: places high-degree nodes (hubs) at top,
+        // low-degree nodes (leaves) at bottom. Creates a clear top-down hierarchy
+        // that reveals organizational structure (e.g., parent companies on top,
+        // subsidiaries below). Simple and deterministic — no extra library needed.
+        const nodes = graph.nodes();
+        // Compute degree for every node — more connections = higher importance tier
+        const degrees = Object.fromEntries(nodes.map((n) => [n, graph.degree(n)]));
+        const maxDeg = Math.max(...Object.values(degrees), 1); // guard against max=0
+
+        nodes.forEach((n, i) => {
+          // WHY 1 - (degree/maxDeg): degree=maxDeg → tier=0 (top), degree=0 → tier=1 (bottom)
+          // WHY jitter: spread nodes within the same tier horizontally; modular index
+          // spacing ensures they don't stack on top of each other.
+          const tier = 1 - degrees[n] / maxDeg;
+          const tierWidth = 100; // horizontal spread in sigma coordinates
+          const xOffset = ((i % Math.ceil(nodes.length / 5)) / Math.ceil(nodes.length / 5)) * tierWidth - tierWidth / 2;
+          graph.setNodeAttribute(n, "x", xOffset);
+          graph.setNodeAttribute(n, "y", tier * 100 - 50);
+        });
+      } else {
+        // WHY synchronous FA2 (not worker): The worker variant is async and requires
+        // a separate Worker file. Synchronous FA2 runs in <50ms for ≤100 nodes —
+        // acceptable for our use case. Worker is only needed for 500+ node graphs.
+
+        // WHY inferSettings: automatically calibrates gravity, scaling, slow-down
+        // based on graph density (order/edges ratio). We then override gravity
+        // to a lower value to spread nodes more evenly across the canvas.
+        const fa2Settings = forceAtlas2.inferSettings(graph);
+        forceAtlas2.assign(graph, {
+          iterations: 100,
+          settings: {
+            ...fa2Settings,
+            gravity: 0.1,        // WHY low gravity: prevents all nodes collapsing to center
+            adjustSizes: true,   // WHY adjustSizes: prevents node overlap by using node.size
+            // WHY Barnes-Hut only for large graphs: the approximation improves O(n²)→O(n log n)
+            // but introduces layout error at small scales. Only enable for 50+ nodes.
+            barnesHutOptimize: graph.order > 50,
+          },
+        });
+      }
     }
 
     // Pass the constructed + laid-out graphology graph to sigma for rendering
     loadGraph(graph);
-  }, [data, centerEntityId, loadGraph]);
+  }, [data, centerEntityId, layout, loadGraph]);
+
+  return null;
+}
+
+// ── FilterController — pushes filter state into sigma reducers ────────────────
+// WHY a dedicated child component (not props on SigmaContainer settings):
+// sigma.setSettings() lets us update edge/nodeReducer at any time without
+// destroying and re-creating the SigmaContainer (which would re-initialize WebGL).
+// Calling sigma.setSettings() + sigma.refresh() is O(edges) — fast enough for
+// interactive filter controls (slider drag, pill click, keystroke).
+//
+// WHY inside SigmaContainer: useSigma() is a context hook — it must be a
+// descendant of <SigmaContainer>. Cannot move this logic to the parent.
+
+interface FilterControllerProps {
+  activeRelFilter: RelationFilter;
+  minWeight: number;   // 0–100 integer (threshold percentage)
+  searchQuery: string;
+  graphData: EntityGraphData;
+}
+
+function FilterController({ activeRelFilter, minWeight, searchQuery }: FilterControllerProps) {
+  const sigma = useSigma();
+
+  useEffect(() => {
+    sigma.setSettings({
+      // ── edgeReducer ──────────────────────────────────────────────────────────
+      // Called by sigma for every edge before rendering. Returning { hidden: true }
+      // removes the edge from the WebGL draw call — 0 cost for hidden edges.
+      edgeReducer: (edge: string, data: Record<string, unknown>) => {
+        const label = (data.label as string ?? "").toUpperCase();
+        const weight = (data.weight as number) ?? 0;
+
+        // WHY minWeight / 100: slider stores 0–100, graph stores 0–1 weight
+        if (weight < minWeight / 100) return { ...data, hidden: true };
+
+        // WHY activeRelFilter check AFTER weight: weight filter is cheaper
+        // (arithmetic) so we short-circuit before the string includes() calls.
+        if (activeRelFilter !== "all" && !matchesRelFilter(label, activeRelFilter)) {
+          return { ...data, hidden: true };
+        }
+
+        return { ...data, hidden: false };
+      },
+
+      // ── nodeReducer ──────────────────────────────────────────────────────────
+      // Called by sigma for every node before rendering. We dim non-matching
+      // nodes by setting their color to near-invisible (#1A2030 ≈ background).
+      // WHY NOT hidden:true for non-matching nodes: hiding nodes that have edges
+      // would cause sigma to error (dangling edge endpoints). Dimming keeps the
+      // graph structure visible while making non-matches recede to background.
+      nodeReducer: (node: string, data: Record<string, unknown>) => {
+        if (!searchQuery) return data; // WHY early return: no search = no dimming
+
+        const label = (data.label as string ?? "").toLowerCase();
+        if (!label.includes(searchQuery.toLowerCase())) {
+          // WHY #1A2030: the graph background color — makes unmatched nodes
+          // nearly invisible without fully hiding them (avoids dangling-edge errors).
+          return { ...data, color: "#1A2030", labelColor: "#1A2030" };
+        }
+        return data;
+      },
+    });
+
+    // WHY sigma.refresh(): setSettings alone does not re-render; refresh()
+    // triggers a full sigma redraw applying the new reducers.
+    sigma.refresh();
+  }, [sigma, activeRelFilter, minWeight, searchQuery]);
 
   return null;
 }
@@ -353,6 +508,14 @@ export function EntityGraph({ data, centerEntityId }: EntityGraphProps) {
   const [edgeTooltip, setEdgeTooltip] = useState<EdgeTooltip | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // ── PLAN-0059 H-4 filter state ───────────────────────────────────────────────
+  // WHY separate state atoms (not one object): React bails out on re-render when
+  // the specific atom doesn't change — coarse-grained objects always re-render.
+  const [activeRelFilter, setActiveRelFilter] = useState<RelationFilter>("all");
+  const [minWeight, setMinWeight] = useState(0);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [layout, setLayout] = useState<"force" | "hierarchical">("force");
+
   // WHY useCallback with []: the setState functions from useState are stable
   // (same reference across renders). useCallback with [] deps ensures the handler
   // references are also stable, preventing useEffect re-registration in GraphEvents.
@@ -377,6 +540,109 @@ export function EntityGraph({ data, centerEntityId }: EntityGraphProps) {
 
   return (
     <GraphErrorBoundary>
+      {/* ── Filter controls row (PLAN-0059 H-4) ─────────────────────────────── */}
+      {/* WHY above SigmaContainer: controls must be interactive DOM elements;
+          placing them inside sigma's canvas div would cause z-index conflicts.
+          mb-2 gives 8px breathing room between controls and the graph frame. */}
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+
+        {/* ── Relation-type filter pills ─────────────────────────────────────── */}
+        {/* WHY pills (not dropdown): pills let analysts see all options at once
+            and toggle without opening a menu — critical for flow state in
+            fast financial analysis. At max 6 pills they still fit on one row. */}
+        <div className="flex gap-1" data-testid="filter-pills">
+          {RELATION_TYPES.map((type) => {
+            const isActive = activeRelFilter === type;
+            return (
+              <button
+                key={type}
+                onClick={() => setActiveRelFilter(type)}
+                data-testid={`filter-pill-${type}`}
+                data-active={isActive}
+                className={[
+                  // WHY rounded-[2px]: matches the terminal aesthetic — sharp corners
+                  // but 2px radius to avoid harsh 0px corners (Bloomberg convention).
+                  "capitalize rounded-[2px] border px-2 py-0.5 text-[10px] transition-colors",
+                  isActive
+                    ? // WHY bg-primary/20: subtle primary fill — active state is clear
+                      // without the pill looking like a full button press.
+                      "bg-primary/20 text-primary border-primary/40"
+                    : "text-muted-foreground border-border/40 hover:text-foreground hover:border-border/70",
+                ].join(" ")}
+              >
+                {type}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* ── Edge-strength slider ───────────────────────────────────────────── */}
+        {/* WHY min-weight filter: helps analysts focus on high-confidence edges
+            (weight ≥ 0.7 = strong evidence) and filter out speculative relations
+            that may be noisy in raw extraction output from S6. */}
+        <div className="flex items-center gap-2" data-testid="strength-slider-container">
+          <span className="whitespace-nowrap text-[10px] text-muted-foreground">
+            Strength ≥ {minWeight}%
+          </span>
+          <Slider
+            data-testid="strength-slider"
+            value={[minWeight]}
+            onValueChange={([v]) => setMinWeight(v ?? 0)}
+            min={0}
+            max={100}
+            step={5}
+            // WHY w-24: 96px is enough for precise control; wider wastes row space.
+            className="w-24"
+          />
+        </div>
+
+        {/* ── Node search input ──────────────────────────────────────────────── */}
+        {/* WHY search dims (not hides): hiding nodes that have edges causes sigma
+            to error on dangling endpoints. Dimming to #1A2030 (graph background)
+            keeps graph topology intact while directing analyst attention. */}
+        <input
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search nodes…"
+          data-testid="node-search"
+          className="h-7 rounded-[2px] border border-border/40 bg-card px-2 text-[11px] text-foreground placeholder:text-muted-foreground/50 focus:border-border focus:outline-none"
+        />
+
+        {/* ── Layout switcher ────────────────────────────────────────────────── */}
+        {/* WHY two layouts: force (FA2) surfaces organic clusters (useful for
+            discovering communities); hierarchical reveals org structure (useful
+            for exec/ownership analysis where tier matters). */}
+        <div className="ml-auto flex gap-1">
+          <button
+            onClick={() => setLayout("force")}
+            data-testid="layout-force"
+            title="Force layout (ForceAtlas2)"
+            className={[
+              "rounded-[2px] border p-1 transition-colors",
+              layout === "force"
+                ? "border-primary/40 bg-primary/20 text-primary"
+                : "border-border/40 text-muted-foreground hover:text-foreground hover:border-border/70",
+            ].join(" ")}
+          >
+            <TrendingUp className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => setLayout("hierarchical")}
+            data-testid="layout-hierarchical"
+            title="Hierarchical layout (degree-tier)"
+            className={[
+              "rounded-[2px] border p-1 transition-colors",
+              layout === "hierarchical"
+                ? "border-primary/40 bg-primary/20 text-primary"
+                : "border-border/40 text-muted-foreground hover:text-foreground hover:border-border/70",
+            ].join(" ")}
+          >
+            <Network className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* ── Graph canvas container ────────────────────────────────────────────── */}
       <div
         ref={containerRef}
         className="relative h-[460px] overflow-hidden rounded-[2px] border border-border/40"
@@ -414,14 +680,24 @@ export function EntityGraph({ data, centerEntityId }: EntityGraphProps) {
           }}
           style={{ background: "#0A0E14" }}
         >
-          {/* GraphLoader builds the graphology graph and passes it to sigma */}
-          <GraphLoader data={data} centerEntityId={centerEntityId} />
+          {/* GraphLoader builds the graphology graph and passes it to sigma.
+              layout prop controls FA2 vs degree-tier positioning. */}
+          <GraphLoader data={data} centerEntityId={centerEntityId} layout={layout} />
 
           {/* GraphEvents registers hover/click listeners on the sigma instance */}
           <GraphEvents
             centerEntityId={centerEntityId}
             onNodeHover={handleNodeHover}
             onEdgeHover={handleEdgeHover}
+          />
+
+          {/* FilterController pushes edge/nodeReducer into sigma on every filter
+              state change — avoids destroying/recreating the SigmaContainer. */}
+          <FilterController
+            activeRelFilter={activeRelFilter}
+            minWeight={minWeight}
+            searchQuery={searchQuery}
+            graphData={data}
           />
         </SigmaContainer>
 

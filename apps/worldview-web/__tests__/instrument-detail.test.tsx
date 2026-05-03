@@ -88,12 +88,16 @@ vi.mock("next/dynamic", () => ({
 // when the library tries to access canvas context. The chart is not the subject
 // of these tests — we just verify the timeframe selector and skeleton logic.
 // PLAN-0059 H-1: v5 factory mock — addSeries(SeriesDef, opts).
+// addPane + removeSeries added for H-1 pane isolation (each oscillator now
+// calls chart.addPane() then addSeries(..., paneIndex)).
 vi.mock("lightweight-charts", () => ({
   createChart: vi.fn(() => ({
     addSeries: vi.fn(() => ({
       setData: vi.fn(),
       applyOptions: vi.fn(),
     })),
+    addPane: vi.fn(),
+    removeSeries: vi.fn(),
     applyOptions: vi.fn(),
     timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
     priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
@@ -675,6 +679,8 @@ describe("OHLCVChart", () => {
     vi.doMock("lightweight-charts", () => ({
       createChart: vi.fn(() => ({
         addSeries: vi.fn(() => ({ setData: vi.fn(), applyOptions: vi.fn() })),
+        addPane: vi.fn(),
+        removeSeries: vi.fn(),
         applyOptions: vi.fn(),
         timeScale: vi.fn(() => ({ fitContent: vi.fn() })),
         priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
