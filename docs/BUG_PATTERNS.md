@@ -334,6 +334,9 @@
 | BP-337 | Qwen3.x `reasoning_content` bleed-through: `reasoning_effort=none` silently ignored → thinking chain read as response → JSON parse fails | ML & LLM | [bug-patterns/ml-llm.md](bug-patterns/ml-llm.md#bp-337) |
 | BP-338 | Small-model (≤1B) alias-list repetition truncates JSON at max_tokens — partial-JSON recovery strips aliases array to preserve scalar fields | ML & LLM | [bug-patterns/ml-llm.md](bug-patterns/ml-llm.md#bp-338) |
 | BP-339 | `reasoning_effort=none` on Qwen3.x description models: primary returns `'\n'` (empty), fallback outputs words separated by `\n\n` — NEVER pass `reasoning_effort` to Qwen3 description adapter | ML & LLM | [bug-patterns/ml-llm.md](bug-patterns/ml-llm.md#bp-339) |
+| BP-340 | S9 gateway hardcodes `event_type="economic"` but S7 stores macro events as `EventType.MACRO="macro"` — enum value mismatch produces silently-empty API response despite data existing in DB | Data & Storage | [bug-patterns/data-storage.md](bug-patterns/data-storage.md#bp-340) |
+| BP-341 | Scheduler workers call internal services without X-Internal-JWT → 401; must generate HS256 system JWT at client construction (pattern: `_system_jwt_headers()` with `dev-skip-verification-key-*`) | Auth & Security | [bug-patterns/auth-security.md](bug-patterns/auth-security.md#bp-341) |
+| BP-342 | KG entity_id ≠ market-data instrument_id — FundamentalsRefreshWorker passed entity_id to market-data REST API → 404; must resolve ticker→instrument_id via `/instruments/symbol/{ticker}` first | API & Contracts | [bug-patterns/api-contracts.md](bug-patterns/api-contracts.md#bp-342) |
 
 ---
 

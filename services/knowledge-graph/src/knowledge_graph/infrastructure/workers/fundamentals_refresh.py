@@ -18,9 +18,12 @@ Wave C-4 additions:
 from __future__ import annotations
 
 import json
+import time
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
+
+import jwt
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
@@ -65,6 +68,28 @@ _SECTOR_BASE_CONFIDENCE = 0.90
 _INDUSTRY_DECAY_CLASS = "DURABLE"
 _INDUSTRY_DECAY_ALPHA = 0.000950
 _INDUSTRY_BASE_CONFIDENCE = 0.85
+
+# Signing key for dev: market-data has MARKET_DATA_INTERNAL_JWT_SKIP_VERIFICATION=true
+# so any HS256 JWT with a decodable header is accepted in local dev.
+_INTERNAL_JWT_DEV_KEY = "dev-skip-verification-key-for-kg-fundamentals"
+
+
+def _system_jwt_headers() -> dict[str, str]:
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "iss": "worldview-gateway",
+            "sub": "system:kg-fundamentals-refresh",
+            "user_id": "00000000-0000-0000-0000-000000000000",
+            "tenant_id": "00000000-0000-0000-0000-000000000000",
+            "role": "system",
+            "iat": now,
+            "exp": now + 86400,
+        },
+        _INTERNAL_JWT_DEV_KEY,
+        algorithm="HS256",
+    )
+    return {"X-Internal-JWT": token}
 
 
 class FundamentalsRefreshWorker:
@@ -116,7 +141,7 @@ class FundamentalsRefreshWorker:
         )
 
         own_http = self._http is None
-        http = self._http or _httpx.AsyncClient(timeout=15.0)
+        http = self._http or _httpx.AsyncClient(timeout=15.0, headers=_system_jwt_headers())
 
         refreshed = 0
         skipped = 0
@@ -156,14 +181,38 @@ class FundamentalsRefreshWorker:
                 entity_id: UUID = ent["entity_id"]
                 ticker_str: str = str(ent["ticker"])
 
+                # Resolve ticker → market-data instrument_id (KG entity_id ≠ market-data instrument_id)
+                instrument_id = await self._resolve_instrument_id(http, ticker_str)
+                if instrument_id is None:
+                    logger.debug(  # type: ignore[no-any-return]
+                        "fundamentals_refresh_instrument_not_found",
+                        entity_id=str(entity_id),
+                        ticker=ticker_str,
+                    )
+                    entity_io_results.append(
+                        {
+                            "entity_id": entity_id,
+                            "ticker": ticker_str,
+                            "canonical_name": ent["canonical_name"],
+                            "earnings_data": None,
+                            "profile_data": None,
+                            "narrative": None,
+                            "embedding": None,
+                            "source_hash": None,
+                        }
+                    )
+                    continue
+
                 # Fetch earnings data (HTTP only, no DB)
-                earnings_data = await self._fetch_earnings_data(http, entity_id, ticker_str)
+                earnings_data = await self._fetch_earnings_data(http, instrument_id, ticker_str)
 
                 # Fetch company-profile data (HTTP only, no DB)
-                profile_data = await self._fetch_company_profile_data(http, entity_id)
+                profile_data = await self._fetch_company_profile_data(http, instrument_id)
 
                 # Fetch fundamentals + build narrative (HTTP only, no DB)
-                narrative = await self._build_fundamentals_narrative(entity_id, ticker_str, ent["row"], http)
+                narrative = await self._build_fundamentals_narrative(
+                    entity_id, ticker_str, ent["row"], http, instrument_id
+                )
 
                 # Compute embedding (LLM HTTP call, no DB)
                 embedding: list[float] | None = None
@@ -266,7 +315,7 @@ class FundamentalsRefreshWorker:
     async def _fetch_earnings_data(
         self,
         http: httpx.AsyncClient,
-        entity_id: UUID,
+        instrument_id: UUID,
         ticker: str,
     ) -> list[dict[str, Any]] | None:
         """Fetch earnings history from market-data service (HTTP only, no DB).
@@ -275,18 +324,18 @@ class FundamentalsRefreshWorker:
         Called in Phase 2 outside any DB session (ARCH-004).
         """
         try:
-            resp = await http.get(f"{self._market_data_url}/api/v1/fundamentals/{entity_id}/earnings")
+            resp = await http.get(f"{self._market_data_url}/api/v1/fundamentals/{instrument_id}/earnings")
             if resp.status_code == 404:
                 logger.debug(  # type: ignore[no-any-return]
                     "earnings_not_found",
-                    entity_id=str(entity_id),
+                    instrument_id=str(instrument_id),
                     ticker=ticker,
                 )
                 return None
             if resp.status_code != 200:
                 logger.warning(  # type: ignore[no-any-return]
                     "earnings_fetch_error",
-                    entity_id=str(entity_id),
+                    instrument_id=str(instrument_id),
                     ticker=ticker,
                     status_code=resp.status_code,
                 )
@@ -295,7 +344,7 @@ class FundamentalsRefreshWorker:
         except Exception as exc:
             logger.warning(  # type: ignore[no-any-return]
                 "earnings_fetch_exception",
-                entity_id=str(entity_id),
+                instrument_id=str(instrument_id),
                 ticker=ticker,
                 error=str(exc),
             )
@@ -427,7 +476,7 @@ ON CONFLICT DO NOTHING
     async def _fetch_company_profile_data(
         self,
         http: httpx.AsyncClient,
-        entity_id: UUID,
+        instrument_id: UUID,
     ) -> dict[str, Any] | None:
         """Fetch company profile from market-data service (HTTP only, no DB).
 
@@ -435,17 +484,17 @@ ON CONFLICT DO NOTHING
         Called in Phase 2 outside any DB session (ARCH-004).
         """
         try:
-            resp = await http.get(f"{self._market_data_url}/api/v1/fundamentals/{entity_id}/company-profile")
+            resp = await http.get(f"{self._market_data_url}/api/v1/fundamentals/{instrument_id}/company-profile")
             if resp.status_code == 404:
                 logger.debug(  # type: ignore[no-any-return]
                     "company_profile_not_found",
-                    entity_id=str(entity_id),
+                    instrument_id=str(instrument_id),
                 )
                 return None
             if resp.status_code != 200:
                 logger.warning(  # type: ignore[no-any-return]
                     "company_profile_fetch_error",
-                    entity_id=str(entity_id),
+                    instrument_id=str(instrument_id),
                     status_code=resp.status_code,
                 )
                 return None
@@ -453,7 +502,7 @@ ON CONFLICT DO NOTHING
         except Exception as exc:
             logger.warning(  # type: ignore[no-any-return]
                 "company_profile_fetch_exception",
-                entity_id=str(entity_id),
+                instrument_id=str(instrument_id),
                 error=str(exc),
             )
             return None
@@ -562,10 +611,12 @@ ON CONFLICT DO NOTHING
         ticker: str,
         entity_row: dict[str, Any],
         http: httpx.AsyncClient,
+        instrument_id: UUID | None = None,
     ) -> str | None:
         """Fetch market data and build the narrative string."""
+        lookup_id = instrument_id or entity_id
         try:
-            fundamentals = await self._fetch_json(http, f"{self._market_data_url}/api/v1/fundamentals/{entity_id}")
+            fundamentals = await self._fetch_json(http, f"{self._market_data_url}/api/v1/fundamentals/{lookup_id}")
             if fundamentals is None:
                 return None
 
@@ -587,6 +638,20 @@ ON CONFLICT DO NOTHING
                 entity_id=str(entity_id),
                 error=str(exc),
             )
+            return None
+
+    async def _resolve_instrument_id(self, http: httpx.AsyncClient, ticker: str) -> UUID | None:
+        """Resolve ticker → market-data instrument_id via /api/v1/instruments/symbol/{ticker}.
+
+        KG entity_id ≠ market-data instrument_id — must look up by symbol before fetching data.
+        Returns None if the ticker is not found in market-data.
+        """
+        data = await self._fetch_json(http, f"{self._market_data_url}/api/v1/instruments/symbol/{ticker}")
+        if data is None:
+            return None
+        try:
+            return UUID(str(data["id"]))
+        except (KeyError, ValueError):
             return None
 
     @staticmethod

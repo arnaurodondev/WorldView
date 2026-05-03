@@ -139,6 +139,7 @@ class TestFundamentalsRefreshWorkerS3Failure:
         ]
         sf, emb_repo = _make_session_factory(due_rows)
 
+        _INSTRUMENT_ID = UUID("01900000-0000-7000-8000-000000001001")
         fundamentals_data = {
             "revenue_usd_millions": 390000.0,
             "gross_margin_pct": 44.5,
@@ -148,12 +149,22 @@ class TestFundamentalsRefreshWorkerS3Failure:
             "week_52_high": 200.0,
             "week_52_low": 130.0,
         }
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json = MagicMock(return_value=fundamentals_data)
+
+        instrument_resp = MagicMock()
+        instrument_resp.status_code = 200
+        instrument_resp.json = MagicMock(return_value={"id": str(_INSTRUMENT_ID), "symbol": "AAPL"})
+
+        fundamentals_resp = MagicMock()
+        fundamentals_resp.status_code = 200
+        fundamentals_resp.json = MagicMock(return_value=fundamentals_data)
+
+        def _route_get(url: str, **_kwargs: object) -> object:
+            if "/instruments/symbol/" in url:
+                return instrument_resp
+            return fundamentals_resp
 
         http_client = AsyncMock()
-        http_client.get = AsyncMock(return_value=mock_response)
+        http_client.get = AsyncMock(side_effect=_route_get)
         http_client.aclose = AsyncMock()
 
         llm = AsyncMock()
