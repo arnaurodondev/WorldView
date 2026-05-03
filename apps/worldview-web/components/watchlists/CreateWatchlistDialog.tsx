@@ -4,11 +4,26 @@
  * PLAN-0059 I-1: minimal "name + submit" dialog used by the /watchlists hub.
  * Members are added separately via the detail page (matches S1's two-step
  * "create then populate" API contract).
+ *
+ * Migrated to RHF + Zod in PLAN-0059 F-2 to fix:
+ *   - BP-330: missing aria-invalid + aria-describedby — screen readers couldn't
+ *     announce the "Name is required" error.
+ *
+ * WHY keep the existing useMutation pattern: the mutation itself is correct;
+ * we only needed RHF to own validation and error wiring. The mutation's
+ * onSuccess/onError handlers are unchanged.
+ *
+ * WHY char count stays: finance users naming watchlists by strategy (e.g.
+ * "US large-cap momentum Q2 2026") need to see the character budget to avoid
+ * truncation in the sidebar nav where names are displayed at ~150px.
  */
 
-"use client";
+"use client"; // WHY: useForm + useMutation both require browser-side state
 
 import * as React from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useApiClient } from "@/lib/api-client";
@@ -23,7 +38,26 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import type { Watchlist } from "@/types/api";
+
+const NAME_MAX = 80;
+
+const watchlistSchema = z.object({
+  name: z
+    .string()
+    .min(1, "Name is required")
+    .max(NAME_MAX, `Max ${NAME_MAX} characters`),
+});
+
+type WatchlistFormValues = z.infer<typeof watchlistSchema>;
 
 interface Props {
   open: boolean;
@@ -32,12 +66,14 @@ interface Props {
   onCreated?: (wl: Watchlist) => void;
 }
 
-const NAME_MAX = 80;
-
 export function CreateWatchlistDialog({ open, onOpenChange, onCreated }: Props) {
   const gateway = useApiClient();
   const qc = useQueryClient();
-  const [name, setName] = React.useState("");
+
+  const form = useForm<WatchlistFormValues>({
+    resolver: zodResolver(watchlistSchema),
+    defaultValues: { name: "" },
+  });
 
   const createMut = useMutation({
     mutationFn: (n: string) => gateway.createWatchlist(n),
@@ -45,17 +81,25 @@ export function CreateWatchlistDialog({ open, onOpenChange, onCreated }: Props) 
       // Invalidate the list so the hub refreshes.
       void qc.invalidateQueries({ queryKey: qk.watchlists.list() });
       toast.success(`Watchlist "${wl.name}" created`);
-      setName("");
+      form.reset();
       onOpenChange(false);
       onCreated?.(wl);
     },
     onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Failed to create watchlist");
+      // WHY setError on root.serverError: maps the network/API error to the
+      // RHF root error slot so FormMessage can surface it as a role="alert".
+      form.setError("root.serverError" as "root", {
+        message: err instanceof Error ? err.message : "Failed to create watchlist",
+      });
     },
   });
 
-  const trimmed = name.trim();
-  const valid = trimmed.length > 0 && trimmed.length <= NAME_MAX;
+  function onSubmit(values: WatchlistFormValues) {
+    createMut.mutate(values.name.trim());
+  }
+
+  // Current trimmed length for the character counter.
+  const trimmedLength = form.watch("name").trim().length;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -67,51 +111,71 @@ export function CreateWatchlistDialog({ open, onOpenChange, onCreated }: Props) 
             screener. You can add members on the next screen.
           </DialogDescription>
         </DialogHeader>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!valid || createMut.isPending) return;
-            createMut.mutate(trimmed);
-          }}
-        >
-          <div className="space-y-2 py-2">
-            <label htmlFor="wl-name" className="text-[11px] text-muted-foreground">
-              Name
-            </label>
-            <Input
-              id="wl-name"
-              density="compact"
-              autoFocus
-              autoComplete="off"
-              maxLength={NAME_MAX}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Mega-cap tech"
-              aria-invalid={name.length > 0 && !valid || undefined}
+
+        <Form {...form}>
+          <form
+            onSubmit={form.handleSubmit(onSubmit)}
+            className="space-y-4"
+          >
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-[11px] text-muted-foreground">
+                    Name
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      density="compact"
+                      autoFocus
+                      autoComplete="off"
+                      placeholder="e.g. Mega-cap tech"
+                      {...field}
+                    />
+                  </FormControl>
+                  {/* WHY always render the char counter (not only on error):
+                      finance users naming watchlists need to see the budget;
+                      an error that disappears the counter as they type is
+                      more confusing than one that coexists with it. */}
+                  <p className="text-[10px] text-muted-foreground tabular-nums">
+                    {trimmedLength}/{NAME_MAX} characters
+                  </p>
+                  <FormMessage />
+                </FormItem>
+              )}
             />
-            <p className="text-[10px] text-muted-foreground">
-              {trimmed.length}/{NAME_MAX} characters
-            </p>
-          </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              density="compact"
-              onClick={() => onOpenChange(false)}
-              disabled={createMut.isPending}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              density="compact"
-              disabled={!valid || createMut.isPending}
-            >
-              {createMut.isPending ? "Creating…" : "Create"}
-            </Button>
-          </DialogFooter>
-        </form>
+
+            {/* Server-level error */}
+            {form.formState.errors.root && (
+              <p role="alert" className="text-[11px] text-destructive font-mono">
+                {form.formState.errors.root.message}
+              </p>
+            )}
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="ghost"
+                density="compact"
+                onClick={() => {
+                  form.reset();
+                  onOpenChange(false);
+                }}
+                disabled={createMut.isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                density="compact"
+                disabled={createMut.isPending || !form.formState.isValid}
+              >
+                {createMut.isPending ? "Creating…" : "Create"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );
