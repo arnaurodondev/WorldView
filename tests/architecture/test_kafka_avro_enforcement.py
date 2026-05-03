@@ -32,11 +32,27 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _Style = Literal["AVRO_FIRST", "AVRO_ONLY", "JSON_ONLY", "UNKNOWN"]
 
 
+_JSON_LOADS_PATTERNS = (
+    "json.loads",
+    "orjson.loads",
+    "ujson.loads",
+    "simplejson.loads",
+    "from json import loads",
+)
+_FORBIDDEN_DESERIALIZERS = ("pickle.loads", "marshal.loads", "yaml.load(", "yaml.unsafe_load")
+_AVRO_PATTERNS = ("deserialize_confluent_avro", "deserialize_avro")
+
+
 def _classify_deserialize_value(file_path: Path) -> _Style:
     """Read *file_path* and classify its ``deserialize_value`` implementation.
 
     Returns ``UNKNOWN`` if the file does not define ``deserialize_value`` (the
     caller should not pass such files in).
+
+    QA-iter1 (PLAN-0062): widened the JSON detector to cover ``orjson``,
+    ``ujson``, ``simplejson``, and the ``from json import loads`` aliasing
+    pattern — the prior substring scan only matched ``json.loads`` and could
+    be circumvented by either alternative module imports or a renamed import.
     """
     text = file_path.read_text(encoding="utf-8")
     marker = "def deserialize_value"
@@ -44,13 +60,16 @@ def _classify_deserialize_value(file_path: Path) -> _Style:
     if idx == -1:
         return "UNKNOWN"
 
-    # Take a generous window of the body — up to the next dedent-level def or
-    # end-of-file.  We scan ~30 lines, which is more than enough for the
-    # short serializer methods used across the codebase.
-    body = "\n".join(text[idx:].splitlines()[:30])
+    # Generous body window — up to 60 lines or the next dedented `def`.  60
+    # accommodates verbose docstrings (which the previous 30-line cap could
+    # push the actual deserialise call out of view).
+    body = "\n".join(text[idx:].splitlines()[:60])
+    # File-level imports are needed too: ``from json import loads`` lives at
+    # the top of the file, not inside the function body.
+    file_head = "\n".join(text.splitlines()[:80])
 
-    has_json = "json.loads" in body
-    has_avro = "deserialize_confluent_avro" in body or "deserialize_avro" in body
+    has_json = any(p in body for p in _JSON_LOADS_PATTERNS) or any(p in file_head for p in _JSON_LOADS_PATTERNS)
+    has_avro = any(p in body for p in _AVRO_PATTERNS)
 
     if has_avro and has_json:
         return "AVRO_FIRST"
@@ -59,6 +78,24 @@ def _classify_deserialize_value(file_path: Path) -> _Style:
     if has_json:
         return "JSON_ONLY"
     return "UNKNOWN"
+
+
+def _has_forbidden_deserializer(file_path: Path) -> str | None:
+    """Return the offending pattern if a deserialize_value uses pickle/yaml/marshal.
+
+    Pickle and unsafe YAML deserialisation are blanket-forbidden in any
+    Kafka consumer (RCE risk on attacker-controlled broker payloads).
+    """
+    text = file_path.read_text(encoding="utf-8")
+    marker = "def deserialize_value"
+    idx = text.find(marker)
+    if idx == -1:
+        return None
+    body = "\n".join(text[idx:].splitlines()[:60])
+    for pat in _FORBIDDEN_DESERIALIZERS:
+        if pat in body:
+            return pat
+    return None
 
 
 def _discover_consumer_files() -> list[Path]:
@@ -114,3 +151,63 @@ class TestKafkaAvroEnforcement:
             1 for py in _discover_consumer_files() if _classify_deserialize_value(py) in {"AVRO_FIRST", "AVRO_ONLY"}
         )
         assert avro_count >= 1, "No Avro consumers discovered — discovery glob may be broken"
+
+    def test_no_forbidden_deserializers(self) -> None:
+        """No consumer may use pickle/yaml/marshal in deserialize_value.
+
+        QA-iter1 (PLAN-0062): pickle.loads on attacker-controlled bytes is
+        an RCE vector; unsafe yaml.load is the same class of bug.  Marshal
+        is even worse (Python-version dependent).  Block all three
+        unconditionally.
+        """
+        violations: list[str] = []
+        for py in _discover_consumer_files():
+            offender = _has_forbidden_deserializer(py)
+            if offender is not None:
+                rel = str(py.relative_to(REPO_ROOT))
+                violations.append(f"  {rel} — uses {offender}")
+        assert not violations, "\n[KAFKA-AVRO] Forbidden deserialiser detected (RCE risk):\n" + "\n".join(violations)
+
+    def test_classifier_self_test_for_synthetic_inputs(self, tmp_path: Path) -> None:
+        """Smoke-test the classifier against synthetic inputs.
+
+        QA-iter1 (PLAN-0062 cross-agent F-005): without this, a regression in
+        ``_classify_deserialize_value`` (e.g. body window too short, marker
+        typo) silently turns the architecture test into a no-op — a future
+        JSON-only consumer would slip through as ``UNKNOWN``.
+        """
+        json_only = tmp_path / "json_only.py"
+        json_only.write_text(
+            "import json\nclass C:\n    def deserialize_value(self, raw):\n        return json.loads(raw)\n",
+            encoding="utf-8",
+        )
+        avro_only = tmp_path / "avro_only.py"
+        avro_only.write_text(
+            "from messaging.kafka.serialization_utils import deserialize_confluent_avro\n"
+            "class C:\n"
+            "    def deserialize_value(self, raw, schema_path):\n"
+            "        return deserialize_confluent_avro(schema_path, raw)\n",
+            encoding="utf-8",
+        )
+        avro_first = tmp_path / "avro_first.py"
+        avro_first.write_text(
+            "import json\n"
+            "from messaging.kafka.serialization_utils import deserialize_confluent_avro\n"
+            "class C:\n"
+            "    def deserialize_value(self, raw, schema_path):\n"
+            "        if raw[:1] == b'\\x00':\n"
+            "            return deserialize_confluent_avro(schema_path, raw)\n"
+            "        return json.loads(raw)\n",
+            encoding="utf-8",
+        )
+        json_aliased = tmp_path / "json_aliased.py"
+        json_aliased.write_text(
+            "from json import loads\nclass C:\n    def deserialize_value(self, raw):\n        return loads(raw)\n",
+            encoding="utf-8",
+        )
+
+        assert _classify_deserialize_value(json_only) == "JSON_ONLY"
+        assert _classify_deserialize_value(avro_only) == "AVRO_ONLY"
+        assert _classify_deserialize_value(avro_first) == "AVRO_FIRST"
+        # ``from json import loads`` alias must still classify as JSON_ONLY.
+        assert _classify_deserialize_value(json_aliased) == "JSON_ONLY"

@@ -16,7 +16,6 @@ Test scenarios:
 from __future__ import annotations
 
 import contextlib
-import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -307,7 +306,17 @@ class TestZeroNER:
         # Enriched event must still be written
         outbox_add.assert_called_once()
         call_kwargs = outbox_add.call_args.kwargs
-        payload = json.loads(call_kwargs["payload_avro"])
+        # PLAN-0062 Wave B: payload is now Confluent-Avro on the wire (5-byte
+        # magic header + Avro body) — match the helper used in the sibling
+        # test at TestEnrichedEventWriteToOutbox.
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import _SCHEMA_DIR
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        wire_bytes = call_kwargs["payload_avro"]
+        assert wire_bytes[:1] == b"\x00"
+        schema_path = str(_SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
+        payload = deserialize_confluent_avro(schema_path, wire_bytes)
         assert payload["mention_count"] == 0
 
 

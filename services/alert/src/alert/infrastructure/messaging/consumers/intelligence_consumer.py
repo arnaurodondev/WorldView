@@ -259,21 +259,30 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
         consumer's ``_handle_message`` via ``get_schema_path``) the Avro path
         decodes against that schema.  Falls back to JSON for legacy
         producers — this is logged so we can quantify residual JSON traffic.
+
+        QA-iter1 (PLAN-0062): if the Confluent magic byte is present but no
+        schema path is known (unknown topic), refuse to call ``json.loads``
+        on Avro bytes — that would raise ``JSONDecodeError`` and dead-letter
+        the message via the noisier path.  Raise ``MalformedDataError``
+        directly so the dead-letter is clean and the warning is accurate.
         """
+        from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
         from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 
-        if raw and raw[:1] == b"\x00" and schema_path:
-            return deserialize_confluent_avro(schema_path, raw)  # type: ignore[no-any-return]
         if raw and raw[:1] == b"\x00":
+            if schema_path:
+                return deserialize_confluent_avro(schema_path, raw)  # type: ignore[no-any-return]
             logger.warning(  # type: ignore[no-any-return]
                 "intelligence_consumer.avro_payload_without_schema",
-                message="Confluent magic byte present but no schema_path resolved; falling back to JSON parse",
+                message="Confluent magic byte present but no schema_path resolved; dead-lettering as malformed",
             )
-        else:
-            logger.warning(  # type: ignore[no-any-return]
-                "intelligence_consumer.legacy_json_payload",
-                message="message lacks Confluent magic byte; using JSON fallback",
+            raise MalformedDataError(
+                "Avro magic byte present but no schema path registered for this topic",
             )
+        logger.warning(  # type: ignore[no-any-return]
+            "intelligence_consumer.legacy_json_payload",
+            message="message lacks Confluent magic byte; using JSON fallback",
+        )
         return json.loads(raw)  # type: ignore[no-any-return]
 
     def get_schema_path(self, topic: str) -> str | None:

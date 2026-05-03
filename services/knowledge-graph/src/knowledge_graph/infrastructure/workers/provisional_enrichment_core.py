@@ -160,6 +160,28 @@ async def persist_enrichment(
     ticker: str | None = profile.get("ticker")
     isin: str | None = profile.get("isin")
 
+    # QA-iter1 (PLAN-0062 SA-005 fix): pre-validate the Avro payload BEFORE any
+    # DB writes.  The polling worker (provisional_enrichment.py) commits the
+    # batch session in a finally-style block — if serialize_confluent_avro
+    # raised AFTER the canonical-entity INSERT it would orphan the entity row
+    # without an outbox event (DB committed, no Kafka event ever produced).
+    # By serializing first we either fail-fast (no DB writes) or have valid
+    # bytes ready when the outbox INSERT runs at the end of this function.
+    entity_id_str = str(new_uuid7())
+    avro_record: dict[str, Any] = {
+        "event_id": str(new_uuid7()),
+        "event_type": "entity.canonical.created",
+        "schema_version": 1,
+        "occurred_at": utc_now().isoformat(),
+        "entity_id": entity_id_str,
+        "canonical_name": canonical_name,
+        "entity_type": entity_type,
+        "provisional_queue_id": str(queue_id),
+        "alias_texts": [canonical_name, *([ticker.upper()] if ticker else []), *([isin.upper()] if isin else [])],
+        "correlation_id": None,
+    }
+    avro_payload_bytes = serialize_confluent_avro(_ENTITY_CANONICAL_CREATED_SCHEMA_PATH, avro_record)
+
     entity_repo = CanonicalEntityRepository(session)
     entity_id = await entity_repo.create(  # type: ignore[attr-defined]
         canonical_name=canonical_name,
@@ -167,6 +189,12 @@ async def persist_enrichment(
         ticker=ticker,
         isin=isin,
     )
+    # The repo generates its own UUIDv7 — re-serialize with the actual entity_id
+    # to keep the outbox bytes consistent with the DB row.  This second
+    # serialize_confluent_avro call uses an identical record shape, so it is
+    # equally safe to fail before any further DB work.
+    avro_record["entity_id"] = str(entity_id)
+    avro_payload_bytes = serialize_confluent_avro(_ENTITY_CANONICAL_CREATED_SCHEMA_PATH, avro_record)
 
     alias_repo = EntityAliasRepository(session)
     normalized_name = canonical_name.lower().strip()
@@ -209,30 +237,13 @@ WHERE provisional_queue_id = :queue_id
     )
 
     outbox_repo = OutboxRepository(session)
-    # PLAN-0062 Wave A: write Confluent-Avro wire-format bytes (5-byte header +
-    # Avro body) so the consumer can decode via deserialize_confluent_avro.
-    # All schema fields must be present — Avro encoding is strict on missing
-    # required fields (event_id, occurred_at, entity_id, canonical_name,
-    # entity_type, provisional_queue_id).  ``alias_texts`` defaults to [] in
-    # the schema; we still emit it explicitly for clarity.
-    record: dict[str, Any] = {
-        "event_id": str(new_uuid7()),
-        "event_type": "entity.canonical.created",
-        "schema_version": 1,
-        "occurred_at": utc_now().isoformat(),
-        "entity_id": str(entity_id),
-        "canonical_name": canonical_name,
-        "entity_type": entity_type,
-        "provisional_queue_id": str(queue_id),
-        "alias_texts": [canonical_name, *([ticker.upper()] if ticker else []), *([isin.upper()] if isin else [])],
-        "correlation_id": None,
-    }
-    payload = serialize_confluent_avro(_ENTITY_CANONICAL_CREATED_SCHEMA_PATH, record)
-
+    # QA-iter1 (PLAN-0062): payload bytes were pre-serialized at the top of
+    # this function — the call there fails-fast if the record dict is invalid,
+    # preventing partial DB state without an outbox row (BP-313 / SA-005).
     await outbox_repo.append(
         topic="entity.canonical.created.v1",
         partition_key=str(entity_id),
-        payload_avro=payload,
+        payload_avro=avro_payload_bytes,
     )
 
     return entity_id  # type: ignore[no-any-return]
