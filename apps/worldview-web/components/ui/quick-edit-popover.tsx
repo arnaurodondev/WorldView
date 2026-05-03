@@ -71,15 +71,34 @@ export function QuickEditPopover({
   // Local edit value — initialised from `value` when the popover opens.
   const [localValue, setLocalValue] = React.useState<number | string | null>(value);
   const inputRef = React.useRef<HTMLInputElement>(null);
+  // WHY useId: associates the visible Label with its input via htmlFor/id so
+  // screen readers announce "Quantity: [value]" rather than just the value.
+  const inputId = React.useId();
+  // WHY store the trigger element: when the popover closes (Cancel, Escape, Save),
+  // focus must return to the element that opened it so keyboard users don't lose
+  // their place in the table. We capture document.activeElement on open — that is
+  // always the trigger because Radix Popover moves focus to PopoverContent immediately
+  // after mount, so the previous activeElement is the trigger.
+  const triggerFocusRef = React.useRef<Element | null>(null);
 
-  // Sync local value when the popover opens (value may have changed externally).
+  // Sync local value when the popover opens; restore focus when it closes.
   React.useEffect(() => {
     if (open) {
+      triggerFocusRef.current = document.activeElement;
       setLocalValue(value);
       // WHY setTimeout 0: PopoverContent renders asynchronously; the input
       // doesn't exist yet on the tick the effect fires. Deferring focus by one
       // microtask ensures the ref is populated.
       setTimeout(() => inputRef.current?.focus(), 0);
+    } else {
+      // WHY requestAnimationFrame: restoring focus synchronously races with
+      // Radix's own focus-return logic — rAF defers until after Radix has
+      // settled so the restoration wins without fighting the library.
+      requestAnimationFrame(() => {
+        if (triggerFocusRef.current instanceof HTMLElement) {
+          triggerFocusRef.current.focus();
+        }
+      });
     }
   }, [open, value]);
 
@@ -127,8 +146,11 @@ export function QuickEditPopover({
         // look merged in compact density.
         sideOffset={4}
       >
-        {/* Label — matches FormLabel styling for consistency with RHF forms */}
-        <Label className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground font-mono">
+        {/* Label — htmlFor wires to inputId so screen readers announce the label */}
+        <Label
+          htmlFor={inputId}
+          className="text-[10px] uppercase tracking-[0.06em] text-muted-foreground font-mono"
+        >
           {label}
         </Label>
 
@@ -138,6 +160,7 @@ export function QuickEditPopover({
           // institutional users expect everywhere they type a number.
           <NumberInput
             ref={inputRef}
+            id={inputId}
             value={typeof localValue === "number" ? localValue : null}
             onValueChange={(v) => setLocalValue(v)}
             disabled={isLoading}
@@ -148,6 +171,7 @@ export function QuickEditPopover({
         ) : (
           <Input
             ref={inputRef}
+            id={inputId}
             value={typeof localValue === "string" ? localValue : ""}
             onChange={(e) => setLocalValue(e.target.value)}
             disabled={isLoading}

@@ -170,7 +170,7 @@ const FormControl = React.forwardRef<
           ? `${formDescriptionId}`
           : `${formDescriptionId} ${formMessageId}`
       }
-      aria-invalid={!!error || undefined}
+      aria-invalid={error ? "true" : undefined}
       {...props}
     />
   );
@@ -214,23 +214,25 @@ const FormMessage = React.forwardRef<
   const { error, formMessageId } = useFormField();
   const body = error ? String(error?.message) : children;
 
-  // Don't render the element at all when there's no error or children — avoids
-  // empty elements messing up the spacing in the FormItem.
-  if (!body) return null;
-
+  // WHY always render (even when empty): FormControl wires aria-describedby to
+  // formMessageId. If this element is absent from the DOM, the reference is
+  // dangling — technically invalid per ARIA spec. We keep it rendered but
+  // aria-hidden + visually hidden so it occupies no space and is inert to AT.
   return (
     <p
       ref={ref}
       id={formMessageId}
       role="alert"
+      aria-hidden={!body}
       className={cn(
         "text-[11px] font-mono",
         error ? "text-destructive" : "text-muted-foreground",
+        !body && "hidden",
         className,
       )}
       {...props}
     >
-      {body}
+      {body ?? ""}
     </p>
   );
 });

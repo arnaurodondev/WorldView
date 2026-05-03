@@ -53,6 +53,7 @@ const NAME_MAX = 80;
 const watchlistSchema = z.object({
   name: z
     .string()
+    .trim()
     .min(1, "Name is required")
     .max(NAME_MAX, `Max ${NAME_MAX} characters`),
 });
@@ -146,10 +147,11 @@ export function CreateWatchlistDialog({ open, onOpenChange, onCreated }: Props) 
               )}
             />
 
-            {/* Server-level error */}
-            {form.formState.errors.root && (
+            {/* Server-level error — stored at errors.root.serverError.message
+                (setError uses "root.serverError" as the dotted path). */}
+            {form.formState.errors.root?.serverError && (
               <p role="alert" className="text-[11px] text-destructive font-mono">
-                {form.formState.errors.root.message}
+                {String(form.formState.errors.root.serverError.message ?? "")}
               </p>
             )}
 

@@ -88,6 +88,7 @@ import {
 } from "@/lib/screener-columns";
 import { useScreenerSparklines } from "@/hooks/useScreenerSparklines";
 import { buildScreenerFilters } from "@/features/screener/lib/build-filters";
+import { applyClientFilters } from "@/features/screener/lib/apply-client-filters";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -101,46 +102,7 @@ import { buildScreenerFilters } from "@/features/screener/lib/build-filters";
  */
 const PAGE_SIZE = 50;
 
-/**
- * applyClientFilters — filters that the backend cannot apply yet.
- *
- * For each technical / news control set in FilterState, drop rows that do not
- * satisfy the constraint. When the data field is missing on the row (most
- * common case today), we keep the row so partial-data instruments are not
- * accidentally hidden. Conservative behaviour matches Bloomberg's "soft" filters
- * where missing data means "uncertain" rather than "exclude".
- *
- * TODO(server): once S3 / S6 surface these fields, move them to buildScreenerFilters.
- */
-function applyClientFilters(rows: ScreenerResult[], f: FilterState): ScreenerResult[] {
-  let out = rows;
-
-  // Free-text search on ticker / name — NOT supported by backend.
-  if (f.search.trim()) {
-    const q = f.search.trim().toLowerCase();
-    out = out.filter((r) => {
-      const t = (r.ticker ?? "").toLowerCase();
-      const n = (r.name ?? "").toLowerCase();
-      return t.includes(q) || n.includes(q);
-    });
-  }
-
-  // Above 50d MA — TODO server: requires `current_price` and `ma_50` on response.
-  // Today neither is consistently populated; we skip this filter when data missing.
-  // (No-op until backend ships moving averages.)
-
-  // RSI band — TODO server. No `rsi_14` field on response yet.
-
-  // Volume vs 30d average — TODO server. Requires daily volume + avg_volume_30d on response.
-  // (avg_volume_30d is in instrument_fundamentals_snapshot but not on screener row.)
-
-  // Distance from 52W high — TODO server. Requires high_52w on response.
-  // Distance from 52W low — TODO server. Requires low_52w on response.
-
-  // News & signals — all TODO server (S6/S7). Inputs are accepted but not applied.
-
-  return out;
-}
+// applyClientFilters is imported from features/screener/lib/apply-client-filters.ts
 
 /**
  * SORT_KEY_TO_FIELD — map display column keys → ScreenerResult fields.
