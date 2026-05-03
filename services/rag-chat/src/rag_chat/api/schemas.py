@@ -182,8 +182,9 @@ class BriefingResponse(BaseModel):
     PLAN-0062-W4 added ``confidence`` and ``lead``:
     - ``confidence``: composite citation quality score in [0.0, 1.0].
       1.0 = all bullets have citations; lower values indicate partial coverage.
-    - ``lead``: the lead sentence(s) from the ## LEAD block with [cN] markers
-      resolved. None when the LLM didn't emit a lead or no valid citations.
+    - ``lead``: 1-3 sentence executive summary from the ## LEAD block with
+      inline [cN] markers. None when the LLM didn't emit a lead or no valid
+      citations exist.
     """
 
     narrative: str
@@ -194,17 +195,14 @@ class BriefingResponse(BaseModel):
     # summary block. The frontend handles `summary == null` by falling back to
     # showing a clamp-3 of the narrative — safe degradation across rollouts.
     summary: str | None = None
-    # PLAN-0049 additive fields. Leave blank for backwards compatibility.
-    headline: str | None = Field(default=None, max_length=240)
     sections: list[BriefSection] = Field(default_factory=list)
-    # PLAN-0062-W4 additive fields — default values ensure old callers are unaffected.
     # WHY ge=0 le=1: confidence is a probability — clamped to [0.0, 1.0] by the
     # formula. default=1.0 means "fully cited" which is the safe fallback for
     # callers that don't populate this field (no citation badge shown).
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-    # WHY lead optional: the v3.0 prompt emits a ## LEAD block; older prompts,
-    # cached briefs, and instrument briefs (no ## LEAD) pass None here.
-    lead: str | None = Field(default=None, max_length=600)
+    # WHY max_length=1000: v3.0 prompt allows 1-3 sentences; on high-activity
+    # days or large portfolios three dense sentences can approach 600 chars.
+    lead: str | None = Field(default=None, max_length=1000)
 
 
 # ── Public briefing schemas (PLAN-0029 T-2-01) ───────────────────────────────
@@ -235,13 +233,10 @@ class PublicBriefingResponse(BaseModel):
     # before v2.2 will lack this field. The frontend treats None as "no two-tier
     # output available — render clamp-3 of narrative as before".
     summary: str | None = None
-    # PLAN-0049 T-A-1-04 — structured render fields. Optional for forward
-    # compat: when present, the frontend renders headline + sections; when
-    # absent, it falls back to narrative through ``<MarkdownContent>``.
-    headline: str | None = Field(default=None, max_length=240)
     sections: list[BriefSection] = Field(default_factory=list)
-    # PLAN-0062-W4 additive fields — same as BriefingResponse.
     # WHY default=1.0: safe fallback; no amber warning badge shown when all
     # cached briefs lack this field after the first deploy.
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-    lead: str | None = Field(default=None, max_length=600)
+    # WHY max_length=1000: mirrors BriefingResponse.lead — 1-3 sentences fit
+    # comfortably within 1000 chars even on dense financial-domain prose.
+    lead: str | None = Field(default=None, max_length=1000)

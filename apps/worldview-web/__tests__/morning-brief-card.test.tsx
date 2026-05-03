@@ -121,7 +121,7 @@ function structuredBrief(): BriefingResponse {
       "## Drivers\n\n- Tech rallied 1.2%\n- 10Y yield -3bp\n\n## Implications\n\n- Watch Fed minutes Wed\n\n" +
       LONG_NARRATIVE_PADDING,
     summary: "Markets opened mixed; tech outperformed.",
-    headline: "Markets opened mixed; tech outperformed.",
+    lead: "Markets opened mixed; tech outperformed.",
     risk_summary: null,
     entity_mentions: [],
     citations: [

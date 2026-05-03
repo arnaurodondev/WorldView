@@ -333,7 +333,7 @@ test.describe("PLAN-0049 stabilization — MorningBriefCard renders content", ()
             "Markets opened mixed; tech outperformed and energy lagged. Banks led the rally on rising bond yields. " +
             "Volatility ticked up modestly but breadth remained healthy across sectors.",
           summary: "Markets opened mixed; tech outperformed.",
-          headline: "Markets opened mixed; tech outperformed.",
+          lead: "Markets opened mixed; tech outperformed.",
           risk_summary: null,
           entity_mentions: [],
           citations: [],

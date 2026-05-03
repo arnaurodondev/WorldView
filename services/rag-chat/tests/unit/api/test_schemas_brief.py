@@ -151,7 +151,20 @@ class TestPublicBriefingResponseAdditions:
         r = PublicBriefingResponse(narrative="ok", risk_summary={}, generated_at="t")
         assert r.lead is None
 
-    def test_lead_max_length_600(self) -> None:
-        """lead is capped at 600 chars."""
+    def test_lead_max_length_1000(self) -> None:
+        """lead is capped at 1000 chars (allows up to 3 dense sentences)."""
         with pytest.raises(ValidationError):
-            PublicBriefingResponse(narrative="ok", risk_summary={}, generated_at="t", lead="x" * 601)
+            PublicBriefingResponse(narrative="ok", risk_summary={}, generated_at="t", lead="x" * 1001)
+
+    def test_lead_accepts_three_sentences(self) -> None:
+        """A 3-sentence lead under 1000 chars must be accepted without error."""
+        long_lead = (
+            "Meta's increased capex to $145B signals aggressive AI infrastructure expansion "
+            "across data centers and silicon, compressing near-term free cash flow. "
+            "Analysts expect margin pressure in H1 before hyperscale deployments begin monetizing "
+            "in H2, with MSFT and GOOGL likely to follow suit. "
+            "Portfolio exposure to cloud infrastructure, energy, and cooling suppliers is elevated."
+        )
+        assert len(long_lead) < 1000
+        r = PublicBriefingResponse(narrative="ok", risk_summary={}, generated_at="t", lead=long_lead)
+        assert r.lead == long_lead
