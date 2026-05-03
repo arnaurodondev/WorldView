@@ -115,6 +115,17 @@ if TYPE_CHECKING:
 # bytes for ``nlp.signal.detected.v1`` instead of raw ``json.dumps(...).encode()``.
 _NLP_SIGNAL_DETECTED_SCHEMA_PATH = get_schema_path("nlp.signal.detected.v1.avsc")
 
+# Block 13E: schema path for the temporal-event outbox topic (intelligence.temporal_event.v1).
+# The schema lives alongside all other Avro schemas in the infra/kafka/schemas/ dir.
+_TEMPORAL_EVENT_SCHEMA_PATH = get_schema_path("intelligence.temporal_event.v1.avsc")
+
+# Block 13E: event_type values produced by Block 10 deep extraction that
+# represent a temporal / macro-geopolitical scope requiring S7 KG linking.
+# Any event whose event_type is NOT in this set is skipped by _emit_temporal_events.
+_TEMPORAL_EVENT_TYPES: frozenset[str] = frozenset(
+    {"MACRO", "REGULATORY_ACTION", "GEOPOLITICAL", "SANCTIONS", "NATURAL_DISASTER"}
+)
+
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _TOPIC = "content.article.stored.v1"
@@ -578,6 +589,41 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                     doc_id=doc_id,
                     is_backfill=is_backfill,
                     correlation_id=correlation_id,
+                )
+
+            # Block 13E: emit intelligence.temporal_event.v1 for macro / geopolitical
+            # events found by Block 10. Must be inside the same DB transaction so
+            # temporal event rows are never lost on commit failure.  No second LLM
+            # call — reuses the extraction_result already produced above.
+            # Build the entity_id_by_ref lookup from resolved/provisional mentions
+            # so _emit_temporal_events can map participant_entity_ids to real UUIDs.
+            if should_run_deep_extraction(final_path) and extraction_result.get("events"):
+                # Reuse the same resolved-mention lookup that _enqueue_enriched uses:
+                # resolved entities first (canonical UUID), then provisional (queue UUID).
+                _te_entity_id_by_ref: dict[str, str] = {}
+                for _m in final_mentions:
+                    if _m.resolved_entity_id is not None:
+                        for _v in _normalize_ref_variants(_m.mention_text):
+                            _te_entity_id_by_ref.setdefault(_v, str(_m.resolved_entity_id))
+                    elif _m.provisional_queue_id is not None:
+                        for _v in _normalize_ref_variants(_m.mention_text):
+                            _te_entity_id_by_ref.setdefault(_v, str(_m.provisional_queue_id))
+
+                # Track which mention refs map to provisional queue entries so
+                # _emit_temporal_events can skip them (spec: exposed_entities only
+                # contains resolved canonical entity UUIDs).
+                _te_provisional_ids: frozenset[str] = frozenset(
+                    str(_m.provisional_queue_id) for _m in final_mentions if _m.provisional_queue_id is not None
+                )
+
+                await _emit_temporal_events(
+                    raw_events=extraction_result.get("events", []),
+                    entity_id_by_ref=_te_entity_id_by_ref,
+                    provisional_entity_ids=_te_provisional_ids,
+                    doc_id=doc_id,
+                    published_at=published_at,
+                    outbox_repo=outbox_repo,
+                    settings=self._settings,
                 )
 
             # ── D-004: Commit NLP FIRST, then intel ──────────────────────────
@@ -1325,6 +1371,146 @@ async def _enqueue_signal_events(
             topic=settings.topic_signal_detected,
             partition_key=str(signal.entity_id),
             payload_avro=payload_bytes,
+        )
+
+
+def _infer_temporal_scope(event_type: str) -> str:
+    """Map a Block-10 event_type to the intelligence.temporal_event.v1 scope field.
+
+    Scope semantics (per Avro schema doc + PRD-0018 §6.2):
+    - ``GLOBAL``   — events with broad cross-border reach (geopolitical, sanctions).
+    - ``NATIONAL`` — country-level policy or economic releases (macro, regulatory).
+    - ``REGIONAL`` — geographically bounded natural events.
+
+    Defaults to ``NATIONAL`` for any unrecognised type so the consumer never
+    receives an invalid scope value.
+    """
+    scope_map: dict[str, str] = {
+        "GEOPOLITICAL": "GLOBAL",
+        "SANCTIONS": "GLOBAL",
+        "MACRO": "NATIONAL",
+        "REGULATORY_ACTION": "NATIONAL",
+        "NATURAL_DISASTER": "REGIONAL",
+    }
+    return scope_map.get(event_type.upper(), "NATIONAL")
+
+
+async def _emit_temporal_events(
+    *,
+    raw_events: list[Any],
+    entity_id_by_ref: dict[str, str],
+    provisional_entity_ids: frozenset[str],
+    doc_id: uuid.UUID,
+    published_at: datetime | None,
+    outbox_repo: OutboxRepository,
+    settings: Any,
+) -> None:
+    """Block 13E — publish ``intelligence.temporal_event.v1`` for macro/geo events.
+
+    Reuses the Block 10 extraction output (``raw_events``); adds NO second LLM
+    call.  The function:
+
+    1. Filters events to the ``_TEMPORAL_EVENT_TYPES`` set.
+    2. Skips events with ``extraction_confidence < 0.5``.
+    3. Builds an Avro payload matching the ``intelligence.temporal_event.v1``
+       schema for each qualifying event.
+    4. Resolves ``participant_entity_ids`` to canonical entity UUIDs (provisional
+       IDs are intentionally excluded — the KG consumer only accepts confirmed
+       canonical entities in ``exposed_entities``).
+    5. Writes each payload to the outbox via ``outbox_repo.add()`` so the
+       transactional guarantee of the enclosing nlp_db commit is preserved.
+
+    All payloads use Confluent Avro wire format (magic byte + schema-id header)
+    so the S7 ``TemporalEventConsumer`` can deserialise them without extra
+    negotiation.
+    """
+    confidence_threshold = 0.5
+
+    for evt in raw_events:
+        evt_d: dict[str, Any] = dict(evt) if not isinstance(evt, dict) else evt  # type: ignore[call-overload]
+
+        # ── Filter 1: event_type must be temporal ────────────────────────────
+        raw_type = str(evt_d.get("event_type", "")).upper()
+        if raw_type not in _TEMPORAL_EVENT_TYPES:
+            continue
+
+        # ── Filter 2: confidence threshold ──────────────────────────────────
+        confidence = float(evt_d.get("extraction_confidence", 0.0))
+        if confidence < confidence_threshold:
+            continue
+
+        # ── Build exposed_entities from participant_entity_ids ───────────────
+        # Participant IDs arrive as a list of string UUIDs already resolved by
+        # _build_raw_events (they are the values from entity_id_by_ref).
+        # We skip provisional entries because S7 requires confirmed canonical
+        # entity UUIDs in entity_event_exposures.
+        participant_ids: list[str] = [str(pid) for pid in evt_d.get("participant_entity_ids", [])]
+        exposed_entities: list[dict[str, Any]] = [
+            {
+                "entity_id": pid,
+                "exposure_type": "directly_affected",
+                # Carry the same extraction confidence for all participants —
+                # S7 stores this as entity_event_exposures.confidence.
+                "confidence": confidence,
+            }
+            for pid in participant_ids
+            if pid not in provisional_entity_ids  # skip provisional queue UUIDs
+        ]
+
+        # ── Infer scope from event_type ───────────────────────────────────────
+        scope = _infer_temporal_scope(raw_type)
+
+        # ── Build Avro payload (all fields match intelligence.temporal_event.v1.avsc)
+        # Avro empty-string convention: the S7 consumer converts "" → NULL for
+        # region, active_until, source_url, description (per avsc doc field).
+        payload: dict[str, Any] = {
+            "event_id": str(common.ids.new_uuid7()),
+            "event_type": "intelligence.temporal_event",  # envelope field
+            "schema_version": 1,
+            "occurred_at": common.time.utc_now().isoformat(),
+            # Lowercase event type for the temporal_event_type column
+            # (e.g. "macro", "geopolitical") — consumer stores as-is.
+            "temporal_event_type": raw_type.lower(),
+            "scope": scope,
+            # Region is unknown from article text alone; S7 converts "" → NULL.
+            "region": "",
+            # Truncate to 500 chars per Avro field doc constraint.
+            "title": str(evt_d.get("event_text", ""))[:500],
+            "description": "",
+            "source_article_ids": [str(doc_id)],
+            "source_url": "",
+            # active_from defaults to article publication date; fall back to now()
+            # if published_at is absent (should be rare for DEEP-tier articles).
+            "active_from": published_at.isoformat() if published_at else common.time.utc_now().isoformat(),
+            # active_until="" means still active / open-ended; S7 stores NULL.
+            "active_until": "",
+            # 90 days of residual market impact — conservative default matching
+            # the structured EODHD events in PRD-0018 §6.5.
+            "residual_impact_days": 90,
+            "confidence": confidence,
+            "exposed_entities": exposed_entities,
+        }
+
+        # Serialize BEFORE adding to outbox so a schema mismatch aborts the
+        # transaction instead of poisoning the outbox with un-serializable bytes
+        # (same pattern as _enqueue_signal_events / PLAN-0062 F-006).
+        payload_bytes = serialize_confluent_avro(_TEMPORAL_EVENT_SCHEMA_PATH, payload)
+
+        await outbox_repo.add(
+            topic=settings.topic_temporal_event,
+            # Partition by event_type so that all MACRO events land on the
+            # same S7 partition, reducing out-of-order temporal event upserts.
+            partition_key=raw_type,
+            payload_avro=payload_bytes,
+        )
+
+        logger.debug(  # type: ignore[no-any-return]
+            "temporal_event_enqueued",
+            doc_id=str(doc_id),
+            event_type=raw_type,
+            scope=scope,
+            confidence=confidence,
+            exposed_entity_count=len(exposed_entities),
         )
 
 
