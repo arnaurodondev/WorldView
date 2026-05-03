@@ -124,28 +124,56 @@ function ContradictionCard({
 
   if (!isExpanded) {
     // ── Collapsed: 22px row with severity badge + truncated claim + time ──
+    // WHY <div> wrapper with onClick + inner <button>:
+    //   - instrument-detail.test.tsx uses closest("div") to find the row element
+    //     (legacy test written when the card was a plain div — R19: do not delete).
+    //     closest("div") from the claim text span must resolve to a clickable element.
+    //   - instrument-wave-e-plan-0053.test.tsx uses closest("button") to find the
+    //     row for a11y/keyboard interaction (T-E-5-04 contract).
+    //   Both constraints are satisfied by having a clickable <div> wrapper that also
+    //   contains a <button>. closest("div") finds the wrapper; closest("button") finds
+    //   the button. onClick on the div covers the pointer click; the button handles
+    //   keyboard Enter/Space and is the correct semantic element for a11y.
     return (
       <div
-        className="flex items-center h-[22px] px-2 gap-1.5 hover:bg-muted/40 cursor-pointer border-b border-border/30"
         onClick={onToggle}
+        className="flex items-center h-[22px] border-b border-border/30 hover:bg-muted/40 cursor-pointer"
+        role="presentation"
       >
-        {/* Severity badge — compact colored pill */}
-        <span className={`rounded-[2px] px-1 py-0 text-[9px] font-semibold uppercase ${styles.badge}`}>
-          {styles.text}
-        </span>
+        <button
+          type="button"
+          className="w-full flex items-center h-[22px] px-2 gap-1.5 text-left"
+          onClick={(e) => {
+            // WHY stopPropagation: the wrapper div also has onClick={onToggle}.
+            // Without stopPropagation, clicking the button fires the button's
+            // onClick then bubbles to the div and fires the div's onClick —
+            // calling onToggle twice and immediately re-collapsing the card.
+            // stopPropagation ensures only one onToggle call per click regardless
+            // of which element the click originates on.
+            e.stopPropagation();
+            onToggle();
+          }}
+          aria-expanded={false}
+          aria-label={`Expand contradiction: ${item.claim_a.slice(0, 40)}`}
+        >
+          {/* Severity badge — compact colored pill */}
+          <span className={`rounded-[2px] px-1 py-0 text-[9px] font-semibold uppercase ${styles.badge}`}>
+            {styles.text}
+          </span>
 
-        {/* First 60 chars of claim_a — enough context to identify the signal */}
-        <span className="text-[11px] text-foreground flex-1 truncate">
-          {item.claim_a.slice(0, 60)}{item.claim_a.length > 60 ? "…" : ""}
-        </span>
+          {/* First 60 chars of claim_a — enough context to identify the signal */}
+          <span className="text-[11px] text-foreground flex-1 truncate">
+            {item.claim_a.slice(0, 60)}{item.claim_a.length > 60 ? "…" : ""}
+          </span>
 
-        {/* Relative time */}
-        <span className="font-mono text-[10px] tabular-nums text-muted-foreground shrink-0">
-          {formatRelativeTime(item.detected_at)}
-        </span>
+          {/* Relative time */}
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground shrink-0">
+            {formatRelativeTime(item.detected_at)}
+          </span>
 
-        {/* Expand chevron */}
-        <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+          {/* Expand chevron */}
+          <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+        </button>
       </div>
     );
   }
@@ -175,9 +203,13 @@ function ContradictionCard({
       </div>
 
       {/* Claim A vs Claim B — full VS layout */}
+      {/* WHY "Claim A" / "Claim B" labels: T-E-5-04 test asserts both labels
+          are present when the Sheet is open. The labels also improve accessibility
+          by clearly identifying each side of the contradiction to screen readers. */}
       <div className="space-y-2">
         {/* WHY VS layout: makes the contradiction visually obvious at a glance */}
         <div className="rounded-[2px] bg-positive/5 p-2">
+          <p className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Claim A</p>
           <p className="text-[11px] text-foreground/80 leading-relaxed">&ldquo;{item.claim_a}&rdquo;</p>
           <p className="mt-1 text-[10px] text-muted-foreground">— {item.source_a}</p>
         </div>
@@ -187,6 +219,7 @@ function ContradictionCard({
           <AlertTriangle className={`h-3 w-3 ${styles.icon}`} />
         </div>
         <div className="rounded-[2px] bg-negative/5 p-2">
+          <p className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Claim B</p>
           <p className="text-[11px] text-foreground/80 leading-relaxed">&ldquo;{item.claim_b}&rdquo;</p>
           <p className="mt-1 text-[10px] text-muted-foreground">— {item.source_b}</p>
         </div>
