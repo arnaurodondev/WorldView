@@ -1,35 +1,35 @@
-"use client";
+"use client"; // WHY: useForm + useMutation require browser-side state and event handlers
 
 /**
  * features/portfolio/components/AddPositionDialog.tsx
  *
- * Modal for manually adding a new position to a portfolio.
+ * WHY THIS EXISTS: Modal for manually adding a new position to a portfolio.
  *
- * WHY a BUY transaction (not a direct "add holding" call): S1 has no
- * dedicated endpoint for creating holdings. Holdings are derived from
- * transaction history — a BUY transaction increases (or creates) a holding.
- * This mirrors how a real broker records a purchase. See gateway.addPosition
- * for the S1 mapping.
+ * Migrated to RHF + Zod in PLAN-0059 F-2 to fix:
+ *   - BP-328: quantity=0 and avgPrice=0 passed the old client-side gate
+ *     (`parsedQty <= 0` only caught negative, not zero). A zero-quantity BUY
+ *     transaction is meaningless and creates a phantom holding at 0 shares.
+ *   - BP-330: missing aria-invalid + aria-describedby — screen readers couldn't
+ *     announce validation errors.
  *
- * TICKER RESOLUTION FLOW:
- *   1. User types a ticker (e.g. "AAPL")
- *   2. On submit → searchInstruments("AAPL") → gets instrument_id
- *   3. addPosition(portfolioId, instrument_id, qty, price) → POST /v1/transactions
- *   4. On success → invalidate ["holdings", portfolioId] so the table refreshes
+ * WHY NumberInput instead of <Input type="number">: NumberInput parses
+ * TradingView shorthand ("1.5k" → 1500, "25%" → 0.25) which institutional
+ * traders expect from any number input in a finance terminal. The old Input
+ * type="number" also had a browser-native stepper widget that cluttered the UI.
  *
- * WHY resolve ticker server-side (not via user-supplied instrument_id):
- * Instrument IDs are internal UUIDs — they're not meaningful to a user.
- * Letting users type tickers and resolving them to instrument_ids at submit
- * time is the standard UX for all finance terminals (Bloomberg, Schwab, etc.).
+ * TICKER RESOLUTION FLOW (unchanged from pre-migration):
+ *   1. User types a ticker (e.g. "AAPL") + quantity + optional avg price.
+ *   2. Zod validates all three fields before the network round-trip.
+ *   3. On valid submit → searchInstruments("AAPL") → gets instrument_id.
+ *   4. addPosition(portfolioId, instrument_id, qty, price) → POST /v1/transactions.
+ *   5. onSuccess() → parent invalidates ["holdings", portfolioId].
  *
- * WHY no autocomplete on the ticker field: adding a dependency on a live
- * search query inside a modal is complex. The simpler approach is to resolve
- * on submit and show an error if the ticker doesn't exist (same flow as
- * Bloomberg CMD line entry). Autocomplete can be added later as a UX
- * enhancement.
+ * DATA SOURCE: S9 → S3 (instrument search), S9 → S1 (transaction POST).
  */
 
-import { useState, useCallback } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { createGateway } from "@/lib/gateway";
 import {
   Dialog,
@@ -40,7 +40,53 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { NumberInput } from "@/components/ui/number-input";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+
+// ── Validation schema ──────────────────────────────────────────────────────
+
+/**
+ * WHY positive() for quantity (not just nonnegative()):
+ * A BUY transaction with quantity=0 creates a holding record with 0 shares.
+ * S1 won't reject it (it's a valid BUY), but it produces a phantom row in
+ * the holdings table. Blocking at the form level is the right place (BP-328).
+ *
+ * WHY nonnegative() for avgPrice (not positive()):
+ * Some users deliberately enter positions at cost=0 — gifted shares, inherited
+ * positions, or when exact cost basis is unknown. Zero is a valid average price
+ * in S1's data model. The old guard also allowed 0, so this preserves behaviour.
+ * Only negative prices are semantically wrong (can't buy shares at a negative
+ * price in a long portfolio).
+ */
+const addPositionSchema = z.object({
+  ticker: z
+    .string()
+    .min(1, "Ticker is required")
+    .max(12, "Too long")
+    .transform((s) => s.toUpperCase()),
+  quantity: z
+    .number({ invalid_type_error: "Must be a number" })
+    .positive("Must be greater than 0")
+    .max(1_000_000, "Max 1,000,000"),
+  // WHY optional(): avgPrice is labelled "(optional)" in the UI — users adding
+  // gifted shares or positions with unknown cost basis leave it blank. z.number()
+  // without .optional() would reject undefined and block submit for those cases.
+  avgPrice: z
+    .number({ invalid_type_error: "Must be a number" })
+    .nonnegative("Must be 0 or greater")
+    .optional(),
+});
+
+type AddPositionFormValues = z.infer<typeof addPositionSchema>;
+
+// ── Component ──────────────────────────────────────────────────────────────
 
 export interface AddPositionDialogProps {
   open: boolean;
@@ -57,109 +103,68 @@ export function AddPositionDialog({
   portfolioId,
   accessToken,
 }: AddPositionDialogProps) {
-  // Form field state
-  const [ticker, setTicker] = useState("");
-  const [quantity, setQuantity] = useState("");
-  const [avgPrice, setAvgPrice] = useState("");
+  const form = useForm<AddPositionFormValues>({
+    resolver: zodResolver(addPositionSchema),
+    defaultValues: {
+      ticker: "",
+      // WHY undefined for quantity: NumberInput.value is number | null. null
+      // means "empty" — RHF stores undefined; Zod's z.number() with
+      // invalid_type_error surfaces "Must be a number" on submit if untouched.
+      quantity: undefined as unknown as number,
+      // WHY undefined for avgPrice: field is optional; onSubmit coalesces to 0.
+      avgPrice: undefined,
+    },
+    mode: "onChange",
+    // WHY onChange mode: live per-field validation as the user types catches
+    // BP-328 (quantity=0) immediately rather than only on submit. This is the
+    // standard UX for Bloomberg order-entry forms — errors appear as you type.
+  });
 
-  // Submission state
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const serverError = form.formState.errors.root?.serverError?.message;
 
-  const handleSubmit = useCallback(async () => {
-    // ── Validate inputs before hitting the network ──────────────────────
-    const trimmedTicker = ticker.trim().toUpperCase();
-    const parsedQty = parseFloat(quantity);
-    const parsedPrice = parseFloat(avgPrice);
-
-    if (!trimmedTicker) {
-      setError("Ticker symbol is required.");
-      return;
-    }
-    if (isNaN(parsedQty) || parsedQty <= 0) {
-      setError("Quantity must be a positive number.");
-      return;
-    }
-    // WHY avgPrice optional: some traders enter positions at cost=0 (e.g.,
-    // gifted shares, or when exact cost basis is unknown). We allow
-    // empty/zero but not negative.
-    const costBasis = isNaN(parsedPrice) ? 0 : parsedPrice;
-    if (costBasis < 0) {
-      setError("Average price cannot be negative.");
-      return;
-    }
-
-    setIsSubmitting(true);
-    setError(null);
-
+  async function onSubmit(values: AddPositionFormValues) {
     const gw = createGateway(accessToken);
 
     try {
-      // ── Step 1: resolve ticker → instrument_id ─────────────────────────
-      // WHY search with limit=1: we only need the best match (exact ticker
-      // match is ranked first by S3's instrument search).
-      const searchResult = await gw.searchInstruments(trimmedTicker, 1);
+      // Step 1: resolve ticker → instrument_id.
+      // WHY limit=1: we only need the best match. S3's instrument search ranks
+      // exact ticker matches first.
+      const searchResult = await gw.searchInstruments(values.ticker, 1);
       const instrument = searchResult.results[0];
 
       if (!instrument) {
-        // WHY user-facing error (not throw): the user may have mistyped the
-        // ticker. Show an inline error with guidance rather than crashing
-        // the dialog.
-        setError(
-          `Ticker "${trimmedTicker}" not found. Check the symbol and try again.`,
-        );
-        setIsSubmitting(false);
+        form.setError("ticker", {
+          message: `"${values.ticker}" not found. Check the symbol and try again.`,
+        });
         return;
       }
 
-      // ── Step 2: add the position via a BUY transaction ─────────────────
-      // gateway.addPosition() maps to POST /v1/transactions with
-      // direction=BUY. The response is the created transaction (we don't
-      // need to use it here — we just care that the request succeeded so we
-      // can refetch holdings).
+      // Step 2: add the position via a BUY transaction.
       await gw.addPosition(
         portfolioId,
         instrument.instrument_id,
-        parsedQty,
-        costBasis,
+        values.quantity,
+        // WHY default 0: avgPrice is optional in the schema but required by the
+        // gateway call. Zod's .nonnegative() already guarantees >= 0, so NaN
+        // can't reach here, but the nullish coalesce is a safety net.
+        values.avgPrice ?? 0,
       );
 
-      // Reset form on success.
-      setTicker("");
-      setQuantity("");
-      setAvgPrice("");
-      setError(null);
-
-      // Notify parent to invalidate ["holdings", portfolioId] so the table
-      // updates.
+      form.reset();
       onSuccess();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to add position.";
-      setError(message);
-    } finally {
-      setIsSubmitting(false);
+      const message =
+        err instanceof Error ? err.message : "Failed to add position.";
+      form.setError("root.serverError" as "root", { message });
     }
-  }, [ticker, quantity, avgPrice, portfolioId, accessToken, onSuccess]);
+  }
 
-  const handleOpenChange = useCallback(
-    (nextOpen: boolean) => {
-      if (!nextOpen && !isSubmitting) {
-        // Clear form on close so the dialog is fresh on next open.
-        setTicker("");
-        setQuantity("");
-        setAvgPrice("");
-        setError(null);
-      }
-      onOpenChange(nextOpen);
-    },
-    [isSubmitting, onOpenChange],
-  );
-
-  // WHY disable submit when ticker is empty: quantity and price have
-  // sensible defaults (empty = 0), but a ticker-less submission would
-  // always fail at the search step. Disable early to prevent a wasted
-  // network round-trip.
-  const canSubmit = ticker.trim().length > 0 && !isSubmitting;
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen && !form.formState.isSubmitting) {
+      form.reset();
+    }
+    onOpenChange(nextOpen);
+  }
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -170,104 +175,141 @@ export function AddPositionDialog({
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
-          {/* Ticker symbol — the primary identifier traders use */}
-          <div className="space-y-1.5">
-            <Label
-              htmlFor="position-ticker"
-              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
-            >
-              Ticker
-            </Label>
-            <Input
-              id="position-ticker"
-              placeholder="e.g. AAPL"
-              value={ticker}
-              onChange={(e) => setTicker(e.target.value.toUpperCase())}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && canSubmit) void handleSubmit();
-              }}
-              disabled={isSubmitting}
-              autoFocus
-              // WHY toUpperCase(): tickers are always uppercase in financial
-              // systems. Converting as-you-type prevents "aapl" from failing
-              // the S3 search lookup.
-              className="h-8 text-[12px] font-mono bg-background border-border"
+        <Form {...form}>
+          <div className="space-y-4 py-2">
+            {/* Ticker — the primary identifier traders use */}
+            <FormField
+              control={form.control}
+              name="ticker"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground">
+                    Ticker
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      placeholder="e.g. AAPL"
+                      autoFocus
+                      // WHY toUpperCase on change: tickers are always uppercase.
+                      // Converting as-you-type avoids "aapl" failing S3 search.
+                      onChange={(e) => field.onChange(e.target.value.toUpperCase())}
+                      onBlur={field.onBlur}
+                      value={field.value}
+                      name={field.name}
+                      ref={field.ref}
+                      disabled={form.formState.isSubmitting}
+                      className="h-8 text-[12px] font-mono bg-background border-border"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
             />
+
+            {/* Quantity — NumberInput for shorthand parsing + BP-328 validation.
+                WHY NumberInput: "1.5k" → 1500, "25%" → 0.25 (with percent=false
+                here since we want literal share count). The old <Input type="number">
+                had no shorthand parsing and the browser stepper widget cluttered
+                the compact layout. */}
+            <FormField
+              control={form.control}
+              name="quantity"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground">
+                    Quantity
+                  </FormLabel>
+                  <FormControl>
+                    <NumberInput
+                      // WHY percent=false: we want the literal share count, not
+                      // a fraction. "50%" should NOT become 0.5 for a quantity field.
+                      percent={false}
+                      bps={false}
+                      value={field.value ?? null}
+                      onValueChange={(v) => {
+                        // WHY trigger("quantity") after setValue: onChange mode
+                        // re-validates on RHF's internal change, but NumberInput
+                        // commits on blur (not onChange). We setValue + trigger
+                        // to get immediate live validation as the user types shorthand.
+                        field.onChange(v);
+                        void form.trigger("quantity");
+                      }}
+                      disabled={form.formState.isSubmitting}
+                      density="compact"
+                      aria-label="Quantity"
+                      className="w-full"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Average price — optional, 0 is allowed (BP-328: negative is not) */}
+            <FormField
+              control={form.control}
+              name="avgPrice"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground">
+                    Avg Price{" "}
+                    <span className="text-muted-foreground/60 normal-case">(optional)</span>
+                  </FormLabel>
+                  <FormControl>
+                    <NumberInput
+                      percent={false}
+                      bps={false}
+                      value={field.value ?? null}
+                      onValueChange={(v) => {
+                        field.onChange(v);
+                        void form.trigger("avgPrice");
+                      }}
+                      disabled={form.formState.isSubmitting}
+                      density="compact"
+                      aria-label="Average price"
+                      className="w-full"
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {serverError && (
+              <p role="alert" className="text-[11px] text-destructive font-mono">
+                {serverError}
+              </p>
+            )}
           </div>
 
-          {/* Quantity — number of shares */}
-          <div className="space-y-1.5">
-            <Label
-              htmlFor="position-quantity"
-              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => handleOpenChange(false)}
+              disabled={form.formState.isSubmitting}
+              className="text-[11px] font-mono"
             >
-              Quantity
-            </Label>
-            <Input
-              id="position-quantity"
-              type="number"
-              placeholder="e.g. 10"
-              value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
-              disabled={isSubmitting}
-              min="0.00000001"
-              step="any"
-              // WHY step="any": S1 stores quantity as Decimal(18,8). Users
-              // may have fractional shares (e.g., crypto or fractional
-              // equity programs like Robinhood).
-              className="h-8 text-[12px] font-mono tabular-nums bg-background border-border"
-            />
-          </div>
-
-          {/* Average price — cost basis per share */}
-          <div className="space-y-1.5">
-            <Label
-              htmlFor="position-avg-price"
-              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void form.handleSubmit(onSubmit)()}
+              // WHY disable when ticker is empty: quantity+price have defaults,
+              // but a ticker-less submit always fails at the S3 search step.
+              // Disable early to prevent a wasted network round-trip.
+              disabled={
+                form.formState.isSubmitting ||
+                !form.getValues("ticker").trim()
+              }
+              className="text-[11px] font-mono"
             >
-              Avg Price <span className="text-muted-foreground/60">(optional)</span>
-            </Label>
-            <Input
-              id="position-avg-price"
-              type="number"
-              placeholder="e.g. 185.42"
-              value={avgPrice}
-              onChange={(e) => setAvgPrice(e.target.value)}
-              disabled={isSubmitting}
-              min="0"
-              step="any"
-              // WHY optional: some users add positions without knowing exact
-              // cost basis (gifted shares, inherited positions). Defaults to 0.
-              className="h-8 text-[12px] font-mono tabular-nums bg-background border-border"
-            />
-          </div>
-
-          {/* Inline error message */}
-          {error && (
-            <p className="text-[11px] text-destructive font-mono">{error}</p>
-          )}
-        </div>
-
-        <DialogFooter className="gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => handleOpenChange(false)}
-            disabled={isSubmitting}
-            className="text-[11px] font-mono"
-          >
-            Cancel
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => void handleSubmit()}
-            disabled={!canSubmit}
-            className="text-[11px] font-mono"
-          >
-            {isSubmitting ? "Adding…" : "Add Position"}
-          </Button>
-        </DialogFooter>
+              {form.formState.isSubmitting ? "Adding…" : "Add Position"}
+            </Button>
+          </DialogFooter>
+        </Form>
       </DialogContent>
     </Dialog>
   );

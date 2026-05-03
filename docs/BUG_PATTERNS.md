@@ -329,6 +329,8 @@
 | BP-332 | TanStack Controlled Sort Race: `getNextSortingOrder()` Captures Stale State Outside Updater When `useDeferredValue` Deferred Pass Is Pending | Frontend | [bug-patterns/frontend.md](bug-patterns/frontend.md#bp-332) |
 | BP-333 | Embedding Model Name Mismatch (HuggingFace ID vs Ollama Tag) Silently Disables ANN Seeder | Config & Docker | [bug-patterns/config-docker.md](bug-patterns/config-docker.md#bp-331) |
 | BP-334 | Provisional Enrichment Alias Duplicate on Recovery Sweep — bare INSERT in `EntityAliasRepository.insert()` hits existing alias after stale-processing reset | Database & ORM | [bug-patterns/database-orm.md](bug-patterns/database-orm.md#bp-334) |
+| BP-335 | `z.number()` Without `.optional()` Silently Blocks RHF Submit for Empty Optional Fields | Frontend | [bug-patterns/frontend.md](bug-patterns/frontend.md#bp-335) |
+| BP-336 | `user.tab()` Inside Radix Dialog Focus Trap Does Not Reliably Fire Blur on NumberInput in jsdom | Frontend | [bug-patterns/frontend.md](bug-patterns/frontend.md#bp-336) |
 
 ---
 
