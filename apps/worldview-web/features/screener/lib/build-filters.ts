@@ -64,7 +64,10 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
   pushIfRange(filters, "quarterly_earnings_growth_yoy", f.earningsGrowthMin, f.earningsGrowthMax);
 
   // Attach sector restriction to the first filter (S3 applies it globally).
-  if (f.sector && filters.length > 0) {
+  // WHY exclude "ALL": "ALL" means no sector restriction — attaching it as a
+  // sector value would send a literal "ALL" string to the backend which is not
+  // a valid GICS sector name and would incorrectly filter to zero results.
+  if (f.sector && f.sector !== "ALL" && filters.length > 0) {
     filters[0] = { ...filters[0], sector: f.sector };
   }
 
@@ -77,13 +80,21 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
     });
   }
 
-  // WHY always include daily_return + pe_ratio: without these, the backend
-  // omits those columns from result rows when no filter constraint is set.
+  // WHY always include daily_return + pe_ratio + current_price: without these,
+  // the backend omits those columns from result rows when no filter constraint
+  // is set. All three are mandatory enrichment filters regardless of user input.
   if (!filters.some((f) => f.metric === "daily_return")) {
     filters.push({ metric: "daily_return", min_value: -1, max_value: 1 });
   }
   if (!filters.some((f) => f.metric === "pe_ratio")) {
     filters.push({ metric: "pe_ratio", min_value: -9999, max_value: 9999 });
+  }
+  // WHY current_price enrichment: the PRICE column on the screener table needs
+  // current_price on every row even when the user has set no price filter.
+  // Bounds 0–9,999,999 cover all real-world stock prices while signalling to
+  // the backend "compute this column for every row".
+  if (!filters.some((f) => f.metric === "current_price")) {
+    filters.push({ metric: "current_price", min_value: 0, max_value: 9_999_999 });
   }
 
   return filters;

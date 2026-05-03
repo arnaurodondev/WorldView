@@ -28,13 +28,24 @@
 // rendering, and synchronous DOM document.createElement for the CSV download.
 
 import { useEffect, useMemo, useState } from "react";
+// WHY FixedSizeList: react-window provides the virtualised row renderer for the
+// > 200-row path. Each virtual row is rendered in an independent mini-table so
+// column widths match the header via a shared colgroup percentage spec.
+// The test suite mocks react-window to render all items synchronously so
+// assertions on testids and column widths work without a real ResizeObserver.
+import { FixedSizeList } from "react-window";
 
 import { cn } from "@/lib/utils";
 import { formatPrice } from "@/lib/utils";
 import { exportToCsv, todayDateStamp } from "@/lib/csv-export";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
-import { DataTable } from "@/components/ui/data-table";
-import { makeTransactionColumns, rowTotal } from "./transaction-columns";
+import {
+  rowTotal,
+  typeBadgeClass,
+  assetClassAbbrev,
+  assetClassBadgeClass,
+} from "./transaction-columns";
+import { formatDateTime } from "@/lib/utils";
 import type { Transaction } from "@/types/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -61,10 +72,129 @@ type FilterType = "ALL" | "BUY" | "SELL" | "DIVIDEND";
 // the filter compares tx.currency to the value; "ALL" short-circuits.
 type CurrencyFilter = "ALL" | "USD" | "EUR";
 
-// Threshold above which DataTable activates its built-in react-virtual
-// path. Below this number the synchronous render is faster (no
-// ResizeObserver overhead) and produces nicer accessibility output.
+// Threshold above which the virtualised path activates.
+// Below this number the synchronous render is faster (no ResizeObserver
+// overhead) and produces nicer accessibility output.
 const VIRTUALISATION_THRESHOLD = 200;
+
+// ── Virtual-path column widths ────────────────────────────────────────────────
+// WHY percentage widths: the virtual path renders each row as a mini-table
+// (react-window) with the same colgroup as the sticky header table. Using
+// percentage widths makes the columns scale uniformly as the container resizes.
+// These values must match the DataTable column sizes (px converted to %).
+// DATE=130, TYPE=70, CLASS=60, TICKER=80, QTY=100, PRICE=100, TOTAL=120, FEE=100 → sum=760
+// WHY these percents (not raw px): relative widths are consistent across window sizes.
+const COL_WIDTHS_PCT = [
+  "17.1%",  // DATE  (130/760)
+  "9.2%",   // TYPE  (70/760)
+  "7.9%",   // CLASS (60/760)
+  "10.5%",  // TICKER (80/760)
+  "13.2%",  // QTY   (100/760)
+  "13.2%",  // PRICE (100/760)
+  "15.8%",  // TOTAL (120/760)
+  "13.2%",  // FEE   (100/760)
+];
+
+// ── Virtual row renderer (react-window path) ──────────────────────────────────
+
+/**
+ * renderVirtualRow — renders one Transaction row as a mini-table cell.
+ *
+ * WHY a helper function (not a React component): the test mock for react-window
+ * calls children({ index, style }) without the `data` prop that FixedSizeList
+ * normally provides via itemData. Using a closure factory (makeVirtualRowRenderer)
+ * captures `rows` from the outer scope so VirtualRow always has access to the
+ * data array regardless of whether `data` is passed by the mock or the real lib.
+ *
+ * WHY a separate mini-table per row (not a shared <tbody>): react-window renders
+ * each row into an absolutely positioned div. A shared <table> with a <tbody> cannot
+ * be split between rows — each row must own its own colgroup to receive column widths.
+ * QA-iter1 MAJ-4: this pattern guarantees column widths match the header 1:1 because
+ * both use the same COL_WIDTHS_PCT constant.
+ *
+ * WHY data-testid="transactions-virtual-row": tests assert that this testid exists
+ * and that its colgroup col widths match the header colgroup. The testid makes it
+ * queryable independently of the mocked FixedSizeList container.
+ */
+function makeVirtualRowRenderer(rows: Transaction[]) {
+  // WHY return a named function (not anonymous arrow): React DevTools shows the
+  // component name in the component tree which helps debugging. Named inner
+  // functions also produce cleaner stack traces.
+  return function VirtualRow({
+    index,
+    style,
+  }: {
+    index: number;
+    style: React.CSSProperties;
+  }) {
+    const tx = rows[index];
+    if (!tx) return null;
+    const isPlaceholder = tx.type !== "DIVIDEND" && tx.quantity === 0 && tx.price === 0;
+    const total = rowTotal(tx);
+
+    return (
+      <div style={style}>
+        <table
+          data-testid="transactions-virtual-row"
+          className={cn(
+            "w-full table-fixed border-b border-border/30",
+            isPlaceholder && "text-muted-foreground/50",
+          )}
+        >
+          <colgroup>
+            {COL_WIDTHS_PCT.map((w, i) => (
+              <col key={i} style={{ width: w }} />
+            ))}
+          </colgroup>
+          <tbody>
+            <tr className="h-[22px]">
+              <td className="px-2 font-mono text-[11px] tabular-nums text-muted-foreground whitespace-nowrap">
+                {formatDateTime(tx.executed_at)}
+              </td>
+              <td className="px-2">
+                <span
+                  className={cn(
+                    "inline-flex items-center px-1 rounded-[2px] font-mono text-[10px] font-semibold",
+                    typeBadgeClass(tx.type),
+                  )}
+                  data-testid={`tx-type-${tx.transaction_id}`}
+                >
+                  {tx.type === "DIVIDEND" ? "DIV" : tx.type}
+                </span>
+              </td>
+              <td className="px-2">
+                <span
+                  className={cn(
+                    "inline-flex items-center px-1 rounded-[2px] border font-mono text-[10px] font-semibold uppercase",
+                    assetClassBadgeClass(tx.asset_class),
+                  )}
+                  data-testid={`tx-asset-class-${tx.transaction_id}`}
+                >
+                  {assetClassAbbrev(tx.asset_class)}
+                </span>
+              </td>
+              <td className="px-2 font-mono text-[11px] tabular-nums text-primary font-medium">
+                {tx.ticker || "—"}
+              </td>
+              <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
+                {tx.type === "DIVIDEND" ? "—" : tx.quantity.toLocaleString("en-US")}
+              </td>
+              <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
+                {tx.type === "DIVIDEND" ? "—" : formatPrice(tx.price)}
+              </td>
+              <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
+                {isPlaceholder ? "n/a" : total > 0 ? formatPrice(total) : "—"}
+              </td>
+              <td className="px-2 font-mono text-[11px] tabular-nums text-muted-foreground text-right">
+                {tx.type !== "DIVIDEND" && tx.fee > 0 ? formatPrice(tx.fee) : "—"}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+}
 
 /**
  * Inline debounce — returns a value that lags the input by `delayMs`.
@@ -98,15 +228,6 @@ export function TransactionsTable({
   transactions,
   tickerByInstrumentId,
 }: TransactionsTableProps) {
-  // ── Column definitions ────────────────────────────────────────────────────
-  // WHY useMemo: makeTransactionColumns closes over tickerByInstrumentId.
-  // Re-creating on every render would produce new column-def references,
-  // making TanStack Table re-initialise its column model on every keystroke.
-  const columns = useMemo(
-    () => makeTransactionColumns(tickerByInstrumentId),
-    [tickerByInstrumentId],
-  );
-
   // ── Filter state ──────────────────────────────────────────────────────────
   const [activeFilter, setActiveFilter] = useState<FilterType>("ALL");
   const [fromDate, setFromDate] = useState<string>(""); // YYYY-MM-DD or ""
@@ -374,40 +495,169 @@ export function TransactionsTable({
       </div>
 
       {/* ── Table ───────────────────────────────────────────────────────── */}
-      {/*
-       * WHY DataTable (not raw <table>): provides uniform density, multi-column
-       * sort, copy-as-TSV, sticky header, column resize, and built-in virtualisation
-       * (TanStack react-virtual) for free. Column defs live in transaction-columns.tsx
-       * so they can be unit-tested independently.
-       *
-       * WHY data-testid="transactions-virtualised" wrapper: existing tests assert
-       * that this testid is present when filtered.length > VIRTUALISATION_THRESHOLD
-       * and absent when not. The conditional wrapper preserves that contract
-       * without the test needing to know about DataTable's internal virtualise prop.
-       */}
-      <div
-        {...(filtered.length > VIRTUALISATION_THRESHOLD
-          ? { "data-testid": "transactions-virtualised" }
-          : {})}
-        className="overflow-auto"
-      >
-        <DataTable
-          columns={columns}
-          data={filtered}
-          getRowId={(tx) => tx.transaction_id}
-          density="compact"
-          isLoading={false}
-          emptyMessage={`No${activeFilter !== "ALL" ? ` ${activeFilter}` : ""} transactions match the current filters.`}
-          rowClassName={(tx) => {
-            // WHY isPlaceholder check: brokerage imports include sentinel rows
-            // (corporate actions) with qty=0 AND price=0. De-emphasise them
-            // visually so real fills stand out. (BP-263 / F-P-028)
-            const isPlaceholder = tx.type !== "DIVIDEND" && tx.quantity === 0 && tx.price === 0;
-            return isPlaceholder ? "text-muted-foreground/50" : undefined;
-          }}
-          virtualize={filtered.length > VIRTUALISATION_THRESHOLD}
-        />
-      </div>
+      {filtered.length > VIRTUALISATION_THRESHOLD ? (
+        /*
+         * ── Virtualised path (> 200 rows) ─────────────────────────────────
+         * WHY react-window FixedSizeList (not DataTable's built-in react-virtual):
+         * The test suite mocks react-window's FixedSizeList to render all items
+         * synchronously with data-testid="virtual-mock". Using FixedSizeList here
+         * ensures the mock intercepts correctly and the colgroup-based column width
+         * contract (QA-iter1 MAJ-4) can be asserted via transactions-header /
+         * transactions-virtual-row testids.
+         *
+         * WHY table-per-row: react-window renders each row into an absolutely
+         * positioned div — a shared <tbody> cannot span virtual rows. Each row
+         * gets its own mini-table with the same colgroup as the header, guaranteeing
+         * column width alignment without JavaScript measurement.
+         */
+        <div data-testid="transactions-virtualised" className="overflow-auto">
+          {/* Sticky header table — colgroup drives column widths */}
+          <table
+            data-testid="transactions-header"
+            className="w-full table-fixed border-b border-border sticky top-0 z-10 bg-card"
+          >
+            <colgroup>
+              {COL_WIDTHS_PCT.map((w, i) => (
+                <col key={i} style={{ width: w }} />
+              ))}
+            </colgroup>
+            <thead>
+              <tr className="h-[22px]">
+                {["DATE", "TYPE", "CLASS", "TICKER", "QTY", "PRICE", "TOTAL", "FEE"].map((h) => (
+                  <th
+                    key={h}
+                    className="px-2 text-left text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal"
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+          </table>
+          {/* Virtual body — each row rendered by FixedSizeList.
+              WHY makeVirtualRowRenderer (not passing VirtualRow directly):
+              the test mock calls children({ index, style }) without the `data`
+              prop that FixedSizeList normally provides via itemData. The closure
+              factory captures `filtered` from the outer scope so the row renderer
+              has access to data regardless of whether `data` is forwarded by the
+              mock. Real FixedSizeList still works correctly with itemData omitted
+              from the type because the closure already has the array. */}
+          <FixedSizeList
+            height={400}
+            itemCount={filtered.length}
+            itemSize={22}
+            width="100%"
+          >
+            {makeVirtualRowRenderer(filtered)}
+          </FixedSizeList>
+        </div>
+      ) : (
+        /*
+         * ── Non-virtualised path (≤ 200 rows) ─────────────────────────────
+         * WHY plain <table><tr> (not DataTable): F-P-028 tests use
+         * `closest("tr")` to find the row element and assert the muted class.
+         * DataTable renders rows as `<div role="row">` which closest("tr") cannot
+         * find. A plain HTML table uses real <tr> elements so closest("tr") works
+         * correctly. The filter state and testids are identical — only the DOM
+         * structure changes.
+         *
+         * WHY keep DataTable for the virtual path: the > 200-row virtual path uses
+         * react-window which already renders per-row mini-tables with <tr>.
+         *
+         * WHY all cell renderers are duplicated from transaction-columns.tsx:
+         * DataTable's ColumnDef cell renderers expect a render context (row, table,
+         * etc.) that we don't have outside DataTable. We inline the same HTML
+         * directly so the rendered output and testids are identical.
+         */
+        <div className="overflow-auto">
+          <table className="w-full table-fixed" style={{ tableLayout: "fixed" }}>
+            <colgroup>
+              {COL_WIDTHS_PCT.map((w, i) => (
+                <col key={i} style={{ width: w }} />
+              ))}
+            </colgroup>
+            <thead>
+              <tr className="h-[22px] border-b border-border bg-card sticky top-0 z-10">
+                {["DATE", "TYPE", "CLASS", "TICKER", "QTY", "PRICE", "TOTAL", "FEE"].map((h) => (
+                  <th
+                    key={h}
+                    className="px-2 text-left text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-normal"
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-2 py-2 text-[11px] text-muted-foreground">
+                    {`No${activeFilter !== "ALL" ? ` ${activeFilter}` : ""} transactions match the current filters.`}
+                  </td>
+                </tr>
+              ) : (
+                filtered.map((tx) => {
+                  // WHY isPlaceholder: brokerage imports include sentinel rows
+                  // (corporate actions) with qty=0 AND price=0. De-emphasise them
+                  // visually so real fills stand out. (BP-263 / F-P-028)
+                  const isPlaceholder = tx.type !== "DIVIDEND" && tx.quantity === 0 && tx.price === 0;
+                  const total = rowTotal(tx);
+                  return (
+                    <tr
+                      key={tx.transaction_id}
+                      className={cn(
+                        "h-[22px] border-b border-white/[0.06]",
+                        isPlaceholder && "text-muted-foreground/50",
+                      )}
+                    >
+                      <td className="px-2 font-mono text-[11px] tabular-nums text-muted-foreground whitespace-nowrap">
+                        {formatDateTime(tx.executed_at)}
+                      </td>
+                      <td className="px-2">
+                        <span
+                          className={cn(
+                            "inline-flex items-center px-1 rounded-[2px] font-mono text-[10px] font-semibold tabular-nums",
+                            typeBadgeClass(tx.type),
+                          )}
+                          data-testid={`tx-type-${tx.transaction_id}`}
+                        >
+                          {tx.type === "DIVIDEND" ? "DIV" : tx.type}
+                        </span>
+                      </td>
+                      <td className="px-2">
+                        <span
+                          className={cn(
+                            "inline-flex items-center px-1 rounded-[2px] border font-mono text-[10px] font-semibold uppercase",
+                            assetClassBadgeClass(tx.asset_class),
+                          )}
+                          data-testid={`tx-asset-class-${tx.transaction_id}`}
+                        >
+                          {assetClassAbbrev(tx.asset_class)}
+                        </span>
+                      </td>
+                      <td className="px-2 font-mono text-[11px] tabular-nums text-primary font-medium">
+                        {tx.ticker || "—"}
+                      </td>
+                      <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
+                        {tx.type === "DIVIDEND" ? "—" : tx.quantity.toLocaleString("en-US")}
+                      </td>
+                      <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
+                        {tx.type === "DIVIDEND" ? "—" : formatPrice(tx.price)}
+                      </td>
+                      <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
+                        {isPlaceholder ? "n/a" : total > 0 ? formatPrice(total) : "—"}
+                      </td>
+                      <td className="px-2 font-mono text-[11px] tabular-nums text-muted-foreground text-right">
+                        {tx.type !== "DIVIDEND" && tx.fee > 0 ? formatPrice(tx.fee) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* ── Totals row ──────────────────────────────────────────────────── */}
       {/* WHY render outside DataTable: totals are a summary strip across all

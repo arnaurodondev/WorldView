@@ -58,6 +58,11 @@ import { FundamentalsTopNews } from "@/components/instrument/FundamentalsTopNews
 import { EarningsHistoryChart } from "@/components/instrument/EarningsHistoryChart";
 import { InsiderTransactionsTable } from "@/components/instrument/InsiderTransactionsTable";
 import { TechnicalSnapshot } from "@/components/instrument/TechnicalSnapshot";
+// WHY FundamentalSparkline (T-E-5-03): inline sparklines on major metric rows add
+// temporal context — a P/E compressing from 42→34 is a very different picture than
+// "P/E: 34" alone. T-E-5-03 requires timeseries gateway calls for key valuation
+// and profitability metrics.
+import { FundamentalSparkline } from "@/components/instrument/FundamentalSparkline";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -419,6 +424,13 @@ export function FundamentalsTab({
               {formatRatio(fund.pe_ratio)}
             </span>
           </MetricRow>
+          {/* WHY FundamentalSparkline for pe_ratio (T-E-5-03): a trailing P/E
+              sparkline tells analysts whether the multiple is expanding (growth story)
+              or compressing (value trap). This inline sparkline uses getFundamentalsTimeseries
+              and is the T-E-5-03 contract: sparklines on key valuation metrics. */}
+          <div className="py-1">
+            <FundamentalSparkline instrumentId={instrumentId} metric="pe_ratio" height={32} />
+          </div>
 
           {/* Forward P/E: same thresholds as trailing P/E */}
           <MetricRow label="Forward P/E">
@@ -481,6 +493,12 @@ export function FundamentalsTab({
               {formatPercent(fund.roe)}
             </span>
           </MetricRow>
+          {/* WHY FundamentalSparkline for roe (T-E-5-03): ROE trend shows whether
+              returns on equity are improving or deteriorating — directional context
+              critical for capital allocation decisions. */}
+          <div className="py-1">
+            <FundamentalSparkline instrumentId={instrumentId} metric="roe" height={32} />
+          </div>
 
           {/* ROA: green >5%, amber 2-5%, red <2% */}
           <MetricRow label="ROA">

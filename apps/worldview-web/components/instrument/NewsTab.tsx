@@ -30,9 +30,9 @@
 "use client";
 // WHY "use client": uses useQuery for data fetching + useState for filter controls.
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -113,6 +113,102 @@ function getTimeGroup(publishedAt: string | null): TimeGroup {
 
 /** Ordered list of time groups for consistent header rendering. */
 const TIME_GROUP_ORDER: TimeGroup[] = ["TODAY", "PAST 3 DAYS", "PAST WEEK", "OLDER"];
+
+// ── Source monogram ───────────────────────────────────────────────────────────
+
+/**
+ * Curated domain-to-monogram map for well-known financial publishers.
+ *
+ * WHY curated map (not just first-2-letters): domain stems produce poor results
+ * for many outlets. "bloomberg.com" → "BL" is wrong; the brand abbreviation is
+ * "BB". The map covers the top publishers found in S6's source_name field.
+ * Any domain NOT in the map falls back to first-2-letters of the domain stem.
+ */
+const DOMAIN_MONOGRAM_MAP: Record<string, string> = {
+  "bloomberg.com": "BB",
+  "reuters.com": "RE",
+  "wsj.com": "WJ",
+  "ft.com": "FT",
+  "cnbc.com": "CN",
+  "seekingalpha.com": "SA",
+  "marketwatch.com": "MW",
+  "barrons.com": "BA",
+  "businessinsider.com": "BI",
+  "nytimes.com": "NY",
+  "techcrunch.com": "TC",
+  "theguardian.com": "GD",
+  "forbes.com": "FB",
+  "fortune.com": "FU",
+  "economist.com": "EC",
+};
+
+/**
+ * getSourceMonogram — derive a 2-letter monogram from an article URL.
+ *
+ * WHY from URL (not source_name): source_name is free-text from EODHD which
+ * varies ("Bloomberg L.P.", "Bloomberg", "Bloomberg News"). The domain is
+ * canonical and stable. We parse the hostname, strip "www.", and check the
+ * curated map first; unknown domains get the first 2 letters of the stem.
+ *
+ * Examples:
+ *   "https://www.bloomberg.com/…" → "BB"  (curated)
+ *   "https://rare-publisher.com/…" → "RA"  (stem fallback)
+ */
+function getSourceMonogram(url: string | null | undefined): string {
+  if (!url) return "??";
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, "");
+    if (DOMAIN_MONOGRAM_MAP[hostname]) {
+      return DOMAIN_MONOGRAM_MAP[hostname];
+    }
+    // Fallback: take first 2 chars of the domain stem (part before first ".")
+    // WHY split("-")[0] — "rare-publisher.com" splits on "." → "rare-publisher";
+    // we use the first 2 chars of the FULL stem (including hyphens) to match
+    // the test expectation: "rare-publisher.com" → "RA".
+    const stem = hostname.split(".")[0];
+    return stem.slice(0, 2).toUpperCase();
+  } catch {
+    return "??";
+  }
+}
+
+// ── Narrative chips ───────────────────────────────────────────────────────────
+
+/**
+ * Narrative chip definitions — keyword groups that map to a chip label.
+ *
+ * WHY keyword detection on title (not body): S9 returns truncated articles;
+ * the title is always present. Keyword detection on the title is fast
+ * (client-side) and produces useful chips without additional S9 calls.
+ *
+ * WHY case-insensitive regex: title casing varies by outlet
+ * ("Earnings beat" vs "EARNINGS BEAT").
+ */
+const NARRATIVE_CHIPS: Array<{ pattern: RegExp; label: string }> = [
+  // EARNINGS: "earnings", "EPS", "beat", "miss" in earnings context
+  { pattern: /\bearnings\b|\beps\b/i, label: "EARNINGS" },
+  // M&A: "acqui" covers acquire/acquisition; "merger" covers merger/mergers
+  { pattern: /\bacqui|\bmerger\b|\bm&a\b/i, label: "M&A" },
+  // GUIDANCE: forward-looking statements
+  { pattern: /\bguidance\b|\boutlook\b|\bforecast\b/i, label: "GUIDANCE" },
+  // MACRO: central bank / rates / economic data
+  { pattern: /\bfed\b|\binterest rate|\binflation\b|\bgdp\b|\bcpi\b/i, label: "MACRO" },
+  // REGULATORY: antitrust, SEC, regulatory scrutiny
+  { pattern: /\bregulat|\bantitrust\b|\bsec\b|\bfda\b/i, label: "REG" },
+];
+
+/**
+ * getNarrativeChips — derive applicable chip labels from an article title.
+ *
+ * Returns a deduplicated list of chip labels (e.g., ["EARNINGS"]) based
+ * on which NARRATIVE_CHIPS patterns match the title.
+ */
+function getNarrativeChips(title: string | null | undefined): string[] {
+  if (!title) return [];
+  return NARRATIVE_CHIPS
+    .filter(({ pattern }) => pattern.test(title))
+    .map(({ label }) => label);
+}
 
 // ── Relevance badge ───────────────────────────────────────────────────────────
 
@@ -213,11 +309,19 @@ function ImpactPill({ score }: { score: number }) {
  * Layout:
  *   [relevance badge] [sentiment pill] [impact pill]  · · · · · · [time]
  *   [title — external link, 2-line clamp]
- *   [source name] [primary entity chip]
+ *   [monogram] [source name] [narrative chips] [primary entity chip]
  *
  * WHY 3-row layout (not compact 22px InstrumentTopNews row): the News tab has
  * full vertical space and analysts want more context per article than the
  * Overview panel's scannable 22px row.
+ *
+ * WHY monogram (T-E-5-05): a 2-letter badge gives analysts an instant visual
+ * anchor to source without reading the full name. Pattern from financial
+ * terminals (Bloomberg uses "BN" for Bloomberg News headers).
+ *
+ * WHY narrative chips (T-E-5-05): keyword-detected chips (EARNINGS, M&A, etc.)
+ * allow analysts to scan a list and filter by event type at a glance — faster
+ * than reading titles when looking for earnings articles.
  */
 function ArticleRow({
   article,
@@ -226,6 +330,13 @@ function ArticleRow({
   article: RankedArticle;
   onEntityClick: (entityId: string) => void;
 }) {
+  // Derive monogram and narrative chips from article data.
+  // WHY computed inside ArticleRow (not in the parent useMemo): narrative chips
+  // are article-specific and only needed during rendering; computing them here
+  // avoids polluting the sorted/filtered array shapes.
+  const monogram = getSourceMonogram(article.url);
+  const narrativeChips = getNarrativeChips(article.title);
+
   return (
     <article
       className={cn(
@@ -283,14 +394,53 @@ function ArticleRow({
         </span>
       </a>
 
-      {/* ── Row 3: source name + entity chip ────────────────────────────── */}
-      <div className="flex items-center gap-2">
+      {/* ── Row 3: monogram + source name + narrative chips + entity chip ── */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {/* Source monogram badge — 2-letter abbreviation for the publisher.
+            WHY aria-label="Source: {source_name}": screen readers announce
+            the full name; sighted users see the compact monogram. The test
+            asserts getByLabelText("Source: Bloomberg").toHaveTextContent("BB").
+            WHY monogram always renders (even without source_name): the URL
+            always provides a domain to derive the monogram from. */}
+        <span
+          aria-label={`Source: ${article.source_name ?? "Unknown"}`}
+          className={cn(
+            "shrink-0 rounded-[2px] px-1.5 py-0.5 font-mono text-[9px] font-bold",
+            "bg-muted/60 text-muted-foreground border border-border/40",
+            // WHY uppercase: monograms are conventionally uppercase (BB, RE, FT)
+            "uppercase tracking-widest",
+          )}
+        >
+          {monogram}
+        </span>
+
         {/* Source name — the outlet that published this article */}
         {article.source_name && (
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
             {article.source_name}
           </span>
         )}
+
+        {/* Narrative chips — keyword-detected event type badges.
+            WHY these chips (not manual tagging): S9 doesn't provide event-type
+            classification for articles. Client-side keyword detection on the
+            title is fast (~0ms) and produces high-precision chips for the most
+            common event types (earnings, M&A, guidance, macro, regulatory). */}
+        {narrativeChips.map((chip) => (
+          <span
+            key={chip}
+            className={cn(
+              "shrink-0 rounded-[2px] px-1.5 py-0.5 font-mono text-[9px] font-semibold",
+              // WHY distinct colour per chip family: EARNINGS=amber (financial event),
+              // M&A=purple (corporate action), GUIDANCE=blue, MACRO=slate, REG=red.
+              // Using bg-primary/15 + text-primary as a unified accent for Wave E
+              // to avoid adding many new CSS vars; can be colour-coded per chip in Wave F.
+              "bg-primary/15 text-primary",
+            )}
+          >
+            {chip}
+          </span>
+        ))}
 
         {/* Entity chip — clickable → instrument page for the primary entity.
             WHY primary_entity_symbol (not primary_entity_id for the label):
@@ -343,13 +493,70 @@ export function NewsTab({ entityId }: NewsTabProps) {
   const { accessToken } = useAuth();
   const router = useRouter();
 
+  // WHY useParams: the News tab needs instrumentId to build the per-instrument
+  // sessionStorage key ("news-filters-{instrumentId}"). The component only
+  // receives entityId as a prop (it's the KG entity ID used for the news query).
+  // instrumentId comes from the route param via useParams so we can build the
+  // correct storage key without threading an extra prop through the page.
+  const params = useParams();
+  const instrumentId = typeof params?.instrumentId === "string" ? params.instrumentId : null;
+
+  // ── SessionStorage key ─────────────────────────────────────────────────────
+  // WHY per-instrument key (not shared "news-filters"): each instrument page
+  // should remember the last filter the analyst used for THAT instrument,
+  // not a global filter that would override the choice for every instrument.
+  const storageKey = instrumentId ? `news-filters-${instrumentId}` : null;
+
   // ── Pagination state ───────────────────────────────────────────────────────
   const [newsOffset, setNewsOffset] = useState(0);
 
-  // ── Filter + sort state ────────────────────────────────────────────────────
-  // WHY "all" defaults: no filter applied on first render — analyst sees everything
-  const [sourceFilter, setSourceFilter] = useState<string>("all");
-  const [sortKey, setSortKey] = useState<SortKey>("relevance");
+  // ── Filter + sort state — initialised from sessionStorage if present ───────
+  // WHY lazy initialiser for useState (function form): we read sessionStorage
+  // exactly once at mount time. The function form prevents re-reading on every
+  // render. If sessionStorage has no entry, defaults are "all" / "relevance".
+  const [sourceFilter, setSourceFilter] = useState<string>(() => {
+    if (!storageKey || typeof window === "undefined") return "all";
+    try {
+      const raw = window.sessionStorage.getItem(storageKey);
+      if (!raw) return "all";
+      const parsed = JSON.parse(raw) as { sourceFilter?: string; sortKey?: string };
+      return parsed.sourceFilter ?? "all";
+    } catch {
+      return "all";
+    }
+  });
+
+  const [sortKey, setSortKey] = useState<SortKey>(() => {
+    if (!storageKey || typeof window === "undefined") return "relevance";
+    try {
+      const raw = window.sessionStorage.getItem(storageKey);
+      if (!raw) return "relevance";
+      const parsed = JSON.parse(raw) as { sourceFilter?: string; sortKey?: string };
+      const sk = parsed.sortKey;
+      // WHY type guard: JSON.parse returns unknown; guard to valid SortKey values.
+      if (sk === "relevance" || sk === "impact" || sk === "time") return sk;
+      return "relevance";
+    } catch {
+      return "relevance";
+    }
+  });
+
+  // ── Persist filter state to sessionStorage on change ──────────────────────
+  // WHY useEffect (not inline in the onChange handlers): both sourceFilter and
+  // sortKey changes should write to sessionStorage together so the stored object
+  // is always the full current state, not a partial update from one field.
+  useEffect(() => {
+    if (!storageKey || typeof window === "undefined") return;
+    try {
+      window.sessionStorage.setItem(
+        storageKey,
+        JSON.stringify({ sourceFilter, sortKey }),
+      );
+    } catch {
+      // WHY silent catch: sessionStorage may be unavailable in private browsing
+      // or quota-exceeded. Filter persistence is a UX enhancement, not critical.
+    }
+  }, [storageKey, sourceFilter, sortKey]);
 
   // ── Data fetch ─────────────────────────────────────────────────────────────
   const { data: newsResp, isLoading, isError } = useQuery({
