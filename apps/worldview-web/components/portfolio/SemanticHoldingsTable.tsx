@@ -3,24 +3,14 @@
  *
  * WHY THIS EXISTS: The portfolio holdings table is the most data-critical surface
  * for a portfolio manager. Twelve columns give enough data to make re-balancing
- * decisions without navigating to the instrument detail page:
+ * decisions without navigating to the instrument detail page.
  *   Ticker | Name | Qty | Avg Cost | Current | Day$ | Day% | P&L$ | P&L% | Value | Weight | Sector
  *
- * WHY 12 columns (was 10): Day$ and Day% show today's price movement per position,
- * which is distinct from the cumulative unrealised P&L. Bloomberg PORT function
- * always shows both — traders need "how am I doing today" separate from
- * "how am I doing overall".
- *
- * WHY visual weight bars: a numeric percentage ("+33.27%") conveys no spatial
- * intuition — a proportional bar lets a portfolio manager immediately see
- * concentration risk. Bloomberg's portfolio view uses the same pattern.
- *
  * WHY click-to-sort: fixed row order is inconvenient for large portfolios.
- * Sorting by P&L$ immediately shows biggest winners/losers. Sorting by VALUE
- * reveals concentration. This is standard for every finance terminal.
+ * Sorting by P&L$ immediately shows biggest winners/losers. Bloomberg PORT default.
  *
- * WHY `<table>` (not div grid): Semantic HTML tables are screen-reader accessible
- * (correct role=rowheader/cell/row semantics, keyboard navigation).
+ * PLAN-0059 F-1 — Migrated to DataTable primitive. Column definitions extracted
+ * to holdings-columns.tsx. ActionContextMenu preserved via DataTable rowWrapper prop.
  *
  * WHO USES IT: app/(app)/portfolio/page.tsx — Holdings tab
  * DATA SOURCE: holdingsResp.holdings + batch quotes from S9
@@ -28,15 +18,21 @@
  */
 
 "use client";
-// WHY "use client": uses useRouter().push() for row-click navigation + useState for sort.
+// WHY "use client": uses useRouter (row-click navigation), useState (sort),
+// useSearchParams + useEffect (URL sort persistence — F-P-025).
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { type SetStateAction } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { formatPrice, formatPercent, formatPercentUnsigned } from "@/lib/utils";
+import { formatPrice, formatPercent } from "@/lib/utils";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+import { DataTable } from "@/components/ui/data-table";
+import type { SortingState } from "@tanstack/react-table";
 import { ActionContextMenu } from "@/components/ui/context-menu";
 import type { HoldingRowContext } from "@/lib/command-actions";
+import { holdingsColumns, type EnrichedHoldingRow } from "./holdings-columns";
+import { fmtPnl } from "./holdings-columns";
 import type { Holding } from "@/types/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -66,57 +62,10 @@ interface SortState {
   dir: SortDir;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function fmtPnl(value: number): string {
-  return value >= 0 ? `+${formatPrice(value)}` : formatPrice(value);
-}
-
-function formatStalenessAwarePrice(price: number, freshness?: string): string {
-  const isStale = freshness != null && freshness !== "live";
-  return isStale ? `~${formatPrice(price)}` : formatPrice(price);
-}
-
-// ── SortableHeader ─────────────────────────────────────────────────────────────
-
-/**
- * SortableHeader — a <th> that shows a sort indicator and toggles direction on click.
- *
- * WHY separate component: the sort affordance (hover state + indicator) is
- * the same for every sortable column — extracting avoids repeating 4 classNames.
- */
-function SortableHeader({
-  col,
-  label,
-  sortState,
-  onSort,
-  align = "right",
-}: {
-  col: SortCol;
-  label: string;
-  sortState: SortState | null;
-  onSort: (col: SortCol) => void;
-  align?: "left" | "right";
-}) {
-  const isActive = sortState?.col === col;
-  const indicator = isActive ? (sortState!.dir === "asc" ? " ▲" : " ▼") : "";
-
-  return (
-    <th
-      className={cn(
-        "px-2 text-[10px] uppercase tracking-[0.08em] font-normal cursor-pointer select-none",
-        "hover:text-foreground transition-colors",
-        isActive ? "text-primary" : "text-muted-foreground",
-        align === "right" ? "text-right" : "text-left",
-      )}
-      onClick={() => onSort(col)}
-      title={`Sort by ${label}`}
-    >
-      {label}
-      <span className="text-[9px]">{indicator}</span>
-    </th>
-  );
-}
+// Valid SortCol values — used to guard against malformed URL params.
+const VALID_SORT_COLS: SortCol[] = [
+  "qty", "dayChange", "dayChangePct", "pnl", "pnlPct", "value", "weight",
+];
 
 // ── SemanticHoldingsTable ────────────────────────────────────────────────────
 
@@ -128,48 +77,27 @@ export function SemanticHoldingsTable({
 }: SemanticHoldingsTableProps) {
   const router = useRouter();
   // F-P-025 (PLAN-0051 W6): persist sort to the URL so the user can
-  // share a link like /portfolio?sort=pnl&dir=desc and the recipient
-  // sees the same view. URL persistence also survives tab switches —
-  // previously the Holdings sort reset to value/desc whenever the user
-  // visited Transactions or Watchlist and came back. URL-backed state
-  // is preferred over sessionStorage because it's shareable AND
-  // survives reloads.
+  // share a link like /portfolio?sort=pnl&dir=desc. URL-backed state
+  // also survives tab switches (e.g., Holdings → Transactions → Holdings).
   const searchParams = useSearchParams();
   const pathname = usePathname();
 
   // Read initial sort from URL params; fall back to the trader-friendly
-  // default (largest positions first by VALUE). WHY parse once at
-  // mount + then use as initial state: URL params are the source-of-truth
-  // for the SHARED view, but interactive sort clicks need useState so
-  // the table re-renders without a full route navigation.
+  // default (largest positions first by VALUE).
   const initialSort: SortState = (() => {
     const col = searchParams?.get("sort") as SortCol | null;
     const dir = searchParams?.get("dir") as SortDir | null;
-    const validCols: SortCol[] = [
-      "qty",
-      "dayChange",
-      "dayChangePct",
-      "pnl",
-      "pnlPct",
-      "value",
-      "weight",
-    ];
-    if (col && validCols.includes(col) && (dir === "asc" || dir === "desc")) {
+    if (col && VALID_SORT_COLS.includes(col) && (dir === "asc" || dir === "desc")) {
       return { col, dir };
     }
     return { col: "value", dir: "desc" };
   })();
 
-  // WHY default sort DESC by value: traders most care about their largest positions.
-  // Showing the biggest positions first matches Bloomberg's default PORT view.
+  // WHY default DESC by value: traders most care about their largest positions.
   const [sortState, setSortState] = useState<SortState>(initialSort);
 
-  // F-P-025: write sort changes back to the URL via router.replace
-  // (NOT push — we don't want a back-button entry for every sort click).
-  // ``replace`` swaps the current history entry in place. We only run
-  // this when sortState actually changes, and we only update when the
-  // current URL doesn't already reflect the state (avoids redundant
-  // history writes).
+  // F-P-025: write sort changes back to the URL via router.replace (not push —
+  // we don't want a back-button entry for every sort click).
   useEffect(() => {
     if (!searchParams || !pathname) return;
     const currentCol = searchParams.get("sort");
@@ -181,26 +109,42 @@ export function SemanticHoldingsTable({
     router.replace(`${pathname}?${next.toString()}`, { scroll: false });
   }, [sortState, searchParams, pathname, router]);
 
-  // F-P-016 (PLAN-0051 W6): empty-state copy follows the Title + Body
-  // pattern — "No holdings yet" tells the user WHAT, the trailing clause
-  // tells them WHY they might see this and what to do next. WHY include
-  // both options (manual + brokerage): some users will paper-trade by
-  // clicking Add Position; others will connect SnapTrade. Both paths
-  // start at this surface, so both should be discoverable from the
-  // empty state.
+  // ── Bridge: SortState ↔ TanStack SortingState ───────────────────────────
+  // DataTable uses SortingState = { id: string; desc: boolean }[].
+  // We keep our SortState as source-of-truth (for URL sync) and derive
+  // the TanStack representation for the controlled sort prop.
+  const tanStackSorting: SortingState = useMemo(
+    () => [{ id: sortState.col, desc: sortState.dir === "desc" }],
+    [sortState],
+  );
+
+  // When DataTable fires onSortingChange (user clicked a column header),
+  // convert the new SortingState back into our SortState and update it.
+  // The useEffect above then syncs the new sort to the URL.
+  const handleSortingChange = useCallback(
+    (updater: SetStateAction<SortingState>) => {
+      const next = typeof updater === "function" ? updater(tanStackSorting) : updater;
+      if (next.length === 0) {
+        // TanStack clears all sorts when the user clicks an already-sorted column
+        // a third time. Fall back to the default sort.
+        setSortState({ col: "value", dir: "desc" });
+      } else {
+        const { id, desc } = next[0];
+        setSortState({ col: id as SortCol, dir: desc ? "desc" : "asc" });
+      }
+    },
+    [tanStackSorting],
+  );
+
+  // F-P-016 (PLAN-0051 W6): empty-state copy — Title + Body explanation.
   if (holdings.length === 0) {
     return (
       <InlineEmptyState message="No holdings yet. Connect a brokerage or use Add Position to start tracking your book." />
     );
   }
 
-  // F-208 (QA iter-2): when every position reads quantity=0 the broker has
-  // either reported nothing on the latest sync or the holdings were zeroed
-  // by the repair script (F-201) and the broker sandbox returned no
-  // activities to repopulate. Render a deliberate empty state instead of a
-  // table of 17 zero rows, which silently misled users into thinking the
-  // app had lost their portfolio. Number(...) handles the Decimal-as-string
-  // edge case cleanly.
+  // F-208 (QA iter-2): all-zero positions = broker sync returned nothing.
+  // Render a deliberate message instead of a table of 17 zero rows.
   const allZeroQty = holdings.every((h) => Number(h.quantity) === 0);
   if (allZeroQty) {
     return (
@@ -218,11 +162,15 @@ export function SemanticHoldingsTable({
     );
   }
 
-  // ── Compute per-row values ──────────────────────────────────────────────────
+  // ── Enrich rows ───────────────────────────────────────────────────────────
+  // WHY pre-compute (not inside cell): DataTable's getSortedRowModel uses
+  // accessorFn to obtain the sort value. The accessorFn on each ColumnDef
+  // reads `row.value`, `row.pnl`, etc. — fields on EnrichedHoldingRow.
+  // Pre-enriching once avoids repeated arithmetic in the column accessors.
   let totalPnl = 0;
   let totalPnlCost = 0;
 
-  const rows = holdings.map((h) => {
+  const enrichedRows: EnrichedHoldingRow[] = holdings.map((h) => {
     const quote = quotes[h.instrument_id];
     const livePrice = quote?.price ?? h.current_price ?? h.average_cost;
     const freshness = quote?.freshness_status;
@@ -232,15 +180,10 @@ export function SemanticHoldingsTable({
       h.average_cost > 0
         ? ((livePrice - h.average_cost) / h.average_cost) * 100
         : 0;
-    const weight =
-      totalValue > 0 ? (value / totalValue) * 100 : 0;
+    const weight = totalValue > 0 ? (value / totalValue) * 100 : 0;
     const sector = sectors?.[h.instrument_id] ?? null;
-
-    // Day change — from today's price movement, not vs avg cost
-    const dayChange = quote?.change ?? null;           // absolute price change today
-    const dayChangePct = quote?.change_pct ?? null;    // percentage price change today
-    // WHY multiply dayChange by quantity: the absolute day P&L contribution of this
-    // position is dayChange (per share) × quantity (shares held).
+    const dayChange = quote?.change ?? null;
+    const dayChangePct = quote?.change_pct ?? null;
     const dayChangeValue = dayChange != null ? dayChange * h.quantity : null;
 
     totalPnl += pnl;
@@ -249,301 +192,86 @@ export function SemanticHoldingsTable({
     return { h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChange, dayChangePct, dayChangeValue };
   });
 
-  // ── Sort rows ──────────────────────────────────────────────────────────────
-  const sortedRows = [...rows].sort((a, b) => {
-    let aVal: number;
-    let bVal: number;
-
-    switch (sortState.col) {
-      case "qty":         aVal = a.h.quantity;            bVal = b.h.quantity;            break;
-      case "dayChange":   aVal = a.dayChangeValue ?? 0;   bVal = b.dayChangeValue ?? 0;   break;
-      case "dayChangePct": aVal = a.dayChangePct ?? 0;    bVal = b.dayChangePct ?? 0;     break;
-      case "pnl":         aVal = a.pnl;                   bVal = b.pnl;                   break;
-      case "pnlPct":      aVal = a.pnlPct;                bVal = b.pnlPct;                break;
-      case "value":       aVal = a.value;                  bVal = b.value;                 break;
-      case "weight":      aVal = a.weight;                 bVal = b.weight;                break;
-    }
-
-    return sortState.dir === "asc" ? aVal - bVal : bVal - aVal;
-  });
-
-  function handleSort(col: SortCol) {
-    setSortState((prev) => {
-      if (prev.col === col) {
-        // Same column: toggle direction
-        return { col, dir: prev.dir === "asc" ? "desc" : "asc" };
-      }
-      // New column: default descending (largest first)
-      return { col, dir: "desc" };
-    });
-  }
-
   const totalPnlPct = totalPnlCost > 0 ? (totalPnl / totalPnlCost) * 100 : 0;
 
   return (
-    <div className="overflow-auto">
-      <table className="w-full border-collapse text-[11px]">
+    <div className="overflow-auto flex flex-col">
+      {/*
+       * WHY DataTable (not raw <table>): provides multi-column sort, sticky header,
+       * column resize, and copy-as-TSV. Column defs and cell renderers live in
+       * holdings-columns.tsx for isolated testing.
+       *
+       * WHY rowWrapper: ActionContextMenu is registry-driven (uses useContextMenuActions()
+       * hook). It cannot be expressed as a static DataTableContextMenuItem[] array —
+       * the registry reads the current path and row context at render time to filter
+       * and group ~30 actions. rowWrapper preserves the exact ActionContextMenu
+       * integration from PLAN-0059 F-3 without modification.
+       */}
+      <DataTable
+        columns={holdingsColumns}
+        data={enrichedRows}
+        getRowId={(row) => row.h.holding_id}
+        density="compact"
+        sorting={tanStackSorting}
+        onSortingChange={handleSortingChange}
+        onRowClick={(row) =>
+          router.push(`/instruments/${encodeURIComponent(row.h.entity_id)}`)
+        }
+        rowWrapper={(row, node) => {
+          // Build the row context for the action registry.
+          // WHY typed as HoldingRowContext: we know at compile time this is a
+          // holdings table row. The full context allows actions like "Sell" to
+          // gate on row.kind and "Copy Ticker" to read row.ticker.
+          const ctx: HoldingRowContext = {
+            kind: "holding",
+            holdingId: row.h.holding_id,
+            portfolioId: row.h.portfolio_id,
+            instrumentId: row.h.instrument_id,
+            entityId: row.h.entity_id,
+            ticker: row.h.ticker,
+            name: row.h.name,
+          };
+          return <ActionContextMenu key={row.h.holding_id} row={ctx}>{node}</ActionContextMenu>;
+        }}
+      />
 
-        {/* ── Column headers ─────────────────────────────────────────────── */}
-        {/*
-          WHY bg-card on the <tr> (not the <thead>): with `border-collapse`
-          tables, paint of <thead>-level backgrounds during sticky scroll is
-          inconsistent across Chromium/Safari/Firefox — some browsers leak
-          the page background through the cells, producing a "transparent
-          floating header" artefact when the user scrolls down through the
-          analytics section. Putting the bg-card on the <tr> (which is the
-          actual row painted) fixes this. We keep z-10 so the row stays above
-          the body cells but below page-level chrome (TopBar/StatusBar live
-          in the shell layout above).
-        */}
-        <thead className="sticky top-0 z-10">
-          {/* F-P-015 (PLAN-0051 W6): sticky header padding MUST equal body
-              cell padding. Both <th> and <td> use ``px-2`` — DO NOT change
-              one without the other. Asymmetric padding would cause a 4-8px
-              horizontal slide of the header text when the user scrolls
-              the body cells under the sticky thead, which is a classic
-              "header doesn't track the column" bug. */}
-          <tr className="h-[22px] border-b border-border bg-card">
-            {/* Non-sortable columns: TICKER, NAME, AVG COST, CURRENT */}
-            <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-left font-normal">
-              TICKER
-            </th>
-            <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-left font-normal">
-              NAME
-            </th>
-            <SortableHeader col="qty" label="QTY" sortState={sortState} onSort={handleSort} />
-            <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-right font-normal">
-              AVG COST
-            </th>
-            <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-right font-normal">
-              CURRENT
-            </th>
-            {/* Sortable: DAY$ and DAY% — new columns showing today's price movement */}
-            <SortableHeader col="dayChange" label="DAY $" sortState={sortState} onSort={handleSort} />
-            <SortableHeader col="dayChangePct" label="DAY %" sortState={sortState} onSort={handleSort} />
-            <SortableHeader col="pnl" label="P&L $" sortState={sortState} onSort={handleSort} />
-            <SortableHeader col="pnlPct" label="P&L %" sortState={sortState} onSort={handleSort} />
-            <SortableHeader col="value" label="VALUE" sortState={sortState} onSort={handleSort} />
-            <SortableHeader col="weight" label="WEIGHT" sortState={sortState} onSort={handleSort} />
-            <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-left font-normal">
-              SECTOR
-            </th>
-          </tr>
-        </thead>
+      {/* ── Totals footer ──────────────────────────────────────────────────── */}
+      {/* WHY outside DataTable: totals are a summary strip across all rows, not
+          a data row. DataTable rows map to EnrichedHoldingRow entities; the
+          totals strip has a different role and a different visual treatment
+          (border-t-2, condensed text, font-semibold). */}
+      <div className="flex h-[22px] items-center border-t-2 border-border">
+        {/* Left columns spacer (TICKER + NAME + QTY + AVG COST + CURRENT + DAY$ + DAY%) */}
+        <div className="shrink-0 w-[560px] px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+          TOTAL
+        </div>
 
-        {/* ── Data rows ─────────────────────────────────────────────────── */}
-        <tbody className="divide-y divide-border/30">
-          {sortedRows.map(({ h, livePrice, freshness, value, pnl, pnlPct, weight, sector, dayChangeValue, dayChangePct }) => {
-            // Build the row context for the action registry.
-            // WHY typed as HoldingRowContext (not the union RowContextKind):
-            // we know at compile time this is a holdings table row. Providing
-            // the full context allows actions like "Sell" to gate on row.kind
-            // and "Copy Ticker" to read row.ticker without extra lookups.
-            const holdingRowCtx: HoldingRowContext = {
-              kind: "holding",
-              holdingId: h.holding_id,
-              portfolioId: h.portfolio_id,
-              instrumentId: h.instrument_id,
-              entityId: h.entity_id,
-              ticker: h.ticker,
-              name: h.name,
-            };
+        {/* Total P&L $ */}
+        <div
+          className={cn(
+            "shrink-0 w-[100px] px-2 font-mono text-[11px] tabular-nums text-right font-semibold",
+            totalPnl >= 0 ? "text-positive" : "text-negative",
+          )}
+        >
+          {fmtPnl(totalPnl)}
+        </div>
 
-            return (
-            // F-P-013 (PLAN-0051 W6): row key is ``holding_id`` (a stable
-            // UUIDv7), NOT the array index. WHY: when the table re-sorts on
-            // a column click, index-based keys force React to re-render
-            // every row (it sees "row 0 changed", "row 1 changed", …) and
-            // the WEIGHT bars briefly flicker as their widths re-animate.
-            // Using the holding_id keeps row identity stable across sorts
-            // so React only moves rows in the DOM rather than re-mounting.
-            //
-            // F-3 (PLAN-0059): each row is wrapped in ActionContextMenu so
-            // right-clicking opens the registry-driven context menu with ≥4
-            // actions: Copy Ticker, Add to Watchlist, View Earnings, Open in
-            // Workspace, and more depending on scope. The menu is keyboard-
-            // accessible via mnemonic letters (Bloomberg convention).
-            <ActionContextMenu key={h.holding_id} row={holdingRowCtx}>
-              <tr
-                className="h-[22px] hover:bg-muted/40 cursor-pointer transition-colors"
-                onClick={() => router.push(`/instruments/${encodeURIComponent(h.entity_id)}`)}
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    router.push(`/instruments/${encodeURIComponent(h.entity_id)}`);
-                  }
-                }}
-              >
-              {/* Ticker */}
-              <td className="px-2 font-mono text-[11px] tabular-nums text-primary font-medium">
-                {h.ticker}
-              </td>
+        {/* Total P&L % */}
+        <div
+          className={cn(
+            "shrink-0 w-[80px] px-2 font-mono text-[11px] tabular-nums text-right font-semibold",
+            totalPnlPct >= 0 ? "text-positive" : "text-negative",
+          )}
+        >
+          {/* F-501 fix: formatPercent already signs; no extra ternary. */}
+          {formatPercent(totalPnlPct / 100)}
+        </div>
 
-              {/* Name */}
-              <td className="px-2 text-[11px] text-foreground max-w-[120px] truncate">
-                {h.name}
-              </td>
-
-              {/* Quantity */}
-              <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
-                {h.quantity.toLocaleString("en-US")}
-              </td>
-
-              {/* Avg Cost */}
-              <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
-                {formatPrice(h.average_cost)}
-              </td>
-
-              {/* Current Price — "~" prefix when quote is stale */}
-              <td
-                className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right"
-                title={
-                  freshness && freshness !== "live"
-                    ? "Delayed or end-of-day price — live feed unavailable"
-                    : undefined
-                }
-              >
-                {formatStalenessAwarePrice(livePrice, freshness)}
-              </td>
-
-              {/* Day $ — today's absolute P&L contribution from this position.
-                  WHY show "—" instead of $0 when no quote: $0 could mean the price
-                  genuinely didn't move, or that no live quote is available. "—" is honest. */}
-              <td
-                className={cn(
-                  "px-2 font-mono text-[11px] tabular-nums text-right",
-                  dayChangeValue == null
-                    ? "text-muted-foreground"
-                    : dayChangeValue >= 0 ? "text-positive" : "text-negative",
-                )}
-              >
-                {dayChangeValue == null ? "—" : fmtPnl(dayChangeValue)}
-              </td>
-
-              {/* Day % — today's percentage price change (per-share, not position) */}
-              <td
-                className={cn(
-                  "px-2 font-mono text-[11px] tabular-nums text-right",
-                  dayChangePct == null
-                    ? "text-muted-foreground"
-                    : dayChangePct >= 0 ? "text-positive" : "text-negative",
-                )}
-              >
-                {/* F-201 fix (PLAN-0048 QA iter-1): formatPercent already
-                    prefixes "+"/"-" for non-null values (see lib/utils.ts:81),
-                    so the previous explicit ternary produced "++0.00%" /
-                    "++30.92%" everywhere positive. Trust the formatter and
-                    drop the wrapper. */}
-                {dayChangePct == null ? "—" : formatPercent(dayChangePct / 100)}
-              </td>
-
-              {/* P&L $ — cumulative unrealised P&L (vs avg cost) */}
-              <td
-                className={cn(
-                  "px-2 font-mono text-[11px] tabular-nums text-right",
-                  pnl >= 0 ? "text-positive" : "text-negative",
-                )}
-              >
-                {fmtPnl(pnl)}
-              </td>
-
-              {/* P&L % */}
-              <td
-                className={cn(
-                  "px-2 font-mono text-[11px] tabular-nums text-right",
-                  pnlPct >= 0 ? "text-positive" : "text-negative",
-                )}
-              >
-                {/* F-201 fix: same double-"+" bug as DAY % above — drop the
-                    redundant ternary; formatPercent already signs the value. */}
-                {formatPercent(pnlPct / 100)}
-              </td>
-
-              {/* Value */}
-              <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
-                {formatPrice(value)}
-              </td>
-
-              {/* Weight — visual bar + percentage.
-                  WHY w-[56px] container: fixed width ensures all bars are on the same
-                  scale regardless of the text length. A 33% weight bar fills 33% of 56px.
-                  WHY h-[3px] bar: 3px is the thinnest bar visible at 22px row height that
-                  still reads as intentional (not a border artefact). */}
-              <td className="px-2 text-muted-foreground">
-                <div className="flex items-center gap-1.5 justify-end">
-                  <div className="w-[48px] h-[3px] rounded-[1px] bg-muted/50 shrink-0">
-                    <div
-                      className="h-full rounded-[1px] bg-primary/50"
-                      style={{ width: `${Math.min(weight, 100).toFixed(1)}%` }}
-                    />
-                  </div>
-                  {/* F-502 (iter-2): WEIGHT is allocation share, not directional —
-                      a position cannot have negative weight, so the leading
-                      "+" from formatPercent looks like noise. Use the
-                      unsigned formatter so we render "31.88%" not "+31.88%". */}
-                  <span className="font-mono text-[11px] tabular-nums w-[36px] text-right">
-                    {formatPercentUnsigned(weight / 100)}
-                  </span>
-                </div>
-              </td>
-
-              {/* Sector */}
-              <td className="px-2 text-[11px] text-muted-foreground truncate max-w-[100px]">
-                {sector ?? "—"}
-              </td>
-            </tr>
-            </ActionContextMenu>
-            );
-          })}
-        </tbody>
-
-        {/* ── Total row ─────────────────────────────────────────────────── */}
-        <tfoot>
-          {/* WHY colSpan={7}: the 12 columns split as 7 non-aggregate left columns
-              (TICKER, NAME, QTY, AVG COST, CURRENT, DAY$, DAY%) and 5 aggregate right
-              columns (P&L$, P&L%, VALUE, WEIGHT-bar, SECTOR). TOTAL label spans the left. */}
-          <tr className="h-[22px] border-t-2 border-border">
-            <td
-              colSpan={7}
-              className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground"
-            >
-              TOTAL
-            </td>
-
-            {/* Total P&L $ */}
-            <td
-              className={cn(
-                "px-2 font-mono text-[11px] tabular-nums text-right font-semibold",
-                totalPnl >= 0 ? "text-positive" : "text-negative",
-              )}
-            >
-              {fmtPnl(totalPnl)}
-            </td>
-
-            {/* Total P&L % */}
-            <td
-              className={cn(
-                "px-2 font-mono text-[11px] tabular-nums text-right font-semibold",
-                totalPnlPct >= 0 ? "text-positive" : "text-negative",
-              )}
-            >
-              {/* F-501 (iter-2): formatPercent already prefixes "+"/"-" — the
-                  redundant ternary produced "++30.92%". Match the per-row fix
-                  on line 365. */}
-              {formatPercent(totalPnlPct / 100)}
-            </td>
-
-            {/* Total Value */}
-            <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right font-semibold">
-              {formatPrice(totalValue)}
-            </td>
-
-            {/* Remaining columns (WEIGHT bar, SECTOR) — no aggregates */}
-            <td colSpan={2} />
-          </tr>
-        </tfoot>
-      </table>
+        {/* Total Value */}
+        <div className="shrink-0 w-[100px] px-2 font-mono text-[11px] tabular-nums text-foreground text-right font-semibold">
+          {formatPrice(totalValue)}
+        </div>
+      </div>
     </div>
   );
 }

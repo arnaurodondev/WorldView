@@ -5,25 +5,17 @@
  * assess average-cost basis accuracy, and track dividend income. Extracted from
  * portfolio/page.tsx as a standalone component so it can be tested independently.
  *
- * WHY 7 COLUMNS: Date | Type | Ticker | Qty | Price | Total | Fee covers the
- * full picture of a trade execution without becoming wider than a typical panel.
+ * WHY 8 COLUMNS: Date | Type | Class | Ticker | Qty | Price | Total | Fee covers
+ * the full picture of a trade execution without becoming wider than a typical panel.
+ * The asset-class badge (PLAN-0053 T-D-4-02) was added between Type and Ticker.
  *
  * WHY DIVIDEND row shows "—" for Qty and Price: a dividend is an income event,
  * not a share purchase/sale. Qty and Price are meaningless for dividends; the
- * relevant amount is in the Fee column (repurposed as "amount" for DIVIDEND type).
+ * relevant amount is in the Total column (using tx.amount).
  *
- * PLAN-0051 Wave A enhancements (T-A-1-01 / T-A-1-02 / T-A-1-03):
- *   • Date-range picker (From / To) — calendar-bounded filter
- *   • Ticker autocomplete (datalist of currently-loaded tickers)
- *   • Currency filter (USD / EUR / All) — replaces a "market" filter the
- *     gateway can't express today (no `market`/`exchange` field on Transaction;
- *     see TODO below)
- *   • Min / Max amount sliders (number inputs)
- *   • Free-text search (debounced 200 ms, matches ticker / type / notes)
- *   • Clear-filters button (only shown when at least one filter is active)
- *   • CSV export (papaparse) — `transactions-YYYY-MM-DD.csv`
- *   • Virtualisation via react-window FixedSizeList when filtered.length > 200
- *   • Totals row (BUY cost / SELL proceeds / DIV income), updates with filters
+ * PLAN-0059 F-1 — Migrated to DataTable primitive. react-window removed;
+ * DataTable (@tanstack/react-virtual) handles virtualisation natively.
+ * Column definitions extracted to transaction-columns.tsx for isolated testing.
  *
  * WHO USES IT: app/(app)/portfolio/page.tsx — Transactions tab
  * DATA SOURCE: getTransactions() via parent page
@@ -31,19 +23,18 @@
  */
 
 "use client";
-// WHY "use client": every interactive piece in this file requires browser-only
-// behaviour: useState (filter state), useMemo, useEffect (debounce timer),
-// react-window (uses ResizeObserver / DOM measurements), HTML <input type=date>
+// WHY "use client": every interactive piece requires browser-only behaviour:
+// useState (filter state), useEffect (debounce timer), HTML <input type=date>
 // rendering, and synchronous DOM document.createElement for the CSV download.
-// None of this can run during server rendering.
 
 import { useEffect, useMemo, useState } from "react";
-import { FixedSizeList, type ListChildComponentProps } from "react-window";
 
 import { cn } from "@/lib/utils";
-import { formatPrice, formatDateTime } from "@/lib/utils";
+import { formatPrice } from "@/lib/utils";
 import { exportToCsv, todayDateStamp } from "@/lib/csv-export";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+import { DataTable } from "@/components/ui/data-table";
+import { makeTransactionColumns, rowTotal } from "./transaction-columns";
 import type { Transaction } from "@/types/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -52,10 +43,9 @@ export interface TransactionsTableProps {
   transactions: Transaction[];
   /**
    * @deprecated F-205 (QA iter-2): the gateway / S1 now populate ``ticker``
-   * directly on every transaction (``ListTransactionsUseCase`` joins to
-   * ``instruments``). The fallback lookup is retained ONLY so existing call
-   * sites that still pass the map don't break — it's no longer required for
-   * a correct render. New consumers MUST omit this prop.
+   * directly on every transaction. The fallback lookup is retained ONLY so
+   * existing call sites that still pass the map don't break — it's no longer
+   * required for a correct render. New consumers MUST omit this prop.
    *
    * Historical context: BP-262 added this workaround when ``tx.ticker`` was
    * always empty. The server-side enrichment supersedes it.
@@ -67,169 +57,20 @@ export interface TransactionsTableProps {
 // logic. Every tx.type matches "ALL"; BUY matches only BUY transactions, etc.
 type FilterType = "ALL" | "BUY" | "SELL" | "DIVIDEND";
 
-// WHY a discriminated currency literal "ALL" exists for the same reason:
-// the filter compares tx.currency to the value; "ALL" short-circuits the
-// comparison rather than threading a nullable around.
+// WHY a discriminated currency literal "ALL" for the same reason:
+// the filter compares tx.currency to the value; "ALL" short-circuits.
 type CurrencyFilter = "ALL" | "USD" | "EUR";
 
-// Threshold above which we render rows through react-window. Below this
-// number, the synchronous <tbody> path is faster (no ResizeObserver, no
-// extra wrapping divs) and produces nicer accessibility output.
+// Threshold above which DataTable activates its built-in react-virtual
+// path. Below this number the synchronous render is faster (no
+// ResizeObserver overhead) and produces nicer accessibility output.
 const VIRTUALISATION_THRESHOLD = 200;
-
-/**
- * COLUMN_WIDTHS — single source of truth for both the static <table> header
- * and each per-row mini-<table> in the virtualised path. QA-iter1 MAJ-4: the
- * earlier impl left both <colgroup>s empty, so columns sized to content per-row
- * and the right-aligned numerics drifted out of alignment with the header.
- *
- * WHY percentages (not pixels): the wrapping container has a fluid width;
- * percentages keep the proportions identical regardless of the panel size.
- * The seven columns (Date | Type | Ticker | Qty | Price | Total | Fee) sum
- * to 100% — the header and each virtualised row use the SAME array.
- */
-// PLAN-0053 T-D-4-02: 8 columns now — added an asset-class badge between
-// Type and Ticker. The total still sums to 100% so percentage layout stays
-// correct on every viewport width. We trim Date/Total/Fee by 1-2pp each so
-// the new column borrows breathing room without forcing a horizontal scroll.
-const COLUMN_WIDTHS: readonly string[] = [
-  "14%", // Date
-  "8%", // Type badge
-  "8%", // Asset class badge (new)
-  "10%", // Ticker
-  "12%", // Qty
-  "14%", // Price
-  "18%", // Total
-  "16%", // Fee
-];
-
-/**
- * ColGroup — render the shared column template. Used identically by the
- * header table and every virtualised row mini-table so widths line up.
- */
-function ColGroup() {
-  return (
-    <colgroup>
-      {COLUMN_WIDTHS.map((w, i) => (
-        <col key={i} style={{ width: w }} />
-      ))}
-    </colgroup>
-  );
-}
-
-// Row height in pixels — must match the <tr h-[22px]> below or virtualised
-// rows visually disagree with the unvirtualised ones during dev.
-const ROW_PX = 22;
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * typeBadgeClass — color for the type badge based on transaction type.
- *
- * WHY background + text pair: a colored badge is more scannable than plain text.
- * Bloomberg uses color-coded action indicators in trade blotters for the same reason.
- */
-function typeBadgeClass(type: Transaction["type"]): string {
-  switch (type) {
-    case "BUY":
-      return "bg-positive/20 text-positive";
-    case "SELL":
-      return "bg-negative/20 text-negative";
-    case "DIVIDEND":
-      // WHY text-primary for DIVIDEND: it's a neutral income event (neither gain nor loss).
-      // text-primary (sky blue) signals "informational" without positive/negative connotation.
-      return "bg-primary/20 text-primary";
-    default:
-      return "text-muted-foreground";
-  }
-}
-
-/**
- * assetClassBadgeClass — color for the asset-class badge (PLAN-0053 T-D-4-02).
- *
- * WHY a distinct palette per class: a trader scanning for option fills (red),
- * crypto rows (cyan), or bonds (purple) gains a fast peripheral cue without
- * having to read the badge text. Colours sourced from the design tokens —
- * each at /20 opacity for the chip background and full-saturation for the
- * text so the chip stays subtle but legible on the dark theme.
- *
- * WHY 'unknown' renders muted: the column should not yell "this row is
- * misclassified" — most rows pre-PLAN-0053 will be 'unknown' on first sight.
- * A muted chip says "we'll fill this in once your broker re-syncs" without
- * looking like a bug.
- */
-/**
- * assetClassAbbrev — short label for the asset-class badge.
- *
- * WHY 2-3 char codes: a 36-44px column has room for ~3 chars at 10px text.
- * Going wider would either truncate ugly or push the columns out of
- * proportion. 'OPT', 'FUT', 'CRY' are unambiguous in a finance context.
- */
-function assetClassAbbrev(cls: string | null | undefined): string {
-  switch ((cls ?? "").toLowerCase()) {
-    case "equity":
-      return "EQ";
-    case "etf":
-      return "ETF";
-    case "option":
-      return "OPT";
-    case "future":
-      return "FUT";
-    case "bond":
-      return "BND";
-    case "crypto":
-      return "CRY";
-    default:
-      return "—";
-  }
-}
-
-function assetClassBadgeClass(cls: string | null | undefined): string {
-  switch ((cls ?? "").toLowerCase()) {
-    case "equity":
-      return "bg-positive/15 text-positive border-positive/30";
-    case "etf":
-      return "bg-primary/15 text-primary border-primary/30";
-    case "option":
-      return "bg-negative/15 text-negative border-negative/30";
-    case "future":
-      return "bg-warning/15 text-warning border-warning/30";
-    case "bond":
-      // No "bond" semantic colour token — re-use muted-foreground for a
-      // dignified low-key visual that suits fixed-income.
-      return "bg-muted-foreground/10 text-muted-foreground border-muted-foreground/30";
-    case "crypto":
-      // No "crypto" semantic colour token — primary at higher opacity
-      // distinguishes it from ETF without adding a new palette entry.
-      return "bg-primary/25 text-primary border-primary/40";
-    default:
-      // 'unknown' or null — least-prominent badge so users skim past
-      // unclassified rows without false alarm.
-      return "bg-muted/40 text-muted-foreground border-border/40";
-  }
-}
-
-/**
- * Compute "total" the way every consumer of this table expects it:
- *   BUY/SELL → quantity × price (gross of fees)
- *   DIVIDEND → tx.amount (broker-reported cash payment), 0 fallback
- *
- * Centralised here because both the on-screen Total cell, the Min/Max amount
- * filter, and the totals row all need the same definition. Drift would
- * silently mis-filter rows.
- */
-function rowTotal(tx: Transaction): number {
-  if (tx.type === "DIVIDEND") return tx.amount ?? 0;
-  return tx.quantity * tx.price;
-}
 
 /**
  * Inline debounce — returns a value that lags the input by `delayMs`.
  *
  * WHY local (not the shared hooks/useDebounce.ts): this file is intentionally
- * dependency-light. The shared hook does the same thing but importing it would
- * also pull the hook's file-level header noise into this module. The inline
- * version is 8 lines and entirely self-explanatory.
+ * dependency-light. The inline version is 8 lines and entirely self-explanatory.
  */
 function useDebouncedValue<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -242,17 +83,10 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
 
 // ── Filter-bar styling ───────────────────────────────────────────────────────
 
-// WHY a shared className constant (not inline strings everywhere): we want
-// every input in the filter bar — date, text, number, datalist trigger — to
-// share the exact same height, padding, font, border, and focus colour. A
-// constant keeps the design tokens centralised and prevents drift when we
-// later add another input.
-//
-// WHY h-6 (24 px): the filter bar is 36 px tall (h-9), and 24 px inputs
-// leave 6 px breathing room top + bottom — same proportion as the existing
-// segmented filter buttons. WHY rounded-[2px]: terminal-grade chrome (no
-// rounded "card" look), matches design system. WHY bg-card: makes the input
-// distinguishable from the bg-card filter row by virtue of the border alone.
+// WHY a shared className constant: every input in the filter bar — date,
+// text, number, datalist trigger — shares the exact same height, padding,
+// font, border, and focus colour. A constant prevents drift when we add
+// another input.
 const INPUT_CLS =
   "h-6 px-2 text-[11px] font-mono bg-card border border-border rounded-[2px] " +
   "text-foreground placeholder:text-muted-foreground focus:outline-none " +
@@ -264,10 +98,16 @@ export function TransactionsTable({
   transactions,
   tickerByInstrumentId,
 }: TransactionsTableProps) {
+  // ── Column definitions ────────────────────────────────────────────────────
+  // WHY useMemo: makeTransactionColumns closes over tickerByInstrumentId.
+  // Re-creating on every render would produce new column-def references,
+  // making TanStack Table re-initialise its column model on every keystroke.
+  const columns = useMemo(
+    () => makeTransactionColumns(tickerByInstrumentId),
+    [tickerByInstrumentId],
+  );
+
   // ── Filter state ──────────────────────────────────────────────────────────
-  // Each filter is its own piece of state so we can clear them independently
-  // and so React's reconciliation doesn't re-render the whole row body when
-  // an unrelated filter changes (state-co-location keeps render scopes tight).
   const [activeFilter, setActiveFilter] = useState<FilterType>("ALL");
   const [fromDate, setFromDate] = useState<string>(""); // YYYY-MM-DD or ""
   const [toDate, setToDate] = useState<string>("");
@@ -278,20 +118,14 @@ export function TransactionsTable({
   const [searchRaw, setSearchRaw] = useState<string>("");
 
   // Debounce free-text search so we don't recompute the filtered list on
-  // every keystroke. 200 ms feels instantaneous on a fast typist while
-  // collapsing the worst-case 10-keystroke burst into one pass.
+  // every keystroke. 200 ms feels instantaneous while collapsing keystroke
+  // bursts into one pass.
   const search = useDebouncedValue(searchRaw, 200);
 
-  // TODO(PLAN-0051 / backend): the original spec calls for a "market" filter
-  // (NYSE / NASDAQ / LSE / etc). The Transaction shape returned by S9 today
-  // exposes no market/exchange/MIC field; only `currency`. A future S1
-  // enhancement should surface `instrument.exchange_mic` on the transaction
-  // payload — until then we degrade gracefully to a currency filter, which
-  // is a reasonable proxy for region (USD ≈ US, EUR ≈ EU).
+  // TODO(PLAN-0051 / backend): the original spec calls for a "market" filter.
+  // Transaction has no market/exchange/MIC field today — currency is a proxy.
 
   // ── Filter active? ────────────────────────────────────────────────────────
-  // Used to toggle the "Clear filters" button visibility. Combine all filter
-  // pieces into one boolean so we don't litter JSX with eight conditions.
   const anyFilterActive =
     activeFilter !== "ALL" ||
     fromDate !== "" ||
@@ -302,7 +136,6 @@ export function TransactionsTable({
     maxAmount !== "" ||
     searchRaw !== "";
 
-  /** Reset every filter to its initial empty/ALL state. */
   function clearFilters() {
     setActiveFilter("ALL");
     setFromDate("");
@@ -314,10 +147,7 @@ export function TransactionsTable({
     setSearchRaw("");
   }
 
-  // ── Pre-compute the unique ticker datalist ────────────────────────────────
-  // WHY useMemo: this runs once per transactions change rather than on every
-  // keystroke / filter tweak. The set deduplicates while we walk the array
-  // once; sorting once on the way out gives users a predictable autocomplete.
+  // ── Ticker datalist ───────────────────────────────────────────────────────
   const tickerOptions = useMemo(() => {
     const seen = new Set<string>();
     for (const tx of transactions) {
@@ -328,13 +158,6 @@ export function TransactionsTable({
   }, [transactions, tickerByInstrumentId]);
 
   // ── Empty state guard ─────────────────────────────────────────────────────
-  // F-P-016 (PLAN-0051 W6): empty-state copy guide — Title + Body explanation.
-  // - Title (short, descriptive): "No transactions yet."
-  // - Body (WHY the user might see this): "Connect a brokerage to import
-  //   activity, or use Add Position to record a trade manually."
-  // The single-line InlineEmptyState renders the combined sentence so the
-  // user understands their next step rather than just learning that the
-  // table is empty.
   if (transactions.length === 0) {
     return (
       <InlineEmptyState message="No transactions yet. Connect a brokerage to import activity, or use Add Position to record a trade manually." />
@@ -348,28 +171,19 @@ export function TransactionsTable({
     b.executed_at.localeCompare(a.executed_at),
   );
 
-  // Parse min/max once outside the filter loop — turning "" into NaN here lets
-  // us short-circuit cheaply per row with `Number.isNaN` rather than re-running
-  // parseFloat for every single transaction.
   const minAmt = minAmount === "" ? NaN : Number(minAmount);
   const maxAmt = maxAmount === "" ? NaN : Number(maxAmount);
   const tickerLower = tickerFilter.trim().toLowerCase();
   const searchLower = search.trim().toLowerCase();
 
   const filtered = sorted.filter((tx) => {
-    // Type segmented filter
     if (activeFilter !== "ALL" && tx.type !== activeFilter) return false;
 
-    // Date range — string comparison is correct because executed_at is ISO
-    // 8601 with a YYYY-... prefix and our pickers emit YYYY-MM-DD.
-    // WHY string comparison (not Date parse): avoids timezone shifts that
-    // would otherwise drop a tx executed at 00:30 UTC out of "today's" range
-    // when the user is in PST.
+    // WHY string comparison for dates: avoids timezone shifts that would drop
+    // a tx executed at 00:30 UTC out of "today's" range for a PST user.
     if (fromDate && tx.executed_at.slice(0, 10) < fromDate) return false;
     if (toDate && tx.executed_at.slice(0, 10) > toDate) return false;
 
-    // Ticker substring (case-insensitive). Look up enriched ticker first so
-    // the filter respects the same value the user sees in the table.
     if (tickerLower) {
       const t = (
         tx.ticker || tickerByInstrumentId?.[tx.instrument_id] || ""
@@ -377,20 +191,14 @@ export function TransactionsTable({
       if (!t.includes(tickerLower)) return false;
     }
 
-    // Currency filter
-    if (currencyFilter !== "ALL" && tx.currency !== currencyFilter) {
-      return false;
-    }
+    if (currencyFilter !== "ALL" && tx.currency !== currencyFilter) return false;
 
-    // Amount range — applies to the row's "total" (qty*price for BUY/SELL,
-    // amount for DIVIDEND) so the filter behaves the way the user reads the
-    // Total column. NaN guards skip the bound when the user left it blank.
+    // Amount range applies to the row's "total" so the filter behaves the way
+    // the user reads the Total column.
     const total = rowTotal(tx);
     if (!Number.isNaN(minAmt) && total < minAmt) return false;
     if (!Number.isNaN(maxAmt) && total > maxAmt) return false;
 
-    // Free-text search — matches against ticker, type, and notes (the only
-    // textual fields). We pre-lowercased the term once outside the loop.
     if (searchLower) {
       const tickerHaystack = (
         tx.ticker || tickerByInstrumentId?.[tx.instrument_id] || ""
@@ -406,10 +214,6 @@ export function TransactionsTable({
   });
 
   // ── Totals row ────────────────────────────────────────────────────────────
-  // WHY recompute on every render (no useMemo): the sums are a single linear
-  // pass over `filtered`, which is itself recomputed each render. The memo
-  // would also depend on `filtered`, making it churn anyway — it's strictly
-  // wasted bookkeeping. Keep it explicit.
   let buyCost = 0;
   let sellProceeds = 0;
   let divIncome = 0;
@@ -426,18 +230,12 @@ export function TransactionsTable({
     { label: "DIV", value: "DIVIDEND" },
   ];
 
-  // ── CSV export handler ────────────────────────────────────────────────────
-  // WHY captured by a function (not inlined onClick): unit tests can mock
-  // `exportToCsv` and assert the helper was called with the filtered rows.
-  // Inlining would force tests to spy on the global Blob API instead.
+  // ── CSV export ────────────────────────────────────────────────────────────
   function handleExportCsv() {
     exportToCsv<Transaction>({
       filenameStem: `transactions-${todayDateStamp()}`,
       rows: filtered,
       columns: [
-        // WHY ISO-8601 for Date: spreadsheet "Date" import preserves sort order.
-        // The on-screen format is human-friendly (formatDateTime), but for export
-        // we want machine-friendly so an accountant can run formulas on it.
         { header: "Date", accessor: (r) => r.executed_at },
         { header: "Type", accessor: (r) => r.type },
         {
@@ -445,9 +243,6 @@ export function TransactionsTable({
           accessor: (r) =>
             r.ticker || tickerByInstrumentId?.[r.instrument_id] || "",
         },
-        // WHY emit numbers (not formatted strings) for Qty/Price/Total/Fee:
-        // formatPrice would lose precision and turn $1,234.50 into a string
-        // Excel can't sum without a manual "convert text to number" step.
         { header: "Quantity", accessor: (r) => r.quantity },
         { header: "Price", accessor: (r) => r.price },
         { header: "Total", accessor: (r) => rowTotal(r) },
@@ -457,141 +252,10 @@ export function TransactionsTable({
     });
   }
 
-  // ── Render: row presenter ─────────────────────────────────────────────────
-  // Extracted so both the unvirtualised <tbody> path and the react-window
-  // path render an identical DOM shape. WHY a function (not a component): we
-  // need the FixedSizeList "Row" prop to receive `index` + `style`, and the
-  // child must spread style into the outer element. Creating a component would
-  // mean re-shaping props for the unvirtualised path; a function with the same
-  // signature in both paths is the simplest unification.
-  function renderTxRow(tx: Transaction, style?: React.CSSProperties) {
-    const isDividend = tx.type === "DIVIDEND";
-    // WHY this branch:
-    //   * BUY / SELL → total = quantity * price (cost / proceeds before fees)
-    //   * DIVIDEND   → quantity≈0 and price≈0; the cash payment lives in
-    //                  `tx.amount` (PLAN-0046 / BP-263).
-    const total = isDividend ? (tx.amount ?? 0) : tx.quantity * tx.price;
-    // WHY enrichment lookup: tx.ticker is empty from the gateway because
-    // S1's TransactionListItem omits ticker. The parent page loads holding
-    // overviews keyed by instrument_id and passes them here as a lookup.
-    const enrichedTicker =
-      tx.ticker || tickerByInstrumentId?.[tx.instrument_id] || "";
-    // WHY zero-qty/zero-price guard (B-6): brokerage imports occasionally
-    // include sentinel rows (corporate actions, fee-only adjustments) with
-    // qty=0 AND price=0. These are not user-actionable trades — render the
-    // row in a muted style so it visually de-emphasises against real fills.
-    const isPlaceholder = !isDividend && tx.quantity === 0 && tx.price === 0;
-
-    return (
-      <tr
-        key={tx.transaction_id}
-        // The `style` is only set when react-window is positioning the row
-        // absolutely (`top: NNNpx`); the unvirtualised path passes undefined.
-        style={style}
-        className={cn(
-          "h-[22px] hover:bg-muted/40 transition-colors",
-          isPlaceholder && "text-muted-foreground/50",
-        )}
-      >
-        {/* Date */}
-        <td className="px-2 font-mono text-[11px] tabular-nums text-muted-foreground whitespace-nowrap">
-          {formatDateTime(tx.executed_at)}
-        </td>
-
-        {/* Type badge — data-testid for testing BUY/SELL color classes */}
-        <td className="px-2">
-          <span
-            className={cn(
-              "inline-flex items-center px-1 rounded-[2px] font-mono text-[10px] font-semibold tabular-nums",
-              typeBadgeClass(tx.type),
-            )}
-            data-testid={`tx-type-${tx.transaction_id}`}
-          >
-            {tx.type === "DIVIDEND" ? "DIV" : tx.type}
-          </span>
-        </td>
-
-        {/* PLAN-0053 T-D-4-02: Asset-class badge.
-            WHY uppercase abbreviation: "EQUITY" reads as "EQ" in a 36px-wide
-            column without losing meaning to a trader. We render the full
-            class on the title so screen-reader users still hear the unabbreviated
-            form. */}
-        <td className="px-2">
-          <span
-            className={cn(
-              "inline-flex items-center px-1 rounded-[2px] border font-mono text-[10px] font-semibold uppercase tabular-nums",
-              assetClassBadgeClass(tx.asset_class),
-            )}
-            title={tx.asset_class ?? "Asset class unknown"}
-            data-testid={`tx-asset-class-${tx.transaction_id}`}
-          >
-            {assetClassAbbrev(tx.asset_class)}
-          </span>
-        </td>
-
-        {/* Ticker */}
-        <td className="px-2 font-mono text-[11px] tabular-nums text-primary font-medium">
-          {enrichedTicker || "—"}
-        </td>
-
-        {/* Qty — "—" for DIVIDEND (not applicable) */}
-        <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
-          {isDividend ? "—" : tx.quantity.toLocaleString("en-US")}
-        </td>
-
-        {/* Price — "—" for DIVIDEND */}
-        <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
-          {isDividend ? "—" : formatPrice(tx.price)}
-        </td>
-
-        {/* Total */}
-        <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
-          {isPlaceholder ? "n/a" : total > 0 ? formatPrice(total) : "—"}
-        </td>
-
-        {/* Fee */}
-        <td className="px-2 font-mono text-[11px] tabular-nums text-muted-foreground text-right">
-          {!isDividend && tx.fee > 0 ? formatPrice(tx.fee) : "—"}
-        </td>
-      </tr>
-    );
-  }
-
-  // The react-window child component MUST return a single positioned element.
-  // WHY a <table> wrapper inside the row: react-window applies `top: Npx;
-  // position: absolute;` to the rendered child. Wrapping in a single-row
-  // <table> preserves <td> layout / alignment with the header. Without the
-  // wrapper, a bare <tr> would render with default block layout and lose
-  // column alignment.
-  const VirtualRow = ({ index, style }: ListChildComponentProps) => {
-    const tx = filtered[index];
-    return (
-      <table
-        // WHY width:100% inside style: the parent <FixedSizeList> sets a
-        // fixed pixel width based on its container. We want each row to span
-        // that full width so columns align with the header table.
-        style={{ ...style, width: "100%" }}
-        className="border-collapse text-[11px] table-fixed"
-        // QA-iter1 MAJ-4: the row table uses the same shared <ColGroup/> as
-        // the header so percentage column widths are identical and right-
-        // aligned numerics line up. data-testid lets tests sample a row to
-        // diff its computed widths against the header's.
-        data-testid="transactions-virtual-row"
-      >
-        <ColGroup />
-        <tbody>{renderTxRow(tx, undefined)}</tbody>
-      </table>
-    );
-  };
-
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-0">
       {/* ── Filter bar ──────────────────────────────────────────────────── */}
-      {/* WHY h-9: matches the standard 36 px header bar height used throughout.
-          WHY flex-wrap + gap-y: with eight inputs we will overflow on narrow
-          panel widths; wrapping is the least-bad fallback. The minimum the
-          user will ever see at a normal desktop width is one row. */}
       <div className="flex flex-wrap h-auto items-center gap-1 gap-y-1 border-b border-border px-2 py-1 shrink-0">
         {filterButtons.map(({ label, value }) => (
           <button
@@ -610,10 +274,6 @@ export function TransactionsTable({
           </button>
         ))}
 
-        {/* Date range — From / To. WHY label="From" / "To": <input type=date>
-            doesn't carry an implicit label; some screen readers announce only
-            "date picker", so we wrap with a visually-tiny but a11y-visible
-            label. */}
         <label className="flex items-center gap-1 text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
           From
           <input
@@ -635,10 +295,6 @@ export function TransactionsTable({
           />
         </label>
 
-        {/* Ticker autocomplete (datalist). WHY datalist (not a custom Combobox):
-            datalist is native, accessible by default, supports keyboard nav,
-            and adds zero JS bytes. The downside is limited styling — the
-            dropdown appearance is browser-controlled. Acceptable for v1. */}
         <input
           type="text"
           aria-label="Filter by ticker"
@@ -654,23 +310,17 @@ export function TransactionsTable({
           ))}
         </datalist>
 
-        {/* Currency filter — degrades gracefully from "market" filter. */}
         <select
           aria-label="Filter by currency"
           className={cn(INPUT_CLS, "w-16 cursor-pointer")}
           value={currencyFilter}
-          onChange={(e) =>
-            setCurrencyFilter(e.target.value as CurrencyFilter)
-          }
+          onChange={(e) => setCurrencyFilter(e.target.value as CurrencyFilter)}
         >
           <option value="ALL">All</option>
           <option value="USD">USD</option>
           <option value="EUR">EUR</option>
         </select>
 
-        {/* Min / Max amount. WHY type=number: gives mobile users a numeric
-            keypad and prevents non-numeric input. inputMode=decimal is also
-            set for legacy browsers that ignore `type=number` styling. */}
         <input
           type="number"
           aria-label="Minimum amount"
@@ -690,7 +340,6 @@ export function TransactionsTable({
           onChange={(e) => setMaxAmount(e.target.value)}
         />
 
-        {/* Search — debounced internally. */}
         <input
           type="search"
           aria-label="Search transactions"
@@ -700,10 +349,6 @@ export function TransactionsTable({
           onChange={(e) => setSearchRaw(e.target.value)}
         />
 
-        {/* Clear filters — only visible when something is filtered. WHY
-            ml-auto on the LAST visible item we want at the right edge: it
-            forces the spacer between the last input and this trailing pill,
-            even with flex-wrap. */}
         {anyFilterActive && (
           <button
             type="button"
@@ -714,9 +359,6 @@ export function TransactionsTable({
           </button>
         )}
 
-        {/* CSV export. WHY a stand-alone button (not a dropdown): we only
-            offer one format today. PLAN-0051 T-B-2-07 introduces the
-            screener-side dropdown for CSV/XLSX/PDF. */}
         <button
           type="button"
           aria-label="Export transactions as CSV"
@@ -726,113 +368,52 @@ export function TransactionsTable({
           Export CSV
         </button>
 
-        {/* Row count — shows how many transactions match the active filters */}
         <span className="ml-auto font-mono text-[10px] tabular-nums text-muted-foreground">
           {filtered.length} / {transactions.length}
         </span>
       </div>
 
       {/* ── Table ───────────────────────────────────────────────────────── */}
-      <div className="overflow-auto">
-        <table
-          // QA-iter1 MAJ-4: ``table-fixed`` + shared <ColGroup/> pin column
-          // widths so virtualised row mini-tables align with the header.
-          // ``data-testid="transactions-header"`` exposes a stable handle
-          // for the alignment regression test.
-          data-testid="transactions-header"
-          className="w-full border-collapse text-[11px] table-fixed"
-        >
-          <ColGroup />
-          <thead className="sticky top-0 bg-card z-10">
-            <tr className="h-[22px] border-b border-border">
-              <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-left font-normal">
-                DATE
-              </th>
-              <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-left font-normal">
-                TYPE
-              </th>
-              {/* PLAN-0053 T-D-4-02: asset class column header. */}
-              <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-left font-normal">
-                CLASS
-              </th>
-              <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-left font-normal">
-                TICKER
-              </th>
-              <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-right font-normal">
-                QTY
-              </th>
-              <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-right font-normal">
-                PRICE
-              </th>
-              <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-right font-normal">
-                TOTAL
-              </th>
-              <th className="px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground text-right font-normal">
-                FEE
-              </th>
-            </tr>
-          </thead>
-
-          {/* WHY split rendering paths:
-                small table (≤ 200 rows) → static <tbody> for accessibility +
-                    sticky-header behaviour. react-window adds a virtual
-                    scroller div which would clip the sticky header.
-                large table (> 200 rows) → react-window for perf. */}
-          {filtered.length === 0 ? (
-            <tbody className="divide-y divide-border/30">
-              <tr>
-                <td
-                  // PLAN-0053 T-D-4-02: column count went from 7 → 8 with the
-                  // asset-class column.
-                  colSpan={8}
-                  className="px-2 py-3 text-center text-[11px] text-muted-foreground"
-                >
-                  No {activeFilter === "ALL" ? "" : activeFilter} transactions match
-                  the current filters.
-                </td>
-              </tr>
-            </tbody>
-          ) : filtered.length > VIRTUALISATION_THRESHOLD ? (
-            // Render the virtualisation container in a NON-table context:
-            // FixedSizeList wraps each row in <div style="position:absolute;
-            // top: …">, which is invalid as a direct child of <tbody>. We
-            // close the static table here and open a fresh containing div
-            // immediately below; the rows are mini-tables that share column
-            // widths via the table-fixed class on the row.
-            //
-            // WHY accept this DOM compromise: virtualised tables are a known
-            // hard problem in the React ecosystem. The alternative is
-            // CSS Grid which loses native row hit-testing; the mini-table
-            // approach keeps tables semantic on a per-row basis.
-            <tbody />
-          ) : (
-            <tbody className="divide-y divide-border/30">
-              {filtered.map((tx) => renderTxRow(tx))}
-            </tbody>
-          )}
-        </table>
-
-        {/* Virtualised body — only when over threshold AND not empty. */}
-        {filtered.length > VIRTUALISATION_THRESHOLD && (
-          <div data-testid="transactions-virtualised">
-            <FixedSizeList
-              height={ROW_PX * Math.min(filtered.length, 20)}
-              itemCount={filtered.length}
-              itemSize={ROW_PX}
-              width="100%"
-            >
-              {VirtualRow}
-            </FixedSizeList>
-          </div>
-        )}
+      {/*
+       * WHY DataTable (not raw <table>): provides uniform density, multi-column
+       * sort, copy-as-TSV, sticky header, column resize, and built-in virtualisation
+       * (TanStack react-virtual) for free. Column defs live in transaction-columns.tsx
+       * so they can be unit-tested independently.
+       *
+       * WHY data-testid="transactions-virtualised" wrapper: existing tests assert
+       * that this testid is present when filtered.length > VIRTUALISATION_THRESHOLD
+       * and absent when not. The conditional wrapper preserves that contract
+       * without the test needing to know about DataTable's internal virtualise prop.
+       */}
+      <div
+        {...(filtered.length > VIRTUALISATION_THRESHOLD
+          ? { "data-testid": "transactions-virtualised" }
+          : {})}
+        className="overflow-auto"
+      >
+        <DataTable
+          columns={columns}
+          data={filtered}
+          getRowId={(tx) => tx.transaction_id}
+          density="compact"
+          isLoading={false}
+          emptyMessage={`No${activeFilter !== "ALL" ? ` ${activeFilter}` : ""} transactions match the current filters.`}
+          rowClassName={(tx) => {
+            // WHY isPlaceholder check: brokerage imports include sentinel rows
+            // (corporate actions) with qty=0 AND price=0. De-emphasise them
+            // visually so real fills stand out. (BP-263 / F-P-028)
+            const isPlaceholder = tx.type !== "DIVIDEND" && tx.quantity === 0 && tx.price === 0;
+            return isPlaceholder ? "text-muted-foreground/50" : undefined;
+          }}
+          virtualize={filtered.length > VIRTUALISATION_THRESHOLD}
+        />
       </div>
 
       {/* ── Totals row ──────────────────────────────────────────────────── */}
-      {/* WHY render outside the table: see the tbody/FixedSizeList comment
-          above — keeping totals as its own div sidesteps the virtualisation
-          DOM constraints AND gives us a pinned strip across both rendering
-          paths. WHY border-t-2: emphasises a summary row visually different
-          from the regular border-t between scroll rows. */}
+      {/* WHY render outside DataTable: totals are a summary strip across all
+          filtered rows — not a data row. DataTable rows map to Transaction
+          entities; the totals row has a different role and a different visual
+          treatment (border-t-2, condensed text). */}
       <div
         data-testid="transactions-totals"
         className="flex h-7 items-center gap-4 border-t-2 border-border bg-card px-2 shrink-0"
@@ -842,28 +423,19 @@ export function TransactionsTable({
         </span>
         <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
           BUY cost{" "}
-          <span
-            data-testid="totals-buy"
-            className="ml-1 text-foreground"
-          >
+          <span data-testid="totals-buy" className="ml-1 text-foreground">
             {formatPrice(buyCost)}
           </span>
         </span>
         <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
           SELL proceeds{" "}
-          <span
-            data-testid="totals-sell"
-            className="ml-1 text-foreground"
-          >
+          <span data-testid="totals-sell" className="ml-1 text-foreground">
             {formatPrice(sellProceeds)}
           </span>
         </span>
         <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
           DIV income{" "}
-          <span
-            data-testid="totals-div"
-            className="ml-1 text-foreground"
-          >
+          <span data-testid="totals-div" className="ml-1 text-foreground">
             {formatPrice(divIncome)}
           </span>
         </span>

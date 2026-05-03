@@ -738,3 +738,32 @@ revenue: num(metrics["revenue_usd"] ?? metrics["revenue"] ?? row["revenue"]),
 **Regression test**: `apps/worldview-web/__tests__/screener-metric-mapping.test.ts` (4 cases: revenue_usd primary; metrics.revenue fallback; top-level row.revenue fallback; null when all absent).
 
 ---
+
+---
+
+## BP-332 — TanStack Table Controlled Sort Race: `getNextSortingOrder()` Captures Stale State Outside Updater
+
+**Category**: Frontend
+**Symptom**: In tests (and rarely in prod under rapid clicking), clicking a column header twice quickly sometimes cycles none→asc→asc instead of none→asc→desc. The second click seems "ignored" and the sort doesn't advance to descending.
+**Root cause**: TanStack Table v8's `column.toggleSorting()` calls `column.getNextSortingOrder()` **synchronously at click time**, before the updater function is constructed. `getNextSortingOrder()` reads `column.getIsSorted()` from `table.getState().sorting` — which is the PREVIOUS committed sort state if React hasn't re-rendered yet. If a second click fires before React commits the first click's state update, TanStack computes `sortAction = 'asc'` (from-none) instead of `'desc'` (from-asc). The updater function itself correctly uses functional prev state, but the direction it will set is baked in at creation time.
+
+In tests, `useDeferredValue` on the filtered rows creates a second low-priority render pass after the urgent one. Between the urgent render (which commits `aria-sort = "ascending"`) and the deferred render completing, TanStack's `table` instance may momentarily show a state mismatch. Using `waitFor` to wait for `aria-sort` doesn't fully guarantee TanStack's in-flight deferred pass is settled before the next click.
+
+**Fix**: Mock `useDeferredValue` to be synchronous in screener sort tests so no deferred render window exists between clicks:
+
+```tsx
+// __tests__/screener.test.tsx
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  const syncUseDeferredValue = (
+    (value: unknown) => value
+  ) as typeof actual.useDeferredValue;
+  return { ...actual, useDeferredValue: syncUseDeferredValue };
+});
+```
+
+**Prevention**: Any test that simulates rapid sequential clicks on a TanStack-controlled sort that is bridge-proxied through `useDeferredValue` will hit this race. Apply the same mock pattern to any future test with multi-click sort assertions.
+
+**Regression test**: `apps/worldview-web/__tests__/screener.test.tsx` — sort tests "clicking sorted column again changes sort to descending" and "clicking column third time clears sort (back to none)". Previously failed ~60% of full-suite runs; now stable.
+
+---

@@ -25,7 +25,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, CheckSquare, Download, Filter as FilterIcon, Loader2, MinusSquare, Square } from "lucide-react";
+import { Download, Filter as FilterIcon, Loader2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -46,6 +46,9 @@ import type {
   FeedbackStatus,
   FeedbackSubmission,
 } from "@/types/api";
+import type { RowSelectionState } from "@tanstack/react-table";
+import { DataTable } from "@/components/ui/data-table/data-table";
+import { makeFeedbackColumns } from "./feedback-columns";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -257,6 +260,31 @@ export default function AdminFeedbackPage() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
 
+  // WHY bridge: DataTable uses TanStack's RowSelectionState ({ [id]: boolean })
+  // while the feedback page tracks selected ids in a Set for the bulk action.
+  // We derive RowSelectionState from selectedIds on each render (O(n), n ≤ 200)
+  // and convert back in onRowSelectionChange so selectedIds stays the source of truth.
+  const rowSelection: RowSelectionState = useMemo(
+    () => Object.fromEntries([...selectedIds].map((id) => [id, true])),
+    [selectedIds],
+  );
+  const handleRowSelectionChange = (
+    updater: RowSelectionState | ((prev: RowSelectionState) => RowSelectionState),
+  ) => {
+    const next = typeof updater === "function" ? updater(rowSelection) : updater;
+    setSelectedIds(new Set(Object.keys(next).filter((id) => next[id])));
+  };
+
+  // WHY recompute columns each render: the cell renderers for the status column
+  // close over rowPendingIds and rowFailedIds (Sets that mutate frequently).
+  // Recreating the column array on each render ensures the cells always see
+  // the latest pending/failed state without needing useRef gymnastics.
+  const feedbackColumns = useMemo(
+    () => makeFeedbackColumns(rowPendingIds, rowFailedIds, updateRowStatus),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rowPendingIds, rowFailedIds],
+  );
+
   // Trim the selection whenever the visible items change so we never carry
   // ids that aren't on screen (avoids confusing UX where the count chip
   // claims rows that the user can't see).
@@ -270,25 +298,6 @@ export default function AdminFeedbackPage() {
     });
   }, [items, selectedIds.size]);
 
-  const allSelected = items.length > 0 && selectedIds.size === items.length;
-  const someSelected = selectedIds.size > 0 && !allSelected;
-
-  const toggleAll = () => {
-    if (allSelected || someSelected) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(items.map((r) => r.id)));
-    }
-  };
-
-  const toggleRow = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
 
   // Ref to the bulk-error banner so we can move focus to it after a
   // partial failure — the banner sits above the table while the user's
@@ -488,164 +497,21 @@ export default function AdminFeedbackPage() {
         </p>
       )}
 
-      {/* Table */}
-      <div className="overflow-x-auto rounded-[2px] border border-border">
-        <table className="w-full text-xs">
-          <thead className="bg-muted/30 text-left text-[10px] uppercase">
-            <tr>
-              {/* Bulk-select header — clickable cell renders a tri-state
-                  glyph (empty / partial / all). WHY a button (not native
-                  checkbox): the partial / indeterminate state is awkward
-                  to wire on a real <input>. The button + lucide icons give
-                  us the same affordance with a single render path.
-                  PLAN-0052 Wave E QA-iter1 a11y/B-2: explicit
-                  role="checkbox" + aria-checked={"true"|"false"|"mixed"}
-                  so screen readers convey ALL THREE selection states.
-                  Without these, AT users heard "button, deselect all"
-                  with no signal of WHAT was selected.
-                  QA-iter1 design/#6: distinct MinusSquare icon for the
-                  partial state — opacity drop alone was too subtle for
-                  many sighted users to register the difference. */}
-              <th className="p-2">
-                <button
-                  type="button"
-                  role="checkbox"
-                  aria-checked={
-                    allSelected ? "true" : someSelected ? "mixed" : "false"
-                  }
-                  onClick={toggleAll}
-                  aria-label={
-                    allSelected ? "Deselect all rows" : "Select all rows"
-                  }
-                  className="inline-flex items-center justify-center text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-                >
-                  {allSelected ? (
-                    <CheckSquare className="h-3.5 w-3.5 text-primary" />
-                  ) : someSelected ? (
-                    <MinusSquare className="h-3.5 w-3.5 text-primary" />
-                  ) : (
-                    <Square className="h-3.5 w-3.5" />
-                  )}
-                </button>
-              </th>
-              <th className="p-2">Created</th>
-              <th className="p-2">Kind</th>
-              <th className="p-2">Severity</th>
-              <th className="p-2">Status</th>
-              <th className="p-2">From</th>
-              <th className="p-2">Description</th>
-              <th className="p-2">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rowsLoading && (
-              <tr>
-                <td colSpan={8} className="p-4 text-center text-muted-foreground">
-                  Loading…
-                </td>
-              </tr>
-            )}
-            {!rowsLoading && items.length === 0 && (
-              <tr>
-                <td colSpan={8} className="p-4 text-center text-muted-foreground">
-                  No submissions match these filters.
-                </td>
-              </tr>
-            )}
-            {items.map((row) => (
-              <tr key={row.id} className="border-t border-border hover:bg-muted/10">
-                <td className="p-2">
-                  {/* PLAN-0052 Wave E QA-iter1 a11y/B-2: role="checkbox" +
-                      aria-checked is the correct ARIA model for selection.
-                      Previously used aria-pressed (toggle-button semantics)
-                      which reads as "pressed/not pressed" instead of
-                      "checked/not checked" — semantically wrong AND
-                      inconsistent with the header tri-state checkbox. */}
-                  <button
-                    type="button"
-                    role="checkbox"
-                    aria-checked={selectedIds.has(row.id)}
-                    onClick={() => toggleRow(row.id)}
-                    aria-label={
-                      selectedIds.has(row.id)
-                        ? `Deselect submission ${row.id}`
-                        : `Select submission ${row.id}`
-                    }
-                    className="inline-flex items-center justify-center text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-                  >
-                    {selectedIds.has(row.id) ? (
-                      <CheckSquare className="h-3.5 w-3.5 text-primary" />
-                    ) : (
-                      <Square className="h-3.5 w-3.5" />
-                    )}
-                  </button>
-                </td>
-                <td className="p-2 font-mono tabular-nums">
-                  {row.created_at.slice(0, 19).replace("T", " ")}
-                </td>
-                <td className="p-2 capitalize">{row.kind.replace("_", " ")}</td>
-                <td className="p-2">{row.severity ?? "—"}</td>
-                <td className="p-2">
-                  {/* PLAN-0052 platform-QA fix (2026-05-01): per-row pending +
-                      failed glyphs alongside the Select. Without these the
-                      admin had no signal for in-flight or failed PATCHes —
-                      a 500 from S9 would silently snap the dropdown back on
-                      cache invalidation. Now: spinner while in flight,
-                      AlertCircle (red) for the last failure on this row. */}
-                  <div className="flex items-center gap-1.5">
-                    <Select
-                      value={row.status}
-                      onValueChange={(v) =>
-                        updateRowStatus(row.id, v as FeedbackStatus)
-                      }
-                      disabled={rowPendingIds.has(row.id)}
-                    >
-                      <SelectTrigger className="h-7 w-32 text-[10px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {STATUS_OPTIONS.map((s) => (
-                          <SelectItem key={s} value={s}>
-                            {s.replace("_", " ")}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {rowPendingIds.has(row.id) && (
-                      <Loader2
-                        className="h-3 w-3 motion-safe:animate-spin text-muted-foreground"
-                        aria-label="Saving status change"
-                      />
-                    )}
-                    {rowFailedIds.has(row.id) && (
-                      <AlertCircle
-                        className="h-3 w-3 text-destructive"
-                        aria-label="Failed to save — try again"
-                      />
-                    )}
-                  </div>
-                </td>
-                <td className="p-2 font-mono text-[10px]">
-                  {row.email ?? row.user_id ?? "—"}
-                </td>
-                <td className="max-w-md truncate p-2">{row.description}</td>
-                <td className="p-2">
-                  {row.page_url && (
-                    <a
-                      href={row.page_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[10px] text-primary underline"
-                    >
-                      Open page
-                    </a>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+
+      {/* Table — DataTable handles selection column (selectable=true), loading */}
+      {/* skeleton, empty state, and keyboard navigation.  */}
+      <DataTable<FeedbackSubmission>
+        columns={feedbackColumns}
+        data={items}
+        getRowId={(row) => row.id}
+        density="compact"
+        isLoading={rowsLoading}
+        emptyMessage="No submissions match these filters."
+        ariaLabel="Feedback submissions"
+        selectable
+        rowSelection={rowSelection}
+        onRowSelectionChange={handleRowSelectionChange}
+      />
     </div>
   );
 }
