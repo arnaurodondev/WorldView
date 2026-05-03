@@ -48,9 +48,16 @@ import { useQuery } from "@tanstack/react-query";
 // dimensions exposed here are what traders most often share via deep-link
 // ("look at my Energy / Mid-cap screen"). Saved Screens cover the rest.
 import { useQueryState, parseAsString, parseAsStringLiteral } from "nuqs";
+import { useRouter } from "next/navigation";
+import { type SortingState, type VisibilityState } from "@tanstack/react-table";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-import { ScreenerTable, type SortState, type SortableKey } from "@/components/screener/ScreenerTable";
+import { DataTable } from "@/components/ui/data-table/data-table";
+import {
+  createScreenerColumns,
+  type SortState,
+  type SortableKey,
+} from "@/components/screener/screener-columns";
 // PLAN-0059 G-2: ScreenerFilterBar is the largest component on /screener
 // (~986 LOC + per-section validators). Dynamic-import code-splits it out
 // of the initial bundle so the screener route's first paint shows the
@@ -69,7 +76,7 @@ const ScreenerFilterBar = dynamic(
   { ssr: false },
 );
 import { DashboardEmptyState } from "@/components/ui/dashboard-empty-state";
-import type { ScreenerResult, ScreenerRequest, ScreenerFilter } from "@/types/api";
+import type { ScreenerResult, ScreenerRequest } from "@/types/api";
 // PLAN-0051 Wave B Part 2 imports — Saved Screens, Column Settings, Export, Sparklines.
 import { SavedScreensDialog } from "@/components/screener/SavedScreensDialog";
 import { ColumnSettingsPopover } from "@/components/screener/ColumnSettingsPopover";
@@ -80,6 +87,7 @@ import {
   type ScreenerColumn,
 } from "@/lib/screener-columns";
 import { useScreenerSparklines } from "@/hooks/useScreenerSparklines";
+import { buildScreenerFilters } from "@/features/screener/lib/build-filters";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -92,106 +100,6 @@ import { useScreenerSparklines } from "@/hooks/useScreenerSparklines";
  * too aggressively.
  */
 const PAGE_SIZE = 50;
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * pushIfRange — append a `{metric, min_value, max_value}` filter when at least
- * one bound is set, otherwise no-op. Centralises the "do not send empty filters"
- * rule so we never POST an empty-bound filter (which the backend rejects with 422).
- */
-function pushIfRange(
-  out: ScreenerFilter[],
-  metric: string,
-  min: number | undefined,
-  max: number | undefined,
-): void {
-  if (min === undefined && max === undefined) return;
-  out.push({ metric, min_value: min, max_value: max });
-}
-
-/**
- * buildScreenerFilters — converts UI FilterState to ScreenerRequest.filters[].
- *
- * Maps each fundamental UI filter to the canonical backend metric name from
- * docs/services/market-data.md (PLAN-0051 T-B-2-01):
- *   pe_ratio, pb_ratio, price_sales_ttm, dividend_yield,
- *   roe_ttm, profit_margin, operating_margin_ttm,
- *   quarterly_revenue_growth_yoy, quarterly_earnings_growth_yoy,
- *   market_capitalization.
- *
- * Backend-pending filters (gross margin, debt/equity, current ratio) are
- * skipped — the UI inputs are disabled but the FilterState may still carry
- * stale values from a saved screen.
- *
- * Technical, news, and signal filters are NOT sent to the backend; they are
- * applied client-side after fetch (see applyClientFilters).
- */
-function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
-  const filters: ScreenerFilter[] = [];
-
-  // ── Top-row primary filters ────────────────────────────────────────────────
-  // Search by ticker / name → backend has no text search on the screener
-  // endpoint; this remains a CLIENT_SIDE_FILTER applied in applyClientFilters.
-
-  // Sector → applied at the SCREEN_FILTER level via the optional `sector` field
-  // on a single filter. Per S3 semantics: specifying sector on any filter
-  // restricts the entire result set. We attach it to the first filter we push.
-  // If no other filters exist, we synthesize a benign filter so the request
-  // still has at least one entry (backend min_length=1).
-
-  // Cap tier → market_capitalization range
-  let capMin: number | undefined;
-  let capMax: number | undefined;
-  if (f.capTier === "LARGE") capMin = 10_000_000_000;
-  else if (f.capTier === "MID") {
-    capMin = 2_000_000_000;
-    capMax = 10_000_000_000;
-  } else if (f.capTier === "SMALL") capMax = 2_000_000_000;
-  pushIfRange(filters, "market_capitalization", capMin, capMax);
-
-  // ── Valuation (SERVER_SIDE) ────────────────────────────────────────────────
-  pushIfRange(filters, "pe_ratio", f.peMin, f.peMax);
-  pushIfRange(filters, "pb_ratio", f.pbMin, f.pbMax);
-  pushIfRange(filters, "price_sales_ttm", f.psMin, f.psMax);
-  pushIfRange(filters, "dividend_yield", f.divYieldMin, f.divYieldMax);
-
-  // ── Profitability (SERVER_SIDE) ────────────────────────────────────────────
-  pushIfRange(filters, "roe_ttm", f.roeMin, f.roeMax);
-  // Gross margin SKIPPED — BACKEND_PENDING (gross_margin not derived).
-  pushIfRange(filters, "profit_margin", f.netMarginMin, f.netMarginMax);
-  pushIfRange(filters, "operating_margin_ttm", f.opMarginMin, f.opMarginMax);
-
-  // ── Growth (SERVER_SIDE) ───────────────────────────────────────────────────
-  pushIfRange(filters, "quarterly_revenue_growth_yoy", f.revGrowthMin, f.revGrowthMax);
-  pushIfRange(filters, "quarterly_earnings_growth_yoy", f.earningsGrowthMin, f.earningsGrowthMax);
-
-  // ── Leverage SKIPPED — BACKEND_PENDING (debt/equity, current ratio not derived).
-
-  // Attach sector restriction (if any) to the first filter — S3 applies it as
-  // a global universe constraint, not per-filter, but the ScreenFilter schema
-  // requires placing it on ≥1 filter. If no filters exist yet, fall through —
-  // the synth path below will handle the empty case.
-  if (f.sector && filters.length > 0) {
-    filters[0] = { ...filters[0], sector: f.sector };
-  }
-
-  // ── Synthesize a benign filter when nothing else is set ────────────────────
-  // Backend rejects empty filter lists (min_length=1). When the user opens the
-  // page with no filters at all, we send a permissive market_capitalization
-  // bound (≥ $0) so we always get a result page. This is the same trick
-  // documented in PLAN-0017 Wave C-1 for "browse all" queries.
-  if (filters.length === 0) {
-    filters.push({
-      metric: "market_capitalization",
-      min_value: 0,
-      // Apply sector if requested
-      ...(f.sector ? { sector: f.sector } : {}),
-    });
-  }
-
-  return filters;
-}
 
 /**
  * applyClientFilters — filters that the backend cannot apply yet.
@@ -281,10 +189,50 @@ function sortResults(results: ScreenerResult[], sort: SortState): ScreenerResult
   });
 }
 
+// ── Sort bridges ─────────────────────────────────────────────────────────────
+
+/**
+ * screenerSortToTanstack — convert our simple {key, dir} sort to the
+ * SortingState array DataTable expects.
+ *
+ * WHY needed: DataTable uses TanStack's controlled sort API (SortingState[]).
+ * Our screener sort allows only one active column. The bridge maps that to a
+ * single-element array (multi-column shift-click not wired in the screener).
+ */
+function screenerSortToTanstack(s: SortState): SortingState {
+  if (!s.key || !s.dir) return [];
+  return [{ id: s.key, desc: s.dir === "desc" }];
+}
+
+/**
+ * tanstackToScreenerSort — convert TanStack SortingState back to our local
+ * SortState so the existing sortResults() + sort indicator logic is unchanged.
+ */
+function tanstackToScreenerSort(s: SortingState): SortState {
+  if (s.length === 0) return { key: null, dir: null };
+  return { key: s[0].id as SortableKey, dir: s[0].desc ? "desc" : "asc" };
+}
+
+/**
+ * screenerColsToVisibility — convert the user's ScreenerColumn[] prefs to a
+ * TanStack VisibilityState map (column.id → boolean).
+ *
+ * WHY: DataTable drives visibility by column ID. Our prefs use the same key
+ * values ("ticker", "pe", …) as the ColumnDef ids in screener-columns.tsx,
+ * so this is a 1:1 mapping.
+ */
+function screenerColsToVisibility(cols: ScreenerColumn[]): VisibilityState {
+  return Object.fromEntries(cols.map((c) => [c.key, c.visible]));
+}
+
 // ── ScreenerPage ──────────────────────────────────────────────────────────────
 
 export default function ScreenerPage() {
   const { accessToken } = useAuth();
+  // WHY useRouter here (not inside column cells): navigation is a page-level
+  // concern. Passing a callback to DataTable's onRowClick keeps the column
+  // factory free of router dependencies (easier to unit-test).
+  const router = useRouter();
 
   // ── URL-backed dimensions (C-6) ───────────────────────────────────────────
   // WHY just sector + capTier: these are the top-level "axis" filters most
@@ -363,16 +311,6 @@ export default function ScreenerPage() {
   // for hiding the Load More button when accumulator.length >= total.
   const [serverTotal, setServerTotal] = useState(0);
 
-  // ── Column sort handler — cycle: none → asc → desc → none ─────────────────
-  const handleSort = useCallback((key: SortableKey) => {
-    setSort((prev) => {
-      if (prev.key !== key) {
-        return { key, dir: "asc" };
-      }
-      if (prev.dir === "asc") return { key, dir: "desc" };
-      return { key: null, dir: null };
-    });
-  }, []);
 
   // ── Stable key for the active filter set ──────────────────────────────────
   // WHY useMemo: queryKey must be stable across renders so React Query caches
@@ -497,6 +435,16 @@ export default function ScreenerPage() {
     enabled: sparklineEnabled,
   });
 
+  // ── TanStack column definitions ────────────────────────────────────────────
+  // WHY useMemo with sparklines dep: createScreenerColumns closes over the
+  // sparklines map. Re-running only when sparklines change avoids recreating
+  // all 13 ColumnDef objects on every render (which would cause DataTable to
+  // re-reconcile the full column list unnecessarily).
+  const tableColumns = useMemo(
+    () => createScreenerColumns(sparklines),
+    [sparklines],
+  );
+
   // ── Export columns — only currently-visible columns (T-B-2-07) ────────────
   // WHY derived (not state): when the user hides/shows a column the export
   // menu picks the change up immediately on next render. Storing this in
@@ -618,29 +566,42 @@ export default function ScreenerPage() {
 
       {/* ── 12-column virtualized table ───────────────────────────────────── */}
       {/*
-       * WHY ALWAYS render ScreenerTable: keeping the table mounted across all
-       * states (loading, empty, populated) avoids unmounting the column headers
-       * when transient empty-state conditions flip during the data merge.
+       * WHY ALWAYS render DataTable: keeping the table mounted across all
+       * states (loading, empty, populated) avoids unmounting the sticky column
+       * headers when transient empty-state conditions flip during data merge.
+       * DataTable renders skeletons while isLoading, an emptyMessage when rows
+       * are empty, and the virtualised data rows when populated.
        *
-       * The table itself shows skeletons while loading, an inline "No results"
-       * line when rows are empty, and the data when populated — see ScreenerTable.
-       *
-       * For the *deliberate, post-load* empty state we render the shared
-       * DashboardEmptyState BELOW the table headers (sticky) so users see
-       * the matched count chrome alongside the message. We only show the
-       * empty-state OVERLAY once data has actually been merged into the
-       * accumulator, to avoid the race where data arrives but the merge
-       * effect hasn't yet bumped serverTotal — which would briefly mount
-       * an empty state and unmount the table headers (breaking sort tests).
+       * For the *deliberate, post-load* empty state we render DashboardEmptyState
+       * BELOW the table so column headers stay mounted (preserves sort test assertions).
        */}
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-        <ScreenerTable
-          rows={sortedRows}
+        <DataTable
+          columns={tableColumns}
+          data={sortedRows}
+          getRowId={(row) => row.instrument_id}
+          density="compact"
+          ariaLabel="Screener results"
           isLoading={isLoading}
-          sort={sort}
-          onSort={handleSort}
-          columns={columns}
-          sparklines={sparklines}
+          emptyMessage="No instruments match the current filters. Adjust filters and apply."
+          onRowClick={(row) => router.push(`/instruments/${row.entity_id}`)}
+          sorting={screenerSortToTanstack(sort)}
+          onSortingChange={(updater) => {
+            // WHY functional setSort: using prevSort inside the setter avoids
+            // stale closure captures in React concurrent mode. If two clicks fire
+            // before the first re-render commits (full-suite test load; rare in
+            // prod), updater(screenerSortToTanstack(sort)) would use the stale
+            // `sort` from the outer closure. The functional form always receives
+            // the current committed state from React's queue.
+            setSort((prevSort) => {
+              const prevTanstack = screenerSortToTanstack(prevSort);
+              const next =
+                typeof updater === "function" ? updater(prevTanstack) : updater;
+              return tanstackToScreenerSort(next);
+            });
+          }}
+          columnVisibility={screenerColsToVisibility(columns)}
+          virtualize
         />
         {/*
          * Post-load empty messaging — only shows when:

@@ -12,9 +12,9 @@
  * navigation rather than complex multi-criteria filtering. Bloomberg analogy:
  * SECF (Security Finder) vs. EQUITY SCREEN.
  *
- * WHY REUSE ScreenerTable + ScreenerFilterBar: Both components already implement
- * the correct terminal-quality rendering (virtual scroll, 12-col layout, heat
- * cells, sort). Re-implementing would duplicate ~400 lines for no user benefit.
+ * WHY REUSE DataTable + createScreenerColumns: Both share the same terminal-quality
+ * rendering as the screener (virtual scroll, 12-col layout, heat cells, sort).
+ * Re-implementing would duplicate ~400 lines for no user benefit.
  * We pass simpler state management (search-only) rather than the full filter set.
  *
  * WHY NO SERVER COMPONENT: useQuery and useAuth require client rendering. The
@@ -26,14 +26,16 @@
  */
 
 "use client";
-// WHY "use client": useQuery, useAuth, useState, and useCallback require browser context.
+// WHY "use client": useQuery, useAuth, useState, and useMemo require browser context.
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
-import { ScreenerTable, type SortState, type SortableKey } from "@/components/screener/ScreenerTable";
+import { DataTable } from "@/components/ui/data-table/data-table";
+import { createScreenerColumns } from "@/components/screener/screener-columns";
 import type { ScreenerResult, ScreenerRequest } from "@/types/api";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -43,37 +45,11 @@ import type { ScreenerResult, ScreenerRequest } from "@/types/api";
 // keeps rendering fast regardless of row count.
 const PAGE_SIZE = 100;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * sortResults — client-side sort on the loaded result set.
- * Mirrors the same sort logic in screener/page.tsx for consistent behavior.
- * WHY null → bottom: null values sort to the bottom in both asc and desc
- * directions. Users want data-rich rows first.
- */
-function sortResults(results: ScreenerResult[], sort: SortState): ScreenerResult[] {
-  if (!sort.key || !sort.dir) return results;
-
-  const key = sort.key;
-  const dir = sort.dir === "asc" ? 1 : -1;
-
-  return [...results].sort((a, b) => {
-    const av = a[key];
-    const bv = b[key];
-
-    if (av == null && bv == null) return 0;
-    if (av == null) return 1;
-    if (bv == null) return -1;
-
-    if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
-    return String(av).localeCompare(String(bv)) * dir;
-  });
-}
-
 // ── InstrumentsPage ───────────────────────────────────────────────────────────
 
 export default function InstrumentsPage() {
   const { accessToken } = useAuth();
+  const router = useRouter();
 
   // ── Search input state (controlled) ──────────────────────────────────────
   // WHY separate "inputValue" and "searchQuery": the query only fires on Enter
@@ -87,17 +63,10 @@ export default function InstrumentsPage() {
   // WHY 400ms: long enough to avoid mid-word queries; short enough to feel responsive.
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Sort state ────────────────────────────────────────────────────────────
-  const [sort, setSort] = useState<SortState>({ key: null, dir: null });
-
-  // ── Column sort handler — cycle: none → asc → desc → none ─────────────────
-  const handleSort = useCallback((key: SortableKey) => {
-    setSort((prev) => {
-      if (prev.key !== key) return { key, dir: "asc" };
-      if (prev.dir === "asc") return { key, dir: "desc" };
-      return { key: null, dir: null };
-    });
-  }, []);
+  // ── Column definitions — stable across renders ────────────────────────────
+  // WHY useMemo with empty dep array: createScreenerColumns is expensive (~13
+  // ColumnDef objects). No sparklines on the browse page, so {} is fine.
+  const tableColumns = useMemo(() => createScreenerColumns({}), []);
 
   // ── Input change: update display value + debounce search query ────────────
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -108,9 +77,6 @@ export default function InstrumentsPage() {
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
       setSearchQuery(val.trim());
-      // WHY reset sort on search change: sort state from the previous result
-      // set is meaningless after a new query.
-      setSort({ key: null, dir: null });
     }, 400);
   }
 
@@ -119,13 +85,12 @@ export default function InstrumentsPage() {
     if (e.key === "Enter") {
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
       setSearchQuery(inputValue.trim());
-      setSort({ key: null, dir: null });
     }
   }
 
   // ── S9 screener query ─────────────────────────────────────────────────────
   // WHY use the screener endpoint (not search): the screener returns ScreenerResult
-  // objects with entity_id, ticker, fundamentals — everything ScreenerTable needs.
+  // objects with entity_id, ticker, fundamentals — everything DataTable needs.
   // The /v1/search/instruments endpoint returns a lightweight shape without
   // fundamentals data (no market_cap, P/E, etc.).
   const request: ScreenerRequest = {
@@ -145,11 +110,8 @@ export default function InstrumentsPage() {
     staleTime: 30_000,
   });
 
-  const rawResults = data?.results ?? [];
+  const rawResults: ScreenerResult[] = data?.results ?? [];
   const totalResults = data?.total ?? 0;
-
-  // WHY sort after fetch: client sort is instant for in-memory arrays
-  const sortedResults = sortResults(rawResults, sort);
 
   return (
     // WHY h-full flex-col: page must fill the shell's main content area (flex-1
@@ -216,7 +178,6 @@ export default function InstrumentsPage() {
             onClick={() => {
               setInputValue("");
               setSearchQuery("");
-              setSort({ key: null, dir: null });
             }}
             className="shrink-0 text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
             aria-label="Clear search"
@@ -232,17 +193,26 @@ export default function InstrumentsPage() {
        * search bar. min-h-0 overrides the default flex min-height so the table
        * doesn't push outside the flex container.
        *
-       * WHY ScreenerTable (not a custom table): ScreenerTable already has the
-       * correct virtual-scroll implementation, 12-column layout, sort icons,
-       * heat cells, and click-to-navigate to /instruments/{entity_id}. Reusing it
-       * avoids duplicating ~200 lines of table rendering code.
+       * WHY DataTable (not ScreenerTable): DataTable is the universal primitive that
+       * provides virtual-scroll, sort, column-resize, and row-click. ScreenerTable
+       * was a bespoke wrapper that duplicated DataTable's logic; removed in this wave.
+       *
+       * WHY key={searchQuery}: remounts DataTable on each new search so TanStack's
+       * internal sort state resets. Users expect a fresh sort order on a new query;
+       * keeping the previous column-sort over different result sets is confusing.
        */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <ScreenerTable
-          rows={sortedResults}
+        <DataTable<ScreenerResult>
+          key={searchQuery}
+          columns={tableColumns}
+          data={rawResults}
+          getRowId={(row) => row.instrument_id}
+          density="compact"
+          ariaLabel="Instruments browser"
           isLoading={isLoading}
-          sort={sort}
-          onSort={handleSort}
+          emptyMessage="No instruments found. Try a different search term."
+          onRowClick={(row) => router.push(`/instruments/${row.entity_id}`)}
+          virtualize
         />
       </div>
 
