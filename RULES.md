@@ -42,6 +42,27 @@ without forward compatibility, all consumers break simultaneously. Rules:
 - Bump `schema_version` in the event envelope
 - Run `scripts/gen-contracts.sh` to validate compatibility before merging
 
+### R28: MUST use Avro for all Kafka contracts (no JSON on the wire)
+**Why**: Pure JSON on Kafka silently accepts schema drift — a renamed or removed
+field is invisible until the consumer crashes in production. Avro on the wire
+with a registered `.avsc` makes every contract change explicit, validated by
+`scripts/gen-contracts.sh`, and enforced by the architecture test
+`tests/architecture/test_kafka_avro_enforcement.py` (which fails the build for
+any consumer using `json.loads` without a paired `deserialize_confluent_avro`
+path). PLAN-0062 codified this after every JSON-only consumer on the platform
+was migrated. Rules:
+- Every topic has exactly one `.avsc` file in `infra/kafka/schemas/`,
+  registered with the schema registry by `register-schemas.py` at startup
+- Every topic has a canonical model in `libs/contracts` mirroring the schema
+  field-for-field (entity-shaped → `canonical/<event>.py`; trigger-event-shaped
+  → `events/<domain>/<event>.py`)
+- Producers serialise via `messaging.kafka.serialization_utils.serialize_confluent_avro`
+  (or `serialize_avro` for non-Confluent envelopes) — never `json.dumps(...).encode()`
+- Consumers' `deserialize_value` calls `deserialize_confluent_avro` (or
+  `deserialize_avro`); a JSON fallback is allowed only as a temporary migration
+  aid and must log every fallback hit so the residual JSON traffic is measurable
+- The architecture test is unconditional — no baseline / escape hatch
+
 ### R6: MUST version REST API paths for breaking changes
 **Why**: Clients (frontend, other services) depend on stable API contracts.
 Non-breaking additions (new endpoints, new optional fields) are fine. Breaking changes
