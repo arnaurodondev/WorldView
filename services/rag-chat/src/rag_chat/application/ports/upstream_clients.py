@@ -60,7 +60,7 @@ class RelationResult:
     object: str
     summary: str
     confidence: float
-    summary_authority: str | None = None
+    summary_authority: float | None = None
     evidence_count: int = 0
     latest_evidence_at: str | None = None
     semantic_mode: str | None = None

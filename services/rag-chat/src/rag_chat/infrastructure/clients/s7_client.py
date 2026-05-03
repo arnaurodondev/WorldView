@@ -6,7 +6,7 @@ Endpoints:
   POST /api/v1/claims/search            → temporal claims
   POST /api/v1/events/search            → structured events
   GET  /api/v1/entities/{id}/contradictions → active contradictions
-  POST /api/v1/graph/cypher             → multi-hop Cypher (feature-flagged)
+  POST /api/v1/graph/cypher/neighborhood → multi-hop Cypher (feature-flagged)
 """
 
 from __future__ import annotations
@@ -275,14 +275,27 @@ class S7Client(BaseUpstreamClient):
         params: dict,
         max_results: int = 50,
     ) -> list[dict]:
-        """POST /api/v1/graph/cypher → multi-hop traversal results.
+        """POST /api/v1/graph/cypher/neighborhood → egocentric multi-hop results.
 
-        Returns empty list when feature is disabled (501) or on any error.
+        The ``params`` dict is expected to contain an ``"id"`` key with the
+        entity UUID string (set by the caller in ``_fetch_cypher``).
+
+        Returns empty list when feature is disabled (503) or on any error.
         This method NEVER raises; callers treat an empty list as unavailable.
         """
+        entity_id = params.get("id", "")
+        limit = min(max_results, 200)  # CypherNeighborhoodRequest.limit max=200
         raw = await self._post(
-            "/api/v1/graph/cypher",
-            {"cypher": cypher, "params": params, "max_results": max_results},
+            "/api/v1/graph/cypher/neighborhood",
+            {
+                "entity_id": entity_id,
+                "max_hops": 2,
+                "min_confidence": 0.4,
+                "include_temporal_events": False,
+                "limit": limit,
+            },
         )
-        results: list[dict] = raw.get("results", [])  # type: ignore[assignment]
+        # Response shape: {center, relations, entities, temporal_events}
+        # Flatten relations into a list of dicts for the caller
+        results: list[dict] = raw.get("relations", [])  # type: ignore[assignment]
         return results

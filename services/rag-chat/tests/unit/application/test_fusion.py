@@ -40,7 +40,7 @@ def _item(
     )
 
 
-def _relation_result(subject: str, summary_authority: str = "high", confidence: float = 0.85) -> MagicMock:
+def _relation_result(subject: str, summary_authority: float | None = 0.85, confidence: float = 0.85) -> MagicMock:
     r = MagicMock()
     r.relation_id = f"rel-{subject}"
     r.relation_type = "OWNS"
@@ -116,10 +116,10 @@ def test_graph_enricher_injects_top3_relations(enricher: GraphEnricher) -> None:
     """Chunk with entity → top-3 relations attached as graph_enrichment."""
     chunk = _item(item_type=ItemType.chunk, entity_name="Apple Inc")
     relations = [
-        _relation_result("Apple Inc", summary_authority="a", confidence=0.90),
-        _relation_result("Apple Inc", summary_authority="b", confidence=0.80),
-        _relation_result("Apple Inc", summary_authority="c", confidence=0.70),
-        _relation_result("Apple Inc", summary_authority="d", confidence=0.60),  # 4th — excluded
+        _relation_result("Apple Inc", summary_authority=0.90, confidence=0.90),
+        _relation_result("Apple Inc", summary_authority=0.80, confidence=0.80),
+        _relation_result("Apple Inc", summary_authority=0.70, confidence=0.70),
+        _relation_result("Apple Inc", summary_authority=0.60, confidence=0.60),  # 4th — excluded
     ]
 
     result = enricher.enrich([chunk], relations)
@@ -159,3 +159,33 @@ def test_graph_enricher_no_matching_entity(enricher: GraphEnricher) -> None:
 
     result = enricher.enrich([chunk], relations)
     assert result[0].graph_enrichment == ()
+
+
+@pytest.mark.unit
+def test_sort_by_summary_authority_float_values(enricher: GraphEnricher) -> None:
+    """Relations with mixed float and None summary_authority sort correctly (B-1 regression).
+
+    Expected order after enrich(): authority=0.8 first, then 0.3, then None last.
+    """
+    chunk = _item(item_type=ItemType.chunk, entity_name="Tesla Inc")
+
+    rel_high = _relation_result("Tesla Inc", summary_authority=0.8, confidence=0.90)
+    rel_none = _relation_result("Tesla Inc", summary_authority=None, confidence=0.70)
+    rel_low = _relation_result("Tesla Inc", summary_authority=0.3, confidence=0.80)
+
+    # Pass in unsorted order — enricher must sort correctly without TypeError
+    result = enricher.enrich([chunk], [rel_high, rel_none, rel_low])
+
+    assert len(result) == 1
+    graph = result[0].graph_enrichment
+    assert len(graph) == 3
+
+    # Extract the objects (the relation results are MagicMocks whose .object is "Target Corp")
+    # We verify order by inspecting the relation_id which encodes subject+uniqueness via MagicMock spec.
+    # Instead: re-derive the authority order from the graph_enrichment confidence values
+    # (each rel has a distinct confidence, and authority order matches confidence order here).
+    confidences = [entry["confidence"] for entry in graph]
+    # 0.8 authority → confidence 0.90, 0.3 authority → confidence 0.80, None → confidence 0.70
+    assert confidences[0] == pytest.approx(0.90), "Highest authority (0.8) must be first"
+    assert confidences[1] == pytest.approx(0.80), "Second authority (0.3) must be second"
+    assert confidences[2] == pytest.approx(0.70), "None authority must be last"

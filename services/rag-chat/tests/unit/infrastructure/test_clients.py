@@ -116,3 +116,40 @@ async def test_s7_cypher_501_returns_empty(
     )
 
     assert result == []
+
+
+# ── T5: S7 cypher_traverse posts to /neighborhood endpoint (B-4 regression) ──
+
+
+@pytest.mark.asyncio
+async def test_cypher_traverse_uses_neighborhood_endpoint(
+    httpx_mock: pytest_httpx.HTTPXMock,
+) -> None:
+    """cypher_traverse() must POST to /api/v1/graph/cypher/neighborhood, not /api/v1/graph/cypher."""
+    import json
+
+    entity_id = uuid4()
+    httpx_mock.add_response(
+        status_code=200,
+        json={"center": {}, "relations": [{"relation_id": "r1"}], "entities": {}, "temporal_events": []},
+    )
+
+    client = S7Client(base_url=_BASE)
+    result = await client.cypher_traverse(
+        cypher="MATCH (e:Entity {id: $id})-[r*1..3]->(n) RETURN n",
+        params={"id": str(entity_id)},
+        max_results=30,
+    )
+
+    # Verify the result was parsed from "relations" key
+    assert result == [{"relation_id": "r1"}]
+
+    # Verify the correct endpoint was called
+    requests = httpx_mock.get_requests()
+    assert len(requests) == 1
+    assert str(requests[0].url) == f"{_BASE}/api/v1/graph/cypher/neighborhood"
+
+    # Verify the request body contains entity_id (not a raw cypher string)
+    body = json.loads(requests[0].content)
+    assert body["entity_id"] == str(entity_id)
+    assert "cypher" not in body

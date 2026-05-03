@@ -44,8 +44,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
-_DEFAULT_EMBED_MODEL_ID = "nomic-embed-text"
-
 
 class DirectProducerProtocol(Protocol):
     """Structural type for direct Kafka producer (entity.dirtied.v1)."""
@@ -62,7 +60,8 @@ class ProvisionalEnrichmentWorker:
         llm_client:        FallbackChainClient for extraction + embedding.
         direct_producer:   Direct Kafka producer for entity.dirtied.v1.
         entity_dirtied_topic: Topic name for entity.dirtied.v1.
-        embedding_model_id: Model ID passed to EmbeddingInput (default: nomic-embed-text).
+        embedding_model_id: Model ID passed to EmbeddingInput (default: bge-large:latest,
+                           which produces 1024-dim vectors matching vector(1024) column).
                            Set via KNOWLEDGE_GRAPH_EMBEDDING_MODEL_ID env var.
         batch_limit:       Max rows fetched per cycle (default 50). PLAN-0061 T-A-4.
         max_retries:       Rows exceeding this failure count become 'failed' (terminal).
@@ -77,7 +76,7 @@ class ProvisionalEnrichmentWorker:
         llm_client: FallbackChainClient,
         direct_producer: DirectProducerProtocol | None = None,
         entity_dirtied_topic: str = "entity.dirtied.v1",
-        embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
+        embedding_model_id: str = "bge-large:latest",
         usage_logger: LlmUsageLogProtocol | None = None,
         batch_limit: int = 50,
         max_retries: int = 5,
@@ -110,6 +109,16 @@ class ProvisionalEnrichmentWorker:
         Session is NOT held open during external LLM / embedding HTTP calls.
         """
         from sqlalchemy import text
+
+        # B-7: Recovery sweep — reset rows stuck in 'processing' back to 'pending'
+        # so they can be retried on the next cycle.
+        async with self._sf() as session:
+            recovered = await self._recover_stale_processing_rows(session)
+        if recovered:
+            logger.info(  # type: ignore[no-any-return]
+                "provisional_enrichment_recovery_swept",
+                recovered=recovered,
+            )
 
         enriched = 0
         failed = 0
@@ -237,15 +246,13 @@ WHERE queue_id = :queue_id
             await session.commit()
 
         # Produce entity.dirtied.v1 AFTER successful DB commit.
-        import json
-
         for dirty_id in entity_ids_to_dirty:
             if self._producer:
                 try:
                     self._producer.produce_bytes(
                         topic=self._dirtied_topic,
                         key=str(dirty_id).encode(),
-                        value=json.dumps({"entity_id": str(dirty_id)}).encode(),
+                        value=core._build_dirtied_event(dirty_id),
                     )
                 except Exception:
                     logger.warning(  # type: ignore[no-any-return]
@@ -259,6 +266,30 @@ WHERE queue_id = :queue_id
             enriched=enriched,
             failed=failed,
         )
+
+    async def _recover_stale_processing_rows(self, session: Any) -> int:
+        """Reset rows stuck in 'processing' for > 30 minutes back to 'pending'.
+
+        B-7 fix: provisional_entity_queue has no ``updated_at`` column (only
+        ``created_at``), so we use a 30-minute threshold on ``created_at``.
+        Rows that were legitimately created recently and are still processing
+        will not be reset (they are younger than 30 minutes).
+
+        Returns the number of rows recovered.
+        """
+        from sqlalchemy import text
+
+        result = await session.execute(
+            text("""
+UPDATE provisional_entity_queue
+SET status = 'pending', retry_count = LEAST(retry_count + 1, :max_retries - 1)
+WHERE status = 'processing'
+  AND created_at < now() - interval '30 minutes'
+"""),
+            {"max_retries": self._max_retries},
+        )
+        await session.commit()
+        return result.rowcount  # type: ignore[no-any-return]
 
     async def _apply_retry(
         self,

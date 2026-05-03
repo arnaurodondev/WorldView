@@ -158,8 +158,8 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
         ):
             await worker.run()
 
-        # Phase 1 commit + Phase 3 commit = 2 commits
-        assert len(commit_called_at) == 2
+        # Recovery sweep commit + Phase 1 commit + Phase 3 commit = 3 commits
+        assert len(commit_called_at) == 3
         assert len(produce_called_at) == 1
         # Produce must happen after the LAST commit (Phase 3)
         assert (
@@ -175,13 +175,13 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
         session, factory = _make_session_with_rows([_make_pending_row()])
         producer = _make_producer()
 
-        # Make the second commit (Phase 3) fail; first commit (Phase 1) succeeds.
+        # Recovery sweep commit (1) + Phase 1 commit (2) succeed; Phase 3 (3) fails.
         commit_count = [0]
         original_commit = session.commit
 
         async def _fail_on_phase3():
             commit_count[0] += 1
-            if commit_count[0] >= 2:  # Phase 3 commit
+            if commit_count[0] >= 3:  # Phase 3 commit
                 raise RuntimeError("DB write failed")
             await original_commit()
 
@@ -655,3 +655,157 @@ class TestInitWarningNoProducerEnrichmentWorker:
         assert not any(
             e.get("event") == "provisional_enrichment_worker_no_producer" for e in cap
         ), f"Unexpected no_producer warning found in: {cap}"
+
+
+# ---------------------------------------------------------------------------
+# B-2: embed model default must not be "nomic-embed-text" (768-dim vs 1024)
+# ---------------------------------------------------------------------------
+
+
+class TestEmbedModelIdDefault:
+    def test_embed_model_id_is_not_nomic_embed_text(self) -> None:
+        """Default embed_model_id must not be 'nomic-embed-text' (produces 768-dim vectors).
+
+        B-2 fix: entity_embedding_state.embedding is vector(1024). Using
+        nomic-embed-text causes a FatalError on every provisional embed call.
+        The correct default is a 1024-dim model such as 'bge-large:latest'.
+        """
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([])
+        worker = ProvisionalEnrichmentWorker(
+            session_factory=factory,
+            llm_client=AsyncMock(),
+        )
+
+        assert worker._embed_model_id != "nomic-embed-text", (
+            f"Default embed model '{worker._embed_model_id}' is nomic-embed-text, "
+            "which produces 768-dim vectors incompatible with vector(1024) column"
+        )
+        # Assert the model is a known 1024-dim model.
+        assert worker._embed_model_id in {
+            "bge-large:latest",
+            "BAAI/bge-large-en-v1.5",
+        }, f"Default embed model '{worker._embed_model_id}' is not a known 1024-dim model"
+
+
+# ---------------------------------------------------------------------------
+# B-3: entity.dirtied.v1 payload must include all required Avro fields
+# ---------------------------------------------------------------------------
+
+
+class TestDirtiedEventPayload:
+    def test_dirtied_event_includes_all_avro_fields(self) -> None:
+        """_build_dirtied_event() must include all required Avro fields.
+
+        B-3 fix: previously callers emitted {"entity_id": "<uuid>"} which is
+        missing event_id, event_type, schema_version, occurred_at, dirty_reason
+        — all required by infra/kafka/schemas/entity.dirtied.v1.avsc.
+        """
+        import json
+
+        from knowledge_graph.infrastructure.workers.provisional_enrichment_core import (
+            _build_dirtied_event,
+        )
+
+        entity_id = _ENTITY_ID
+        raw = _build_dirtied_event(entity_id)
+        payload = json.loads(raw)
+
+        # All required Avro fields must be present.
+        required_fields = {"event_id", "event_type", "schema_version", "occurred_at", "entity_id", "dirty_reason"}
+        missing = required_fields - payload.keys()
+        assert not missing, f"Missing required Avro fields: {missing}"
+
+        assert (
+            payload["event_type"] == "entity.dirtied"
+        ), f"event_type must be 'entity.dirtied', got '{payload['event_type']}'"
+        assert payload["schema_version"] == 1, f"schema_version must be 1, got {payload['schema_version']}"
+        assert payload["entity_id"] == str(entity_id), f"entity_id must be '{entity_id}', got '{payload['entity_id']}'"
+        assert (
+            payload["dirty_reason"] == "profile_updated"
+        ), f"Default dirty_reason must be 'profile_updated', got '{payload['dirty_reason']}'"
+        # Optional fields should also be present (nullable in Avro).
+        assert "source_doc_id" in payload
+        assert "correlation_id" in payload
+
+
+# ---------------------------------------------------------------------------
+# B-7: recovery sweep for rows stuck in 'processing'
+# ---------------------------------------------------------------------------
+
+
+class TestRecoverStaleProcessingRows:
+    async def test_recover_stale_processing_rows_resets_to_pending(self) -> None:
+        """_recover_stale_processing_rows() issues UPDATE resetting stuck rows to 'pending'.
+
+        B-7 fix: rows stuck in 'processing' after a crash are never retried
+        because Phase 1 SELECT only queries WHERE status = 'pending'.
+        """
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([])
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), max_retries=5)
+
+        # Set up a session where execute() returns rowcount=3.
+        session = AsyncMock()
+        session.commit = AsyncMock()
+        result_mock = MagicMock()
+        result_mock.rowcount = 3
+        session.execute = AsyncMock(return_value=result_mock)
+
+        recovered = await worker._recover_stale_processing_rows(session)
+
+        assert recovered == 3, f"Expected 3 recovered rows, got {recovered}"
+
+        # The UPDATE SQL must reference 'processing' and pass max_retries.
+        session.execute.assert_awaited_once()
+        call_args = session.execute.call_args
+        sql_text = str(call_args.args[0])
+        assert "processing" in sql_text, "SQL must filter on status = 'processing'"
+        params = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("parameters", {})
+        assert "max_retries" in params, "SQL must pass max_retries parameter"
+        assert params["max_retries"] == 5
+
+        session.commit.assert_awaited_once()
+
+    async def test_run_calls_recovery_before_processing(self) -> None:
+        """run() calls _recover_stale_processing_rows before fetching pending rows.
+
+        B-7 fix: the recovery sweep must happen at the start of every run()
+        cycle to unblock stuck rows.
+        """
+        from unittest.mock import patch as _patch
+
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        call_order: list[str] = []
+
+        _session, factory = _make_session_with_rows([])
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock())
+
+        async def _mock_recover(session: object) -> int:
+            call_order.append("recover")
+            return 0
+
+        async def _mock_fetch_pending(session: object) -> list:  # type: ignore[return]
+            call_order.append("fetch_pending")
+            return []
+
+        with (
+            _patch.object(worker, "_recover_stale_processing_rows", side_effect=_mock_recover),
+            _patch(
+                "knowledge_graph.infrastructure.workers.provisional_enrichment.ProvisionalEnrichmentWorker._recover_stale_processing_rows",
+                side_effect=_mock_recover,
+            ),
+        ):
+            await worker.run()
+
+        # _recover_stale_processing_rows must have been called exactly once.
+        assert call_order.count("recover") == 1, f"Expected 1 recovery call, got {call_order.count('recover')}"
