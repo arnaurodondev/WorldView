@@ -1192,6 +1192,7 @@ def _build_raw_relations(
                 "object_entity_id": object_id,
                 "raw_type": str(rel_d.get("predicate", "")),
                 "extraction_confidence": float(rel_d.get("confidence", 0.5)),
+                "evidence_text": str(rel_d.get("evidence_text", "")) or None,
                 "entity_provisional": subject_is_provisional or object_is_provisional,
                 "provisional_queue_id": provisional_qid,
             }
