@@ -337,7 +337,11 @@ class TestParseRawClaims:
         assert claim.is_backfill is True
 
     def test_invalid_claim_skipped_with_warning(self) -> None:
-        """A claim dict missing required subject_entity_id is skipped."""
+        """A claim dict missing required subject_entity_id is skipped.
+
+        PLAN-0062 F-021: handler split into typed (KeyError vs ValueError)
+        warnings — missing-field branch emits ``..._bad_claim_missing_field``.
+        """
         good_id = str(uuid4())
         data = [
             {"claim_type": "bad_claim"},  # missing subject_entity_id
@@ -350,11 +354,14 @@ class TestParseRawClaims:
         assert len(result) == 1
         assert result[0].claim_type == "good_claim"
         assert any(
-            e.get("event") == "enriched_consumer_bad_claim" for e in cap
-        ), f"Expected warning log for bad claim not found in {cap}"
+            e.get("event") == "enriched_consumer_bad_claim_missing_field" for e in cap
+        ), f"Expected enriched_consumer_bad_claim_missing_field warning not found in {cap}"
 
     def test_invalid_uuid_skipped(self) -> None:
-        """A claim with a non-UUID subject_entity_id is skipped."""
+        """A claim with a non-UUID subject_entity_id is skipped.
+
+        PLAN-0062 F-021: ValueError branch emits ``..._bad_claim_value_error``.
+        """
         data = [
             {"subject_entity_id": "not-a-uuid", "claim_type": "test"},
         ]
@@ -363,7 +370,7 @@ class TestParseRawClaims:
             result = _parse_raw_claims(data, is_backfill=False)
 
         assert len(result) == 0
-        assert any(e.get("event") == "enriched_consumer_bad_claim" for e in cap)
+        assert any(e.get("event") == "enriched_consumer_bad_claim_value_error" for e in cap)
 
     def test_empty_list_returns_empty(self) -> None:
         """Empty input produces empty output."""
@@ -526,3 +533,227 @@ class TestEnrichedConsumerAvroDeserialization:
         decoded = consumer.deserialize_value(legacy)
         assert decoded["doc_id"] == "01234567-89ab-7def-8012-aaaaaaaaaaaa"
         assert decoded["raw_relations"][0]["subject_entity_id"] == "y"
+
+    # ── PLAN-0062 F-015: malformed Avro payload ───────────────────────────
+
+    @pytest.mark.unit
+    def test_malformed_avro_raises(self) -> None:
+        """A payload with the magic byte but a truncated/garbage Avro body
+        must surface as a non-``JSONDecodeError`` exception so the dispatch
+        falls cleanly into ``MalformedDataError`` and dead-letters with the
+        correct error class.
+        """
+        consumer = _make_consumer()
+        garbage = b"\x00\x00\x00\x00\x01\x42"
+        with pytest.raises(Exception) as exc_info:
+            consumer.deserialize_value(garbage)
+        # Must NOT be a JSONDecodeError — the magic byte routed to the Avro
+        # path; failure should surface from the Avro reader.
+        import json
+
+        assert not isinstance(exc_info.value, json.JSONDecodeError)
+
+    # ── PLAN-0062 F-018: oversized JSON-fallback payload ─────────────────
+
+    @pytest.mark.unit
+    def test_json_fallback_oversized_payload_raises_malformed_data_error(self) -> None:
+        """A JSON-fallback payload above the 16 MiB cap must raise
+        :class:`MalformedDataError` BEFORE ``json.loads`` is called.
+        """
+        from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
+
+        consumer = _make_consumer()
+        # 17 MiB payload — over the 16 MiB cap.
+        payload = b'{"x":"' + b"a" * (17 * 1024 * 1024) + b'"}'
+        with pytest.raises(MalformedDataError):
+            consumer.deserialize_value(payload)
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0062 F-013/F-014: process_message E2E coverage for raw_relations_json
+# ---------------------------------------------------------------------------
+
+
+def _mock_session_factory_simple() -> AsyncMock:
+    """Minimal session factory whose UoW commits cleanly.  Reuses the
+    pattern from :func:`_mock_session_factory` above but wraps it as a
+    bound async context manager.
+    """
+    sf, _session = _mock_session_factory()
+    return sf
+
+
+class TestRawRelationsJsonProcessMessage:
+    """PLAN-0062 F-013/F-014: ``process_message`` must materialize relations
+    decoded from BOTH the new ``raw_relations_json`` field (post-migration)
+    AND the legacy ``raw_relations`` list field (pre-migration).
+    """
+
+    @pytest.mark.unit
+    async def test_decodes_raw_relations_json_through_process_message(self) -> None:
+        """A message with ``raw_relations_json`` (JSON string) is decoded and
+        passed through to ``materialize_graph`` with one relation.
+        """
+        sf = _mock_session_factory_simple()
+        config = ConsumerConfig(
+            group_id="kg-enriched-test",
+            topics=["nlp.article.enriched.v1"],
+        )
+        consumer = EnrichedArticleConsumer(
+            config=config,
+            session_factory=sf,
+            embedding_client=MagicMock(),
+            direct_producer=MagicMock(),
+            entity_dirtied_topic="entity.dirtied.v1",
+        )
+
+        subj = str(uuid4())
+        obj = str(uuid4())
+        msg = {
+            "event_id": str(uuid4()),
+            "doc_id": str(uuid4()),
+            "resolved_entity_ids": [subj, obj],
+            "is_backfill": False,
+            "source_type": "news",
+            "raw_relations_json": (
+                '[{"subject_entity_id":"' + subj + '","object_entity_id":"' + obj + '","raw_type":"employs"}]'
+            ),
+            "raw_events": [],
+            "raw_claims": [],
+        }
+
+        canon_result = MagicMock()
+        canon_result.canonical_type = "employs"
+        canon_result.semantic_mode = "RELATION_STATE"
+        canon_result.decay_class = "stable"
+        canon_result.decay_alpha = 0.0
+        canon_result.base_confidence = 0.8
+        canon_result.step = "exact"
+
+        with (
+            patch(
+                "knowledge_graph.infrastructure.messaging.consumers.enriched_consumer.materialize_graph",
+            ) as mock_materialize,
+            patch(
+                "knowledge_graph.infrastructure.messaging.consumers.enriched_consumer.canonicalize_relation_type",
+                AsyncMock(return_value=canon_result),
+            ),
+        ):
+            mock_summary = MagicMock()
+            mock_summary.entity_ids_to_dirty = frozenset()
+            mock_materialize.return_value = mock_summary
+
+            await consumer.process_message(key="test", value=msg, headers={})
+
+        mock_materialize.assert_called_once()
+        relations = mock_materialize.call_args.kwargs["relations"]
+        assert len(relations) == 1, f"Expected 1 relation from raw_relations_json, got {len(relations)}"
+
+    @pytest.mark.unit
+    async def test_legacy_raw_relations_list_fallback_through_process_message(self) -> None:
+        """A message with the LEGACY ``raw_relations`` list field (no
+        ``_json`` suffix) still flows end-to-end with one relation — covers
+        the migration window where producers may emit either shape.
+        """
+        sf = _mock_session_factory_simple()
+        config = ConsumerConfig(
+            group_id="kg-enriched-test",
+            topics=["nlp.article.enriched.v1"],
+        )
+        consumer = EnrichedArticleConsumer(
+            config=config,
+            session_factory=sf,
+            embedding_client=MagicMock(),
+            direct_producer=MagicMock(),
+            entity_dirtied_topic="entity.dirtied.v1",
+        )
+
+        msg = _enriched_message()  # uses legacy ``raw_relations`` list
+
+        canon_result = MagicMock()
+        canon_result.canonical_type = "employs"
+        canon_result.semantic_mode = "RELATION_STATE"
+        canon_result.decay_class = "stable"
+        canon_result.decay_alpha = 0.0
+        canon_result.base_confidence = 0.8
+        canon_result.step = "exact"
+
+        with (
+            patch(
+                "knowledge_graph.infrastructure.messaging.consumers.enriched_consumer.materialize_graph",
+            ) as mock_materialize,
+            patch(
+                "knowledge_graph.infrastructure.messaging.consumers.enriched_consumer.canonicalize_relation_type",
+                AsyncMock(return_value=canon_result),
+            ),
+        ):
+            mock_summary = MagicMock()
+            mock_summary.entity_ids_to_dirty = frozenset()
+            mock_materialize.return_value = mock_summary
+
+            await consumer.process_message(key="test", value=msg, headers={})
+
+        mock_materialize.assert_called_once()
+        relations = mock_materialize.call_args.kwargs["relations"]
+        assert len(relations) == 1, f"Expected 1 relation from legacy raw_relations, got {len(relations)}"
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0062 F-019: text-field cap + polarity allow-list
+# ---------------------------------------------------------------------------
+
+
+class TestParseRawRelationsTruncationAndPolarity:
+    """PLAN-0062 F-019: ``_parse_raw_relations`` must truncate oversized
+    free-text and normalize out-of-vocabulary polarities, both with
+    structured warnings.
+    """
+
+    @pytest.mark.unit
+    def test_parse_raw_relations_truncates_oversized_evidence_text(self) -> None:
+        from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import (
+            _MAX_TEXT_FIELD_LEN,
+            _parse_raw_relations,
+        )
+
+        subj = str(uuid4())
+        obj = str(uuid4())
+        oversized_text = "x" * (_MAX_TEXT_FIELD_LEN + 1)
+        data = [
+            {
+                "subject_entity_id": subj,
+                "object_entity_id": obj,
+                "raw_type": "employs",
+                "evidence_text": oversized_text,
+            },
+        ]
+        with capture_logs() as logs:
+            results = _parse_raw_relations(data)
+
+        assert len(results) == 1
+        assert results[0].evidence_text is not None
+        assert len(results[0].evidence_text) == _MAX_TEXT_FIELD_LEN
+        truncation_logs = [le for le in logs if le.get("event") == "enriched_consumer_text_field_truncated"]
+        assert truncation_logs, "expected truncation warning to be logged"
+
+    @pytest.mark.unit
+    def test_parse_raw_relations_normalizes_invalid_polarity(self) -> None:
+        from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import _parse_raw_relations
+
+        subj = str(uuid4())
+        obj = str(uuid4())
+        data = [
+            {
+                "subject_entity_id": subj,
+                "object_entity_id": obj,
+                "raw_type": "employs",
+                "polarity": "bogus",
+            },
+        ]
+        with capture_logs() as logs:
+            results = _parse_raw_relations(data)
+
+        assert len(results) == 1
+        assert results[0].polarity == "neutral"
+        norm_logs = [le for le in logs if le.get("event") == "enriched_consumer_polarity_normalized"]
+        assert norm_logs, "expected polarity-normalization warning to be logged"

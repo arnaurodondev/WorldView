@@ -211,3 +211,68 @@ class TestKafkaAvroEnforcement:
         assert _classify_deserialize_value(avro_first) == "AVRO_FIRST"
         # ``from json import loads`` alias must still classify as JSON_ONLY.
         assert _classify_deserialize_value(json_aliased) == "JSON_ONLY"
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0062 producer-side R28 enforcement (Wave A counter-test)
+# ---------------------------------------------------------------------------
+
+
+import re
+
+import pytest
+
+# Match e.g. ``payload_avro=json.dumps(...)`` or ``payload_avro = json.dumps(...)``.
+# Both ``outbox_repo.append`` and ``outbox_repo.add`` are the legitimate call
+# sites; anything else producing ``payload_avro=json.dumps(...)`` is also a
+# violation.  We don't need to anchor on the call site — the assignment alone
+# is the smoking gun.
+_PRODUCER_JSON_DUMPS_RE = re.compile(r"payload_avro\s*=\s*json\.dumps\b")
+
+
+def _discover_production_files() -> list[Path]:
+    """Glob all production ``.py`` files under ``services/*/src``.
+
+    Skips test directories — only actual production code is in scope for
+    R28 producer enforcement.
+    """
+    matches: list[Path] = []
+    for svc_src in (REPO_ROOT / "services").glob("*/src"):
+        for py in svc_src.rglob("*.py"):
+            # Belt-and-braces: skip any tests that may live under src.
+            parts = py.parts
+            if "tests" in parts or "test_" in py.name:
+                continue
+            matches.append(py)
+    return sorted(matches)
+
+
+@pytest.mark.unit
+class TestProducerR28Enforcement:
+    """Producer-side counterpart to :class:`TestKafkaAvroEnforcement`.
+
+    Every outbox row written into PostgreSQL eventually becomes a Kafka
+    message.  Hard Rule R28 forbids pure-JSON envelopes — therefore
+    ``payload_avro=json.dumps(...)`` at any producer site is a build
+    failure.  Use ``serialize_confluent_avro(schema_path, record)`` (or
+    ``serialize_avro(...)``) instead and bind the bytes to a local
+    variable BEFORE the outbox call (DS F-001 lesson).
+    """
+
+    def test_no_producer_uses_json_dumps_for_payload_avro(self) -> None:
+        violations: list[str] = []
+        for py in _discover_production_files():
+            text = py.read_text(encoding="utf-8")
+            for match in _PRODUCER_JSON_DUMPS_RE.finditer(text):
+                # Compute 1-based line number.
+                line = text.count("\n", 0, match.start()) + 1
+                rel = str(py.relative_to(REPO_ROOT))
+                violations.append(
+                    f"  {rel}:{line} — payload_avro=json.dumps(...) is forbidden under Hard Rule R28. "
+                    "Use serialize_confluent_avro(schema_path, record) and bind the bytes "
+                    "BEFORE the outbox call (DS F-001 lesson).",
+                )
+        assert not violations, (
+            "\n[KAFKA-AVRO PRODUCER] Pure-JSON outbox writes are forbidden under Hard Rule R28 "
+            f"({len(violations)} site(s)):\n" + "\n".join(violations)
+        )

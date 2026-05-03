@@ -73,6 +73,47 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 _ARTICLE_ENRICHED_TOPIC = "nlp.article.enriched.v1"
 _ARTICLE_ENRICHED_SCHEMA_PATH = get_schema_path("nlp.article.enriched.v1.avsc")
 
+# PLAN-0062 F-018: defence-in-depth bound on the unbounded ``json.loads`` read.
+# Mirrors libs/contracts decode_raw_array's _MAX_RAW_ARRAY_BYTES — caps the
+# JSON-fallback path at 16 MiB so a poisoned legacy producer cannot OOM the
+# consumer.  Avro path is already bounded by the schema; this only covers the
+# ``raw[:1] != b"\x00"`` JSON branch.
+_MAX_JSON_FALLBACK_BYTES = 16 * 1024 * 1024
+
+# PLAN-0062 F-019: cap free-text fields and constrain polarity values.
+# The Avro schema permits arbitrarily long strings; this hard cap protects
+# downstream Postgres TEXT columns and Cypher queries from pathological
+# inputs.  Polarity values outside the allow-list collapse to ``"neutral"``
+# with a structured warning so the upstream extractor's mistake is visible.
+_MAX_TEXT_FIELD_LEN = 8192  # 8 KiB hard cap
+_VALID_POLARITIES = frozenset({"positive", "negative", "neutral"})
+
+
+def _truncate_text_field(value: Any, *, field_name: str) -> Any:
+    """Truncate string values exceeding _MAX_TEXT_FIELD_LEN; emit a warning on truncation."""
+    if isinstance(value, str) and len(value) > _MAX_TEXT_FIELD_LEN:
+        logger.warning(  # type: ignore[no-any-return]
+            "enriched_consumer_text_field_truncated",
+            field_name=field_name,
+            original_len=len(value),
+            cap=_MAX_TEXT_FIELD_LEN,
+        )
+        return value[:_MAX_TEXT_FIELD_LEN]
+    return value
+
+
+def _normalize_polarity(value: Any, *, default: str) -> str:
+    """Coerce unknown polarity values to ``"neutral"`` with a warning; ``None`` falls back to *default*."""
+    if value is None:
+        return default
+    if value in _VALID_POLARITIES:
+        return str(value)
+    logger.warning(  # type: ignore[no-any-return]
+        "enriched_consumer_polarity_normalized",
+        invalid_value=str(value)[:64],
+    )
+    return "neutral"
+
 
 # ---------------------------------------------------------------------------
 # Minimal no-op UoW — the consumer manages its own session in process_message
@@ -391,6 +432,17 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
             "enriched_consumer_legacy_json_payload",
             message="nlp.article.enriched.v1 message lacks Confluent magic byte; using JSON fallback",
         )
+        # PLAN-0062 F-018: cap the JSON-fallback branch to defend against
+        # an oversized poison message before ``json.loads`` allocates the
+        # entire payload as a Python object graph.
+        from messaging.kafka.consumer.errors import (  # type: ignore[import-untyped]
+            MalformedDataError,
+        )
+
+        if len(raw) > _MAX_JSON_FALLBACK_BYTES:
+            raise MalformedDataError(
+                f"JSON fallback payload exceeds cap ({len(raw)} > {_MAX_JSON_FALLBACK_BYTES})",
+            )
         return json.loads(raw)  # type: ignore[no-any-return]
 
     def get_schema_path(self, topic: str) -> str | None:
@@ -416,7 +468,8 @@ def _parse_raw_relations(data: list[dict[str, Any]]) -> list[RawRelation]:
                     subject_entity_id=UUID(d["subject_entity_id"]),
                     object_entity_id=UUID(d["object_entity_id"]),
                     raw_type=d["raw_type"],
-                    polarity=d.get("polarity", "positive"),
+                    # PLAN-0062 F-019: collapse out-of-vocabulary polarities.
+                    polarity=_normalize_polarity(d.get("polarity"), default="positive"),
                     extraction_confidence=float(d.get("extraction_confidence", 0.5)),
                     source_trust_weight=float(d.get("source_trust_weight", 1.0)),
                     evidence_date=_parse_dt(d.get("evidence_date")),
@@ -425,11 +478,22 @@ def _parse_raw_relations(data: list[dict[str, Any]]) -> list[RawRelation]:
                     provisional_queue_id=(UUID(d["provisional_queue_id"]) if d.get("provisional_queue_id") else None),
                     claim_id=UUID(d["claim_id"]) if d.get("claim_id") else None,
                     chunk_id=UUID(d["chunk_id"]) if d.get("chunk_id") else None,
-                    evidence_text=d.get("evidence_text"),
+                    # PLAN-0062 F-019: cap pathological evidence text length.
+                    evidence_text=_truncate_text_field(d.get("evidence_text"), field_name="evidence_text"),
                 ),
             )
-        except (KeyError, ValueError):
-            logger.warning("enriched_consumer_bad_relation", data=str(d)[:200])  # type: ignore[no-any-return]
+        # PLAN-0062 F-021: split into typed handlers — drop the ``data=`` echo
+        # that could leak PII / oversized payloads into log aggregation.
+        except KeyError as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "enriched_consumer_bad_relation_missing_field",
+                missing=str(exc).strip("'\""),
+            )
+        except ValueError as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "enriched_consumer_bad_relation_value_error",
+                error_class=type(exc).__name__,
+            )
     return results
 
 
@@ -441,14 +505,23 @@ def _parse_raw_events(data: list[dict[str, Any]]) -> list[RawEvent]:
                 RawEvent(
                     subject_entity_id=UUID(d["subject_entity_id"]),
                     event_type=d["event_type"],
-                    event_text=d.get("event_text", ""),
+                    # PLAN-0062 F-019: cap pathological event text length.
+                    event_text=_truncate_text_field(d.get("event_text", ""), field_name="event_text"),
                     extraction_confidence=float(d.get("extraction_confidence", 0.5)),
                     event_date=_parse_dt(d.get("event_date")),
                     participant_entity_ids=tuple(UUID(eid) for eid in d.get("participant_entity_ids", [])),
                 ),
             )
-        except (KeyError, ValueError):
-            logger.warning("enriched_consumer_bad_event", data=str(d)[:200])  # type: ignore[no-any-return]
+        except KeyError as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "enriched_consumer_bad_event_missing_field",
+                missing=str(exc).strip("'\""),
+            )
+        except ValueError as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "enriched_consumer_bad_event_value_error",
+                error_class=type(exc).__name__,
+            )
     return results
 
 
@@ -464,16 +537,26 @@ def _parse_raw_claims(
                 RawClaim(
                     subject_entity_id=UUID(d["subject_entity_id"]),
                     claim_type=d["claim_type"],
-                    polarity=d.get("polarity", "neutral"),
-                    claim_text=d.get("claim_text", ""),
+                    # PLAN-0062 F-019: collapse out-of-vocabulary polarities.
+                    polarity=_normalize_polarity(d.get("polarity"), default="neutral"),
+                    # PLAN-0062 F-019: cap pathological claim text length.
+                    claim_text=_truncate_text_field(d.get("claim_text", ""), field_name="claim_text"),
                     extraction_confidence=float(d.get("extraction_confidence", 0.5)),
                     claimer_entity_id=(UUID(d["claimer_entity_id"]) if d.get("claimer_entity_id") else None),
                     chunk_id=UUID(d["chunk_id"]) if d.get("chunk_id") else None,
                     is_backfill=is_backfill,
                 ),
             )
-        except (KeyError, ValueError):
-            logger.warning("enriched_consumer_bad_claim", data=str(d)[:200])  # type: ignore[no-any-return]
+        except KeyError as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "enriched_consumer_bad_claim_missing_field",
+                missing=str(exc).strip("'\""),
+            )
+        except ValueError as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "enriched_consumer_bad_claim_value_error",
+                error_class=type(exc).__name__,
+            )
     return results
 
 

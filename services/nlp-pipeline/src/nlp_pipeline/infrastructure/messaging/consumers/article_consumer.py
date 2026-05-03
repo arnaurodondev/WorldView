@@ -35,7 +35,13 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
-from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
+from messaging.kafka.schema_paths import (  # type: ignore[import-untyped]
+    find_schema_dir,
+    get_schema_path,
+)
+from messaging.kafka.serialization_utils import (  # type: ignore[import-untyped]
+    serialize_confluent_avro,
+)
 from nlp_pipeline.application.blocks.deep_extraction import run_deep_extraction_block
 from nlp_pipeline.application.blocks.embeddings import run_embeddings_block
 from nlp_pipeline.application.blocks.entity_resolution import run_entity_resolution_block
@@ -103,6 +109,10 @@ if TYPE_CHECKING:
     from nlp_pipeline.domain.models import Chunk, EntityMention, RoutingDecision, Section
     from nlp_pipeline.infrastructure.backpressure.controller import BackpressureController
     from nlp_pipeline.infrastructure.valkey.watchlist_cache import WatchlistCache
+
+# PLAN-0062 F-006: producer-side R28 enforcement — emit Confluent-Avro framed
+# bytes for ``nlp.signal.detected.v1`` instead of raw ``json.dumps(...).encode()``.
+_NLP_SIGNAL_DETECTED_SCHEMA_PATH = get_schema_path("nlp.signal.detected.v1.avsc")
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -1305,10 +1315,17 @@ async def _enqueue_signal_events(
             "correlation_id": correlation_id,
             "market_impact_score": 0.0,
         }
+        # PLAN-0062 F-006 / DS F-001: build Avro bytes BEFORE the outbox add so
+        # a serialization failure aborts the transaction instead of poisoning
+        # the outbox with a half-written row.
+        payload_bytes = serialize_confluent_avro(
+            _NLP_SIGNAL_DETECTED_SCHEMA_PATH,
+            payload,
+        )
         await outbox_repo.add(
             topic=settings.topic_signal_detected,
             partition_key=str(signal.entity_id),
-            payload_avro=json.dumps(payload).encode(),
+            payload_avro=payload_bytes,
         )
 
 
