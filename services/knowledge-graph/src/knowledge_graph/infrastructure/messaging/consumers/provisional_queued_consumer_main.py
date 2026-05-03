@@ -103,15 +103,20 @@ async def main() -> None:
     else:
         log.info("kg_pq_consumer_extraction_deepinfra_key_absent_using_ollama_gemini_chain")
 
-    from ml_clients.adapters.ollama_extraction import OllamaExtractionAdapter  # type: ignore[import-not-found]
+    # Only wire Ollama extraction when DeepInfra key is absent (same rule as scheduler_main).
+    ollama_ext: Any = None
+    if not settings.deepinfra_api_key:
+        from ml_clients.adapters.ollama_extraction import OllamaExtractionAdapter  # type: ignore[import-not-found]
 
-    _ollama_ext_model = "qwen3:0.6b"
-    ollama_ext = OllamaExtractionAdapter(
-        base_url=settings.ollama_base_url,
-        model_id=_ollama_ext_model,
-        semaphore=asyncio.Semaphore(1),
-    )
-    log.info("kg_pq_consumer_extraction_ollama_fallback_wired", model_id=_ollama_ext_model)
+        _ollama_ext_model = "qwen3:0.6b"
+        ollama_ext = OllamaExtractionAdapter(
+            base_url=settings.ollama_base_url,
+            model_id=_ollama_ext_model,
+            semaphore=asyncio.Semaphore(1),
+        )
+        log.info("kg_pq_consumer_extraction_ollama_fallback_wired", model_id=_ollama_ext_model)
+    else:
+        log.info("kg_pq_consumer_extraction_ollama_skipped_deepinfra_key_present")
 
     llm_client = FallbackChainClient(
         deepinfra_extraction=deepinfra_ext,
