@@ -151,8 +151,21 @@ async def persist_enrichment(
 
     canonical_name: str = profile.get("canonical_name") or mention_text
     entity_type: str = profile.get("entity_type") or str(profile.get("mention_class", "unknown"))
-    ticker: str | None = profile.get("ticker")
-    isin: str | None = profile.get("isin")
+    # Clamp ticker/isin to DB column widths (varchar(20)); discard if malformed.
+    # Qwen3.5-0.8B occasionally returns oversized values despite prompt instructions.
+    _ticker_raw: str | None = profile.get("ticker")
+    ticker: str | None = _ticker_raw[:20] if _ticker_raw else None
+    _isin_raw: str | None = profile.get("isin")
+    # Standard ISIN = exactly 12 alphanumeric chars; anything else is a hallucination.
+    import re as _re
+
+    isin: str | None = _isin_raw if (_isin_raw and _re.fullmatch(r"[A-Z0-9]{12}", _isin_raw)) else None
+    if _isin_raw and isin is None:
+        logger.warning(  # type: ignore[no-any-return]
+            "provisional_enrichment_isin_discarded",
+            isin_raw=_isin_raw,
+            entity=canonical_name,
+        )
 
     # QA-iter1 (PLAN-0062 SA-005 fix): pre-validate the Avro payload BEFORE any
     # DB writes.  The polling worker (provisional_enrichment.py) commits the
