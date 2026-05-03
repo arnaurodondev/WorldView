@@ -19,6 +19,17 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from observability import get_logger  # type: ignore[import-untyped]
+
+_logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+# QA-iter1 (PLAN-0062): cap the JSON blob at ~16 MB.  Kafka's default
+# max.message.bytes is 1 MB but operators may raise it; the cap is a
+# defence-in-depth bound on the unbounded ``json.loads`` read.  Anything
+# legitimate from the producer fits well under this — relation/event/claim
+# arrays for one article are typically < 50 KB.
+_MAX_RAW_ARRAY_BYTES = 16 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class CanonicalNlpArticleEnriched:
@@ -126,16 +137,43 @@ def encode_raw_array(items: list[dict] | None) -> str | None:
 def decode_raw_array(blob: str | None) -> list[dict]:
     """Decode a raw_*_json string back into a list of dicts.
 
-    Returns an empty list on None / empty / malformed input — callers always
-    iterate, so a forgiving decode keeps the consumer resilient to legacy or
-    schema-mismatched producers.
+    Returns an empty list on None / empty / malformed / oversized input.
+    Callers always iterate, so a forgiving decode keeps the consumer
+    resilient to legacy or schema-mismatched producers — but every
+    silent-drop branch emits a structlog warning so the failure mode is
+    observable (per QA-iter1 of PLAN-0062, addresses memory feedback
+    "audit-returned-value-persistence" — silent drops were the failure
+    pattern that previously masked 80% of S6 extraction loss).
     """
     if not blob:
         return []
+    if len(blob) > _MAX_RAW_ARRAY_BYTES:
+        _logger.warning(  # type: ignore[no-any-return]
+            "raw_array_decode_oversized",
+            blob_bytes=len(blob),
+            cap_bytes=_MAX_RAW_ARRAY_BYTES,
+        )
+        return []
     try:
         decoded = json.loads(blob)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        _logger.warning(  # type: ignore[no-any-return]
+            "raw_array_decode_json_error",
+            error=str(exc),
+            blob_prefix=blob[:60] if isinstance(blob, str) else None,
+        )
         return []
     if not isinstance(decoded, list):
+        _logger.warning(  # type: ignore[no-any-return]
+            "raw_array_decode_not_list",
+            decoded_type=type(decoded).__name__,
+        )
         return []
-    return [item for item in decoded if isinstance(item, dict)]
+    filtered = [item for item in decoded if isinstance(item, dict)]
+    if len(filtered) != len(decoded):
+        _logger.warning(  # type: ignore[no-any-return]
+            "raw_array_decode_dropped_non_dict_items",
+            received=len(decoded),
+            kept=len(filtered),
+        )
+    return filtered
