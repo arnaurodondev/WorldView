@@ -14,6 +14,7 @@ import json
 from typing import TYPE_CHECKING
 
 from contracts.canonical.price_snapshot import PriceSnapshot  # type: ignore[import-untyped]
+from market_data.application.ports.cache import PriceSnapshotCachePort
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -26,7 +27,7 @@ _KEY_PREFIX = "price_snapshot:v1"
 _DEFAULT_TTL = 7200  # 2 hours — covers a full trading day + overnight
 
 
-class PriceSnapshotCache:
+class PriceSnapshotCache(PriceSnapshotCachePort):
     """Valkey cache for resolved PriceSnapshot objects.
 
     This is an infrastructure concern: it wraps ValkeyClient with

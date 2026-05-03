@@ -22,12 +22,7 @@ from pathlib import Path
 
 import pytest
 
-_MIGRATION = (
-    Path(__file__).resolve().parents[3]
-    / "alembic"
-    / "versions"
-    / "0008_backfill_alert_titles.py"
-)
+_MIGRATION = Path(__file__).resolve().parents[3] / "alembic" / "versions" / "0008_backfill_alert_titles.py"
 
 
 def _legacy_title_match(title: str | None) -> bool:

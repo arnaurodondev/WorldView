@@ -34,9 +34,8 @@ from alert.application.ports.entity_resolver import EntityNameResolverPort
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from redis.asyncio import Redis
-
     from alert.config import Settings
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
 logger = structlog.get_logger(__name__)
 
@@ -61,7 +60,7 @@ class S7EntityResolver(EntityNameResolverPort):
     def __init__(
         self,
         settings: Settings,
-        valkey: Redis,  # type: ignore[type-arg]
+        valkey: ValkeyClient,
         client: AsyncClient | None = None,
     ) -> None:
         self._base_url = settings.s7_knowledge_graph_base_url.rstrip("/")
@@ -162,9 +161,8 @@ class S7EntityResolver(EntityNameResolverPort):
         if raw is None:
             return None
 
-        # asyncio Valkey may return bytes OR str depending on decode_responses=
-        # config; handle both robustly.
-        text = raw.decode() if isinstance(raw, bytes) else str(raw)
+        # ValkeyClient always returns str (decode_responses=True); cast for safety.
+        text = str(raw)
         try:
             obj = json.loads(text)
         except (ValueError, TypeError):

@@ -42,9 +42,7 @@ def upgrade() -> None:
     )
     # UNIQUE index is required for REFRESH MATERIALIZED VIEW CONCURRENTLY.
     # Without it, refresh takes an exclusive lock and blocks worker INSERTs.
-    op.execute(
-        "CREATE UNIQUE INDEX ix_dsl_latest_pk ON document_source_llm_latest(doc_id, score_type)"
-    )
+    op.execute("CREATE UNIQUE INDEX ix_dsl_latest_pk ON document_source_llm_latest(doc_id, score_type)")
 
 
 def downgrade() -> None:
