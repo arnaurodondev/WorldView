@@ -924,3 +924,39 @@ conn.execute(text("UPDATE ... SET embedding = :emb::vector ..."), {"emb": str(ve
 - Review checklist: when adding an Ollama pull command, grep for every `EMBEDDING_MODEL` env var and verify they all use the Ollama tag form (`name:tag`), not the HuggingFace form (`org/name`).
 
 ---
+
+### BP-344: AGE SyncWorker Disabled by Feature Flag — Fully Implemented Worker Never Executes
+
+**Category**: Config & Docker
+**Severity**: MEDIUM
+**First seen**: 2026-05-03
+**Services**: knowledge-graph (S7)
+
+**Symptoms**:
+- AGE (Apache AGE) property graph is never populated despite 500+ entities and relations existing
+- Worker 13F logs `age_sync_worker_disabled` every run with `return` immediately
+- Apache AGE graph `worldview_graph` exists but has stale/empty data
+
+**Root cause**:
+`KNOWLEDGE_GRAPH_CYPHER_ENABLED=false` in `services/knowledge-graph/configs/docker.env`. The worker code at `age_sync_worker.py:179` checks `if not self._settings.cypher_enabled: return`. The worker itself is fully implemented with injection-protected Cypher queries, watermark-based sync, and proper `LOAD 'age'` session setup — it was intentionally gated during development and the flag was never flipped.
+
+**Example**:
+```python
+# Bad (docker.env)
+KNOWLEDGE_GRAPH_CYPHER_ENABLED=false  # worker never runs
+
+# Good
+KNOWLEDGE_GRAPH_CYPHER_ENABLED=true
+```
+
+**Fix**:
+Set `KNOWLEDGE_GRAPH_CYPHER_ENABLED=true` in `services/knowledge-graph/configs/docker.env` and rebuild the knowledge-graph-scheduler container.
+
+**Prevention**:
+- Feature flags that disable entire workers should be tracked in TRACKING.md with an explicit "re-enable by [date]" note
+- Review checklist: grep for `=false` in docker.env files and verify each disabled feature has a documented rationale
+- Add a startup log message when `cypher_enabled=false` at WARNING level (not DEBUG) so the disabled state is visible without hunting
+
+**Regression test**: manual validation — `docker logs knowledge-graph-scheduler | grep age_sync` should show `age_sync_worker_complete` not `age_sync_worker_disabled`
+
+---

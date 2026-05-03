@@ -77,6 +77,13 @@ class SummaryWorker:
                     relation_id,  # type: ignore[arg-type]
                     limit=_EVIDENCE_LIMIT,
                 )
+                # Fall back to raw staging table when the immutable partition
+                # table is empty (insert_immutable promotion not yet implemented).
+                if not evidence_rows:
+                    evidence_rows = await ev_repo.get_raw_for_relation_id(  # type: ignore[attr-defined]
+                        relation_id,  # type: ignore[arg-type]
+                        limit=_EVIDENCE_LIMIT,
+                    )
                 if not evidence_rows:
                     continue
 

@@ -47,6 +47,7 @@ class RelationEvidenceRepository:
         is_backfill: bool = False,
         entity_provisional: bool = False,
         provisional_queue_id: UUID | None = None,
+        evidence_text: str | None = None,
     ) -> UUID:
         """Insert a row into ``relation_evidence_raw`` (hot-path staging).
 
@@ -58,12 +59,14 @@ INSERT INTO relation_evidence_raw (
     subject_entity_id, object_entity_id, canonical_type, polarity,
     claim_id, chunk_id, source_document_id,
     extraction_confidence, source_trust_weight,
-    evidence_date, is_backfill, entity_provisional, provisional_queue_id
+    evidence_date, is_backfill, entity_provisional, provisional_queue_id,
+    evidence_text
 ) VALUES (
     :subject_entity_id, :object_entity_id, :canonical_type, :polarity,
     :claim_id, :chunk_id, :source_document_id,
     :extraction_confidence, :source_trust_weight,
-    :evidence_date, :is_backfill, :entity_provisional, :provisional_queue_id
+    :evidence_date, :is_backfill, :entity_provisional, :provisional_queue_id,
+    :evidence_text
 )
 RETURNING raw_id
 """),
@@ -81,6 +84,7 @@ RETURNING raw_id
                 "is_backfill": is_backfill,
                 "entity_provisional": entity_provisional,
                 "provisional_queue_id": str(provisional_queue_id) if provisional_queue_id else None,
+                "evidence_text": evidence_text,
             },
         )
         row = result.fetchone()
@@ -137,7 +141,8 @@ RETURNING evidence_id
         result = await self._session.execute(
             text("""
 SELECT raw_id, subject_entity_id, object_entity_id, canonical_type,
-       extraction_confidence, source_trust_weight, evidence_date, is_backfill
+       extraction_confidence, source_trust_weight, evidence_date, is_backfill,
+       evidence_text
 FROM relation_evidence_raw
 WHERE partition_key      = :partition_key
   AND processed          = false
@@ -159,6 +164,7 @@ FOR UPDATE SKIP LOCKED
                 "source_trust_weight": float(r[5]),
                 "evidence_date": r[6],
                 "is_backfill": bool(r[7]),
+                "evidence_text": r[8],
             }
             for r in rows
         ]
@@ -174,7 +180,7 @@ FOR UPDATE SKIP LOCKED
         result = await self._session.execute(
             text("""
 SELECT raw_id, extraction_confidence, source_trust_weight,
-       evidence_date, is_backfill, source_document_id
+       evidence_date, is_backfill, source_document_id, evidence_text
 FROM relation_evidence_raw
 WHERE subject_entity_id = :subject
   AND object_entity_id  = :object
@@ -199,6 +205,53 @@ LIMIT :limit
                 "evidence_date": r[3],
                 "is_backfill": bool(r[4]),
                 "source_document_id": UUID(str(r[5])),
+                "evidence_text": r[6],
+            }
+            for r in rows
+        ]
+
+    async def get_raw_for_relation_id(
+        self,
+        relation_id: UUID,
+        limit: int = 10,
+    ) -> list[dict[str, object]]:
+        """Fetch raw evidence rows for a relation identified by its UUID.
+
+        Resolves the triple (subject, object, canonical_type) from the
+        ``relations`` table and queries ``relation_evidence_raw`` using it.
+        Used by SummaryWorker (13C) since ``relation_evidence`` (the immutable
+        partition table) may be empty if the promotion step has not run.
+
+        Orders by ``source_trust_weight DESC, evidence_date DESC`` to match the
+        priority order used by ``get_all_for_relation``.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT rer.raw_id, rer.extraction_confidence, rer.source_trust_weight,
+       rer.evidence_date, rer.is_backfill, rer.source_document_id,
+       rer.evidence_text
+FROM relation_evidence_raw rer
+JOIN relations r
+  ON  r.subject_entity_id = rer.subject_entity_id
+  AND r.object_entity_id  = rer.object_entity_id
+  AND r.canonical_type    = rer.canonical_type
+WHERE r.relation_id          = :relation_id
+  AND rer.entity_provisional = false
+ORDER BY rer.source_trust_weight DESC, rer.evidence_date DESC
+LIMIT :limit
+"""),
+            {"relation_id": str(relation_id), "limit": limit},
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "raw_id": UUID(str(r[0])),
+                "extraction_confidence": float(r[1]),
+                "source_trust_weight": float(r[2]),
+                "evidence_date": r[3],
+                "is_backfill": bool(r[4]),
+                "source_document_id": UUID(str(r[5])),
+                "evidence_text": r[6],
             }
             for r in rows
         ]
