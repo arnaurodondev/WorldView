@@ -115,6 +115,35 @@ def deserialize_avro(schema: dict[str, Any], data: bytes) -> dict[str, Any]:
     return cast("dict[str, Any]", fastavro.schemaless_reader(buf, schema, None))
 
 
+def serialize_confluent_avro(
+    schema_path: str,
+    record: dict[str, Any],
+    schema_id: int = 0,
+) -> bytes:
+    """Serialize *record* to Confluent Schema Registry wire-format bytes.
+
+    The Confluent wire format prefixes a 5-byte header (``0x00`` magic byte +
+    4-byte big-endian schema ID) before the raw Avro payload.  This helper
+    keeps producer-side serialization aligned with
+    :func:`deserialize_confluent_avro` so consumers and producers stay in sync.
+
+    Args:
+        schema_path: Filesystem path to the ``.avsc`` schema file.
+        record: Plain dict matching the schema.
+        schema_id: Confluent Schema Registry schema ID.  Defaults to 0 because
+            the consumer does not validate the ID — it strips the header and
+            decodes against its locally-loaded schema.  Producers that DO want
+            to honour the registry can pass the real ID here.
+
+    Returns:
+        5-byte Confluent header + Avro-encoded payload bytes.
+    """
+    schema = load_schema(schema_path)
+    avro_bytes = serialize_avro(schema, record)
+    header = b"\x00" + schema_id.to_bytes(4, byteorder="big", signed=False)
+    return header + avro_bytes
+
+
 def deserialize_confluent_avro(schema_path: str, data: bytes) -> dict[str, Any]:
     """Deserialize a Confluent Schema Registry wire-format Avro message.
 

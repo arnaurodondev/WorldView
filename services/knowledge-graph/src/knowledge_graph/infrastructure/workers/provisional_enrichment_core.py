@@ -243,39 +243,40 @@ async def _write_embedding(
 async def apply_retry_transition(
     session: AsyncSession,
     queue_id: UUID,
-    retry_count: int,
     max_retries: int,
 ) -> bool:
-    """Increment retry_count and transition to 'failed' if max_retries is exhausted.
+    """Atomically increment retry_count and decide terminal state in one SQL round-trip.
+
+    The DB authoritatively reads the current ``retry_count`` and computes the
+    new status with a SQL ``CASE`` expression, so we never depend on a stale
+    caller-supplied count.  ``RETURNING (status = 'failed')`` exposes the outcome
+    to Python so the caller can increment the appropriate Prometheus counter.
 
     Returns True if the row was transitioned to 'failed' (terminal), False if it
     was reset to 'pending' for another attempt.
 
-    This function does NOT increment s7_provisional_enrichment_failed_total —
-    that counter lives in provisional_enrichment.py so existing test patch paths
-    are preserved.  Callers that need the counter (the worker's _apply_retry)
-    must check the return value and call inc() themselves.
+    This function does NOT increment ``s7_provisional_enrichment_failed_total`` —
+    callers that need the counter (the worker's ``_apply_retry``) must check
+    the return value and call ``inc()`` themselves so existing test patch paths
+    are preserved.
     """
     from sqlalchemy import text
 
-    new_count = retry_count + 1
-    if new_count >= max_retries:
-        await session.execute(
-            text("""
+    result = await session.execute(
+        text("""
 UPDATE provisional_entity_queue
-SET retry_count = retry_count + 1, status = 'failed'
+SET retry_count = retry_count + 1,
+    status = CASE
+        WHEN retry_count + 1 >= :max_retries THEN 'failed'
+        ELSE 'pending'
+    END
 WHERE queue_id = :queue_id
+RETURNING (status = 'failed') AS is_terminal
 """),
-            {"queue_id": str(queue_id)},
-        )
-        return True
-    else:
-        await session.execute(
-            text("""
-UPDATE provisional_entity_queue
-SET retry_count = retry_count + 1, status = 'pending'
-WHERE queue_id = :queue_id
-"""),
-            {"queue_id": str(queue_id)},
-        )
+        {"queue_id": str(queue_id), "max_retries": max_retries},
+    )
+    row = result.fetchone()
+    if row is None:
+        # Row no longer exists (very rare — would imply concurrent delete).
         return False
+    return bool(row[0])

@@ -47,6 +47,10 @@ def _make_session_with_rows(rows: list) -> tuple[AsyncMock, MagicMock]:
 
     result_mock = MagicMock()
     result_mock.fetchall.return_value = rows
+    # rowcount defaults to 0 so the B-7 recovery sweep doesn't accidentally
+    # trip the s7_provisional_stuck_recovered_total counter increment in
+    # tests that don't care about the recovery path.
+    result_mock.rowcount = 0
 
     session.execute = AsyncMock(return_value=result_mock)
 
@@ -353,16 +357,23 @@ class TestProvisionalEnrichmentWorkerNoProducer:
 
 class TestRetryCapAndFailedStatus:
     async def test_retry_cap_transitions_to_failed(self) -> None:
-        """Row at max_retries-1 + LLM None → Phase 3 UPDATE sets status='failed'.
+        """Row at max_retries-1 + LLM None → atomic CASE returns is_terminal=True → counter increments.
 
         T-A-3: After retry_count+1 >= max_retries the row must become terminal.
+        Wave-B-2026-05-03 refactor: ``apply_retry_transition`` is now a single
+        atomic ``UPDATE ... CASE ... RETURNING (status='failed')`` so we drive
+        the test by setting the ``fetchone()`` return value (the RETURNING row)
+        rather than introspecting the SQL string (both 'failed' and 'pending'
+        literals appear in the CASE expression at all times).
         """
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
 
-        # retry_count=4, max_retries=5 → next count (5) >= 5 → 'failed'
+        # retry_count=4, max_retries=5 → next count (5) >= 5 → CASE='failed' → RETURNING is_terminal=True
         session, factory = _make_session_with_rows([_make_pending_row(retry_count=4)])
+        # Simulate the DB returning is_terminal=True from the RETURNING clause.
+        session.execute.return_value.fetchone.return_value = (True,)
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), max_retries=5)
 
@@ -375,14 +386,10 @@ class TestRetryCapAndFailedStatus:
         ):
             await worker.run()
 
-        # Verify that the Phase 3 execute was called with SQL containing 'failed'
-        execute_calls = session.execute.call_args_list
-        failed_calls = [c for c in execute_calls if "failed" in str(c.args[0] if c.args else "")]
-        assert len(failed_calls) >= 1, "Expected an UPDATE setting status='failed'"
         mock_counter.inc.assert_called_once()
 
     async def test_retry_below_cap_stays_pending(self) -> None:
-        """Row below max_retries + LLM None → status stays 'pending' (not 'failed').
+        """Row below max_retries + LLM None → atomic CASE returns is_terminal=False → counter NOT called.
 
         T-A-3: Row with retry_count=2 < max_retries=5 should be re-queued.
         """
@@ -390,8 +397,9 @@ class TestRetryCapAndFailedStatus:
             ProvisionalEnrichmentWorker,
         )
 
-        # retry_count=2, max_retries=5 → next count (3) < 5 → 'pending'
+        # retry_count=2, max_retries=5 → next count (3) < 5 → CASE='pending' → RETURNING is_terminal=False
         session, factory = _make_session_with_rows([_make_pending_row(retry_count=2)])
+        session.execute.return_value.fetchone.return_value = (False,)
 
         worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), max_retries=5)
 
@@ -403,13 +411,6 @@ class TestRetryCapAndFailedStatus:
         ):
             await worker.run()
 
-        execute_calls = session.execute.call_args_list
-        # Must NOT have any 'failed' update
-        failed_calls = [c for c in execute_calls if "failed" in str(c.args[0] if c.args else "")]
-        assert len(failed_calls) == 0, "Row below cap must NOT be set to 'failed'"
-        # pending update must be present
-        pending_calls = [c for c in execute_calls if "pending" in str(c.args[0] if c.args else "")]
-        assert len(pending_calls) >= 1, "Row below cap must be reset to 'pending'"
         mock_counter.inc.assert_not_called()
 
     async def test_phase1_select_includes_max_retries_param(self) -> None:
