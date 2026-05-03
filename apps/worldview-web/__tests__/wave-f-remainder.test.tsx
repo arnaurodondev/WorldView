@@ -62,6 +62,11 @@ vi.mock("@/lib/gateway", () => ({
     getEntityNews: vi.fn().mockReturnValue(new Promise(() => {})),
     getInstrumentBrief: vi.fn().mockReturnValue(new Promise(() => {})),
     getAnalystRatings: vi.fn().mockReturnValue(new Promise(() => {})),
+    // WHY getEarningsCalendar: EarningsCalendarWidget (PLAN-0068 Wave B-1) converted
+    // from a static placeholder to a live useQuery component. Returns a never-resolving
+    // promise so the widget stays in loading state — we only test DOM structure here,
+    // not the loaded state.
+    getEarningsCalendar: vi.fn().mockReturnValue(new Promise(() => {})), // stays loading
     refreshToken: vi.fn().mockResolvedValue({
       access_token: "tok",
       user: { user_id: "u1", tenant_id: "t1", email: "a@b.com", name: "A", avatar_url: null },
@@ -221,18 +226,21 @@ describe("Instrument page loading skeleton — 9-section layout (T-F-6-12)", () 
 // ── T-F-6-03: Widget inner padding standardization ────────────────────────────
 
 describe("Dashboard widget inner padding — px-3 py-2 standard (T-F-6-03)", () => {
-  it("EarningsCalendarWidget empty state uses px-3 py-2 (not px-2)", async () => {
-    // WHY EarningsCalendarWidget: it always shows the empty state (placeholder widget
-    // with no data fetch), making it the easiest widget to test in isolation without
-    // complex gateway mocking. The empty state wrapper must have px-3 py-2.
+  it("EarningsCalendarWidget loading skeleton uses px-3 py-2 (not px-2)", async () => {
+    // WHY EarningsCalendarWidget: The widget was converted from a static placeholder
+    // to a live useQuery component in PLAN-0068 Wave B-1. It now requires a
+    // QueryClientProvider wrapper and the gateway mock (both set at file scope).
+    // The getEarningsCalendar mock returns a never-resolving Promise so the
+    // component stays in loading/skeleton state — the state that has px-3 py-2.
     const { EarningsCalendarWidget } = await import(
       "@/components/dashboard/EarningsCalendarWidget"
     );
 
-    const { container } = render(<EarningsCalendarWidget />);
+    // WHY wrapper: EarningsCalendarWidget uses useQuery which requires QueryClientProvider.
+    const { container } = render(<EarningsCalendarWidget />, { wrapper: makeWrapper() });
 
     // WHY check for px-3: the standardised inner content padding is px-3 py-2.
-    // The old padding was px-2 pt-2. After T-F-6-03, the wrapper must have px-3.
+    // The loading skeleton div has className="flex-1 space-y-2 px-3 py-2".
     // WHY [class*='px-3']: attribute-contains selector — works with Tailwind's JIT
     // since the full class string contains "px-3" as a substring.
     const paddedContent = container.querySelector("[class*='px-3'][class*='py-2']");
@@ -246,7 +254,8 @@ describe("Dashboard widget inner padding — px-3 py-2 standard (T-F-6-03)", () 
       "@/components/dashboard/EarningsCalendarWidget"
     );
 
-    const { container } = render(<EarningsCalendarWidget />);
+    // WHY wrapper: EarningsCalendarWidget uses useQuery which requires QueryClientProvider.
+    const { container } = render(<EarningsCalendarWidget />, { wrapper: makeWrapper() });
 
     // WHY check EARNINGS CALENDAR label: this text lives in the header row which
     // should still be px-2, not px-3.

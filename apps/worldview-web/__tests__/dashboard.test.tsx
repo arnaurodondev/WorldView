@@ -164,6 +164,13 @@ vi.mock("@/lib/gateway", () => ({
         "ins-aapl": { price: 185.5, change: 2.3, change_pct: 1.25 },
       },
     }),
+    // WHY getEarningsCalendar: EarningsCalendarWidget (Wave B-1, PLAN-0068) fetches
+    // upcoming earnings events from S9 /v1/fundamentals/earnings-calendar.
+    // Returns empty list by default so the widget renders the empty state.
+    getEarningsCalendar: vi.fn().mockResolvedValue({
+      events: [],
+      total: 0,
+    }),
     // WHY getMorningBrief: MorningBriefCard (in DashboardPage) fetches the brief
     getMorningBrief: vi.fn().mockResolvedValue({
       content: "Market conditions are stable.",
@@ -485,21 +492,29 @@ describe("PortfolioNewsWidget", () => {
   });
 });
 
-// ── Tests: EarningsCalendarWidget (Wave 7 new) ────────────────────────────────
+// ── Tests: EarningsCalendarWidget (Wave 7 header + Wave B-1 live data) ───────
+// WHY updated (PLAN-0068 Wave B-1): EarningsCalendarWidget was converted from a
+// static placeholder to a live "use client" component backed by useQuery /
+// getEarningsCalendar. Tests now require { wrapper } (QueryClientProvider) and
+// assert the live empty state — not the old static text. Static render path
+// (no wrapper) is no longer valid after the live conversion.
 
 describe("EarningsCalendarWidget", () => {
   it("renders EARNINGS CALENDAR header", () => {
-    render(<EarningsCalendarWidget />);
+    // WHY wrapper: component now uses useQuery (requires QueryClientProvider).
+    render(<EarningsCalendarWidget />, { wrapper });
     expect(screen.getByText("EARNINGS CALENDAR")).toBeInTheDocument();
   });
 
-  it("renders empty state placeholder", () => {
-    render(<EarningsCalendarWidget />);
-    // WHY "No upcoming earnings events scheduled." (not "Earnings data coming soon"):
-    // The empty state message was updated to set correct expectations — the API
-    // is functional but earnings data hasn't been ingested yet. The message now
-    // guides traders rather than implying the feature itself isn't built.
-    expect(screen.getByText(/No upcoming earnings events scheduled/i)).toBeInTheDocument();
+  it("renders empty state when no events returned", async () => {
+    // WHY wrapper: useQuery hook requires QueryClientProvider.
+    // WHY waitFor: the empty state renders AFTER the mock resolves (async).
+    // The mock for getEarningsCalendar returns {events:[], total:0} so the
+    // component correctly falls into the empty-state branch.
+    render(<EarningsCalendarWidget />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByText(/No upcoming earnings events scheduled/i)).toBeInTheDocument();
+    });
   });
 });
 
