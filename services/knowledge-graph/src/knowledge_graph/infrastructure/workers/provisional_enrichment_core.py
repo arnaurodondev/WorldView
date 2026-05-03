@@ -300,7 +300,7 @@ async def apply_retry_transition(
     result = await session.execute(
         text("""
 UPDATE provisional_entity_queue
-SET retry_count = retry_count + 1,
+SET retry_count = LEAST(retry_count + 1, :max_retries),
     status = CASE
         WHEN retry_count + 1 >= :max_retries THEN 'failed'
         ELSE 'pending'
