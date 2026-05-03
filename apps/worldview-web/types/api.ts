@@ -1070,6 +1070,37 @@ export interface EconomicCalendarResponse {
   events: EconomicEvent[];
 }
 
+// ── Earnings Calendar ──────────────────────────────────────────────────────
+
+/**
+ * EarningsEvent — one company earnings report from S9 /v1/fundamentals/earnings-calendar.
+ *
+ * WHY region = ticker: The earnings-calendar consumer (13D-9) stores the
+ * company ticker symbol in `region` because temporal_events.region is a
+ * free-text label (not a country code) for company-scoped events.
+ *
+ * WHY confidence: Finnhub sourced events with a confirmed report date get
+ * confidence=1.0; tentative-date events (epsEstimate=null) are skipped by
+ * the consumer so this field is always 1.0 in practice.
+ *
+ * DATA SOURCE: S9 GET /v1/fundamentals/earnings-calendar → S7 temporal-events
+ * (event_type=corporate). PLAN-0068 Wave A-1 / A-2.
+ */
+export interface EarningsEvent {
+  event_id: string;
+  title: string;        // e.g. "AAPL Q3 2026 Earnings"
+  description: string;  // e.g. "EPS est. $1.45 (BMO)"
+  active_from: string;  // ISO 8601 UTC — report datetime
+  active_until: string; // ISO 8601 UTC — residual end (+7 days)
+  region: string;       // ticker symbol, e.g. "AAPL"
+  confidence: number;   // always 1.0 for confirmed earnings dates
+}
+
+export interface EarningsCalendarResponse {
+  events: EarningsEvent[];
+  total: number;
+}
+
 // ── Briefings ─────────────────────────────────────────────────────────────
 
 /** Entity reference extracted from briefing context (portfolio, news, alerts) */

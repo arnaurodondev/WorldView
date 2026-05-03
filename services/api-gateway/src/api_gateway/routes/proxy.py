@@ -1257,7 +1257,48 @@ async def economic_calendar(request: Request) -> Any:
         # was silently ignored by FastAPI, meaning no type filter was applied and
         # ALL temporal events were returned regardless of type.
         # Also strip any user-supplied `event_type` to prevent overriding the filter.
-        params={"event_type": "economic", **{k: v for k, v in dict(request.query_params).items() if k != "event_type"}},
+        # BP-340: EventType.MACRO = "macro" — economic events are stored as "macro",
+        # not "economic". "economic" matched no rows, silently returning empty list.
+        params={"event_type": "macro", **{k: v for k, v in dict(request.query_params).items() if k != "event_type"}},
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# NOTE: /fundamentals/earnings-calendar MUST be registered before /fundamentals/{instrument_id}
+# (same reason as economic-calendar above — literal sub-paths shadow path params in FastAPI
+# only when registered FIRST in the same router).
+# PLAN-0068 Wave A-2.
+@router.get("/fundamentals/earnings-calendar")
+async def earnings_calendar(request: Request) -> Any:
+    """Proxy GET /api/v1/temporal-events → S7 Knowledge Graph (corporate earnings).
+
+    Returns upcoming company earnings events for the EarningsCalendarWidget on
+    the dashboard.  Injects ``event_type=corporate`` so only earnings events from
+    the EarningsCalendarDatasetConsumer (13D-9) are returned — prevents the
+    widget accidentally showing macro/geopolitical events.
+
+    Auth: JWT required (same pattern as economic-calendar endpoint above).
+
+    Passes through optional query params from the caller:
+      - from_date (date): earliest active_from to include
+      - to_date   (date): latest active_from to include
+      - limit     (int):  max rows to return (S7 default: 20)
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.knowledge_graph.get(
+        "/api/v1/temporal-events",
+        # WHY strip event_type from caller params: we must always inject
+        # event_type=corporate here.  A malicious or misconfigured caller
+        # passing event_type=macro would see the wrong data.  Stripping it
+        # ensures the filter cannot be overridden from outside.
+        params={
+            "event_type": "corporate",
+            **{k: v for k, v in dict(request.query_params).items() if k != "event_type"},
+        },
         headers=headers,
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")

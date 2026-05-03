@@ -105,3 +105,11 @@ s7_provisional_stuck_recovered_total = Counter(
     "s7_provisional_stuck_recovered_total",
     "Provisional queue rows recovered by stale-processing sweep (reset 'processing'->'pending').",
 )
+
+# ── PLAN-0068 Wave A-1: Earnings Calendar consumer (13D-9) ───────────────────
+
+s7_earnings_calendar_events_ingested_total = Counter(
+    "s7_earnings_calendar_events_ingested_total",
+    "Total earnings calendar events upserted by consumer 13D-9, by ticker.",
+    ["ticker"],
+)
