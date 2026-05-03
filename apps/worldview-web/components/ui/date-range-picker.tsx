@@ -116,6 +116,7 @@ export function DateRangePicker({
         <Button
           variant="outline"
           disabled={disabled}
+          aria-label={value?.from ? `Select date range: ${label}` : "Select date range"}
           className={cn(
             "w-full justify-start gap-2 font-mono tabular-nums",
             heightClass,
