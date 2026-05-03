@@ -1079,12 +1079,84 @@ export interface BriefingEntityMention {
   ticker: string | null;
 }
 
-/** Source that informed the briefing — deterministic, from gathered context (not LLM output) */
+/**
+ * BriefCitation — a structured source document attached to a brief bullet.
+ *
+ * WHY document_id (not source_id): PLAN-0062-W4 migrated the backend Pydantic
+ * model to `document_id` to align with the KG document vocabulary. We keep
+ * `source_id` as an optional back-compat alias so pre-W4 cached responses
+ * (which emit `source_id`) still parse correctly.
+ *
+ * WHY `source_type` Literal: discriminates news articles, economic events, and
+ * alerts so the renderer can apply per-type UI treatment (e.g. an anchor tag
+ * for articles, an event chip for economic events).
+ *
+ * DATA SOURCE: S8 BriefCitation Pydantic model (PLAN-0062-W4 T-W4-A-01)
+ */
+export interface BriefCitation {
+  // Primary identifier — populated by W4+ API responses.
+  document_id: string;
+  // Legacy back-compat alias — populated by pre-W4 cached responses.
+  // WHY optional: not present in W4+ responses; optional avoids forced migration.
+  source_id?: string;
+  // Human-readable title (article headline, event name, alert description).
+  title: string;
+  // Direct URL to the source; null for events/alerts that have no external URL.
+  url: string | null;
+  // Discriminator — drives per-type UI treatment in StructuredBrief.
+  source_type: "article" | "event" | "alert";
+  // Short excerpt (≤ 400 chars) from the source document used as a tooltip.
+  // WHY optional: pre-W4 cached responses lack this field.
+  snippet?: string | null;
+}
+
+/**
+ * BriefingCitation — legacy shape emitted by pre-W4 API responses.
+ *
+ * WHY keep this: The morning brief card and instrument brief panel both
+ * read `brief.citations` to build the Top Stories chip strip. Pre-W4 cached
+ * responses emit `BriefingCitation` objects (with `source_id`); W4+ responses
+ * emit `BriefCitation` objects (with `document_id`). Both shapes must parse.
+ *
+ * DEPRECATION NOTE: Use `BriefCitation` for all new code. This alias is kept
+ * only for backward compatibility during the cache warm-up window after W4
+ * deploy. Remove after cache TTL (24h) expires.
+ *
+ * DATA SOURCE: S8 BriefingCitation (pre-W4 schema, PLAN-0049)
+ */
 export interface BriefingCitation {
   source_type: "article" | "event" | "alert";
   source_id: string;
   title: string;
   url: string | null;
+}
+
+/**
+ * BriefBullet — a single bullet point with mandatory citations (PLAN-0062-W4).
+ *
+ * WHY citations are required (not optional): the 100% citation gate is the
+ * core contract of PLAN-0062-W4. Every bullet MUST reference ≥ 1 source
+ * document. The `_backfill_uncited_bullets` function on the backend drops
+ * any bullet that couldn't resolve a citation, so the frontend can safely
+ * assume this invariant holds for W4+ responses.
+ *
+ * WHY optional `citations`: pre-W4 cached responses have `bullets: string[]`.
+ * The `BriefSection.bullets` type is `BriefBullet[]`, so string bullets from
+ * pre-W4 caches will fail Pydantic validation — the route serves a cache miss
+ * instead (see the v2 cache key bump in PLAN-0062-W4 T-W4-C-01). We mark
+ * `citations` optional here ONLY so TypeScript doesn't force callers to supply
+ * citations when adapting legacy string bullets in tests.
+ *
+ * DATA SOURCE: S8 BriefBullet Pydantic model (PLAN-0062-W4 T-W4-A-01)
+ */
+export interface BriefBullet {
+  // The bullet text (≤ 400 chars, ≥ 1 char).
+  text: string;
+  // Resolved source citations for this bullet — guaranteed non-empty by the
+  // backend's citation gate for W4+ responses.
+  // WHY optional: allows test adapters to construct BriefBullet from legacy
+  // string bullets without supplying citations (see morning-brief-card.test.tsx).
+  citations?: BriefCitation[];
 }
 
 /** Response from GET /api/v1/briefings/* — matches S8 PublicBriefingResponse */
@@ -1108,8 +1180,15 @@ export interface BriefingResponse {
     top_risk_signals: Array<{ signal_id: string; description: string }>;
     sector_breakdown: Record<string, number>;
   } | null;
-  entity_mentions: BriefingEntityMention[];
-  citations: BriefingCitation[];
+  // WHY entity_mentions optional: PLAN-0062-W4 removes entity_mentions from the
+  // critical path — the backend no longer guarantees they are populated. The
+  // frontend defensively falls back to `brief.entity_mentions ?? []` everywhere.
+  entity_mentions?: BriefingEntityMention[];
+  // WHY union type: W4+ responses emit `BriefCitation[]` (with `document_id`);
+  // pre-W4 cached responses emit `BriefingCitation[]` (with `source_id`).
+  // Both shapes share `source_type`, `title`, and `url` — the URL is all the
+  // frontend needs to render the Top Stories chip strip.
+  citations: (BriefCitation | BriefingCitation)[];
   generated_at: string;
   cached: boolean;
   entity_id: string | null;
@@ -1119,12 +1198,36 @@ export interface BriefingResponse {
   // over ``narrative``. ``headline`` mirrors ``summary`` for the top-of-card line.
   headline?: string | null;
   sections?: BriefSection[];
+  // PLAN-0062-W4 T-W4-D-01 — confidence + lead fields.
+  // ``confidence`` is a [0.0, 1.0] score reflecting citation density and
+  // breadth. ``lead`` is the 1-2 sentence executive summary extracted from the
+  // ## LEAD block of the v3.0 prompt output.
+  // WHY optional: pre-W4 cached responses (served from the v2 cache key) lack
+  // these fields. The frontend renders the confidence badge only when present,
+  // and falls back to `summary` when `lead` is absent.
+  confidence?: number;
+  lead?: string | null;
 }
 
-/** A structured section of a brief — populated when the backend parser succeeds. */
+/**
+ * BriefSection — a structured section of a brief with W4+ citation bullets.
+ *
+ * WHY bullets is `BriefBullet[]` (not `string[]`): PLAN-0062-W4 changed the
+ * backend Pydantic model from `list[str]` to `list[BriefBullet]`. Any attempt
+ * to construct a BriefSection with string bullets from a v2 cache key will
+ * fail Pydantic validation, causing a cache miss and fresh generation.
+ *
+ * WHY back-compat via test adapter: existing tests that build BriefingResponse
+ * fixtures with `bullets: string[]` must adapt using `_toBriefBullet()` helpers
+ * in the test file — R19 forbids deleting/weakening existing tests.
+ *
+ * DATA SOURCE: S8 BriefSection Pydantic model (PLAN-0062-W4 T-W4-A-01)
+ */
 export interface BriefSection {
   title: string;
-  bullets: string[];
+  // W4+ responses: array of BriefBullet objects (each with ≥1 citation).
+  // Pre-W4 cached responses: NOT served (v2 cache key forces regeneration).
+  bullets: BriefBullet[];
 }
 
 // ── Market Heatmap ────────────────────────────────────────────────────────

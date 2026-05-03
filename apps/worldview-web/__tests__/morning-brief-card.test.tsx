@@ -29,7 +29,26 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import type { BriefingResponse } from "@/types/api";
+import type { BriefingResponse, BriefBullet } from "@/types/api";
+
+// ── Test adapter ──────────────────────────────────────────────────────────────
+// WHY _toBriefBullet: PLAN-0062-W4 changed BriefSection.bullets from string[]
+// to BriefBullet[]. Existing fixture strings are wrapped here rather than
+// deleting/rewriting every assertion — R19 forbids weakening existing tests.
+// The placeholder citation keeps the shape valid without needing real article IDs.
+function _toBriefBullet(text: string): BriefBullet {
+  return {
+    text,
+    citations: [
+      {
+        document_id: "test-doc-placeholder",
+        source_type: "article",
+        title: "Placeholder citation for test fixture",
+        url: null,
+      },
+    ],
+  };
+}
 
 // ── Next.js navigation mock ───────────────────────────────────────────────────
 // MorningBriefCard imports ``next/link`` (which internally reads router config)
@@ -123,8 +142,10 @@ function structuredBrief(): BriefingResponse {
     cached: false,
     entity_id: null,
     sections: [
-      { title: "Drivers", bullets: ["Tech rallied 1.2%", "10Y yield -3bp"] },
-      { title: "Implications", bullets: ["Watch Fed minutes Wed"] },
+      // WHY _toBriefBullet: BriefSection.bullets is now BriefBullet[] (PLAN-0062-W4).
+      // We adapt the string fixture so R19 (never delete/weaken tests) is honoured.
+      { title: "Drivers", bullets: ["Tech rallied 1.2%", "10Y yield -3bp"].map(_toBriefBullet) },
+      { title: "Implications", bullets: ["Watch Fed minutes Wed"].map(_toBriefBullet) },
     ],
   };
 }
