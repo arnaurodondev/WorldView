@@ -799,3 +799,37 @@ extra_body={"prompt_cache_key": "entity_description_v1"}
 - Add an integration smoke-test for description adapters that asserts `len(description) > 50` after the first API call.
 
 ---
+
+### BP-347: LLM Returns Lowercase event_type Despite Uppercase Enum in Prompt
+
+**Category**: ML & LLM
+**Severity**: MEDIUM
+**First seen**: 2026-05-03
+**Services**: nlp-pipeline (article_consumer)
+
+**Symptoms**:
+- `events` table contains `earnings_release` (lowercase) mixed with `EARNINGS_RELEASE` (uppercase)
+- KG queries filtering by uppercase enum value (`EARNINGS_RELEASE`) miss 820 of 1530 events (~54%)
+- Upstream prompt correctly specifies `EARNINGS_RELEASE | M_AND_A | ...` but 8B-class models produce lowercase
+
+**Root cause**:
+Small models (8B class, DeepSeek-V4-Flash, Llama-3.1-8B) do not reliably follow casing instructions for enum values. The extraction prompt specifies uppercase constants, but models return lowercase (`earnings_release`, `m_and_a`). `_build_raw_events()` in `article_consumer.py` passed the LLM value verbatim with `str(evt_d.get("event_type", ""))` — no normalization.
+
+**Example**:
+```python
+# Bad — passes mixed-case verbatim
+"event_type": str(evt_d.get("event_type", ""))
+
+# Good — normalize at source before Kafka payload
+"event_type": str(evt_d.get("event_type", "")).upper()
+```
+
+**Fix**:
+Add `.upper()` to the `event_type` string in `_build_raw_events()` at `article_consumer.py:1238`.
+
+**Prevention**:
+- Always normalize enum fields from LLM output to the expected case at the point of extraction, not at the point of consumption.
+- Apply `.upper()` / `.lower()` normalization for any LLM-extracted field that must match a fixed enum set.
+- JSON schema `enum` constraints in `_EXTRACTION_SCHEMA` can guide the model but are not a substitute for normalization — small models do not always respect them.
+
+**Regression test**: `tests/unit/infrastructure/test_consumer.py` (event_type normalization assertions)
