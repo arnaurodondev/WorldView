@@ -443,6 +443,27 @@ services/<service>/src/<package>/infrastructure/messaging/schemas/
 - Never change a field's type incompatibly.
 - Bump `schema_version` integer when adding fields.
 
+### 3.7.1 Avro on the wire — Hard Rule R28 (PLAN-0062)
+
+Pure JSON on Kafka is **forbidden** (R28). Every topic in the platform follows
+the same producer/consumer contract:
+
+| Layer | Rule |
+|-------|------|
+| **Schema source of truth** | One `.avsc` file per topic in `infra/kafka/schemas/`, registered with the schema registry by `infra/kafka/init/register-schemas.py` at startup. |
+| **Canonical model** | One frozen dataclass in `libs/contracts/src/contracts/canonical/<event>.py` (entity-shaped payloads — articles, OHLCV, instruments) **OR** `libs/contracts/src/contracts/events/<domain>/<event>.py` (pure trigger events — provisional queued, contradictions, enrichment). The model mirrors the Avro fields field-for-field with `from_dict` / `to_dict`. |
+| **Producer** | `serialize_confluent_avro(schema_path, record)` (5-byte Confluent header + Avro body). Never `json.dumps(...).encode()` for outbox `payload_avro` writes. |
+| **Consumer** | `deserialize_confluent_avro(schema_path, raw)` keyed off `get_schema_path(topic)`. JSON fallback is permitted only as a transition aid and must log every fallback hit (warning level) so the migration window is measurable and the branch can be removed once traffic decays to zero. |
+| **Architecture test** | `tests/architecture/test_kafka_avro_enforcement.py` is unconditional — any new pure-JSON consumer fails the build. |
+
+The `canonical/` vs `events/<domain>/` split is intentional: `canonical/`
+historically carries the *one shape per domain* models that map onto
+persisted entities, while `events/<domain>/` carries pure-event payloads
+that exist only as Kafka triggers and never persist as their own row.
+When in doubt, ask whether the payload corresponds to a row in some
+service's database — if yes, it goes under `canonical/`; if it is
+purely an event-of-something-happened, it goes under `events/<domain>/`.
+
 ### 3.8 Valkey — ALWAYS use `messaging.valkey.ValkeyClient`
 
 ```python

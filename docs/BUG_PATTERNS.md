@@ -8393,3 +8393,55 @@ jobs = [
 - **Test**: `test_all_ten_jobs_registered` verifies the full set of expected job IDs. When adding a new worker, update this test's `expected_ids` set — a failing test is your first signal of a missing registration.
 - **Code review**: When reviewing a `build_workers()` addition, immediately check whether `_register_jobs()` was also updated. If not, block the PR.
 - **Observability**: At startup, log the full list of registered job IDs at INFO level. Cross-reference against the keys in `build_workers()` in the startup log. A missing key is immediately visible in the startup trace.
+
+---
+
+## BP-313 — JSON-Only Kafka Consumer Hides Schema-Evolution Bugs (PLAN-0062)
+
+**Pattern**: A Kafka consumer's `deserialize_value` calls `json.loads(raw)` on
+the wire bytes with no Avro path. The producer side writes the outbox row's
+`payload_avro` column as `json.dumps(payload).encode()`. There is an `.avsc`
+schema in `infra/kafka/schemas/` for the topic, but no code path actually
+consults it — the schema is decoration, not enforcement.
+
+**Root Cause**: In a JSON-on-the-wire pipeline, every dict key the consumer
+reads is implicitly part of the contract, but no tool checks alignment
+between the producer dict and the schema. Consumers silently accept extra,
+missing, or renamed fields. Schema-evolution bugs surface only when a
+consumer crashes in production, often weeks after the producer changed.
+
+**Discovered**: PLAN-0062 architecture sweep (2026-05-03). Found three
+JSON-only consumers — alert `intelligence_consumer`, kg `enriched_consumer`,
+kg `entity_consumer` — for topics that already had `.avsc` schemas. In each
+case the producer's outbox row was missing fields that the schema declared
+required (e.g. `entity.canonical.created.v1.occurred_at` was absent from
+the `provisional_enrichment_core` payload). The mismatch was invisible to
+runtime tests because nothing decoded against the schema.
+
+**Fix**: Switch the producer to
+`messaging.kafka.serialization_utils.serialize_confluent_avro(schema_path, record)`
+and the consumer to
+`messaging.kafka.serialization_utils.deserialize_confluent_avro(schema_path, raw)`.
+Keep a JSON fallback temporarily and **log every fallback hit** so the
+residual JSON traffic is measurable; remove the branch once it decays to
+zero.
+
+**Regression test**: `tests/architecture/test_kafka_avro_enforcement.py` —
+unconditional after PLAN-0062 Wave D — fails the build for any consumer
+whose `deserialize_value` body uses `json.loads` with no Avro call.
+
+### Prevention
+
+- **Rule**: All Kafka contracts use Avro on the wire (R28). Pure JSON
+  consumers are forbidden — there is no baseline / escape hatch.
+- **Architecture test**: The classifier test scans every
+  `services/*/src/**/consumers/*.py` and rejects any `deserialize_value`
+  that lacks `deserialize_confluent_avro` / `deserialize_avro`.
+- **Producer-side audit**: When adding a new outbox writer, the call site
+  must use `serialize_confluent_avro(schema_path, ...)` — outbox dispatchers
+  produce the bytes verbatim and do NOT prefix the Confluent header, so the
+  responsibility lives at the row-construction site.
+- **Canonical model**: Every topic has a frozen-dataclass canonical model
+  in `libs/contracts` mirroring the schema field-for-field, with field-set
+  alignment asserted by a contract test at
+  `libs/contracts/tests/test_events_*_*.py`.
