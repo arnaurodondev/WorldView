@@ -18,6 +18,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+// useMemo retained for contextMenu (depends on router).
 import { useRouter } from "next/navigation";
 import { Plus, Eye, ListChecks } from "lucide-react";
 import { useAuthedQuery } from "@/lib/api-client";
@@ -29,8 +30,8 @@ import {
   DataTable,
   type DataTableContextMenuItem,
 } from "@/components/ui/data-table";
+import { watchlistHubColumns } from "./hub-columns";
 import type { Watchlist } from "@/types/api";
-import type { ColumnDef } from "@tanstack/react-table";
 import { cn } from "@/lib/utils";
 
 // Lazy-imported create dialog — keeps the hub bundle small for users who
@@ -43,24 +44,6 @@ const CreateWatchlistDialog = dynamic(
     ),
   { ssr: false },
 );
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-function formatRelativeTime(iso: string): string {
-  // Formats "2026-04-30T12:00:00Z" → "2h ago" / "3d ago" / "Apr 14".
-  const then = new Date(iso).getTime();
-  const now = Date.now();
-  const sec = Math.floor((now - then) / 1000);
-  if (sec < 60) return "just now";
-  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
-  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
-  if (sec < 7 * 86400) return `${Math.floor(sec / 86400)}d ago`;
-  return new Date(iso).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
-}
 
 // ── Page ───────────────────────────────────────────────────────────────────
 
@@ -79,57 +62,9 @@ export default function WatchlistsHubPage() {
 
   const watchlists = data ?? [];
 
-  // Define columns with TanStack-style accessor configs so the DataTable's
-  // multi-sort and copy-as-TSV both work out of the box.
-  const columns = useMemo<ColumnDef<Watchlist>[]>(
-    () => [
-      {
-        id: "name",
-        accessorKey: "name",
-        header: "Name",
-        size: 280,
-        cell: ({ row }) => (
-          <span className="font-mono text-[11px] text-foreground truncate">
-            {row.original.name}
-          </span>
-        ),
-      },
-      {
-        id: "member_count",
-        accessorKey: "member_count",
-        header: "Members",
-        size: 100,
-        cell: ({ row }) => (
-          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-            {row.original.member_count}
-          </span>
-        ),
-      },
-      {
-        id: "updated_at",
-        accessorKey: "updated_at",
-        header: "Updated",
-        size: 120,
-        cell: ({ row }) => (
-          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-            {formatRelativeTime(row.original.updated_at)}
-          </span>
-        ),
-      },
-      {
-        id: "created_at",
-        accessorKey: "created_at",
-        header: "Created",
-        size: 120,
-        cell: ({ row }) => (
-          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-            {formatRelativeTime(row.original.created_at)}
-          </span>
-        ),
-      },
-    ],
-    [],
-  );
+  // WHY not useMemo: watchlistHubColumns is a static array (no closures over
+  // mutable state) — importing directly avoids unnecessary memo bookkeeping.
+  const columns = watchlistHubColumns;
 
   const contextMenu = useMemo<DataTableContextMenuItem<Watchlist>[]>(
     () => [

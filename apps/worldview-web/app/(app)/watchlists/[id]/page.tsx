@@ -28,8 +28,8 @@ import {
   type DataTableContextMenuItem,
 } from "@/components/ui/data-table";
 import { DestructiveButton } from "@/components/ui/destructive-button";
+import { watchlistMembersColumns } from "../members-columns";
 import type { WatchlistMember } from "@/types/api";
-import type { ColumnDef } from "@tanstack/react-table";
 
 export default function WatchlistDetailPage() {
   const router = useRouter();
@@ -94,71 +94,9 @@ export default function WatchlistDetailPage() {
       toast.error(e instanceof Error ? e.message : "Member removal failed"),
   });
 
-  // ── Columns ─────────────────────────────────────────────────────────────
-
-  const columns = useMemo<ColumnDef<WatchlistMember>[]>(
-    () => [
-      {
-        id: "ticker",
-        accessorKey: "ticker",
-        header: "Ticker",
-        size: 80,
-        cell: ({ row }) => (
-          <span className="font-mono text-[11px] tabular-nums text-primary truncate">
-            {row.original.ticker ?? "—"}
-          </span>
-        ),
-      },
-      {
-        id: "name",
-        accessorKey: "name",
-        header: "Name",
-        size: 240,
-        cell: ({ row }) => (
-          <span className="text-[11px] text-foreground truncate">
-            {row.original.name}
-          </span>
-        ),
-      },
-      {
-        id: "resolution",
-        accessorKey: "resolution",
-        header: "Status",
-        size: 90,
-        cell: ({ row }) => {
-          const s = row.original.resolution ?? "resolved";
-          if (s === "pending") {
-            return (
-              <span className="rounded-[2px] bg-warning/15 px-1 font-mono text-[10px] uppercase tracking-wider text-warning">
-                resolving
-              </span>
-            );
-          }
-          return (
-            <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              ok
-            </span>
-          );
-        },
-      },
-      {
-        id: "added_at",
-        accessorKey: "added_at",
-        header: "Added",
-        size: 100,
-        cell: ({ row }) => (
-          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-            {new Date(row.original.added_at).toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-              timeZone: "UTC",
-            })}
-          </span>
-        ),
-      },
-    ],
-    [],
-  );
+  // WHY not useMemo: watchlistMembersColumns is a static array (no closures over
+  // mutable state) — importing directly avoids unnecessary memo bookkeeping.
+  const columns = watchlistMembersColumns;
 
   const contextMenu = useMemo<DataTableContextMenuItem<WatchlistMember>[]>(
     () => [
