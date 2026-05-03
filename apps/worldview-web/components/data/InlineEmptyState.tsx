@@ -38,7 +38,14 @@ export function InlineEmptyState({ message, className }: InlineEmptyStateProps) 
   return (
     // WHY py-3 text-xs: minimal height, stays within a terminal panel without
     // dominating the visual weight of the panel header above it.
-    <p className={cn("py-3 text-xs text-muted-foreground", className)}>
+    // WHY role="status" aria-live="polite": when the empty state appears after
+    // a data fetch (e.g. filter returns 0 rows), AT users need to hear the change;
+    // "polite" queues the announcement without interrupting ongoing speech.
+    <p
+      role="status"
+      aria-live="polite"
+      className={cn("py-3 text-xs text-muted-foreground", className)}
+    >
       {message}
     </p>
   );

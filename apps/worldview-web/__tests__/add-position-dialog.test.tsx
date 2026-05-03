@@ -207,6 +207,37 @@ describe("AddPositionDialog — success path", () => {
   });
 });
 
+// ── Quantity component interaction (F-M-003) ──────────────────────────────
+
+describe("AddPositionDialog — quantity component interaction (F-M-003)", () => {
+  it("shows 'Must be greater than 0' message after typing 0 and blurring (BP-328)", async () => {
+    // WHY this test exists: the Zod schema tests above verify the rule is defined,
+    // but this integration test verifies the error actually reaches the DOM — i.e.
+    // RHF's onChange mode is wired, NumberInput.commit() calls field.onChange, and
+    // FormMessage renders the destructive text.
+    const user = userEvent.setup();
+    renderDialog();
+    await fillQuantity(user, "0");
+    await waitFor(() => {
+      expect(screen.getByText("Must be greater than 0")).toBeInTheDocument();
+    });
+  });
+
+  it("quantity input has aria-invalid='true' after 0 is entered (BP-330)", async () => {
+    // WHY aria-invalid: AT users need the field announced as invalid — the
+    // text error alone is not surfaced by all screen readers until re-focused.
+    const user = userEvent.setup();
+    renderDialog();
+    await fillQuantity(user, "0");
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Quantity" })).toHaveAttribute(
+        "aria-invalid",
+        "true",
+      );
+    });
+  });
+});
+
 // ── Cancel ────────────────────────────────────────────────────────────────
 
 describe("AddPositionDialog — cancel", () => {

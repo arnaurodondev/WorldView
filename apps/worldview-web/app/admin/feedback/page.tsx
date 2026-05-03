@@ -24,6 +24,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { GatewayError } from "@/lib/api/_client";
 import { useQuery } from "@tanstack/react-query";
 import { Download, Filter as FilterIcon, Loader2 } from "lucide-react";
 import {
@@ -173,7 +174,9 @@ function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
-      <div className="mt-0.5 font-mono text-lg tabular-nums text-foreground">
+      {/* WHY text-[13px] not text-lg: terminal density — text-lg (18px) is
+          consumer-app sizing; Bloomberg NPS strips use compact 13px mono values. */}
+      <div className="mt-0.5 font-mono text-[13px] tabular-nums text-foreground">
         {value}
       </div>
     </div>
@@ -350,19 +353,27 @@ export default function AdminFeedbackPage() {
   };
 
   if (isLoading) {
-    return <div className="p-8 text-sm text-muted-foreground">Loading…</div>;
+    // WHY p-3 text-[11px]: terminal density — p-8 text-sm looks consumer-app;
+    // all other loading states in the shell use compact sizing.
+    return <div className="p-3 text-[11px] font-mono text-muted-foreground">Loading…</div>;
   }
 
-  // WHY surface the 403 instead of redirecting: the backend is the
-  // canonical guard — if it 403s the front-end shouldn't pretend it's
-  // unauthorized at the route level. We just show a clean message.
+  // WHY differentiate 403 vs 5xx: a 403 means the account lacks the admin role
+  // (show "access denied"). Any other status means a real server failure (show a
+  // retriable error). Treating both as "access denied" would hide infra problems
+  // from the admin who is most capable of acting on them. GatewayError.status is
+  // the reliable discriminant — `error.message` alone could be anything.
   if (isError) {
+    const is403 = error instanceof GatewayError && error.status === 403;
     return (
-      <div className="mx-auto max-w-3xl p-8">
-        <h1 className="text-2xl font-semibold">Admin: Feedback</h1>
-        <p className="mt-2 text-sm text-destructive">
-          Access denied — your account is not authorised to view this page.
-          {error instanceof Error ? ` (${error.message})` : ""}
+      <div className="p-3">
+        <p className="text-[11px] font-mono font-semibold text-foreground">
+          Admin: Feedback
+        </p>
+        <p className="mt-1 text-[11px] font-mono text-destructive">
+          {is403
+            ? "Access denied — your account is not authorised to view this page."
+            : `Server error — could not load feedback submissions (${error instanceof Error ? error.message : "unknown error"}). Please try again.`}
         </p>
       </div>
     );
@@ -374,7 +385,9 @@ export default function AdminFeedbackPage() {
     <div className="mx-auto max-w-7xl p-3">
       <header className="mb-4 flex items-end justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Admin: Feedback</h1>
+          {/* WHY text-[13px] not text-2xl: terminal density — headers in Bloomberg
+              panels use compact 12-13px, not 24px consumer-app headings. */}
+          <h1 className="text-[13px] font-semibold tracking-tight font-mono">Admin: Feedback</h1>
           <p className="mt-1 text-xs text-muted-foreground">
             {role ? `Signed in as ${role}` : "Server enforces admin role"} ·{" "}
             {items.length} row(s)
