@@ -12,14 +12,14 @@
 
 | Category | File | Patterns | Description |
 |----------|------|----------|-------------|
-| [Kafka & Messaging](bug-patterns/kafka-messaging.md) | `bug-patterns/kafka-messaging.md` | 35 | Kafka, Avro, outbox, DLQ, Schema Registry |
+| [Kafka & Messaging](bug-patterns/kafka-messaging.md) | `bug-patterns/kafka-messaging.md` | 36 | Kafka, Avro, outbox, DLQ, Schema Registry |
 | [Database & ORM](bug-patterns/database-orm.md) | `bug-patterns/database-orm.md` | 42 | SQLAlchemy, asyncpg, Alembic, PostgreSQL, pgvector |
 | [Async & Concurrency](bug-patterns/async-concurrency.md) | `bug-patterns/async-concurrency.md` | 14 | asyncio, event loops, concurrency, React concurrent mode |
 | [Auth & Security](bug-patterns/auth-security.md) | `bug-patterns/auth-security.md` | 28 | JWT/OIDC, SSRF, XSS, tenant isolation, CSP, middleware |
 | [Testing](bug-patterns/testing.md) | `bug-patterns/testing.md` | 26 | pytest, AsyncMock, fixtures, Vitest, pre-commit, CI |
 | [Frontend](bug-patterns/frontend.md) | `bug-patterns/frontend.md` | 29 | React, Next.js, WebSocket/SSE, TypeScript, CSS |
-| [Config & Docker](bug-patterns/config-docker.md) | `bug-patterns/config-docker.md` | 29 | pydantic-settings, Docker, Compose, env vars, images |
-| [ML & LLM](bug-patterns/ml-llm.md) | `bug-patterns/ml-llm.md` | 26 | Ollama, GLiNER, DeepInfra, embeddings, LLM prompt patterns |
+| [Config & Docker](bug-patterns/config-docker.md) | `bug-patterns/config-docker.md` | 30 | pydantic-settings, Docker, Compose, env vars, images |
+| [ML & LLM](bug-patterns/ml-llm.md) | `bug-patterns/ml-llm.md` | 27 | Ollama, GLiNER, DeepInfra, embeddings, LLM prompt patterns |
 | [Observability](bug-patterns/observability.md) | `bug-patterns/observability.md` | 9 | Prometheus, Grafana, Alertmanager, structlog, OTel |
 | [Workers & Schedulers](bug-patterns/worker-scheduler.md) | `bug-patterns/worker-scheduler.md` | 37 | task scheduling, lease patterns, backfill, watermarks, rate limiting |
 | [API & Contracts](bug-patterns/api-contracts.md) | `bug-patterns/api-contracts.md` | 21 | FastAPI, Pydantic, API contract drift, PRD assumptions, gateways |
@@ -339,6 +339,9 @@
 | BP-342 | KG entity_id ≠ market-data instrument_id — FundamentalsRefreshWorker passed entity_id to market-data REST API → 404; must resolve ticker→instrument_id via `/instruments/symbol/{ticker}` first | API & Contracts | [bug-patterns/api-contracts.md](bug-patterns/api-contracts.md#bp-342) |
 | BP-343 | SummaryWorker (13C) always returns 0 summaries — `relation_evidence` immutable table permanently empty because `insert_immutable()` has zero callers; evidence_text silently dropped in `insert_raw()` because `relation_evidence_raw` had no `evidence_text` column | Workers & Schedulers | [bug-patterns/worker-scheduler.md](bug-patterns/worker-scheduler.md#bp-343) |
 | BP-344 | AGE SyncWorker returns immediately with no-op — `KNOWLEDGE_GRAPH_CYPHER_ENABLED=false` in docker.env gates a fully-implemented worker; fix: set `true` in docker.env and rebuild | Config & Docker | [bug-patterns/config-docker.md](bug-patterns/config-docker.md#bp-344) |
+| BP-345 | NLP evidence_text silently dropped from relation dicts — `_build_raw_relations()` never forwarded `evidence_text` from LLM output; all 925 rows in `relation_evidence_raw` had NULL evidence_text | Kafka & Messaging | [bug-patterns/kafka-messaging.md](bug-patterns/kafka-messaging.md#bp-345) |
+| BP-346 | Stale container missing module added after last build — `contracts.events.nlp.article_enriched` added in PLAN-0062 after container built 2026-04-13; every Kafka message crashed with `ModuleNotFoundError`; fix: always rebuild consumers after shared-lib changes | Config & Docker | [bug-patterns/config-docker.md](bug-patterns/config-docker.md#bp-346) |
+| BP-347 | LLM returns lowercase event_type despite uppercase enum in prompt — 8B-class models return `earnings_release` instead of `EARNINGS_RELEASE`; fix: `.upper()` normalization in `article_consumer.py:_build_raw_events()` before Kafka payload | ML & LLM | [bug-patterns/ml-llm.md](bug-patterns/ml-llm.md#bp-347) |
 
 ---
 
