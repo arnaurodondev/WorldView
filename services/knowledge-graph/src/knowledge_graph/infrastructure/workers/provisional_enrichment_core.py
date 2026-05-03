@@ -12,7 +12,6 @@ acquire a new session for persist_enrichment.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -21,22 +20,11 @@ from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
     EntityEmbeddingStateRepository,
 )
+from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
-
-def _find_schema_dir() -> Path:
-    """Locate ``infra/kafka/schemas/`` whether running locally or in Docker."""
-    relative = Path("infra") / "kafka" / "schemas"
-    for base in Path(__file__).resolve().parents:
-        candidate = base / relative
-        if candidate.is_dir():
-            return candidate
-    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
-
-
-_SCHEMA_DIR = _find_schema_dir()
-_ENTITY_CANONICAL_CREATED_SCHEMA_PATH = str(_SCHEMA_DIR / "entity.canonical.created.v1.avsc")
-_ENTITY_DIRTIED_SCHEMA_PATH = str(_SCHEMA_DIR / "entity.dirtied.v1.avsc")
+_ENTITY_CANONICAL_CREATED_SCHEMA_PATH = get_schema_path("entity.canonical.created.v1.avsc")
+_ENTITY_DIRTIED_SCHEMA_PATH = get_schema_path("entity.dirtied.v1.avsc")
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession

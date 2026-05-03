@@ -24,7 +24,6 @@ provides the <100ms hot path.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
@@ -36,24 +35,11 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
-
-# Walk up the directory tree to find infra/kafka/schemas/ — works both in
-# development (repo root is a few levels up) and in Docker (schemas copied to
-# /app/infra/kafka/schemas/).
-def _find_schema_dir() -> Path:
-    relative = Path("infra") / "kafka" / "schemas"
-    for base in Path(__file__).resolve().parents:
-        candidate = base / relative
-        if candidate.is_dir():
-            return candidate
-    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
-
-
-_SCHEMA_DIR = _find_schema_dir()
 _PROVISIONAL_QUEUED_TOPIC = "entity.provisional.queued.v1"
-_PROVISIONAL_QUEUED_SCHEMA_PATH = str(_SCHEMA_DIR / "entity.provisional.queued.v1.avsc")
+_PROVISIONAL_QUEUED_SCHEMA_PATH = get_schema_path("entity.provisional.queued.v1.avsc")
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
