@@ -184,14 +184,23 @@ class AgeSyncWorker:
         watermark = await self._get_watermark()
         new_watermark = utc_now()  # type: ignore[no-any-return]
 
+        watermark_age_s = round((new_watermark - watermark).total_seconds())
+        logger.info(  # type: ignore[no-any-return]
+            "age_sync_worker_start",
+            watermark=watermark.isoformat(),
+            watermark_age_s=watermark_age_s,
+            is_full_resync=watermark.year == 1970,
+        )
+
         entities_synced = 0
         relations_synced = 0
+        temporal_events_synced = 0
 
         async with self._sf() as session:
             await _setup_age_session(session)
             entities_synced = await self._sync_entities(session, watermark)
             relations_synced = await self._sync_relations(session, watermark)
-            await self._sync_temporal_events(session, watermark)
+            temporal_events_synced = await self._sync_temporal_events(session, watermark)
             await session.commit()
 
         await self._set_watermark(new_watermark)
@@ -201,12 +210,23 @@ class AgeSyncWorker:
         s7_age_sync_relations_total.inc(relations_synced)
         s7_age_sync_duration_seconds.observe(elapsed)
 
+        # Log a warning when nothing was synced — may indicate the relational
+        # tables are empty or the watermark is ahead of all rows.
+        if entities_synced == 0 and relations_synced == 0 and temporal_events_synced == 0:
+            logger.warning(  # type: ignore[no-any-return]
+                "age_sync_worker_no_changes",
+                watermark=watermark.isoformat(),
+                duration_s=round(elapsed, 2),
+                message="all AGE MERGE operations were no-ops — relational tables may be empty or watermark is stale",
+            )
+
         logger.info(  # type: ignore[no-any-return]
             "age_sync_worker_complete",
             entities_synced=entities_synced,
             relations_synced=relations_synced,
+            temporal_events_synced=temporal_events_synced,
             duration_s=round(elapsed, 2),
-            watermark=new_watermark.isoformat(),
+            new_watermark=new_watermark.isoformat(),
         )
 
     # ── Watermark ─────────────────────────────────────────────────────────────
@@ -360,14 +380,18 @@ class AgeSyncWorker:
 
     # ── Temporal event sync ───────────────────────────────────────────────────
 
-    async def _sync_temporal_events(self, session: AsyncSession, since: datetime) -> None:
+    async def _sync_temporal_events(self, session: AsyncSession, since: datetime) -> int:
         """MERGE temporal events + EVENT_EXPOSES edges updated/created since *since*.
 
         Uses paginated fetches (same pattern as _sync_entities) to bound memory
         usage on large or first-run backlogs.
+
+        Returns the total number of TemporalEvent vertices upserted.
         """
         event_batch = 2000
         exposure_batch = 5000
+        events_total = 0
+        exposures_total = 0
 
         # 1. TemporalEvent vertices — paginated
         offset = 0
@@ -396,6 +420,7 @@ class AgeSyncWorker:
                     "updated_at": row.updated_at.isoformat(),
                 }
                 await session.execute(text(_SQL_TEMPORAL_EVENT_MERGE), {"params": json.dumps(params)})
+            events_total += len(batch)
             if len(batch) < event_batch:
                 break
             offset += event_batch
@@ -427,9 +452,17 @@ class AgeSyncWorker:
                     "confidence": float(row.confidence),
                 }
                 await session.execute(text(_SQL_EVENT_EXPOSES_MERGE), {"params": json.dumps(params)})
+            exposures_total += len(batch)
             if len(batch) < exposure_batch:
                 break
             offset += exposure_batch
+
+        logger.debug(  # type: ignore[no-any-return]
+            "age_sync_temporal_events_complete",
+            temporal_events_synced=events_total,
+            event_exposures_synced=exposures_total,
+        )
+        return events_total
 
 
 # ── Session helpers ────────────────────────────────────────────────────────────

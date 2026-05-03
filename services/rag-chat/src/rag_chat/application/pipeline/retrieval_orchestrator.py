@@ -125,16 +125,41 @@ class ParallelRetrievalOrchestrator:
             tasks.append(self._with_cb("cypher", self._fetch_cypher(entity_ids[0])))
 
         if not tasks:
+            log.warning(  # type: ignore[no-any-return]
+                "retrieval_no_tasks_planned",
+                entity_ids_count=len(entity_ids),
+                message="retrieval plan produced zero tasks — query may be too generic or plan flags all false",
+            )
             return []
 
         results_nested = await asyncio.gather(*tasks, return_exceptions=True)
 
         items: list[RetrievedItem] = []
+        failed_count = 0
         for r in results_nested:
             if isinstance(r, Exception):
                 log.warning("retrieval_task_failed", error=str(r))  # type: ignore[no-any-return]
+                failed_count += 1
             elif isinstance(r, list):
                 items.extend(r)
+
+        if not items:
+            log.warning(  # type: ignore[no-any-return]
+                "retrieval_empty_result",
+                tasks_scheduled=len(tasks),
+                failed_tasks=failed_count,
+                entity_ids_count=len(entity_ids),
+                message="all retrieval tasks returned empty — context may be missing or services unavailable",
+            )
+        else:
+            log.info(  # type: ignore[no-any-return]
+                "retrieval_complete",
+                items_retrieved=len(items),
+                tasks_scheduled=len(tasks),
+                failed_tasks=failed_count,
+                entity_ids_count=len(entity_ids),
+            )
+
         return items
 
     # ── Circuit breaker wrapper ──────────────────────────────────────────────
@@ -188,6 +213,12 @@ class ParallelRetrievalOrchestrator:
             date_to=_date_to_dt(plan.date_filter.end) if plan.date_filter else None,
         )
         results = await asyncio.wait_for(self._s6.search_chunks(req), timeout=self._timeout)
+        if not results:
+            log.warning(  # type: ignore[no-any-return]
+                "retrieval_chunks_empty",
+                has_embedding=query_embedding is not None,
+                message="chunk search returned 0 results — S6 index may be empty or query has no match",
+            )
         items: list[RetrievedItem] = []
         for r in results:
             trust = DEFAULT_TRUST_WEIGHTS.get(r.source_type, DEFAULT_TRUST_WEIGHTS["default"])
@@ -247,6 +278,12 @@ class ParallelRetrievalOrchestrator:
             self._s7.get_egocentric_graph(entity_id, min_confidence=0.40, limit=30),
             timeout=self._timeout,
         )
+        if not graph.edges:
+            log.warning(  # type: ignore[no-any-return]
+                "retrieval_graph_empty",
+                entity_id=str(entity_id),
+                message="egocentric graph returned 0 edges — entity may have no relations above confidence threshold",
+            )
         items: list[RetrievedItem] = []
         for edge in graph.edges:
             text = (

@@ -220,6 +220,20 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
         raw_events = _parse_raw_events(raw_events_data)
         raw_claims = _parse_raw_claims(raw_claims_data, is_backfill=is_backfill)
 
+        # Data quality signal: track how many incoming relations lack evidence_text.
+        # This indicates NLP pipeline extraction gaps that will cause downstream
+        # SummaryWorker to fall back to raw tables or skip the relation entirely.
+        if raw_relations:
+            null_evidence_count = sum(1 for r in raw_relations if not r.evidence_text)
+            if null_evidence_count > 0:
+                logger.warning(  # type: ignore[no-any-return]
+                    "enriched_consumer_null_evidence_text",
+                    doc_id=str(doc_id),
+                    null_evidence_count=null_evidence_count,
+                    total_relations=len(raw_relations),
+                    message="incoming relations missing evidence_text — NLP extraction gap",
+                )
+
         async with self._sf() as session:
             registry_repo = RelationTypeRegistryRepository(session)
             outbox_repo = OutboxRepository(session)
@@ -251,6 +265,28 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
             canonical_decay_classes = [r.decay_class for r in canon_results]
             canonical_decay_alphas = [r.decay_alpha for r in canon_results]
             canonical_base_confidences = [r.base_confidence for r in canon_results]
+
+            # Log canonicalization quality: how many raw_types resolved vs stayed unknown.
+            if canon_results:
+                resolved_count = sum(1 for ct in canonical_types if ct is not None)
+                unknown_count = len(canonical_types) - resolved_count
+                logger.debug(  # type: ignore[no-any-return]
+                    "enriched_consumer_canonicalization_summary",
+                    doc_id=str(doc_id),
+                    total_relations=len(canon_results),
+                    resolved=resolved_count,
+                    unknown=unknown_count,
+                )
+                if unknown_count > 0:
+                    unknown_raw_types = [
+                        r.raw_type for r, ct in zip(raw_relations, canonical_types, strict=True) if ct is None
+                    ]
+                    logger.warning(  # type: ignore[no-any-return]
+                        "enriched_consumer_unresolved_relation_types",
+                        doc_id=str(doc_id),
+                        unknown_count=unknown_count,
+                        unknown_raw_types=unknown_raw_types[:10],  # cap to avoid log bloat
+                    )
 
             # ----------------------------------------------------------
             # Block 12a: Graph materialization

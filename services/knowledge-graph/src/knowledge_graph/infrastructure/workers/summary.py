@@ -69,6 +69,17 @@ class SummaryWorker:
             summary_repo = RelationSummaryRepository(session)
 
             stale_relations = await rel_repo.fetch_stale_summary(_BATCH_LIMIT)  # type: ignore[attr-defined]
+            batch_size = len(stale_relations)
+
+            logger.info(  # type: ignore[no-any-return]
+                "summary_worker_batch_start",
+                stale_relations=batch_size,
+            )
+
+            immutable_hits_total = 0
+            raw_fallback_hits_total = 0
+            skipped_no_evidence = 0
+            skipped_null_evidence_text = 0
 
             for rel in stale_relations:
                 relation_id = rel["relation_id"]  # type: ignore[assignment]
@@ -77,6 +88,7 @@ class SummaryWorker:
                     relation_id,  # type: ignore[arg-type]
                     limit=_EVIDENCE_LIMIT,
                 )
+                evidence_source = "immutable"
                 # Fall back to raw staging table when the immutable partition
                 # table is empty (insert_immutable promotion not yet implemented).
                 if not evidence_rows:
@@ -84,15 +96,40 @@ class SummaryWorker:
                         relation_id,  # type: ignore[arg-type]
                         limit=_EVIDENCE_LIMIT,
                     )
+                    evidence_source = "raw_fallback"
+                    if evidence_rows:
+                        logger.debug(  # type: ignore[no-any-return]
+                            "summary_worker_raw_fallback_triggered",
+                            relation_id=str(relation_id),
+                            evidence_source=evidence_source,
+                            row_count=len(evidence_rows),
+                        )
                 if not evidence_rows:
+                    skipped_no_evidence += 1
                     continue
+
+                # Track which evidence source contributed
+                if evidence_source == "immutable":
+                    immutable_hits_total += len(evidence_rows)
+                else:
+                    raw_fallback_hits_total += len(evidence_rows)
 
                 evidence_texts = [
                     str(e.get("evidence_text", "")) or str(e.get("canonicalized_evidence_text", ""))
                     for e in evidence_rows
                     if e.get("evidence_text") or e.get("canonicalized_evidence_text")
                 ]
+                null_count = len(evidence_rows) - len(evidence_texts)
+                if null_count > 0:
+                    logger.warning(  # type: ignore[no-any-return]
+                        "summary_worker_null_evidence_text",
+                        relation_id=str(relation_id),
+                        null_evidence_count=null_count,
+                        total_rows=len(evidence_rows),
+                        message="evidence_text NULL on pre-migration rows — consider promoting to immutable",
+                    )
                 if not evidence_texts:
+                    skipped_null_evidence_text += 1
                     continue
 
                 # SHA-256 of combined evidence for change detection
@@ -131,8 +168,13 @@ class SummaryWorker:
 
         logger.info(  # type: ignore[no-any-return]
             "summary_worker_complete",
+            stale_relations=batch_size,
             summaries_created=summaries_created,
             summaries_skipped=summaries_skipped,
+            skipped_no_evidence=skipped_no_evidence,
+            skipped_null_evidence_text=skipped_null_evidence_text,
+            immutable_hits=immutable_hits_total,
+            raw_fallback_hits=raw_fallback_hits_total,
         )
 
     async def _generate_summary(
