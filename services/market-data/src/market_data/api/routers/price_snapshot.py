@@ -23,18 +23,15 @@ directly importing infrastructure repositories.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException, Request
 
 from market_data.api.dependencies import ReadUoWDep
 from market_data.api.schemas.price_snapshot import BatchPriceSnapshotRequest, PriceSnapshotResponse
+from market_data.application.ports.cache import PriceSnapshotCachePort
 from market_data.domain.enums import Timeframe
 from market_data.domain.price_snapshot import PriceSnapshotResolver
 from observability.logging import get_logger  # type: ignore[import-untyped]
-
-if TYPE_CHECKING:
-    from market_data.infrastructure.cache.price_snapshot_cache import PriceSnapshotCache
 
 logger = get_logger(__name__)
 
@@ -75,7 +72,7 @@ def _snapshot_to_response(snapshot: object) -> PriceSnapshotResponse:
 async def _resolve_and_cache(
     instrument_id: str,
     uow: object,  # ReadOnlyUnitOfWork
-    cache: PriceSnapshotCache,
+    cache: PriceSnapshotCachePort,
 ) -> PriceSnapshotResponse | None:
     """Core resolution logic shared by both the single and batch endpoints.
 
@@ -165,7 +162,7 @@ async def get_price_snapshot(
     Returns 404 if the instrument has no price data from any source.
     """
     # Get the PriceSnapshotCache from application state (injected at startup)
-    cache: PriceSnapshotCache = request.app.state.price_snapshot_cache
+    cache: PriceSnapshotCachePort = request.app.state.price_snapshot_cache
 
     result = await _resolve_and_cache(instrument_id, uow, cache)
     if result is None:
@@ -188,7 +185,7 @@ async def get_price_snapshots_batch(
     list (not 404 — partial results are valid for a batch).
     """
     # Get the PriceSnapshotCache from application state (injected at startup)
-    cache: PriceSnapshotCache = request.app.state.price_snapshot_cache
+    cache: PriceSnapshotCachePort = request.app.state.price_snapshot_cache
 
     results: list[PriceSnapshotResponse] = []
     for instrument_id in body.instrument_ids:

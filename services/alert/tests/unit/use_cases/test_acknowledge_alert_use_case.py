@@ -140,7 +140,7 @@ class TestAcknowledgeAlertUseCase:
             acknowledged_by_user_id=user_id,
         )
 
-        uc, repo, session = _make_uc()
+        uc, repo, _session = _make_uc()
         repo.get_by_id = AsyncMock(side_effect=[before, after])
         repo.acknowledge = AsyncMock(return_value=True)
 

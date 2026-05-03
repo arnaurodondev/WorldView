@@ -1079,7 +1079,7 @@ class TestEntityCreatedEnqueues:
         settings = _make_settings(ollama_url="http://localhost:11434")
         mention = _make_mention(mention_class=MentionClass.ORGANIZATION, mention_text="Stripe Inc")
 
-        nlp_sf, nlp_session = _make_nlp_sf()
+        nlp_sf, _nlp_session = _make_nlp_sf()
 
         em_repo = AsyncMock()
         em_repo.get_unresolved_batch = AsyncMock(return_value=[mention])

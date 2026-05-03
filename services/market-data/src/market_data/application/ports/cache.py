@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from market_data.api.schemas.quotes import QuoteResponse
     from market_data.domain.entities import ScreenFieldMetadata
+    from market_data.domain.price_snapshot import PriceSnapshot
 
 
 class QuoteCachePort(abc.ABC):
@@ -38,6 +39,27 @@ class QuoteCachePort(abc.ABC):
     @abc.abstractmethod
     async def invalidate_many(self, instrument_ids: list[str]) -> None:
         """Remove cached quotes for multiple instruments."""
+
+
+class PriceSnapshotCachePort(abc.ABC):
+    """Port interface for price snapshot caching (R25).
+
+    The API layer must depend on this ABC, not on the infrastructure
+    ``PriceSnapshotCache`` directly.  Concrete implementation lives in
+    ``market_data.infrastructure.cache.price_snapshot_cache``.
+    """
+
+    @abc.abstractmethod
+    async def get(self, instrument_id: str) -> PriceSnapshot | None:
+        """Return the cached PriceSnapshot, or ``None`` on cache miss or error."""
+
+    @abc.abstractmethod
+    async def set(self, instrument_id: str, snapshot: PriceSnapshot, ttl: int = 7200) -> None:
+        """Cache a PriceSnapshot with the given TTL in seconds."""
+
+    @abc.abstractmethod
+    async def invalidate(self, instrument_id: str) -> None:
+        """Delete the cached PriceSnapshot for the given instrument."""
 
 
 class ScreenFieldsCachePort(abc.ABC):

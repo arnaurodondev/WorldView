@@ -44,7 +44,7 @@ class TestS7EntityResolver:
         """A cached ``[name, ticker]`` JSON list is returned without HTTP."""
         eid = uuid4()
         valkey = _mock_valkey()
-        valkey.get = AsyncMock(return_value=json.dumps(["Apple Inc.", "AAPL"]).encode())
+        valkey.get = AsyncMock(return_value=json.dumps(["Apple Inc.", "AAPL"]))
 
         # Build a transport that fails the test if hit — proves we don't HTTP.
         def _no_http(_: httpx.Request) -> httpx.Response:
@@ -144,7 +144,7 @@ class TestS7EntityResolver:
         """Malformed JSON in cache must not propagate — treat as miss + refetch."""
         eid = uuid4()
         valkey = _mock_valkey()
-        valkey.get = AsyncMock(return_value=b"not-valid-json{")
+        valkey.get = AsyncMock(return_value="not-valid-json{")
 
         def _handler(_: httpx.Request) -> httpx.Response:
             return httpx.Response(

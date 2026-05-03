@@ -285,7 +285,7 @@ class DeepInfraReranker:
             scores = data.get("scores") or []
             if len(scores) != len(documents):
                 raise ValueError(
-                    f"deepinfra_reranker score-length mismatch: " f"got {len(scores)} for {len(documents)} docs"
+                    f"deepinfra_reranker score-length mismatch: got {len(scores)} for {len(documents)} docs"
                 )
             scored = sorted(zip(head, scores, strict=False), key=lambda x: x[1], reverse=True)
             reranked = [item for item, _ in scored[:_TOP_K]]
