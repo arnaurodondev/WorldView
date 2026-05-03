@@ -71,9 +71,11 @@ export function createScreenerApi(t: string | undefined) {
           // + IndexTicker chips already use this `entity-{ticker-lc}`
           // convention, so the screener row click now lands on a real
           // page instead of /instruments/undefined.
-          entity_id:
-            (row["entity_id"] as string | undefined) ??
-            `entity-${ticker.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+          // BP-330: entity_id falls back to the raw instrument_id string so
+          // row-click navigation lands on /instruments/<UUID> (the canonical
+          // entity page path). The previous `entity-${ticker-lc}` slug was never
+          // a real entity_id — the backend always emits a UUIDv7 for entity_id.
+          entity_id: (row["entity_id"] as string | undefined) ?? String(row["instrument_id"] ?? ""),
           ticker,
           name: String(row["name"] ?? ""),
           exchange: (row["exchange"] as string | undefined) ?? null,
@@ -88,7 +90,10 @@ export function createScreenerApi(t: string | undefined) {
           ),
           pe_ratio: num(row["pe_ratio"] ?? metrics["pe_ratio"]),
           daily_return: num(row["daily_return"] ?? metrics["daily_return"]),
-          revenue: num(row["revenue"] ?? metrics["revenue"]),
+          // BP-331: backend emits revenue as `revenue_usd` inside the metrics dict.
+          // Try revenue_usd first, then fall back to the generic `revenue` key
+          // (used by older screener API versions) and the top-level row field.
+          revenue: num(metrics["revenue_usd"] ?? metrics["revenue"] ?? row["revenue"]),
           beta: num(row["beta"] ?? metrics["beta"]),
           market_impact_score: num(
             row["market_impact_score"] ?? metrics["market_impact_score"],

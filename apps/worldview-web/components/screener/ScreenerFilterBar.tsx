@@ -285,19 +285,28 @@ export function ScreenerFilterBar({
             <div className="flex flex-col gap-1.5">
               <RangeInput
                 label="P/E (TTM)"
+                tooltip="Price ÷ Earnings (TTM). S&P 500 avg ≈ 20–25×. Below 15 may be undervalued; above 40 = high growth priced in."
                 min={form.peMin} max={form.peMax}
+                minPlaceholder="e.g. 10"
+                maxPlaceholder="e.g. 50"
                 onMin={(v) => patch({ peMin: v })}
                 onMax={(v) => patch({ peMax: v })}
               />
               <RangeInput
                 label="P/B"
+                tooltip="Price ÷ Book Value. Below 1 = trades at discount to assets; above 5 = premium franchise. Sector-dependent."
                 min={form.pbMin} max={form.pbMax}
+                minPlaceholder="e.g. 0.5"
+                maxPlaceholder="e.g. 5"
                 onMin={(v) => patch({ pbMin: v })}
                 onMax={(v) => patch({ pbMax: v })}
               />
               <RangeInput
                 label="P/S (TTM)"
+                tooltip="Price ÷ Revenue (TTM). Useful for pre-profit companies. SaaS median ≈ 5–10×."
                 min={form.psMin} max={form.psMax}
+                minPlaceholder="e.g. 1"
+                maxPlaceholder="e.g. 10"
                 onMin={(v) => patch({ psMin: v })}
                 onMax={(v) => patch({ psMax: v })}
               />
@@ -306,7 +315,10 @@ export function ScreenerFilterBar({
               <RangeInput
                 label="Dividend Yield"
                 hint="decimal"
+                tooltip="Annual dividends ÷ price %. 0% = growth stock; 3–5% = income stock; above 6% may signal risk."
                 min={form.divYieldMin} max={form.divYieldMax}
+                minPlaceholder="e.g. 0.01"
+                maxPlaceholder="e.g. 0.06"
                 onMin={(v) => patch({ divYieldMin: v })}
                 onMax={(v) => patch({ divYieldMax: v })}
               />
@@ -319,7 +331,10 @@ export function ScreenerFilterBar({
               <RangeInput
                 label="ROE (TTM)"
                 hint="decimal"
+                tooltip="Net income ÷ avg equity. Above 15% = strong capital efficiency. Buffett target: sustained above 20%."
                 min={form.roeMin} max={form.roeMax}
+                minPlaceholder="e.g. 0.05"
+                maxPlaceholder="e.g. 0.30"
                 onMin={(v) => patch({ roeMin: v })}
                 onMax={(v) => patch({ roeMax: v })}
               />
@@ -340,14 +355,20 @@ export function ScreenerFilterBar({
               <RangeInput
                 label="Net Margin"
                 hint="decimal"
+                tooltip="Net income ÷ revenue. Above 20% = pricing power or moat; below 5% = commodity-like business."
                 min={form.netMarginMin} max={form.netMarginMax}
+                minPlaceholder="e.g. 0.05"
+                maxPlaceholder="e.g. 0.40"
                 onMin={(v) => patch({ netMarginMin: v })}
                 onMax={(v) => patch({ netMarginMax: v })}
               />
               <RangeInput
                 label="Op Margin"
                 hint="decimal"
+                tooltip="Operating income ÷ revenue. Strips one-time items; more comparable across capital structures than net margin."
                 min={form.opMarginMin} max={form.opMarginMax}
+                minPlaceholder="e.g. 0.05"
+                maxPlaceholder="e.g. 0.35"
                 onMin={(v) => patch({ opMarginMin: v })}
                 onMax={(v) => patch({ opMarginMax: v })}
               />
@@ -360,6 +381,7 @@ export function ScreenerFilterBar({
               <RangeInput
                 label="Revenue YoY"
                 hint="decimal"
+                tooltip="Quarterly revenue vs same quarter prior year (decimal: 0.15 = +15%). Positive = growing business."
                 min={form.revGrowthMin} max={form.revGrowthMax}
                 onMin={(v) => patch({ revGrowthMin: v })}
                 onMax={(v) => patch({ revGrowthMax: v })}
@@ -367,6 +389,7 @@ export function ScreenerFilterBar({
               <RangeInput
                 label="Earnings YoY"
                 hint="decimal"
+                tooltip="Quarterly EPS vs same quarter prior year. Accelerating positive growth = momentum signal."
                 min={form.earningsGrowthMin} max={form.earningsGrowthMax}
                 onMin={(v) => patch({ earningsGrowthMin: v })}
                 onMax={(v) => patch({ earningsGrowthMax: v })}

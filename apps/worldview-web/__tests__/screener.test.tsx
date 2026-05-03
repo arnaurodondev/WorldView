@@ -25,7 +25,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // PLAN-0059 C-6: ScreenerPage uses nuqs URL state (sector + capTier).
@@ -33,6 +33,29 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { HeatCell } from "@/components/screener/HeatCell";
 import ScreenerPage from "@/app/(app)/screener/page";
+
+// ── React partial mock — synchronous useDeferredValue ─────────────────────────
+// WHY: ScreenerPage uses useDeferredValue for the sort+filter pipeline.
+// In React 18 concurrent mode, useDeferredValue schedules a low-priority render
+// AFTER the urgent one commits. In tests with rapid sequential clicks, TanStack's
+// getNextSortingOrder() reads column.getIsSorted() synchronously at click time
+// (outside the updater) — if a second click fires before the deferred pass
+// commits, TanStack sees stale sort state and computes the wrong next direction.
+// Making useDeferredValue synchronous removes the deferred-pass timing window so
+// each click sees the fully-committed sort state.
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  // WHY cast: in .tsx files, <T>(...) is ambiguous (JSX vs generic). Using
+  // (value: unknown) => value avoids the parse error while still acting as a
+  // pass-through at runtime. The cast restores the correct TypeScript signature.
+  const syncUseDeferredValue = (
+    (value: unknown) => value
+  ) as typeof actual.useDeferredValue;
+  return {
+    ...actual,
+    useDeferredValue: syncUseDeferredValue,
+  };
+});
 
 // ── @tanstack/react-virtual mock ──────────────────────────────────────────────
 // WHY mock useVirtualizer: jsdom has no layout engine. The virtualizer measures
@@ -365,38 +388,68 @@ describe("ScreenerPage — column sort", () => {
     const user = userEvent.setup();
     render(<ScreenerPage />, { wrapper: makeWrapper() });
 
-    // Find the TICKER column header (sortable)
-    const tickerHeader = screen.getByRole("columnheader", { name: /sort by ticker/i });
-    // WHY aria-sort "none" before click: no sort active initially
+    // WHY wait for data: the screener has 3 async layers (useQuery → setAccumulator
+    // effect → useDeferredValue). Clicking sort before all 3 settle can catch
+    // TanStack in a mid-deferred-render state in the full suite, causing the first
+    // toggle to flip DESC instead of ASC. Waiting for a data row ensures the
+    // component is fully stable before we interact with sort.
+    await screen.findByText("AAPL");
+
+    // WHY /ticker/i not /sort by ticker/i: DataTable renders the column header
+    // text ("TICKER") as the accessible name; the old ScreenerTable used an
+    // explicit aria-label="sort by ticker" pattern that DataTable doesn't follow.
+    const tickerHeader = screen.getByRole("columnheader", { name: /ticker/i });
     expect(tickerHeader).toHaveAttribute("aria-sort", "none");
 
     await user.click(tickerHeader);
 
+    // WHY waitFor: sort state flows sort state → screenerSortToTanstack → DataTable
+    // controlled prop → TanStack re-evaluates → aria-sort updates. Two render
+    // cycles may be needed in React 18 concurrent mode.
     // WHY "ascending" after first click: sort cycles null → asc → desc → null
-    expect(tickerHeader).toHaveAttribute("aria-sort", "ascending");
+    await waitFor(() =>
+      expect(tickerHeader).toHaveAttribute("aria-sort", "ascending"),
+    );
   });
 
   it("clicking sorted column again changes sort to descending", async () => {
     const user = userEvent.setup();
     render(<ScreenerPage />, { wrapper: makeWrapper() });
 
-    const tickerHeader = screen.getByRole("columnheader", { name: /sort by ticker/i });
-    await user.click(tickerHeader); // asc
-    await user.click(tickerHeader); // desc
+    // WHY wait for data before sort: see explanation in first sort test above.
+    await screen.findByText("AAPL");
 
-    expect(tickerHeader).toHaveAttribute("aria-sort", "descending");
+    const tickerHeader = screen.getByRole("columnheader", { name: /ticker/i });
+    await user.click(tickerHeader); // none → asc
+    await waitFor(() =>
+      expect(tickerHeader).toHaveAttribute("aria-sort", "ascending"),
+    );
+    await user.click(tickerHeader); // asc → desc
+    await waitFor(() =>
+      expect(tickerHeader).toHaveAttribute("aria-sort", "descending"),
+    );
   });
 
   it("clicking column third time clears sort (back to none)", async () => {
     const user = userEvent.setup();
     render(<ScreenerPage />, { wrapper: makeWrapper() });
 
-    const tickerHeader = screen.getByRole("columnheader", { name: /sort by ticker/i });
-    await user.click(tickerHeader); // asc
-    await user.click(tickerHeader); // desc
-    await user.click(tickerHeader); // none
+    // WHY wait for data before sort: see explanation in first sort test above.
+    await screen.findByText("AAPL");
 
-    expect(tickerHeader).toHaveAttribute("aria-sort", "none");
+    const tickerHeader = screen.getByRole("columnheader", { name: /ticker/i });
+    await user.click(tickerHeader); // none → asc
+    await waitFor(() =>
+      expect(tickerHeader).toHaveAttribute("aria-sort", "ascending"),
+    );
+    await user.click(tickerHeader); // asc → desc
+    await waitFor(() =>
+      expect(tickerHeader).toHaveAttribute("aria-sort", "descending"),
+    );
+    await user.click(tickerHeader); // desc → none
+    await waitFor(() =>
+      expect(tickerHeader).toHaveAttribute("aria-sort", "none"),
+    );
   });
 });
 
