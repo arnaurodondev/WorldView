@@ -2,7 +2,7 @@
 
 > **Category**: ml-llm
 > **Description**: ML model integration (Ollama, GLiNER, DeepInfra), LLM adapters, NER/NMS, embedding, prompt/output mismatch
-> **Count**: 23 patterns
+> **Count**: 25 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -685,5 +685,78 @@ Add `predicate` to the FIELD VOCABULARIES section in the prompt, listing all 27 
 - Any field that maps to a controlled vocabulary in downstream processing MUST be listed in FIELD VOCABULARIES in the extraction prompt
 - When adding a new relation type to `relation_type_registry`, also update the prompt
 - Run extraction smoke tests that check `predicate` values are all in the canonical set
+
+---
+
+## BP-337 — Qwen3.x `reasoning_content` Bleed-Through When `reasoning_effort=none` Is Silently Ignored
+
+**Date discovered**: 2026-05-03
+**Service affected**: `knowledge-graph` (S7) / `libs/ml-clients` `DeepSeekExtractionAdapter`
+
+### Symptom
+
+Extractions return `FatalError: malformed extraction output` even though `reasoning_effort=none` is set. Logs show `tokens_out=0` and Ollama fallback triggers. The thinking model puts its full chain-of-thought (~6,000 chars) in `reasoning_content` while `content` stays empty.
+
+### Root cause
+
+Qwen3.x thinking models route output to `reasoning_content` by default. When `reasoning_effort=none` is honoured, the answer lands in `content`. When the model ignores the hint for specific requests, the thinking chain fills `reasoning_content` while `content` stays empty. A fallback line `raw_response = msg.content or getattr(msg, "reasoning_content", None) or ""` read the 6,000-char thinking chain as the response — it always fails `json.loads`.
+
+### Fix
+
+```python
+# Bad — reads thinking chain when content is empty
+raw_response: str = msg.content or getattr(msg, "reasoning_content", None) or ""
+
+# Good — empty content IS the error signal when reasoning_effort=none
+raw_response: str = msg.content or ""
+```
+
+### Prevention
+
+- Never add a `reasoning_content` fallback when `reasoning_effort=none` is set; empty `content` means the model's constraint was violated — treat as a retryable error, not a recovery path
+- Log `finish_reason` on every extraction call to distinguish `stop` vs `length`
+
+---
+
+## BP-338 — Small-Model (≤1B) Alias-List Repetition Truncates JSON at max_tokens
+
+**Date discovered**: 2026-05-03
+**Service affected**: `knowledge-graph` (S7) / `libs/ml-clients` `DeepSeekExtractionAdapter`
+
+### Symptom
+
+Extraction for well-known entities (Apple Inc., Wayfair) fails with `deepseek_extraction_malformed finish_reason=length`. The raw response shows correct `canonical_name`/`ticker`/`isin` followed by an infinite aliases loop: `["Apple Inc.", "Apple Inc.", ...]` until the token cap truncates mid-string, breaking JSON parsing.
+
+### Root cause
+
+Qwen3.5-0.8B ignores the "Maximum 5" instruction for popular entities and generates list items until `max_tokens`. With `max_tokens=2048`, the response grew to ~6,000 chars. Lowering to 512 caps it at ~1,500 chars (still truncated for the worst cases, but partial-recovery works).
+
+### Fix
+
+```python
+# 1. Lower max_tokens to fit a valid response (entity profile ≤120 tokens)
+max_tokens=512  # was 2048
+
+# 2. Partial-JSON recovery when finish_reason=length
+if finish_reason == "length":
+    stripped = re.sub(r',\s*"aliases"\s*:.*$', "", cleaned, flags=re.DOTALL)
+    try:
+        _r: dict[str, object] = json.loads(stripped + "}")
+        _r.setdefault("aliases", [])
+        recovered = _r
+    except json.JSONDecodeError:
+        pass
+```
+
+Also validate LLM-provided ISINs before DB write:
+```python
+isin = _isin_raw if (_isin_raw and re.fullmatch(r"[A-Z0-9]{12}", _isin_raw)) else None
+```
+
+### Prevention
+
+- For ≤1B extraction models: set `max_tokens` to the minimum covering a valid response, not the model's context limit
+- Position array fields LAST in the JSON schema — scalar fields can then be recovered via partial-JSON strip when arrays overflow
+- Always validate LLM-generated DB values against column constraints before write
 
 ---
