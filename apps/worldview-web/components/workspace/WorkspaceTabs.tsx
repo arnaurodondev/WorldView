@@ -99,7 +99,10 @@ export function WorkspaceTabs() {
             // WHY group: makes the ✕ close button visible only on tab hover via
             // Tailwind's `group-hover:` variant without extra JS state
             className={cn(
-              "group relative flex h-full items-center px-3 text-xs font-medium cursor-pointer select-none whitespace-nowrap shrink-0",
+              // WHY text-[10px]: workspace tab labels are chrome chrome text — the
+              // same 10px compact rule as all other terminal chrome (panel labels,
+              // toolbar captions). text-xs (12px) is too spacious for a dense tab strip.
+              "group relative flex h-full items-center px-3 text-[10px] font-medium cursor-pointer select-none whitespace-nowrap shrink-0",
               // WHY border-b-2: underline indicator (not background fill) — Bloomberg
               // convention; background fills feel too heavy in a dense tab strip.
               isActive
@@ -128,7 +131,10 @@ export function WorkspaceTabs() {
                 // WHY stopPropagation: prevent click on input from triggering
                 // the parent div's onClick (which would call setActiveWorkspace)
                 onClick={(e) => e.stopPropagation()}
-                className="w-[10ch] border-0 border-b border-primary bg-transparent text-xs text-foreground outline-none"
+                // WHY text-[10px]: inline rename input sits inside the tab strip — must
+              // match the tab label size (10px) so the active text doesn't jump size
+              // when switching between display and edit modes.
+              className="w-[10ch] border-0 border-b border-primary bg-transparent text-[10px] text-foreground outline-none"
                 maxLength={24}
                 aria-label="Rename workspace"
               />
@@ -156,7 +162,9 @@ export function WorkspaceTabs() {
       {/* WHY ml-1: small gap from last tab to distinguish from tab labels */}
       <button
         onClick={addWorkspace}
-        className="ml-1 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground transition-colors duration-0"
+        // WHY text-[10px]: "Add" button lives in the tab strip chrome — must
+        // match the 10px tab label density so it doesn't visually outweigh the tabs.
+        className="ml-1 shrink-0 px-2 text-[10px] text-muted-foreground hover:text-foreground transition-colors duration-0"
         aria-label="Add workspace"
       >
         + Add

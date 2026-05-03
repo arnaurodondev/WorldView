@@ -81,7 +81,10 @@ export function MarketStatusPill() {
           // WHY rounded-[2px]: terminal design mandates 2px radius on all interactive
           // elements. rounded-full (pill shape) is a consumer-app pattern. The status
           // signal is communicated by color and the dot, not by pill shape.
-          className={`flex cursor-default items-center gap-1.5 rounded-[2px] border px-2.5 py-1 text-xs font-medium transition-opacity hover:opacity-80 ${pillClass}`}
+          // WHY text-[10px] (was text-xs=12px): the market status pill is a
+          // compact chrome element in the TopBar — 12px is too large for a 36px bar.
+          // 10px matches the terminal label standard for small status indicators.
+          className={`flex cursor-default items-center gap-1.5 rounded-[2px] border px-2.5 py-1 text-[10px] font-medium transition-opacity hover:opacity-80 ${pillClass}`}
           aria-label={`Market status: ${pillLabel}. Click for details.`}
         >
           {/* Status dot */}
@@ -98,23 +101,29 @@ export function MarketStatusPill() {
       {/* Popover: per-exchange breakdown */}
       <PopoverContent className="w-80 p-0" align="end">
         <div className="border-b border-border px-4 py-3">
-          <h3 className="text-sm font-semibold text-foreground">Exchange Hours</h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">Times in UTC</p>
+          {/* WHY text-[13px] (was text-sm=14px): popover panel title uses 13px
+              per the Bloomberg panel title standard; text-sm is consumer-app scale */}
+          <h3 className="text-[13px] font-semibold uppercase tracking-[0.04em] text-foreground">Exchange Hours</h3>
+          {/* WHY text-[10px] (was text-xs=12px): subtitle/caption label uses
+              10px per the Bloomberg metadata typography standard */}
+          <p className="mt-0.5 text-[10px] text-muted-foreground">Times in UTC</p>
         </div>
 
         <div className="px-4 py-2">
-          <table className="w-full text-xs">
+          {/* WHY text-[10px] (was text-xs=12px): exchange table uses 10px per
+              Bloomberg terminal popover table density — 12px is consumer-app scale */}
+          <table className="w-full text-[10px]">
             <thead>
               <tr className="text-muted-foreground">
-                <th className="pb-1 text-left font-medium">Exchange</th>
-                <th className="pb-1 text-left font-medium">Status</th>
-                <th className="pb-1 text-right font-medium">Hours</th>
+                <th className="pb-1 text-left font-medium uppercase tracking-[0.06em]">Exchange</th>
+                <th className="pb-1 text-left font-medium uppercase tracking-[0.06em]">Status</th>
+                <th className="pb-1 text-right font-medium uppercase tracking-[0.06em]">Hours</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/50">
               {exchanges.map((exchange) => (
                 <tr key={exchange.name} className="py-1">
-                  <td className="py-1.5 pr-2 text-left text-foreground">{exchange.name}</td>
+                  <td className="py-1.5 pr-2 text-left text-[11px] text-foreground">{exchange.name}</td>
                   <td className="py-1.5 pr-2">
                     <div className="flex items-center gap-1.5">
                       <span
@@ -136,7 +145,9 @@ export function MarketStatusPill() {
 
         {/* Current UTC time at bottom — helps traders cross-reference */}
         <div className="border-t border-border px-4 py-2">
-          <p className="text-right font-mono text-xs tabular-nums text-muted-foreground" suppressHydrationWarning>
+          {/* WHY text-[10px] (was text-xs=12px): footer timestamp uses 10px per
+            the Bloomberg metadata typography standard (compact mono label) */}
+        <p className="text-right font-mono text-[10px] tabular-nums text-muted-foreground" suppressHydrationWarning>
             Now: {new Date().toISOString().slice(11, 16)} UTC
           </p>
         </div>

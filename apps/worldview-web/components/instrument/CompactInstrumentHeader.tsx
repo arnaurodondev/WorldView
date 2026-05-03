@@ -23,7 +23,7 @@
 // WHY "use client": uses useState for description expand/collapse toggle.
 
 import { useState } from "react";
-import { ChevronLeft, Check, Copy, Link2, AlertCircle } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronUp, Check, Copy, Link2, AlertCircle } from "lucide-react";
 import { LiveQuoteBadge } from "@/components/instrument/LiveQuoteBadge";
 import { useCopyState } from "@/hooks/useCopyState";
 import { WeekRangeBar } from "@/components/instrument/52WeekRangeBar";
@@ -117,7 +117,8 @@ export function CompactInstrumentHeader({
           className="shrink-0 text-muted-foreground hover:text-foreground"
           aria-label="Go back"
         >
-          <ChevronLeft className="h-4 w-4" />
+          {/* WHY strokeWidth={1.5}: default 2px stroke is too heavy at terminal density — 1.5px matches Bloomberg's icon weight */}
+          <ChevronLeft className="h-4 w-4" strokeWidth={1.5} />
         </button>
 
         {/* Ticker — monospace bold; Bloomberg always monospaces symbols.
@@ -147,16 +148,19 @@ export function CompactInstrumentHeader({
           }
         >
           <span>{ticker}</span>
+          {/* WHY strokeWidth={1.5} on all action icons: default 2px stroke is too heavy at
+              terminal density — 1.5px matches Bloomberg's icon weight */}
           {ticker$.state === "ticker" ? (
-            <Check className="h-3 w-3 text-positive" aria-hidden="true" />
+            <Check className="h-3 w-3 text-positive" strokeWidth={1.5} aria-hidden="true" />
           ) : ticker$.state === "error" ? (
             // F-QA-03: surface the failure path explicitly. Users now see an
             // amber alert dot instead of being silently told "Copied!" when
             // their clipboard was actually empty.
-            <AlertCircle className="h-3 w-3 text-warning" aria-hidden="true" />
+            <AlertCircle className="h-3 w-3 text-warning" strokeWidth={1.5} aria-hidden="true" />
           ) : (
             <Copy
               className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-70"
+              strokeWidth={1.5}
               aria-hidden="true"
             />
           )}
@@ -227,12 +231,13 @@ export function CompactInstrumentHeader({
                   : "Copy link to this view"
             }
           >
+            {/* WHY strokeWidth={1.5}: consistent icon weight across all action icons in the header */}
             {link$.state === "link" ? (
-              <Check className="h-3.5 w-3.5 text-positive" aria-hidden="true" />
+              <Check className="h-3.5 w-3.5 text-positive" strokeWidth={1.5} aria-hidden="true" />
             ) : link$.state === "error" ? (
-              <AlertCircle className="h-3.5 w-3.5 text-warning" aria-hidden="true" />
+              <AlertCircle className="h-3.5 w-3.5 text-warning" strokeWidth={1.5} aria-hidden="true" />
             ) : (
-              <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+              <Link2 className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
             )}
           </button>
         </div>
@@ -300,12 +305,18 @@ export function CompactInstrumentHeader({
             <span className="text-[11px] text-muted-foreground truncate">
               {description}
             </span>
+            {/* WHY no hover:underline: terminal interactive labels use color-shift only —
+                underline is a hyperlink pattern that suggests navigation, not expand/collapse.
+                WHY Lucide icons (not Unicode): → and ▴ fall back to system fonts and render
+                inconsistently across OSes — ▴ uses a system emoji glyph on Windows */}
             <button
               onClick={() => setDescExpanded((v) => !v)}
-              className="text-[10px] text-primary hover:underline shrink-0"
+              className="text-[10px] text-primary hover:text-primary/80 shrink-0"
               aria-label={descExpanded ? "Collapse description" : "Read full description"}
             >
-              {descExpanded ? "Close ▴" : "Read more →"}
+              {descExpanded
+                ? <>Close <ChevronUp className="h-3 w-3 inline-block" strokeWidth={1.5} aria-hidden="true" /></>
+                : <>Read more <ChevronRight className="h-3 w-3 inline-block" strokeWidth={1.5} aria-hidden="true" /></>}
             </button>
           </div>
         )}
@@ -323,14 +334,18 @@ export function CompactInstrumentHeader({
         >
           <div className="overflow-hidden">
             <div className="flex items-start justify-between px-2 pb-2 pt-1">
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
+              {/* WHY leading-[1.4] (not leading-relaxed=1.625): description text is reference material,
+                  not prose to read leisurely — 1.625 is consumer-app/blog standard; 1.4 gives
+                  terminal-appropriate density without sacrificing readability */}
+              <p className="text-[11px] text-muted-foreground leading-[1.4]">
                 {description}
               </p>
+              {/* WHY ChevronUp icon (not ▴ Unicode): consistent with expanded trigger; avoids system emoji glyph on Windows */}
               <button
                 onClick={() => setDescExpanded(false)}
                 className="ml-4 shrink-0 text-[10px] text-muted-foreground hover:text-foreground"
               >
-                ▴ Close
+                <ChevronUp className="h-3 w-3 inline-block" strokeWidth={1.5} aria-hidden="true" /> Close
               </button>
             </div>
           </div>

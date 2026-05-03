@@ -105,7 +105,8 @@ export function PortfolioPageHeader({
                     ALL
                   </span>
                 )}
-                <ChevronDown className="h-3 w-3 opacity-60" />
+                {/* WHY strokeWidth={1.5}: Lucide default 2 reads as too heavy in terminal chrome */}
+                <ChevronDown className="h-3 w-3 opacity-60" strokeWidth={1.5} />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
@@ -114,7 +115,9 @@ export function PortfolioPageHeader({
                   key={p.portfolio_id}
                   onClick={() => onSelectPortfolio(p.portfolio_id)}
                   className={cn(
-                    "font-mono text-xs flex items-center gap-1.5",
+                    // WHY text-[11px]: terminal data row density — text-xs (12px) is
+                    // Bloomberg-inappropriate for dropdown menu items in the portfolio selector.
+                    "font-mono text-[11px] flex items-center gap-1.5",
                     p.portfolio_id === activePortfolioId &&
                       "text-primary font-medium",
                   )}
@@ -173,7 +176,8 @@ export function PortfolioPageHeader({
                   : "border-border text-muted-foreground hover:border-primary/60 hover:text-primary",
               )}
             >
-              <Plus className="h-3 w-3" />
+              {/* WHY strokeWidth={1.5}: Lucide default 2 reads as too heavy in terminal chrome */}
+              <Plus className="h-3 w-3" strokeWidth={1.5} />
               Add Position
             </button>
           )}
@@ -185,7 +189,8 @@ export function PortfolioPageHeader({
             onClick={onCreatePortfolio}
             className="h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-primary/60 text-primary rounded-[2px] hover:bg-primary/10 transition-colors flex items-center gap-1"
           >
-            <Plus className="h-3 w-3" />
+            {/* WHY strokeWidth={1.5}: Lucide default 2 reads as too heavy in terminal chrome */}
+            <Plus className="h-3 w-3" strokeWidth={1.5} />
             New Portfolio
           </button>
 
@@ -216,7 +221,8 @@ export function PortfolioPageHeader({
                   : "border-border text-muted-foreground hover:border-negative/60 hover:text-negative",
               )}
             >
-              <Trash2 className="h-3 w-3" />
+              {/* WHY strokeWidth={1.5}: Lucide default 2 reads as too heavy in terminal chrome */}
+              <Trash2 className="h-3 w-3" strokeWidth={1.5} />
               Delete
             </button>
           )}

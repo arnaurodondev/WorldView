@@ -151,7 +151,10 @@ export function CashManagementCard({ portfolioId }: CashManagementCardProps) {
           A red badge would imply something is broken. */}
       {isCashDrag && (
         <span
-          className="rounded-[2px] border border-warning/40 bg-warning/10 px-1.5 py-px font-mono text-[9px] font-bold uppercase tracking-wider text-warning"
+          // WHY font-semibold (was font-bold): 700-weight at 9px causes blotchy subpixel
+          // rendering on dark themes — 600-weight is the maximum for terminal chrome text
+          // at small sizes (Bloomberg density rule)
+          className="rounded-[2px] border border-warning/40 bg-warning/10 px-1.5 py-px font-mono text-[9px] font-semibold uppercase tracking-wider text-warning"
           title="Cash exceeds 5% of portfolio — consider deploying or transferring out"
         >
           Cash drag

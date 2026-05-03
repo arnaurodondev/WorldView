@@ -231,10 +231,14 @@ export function GlobalSearch() {
                       className="cursor-pointer"
                     >
                       <div className="flex w-full items-center gap-2">
-                        <span className="shrink-0 font-mono text-sm font-medium tabular-nums text-foreground">
+                        {/* WHY text-[11px] (was text-sm=14px): terminal density — search results
+                            must match the 11px chrome standard; 14px reads as consumer-app */}
+                        <span className="shrink-0 font-mono text-[11px] font-medium tabular-nums text-foreground">
                           {recent.ticker}
                         </span>
-                        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                        {/* WHY text-[10px] (was text-xs=12px): company name is secondary metadata —
+                            10px muted label per the Bloomberg label typography standard */}
+                        <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
                           {recent.name}
                         </span>
                         {/* WHY clock icon text: subtle "recent" signal without a bulky icon */}
@@ -280,7 +284,9 @@ export function GlobalSearch() {
                   className="cursor-pointer"
                 >
                   <div className="flex w-full items-center gap-2">
-                    <span className="text-xs text-foreground">Send feedback</span>
+                    {/* WHY text-[11px] (was text-xs=12px): command items must match
+                        the search result item density (11px terminal standard) */}
+                    <span className="text-[11px] text-foreground">Send feedback</span>
                     <span className="ml-auto text-[10px] text-muted-foreground">⌘?</span>
                   </div>
                 </CommandItem>
@@ -313,17 +319,20 @@ export function GlobalSearch() {
                           className="cursor-pointer"
                         >
                           <div className="flex w-full items-center justify-between gap-2">
-                            {/* Ticker — monospace for alignment */}
-                            <span className="shrink-0 font-mono text-sm font-medium tabular-nums text-foreground">
+                            {/* WHY text-[11px] (was text-sm=14px): ticker in search results must
+                                match the terminal density standard — 14px reads as consumer-app */}
+                            <span className="shrink-0 font-mono text-[11px] font-medium tabular-nums text-foreground">
                               {result.ticker}
                             </span>
-                            {/* Company name — truncated to fit */}
-                            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                            {/* WHY text-[10px] (was text-xs=12px): company name is secondary
+                                metadata — 10px muted label per Bloomberg label typography */}
+                            <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
                               {result.name}
                             </span>
-                            {/* Exchange badge */}
+                            {/* WHY text-[10px] (was text-xs=12px): exchange badge is tertiary
+                                info — 10px matches the company name density */}
                             {result.exchange && (
-                              <span className="shrink-0 text-xs text-muted-foreground">
+                              <span className="shrink-0 text-[10px] text-muted-foreground">
                                 {result.exchange}
                               </span>
                             )}

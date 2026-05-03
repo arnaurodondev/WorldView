@@ -138,13 +138,16 @@ function KPITile({
       <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground truncate">
         {label}
       </span>
-      {/* Value: 14px mono — NOT text-primary for P&L (only tickers use text-primary).
+      {/* Value: 13px mono — NOT text-primary for P&L (only tickers use text-primary).
+          WHY text-[13px] (was text-[14px]): Bloomberg portfolio strip uses 13px for KPI band
+          values — 14px is reserved for live price display in instrument headers to maintain
+          visual hierarchy. The 1px reduction keeps the strip compact while still readable.
           F-P-012: when ``valueNode`` is provided (e.g. Skeleton placeholder for
           the Day P&L unknown state) we render that instead of the string. The
           colour classes still apply but become a no-op for the Skeleton. */}
       <span
         className={cn(
-          "font-mono text-[14px] tabular-nums font-medium truncate",
+          "font-mono text-[13px] tabular-nums font-medium truncate",
           positive && "text-positive",
           negative && "text-negative",
           !positive && !negative && "text-foreground",
