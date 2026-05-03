@@ -128,6 +128,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
 
     from rag_chat.application.caching.completion_cache import CompletionCache
     from rag_chat.application.caching.rate_limiter import RateLimiter
+    from rag_chat.application.pipeline.circuit_breaker import SourceCircuitBreaker
     from rag_chat.application.pipeline.fusion import FusionPipeline, GraphEnricher
     from rag_chat.application.pipeline.hyde_expander import HydeExpander
     from rag_chat.application.pipeline.intent_classifier import (
@@ -333,6 +334,27 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
             s1_client=s1,
             timeout=settings.upstream_timeout_seconds,
             s1_internal_token=settings.s1_internal_token,
+            circuit_breakers={
+                name: SourceCircuitBreaker(
+                    valkey_client,
+                    name,
+                    failure_threshold=settings.cb_failure_threshold,
+                    failure_window_seconds=settings.cb_failure_window_seconds,
+                    cool_down_seconds=settings.cb_cool_down_seconds,
+                )
+                for name in [
+                    "chunk",
+                    "relations",
+                    "graph",
+                    "claims",
+                    "events",
+                    "contradictions",
+                    "financial",
+                    "portfolio",
+                ]
+            }
+            if settings.cb_enabled
+            else {},
         ),
         graph_enricher=GraphEnricher(),
         fusion=FusionPipeline(),

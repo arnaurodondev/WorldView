@@ -42,7 +42,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
-_DEFAULT_EMBED_MODEL_ID = "nomic-embed-text"
 _DEFAULT_MAX_RETRIES = 5
 
 
@@ -89,7 +88,7 @@ class ProvisionalQueuedConsumer(BaseKafkaConsumer[None]):
         session_factory: async_sessionmaker[AsyncSession],
         llm_client: Any,
         *,
-        embed_model_id: str = _DEFAULT_EMBED_MODEL_ID,
+        embed_model_id: str = "bge-large:latest",
         max_retries: int = _DEFAULT_MAX_RETRIES,
         entity_dirtied_topic: str = "entity.dirtied.v1",
         direct_producer: DirectProducerProtocol | None = None,
@@ -237,7 +236,7 @@ WHERE queue_id = :queue_id
                 self._producer.produce_bytes(
                     topic=self._dirtied_topic,
                     key=str(entity_id).encode(),
-                    value=json.dumps({"entity_id": str(entity_id)}).encode(),
+                    value=core._build_dirtied_event(entity_id),
                 )
             except Exception:
                 logger.warning(  # type: ignore[no-any-return]
