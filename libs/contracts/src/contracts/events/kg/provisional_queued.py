@@ -6,8 +6,9 @@ that any service can construct or deserialise the event without depending on
 the producer's domain dataclasses.
 
 Producer (S6 ``UnresolvedResolutionWorker``) builds the dict, serializes via
-``messaging.kafka.serialization_utils.serialize_avro`` (with the Confluent
-5-byte wire-format header), and emits via ``ConfluentDirectProducer``.
+``messaging.kafka.serialization_utils.serialize_confluent_avro`` (produces
+the Confluent 5-byte wire-format header + Avro body), emits via
+``ConfluentDirectProducer``.
 Consumer (S7 ``ProvisionalQueuedConsumer``) deserializes via
 ``deserialize_confluent_avro`` and instantiates this dataclass for typed
 access.

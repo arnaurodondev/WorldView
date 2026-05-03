@@ -162,6 +162,7 @@ FOR UPDATE SKIP LOCKED
 UPDATE provisional_entity_queue
 SET status = 'processing'
 WHERE queue_id = :queue_id
+  AND status = 'pending'
 """),
                     {"queue_id": str(queue_id)},
                 )
@@ -242,6 +243,9 @@ WHERE queue_id = :queue_id
                         queue_id=str(queue_id),
                         error=str(exc),
                     )
+                    # DS-008: rollback aborted transaction before retry UPDATE so
+                    # SQLAlchemy does not raise InvalidRequestError on the session.
+                    await session.rollback()
                     await self._apply_retry(session, queue_id, retry_count)
                     failed += 1
 
@@ -284,7 +288,7 @@ WHERE queue_id = :queue_id
         result = await session.execute(
             text("""
 UPDATE provisional_entity_queue
-SET status = 'pending', retry_count = LEAST(retry_count + 1, :max_retries - 1)
+SET status = 'pending', retry_count = LEAST(retry_count + 1, :max_retries)
 WHERE status = 'processing'
   AND created_at < now() - interval '30 minutes'
 """),
