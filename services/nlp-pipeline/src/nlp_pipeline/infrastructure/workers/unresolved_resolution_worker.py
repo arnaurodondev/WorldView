@@ -151,7 +151,10 @@ _NON_ENTITY_NOISE_REASON = "non_entity_creating_class"
 #
 # Both Ollama (_phase2_llm_classify_local) and DeepInfra
 # (_phase2_llm_classify_external) call sites use this single template.
-_CLASSIFICATION_PROMPT_TEMPLATE = (
+# Static instruction block — identical across every call. Sent as the system role
+# for external (DeepInfra) requests so DeepInfra's prompt_cache can reuse the KV
+# tensors for this prefix, paying tokens only for the dynamic SURFACE/CONTEXT part.
+_CLASSIFICATION_SYSTEM_PROMPT = (
     "You are classifying a candidate entity mention extracted from a "
     "financial-news or filing pipeline. Decide whether the SURFACE refers "
     "to a real, named entity worth tracking in a market-intelligence "
@@ -177,28 +180,29 @@ _CLASSIFICATION_PROMPT_TEMPLATE = (
     "Worked examples:\n"
     '  - surface="iShares Core S&P 500 ETF", '
     'context="The iShares Core S&P 500 ETF (IVV) saw inflows of $1.2B." '
-    '→ {{"is_entity": true, "reason": "named investable fund"}}\n'
+    '→ {"is_entity": true, "reason": "named investable fund"}\n'
     '  - surface="MAS", '
     'context="Singapore\'s MAS raised the benchmark rate by 25bps." '
-    '→ {{"is_entity": true, "reason": '
-    '"Monetary Authority of Singapore — regulator"}}\n'
+    '→ {"is_entity": true, "reason": "Monetary Authority of Singapore — regulator"}\n'
     '  - surface="the company", '
     'context="Analysts said the company would miss guidance." '
-    '→ {{"is_entity": false, "reason": '
-    '"generic anaphora, not a named entity"}}\n'
+    '→ {"is_entity": false, "reason": "generic anaphora, not a named entity"}\n'
     '  - surface="Q3", '
     'context="Q3 revenue rose 8% year-over-year." '
-    '→ {{"is_entity": false, "reason": '
-    '"calendar fragment, not a named entity"}}\n'
-    "\n"
-    'SURFACE: "{surface}"\n'
-    'CONTEXT: "{context}"\n'
+    '→ {"is_entity": false, "reason": "calendar fragment, not a named entity"}\n'
     "\n"
     "Respond with a single JSON object ONLY (no prose, no code fences). "
-    'Schema: {{"is_entity": <true|false>, "reason": "<short rationale>"}}\n'
-    'Concrete examples: {{"is_entity": true, "reason": "named regulator"}} '
-    'or {{"is_entity": false, "reason": "generic noun phrase"}}.'
+    'Schema: {"is_entity": <true|false>, "reason": "<short rationale>"}'
 )
+
+# Dynamic suffix template — only the per-mention variable part.
+# The Ollama path assembles the full prompt as:
+#   _CLASSIFICATION_SYSTEM_PROMPT + "\n\n" + _CLASSIFICATION_PROMPT_TEMPLATE.format(...)
+# The external (DeepInfra) path sends _CLASSIFICATION_SYSTEM_PROMPT as the system
+# role and a formatted version of this template as the user role.
+# Kept as a standalone string (not concatenated with the system prompt) so that
+# str.format() never encounters the JSON-example curly braces in the system prompt.
+_CLASSIFICATION_PROMPT_TEMPLATE = 'SURFACE: "{surface}"\nCONTEXT: "{context}"'
 
 # SQL for enqueuing a newly-discovered entity mention into intelligence_db for
 # S7 ProvisionalEnrichmentWorker to process. ON CONFLICT DO NOTHING is idempotent:
@@ -649,15 +653,24 @@ class UnresolvedResolutionWorker:
         # are truncated with an ellipsis-free hard cut — model only needs the
         # leading domain words to disambiguate.
         context_text = (context_sentence or "").strip()[:400] or "(no surrounding context available)"
-        prompt = _CLASSIFICATION_PROMPT_TEMPLATE.format(
-            surface=surface[:200],
-            context=context_text,
+        # _CLASSIFICATION_PROMPT_TEMPLATE is the dynamic suffix only (SURFACE + CONTEXT).
+        # Prepend the static system prompt so the Ollama path gets the full instructions.
+        prompt = (
+            _CLASSIFICATION_SYSTEM_PROMPT
+            + "\n\n"
+            + _CLASSIFICATION_PROMPT_TEMPLATE.format(surface=surface[:200], context=context_text)
         )
 
         # DeepInfra path: use OpenAI-compatible chat completions when api_key is set.
+        # Pass the dynamic user content separately so the method can split system/user
+        # messages for prompt_cache optimisation without fragile string-splitting.
         if api_key:
+            user_content = _CLASSIFICATION_PROMPT_TEMPLATE.format(
+                surface=surface[:200],
+                context=context_text,
+            )
             return await self._phase2_llm_classify_external(
-                mention, prompt, api_key, api_base_url, api_model_id, timeout_s
+                mention, user_content, api_key, api_base_url, api_model_id, timeout_s
             )
 
         # ── Ollama fallback path (unchanged) ─────────────────────────────────
@@ -745,7 +758,7 @@ class UnresolvedResolutionWorker:
     async def _phase2_llm_classify_external(
         self,
         mention: EntityMentionModel,
-        prompt: str,
+        user_content: str,
         api_key: str,
         api_base_url: str,
         api_model_id: str,
@@ -753,8 +766,9 @@ class UnresolvedResolutionWorker:
     ) -> tuple[ResolutionOutcome, str | None]:
         """Call DeepInfra (OpenAI-compat) for binary entity/noise classification.
 
-        Uses chat/completions with response_format=json_object so the model returns
-        a JSON payload directly (no "response" wrapper like Ollama uses).
+        ``user_content`` is the already-formatted SURFACE/CONTEXT string.
+        ``_CLASSIFICATION_SYSTEM_PROMPT`` is sent as the system role so DeepInfra
+        can cache the static prefix KV tensors via prompt_cache=true.
 
         Returns (ResolutionOutcome, noise_reason | None).
         """
@@ -766,27 +780,35 @@ class UnresolvedResolutionWorker:
                         headers={"Authorization": f"Bearer {api_key}"},
                         json={
                             "model": api_model_id,
-                            "messages": [{"role": "user", "content": prompt}],
-                            # Force JSON output — avoids free-form prose wrapping the result.
+                            "messages": [
+                                {"role": "system", "content": _CLASSIFICATION_SYSTEM_PROMPT},
+                                {"role": "user", "content": user_content},
+                            ],
                             "response_format": {"type": "json_object"},
                             "temperature": 0.0,
-                            "max_tokens": 64,
+                            "max_tokens": 128,
+                            # reasoning_effort=none: disables Qwen3.x chain-of-thought so
+                            # the answer goes to content (not reasoning_content). Saves
+                            # 1-3s and token cost on a binary classification task.
+                            "reasoning_effort": "none",
+                            # prompt_cache_key: DeepInfra caches the system-prompt prefix
+                            # KV tensors when requests share the same key. Cost is charged
+                            # only for new (user-role) tokens after the first cache miss.
+                            "prompt_cache_key": "entity_classification_v1",
                         },
                     ),
                     timeout=timeout_s,
                 )
                 response.raise_for_status()
-                raw = response.json()["choices"][0]["message"]["content"]
+                msg = response.json()["choices"][0]["message"]
+                # With reasoning_effort=none the answer is in content (reasoning_content=null).
+                # Fallback to reasoning_content for models that don't honour reasoning_effort.
+                raw = msg.get("content") or msg.get("reasoning_content") or ""
                 parsed = _extract_json_object(raw)
                 is_entity = bool(parsed.get("is_entity", False))
                 reason: str | None = str(parsed.get("reason", "")) or None
             except (json.JSONDecodeError, KeyError, ValueError) as parse_exc:
-                # F-103 fix: surface the raw LLM response so failures are
-                # diagnosable. The Llama-3.1-8B-Instruct model occasionally
-                # wraps JSON in ```json fences``` or in prose despite
-                # response_format=json_object — _extract_json_object handles
-                # the common variants; anything still failing here is a real
-                # malformed payload worth logging.
+                # F-103 fix: surface the raw LLM response so failures are diagnosable.
                 logger.warning(
                     "unresolved_resolution_json_parse_failure",
                     mention_id=str(mention.mention_id),
