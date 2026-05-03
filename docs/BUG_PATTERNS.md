@@ -8445,3 +8445,50 @@ whose `deserialize_value` body uses `json.loads` with no Avro call.
   in `libs/contracts` mirroring the schema field-for-field, with field-set
   alignment asserted by a contract test at
   `libs/contracts/tests/test_events_*_*.py`.
+
+---
+
+## BP-318 — AsyncMock Session Returns AsyncMock: scalar_one_or_none() Yields Coroutine
+
+**Category**: Test Infrastructure | **Severity**: High (silent wrong behavior)
+**Introduced by**: Test mock setup for SQLAlchemy async sessions
+**Discovered**: 2026-05-03 (PLAN-0062 deferred follow-up)
+
+### Problem
+
+When a test session factory is built as `AsyncMock()`, all auto-attributes
+(including `execute`) become `AsyncMock` instances. Awaiting `session.execute(stmt)`
+returns `session.execute.return_value`, which is also an `AsyncMock`. Calling
+`.scalar_one_or_none()` or `.all()` on an `AsyncMock` returns a **new coroutine**
+rather than a value, because `AsyncMock.__call__` creates coroutines.
+
+The downstream code then receives a coroutine object where it expects `None` or a
+scalar value, causing:
+- `Decimal(str(<coroutine>))` → `decimal.InvalidOperation`
+- `>= float_threshold` comparisons → `TypeError: unsupported operand`
+- Silent wrong values propagating through the pipeline
+
+The failure only manifests when repositories that call `result.scalar_one_or_none()`
+are exercised through the real implementation (not patched out).
+
+### Fix
+
+Configure `execute.return_value` explicitly as a synchronous `MagicMock`:
+
+```python
+result_mock = MagicMock()
+result_mock.scalar_one_or_none.return_value = None
+result_mock.all.return_value = []
+session.execute = AsyncMock(return_value=result_mock)
+```
+
+The `execute()` coroutine is still async (awaitable), but its resolved value is
+a sync `Result`-like mock, which matches SQLAlchemy's actual behavior.
+
+### Prevention
+
+- **Rule**: When creating mock sessions for integration tests, always set
+  `session.execute = AsyncMock(return_value=MagicMock(...))` explicitly.
+- **Audit**: If a test file has `session = AsyncMock()` without an explicit
+  `execute.return_value`, any repository that calls `scalar_one_or_none()` or
+  `all()` on the result is a latent bug.
