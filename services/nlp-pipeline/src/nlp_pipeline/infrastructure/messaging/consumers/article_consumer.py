@@ -1235,7 +1235,7 @@ def _build_raw_events(
         result.append(
             {
                 "subject_entity_id": subject_id,
-                "event_type": str(evt_d.get("event_type", "")),
+                "event_type": str(evt_d.get("event_type", "")).upper(),
                 "event_text": str(evt_d.get("description", "")),
                 "extraction_confidence": float(evt_d.get("confidence", 0.5)),
                 "participant_entity_ids": participant_ids,

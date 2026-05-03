@@ -83,8 +83,9 @@ class DeepSeekExtractionAdapter:
                     # the article-consumer logs as ``deep_extraction.window_failed``
                     # and silently drops. ``response_format`` forces a valid
                     # JSON object server-side, ``temperature=0`` removes
-                    # sampling variance, ``max_tokens=2048`` covers the
-                    # extraction schema with comfortable headroom.
+                    # sampling variance, ``max_tokens=4096`` covers the
+                    # extraction schema with comfortable headroom even for
+                    # articles with many relations/events/claims.
                     # extra_body (DeepInfra extensions):
                     # reasoning_effort=none — disables Qwen3.x chain-of-thought so the
                     #   answer goes to content (not reasoning_content), saving latency
@@ -100,7 +101,7 @@ class DeepSeekExtractionAdapter:
                         ],
                         response_format={"type": "json_object"},
                         temperature=0.0,
-                        max_tokens=2048,
+                        max_tokens=4096,
                         extra_body={
                             "reasoning_effort": "none",
                             "prompt_cache_key": "kg_extraction_v1",
