@@ -239,9 +239,15 @@ class TestDirtiedEmit:
         producer.produce_bytes.assert_called_once()
         call_kwargs = producer.produce_bytes.call_args.kwargs
         assert call_kwargs["topic"] == "entity.dirtied.v1"
-        import json
+        # PLAN-0062 R28: emitted bytes are now Confluent-Avro, not JSON.
+        assert call_kwargs["value"][:1] == b"\x00", "Expected Confluent-Avro wire format (magic byte 0x00)"
+        from knowledge_graph.infrastructure.workers.provisional_enrichment_core import (
+            _ENTITY_DIRTIED_SCHEMA_PATH,
+        )
 
-        payload = json.loads(call_kwargs["value"])
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
+
+        payload = deserialize_confluent_avro(_ENTITY_DIRTIED_SCHEMA_PATH, call_kwargs["value"])
         assert payload["entity_id"] == str(_ENTITY_ID)
 
 

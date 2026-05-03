@@ -36,6 +36,7 @@ def _find_schema_dir() -> Path:
 
 _SCHEMA_DIR = _find_schema_dir()
 _ENTITY_CANONICAL_CREATED_SCHEMA_PATH = str(_SCHEMA_DIR / "entity.canonical.created.v1.avsc")
+_ENTITY_DIRTIED_SCHEMA_PATH = str(_SCHEMA_DIR / "entity.dirtied.v1.avsc")
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,16 +49,21 @@ _EXTRACT_MODEL_ID = "kg-entity-profile-v1"
 
 
 def _build_dirtied_event(entity_id: UUID, dirty_reason: str = "profile_updated") -> bytes:
-    """Build a fully-populated entity.dirtied.v1 payload (all required Avro fields).
+    """Build a fully-populated entity.dirtied.v1 Confluent-Avro payload.
 
     B-3 fix: previously callers emitted ``{"entity_id": "<uuid>"}`` which is
     missing ``event_id``, ``event_type``, ``schema_version``, ``occurred_at``,
     and ``dirty_reason`` — all required by the Avro schema at
     ``infra/kafka/schemas/entity.dirtied.v1.avsc``.
-    """
-    import json
 
-    return json.dumps(
+    PLAN-0062 R28 fix: migrated from json.dumps to serialize_confluent_avro so
+    that entity.dirtied.v1 uses the Confluent 5-byte wire-format header,
+    consistent with all other producer paths.
+    """
+    from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
+
+    return serialize_confluent_avro(
+        _ENTITY_DIRTIED_SCHEMA_PATH,
         {
             "event_id": str(new_uuid7()),
             "event_type": "entity.dirtied",
@@ -67,8 +73,8 @@ def _build_dirtied_event(entity_id: UUID, dirty_reason: str = "profile_updated")
             "dirty_reason": dirty_reason,
             "source_doc_id": None,
             "correlation_id": None,
-        }
-    ).encode()
+        },
+    )
 
 
 async def extract_entity_profile(

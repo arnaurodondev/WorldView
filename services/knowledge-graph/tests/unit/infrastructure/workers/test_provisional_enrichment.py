@@ -208,12 +208,19 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
         producer.produce_bytes.assert_not_called()
 
     async def test_dirty_payload_contains_entity_id(self) -> None:
-        """Produced entity.dirtied.v1 payload includes the entity_id."""
-        import json
+        """Produced entity.dirtied.v1 payload includes the entity_id in Confluent-Avro format.
 
+        PLAN-0062 R28 update: the emitted bytes are now Confluent-Avro
+        wire-format (5-byte header + Avro body), not JSON.
+        """
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
+        from knowledge_graph.infrastructure.workers.provisional_enrichment_core import (
+            _ENTITY_DIRTIED_SCHEMA_PATH,
+        )
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 
         _session, factory = _make_session_with_rows([_make_pending_row()])
         producer = _make_producer()
@@ -237,7 +244,8 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
         kwargs = producer.produce_bytes.call_args.kwargs
         assert kwargs["topic"] == "entity.dirtied.v1"
         assert kwargs["key"] == str(_ENTITY_ID).encode()
-        payload = json.loads(kwargs["value"])
+        assert kwargs["value"][:1] == b"\x00", "Expected Confluent-Avro wire format (magic byte 0x00)"
+        payload = deserialize_confluent_avro(_ENTITY_DIRTIED_SCHEMA_PATH, kwargs["value"])
         assert payload["entity_id"] == str(_ENTITY_ID)
 
     async def test_multiple_entities_all_produced_after_commit(self) -> None:
@@ -699,21 +707,30 @@ class TestEmbedModelIdDefault:
 
 class TestDirtiedEventPayload:
     def test_dirtied_event_includes_all_avro_fields(self) -> None:
-        """_build_dirtied_event() must include all required Avro fields.
+        """_build_dirtied_event() must produce valid Confluent-Avro with all required fields.
 
         B-3 fix: previously callers emitted {"entity_id": "<uuid>"} which is
         missing event_id, event_type, schema_version, occurred_at, dirty_reason
         — all required by infra/kafka/schemas/entity.dirtied.v1.avsc.
-        """
-        import json
 
+        PLAN-0062 R28 update: _build_dirtied_event now emits Confluent-Avro
+        wire-format bytes (5-byte header + Avro body), not JSON. Test updated
+        to decode via deserialize_confluent_avro.
+        """
         from knowledge_graph.infrastructure.workers.provisional_enrichment_core import (
+            _ENTITY_DIRTIED_SCHEMA_PATH,
             _build_dirtied_event,
         )
 
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
+
         entity_id = _ENTITY_ID
         raw = _build_dirtied_event(entity_id)
-        payload = json.loads(raw)
+
+        # Must start with Confluent magic byte 0x00
+        assert raw[:1] == b"\x00", "Expected Confluent-Avro wire format (magic byte 0x00)"
+
+        payload = deserialize_confluent_avro(_ENTITY_DIRTIED_SCHEMA_PATH, raw)
 
         # All required Avro fields must be present.
         required_fields = {"event_id", "event_type", "schema_version", "occurred_at", "entity_id", "dirty_reason"}
