@@ -252,7 +252,10 @@ export function DividendIncomeTimeline({
               <tbody className="divide-y divide-border/30">
                 {sortedTickers.map((row) => (
                   <tr key={row.ticker} className="h-7 hover:bg-muted/30">
-                    <td className="px-2 font-mono text-[11px] font-bold tabular-nums text-primary">
+                    {/* WHY font-semibold (was font-bold): 700-weight at 11px causes blotchy
+                        subpixel rendering on dark themes — 600-weight is the maximum for
+                        terminal chrome text at small sizes (Bloomberg density rule) */}
+                    <td className="px-2 font-mono text-[11px] font-semibold tabular-nums text-primary">
                       {row.ticker}
                     </td>
                     <td className="px-2 text-right font-mono text-[10px] tabular-nums text-muted-foreground">

@@ -160,9 +160,11 @@ export function TopBar({
           Slack absorbed by the IndexTicker (the only flex-1 sibling). */}
       <div className="flex shrink-0 items-center gap-3">
         {/* Wordmark — text for crisp rendering at all DPIs */}
+        {/* WHY font-mono font-bold: Bloomberg terminal wordmarks are rendered in a
+            monospace fixed-width style — proportional font reads as consumer web app */}
         <button
           onClick={() => router.push("/dashboard")}
-          className="font-semibold text-foreground hover:opacity-80"
+          className="font-mono font-bold text-[13px] tracking-tight text-foreground hover:opacity-80"
         >
           Worldview
         </button>
@@ -320,13 +322,16 @@ export function TopBar({
           className="relative p-1 text-muted-foreground hover:text-foreground"
           aria-label={`${unreadAlerts} unread alerts`}
         >
-          <Bell className="h-4 w-4" />
+          {/* WHY strokeWidth={1.5}: default 2px stroke is too heavy at terminal density — 1.5px matches Bloomberg's icon weight */}
+          <Bell className="h-4 w-4" strokeWidth={1.5} />
           {/* WHY destructive badge: critical alerts demand attention.
               WHY text-destructive-foreground not text-white: Bloomberg Dark palette
               prohibits pure #fff. --destructive-foreground resolves to #E0DDD4
               (warm off-white), the correct on-destructive text color in our palette. */}
+          {/* WHY font-medium (not font-bold): 700-weight text at 10px renders as a blotchy heavy
+              glyph on dark themes due to subpixel antialiasing — 500-weight is the maximum for small badge text */}
           {unreadAlerts > 0 && (
-            <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground">
+            <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-medium text-destructive-foreground">
               {unreadAlerts > 9 ? "9+" : unreadAlerts}
             </span>
           )}
@@ -338,27 +343,33 @@ export function TopBar({
             <button className="rounded-full ring-2 ring-transparent hover:ring-border focus-visible:ring-ring">
               <Avatar className="h-7 w-7">
                 <AvatarImage src={user?.avatar_url ?? undefined} alt={user?.name ?? "User"} />
-                <AvatarFallback className="text-xs">{getInitials(user?.name)}</AvatarFallback>
+                {/* WHY text-[9px]: the avatar is h-7 (28px) — text-xs (12px) fills nearly the
+                    entire circle with no breathing room; 9px matches Bloomberg's compact avatar initials */}
+                <AvatarFallback className="text-[9px] font-medium">{getInitials(user?.name)}</AvatarFallback>
               </Avatar>
             </button>
           </DropdownMenuTrigger>
 
           <DropdownMenuContent align="end" className="w-48">
             {/* User info header */}
+            {/* WHY text-[11px]/text-[10px]: dropdown header must match the 10-11px density
+                of the terminal chrome — text-sm (14px) is consumer-app scale */}
             <div className="px-2 py-1.5">
-              <p className="text-sm font-medium text-foreground">{user?.name ?? "User"}</p>
-              <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
+              <p className="text-[11px] font-medium text-foreground">{user?.name ?? "User"}</p>
+              <p className="truncate text-[10px] text-muted-foreground">{user?.email}</p>
             </div>
 
             <DropdownMenuSeparator />
 
+            {/* WHY strokeWidth={1.5} on all dropdown icons: default 2px stroke is too heavy
+                at terminal density — 1.5px matches Bloomberg's icon weight */}
             <DropdownMenuItem onClick={() => router.push("/settings")}>
-              <User className="mr-2 h-4 w-4" />
+              <User className="mr-2 h-4 w-4" strokeWidth={1.5} />
               Profile
             </DropdownMenuItem>
 
             <DropdownMenuItem onClick={() => router.push("/settings")}>
-              <Settings className="mr-2 h-4 w-4" />
+              <Settings className="mr-2 h-4 w-4" strokeWidth={1.5} />
               Settings
             </DropdownMenuItem>
 
@@ -368,7 +379,7 @@ export function TopBar({
               onClick={() => void handleLogout()}
               className="text-destructive focus:text-destructive"
             >
-              <LogOut className="mr-2 h-4 w-4" />
+              <LogOut className="mr-2 h-4 w-4" strokeWidth={1.5} />
               Sign out
             </DropdownMenuItem>
           </DropdownMenuContent>

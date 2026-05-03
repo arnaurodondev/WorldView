@@ -63,7 +63,9 @@ export function CitationList({ citations }: { citations: Citation[] }) {
           href={safeExternalUrl(cite.url)}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 rounded-[2px] border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs text-primary hover:bg-primary/20"
+          // WHY text-[10px]: citation chips are chrome metadata, not content —
+          // they use the 10px label size, not the 11px data row size.
+          className="inline-flex items-center gap-1 rounded-[2px] border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] text-primary hover:bg-primary/20"
           title={`${cite.source} — relevance: ${(cite.relevance_score * 100).toFixed(0)}%`}
         >
           <sup className="font-mono text-[9px]">[{i + 1}]</sup>
@@ -71,7 +73,10 @@ export function CitationList({ citations }: { citations: Citation[] }) {
             {getCitationIcon(cite)}
           </span>
           <span className="font-mono text-[9px] text-primary/70">{cite.source}</span>
-          <span className="max-w-[140px] truncate">{cite.title}</span>
+          {/* WHY text-[10px]: title snippet inside chip inherits the chip's 10px
+              chrome-label density — no explicit size would let it fall back to
+              the parent bubble's 11px, creating an internal size mismatch. */}
+          <span className="max-w-[140px] truncate text-[10px]">{cite.title}</span>
           <span className="font-mono text-[9px] text-primary/60">
             {(cite.relevance_score * 100).toFixed(0)}%
           </span>

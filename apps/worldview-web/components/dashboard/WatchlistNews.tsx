@@ -58,7 +58,8 @@ export function WatchlistNews() {
   // issue, not a user error. Muted text is professional; red looks broken.
   if (isError) {
     return (
-      <p className="text-sm text-muted-foreground">
+      // WHY text-[11px]: terminal data rows use 11px density — text-sm (14px) is consumer app scale (Bloomberg convention)
+      <p className="text-[11px] text-muted-foreground">
         News feed unavailable — articles will appear once the content pipeline runs.
       </p>
     );
@@ -69,7 +70,8 @@ export function WatchlistNews() {
   // ── Empty state ────────────────────────────────────────────────────────────
   if (articles.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">No recent news</p>
+      // WHY text-[11px]: terminal data rows use 11px density — text-sm (14px) is consumer app scale (Bloomberg convention)
+      <p className="text-[11px] text-muted-foreground">No recent news</p>
     );
   }
 
@@ -96,7 +98,8 @@ export function WatchlistNews() {
             <span className="font-mono tabular-nums">
               {article.published_at ? relativeTime(article.published_at) : '—'}
             </span>
-            <ExternalLink className="ml-auto h-2.5 w-2.5 opacity-0 group-hover:opacity-100" />
+            {/* WHY strokeWidth={1.5}: terminal icon convention — thinner strokes match 11px data density; default 2px looks heavy at h-2.5 w-2.5 */}
+            <ExternalLink className="ml-auto h-2.5 w-2.5 opacity-0 group-hover:opacity-100" strokeWidth={1.5} />
           </div>
         </a>
       ))}

@@ -32,7 +32,9 @@ export function TypingIndicator() {
   return (
     <div className="flex max-w-[70%] items-end gap-2 self-start">
       <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[2px] bg-primary/20">
-        <Bot className="h-3.5 w-3.5 text-primary" />
+        {/* WHY strokeWidth={1.5}: terminal chrome icon hairline rule — default 2px
+            weight overpowers the 14px bot avatar icon at this size. */}
+        <Bot className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />
       </div>
       <div className="rounded-[2px] bg-muted px-4 py-3">
         <div className="flex gap-1" aria-label="AI is generating a response">
@@ -59,12 +61,20 @@ export function MessageBubble({ message }: { message: Message }) {
       >
         {!isUser && (
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[2px] bg-primary/20">
-            <Bot className="h-3.5 w-3.5 text-primary" />
+            {/* WHY strokeWidth={1.5}: terminal chrome icon hairline rule — default 2px
+                weight overpowers the 14px bot avatar icon at this size. */}
+            <Bot className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />
           </div>
         )}
 
+        {/*
+         * WHY text-[11px] leading-[1.5]: chat messages in a terminal must match the
+         * 11px density of all other data surfaces — text-sm (14px) breaks density
+         * consistency and makes chat feel like a consumer chatbot pasted into a
+         * Bloomberg terminal. leading-[1.5] matches the compact prose standard.
+         */}
         <div
-          className={`rounded-[2px] px-4 py-3 text-sm leading-relaxed ${
+          className={`rounded-[2px] px-4 py-3 text-[11px] leading-[1.5] ${
             isUser ? "bg-primary/10 text-foreground" : "bg-muted text-foreground"
           }`}
         >
@@ -73,14 +83,16 @@ export function MessageBubble({ message }: { message: Message }) {
            *  - User: plain <pre> preserves their literal whitespace (a question
            *    like "compare:\n- AAPL\n- MSFT" reads as written). Markdown
            *    rendering on user input would mangle "*" wildcards etc.
-           *  - Assistant: MarkdownContent renders tables/lists/code blocks
-           *    consistent with the rest of the app (PLAN-0051 T-E-5-02).
+           *  - Assistant: MarkdownContent size="compact" renders at 10px with
+           *    11px headings — matches terminal density (PLAN-0051 T-E-5-02).
+           *    WHY "compact" (not "comfortable"): "comfortable" is 12px, which is
+           *    too spacious for a terminal surface that targets 11px everywhere.
            */}
           {isUser ? (
-            <pre className="whitespace-pre-wrap font-sans text-sm">{message.content}</pre>
+            <pre className="whitespace-pre-wrap font-sans text-[11px]">{message.content}</pre>
           ) : (
             <div id={anchorPrefix}>
-              <MarkdownContent size="comfortable">{message.content}</MarkdownContent>
+              <MarkdownContent size="compact">{message.content}</MarkdownContent>
             </div>
           )}
 
@@ -121,10 +133,14 @@ export function StreamingBubble({ streaming }: { streaming: StreamingMessage }) 
     <div className="flex flex-col items-start gap-1">
       <div className="flex max-w-[70%] items-end gap-2">
         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[2px] bg-primary/20">
-          <Bot className="h-3.5 w-3.5 text-primary" />
+          {/* WHY strokeWidth={1.5}: terminal chrome icon hairline rule — default 2px
+              weight overpowers the 14px bot avatar icon at this size. */}
+          <Bot className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />
         </div>
-        <div className="rounded-[2px] bg-muted px-4 py-3 text-sm leading-relaxed">
-          <MarkdownContent size="comfortable">{streaming.text}</MarkdownContent>
+        {/* WHY text-[11px] leading-[1.5] + size="compact": streaming bubble must
+            match the final settled MessageBubble density — same 11px terminal rule. */}
+        <div className="rounded-[2px] bg-muted px-4 py-3 text-[11px] leading-[1.5]">
+          <MarkdownContent size="compact">{streaming.text}</MarkdownContent>
           {streaming.active && (
             <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-primary align-middle" />
           )}

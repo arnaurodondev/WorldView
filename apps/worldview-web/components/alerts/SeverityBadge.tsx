@@ -55,9 +55,12 @@ export function SeverityBadge({ severity, size = "default" }: SeverityBadgeProps
 
   return (
     <Badge
-      // Override badge base with severity-specific palette classes
-      className={`${bg} ${text} border-0 font-mono tracking-wider ${
-        size === "sm" ? "px-1 py-0 text-[9px]" : "px-1.5 py-0.5 text-[10px]"
+      // WHY text-[9px] h-4: severity badges in terminal chrome must be compact 16px chips —
+      // shadcn Badge default (text-xs px-2.5 py-0.5) renders at Bloomberg-inappropriate size.
+      // WHY rounded-[2px]: Bloomberg uses rectangular badges, not pill shapes (rounded-full).
+      // The `sm` variant matches the 22px alert row; `default` is for larger contexts (flash overlay).
+      className={`${bg} ${text} border-0 font-mono tracking-wider h-4 rounded-[2px] ${
+        size === "sm" ? "px-1 py-0 text-[9px]" : "px-1.5 py-0 text-[9px]"
       }`}
       // Full severity label for screenreaders — abbreviated label in visual
       aria-label={severity}

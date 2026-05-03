@@ -42,6 +42,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DashboardEmptyState } from "@/components/ui/dashboard-empty-state";
 import { cn } from "@/lib/utils";
+import { useWorkspaceSymbol } from "@/contexts/WorkspaceSymbolContext";
 
 // ── Timeframe definitions ──────────────────────────────────────────────────────
 
@@ -126,6 +127,21 @@ interface WorkspaceChartWidgetProps {
 export function WorkspaceChartWidget({ ticker }: WorkspaceChartWidgetProps) {
   const { accessToken } = useAuth();
 
+  // WHY consume WorkspaceSymbolContext: the workspace-level SymbolBar broadcasts
+  // a single symbol to ALL panels simultaneously (Bloomberg "Security" bar pattern).
+  // When the user types "TSLA" + Enter in the SymbolBar, this widget should switch
+  // to TSLA regardless of its per-panel linked symbol. broadcastSymbol takes
+  // precedence; if null, we fall back to the ticker prop (set via color-group linking).
+  const { broadcastSymbol } = useWorkspaceSymbol();
+
+  // WHY effectiveTicker (not just ticker): the precedence chain is:
+  //   1. broadcastSymbol — workspace-wide override (set from SymbolBar)
+  //   2. ticker prop — per-panel linked symbol (set from SymbolLinkingContext)
+  //   3. undefined — show empty state
+  // This lets the workspace-level SymbolBar override individual panel links without
+  // breaking the per-panel color-group linking that was already working.
+  const effectiveTicker = broadcastSymbol ?? ticker;
+
   // WHY default 3M (not 1D): a workspace chart is for context, not signal.
   // 3 months of daily bars is the right horizon for "what's the trend?"
   const [activeTfId, setActiveTfId] = useState<WorkspaceTimeframeId>("3M");
@@ -133,9 +149,9 @@ export function WorkspaceChartWidget({ ticker }: WorkspaceChartWidgetProps) {
 
   // WHY this convention: matches WorkspacePanelContainer's demo mapping
   // (entity-aapl / ins-aapl). The S9 demo seed uses lowercase ticker as suffix.
-  // If ticker is undefined, we deliberately do NOT issue the OHLCV request —
+  // If effectiveTicker is undefined, we deliberately do NOT issue the OHLCV request —
   // the empty state renders instead.
-  const instrumentId = ticker ? `ins-${ticker.toLowerCase()}` : undefined;
+  const instrumentId = effectiveTicker ? `ins-${effectiveTicker.toLowerCase()}` : undefined;
 
   // ── Data fetch ───────────────────────────────────────────────────────────
   const { data, isLoading, isError, refetch } = useQuery({
@@ -313,7 +329,10 @@ export function WorkspaceChartWidget({ ticker }: WorkspaceChartWidgetProps) {
   }, [refetch]);
 
   // ── Render: empty state when no symbol linked ─────────────────────────────
-  if (!ticker) {
+  // WHY check effectiveTicker (not ticker): effectiveTicker already incorporates
+  // the broadcastSymbol override. If neither broadcastSymbol nor ticker is set,
+  // there is genuinely no symbol to chart.
+  if (!effectiveTicker) {
     return (
       // WHY full-height wrapper: keeps the empty state vertically centered in
       // the panel slot regardless of how the user has resized it.
@@ -361,12 +380,14 @@ export function WorkspaceChartWidget({ ticker }: WorkspaceChartWidgetProps) {
        * below, half opacity so it doesn't compete with the panel border.
        */}
       <div className="flex h-6 shrink-0 items-center gap-2 border-b border-border/30 px-2">
-        {/* Ticker text — font-mono uppercase 11px primary color */}
+        {/* Ticker text — font-mono uppercase 11px primary color
+          * WHY effectiveTicker: shows whichever symbol is active — the workspace
+          * broadcast symbol takes precedence over the per-panel linked symbol. */}
         <span
           className="font-mono text-[11px] uppercase tabular-nums text-primary"
-          aria-label={`Ticker ${ticker}`}
+          aria-label={`Ticker ${effectiveTicker}`}
         >
-          {ticker}
+          {effectiveTicker}
         </span>
 
         {/* Timeframe selector — 5 small buttons */}

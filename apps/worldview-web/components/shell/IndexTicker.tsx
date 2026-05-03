@@ -127,7 +127,10 @@ export function IndexTicker() {
   if (allResolutionsFailed) {
     return (
       <div className="flex items-center gap-2" title="Index data unavailable">
-        <span className="text-xs font-bold text-foreground">SPY</span>
+        {/* WHY font-semibold (was font-bold): 700-weight at text-xs causes blotchy subpixel
+            rendering on dark themes — 600-weight is the maximum for terminal chrome text
+            at small sizes (Bloomberg density rule) */}
+        <span className="text-xs font-semibold text-foreground">SPY</span>
         <span className="font-mono text-xs tabular-nums text-muted-foreground">
           —
         </span>
@@ -151,7 +154,10 @@ export function IndexTicker() {
       : priceChangeClass(quote.change_pct ?? null);
     return (
       <div key={ticker.id} className="flex items-center gap-1">
-        <span className="text-xs font-bold text-foreground">{ticker.label}</span>
+        {/* WHY font-semibold (was font-bold): 700-weight at text-xs causes blotchy subpixel
+            rendering on dark themes — 600-weight is the maximum for terminal chrome text
+            at small sizes (Bloomberg density rule) */}
+        <span className="text-xs font-semibold text-foreground">{ticker.label}</span>
         <span
           className={`font-mono text-xs tabular-nums ${colorClass}`}
           title={isStale ? (quote?.stale_reason ?? "Delayed data") : undefined}

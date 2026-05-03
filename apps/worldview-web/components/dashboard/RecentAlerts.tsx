@@ -119,7 +119,8 @@ export function RecentAlerts() {
       {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-2) */}
       {!isLoading && merged.length === 0 && (
         <div className="flex flex-1 flex-col gap-0.5 px-3 py-2">
-          <p className="text-xs text-muted-foreground">No recent alerts.</p>
+          {/* WHY text-[10px]: terminal labels/metadata use 10px density — text-xs (12px) is consumer app scale (Bloomberg convention) */}
+          <p className="text-[10px] text-muted-foreground">No recent alerts.</p>
           <p className="text-[10px] text-muted-foreground/60">
             Create alert rules on the{" "}
             <a href="/alerts" className="text-primary hover:underline">Alerts page</a>

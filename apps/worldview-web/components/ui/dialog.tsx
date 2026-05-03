@@ -81,7 +81,11 @@ const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn("text-lg font-semibold leading-none tracking-tight", className)}
+    // WHY text-[13px] uppercase tracking-[0.04em] (was text-lg leading-none tracking-tight):
+    // Bloomberg terminal dialog titles use 13px ALL-CAPS — "text-lg" (18px) is consumer-app
+    // scale; leading-none + tracking-tight conflict with the uppercase terminal aesthetic.
+    // 13px uppercase matches sheet.tsx SheetTitle for visual parity across all modal surfaces.
+    className={cn("text-[13px] font-semibold uppercase tracking-[0.04em] leading-none", className)}
     {...props}
   />
 ));
@@ -93,7 +97,10 @@ const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn("text-sm text-muted-foreground", className)}
+    // WHY text-[10px] (was text-sm=14px): dialog description is secondary metadata —
+    // 14px is consumer-app scale; 10px matches the Bloomberg caption/metadata standard
+    // for supplementary text in dialogs and modals.
+    className={cn("text-[10px] text-muted-foreground", className)}
     {...props}
   />
 ));

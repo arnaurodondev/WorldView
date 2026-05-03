@@ -128,7 +128,11 @@ const SheetTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SheetPrimitive.Title
     ref={ref}
-    className={cn("text-base font-semibold tracking-tight text-foreground", className)}
+    // WHY text-[13px] uppercase tracking-[0.04em] (was text-base tracking-tight):
+    // Bloomberg terminal panel/drawer titles use 13px ALL-CAPS — "text-base" (16px)
+    // is consumer-app scale and "tracking-tight" conflicts with the uppercase
+    // terminal aesthetic. 13px uppercase matches the instrument header ticker style.
+    className={cn("text-[13px] font-semibold uppercase tracking-[0.04em] text-foreground", className)}
     {...props}
   />
 ));
@@ -140,7 +144,10 @@ const SheetDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SheetPrimitive.Description
     ref={ref}
-    className={cn("text-xs text-muted-foreground", className)}
+    // WHY text-[10px] (was text-xs=12px): sheet description is secondary metadata —
+    // 12px is too large for terminal density; 10px matches the Bloomberg caption standard
+    // for supplementary text beneath panel/drawer titles.
+    className={cn("text-[10px] text-muted-foreground", className)}
     {...props}
   />
 ));

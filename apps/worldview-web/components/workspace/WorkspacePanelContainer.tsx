@@ -207,11 +207,18 @@ export function WorkspacePanelContainer({
         {/*
          * WHY h-3.5 w-3.5 (14px): smaller than nav icons (20px) — panel headers are
          * dense chrome; the icon communicates type at a glance without dominating.
+         * WHY strokeWidth={1.5}: Bloomberg terminal chrome uses hairline strokes —
+         * the default 2px stroke weight is too heavy for 14px panel-chrome icons.
          */}
-        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" strokeWidth={1.5} aria-hidden />
 
         {/* Panel type label — 10px ALL CAPS, terminal section header pattern (§0.1) */}
-        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+        {/*
+         * WHY text-[10px] uppercase: Bloomberg panel chrome labels are compact 10px
+         * uppercase identifiers — this distinguishes chrome from data content (which
+         * uses 11px). font-medium reinforces the structural hierarchy over body text.
+         */}
+        <span className="text-[10px] uppercase tracking-[0.08em] font-medium text-muted-foreground">
           {meta.label}
         </span>
 
@@ -239,7 +246,9 @@ export function WorkspacePanelContainer({
             // The button exists for UX consistency (Bloomberg has this affordance).
             onClick={() => {}}
           >
-            <Maximize2 className="h-3 w-3" aria-hidden />
+            {/* WHY strokeWidth={1.5}: toolbar icons at 12px must use hairline strokes —
+                default 2px weight overpowers the tiny icon at this size. */}
+            <Maximize2 className="h-3 w-3" strokeWidth={1.5} aria-hidden />
           </button>
 
           {/* Close button — removes THIS panel instance from the workspace */}
@@ -248,7 +257,8 @@ export function WorkspacePanelContainer({
             aria-label={`Close ${meta.label} panel`}
             onClick={() => removePanelFromWorkspace(workspaceId, panel.id)}
           >
-            <X className="h-3 w-3" aria-hidden />
+            {/* WHY strokeWidth={1.5}: same hairline rule as Maximize2 above. */}
+            <X className="h-3 w-3" strokeWidth={1.5} aria-hidden />
           </button>
         </div>
       </div>

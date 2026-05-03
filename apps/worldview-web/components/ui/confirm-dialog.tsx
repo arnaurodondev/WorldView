@@ -172,7 +172,10 @@ export function ConfirmDialog({
         className="max-w-sm"
       >
         <DialogHeader>
-          <DialogTitle className="text-base">{title}</DialogTitle>
+          {/* WHY no text-base override: DialogTitle now renders at text-[13px] uppercase
+              by default — removing the text-base (16px) override is correct; the base
+              style is the right terminal-grade size for confirmation dialog titles */}
+          <DialogTitle>{title}</DialogTitle>
           {/* WHY always render Description (never sr-only): unlike destructive-button.tsx
               which handles legacy Radix patterns, our Dialog is from a newer shadcn version
               that doesn't warn when description is absent. We still always render it because

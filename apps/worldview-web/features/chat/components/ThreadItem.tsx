@@ -111,15 +111,20 @@ export function ThreadItem({
             }}
             className={cn(
               "w-full rounded-[2px] border border-primary/40 bg-card",
-              "px-1.5 py-0.5 text-sm text-foreground",
+              // WHY text-[11px]: sidebar thread items are data rows — must use the
+              // 11px terminal data density, not the 14px consumer-app text-sm.
+              "px-1.5 py-0.5 text-[11px] text-foreground",
               "focus:outline-none focus:ring-1 focus:ring-primary",
             )}
             aria-label="Edit thread title"
             maxLength={200}
           />
         ) : (
+          // WHY text-[11px]: thread titles are data rows in the sidebar — terminal
+          // density rule mandates 11px for all data text. text-sm (14px) is a
+          // consumer chatbot convention that breaks Bloomberg-grade density.
           <p
-            className={`truncate text-sm ${
+            className={`truncate text-[11px] ${
               isActive ? "font-medium text-primary" : "text-foreground"
             }`}
             // WHY double-click to rename: matches Slack/Notion convention.
@@ -149,7 +154,8 @@ export function ThreadItem({
         aria-label={`Delete thread: ${thread.title ?? PLACEHOLDER_THREAD_TITLE}`}
         tabIndex={-1}
       >
-        <Trash2 className="h-3.5 w-3.5" />
+        {/* WHY strokeWidth={1.5}: hairline icon weight for terminal chrome buttons. */}
+        <Trash2 className="h-3.5 w-3.5" strokeWidth={1.5} />
       </button>
     </div>
   );

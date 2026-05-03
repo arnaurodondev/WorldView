@@ -62,7 +62,10 @@ export function MarqueeTickerChip({ ticker, quote, isError }: Props) {
       aria-label={`${ticker.label} ${quote ? formatPrice(quote.price) : "unavailable"}`}
     >
       {/* Symbol — bold-white, matches Bloomberg ticker labelling convention. */}
-      <span className="text-[11px] font-bold text-foreground">{ticker.label}</span>
+      {/* WHY font-semibold (was font-bold): 700-weight at 11px causes blotchy subpixel
+          rendering on dark themes — 600-weight is the maximum for terminal chrome text
+          at small sizes (Bloomberg density rule) */}
+      <span className="text-[11px] font-semibold text-foreground">{ticker.label}</span>
 
       {/* Price in monospace so digits don't shift as values update. */}
       <span

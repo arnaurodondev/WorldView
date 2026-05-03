@@ -111,7 +111,10 @@ export function AlarmsPanel() {
             WHY bg-destructive: alerts demanding attention use the semantic error color. */}
         {totalCount > 0 && (
           <span
-            className="flex h-4 items-center justify-center rounded-[2px] bg-destructive px-1 text-[10px] font-bold text-destructive-foreground"
+            // WHY font-semibold (was font-bold): 700-weight at 10px causes blotchy
+            // subpixel rendering on dark themes — 600-weight is the maximum for
+            // terminal chrome text at small sizes (Bloomberg density rule).
+            className="flex h-4 items-center justify-center rounded-[2px] bg-destructive px-1 text-[10px] font-semibold text-destructive-foreground"
             aria-label={`${totalCount} pending alerts`}
           >
             {totalCount > 99 ? "99+" : totalCount}

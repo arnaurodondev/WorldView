@@ -223,7 +223,10 @@ function TxRow({ tx }: { tx: Transaction }) {
       }`}
     >
       <Icon className={cn("h-3 w-3 shrink-0", color)} aria-hidden="true" />
-      <span className="w-[44px] shrink-0 font-mono text-[11px] font-bold tabular-nums text-foreground">
+      {/* WHY font-semibold (was font-bold): 700-weight at 11px causes blotchy subpixel
+          rendering on dark themes — 600-weight is the maximum for terminal chrome text
+          at small sizes (Bloomberg density rule) */}
+      <span className="w-[44px] shrink-0 font-mono text-[11px] font-semibold tabular-nums text-foreground">
         {tx.ticker || "—"}
       </span>
       <span className="min-w-0 flex-1 truncate font-mono text-[10px] tabular-nums text-muted-foreground">
