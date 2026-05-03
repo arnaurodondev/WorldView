@@ -99,6 +99,17 @@ def _make_settings() -> MagicMock:
     s.topic_signal_detected = "nlp.signal.detected.v1"
     s.max_ollama_queue_depth = 20
     s.resume_ollama_queue_depth = 10
+    # WHY: all numeric/string settings accessed by the consumer pipeline must be
+    # real values — MagicMock auto-attributes cause TypeError when compared with
+    # floats or used as string arguments in downstream blocks.
+    s.routing_tier_deep = 0.70
+    s.routing_tier_medium = 0.45
+    s.routing_tier_light = 0.20
+    s.novelty_minhash_threshold = 0.80
+    s.novelty_embedding_threshold = 0.90
+    s.entity_resolution_auto_resolve_threshold = 0.72
+    s.entity_resolution_provisional_threshold = 0.45
+    s.silver_bucket = "worldview-silver"
     return s
 
 
@@ -108,6 +119,14 @@ def _make_mock_session() -> AsyncMock:
     session.__aexit__ = AsyncMock(return_value=None)
     session.add = MagicMock()
     session.commit = AsyncMock()
+    # WHY: session.execute() is async, but its return value is a synchronous
+    # SQLAlchemy Result — scalar_one_or_none() / all() are sync methods.
+    # An AsyncMock return value makes those calls return coroutines instead of
+    # values, breaking ArticleImpactWindowRepository.get_max_impact_for_doc.
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = None
+    result_mock.all.return_value = []
+    session.execute = AsyncMock(return_value=result_mock)
     return session
 
 
@@ -336,6 +355,9 @@ class TestBackpressure:
 
             async def __aexit__(self, *args: Any) -> None:
                 pass
+
+            def gauge_value(self) -> int:
+                return 0
 
         consumer, _nlp, _intel = _make_consumer(backpressure=_TrackingBP())
 
