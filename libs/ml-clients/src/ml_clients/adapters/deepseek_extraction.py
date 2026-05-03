@@ -100,7 +100,7 @@ class DeepSeekExtractionAdapter:
                         ],
                         response_format={"type": "json_object"},
                         temperature=0.0,
-                        max_tokens=2048,
+                        max_tokens=512,
                         extra_body={
                             "reasoning_effort": "none",
                             "prompt_cache_key": "kg_extraction_v1",
@@ -114,10 +114,12 @@ class DeepSeekExtractionAdapter:
                         tokens_out = response.usage.completion_tokens or 0
                         details = getattr(response.usage, "prompt_tokens_details", None)
                         tokens_cached = getattr(details, "cached_tokens", 0) or 0
-                    # With reasoning_effort=none the answer is in content.
-                    # Fallback to reasoning_content for models that ignore reasoning_effort.
+                    # With reasoning_effort=none the answer must be in content.
+                    # Do NOT fall back to reasoning_content: when reasoning_effort=none fails
+                    # the model puts its full thinking chain there (~6 kB of prose) which
+                    # will always fail JSON parsing and trigger an incorrect Ollama fallback.
                     msg = response.choices[0].message
-                    raw_response: str = msg.content or getattr(msg, "reasoning_content", None) or ""
+                    raw_response: str = msg.content or ""
                     finish_reason: str | None = getattr(response.choices[0], "finish_reason", None)
                     logger.info(
                         "deepseek_extraction_completed",
@@ -138,16 +140,43 @@ class DeepSeekExtractionAdapter:
                         try:
                             result = json.loads(cleaned)
                         except json.JSONDecodeError as exc:
-                            # Surface the raw response prefix so the next
-                            # regression of this class is debuggable.
-                            logger.warning(
-                                "deepseek_extraction_malformed",
-                                model_id=self._model_id,
-                                raw_response_prefix=raw_response[:500],
-                                raw_response_len=len(raw_response),
-                                finish_reason=finish_reason,
-                            )
-                            raise FatalError(f"malformed extraction output: {exc}") from exc
+                            # Partial-JSON recovery for finish_reason=length: small models
+                            # (0.8B) repeat list items until the token limit is hit,
+                            # truncating mid-array. Since canonical_name / ticker / isin
+                            # always appear before the aliases array, strip the incomplete
+                            # aliases tail and inject [] so the core fields are preserved.
+                            recovered: dict[str, object] | None = None
+                            if finish_reason == "length":
+                                stripped = re.sub(
+                                    r',\s*"aliases"\s*:.*$',
+                                    "",
+                                    cleaned,
+                                    flags=re.DOTALL,
+                                )
+                                try:
+                                    _r: dict[str, object] = json.loads(stripped + "}")
+                                    _r.setdefault("aliases", [])
+                                    recovered = _r
+                                    logger.warning(
+                                        "deepseek_extraction_aliases_truncated_recovered",
+                                        model_id=self._model_id,
+                                        finish_reason=finish_reason,
+                                    )
+                                except json.JSONDecodeError:
+                                    pass
+                            if recovered is not None:
+                                result = recovered
+                            else:
+                                # Surface the raw response prefix so the next
+                                # regression of this class is debuggable.
+                                logger.warning(
+                                    "deepseek_extraction_malformed",
+                                    model_id=self._model_id,
+                                    raw_response_prefix=raw_response[:500],
+                                    raw_response_len=len(raw_response),
+                                    finish_reason=finish_reason,
+                                )
+                                raise FatalError(f"malformed extraction output: {exc}") from exc
                     return ExtractionOutput(
                         result=result,
                         raw_response=raw_response,
