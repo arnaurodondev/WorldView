@@ -37,6 +37,11 @@ import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { BriefingResponse } from "@/types/api";
+// PLAN-0062-W4 T-W4-E-02: StructuredBrief replaces the inline markdown path
+// for instrument briefs that have W4+ sections (BriefBullet[] with citations).
+// When sections is empty or absent, the component falls back to the existing
+// ReactMarkdown path so pre-W4 cached responses still render correctly.
+import { StructuredBrief } from "@/components/brief/StructuredBrief";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -137,7 +142,8 @@ export function InstrumentBriefPanel({ entityId }: InstrumentBriefPanelProps) {
   // S8's PublicBriefingResponse schema field name. See types/api.ts for definition.
   // WHY ?? "": brief.narrative may be an empty string if generation failed mid-stream.
   const safeContent = brief.narrative ?? "";
-  const contentWithLinks = brief.entity_mentions.reduce((text, mention) => {
+  // WHY ?? []: entity_mentions is now optional in BriefingResponse (PLAN-0062-W4).
+  const contentWithLinks = (brief.entity_mentions ?? []).reduce((text, mention) => {
     if (!mention.name) return text;
     const regex = new RegExp(`\\b${escapeRegex(mention.name)}\\b`, "g");
     return text.replace(
@@ -172,19 +178,36 @@ export function InstrumentBriefPanel({ entityId }: InstrumentBriefPanelProps) {
             </span>
           )}
 
-          {/* Brief text — collapsed to preview or expanded to full markdown */}
-          {/* WHY identical styling to MorningBriefCard (text-xs, [&_selector]):
-              ReactMarkdown defaults to article-scale typography. Tailwind's
-              prose plugin applies 14px base size which looks oversized in a
-              compact terminal header band. The [&_selector] pattern pins all
-              markdown-generated elements to text-xs (12px). */}
+          {/* Brief text — collapsed to preview or expanded to structured/markdown */}
+          {/* WHY two-tier expanded path (PLAN-0062-W4 T-W4-E-02):
+              - Collapsed: always shows the plain text preview slice (max PREVIEW_CHARS chars).
+                Markdown formatting would require vertical space that the collapsed band
+                can't accommodate without layout jank.
+              - Expanded + W4 sections: StructuredBrief renders BriefBullet citation chips,
+                lead block, and optional confidence badge. Better fidelity than raw markdown.
+              - Expanded + no sections: fallback to ReactMarkdown over contentWithLinks so
+                pre-W4 cached briefs (which lack sections) still render fully.
+          */}
           <div className="inline max-w-none text-xs leading-relaxed text-foreground/90 [&_a]:text-primary [&_a]:hover:underline [&_strong]:font-semibold">
             {isLong && !expanded ? (
+              // Collapsed preview — plain text slice (no markdown rendering)
               <span className="text-xs text-foreground/90">
                 {safeContent.slice(0, PREVIEW_CHARS)}
                 <span className="text-muted-foreground">…</span>
               </span>
+            ) : brief.sections && brief.sections.length > 0 ? (
+              // Expanded, W4+ structured sections — use shared StructuredBrief component.
+              // WHY variant="compact": InstrumentBriefPanel is a compact horizontal band —
+              // "compact" suppresses citation chips and uses smaller text/spacing so the
+              // panel doesn't expand to full-card height.
+              <StructuredBrief
+                lead={brief.lead}
+                sections={brief.sections}
+                confidence={brief.confidence}
+                variant="compact"
+              />
             ) : (
+              // Expanded, no sections — fallback to ReactMarkdown for pre-W4 responses.
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{

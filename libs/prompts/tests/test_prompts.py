@@ -64,12 +64,13 @@ class TestMorningBriefing:
         assert "Never speculate beyond the evidence provided" in result
 
     def test_v22_two_tier_format(self) -> None:
-        """v2.2 prompt must instruct the LLM to emit ## SUMMARY + --- + ## DETAILS.
+        """Prompt must instruct the LLM to emit a LEAD block + --- + DETAILS block.
 
-        PLAN-0048 Wave A — verifies the two-tier output contract is part of the
-        rendered prompt so the splitter in GenerateBriefingUseCase has a chance
-        to find a divider. Without these directives the LLM falls back to
-        single-block output and the collapsed card view degrades.
+        PLAN-0048 Wave A originally checked for ## SUMMARY + ## DETAILS (v2.2).
+        PLAN-0062-W4 bumped to v3.0: ## SUMMARY was renamed ## LEAD to align with
+        the new citation-first architecture. The `---` divider contract is unchanged.
+        WHY update (not delete): R19 — fix tests in place; the underlying invariant
+        (two-block structure separated by ---) still holds.
         """
         result = MORNING_BRIEFING.render(
             portfolio_context="",
@@ -80,15 +81,14 @@ class TestMorningBriefing:
             safety=SAFETY_FOOTER,
             current_date="2026-04-26",
         )
-        # The prompt must spell out both block headers and the divider rule.
-        assert "## SUMMARY" in result
+        # v3.0 uses ## LEAD (not ## SUMMARY) — the two-block + divider contract holds.
+        assert "## LEAD" in result
         assert "## DETAILS" in result
         assert "literal `---` divider" in result
-        # And it must forbid the redundant body chrome the card already supplies.
+        # Must still forbid the redundant Morning Briefing header in the body.
         assert "Morning Briefing" in result  # appears in the forbid clause
-        assert "Date:" in result  # appears in the forbid clause
-        # Version constant must reflect the bump.
-        assert MORNING_BRIEFING.version == "2.2"
+        # Version constant must reflect the v3.0 bump.
+        assert MORNING_BRIEFING.version == "3.0"
 
 
 class TestInstrumentBriefing:

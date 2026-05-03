@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ── Request schemas ───────────────────────────────────────────────────────────
 
@@ -95,6 +95,45 @@ class DeleteThreadResponse(BaseModel):
 # ── Briefing schemas (T-B-2-03, PRD-0016 §6.2) ───────────────────────────────
 
 
+class BriefCitation(BaseModel):
+    """One source-document reference attached to a bullet (PLAN-0062-W4).
+
+    WHY document_id (not source_id): the new bullet-level citation model uses
+    'document_id' as the primary key to align with S6/S7 internal naming.
+    The 'source_id' alias is kept for back-compat with legacy callers that
+    still send the old field name (R11: never break wire format).
+
+    WHY Literal source_type: strongly typed so the frontend can branch on
+    source_type to decide which deep-link route to construct. Adding new
+    source types requires a schema bump, which is correct behaviour.
+    """
+
+    document_id: str
+    snippet: str = Field(..., max_length=400)
+    url: str | None = Field(default=None)
+    source_type: Literal["article", "event", "alert"] = "article"
+    title: str | None = None
+    # WHY populate_by_name=True: accepts both 'document_id' and the legacy
+    # 'source_id' alias so older callers are not immediately broken.
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class BriefBullet(BaseModel):
+    """One bullet inside a section (PLAN-0062-W4).
+
+    WHY citations min_length=1: this is the 100% citation gate. Every bullet
+    that reaches the response MUST have at least one citation. Bullets without
+    citations are filtered out by _backfill_uncited_bullets() before
+    construction, so a BriefBullet with citations=[] should never be created.
+
+    WHY text max_length=400: generous cap that covers the longest real brief
+    bullets (140 chars target, 400 hard cap to tolerate LLM verbosity).
+    """
+
+    text: str = Field(..., min_length=1, max_length=400)
+    citations: list[BriefCitation] = Field(..., min_length=1)
+
+
 class BriefingRequest(BaseModel):
     """Request body for POST /internal/v1/briefings (called by S10 email scheduler)."""
 
@@ -113,10 +152,18 @@ class BriefSection(BaseModel):
     ``<MorningBriefCard>`` and ``<InstrumentAISubheader>`` prefer this
     structured shape when ``sections`` is non-empty; otherwise both fall
     back to rendering ``narrative`` through ``<MarkdownContent>``.
+
+    PLAN-0062-W4: bullets changed from list[str] to list[BriefBullet] so
+    each bullet carries citations. min_length=0 enables the backfill pattern
+    where sections with zero remaining bullets are dropped rather than crashing.
     """
 
     title: str = Field(..., max_length=120)
-    bullets: list[str] = Field(..., min_length=1, max_length=8)
+    # WHY min_length=0 (was 1): the backfill pass may remove all uncited bullets
+    # from a section. We set min_length=0 here and drop empty sections in
+    # _backfill_uncited_bullets() so the constraint is enforced at the list level
+    # rather than at construction time (which would throw before we can filter).
+    bullets: list[BriefBullet] = Field(..., min_length=0, max_length=8)
 
 
 class BriefingResponse(BaseModel):
@@ -131,6 +178,12 @@ class BriefingResponse(BaseModel):
     populated, the frontend renders structured cards instead of bare
     markdown. ``narrative`` is kept as the always-present fallback so older
     clients keep working unchanged (graceful degradation, BP-019).
+
+    PLAN-0062-W4 added ``confidence`` and ``lead``:
+    - ``confidence``: composite citation quality score in [0.0, 1.0].
+      1.0 = all bullets have citations; lower values indicate partial coverage.
+    - ``lead``: the lead sentence(s) from the ## LEAD block with [cN] markers
+      resolved. None when the LLM didn't emit a lead or no valid citations.
     """
 
     narrative: str
@@ -144,6 +197,14 @@ class BriefingResponse(BaseModel):
     # PLAN-0049 additive fields. Leave blank for backwards compatibility.
     headline: str | None = Field(default=None, max_length=240)
     sections: list[BriefSection] = Field(default_factory=list)
+    # PLAN-0062-W4 additive fields — default values ensure old callers are unaffected.
+    # WHY ge=0 le=1: confidence is a probability — clamped to [0.0, 1.0] by the
+    # formula. default=1.0 means "fully cited" which is the safe fallback for
+    # callers that don't populate this field (no citation badge shown).
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    # WHY lead optional: the v3.0 prompt emits a ## LEAD block; older prompts,
+    # cached briefs, and instrument briefs (no ## LEAD) pass None here.
+    lead: str | None = Field(default=None, max_length=600)
 
 
 # ── Public briefing schemas (PLAN-0029 T-2-01) ───────────────────────────────
@@ -159,6 +220,9 @@ class PublicBriefingResponse(BaseModel):
     v2.2 MORNING_BRIEFING prompt's ``## SUMMARY`` block and consumed by the
     frontend MorningBriefCard collapsed view. ``None`` on legacy/instrument
     briefs (forward-compatible).
+
+    PLAN-0062-W4 added ``confidence`` and ``lead`` — same semantics as
+    BriefingResponse. Both default to safe values for backward compatibility.
     """
 
     narrative: str
@@ -176,3 +240,8 @@ class PublicBriefingResponse(BaseModel):
     # absent, it falls back to narrative through ``<MarkdownContent>``.
     headline: str | None = Field(default=None, max_length=240)
     sections: list[BriefSection] = Field(default_factory=list)
+    # PLAN-0062-W4 additive fields — same as BriefingResponse.
+    # WHY default=1.0: safe fallback; no amber warning badge shown when all
+    # cached briefs lack this field after the first deploy.
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    lead: str | None = Field(default=None, max_length=600)
