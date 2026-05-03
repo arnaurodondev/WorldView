@@ -24,6 +24,7 @@ provides the <100ms hot path.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
@@ -36,6 +37,23 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     UnitOfWorkProtocol,
 )
 from observability import get_logger  # type: ignore[import-untyped]
+
+
+# Walk up the directory tree to find infra/kafka/schemas/ — works both in
+# development (repo root is a few levels up) and in Docker (schemas copied to
+# /app/infra/kafka/schemas/).
+def _find_schema_dir() -> Path:
+    relative = Path("infra") / "kafka" / "schemas"
+    for base in Path(__file__).resolve().parents:
+        candidate = base / relative
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
+
+
+_SCHEMA_DIR = _find_schema_dir()
+_PROVISIONAL_QUEUED_TOPIC = "entity.provisional.queued.v1"
+_PROVISIONAL_QUEUED_SCHEMA_PATH = str(_SCHEMA_DIR / "entity.provisional.queued.v1.avsc")
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -310,9 +328,33 @@ WHERE queue_id = :queue_id
     # ------------------------------------------------------------------
 
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
+        """Decode entity.provisional.queued.v1 events from Confluent-Avro wire format.
+
+        PLAN-0062: this consumer enforces the platform principle that all
+        Kafka contracts use Avro (no JSON).  Producer side is
+        ``UnresolvedResolutionWorker`` in nlp-pipeline which uses
+        ``serialize_confluent_avro`` against the same schema file.
+
+        Falls back to JSON parsing only when the payload lacks the Confluent
+        magic byte (0x00) — useful for legacy replays during the migration
+        window where some pre-PLAN-0062 messages may still be in the topic.
+        """
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
+
+        path = schema_path or _PROVISIONAL_QUEUED_SCHEMA_PATH
+        if raw and raw[:1] == b"\x00":
+            return deserialize_confluent_avro(path, raw)  # type: ignore[no-any-return]
+        # Legacy JSON fallback — logged so we can quantify residual JSON
+        # traffic and remove this branch once the migration window closes.
+        logger.warning(  # type: ignore[no-any-return]
+            "provisional_queued_legacy_json_payload",
+            message="entity.provisional.queued.v1 message lacks Confluent magic byte; using JSON fallback",
+        )
         return json.loads(raw)  # type: ignore[no-any-return]
 
     def get_schema_path(self, topic: str) -> str | None:
+        if topic == _PROVISIONAL_QUEUED_TOPIC:
+            return _PROVISIONAL_QUEUED_SCHEMA_PATH
         return None
 
     def extract_event_id(self, value: dict[str, Any]) -> str:
@@ -330,8 +372,13 @@ async def _retry(
     retry_count: int,
     max_retries: int,
 ) -> None:
-    """Apply retry transition within an already-open session."""
-    await core.apply_retry_transition(session, queue_id, retry_count, max_retries)
+    """Apply retry transition within an already-open session.
+
+    ``retry_count`` is retained in the signature for source-compatibility with
+    earlier call sites; the SQL now reads the count atomically from the DB.
+    """
+    del retry_count
+    await core.apply_retry_transition(session, queue_id, max_retries)
 
 
 async def _fail_safe_retry(
@@ -340,10 +387,14 @@ async def _fail_safe_retry(
     retry_count: int,
     max_retries: int,
 ) -> None:
-    """Apply retry transition in a fresh session (used on persist failure)."""
+    """Apply retry transition in a fresh session (used on persist failure).
+
+    ``retry_count`` is retained for source-compatibility — see ``_retry``.
+    """
+    del retry_count
     try:
         async with session_factory() as session:
-            await core.apply_retry_transition(session, queue_id, retry_count, max_retries)
+            await core.apply_retry_transition(session, queue_id, max_retries)
             await session.commit()
     except Exception:
         s7_provisional_queue_stuck_total.inc()

@@ -21,6 +21,7 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
@@ -28,6 +29,22 @@ import httpx
 
 from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome
 from observability import get_logger  # type: ignore[import-untyped]
+
+
+# Walk up the directory tree to find infra/kafka/schemas/ — works both in
+# development (repo root is a few levels up) and in Docker (schemas copied to
+# /app/infra/kafka/schemas/).  Mirror of the helper in ``article_consumer.py``.
+def _find_schema_dir() -> Path:
+    relative = Path("infra") / "kafka" / "schemas"
+    for base in Path(__file__).resolve().parents:
+        candidate = base / relative
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
+
+
+_SCHEMA_DIR = _find_schema_dir()
+_PROVISIONAL_QUEUED_SCHEMA_PATH = str(_SCHEMA_DIR / "entity.provisional.queued.v1.avsc")
 
 # F-103 fix (2026-04-30): tolerant JSON extractor.
 # DeepInfra/Ollama models occasionally return JSON wrapped in ```json fences```
@@ -524,8 +541,6 @@ class UnresolvedResolutionWorker:
         if self._intel_sf is None:
             return None
 
-        import json
-
         from sqlalchemy import text as sa_text
 
         import common.ids  # type: ignore[import-untyped]
@@ -572,26 +587,39 @@ class UnresolvedResolutionWorker:
         # Hot-path event: emit entity.provisional.queued.v1 so S7 consumer can
         # start enrichment immediately.  Fire-and-forget — producer failure is
         # non-fatal (polling sweep will still pick up the row).
+        #
+        # PLAN-0062: serialized as Confluent-wire-format Avro (5-byte header +
+        # raw Avro payload) so the consumer side decodes via
+        # ``deserialize_confluent_avro`` and the platform's no-JSON-on-Kafka
+        # invariant is preserved.  See ``CanonicalEntityProvisionalQueued`` in
+        # ``libs/contracts`` for the typed model and the alignment tests.
         if self._direct_producer is not None:
+            from contracts.events.kg.provisional_queued import (  # type: ignore[import-untyped]
+                CanonicalEntityProvisionalQueued,
+            )
+            from messaging.kafka.serialization_utils import (  # type: ignore[import-untyped]
+                serialize_confluent_avro,
+            )
+
             normalized_surface = (mention.mention_text or "").lower().strip()
-            event_payload = json.dumps(
-                {
-                    "event_id": str(common.ids.new_uuid7()),
-                    "event_type": "entity.provisional.queued",
-                    "schema_version": 1,
-                    "occurred_at": common.time.utc_now().isoformat(),
-                    "queue_id": str(queue_id),
-                    "normalized_surface": normalized_surface,
-                    "mention_class": mention_class_value,
-                    "source_doc_id": str(mention.doc_id) if mention.doc_id else None,
-                    "correlation_id": None,
-                }
-            ).encode()
+            event_model = CanonicalEntityProvisionalQueued(
+                event_id=str(common.ids.new_uuid7()),
+                occurred_at=common.time.utc_now().isoformat(),
+                queue_id=str(queue_id),
+                normalized_surface=normalized_surface,
+                mention_class=mention_class_value,
+                source_doc_id=str(mention.doc_id) if mention.doc_id else None,
+                correlation_id=None,
+            )
             try:
+                event_bytes = serialize_confluent_avro(
+                    _PROVISIONAL_QUEUED_SCHEMA_PATH,
+                    event_model.to_dict(),
+                )
                 self._direct_producer.produce_bytes(
                     topic=self._settings.kafka_topic_provisional_queued,
                     key=normalized_surface.encode(),
-                    value=event_payload,
+                    value=event_bytes,
                 )
             except Exception:
                 logger.warning(

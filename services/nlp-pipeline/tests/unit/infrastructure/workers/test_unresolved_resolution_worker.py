@@ -1192,9 +1192,17 @@ class TestEnqueueKafkaEmit:
         producer.produce_bytes.assert_called_once()
         call_kwargs = producer.produce_bytes.call_args.kwargs
         assert call_kwargs["topic"] == settings.kafka_topic_provisional_queued
-        import json
 
-        payload = json.loads(call_kwargs["value"])
+        # PLAN-0062: payload is now Confluent-wire-format Avro (5-byte header +
+        # raw Avro body), not JSON.  Decode via the same helper the consumer
+        # uses so the test enforces producer/consumer alignment end-to-end.
+        from nlp_pipeline.infrastructure.workers.unresolved_resolution_worker import (
+            _PROVISIONAL_QUEUED_SCHEMA_PATH,
+        )
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        payload = deserialize_confluent_avro(_PROVISIONAL_QUEUED_SCHEMA_PATH, call_kwargs["value"])
         assert payload["queue_id"] == str(queue_id)
         # mention_class is already a string (mention.mention_class is set to enum.value in _make_mention)
         assert payload["mention_class"] == mention.mention_class

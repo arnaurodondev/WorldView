@@ -100,3 +100,8 @@ s7_provisional_queue_stuck_total = Counter(
     "s7_provisional_queue_stuck_total",
     "Total provisional entity queue rows stuck in 'processing' due to retry transition failure.",
 )
+
+s7_provisional_stuck_recovered_total = Counter(
+    "s7_provisional_stuck_recovered_total",
+    "Provisional queue rows recovered by stale-processing sweep (reset 'processing'->'pending').",
+)

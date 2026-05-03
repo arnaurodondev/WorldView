@@ -32,6 +32,7 @@ from uuid import UUID
 from knowledge_graph.infrastructure.metrics.prometheus import (
     s7_provisional_enrichment_failed_total,
     s7_provisional_enrichment_success_total,
+    s7_provisional_stuck_recovered_total,
 )
 from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 from observability import get_logger  # type: ignore[import-untyped]
@@ -115,6 +116,7 @@ class ProvisionalEnrichmentWorker:
         async with self._sf() as session:
             recovered = await self._recover_stale_processing_rows(session)
         if recovered:
+            s7_provisional_stuck_recovered_total.inc()
             logger.info(  # type: ignore[no-any-return]
                 "provisional_enrichment_recovery_swept",
                 recovered=recovered,
@@ -289,7 +291,7 @@ WHERE status = 'processing'
             {"max_retries": self._max_retries},
         )
         await session.commit()
-        return result.rowcount  # type: ignore[no-any-return]
+        return int(result.rowcount or 0)
 
     async def _apply_retry(
         self,
@@ -303,7 +305,11 @@ WHERE status = 'processing'
         counter here so test patch paths (which mock this module's counter) remain
         unchanged.
         """
-        transitioned_to_failed = await core.apply_retry_transition(session, queue_id, retry_count, self._max_retries)
+        # retry_count is unused — kept in the signature for backward-compatibility
+        # with the worker's existing call sites; core.apply_retry_transition reads
+        # the count atomically from the DB.
+        del retry_count
+        transitioned_to_failed = await core.apply_retry_transition(session, queue_id, self._max_retries)
         if transitioned_to_failed:
             s7_provisional_enrichment_failed_total.inc()
 

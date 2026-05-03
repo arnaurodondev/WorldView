@@ -1136,6 +1136,40 @@ services:
       retries: 3
       start_period: 10s
 
+  # Hot-path provisional-entity enrichment consumer (PLAN-0061 Wave E + PLAN-0062 Wave C).
+  # Reacts to entity.provisional.queued.v1 events emitted by S6 UnresolvedResolutionWorker
+  # so newly-discovered provisional entities are enriched without waiting for the 5-min
+  # ProvisionalEnrichmentWorker polling sweep.
+  knowledge-graph-provisional-queued-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command:
+      [
+        "python",
+        "-m",
+        "knowledge_graph.infrastructure.messaging.consumers.provisional_queued_consumer_main",
+      ]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
   knowledge-graph-entity-consumer:
     build:
       context: ../..
