@@ -1,6 +1,6 @@
 """Architecture test: Kafka consumers must use Avro for the wire format.
 
-Per platform principle (PLAN-0062, Hard Rule 18): every Kafka topic's contract
+Per platform principle (PLAN-0062, Hard Rule R28): every Kafka topic's contract
 MUST be defined as an Avro schema in ``infra/kafka/schemas/`` AND deserialized
 via ``deserialize_confluent_avro`` (or ``deserialize_avro``) in the consumer's
 ``deserialize_value`` method.  Pure ``json.loads`` consumers are forbidden —
@@ -116,7 +116,7 @@ def _discover_consumer_files() -> list[Path]:
 
 class TestKafkaAvroEnforcement:
     def test_no_json_only_consumers(self) -> None:
-        """Hard Rule 18: pure-JSON Kafka consumers are forbidden.
+        """Hard Rule R28: pure-JSON Kafka consumers are forbidden.
 
         Wave D-1 removed the baseline escape hatch — every consumer must
         decode via Avro (with optional JSON fallback for legacy messages).
@@ -130,13 +130,13 @@ class TestKafkaAvroEnforcement:
                 violations.append(
                     f"  {rel}\n"
                     "    deserialize_value uses json.loads with no Avro path. "
-                    "Hard Rule 18 forbids pure-JSON Kafka consumers — switch to "
+                    "Hard Rule R28 forbids pure-JSON Kafka consumers — switch to "
                     "deserialize_confluent_avro (Avro on the wire) with an "
                     "optional JSON fallback for legacy payloads."
                 )
 
         assert not violations, (
-            "\n[KAFKA-AVRO] Pure-JSON Kafka consumers are forbidden under Hard Rule 18 "
+            "\n[KAFKA-AVRO] Pure-JSON Kafka consumers are forbidden under Hard Rule R28 "
             f"({len(violations)} file(s)):\n" + "\n".join(violations)
         )
 
