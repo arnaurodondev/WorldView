@@ -246,6 +246,56 @@ class TestDirtiedEmit:
 
 
 # ---------------------------------------------------------------------------
+# PLAN-0062 Avro deserialization
+# ---------------------------------------------------------------------------
+
+
+class TestAvroDeserialization:
+    """deserialize_value must accept Confluent-Avro and (legacy) JSON payloads."""
+
+    def test_decodes_confluent_avro_payload(self) -> None:
+        """A round-trip through serialize_confluent_avro / deserialize_value yields the original dict."""
+        from knowledge_graph.infrastructure.messaging.consumers.provisional_queued_consumer import (
+            _PROVISIONAL_QUEUED_SCHEMA_PATH,
+        )
+
+        from messaging.kafka.serialization_utils import serialize_confluent_avro
+
+        _, factory = _make_session_factory(pending_row=None)
+        consumer = _make_consumer(factory)
+
+        record = {
+            "event_id": "01900000-0000-7000-0000-000000000001",
+            "event_type": "entity.provisional.queued",
+            "schema_version": 1,
+            "occurred_at": "2026-05-03T12:00:00+00:00",
+            "queue_id": str(_QUEUE_ID),
+            "normalized_surface": "apple inc.",
+            "mention_class": "financial_instrument",
+            "source_doc_id": None,
+            "correlation_id": None,
+        }
+        wire_bytes = serialize_confluent_avro(_PROVISIONAL_QUEUED_SCHEMA_PATH, record)
+
+        decoded = consumer.deserialize_value(wire_bytes)  # type: ignore[union-attr]
+
+        assert decoded["queue_id"] == str(_QUEUE_ID)
+        assert decoded["normalized_surface"] == "apple inc."
+        assert decoded["mention_class"] == "financial_instrument"
+
+    def test_falls_back_to_json_for_legacy_payload(self) -> None:
+        """A pre-PLAN-0062 JSON payload (no magic byte) is still accepted."""
+        import json as _json
+
+        _, factory = _make_session_factory(pending_row=None)
+        consumer = _make_consumer(factory)
+
+        legacy = _json.dumps({"event_id": "x", "queue_id": str(_QUEUE_ID)}).encode()
+        decoded = consumer.deserialize_value(legacy)  # type: ignore[union-attr]
+        assert decoded["queue_id"] == str(_QUEUE_ID)
+
+
+# ---------------------------------------------------------------------------
 # P-1: init warning when direct_producer is None
 # ---------------------------------------------------------------------------
 
