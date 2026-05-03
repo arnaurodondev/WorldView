@@ -2,7 +2,7 @@
 id: PLAN-0062
 title: Kafka Avro Enforcement — Migrate Remaining JSON Consumers to Avro Wire Format
 prd: platform-principle/2026-05-03-no-json-on-kafka
-status: draft
+status: completed
 created: 2026-05-03
 updated: 2026-05-03
 ---
@@ -52,7 +52,8 @@ This plan tracks the migration of those three.
 All three target topics already have Avro schemas registered. The work is to
 align the **runtime serialization** with the existing schemas.
 
-## Wave A — Migrate `entity.canonical.created.v1` (knowledge-graph entity_consumer)
+## Wave A — Migrate `entity.canonical.created.v1` (knowledge-graph entity_consumer) ✅
+**Status**: **DONE** — 2026-05-03 · 6 contracts + 2 entity-consumer + 747 KG unit tests pass · ruff + mypy clean
 
 **Why first:** Lowest blast radius. Producer is the same service
 (knowledge-graph outbox writes the event after `persist_enrichment`), consumer
@@ -70,7 +71,8 @@ no cross-team coordination.
 
 **Validation gate:** knowledge-graph + libs/contracts unit tests + architecture tests all green.
 
-## Wave B — Migrate `nlp.article.enriched.v1` (knowledge-graph enriched_consumer)
+## Wave B — Migrate `nlp.article.enriched.v1` (knowledge-graph enriched_consumer) ✅
+**Status**: **DONE** — 2026-05-03 · 7 contracts + 15 enriched-consumer + 677 nlp-pipeline unit tests pass · schema additively extended with `raw_relations_json`/`raw_events_json`/`raw_claims_json` (forward-compat per HR-011) · ruff + mypy clean
 
 **Why second:** The producer is nlp-pipeline (cross-service), so the migration
 must coordinate the producer cutover with the consumer cutover. The
@@ -90,7 +92,8 @@ the consumer first, then the producer.
 **Deployment order:** ship Wave B in two PRs — consumer first (safe because of
 the JSON fallback), producer second.
 
-## Wave C — Migrate `intelligence.contradiction.v1` (alert intelligence_consumer)
+## Wave C — Migrate `intelligence.contradiction.v1` (alert intelligence_consumer) ✅
+**Status**: **DONE** — 2026-05-03 · 4 contracts + 3 intelligence-consumer + 435 alert unit tests pass · `JSON_CONSUMER_BASELINE` is now `{}` · ruff + mypy clean
 
 **Why last:** This consumer is the single most complex JSON parser in the
 JSON_ONLY set — it dispatches on `event_type` to multiple `AlertType` codes.
@@ -107,7 +110,8 @@ We migrate it last so the pattern is settled by the time we touch alert.
 
 **Validation gate:** alert + knowledge-graph + libs/contracts + architecture tests all green; `JSON_CONSUMER_BASELINE` is empty.
 
-## Wave D — Lock the door
+## Wave D — Lock the door ✅
+**Status**: **DONE** — 2026-05-03 · architecture test unconditional (no baseline lookup), R28 added to RULES.md, STANDARDS.md §3.7.1 documents the producer/consumer contract, BP-313 added to BUG_PATTERNS.md · 2 architecture tests pass
 
 Once the baseline is empty, harden the architecture test:
 
