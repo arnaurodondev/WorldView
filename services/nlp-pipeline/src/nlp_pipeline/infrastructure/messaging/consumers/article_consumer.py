@@ -954,6 +954,16 @@ async def _enqueue_enriched(
     raw_events = _build_raw_events(extraction_result.get("events", []), entity_id_by_ref, provisional_refs)
     raw_claims = _build_raw_claims(extraction_result.get("claims", []), entity_id_by_ref, provisional_refs)
 
+    # PLAN-0062 Wave B: encode raw_* arrays as JSON strings transported through
+    # the Avro envelope.  Defining nested record schemas for relations/events/
+    # claims would be brittle (the LLM output dicts have many optional fields)
+    # and slow to evolve — JSON-string transport keeps the wire format flat
+    # while still gaining schema enforcement on the metadata fields.  KG
+    # ``EnrichedArticleConsumer`` JSON-decodes these back into RawRelation /
+    # RawEvent / RawClaim dataclasses.
+    from contracts.events.nlp.article_enriched import encode_raw_array  # type: ignore[import-untyped]
+    from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
+
     payload: dict[str, Any] = {
         "event_id": str(common.ids.new_uuid7()),
         "event_type": "nlp.article.enriched",
@@ -969,22 +979,21 @@ async def _enqueue_enriched(
         "chunk_count": len(chunks),
         "mention_count": len(mentions),
         "resolved_entity_ids": resolved_ids,
-        # KG-001 fix: include actual extracted data arrays for S7 graph materialization.
-        # Keep counts for backwards compatibility with existing consumers / dashboards.
         "relation_count": len(list(extraction_result.get("relations", []))),
         "claim_count": len(list(extraction_result.get("claims", []))),
         "event_count": len(list(extraction_result.get("events", []))),
-        "raw_relations": raw_relations,
-        "raw_events": raw_events,
-        "raw_claims": raw_claims,
+        "raw_relations_json": encode_raw_array(raw_relations),
+        "raw_events_json": encode_raw_array(raw_events),
+        "raw_claims_json": encode_raw_array(raw_claims),
         "provisional_entity_count": sum(1 for m in mentions if m.resolved_entity_id is None),
         "extraction_model_id": extraction_model_id,
         "correlation_id": correlation_id,
     }
+    schema_path = str(_SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
     await outbox_repo.add(
         topic=settings.topic_article_enriched,
         partition_key=str(doc_id),
-        payload_avro=json.dumps(payload).encode(),
+        payload_avro=serialize_confluent_avro(schema_path, payload),
     )
 
 

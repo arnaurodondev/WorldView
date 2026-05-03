@@ -257,7 +257,15 @@ class TestFullPipeline:
         outbox_add.assert_called_once()
         call_kwargs = outbox_add.call_args.kwargs
         assert call_kwargs["topic"] == "nlp.article.enriched.v1"
-        payload = json.loads(call_kwargs["payload_avro"])
+        # PLAN-0062 Wave B: payload is now Confluent-Avro on the wire.
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import _SCHEMA_DIR
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        wire_bytes = call_kwargs["payload_avro"]
+        assert wire_bytes[:1] == b"\x00"
+        schema_path = str(_SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
+        payload = deserialize_confluent_avro(schema_path, wire_bytes)
         assert payload["doc_id"] == event["doc_id"]
         assert payload["event_type"] == "nlp.article.enriched"
         assert "routing_tier" in payload

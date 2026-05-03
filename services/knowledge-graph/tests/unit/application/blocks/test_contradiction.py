@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -238,8 +237,14 @@ class TestContradictionLinkAndOutbox:
                 outbox_repo=outbox,
             )
         )
+        # PLAN-0062 Wave C: payload is now Confluent-Avro on the wire.
+        from knowledge_graph.application.blocks.contradiction import _CONTRADICTION_SCHEMA_PATH
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
         raw = outbox.append.call_args.kwargs["payload_avro"]
-        payload = json.loads(raw)
+        assert raw[:1] == b"\x00"
+        payload = deserialize_confluent_avro(_CONTRADICTION_SCHEMA_PATH, raw)
         assert payload["is_backfill"] is True
 
     def test_multiple_opposing_claims_produce_multiple_links(self) -> None:

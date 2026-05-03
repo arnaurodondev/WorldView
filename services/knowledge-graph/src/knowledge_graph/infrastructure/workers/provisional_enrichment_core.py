@@ -12,6 +12,7 @@ acquire a new session for persist_enrichment.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -21,6 +22,20 @@ from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embeddin
     EntityEmbeddingStateRepository,
 )
 from observability import get_logger  # type: ignore[import-untyped]
+
+
+def _find_schema_dir() -> Path:
+    """Locate ``infra/kafka/schemas/`` whether running locally or in Docker."""
+    relative = Path("infra") / "kafka" / "schemas"
+    for base in Path(__file__).resolve().parents:
+        candidate = base / relative
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
+
+
+_SCHEMA_DIR = _find_schema_dir()
+_ENTITY_CANONICAL_CREATED_SCHEMA_PATH = str(_SCHEMA_DIR / "entity.canonical.created.v1.avsc")
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -127,8 +142,6 @@ async def persist_enrichment(
 
     Session-only — no external HTTP/LLM calls (ARCH-003).
     """
-    import json
-
     from sqlalchemy import text
 
     from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
@@ -140,6 +153,7 @@ async def persist_enrichment(
     from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
         OutboxRepository,
     )
+    from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
 
     canonical_name: str = profile.get("canonical_name") or mention_text
     entity_type: str = profile.get("entity_type") or str(profile.get("mention_class", "unknown"))
@@ -195,15 +209,25 @@ WHERE provisional_queue_id = :queue_id
     )
 
     outbox_repo = OutboxRepository(session)
-    payload = json.dumps(
-        {
-            "event_id": str(new_uuid7()),
-            "entity_id": str(entity_id),
-            "canonical_name": canonical_name,
-            "entity_type": entity_type,
-            "provisional_queue_id": str(queue_id),
-        },
-    ).encode()
+    # PLAN-0062 Wave A: write Confluent-Avro wire-format bytes (5-byte header +
+    # Avro body) so the consumer can decode via deserialize_confluent_avro.
+    # All schema fields must be present — Avro encoding is strict on missing
+    # required fields (event_id, occurred_at, entity_id, canonical_name,
+    # entity_type, provisional_queue_id).  ``alias_texts`` defaults to [] in
+    # the schema; we still emit it explicitly for clarity.
+    record: dict[str, Any] = {
+        "event_id": str(new_uuid7()),
+        "event_type": "entity.canonical.created",
+        "schema_version": 1,
+        "occurred_at": utc_now().isoformat(),
+        "entity_id": str(entity_id),
+        "canonical_name": canonical_name,
+        "entity_type": entity_type,
+        "provisional_queue_id": str(queue_id),
+        "alias_texts": [canonical_name, *([ticker.upper()] if ticker else []), *([isin.upper()] if isin else [])],
+        "correlation_id": None,
+    }
+    payload = serialize_confluent_avro(_ENTITY_CANONICAL_CREATED_SCHEMA_PATH, record)
 
     await outbox_repo.append(
         topic="entity.canonical.created.v1",
