@@ -1,27 +1,34 @@
-"use client";
+"use client"; // WHY: useForm + useMutation both require browser-side state and event handlers
 
 /**
  * features/portfolio/components/CreatePortfolioDialog.tsx
  *
- * Modal for creating a new manually-managed portfolio.
+ * WHY THIS EXISTS: Modal for creating a new manually-managed portfolio.
  *
- * WHY a separate component (extracted from portfolio/page.tsx in PLAN-0059
- * Wave E-2): isolating dialog state (name input, loading, error) keeps the
- * parent page component lean and the dialog independently testable. The
- * dialog has its own mini state machine: idle → submitting → success/error.
+ * Extracted from portfolio/page.tsx in PLAN-0059 Wave E-2 to isolate dialog
+ * state from the parent page. Migrated to RHF + Zod in PLAN-0059 F-2 to fix:
+ *   - BP-329: currency free-text input accepted invalid ISO 4217 codes ("FAKE",
+ *     "XYZ"). The user saw no error; S1 rejected it with a cryptic 422.
+ *   - BP-330: missing aria-invalid + aria-describedby on form fields — screen
+ *     readers couldn't announce field errors.
  *
  * DATA FLOW:
- *   1. User types a portfolio name
- *   2. On submit → calls gateway.createPortfolio(name)
- *   3. On success → calls onSuccess(newPortfolio) so the page can select it
- *   4. Parent invalidates ["portfolios"] query → TanStack Query refetches the list
+ *   1. User fills in name + selects currency from a constrained Select.
+ *   2. handleSubmit calls zodResolver validation — inline errors appear if invalid.
+ *   3. On valid data → calls gateway.createPortfolio(name, currency).
+ *   4. On success → onSuccess(newPortfolio) so the page selects the new portfolio.
+ *   5. Parent invalidates ["portfolios"] query → TanStack Query refetches the list.
  *
- * WHY onOpenChange instead of onClose: shadcn Dialog uses onOpenChange(false)
- * to signal close — from both the X button and the overlay click. This pattern
- * is idiomatic for shadcn dialogs throughout this app.
+ * WHY useForm instead of raw useState: three benefits over the old approach:
+ *   1. Per-field validation errors without full re-renders on every keystroke.
+ *   2. `isDirty` / `isValid` flags guard the submit button with zero extra state.
+ *   3. Zod schema is the single source of truth for both type and validation —
+ *      no divergence between "what the server expects" and "what we validate".
  */
 
-import { useState, useCallback } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { createGateway } from "@/lib/gateway";
 import type { Portfolio } from "@/types/api";
 import {
@@ -33,7 +40,69 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+
+// ── Validation schema ──────────────────────────────────────────────────────
+
+/**
+ * WHY z.enum for currency (not z.string): an enum constrains the value to the
+ * 12 known ISO 4217 + crypto codes at compile time AND runtime. This was the
+ * root cause of BP-329 — the old free-text Input let users type anything,
+ * which S1 then rejected as a 422 with no user-visible error.
+ */
+const CURRENCIES = [
+  "USD", "EUR", "GBP", "JPY", "CHF",
+  "CAD", "AUD", "CNY", "HKD", "KRW",
+  "BTC", "ETH",
+] as const;
+
+// Type so the Select items array is typed and exhaustive.
+type CurrencyCode = typeof CURRENCIES[number];
+
+const CURRENCY_LABELS: Record<CurrencyCode, string> = {
+  USD: "USD — US Dollar ($)",
+  EUR: "EUR — Euro (€)",
+  GBP: "GBP — Pound Sterling (£)",
+  JPY: "JPY — Japanese Yen (¥)",
+  CHF: "CHF — Swiss Franc",
+  CAD: "CAD — Canadian Dollar",
+  AUD: "AUD — Australian Dollar",
+  CNY: "CNY — Chinese Yuan",
+  HKD: "HKD — Hong Kong Dollar",
+  KRW: "KRW — Korean Won",
+  BTC: "BTC — Bitcoin (₿)",
+  ETH: "ETH — Ether",
+};
+
+const portfolioSchema = z.object({
+  name: z
+    .string()
+    .min(1, "Name is required")
+    .max(100, "Max 100 characters"),
+  currency: z.enum(CURRENCIES, {
+    // WHY custom errorMap: the default "Invalid enum value" message isn't
+    // user-friendly. "Select a currency" matches the field label.
+    errorMap: () => ({ message: "Select a currency" }),
+  }),
+});
+
+type PortfolioFormValues = z.infer<typeof portfolioSchema>;
+
+// ── Component ──────────────────────────────────────────────────────────────
 
 export interface CreatePortfolioDialogProps {
   open: boolean;
@@ -48,166 +117,159 @@ export function CreatePortfolioDialog({
   onSuccess,
   accessToken,
 }: CreatePortfolioDialogProps) {
-  // Local form state — only lives while the dialog is mounted.
-  const [name, setName] = useState("");
-  const [currency, setCurrency] = useState("USD");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const form = useForm<PortfolioFormValues>({
+    resolver: zodResolver(portfolioSchema),
+    defaultValues: {
+      name: "",
+      // WHY USD default: the overwhelming majority of users are USD-denominated.
+      // Defaulting saves a click for 90%+ of users.
+      currency: "USD",
+    },
+  });
 
-  // handleSubmit — async handler that calls S9 POST /v1/portfolios.
-  const handleSubmit = useCallback(async () => {
-    // WHY trim + guard: whitespace-only names would pass server validation
-    // but look wrong in the UI. Catch it client-side for instant feedback
-    // (no network round-trip).
-    const trimmedName = name.trim();
-    if (!trimmedName) {
-      setError("Portfolio name is required.");
-      return;
-    }
+  // Server-level error (not a field validation error, e.g. "portfolio already exists").
+  // WHY track separately from field errors: Zod field errors live in form.formState.errors;
+  // network errors come back after submission and don't map to a field.
+  const serverError = form.formState.errors.root?.serverError?.message;
 
-    setIsSubmitting(true);
-    setError(null);
-
+  async function onSubmit(values: PortfolioFormValues) {
     try {
-      // createPortfolio sends POST /v1/portfolios to S9, which injects
-      // owner_user_id from the JWT claim before forwarding to S1. We only
-      // send name + currency.
       const newPortfolio = await createGateway(accessToken).createPortfolio(
-        trimmedName,
-        currency,
+        values.name.trim(),
+        values.currency,
       );
-
-      // Reset form state before closing so the dialog is clean on next open.
-      setName("");
-      setCurrency("USD");
-      setError(null);
-
-      // Notify parent: it will invalidate ["portfolios"] and select the new portfolio.
+      form.reset();
       onSuccess(newPortfolio);
     } catch (err) {
-      // WHY string cast: GatewayError.message is a string, but unknown
-      // errors may not be. Extract the message or fall back to a generic
-      // string rather than crashing.
       const message =
         err instanceof Error ? err.message : "Failed to create portfolio.";
-      setError(message);
-    } finally {
-      // Always clear loading state, even if the request failed.
-      setIsSubmitting(false);
+      // WHY setError on root.serverError: RHF has no built-in "form-level" error
+      // slot. Using `root.serverError` is the recommended convention from the
+      // RHF docs for non-field API errors.
+      form.setError("root.serverError" as "root", { message });
     }
-  }, [name, currency, accessToken, onSuccess]);
+  }
 
   // handleOpenChange — reset form when dialog is closed externally (X or overlay).
-  const handleOpenChange = useCallback(
-    (nextOpen: boolean) => {
-      if (!nextOpen) {
-        // Don't reset if a submission is in progress — user may have hit
-        // overlay by accident.
-        if (!isSubmitting) {
-          setName("");
-          setCurrency("USD");
-          setError(null);
-        }
-      }
-      onOpenChange(nextOpen);
-    },
-    [isSubmitting, onOpenChange],
-  );
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen && !form.formState.isSubmitting) {
+      form.reset();
+    }
+    onOpenChange(nextOpen);
+  }
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent
-        // WHY max-w-sm: a portfolio creation form only has 2 fields — it
-        // doesn't need a wide modal. Narrow dialogs feel more intentional
-        // than wide ones.
-        className="max-w-sm bg-card border-border"
-      >
+      <DialogContent className="max-w-sm bg-card border-border">
         <DialogHeader>
           <DialogTitle className="text-[13px] font-mono uppercase tracking-[0.08em]">
             New Portfolio
           </DialogTitle>
         </DialogHeader>
 
-        {/* ── Form fields ───────────────────────────────────────────── */}
-        <div className="space-y-4 py-2">
-          {/* Portfolio name */}
-          <div className="space-y-1.5">
-            <Label
-              htmlFor="portfolio-name"
-              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
-            >
-              Name
-            </Label>
-            <Input
-              id="portfolio-name"
-              placeholder="e.g. Main Portfolio"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              // WHY onKeyDown: allow pressing Enter to submit (standard form
-              // UX). Avoid wrapping in a <form> element since we're inside a
-              // Dialog with its own focus management — nested form elements
-              // cause accessibility issues.
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !isSubmitting) void handleSubmit();
-              }}
-              disabled={isSubmitting}
-              // WHY autoFocus: the modal just opened and the name field is
-              // the only required input. Focus it immediately so the user
-              // can start typing.
-              autoFocus
-              className="h-8 text-[12px] font-mono bg-background border-border"
+        {/* Form is the RHF FormProvider — all FormField children can access
+            form state without props. WHY no <form> element: shadcn Dialog
+            manages its own focus trap; nesting a <form> element causes a11y
+            violations (interactive element inside focusTrap dialog). Instead
+            we call form.handleSubmit on the button click. */}
+        <Form {...form}>
+          <div className="space-y-4 py-2">
+            {/* Portfolio name */}
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground">
+                    Name
+                  </FormLabel>
+                  <FormControl>
+                    <Input
+                      placeholder="e.g. Main Portfolio"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !form.formState.isSubmitting) {
+                          void form.handleSubmit(onSubmit)();
+                        }
+                      }}
+                      className="h-8 text-[12px] font-mono bg-background border-border"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
             />
+
+            {/* Currency — constrained Select instead of free-text (BP-329 fix).
+                WHY Select over free-text Input: S1 validates currency against
+                the ISO 4217 + crypto allow-list. A Select eliminates the entire
+                class of "user typed an unsupported code" errors at the source. */}
+            <FormField
+              control={form.control}
+              name="currency"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground">
+                    Currency
+                  </FormLabel>
+                  <FormControl>
+                    <Select
+                      value={field.value}
+                      onValueChange={field.onChange}
+                      disabled={form.formState.isSubmitting}
+                    >
+                      <SelectTrigger className="h-8 text-[11px] font-mono bg-background border-border w-full">
+                        <SelectValue placeholder="Select currency" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CURRENCIES.map((code) => (
+                          <SelectItem
+                            key={code}
+                            value={code}
+                            className="text-[11px] font-mono"
+                          >
+                            {CURRENCY_LABELS[code]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Server-level error (network failure, S1 422, etc.) */}
+            {serverError && (
+              <p role="alert" className="text-[11px] text-destructive font-mono">
+                {serverError}
+              </p>
+            )}
           </div>
 
-          {/* Currency — defaults to USD; most users won't change this */}
-          <div className="space-y-1.5">
-            <Label
-              htmlFor="portfolio-currency"
-              className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground"
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => handleOpenChange(false)}
+              disabled={form.formState.isSubmitting}
+              className="text-[11px] font-mono"
             >
-              Currency
-            </Label>
-            <Input
-              id="portfolio-currency"
-              placeholder="USD"
-              value={currency}
-              onChange={(e) => setCurrency(e.target.value.toUpperCase())}
-              disabled={isSubmitting}
-              maxLength={3}
-              // WHY toUpperCase(): S1 validates that currency is a 3-letter
-              // uppercase code. Convert on change so the user can type
-              // lowercase without errors.
-              className="h-8 text-[12px] font-mono bg-background border-border w-24"
-            />
-          </div>
-
-          {/* Inline error — only shown when submission fails */}
-          {error && (
-            <p className="text-[11px] text-destructive font-mono">{error}</p>
-          )}
-        </div>
-
-        <DialogFooter className="gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => handleOpenChange(false)}
-            disabled={isSubmitting}
-            className="text-[11px] font-mono"
-          >
-            Cancel
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => void handleSubmit()}
-            disabled={isSubmitting || !name.trim()}
-            // WHY font-mono: all action text in terminal UI uses monospace
-            // for consistency.
-            className="text-[11px] font-mono"
-          >
-            {isSubmitting ? "Creating…" : "Create Portfolio"}
-          </Button>
-        </DialogFooter>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void form.handleSubmit(onSubmit)()}
+              disabled={form.formState.isSubmitting}
+              className="text-[11px] font-mono"
+            >
+              {form.formState.isSubmitting ? "Creating…" : "Create Portfolio"}
+            </Button>
+          </DialogFooter>
+        </Form>
       </DialogContent>
     </Dialog>
   );

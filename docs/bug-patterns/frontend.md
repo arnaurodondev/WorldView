@@ -767,3 +767,49 @@ vi.mock("react", async (importOriginal) => {
 **Regression test**: `apps/worldview-web/__tests__/screener.test.tsx` — sort tests "clicking sorted column again changes sort to descending" and "clicking column third time clears sort (back to none)". Previously failed ~60% of full-suite runs; now stable.
 
 ---
+
+## BP-335 — `z.number()` Without `.optional()` Silently Blocks RHF Submit for Empty Optional Fields
+
+**Category**: Frontend
+**Symptom**: An RHF form that uses `zodResolver` has an optional numeric field (e.g. "Avg Price (optional)"). When the field is left empty, the form never calls `onSubmit` — no network request is made, no error is shown, the submit button just does nothing.
+**Root cause**: `z.number()` (and its modifiers `.positive()`, `.nonnegative()`) expects a JavaScript `number` at runtime. An empty form field stores `undefined` in RHF. Zod rejects `undefined` with `invalid_type_error: "Must be a number"`, which counts as a validation failure and causes `handleSubmit` to call `onError` (silently, if no `onError` handler is wired) instead of `onSubmit`.
+
+**Fix**: Add `.optional()` to any schema field whose UI label says "(optional)":
+```ts
+avgPrice: z
+  .number({ invalid_type_error: "Must be a number" })
+  .nonnegative("Must be 0 or greater")
+  .optional(),  // WHY: undefined is valid; onSubmit coalesces to 0 with `?? 0`
+```
+
+**Prevention**: Whenever a form field has "(optional)" in its label or is not required by the API, the Zod field must include `.optional()`. A field that is required at the Zod layer but optional in the UI will silently block submit.
+
+**Fixed in**: `features/portfolio/components/AddPositionDialog.tsx` (`avgPrice`) — PLAN-0059 F-2.
+
+---
+
+## BP-336 — `user.tab()` Inside Radix Dialog Focus Trap Does Not Reliably Fire Blur in jsdom
+
+**Category**: Frontend
+**Symptom**: Tests that drive a `NumberInput` (or any commit-on-blur input) inside a Radix `Dialog` fail intermittently or consistently: the `onValueChange` callback is never called even though `user.type()` and `user.tab()` appear correct. The form's RHF field stays `undefined`, Zod validation fails, and gateway mocks are never called.
+**Root cause**: `NumberInput` commits its parsed value via `onBlur`. `@testing-library/user-event` v14's `user.tab()` fires a synthetic Tab keydown, then programmatically moves focus. However, Radix UI's `@radix-ui/react-focus-trap` intercepts Tab keypresses for focus-scope management. Inside a Dialog, this focus-trap may call `event.stopPropagation()` or route focus in a way that prevents the blur event from landing on the currently-focused input element in jsdom's simulated DOM environment.
+
+**Fix**: Use `fireEvent.blur` (wrapped in `act`) instead of `user.tab()` to commit a NumberInput inside a Dialog:
+```tsx
+import { render, screen, fireEvent, act } from "@testing-library/react";
+
+async function fillNumberInput(user: ReturnType<typeof userEvent.setup>, label: string, value: string) {
+  const input = screen.getByRole("textbox", { name: label });
+  await user.clear(input);
+  await user.type(input, value);
+  // WHY fireEvent.blur not user.tab(): Radix Dialog focus-trap intercepts Tab
+  // and may not fire blur on the current element in jsdom.
+  await act(async () => { fireEvent.blur(input); });
+}
+```
+
+**Prevention**: Any test for a NumberInput (or other commit-on-blur input) rendered inside a Radix Dialog, Sheet, or Popover should use `fireEvent.blur` to commit the value, not keyboard navigation.
+
+**Regression test**: `apps/worldview-web/__tests__/add-position-dialog.test.tsx` — `fillQuantity()` helper uses `fireEvent.blur` — PLAN-0059 F-2.
+
+---
