@@ -380,6 +380,7 @@ async def materialize_graph(
             is_backfill=rel.is_backfill or is_backfill,
             entity_provisional=rel.entity_provisional,
             provisional_queue_id=rel.provisional_queue_id,
+            evidence_text=rel.evidence_text,
         )
         evidence_count += 1
         affected_entity_ids.add(rel.subject_entity_id)

@@ -18,10 +18,10 @@
 | [Auth & Security](bug-patterns/auth-security.md) | `bug-patterns/auth-security.md` | 28 | JWT/OIDC, SSRF, XSS, tenant isolation, CSP, middleware |
 | [Testing](bug-patterns/testing.md) | `bug-patterns/testing.md` | 26 | pytest, AsyncMock, fixtures, Vitest, pre-commit, CI |
 | [Frontend](bug-patterns/frontend.md) | `bug-patterns/frontend.md` | 29 | React, Next.js, WebSocket/SSE, TypeScript, CSS |
-| [Config & Docker](bug-patterns/config-docker.md) | `bug-patterns/config-docker.md` | 28 | pydantic-settings, Docker, Compose, env vars, images |
+| [Config & Docker](bug-patterns/config-docker.md) | `bug-patterns/config-docker.md` | 29 | pydantic-settings, Docker, Compose, env vars, images |
 | [ML & LLM](bug-patterns/ml-llm.md) | `bug-patterns/ml-llm.md` | 26 | Ollama, GLiNER, DeepInfra, embeddings, LLM prompt patterns |
 | [Observability](bug-patterns/observability.md) | `bug-patterns/observability.md` | 9 | Prometheus, Grafana, Alertmanager, structlog, OTel |
-| [Workers & Schedulers](bug-patterns/worker-scheduler.md) | `bug-patterns/worker-scheduler.md` | 36 | task scheduling, lease patterns, backfill, watermarks, rate limiting |
+| [Workers & Schedulers](bug-patterns/worker-scheduler.md) | `bug-patterns/worker-scheduler.md` | 37 | task scheduling, lease patterns, backfill, watermarks, rate limiting |
 | [API & Contracts](bug-patterns/api-contracts.md) | `bug-patterns/api-contracts.md` | 21 | FastAPI, Pydantic, API contract drift, PRD assumptions, gateways |
 
 ---
@@ -337,6 +337,8 @@
 | BP-340 | S9 gateway hardcodes `event_type="economic"` but S7 stores macro events as `EventType.MACRO="macro"` — enum value mismatch produces silently-empty API response despite data existing in DB | Data & Storage | [bug-patterns/data-storage.md](bug-patterns/data-storage.md#bp-340) |
 | BP-341 | Scheduler workers call internal services without X-Internal-JWT → 401; must generate HS256 system JWT at client construction (pattern: `_system_jwt_headers()` with `dev-skip-verification-key-*`) | Auth & Security | [bug-patterns/auth-security.md](bug-patterns/auth-security.md#bp-341) |
 | BP-342 | KG entity_id ≠ market-data instrument_id — FundamentalsRefreshWorker passed entity_id to market-data REST API → 404; must resolve ticker→instrument_id via `/instruments/symbol/{ticker}` first | API & Contracts | [bug-patterns/api-contracts.md](bug-patterns/api-contracts.md#bp-342) |
+| BP-343 | SummaryWorker (13C) always returns 0 summaries — `relation_evidence` immutable table permanently empty because `insert_immutable()` has zero callers; evidence_text silently dropped in `insert_raw()` because `relation_evidence_raw` had no `evidence_text` column | Workers & Schedulers | [bug-patterns/worker-scheduler.md](bug-patterns/worker-scheduler.md#bp-343) |
+| BP-344 | AGE SyncWorker returns immediately with no-op — `KNOWLEDGE_GRAPH_CYPHER_ENABLED=false` in docker.env gates a fully-implemented worker; fix: set `true` in docker.env and rebuild | Config & Docker | [bug-patterns/config-docker.md](bug-patterns/config-docker.md#bp-344) |
 
 ---
 
