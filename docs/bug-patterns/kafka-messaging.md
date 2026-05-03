@@ -1178,3 +1178,54 @@ whose `deserialize_value` body uses `json.loads` with no Avro call.
 ---
 
 ---
+
+### BP-345: NLP Evidence Text Silently Dropped from Relation Dicts
+
+**Category**: Kafka & Messaging
+**Severity**: HIGH
+**First seen**: 2026-05-03
+**Services**: nlp-pipeline, knowledge-graph
+
+**Symptoms**:
+- All `relation_evidence_raw` rows have `evidence_text=NULL`
+- `SummaryWorker` `summary_worker_complete summaries_created=0` (fallback produces no summaries)
+- `enriched_consumer_null_evidence_text` warnings fire for every processed article
+
+**Root cause**:
+The LLM extraction prompt (in `libs/prompts/src/prompts/extraction/deep.py`) explicitly instructs the LLM to include `"evidence_text": "..."` for each relation, and the LLM complies. But `_build_raw_relations()` in `article_consumer.py` built the output dict with only 5 fields, silently dropping `evidence_text` from the LLM response. The field never reached the `encode_raw_array()` call or the Kafka payload.
+
+**Example**:
+```python
+# Bad — evidence_text silently dropped
+result.append({
+    "subject_entity_id": subject_id,
+    "object_entity_id": object_id,
+    "raw_type": str(rel_d.get("predicate", "")),
+    "extraction_confidence": float(rel_d.get("confidence", 0.5)),
+    "entity_provisional": ...,
+    "provisional_queue_id": ...,
+})
+
+# Good — evidence_text forwarded
+result.append({
+    "subject_entity_id": subject_id,
+    "object_entity_id": object_id,
+    "raw_type": str(rel_d.get("predicate", "")),
+    "extraction_confidence": float(rel_d.get("confidence", 0.5)),
+    "evidence_text": str(rel_d.get("evidence_text", "")) or None,
+    "entity_provisional": ...,
+    "provisional_queue_id": ...,
+})
+```
+
+**Fix**:
+- Add `"evidence_text": str(rel_d.get("evidence_text", "")) or None` to the dict built in `_build_raw_relations()`
+- Add `"evidence_text": {"type": "string"}` to the relations items properties in `_EXTRACTION_SCHEMA` for documentation consistency
+
+**Prevention**:
+- Whenever the LLM extraction schema defines a field for a type (events/claims/relations), explicitly verify the field is forwarded through the entire chain: LLM → output_schema → `_build_raw_*()` → Kafka payload → consumer → DB insert
+- Add a unit test asserting that `evidence_text` is forwarded through `_build_raw_relations()`
+
+**Regression test**: `services/nlp-pipeline/tests/unit/application/blocks/test_deep_extraction.py`
+
+---
