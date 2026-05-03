@@ -15,8 +15,8 @@ Aggregation worker (Wave D-3) skips rows where ``entity_provisional = true``.
 from __future__ import annotations
 
 import dataclasses
-import json
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -25,6 +25,28 @@ from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.application.ports.repositories import (
     TOPIC_GRAPH_STATE_CHANGED,
 )
+
+
+def _find_schema_dir() -> Path:
+    """Locate ``infra/kafka/schemas/`` whether running locally or in Docker.
+
+    Same walk-up strategy used by every producer module in this codebase
+    (see ``contradiction.py``, ``provisional_enrichment_core.py``, …).  PLAN-0062
+    audit follow-up F-006 — F-007 will consolidate this into a shared lib.
+    """
+    relative = Path("infra") / "kafka" / "schemas"
+    for base in Path(__file__).resolve().parents:
+        candidate = base / relative
+        if candidate.is_dir():
+            return candidate
+    return Path(__file__).parents[7] / "infra" / "kafka" / "schemas"
+
+
+# PLAN-0062 audit follow-up F-006: serialize the graph.state.changed.v1 outbox
+# payload to Confluent-Avro wire format instead of JSON.
+_SCHEMA_DIR = _find_schema_dir()
+_GRAPH_STATE_CHANGED_SCHEMA_PATH = str(_SCHEMA_DIR / "graph.state.changed.v1.avsc")
+_ENTITY_DIRTIED_SCHEMA_PATH = str(_SCHEMA_DIR / "entity.dirtied.v1.avsc")
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -223,18 +245,27 @@ def _build_entity_dirtied_payload(
     source_doc_id: UUID,
     correlation_id: str | None,
 ) -> bytes:
-    """Serialize ``entity.dirtied.v1`` payload as JSON bytes."""
-    payload: dict[str, Any] = {
-        "event_id": str(new_uuid7()),
-        "event_type": "entity.dirtied",
-        "schema_version": 1,
-        "occurred_at": utc_now().isoformat(),
-        "entity_id": str(entity_id),
-        "dirty_reason": "new_evidence",
-        "source_doc_id": str(source_doc_id),
-        "correlation_id": correlation_id,
-    }
-    return json.dumps(payload).encode()
+    """Serialize ``entity.dirtied.v1`` as a Confluent-Avro wire-format payload.
+
+    PLAN-0062 R28 fix: migrated from json.dumps to serialize_confluent_avro so
+    that entity.dirtied.v1 uses the Confluent 5-byte wire-format header,
+    consistent with all other producer paths.
+    """
+    from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
+
+    return serialize_confluent_avro(
+        _ENTITY_DIRTIED_SCHEMA_PATH,
+        {
+            "event_id": str(new_uuid7()),
+            "event_type": "entity.dirtied",
+            "schema_version": 1,
+            "occurred_at": utc_now().isoformat(),
+            "entity_id": str(entity_id),
+            "dirty_reason": "new_evidence",
+            "source_doc_id": str(source_doc_id),
+            "correlation_id": correlation_id,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +432,13 @@ async def materialize_graph(
     # ------------------------------------------------------------------
     # 6 — graph.state.changed.v1 via outbox
     # ------------------------------------------------------------------
+    # PLAN-0062 F-006: serialise via Confluent-Avro wire format (5-byte magic
+    # header + Avro body) BEFORE the outbox append.  All preceding DB writes
+    # (relations, evidence, events, claims) have already happened; failing the
+    # outbox row here would orphan those rows from S10 fan-out.  Keeping the
+    # serialise→append ordering tight (no DB calls between them) keeps the
+    # failure mode "outbox row never inserted" rather than "outbox row inserted
+    # with garbage bytes", which the dispatcher cannot recover from.
     if affected_entity_ids or relations or events:
         primary_entity_id = str(next(iter(affected_entity_ids))) if affected_entity_ids else str(doc_id)
         state_payload: dict[str, Any] = {
@@ -417,10 +455,14 @@ async def materialize_graph(
             "is_backfill": is_backfill,
             "correlation_id": correlation_id,
         }
+
+        from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
+
+        state_bytes = serialize_confluent_avro(_GRAPH_STATE_CHANGED_SCHEMA_PATH, state_payload)
         await outbox_repo.append(
             topic=TOPIC_GRAPH_STATE_CHANGED,
             partition_key=primary_entity_id,
-            payload_avro=json.dumps(state_payload).encode(),
+            payload_avro=state_bytes,
         )
 
     return MaterializationSummary(
