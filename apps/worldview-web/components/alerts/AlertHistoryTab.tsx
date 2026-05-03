@@ -26,9 +26,10 @@ import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { useDebounce } from "@/hooks/useDebounce";
-import { Skeleton } from "@/components/ui/skeleton";
-import { cn, formatRelativeTime } from "@/lib/utils";
-import type { Alert, AlertHistoryParams, AlertSeverity } from "@/types/api";
+import { cn } from "@/lib/utils";
+import { DataTable } from "@/components/ui/data-table";
+import { alertHistoryColumns } from "./alert-history-columns";
+import type { AlertHistoryParams, AlertSeverity } from "@/types/api";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -188,13 +189,9 @@ export function AlertHistoryTab({ fixedStatus }: AlertHistoryTabProps = {}) {
       </div>
 
       {/* ── Result table ──────────────────────────────────────────────── */}
-      {isLoading ? (
-        <div className="space-y-1" aria-busy="true" aria-label="Loading alert history">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-6 w-full" />
-          ))}
-        </div>
-      ) : isError ? (
+      {isError ? (
+        // Error shown outside DataTable so the table chrome doesn't render
+        // in a broken state. Retry lets the user re-issue the query.
         <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-[11px] text-destructive">
           Failed to load alert history.
           <button
@@ -205,34 +202,28 @@ export function AlertHistoryTab({ fixedStatus }: AlertHistoryTabProps = {}) {
             Retry
           </button>
         </div>
-      ) : rows.length === 0 ? (
-        <p className="py-6 text-center text-[11px] text-muted-foreground">
-          No alerts match the current filters.
-        </p>
       ) : (
         <>
-          {/* WHY a real <table>: history is tabular data; semantic HTML
-              helps screen-readers + lets us reuse browser table styling. */}
-          <table className="w-full border-collapse text-[11px]">
-            <thead className="border-b border-border/60 text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
-              <tr>
-                <th className="px-2 py-1 text-left">Severity</th>
-                <th className="px-2 py-1 text-left">Ticker</th>
-                <th className="px-2 py-1 text-left">Type</th>
-                <th className="px-2 py-1 text-left">Fired</th>
-                <th className="px-2 py-1 text-left">Dismissed</th>
-                <th className="px-2 py-1 text-left">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <HistoryRow key={row.alert_id} alert={row} onSelect={() => router.replace(`/alerts?selected=${encodeURIComponent(row.alert_id)}`)} />
-              ))}
-            </tbody>
-          </table>
+          {/*
+           * WHY DataTable (not raw <table>): provides uniform density, multi-column
+           * sort, copy-as-TSV, sticky header, and column resize for free.
+           * The alertHistoryColumns definition lives in alert-history-columns.tsx
+           * so it can be unit-tested independently.
+           */}
+          <DataTable
+            columns={alertHistoryColumns}
+            data={rows}
+            getRowId={(a) => a.alert_id}
+            density="compact"
+            isLoading={isLoading}
+            emptyMessage="No alerts match the current filters."
+            onRowClick={(alert) =>
+              router.replace(`/alerts?selected=${encodeURIComponent(alert.alert_id)}`)
+            }
+          />
 
-          {/* Load-more button */}
-          {hasMore && (
+          {/* Load-more button — only visible when loaded and server has more rows */}
+          {!isLoading && hasMore && (
             <div className="flex justify-center pt-2">
               <button
                 type="button"
@@ -249,80 +240,5 @@ export function AlertHistoryTab({ fixedStatus }: AlertHistoryTabProps = {}) {
   );
 }
 
-// ── HistoryRow ─────────────────────────────────────────────────────────────
-
-/**
- * HistoryRow — one row of the history table.
- *
- * WHY a sub-component: keeps the JSX in the parent terse + lets us isolate
- * the formatting logic (relative+absolute time, status badge color) here.
- */
-function HistoryRow({ alert, onSelect }: { alert: Alert; onSelect: () => void }) {
-  // Determine status: acked > snoozed > active. (Backend may return these
-  // explicitly but we infer to be defensive against missing fields.)
-  const sevKey = ((alert.severity ?? "").toUpperCase() || "LOW") as AlertSeverity;
-  const status = computeStatus(alert);
-  const statusClass = STATUS_PILL_CLASS[status];
-
-  return (
-    <tr className="border-b border-border/30 hover:bg-muted/30">
-      <td className="px-2 py-1">
-        <span
-          className={cn(
-            "inline-block rounded-[2px] px-1 text-[9px] uppercase tracking-[0.08em]",
-            SEVERITY_PILL_CLASS[sevKey],
-          )}
-        >
-          {sevKey}
-        </span>
-      </td>
-      <td className="px-2 py-1 font-mono tabular-nums">{alert.ticker ?? "—"}</td>
-      <td className="px-2 py-1">
-        <button
-          type="button"
-          onClick={onSelect}
-          className="text-foreground underline-offset-2 hover:underline"
-        >
-          {alert.alert_type}
-        </button>
-      </td>
-      <td className="px-2 py-1 text-muted-foreground" title={alert.created_at}>
-        <span className="font-mono tabular-nums">{formatRelativeTime(alert.created_at)}</span>
-      </td>
-      <td className="px-2 py-1 text-muted-foreground" title={alert.acknowledged_at ?? ""}>
-        {alert.acknowledged_at ? (
-          <span className="font-mono tabular-nums">{formatRelativeTime(alert.acknowledged_at)}</span>
-        ) : (
-          "—"
-        )}
-      </td>
-      <td className="px-2 py-1">
-        <span className={cn("rounded-[2px] px-1 text-[9px] uppercase tracking-[0.08em]", statusClass)}>
-          {status}
-        </span>
-      </td>
-    </tr>
-  );
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-function computeStatus(alert: Alert): "active" | "ack" | "snoozed" {
-  if (alert.acknowledged_at) return "ack";
-  const snoozeUntil = alert.snooze_until ? new Date(alert.snooze_until).getTime() : 0;
-  if (snoozeUntil && snoozeUntil > Date.now()) return "snoozed";
-  return "active";
-}
-
-const SEVERITY_PILL_CLASS: Record<AlertSeverity, string> = {
-  CRITICAL: "bg-negative/20 text-negative",
-  HIGH: "bg-warning/20 text-warning",
-  MEDIUM: "bg-primary/15 text-primary",
-  LOW: "bg-muted/40 text-muted-foreground",
-};
-
-const STATUS_PILL_CLASS: Record<"active" | "ack" | "snoozed", string> = {
-  active: "bg-primary/15 text-primary",
-  ack: "bg-muted/40 text-muted-foreground",
-  snoozed: "bg-warning/20 text-warning",
-};
+// HistoryRow sub-component and its helpers (computeStatus, SEVERITY_PILL_CLASS,
+// STATUS_PILL_CLASS) have moved to alert-history-columns.tsx for isolated testing.

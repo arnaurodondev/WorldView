@@ -17,7 +17,7 @@
 | [Async & Concurrency](bug-patterns/async-concurrency.md) | `bug-patterns/async-concurrency.md` | 14 | asyncio, event loops, concurrency, React concurrent mode |
 | [Auth & Security](bug-patterns/auth-security.md) | `bug-patterns/auth-security.md` | 28 | JWT/OIDC, SSRF, XSS, tenant isolation, CSP, middleware |
 | [Testing](bug-patterns/testing.md) | `bug-patterns/testing.md` | 26 | pytest, AsyncMock, fixtures, Vitest, pre-commit, CI |
-| [Frontend](bug-patterns/frontend.md) | `bug-patterns/frontend.md` | 28 | React, Next.js, WebSocket/SSE, TypeScript, CSS |
+| [Frontend](bug-patterns/frontend.md) | `bug-patterns/frontend.md` | 29 | React, Next.js, WebSocket/SSE, TypeScript, CSS |
 | [Config & Docker](bug-patterns/config-docker.md) | `bug-patterns/config-docker.md` | 28 | pydantic-settings, Docker, Compose, env vars, images |
 | [ML & LLM](bug-patterns/ml-llm.md) | `bug-patterns/ml-llm.md` | 21 | Ollama, GLiNER, DeepInfra, embeddings, LLM prompt patterns |
 | [Observability](bug-patterns/observability.md) | `bug-patterns/observability.md` | 9 | Prometheus, Grafana, Alertmanager, structlog, OTel |
@@ -326,7 +326,8 @@
 | BP-329 | Extraction Prompt `predicate` Unconstrained — Freeform Relation Types Bypass Canonicalization | ML & LLM | [bug-patterns/ml-llm.md](bug-patterns/ml-llm.md#bp-329) |
 | BP-330 | Screener `entity_id` Slug Never Matched a Real Entity Page — Fall Back to `instrument_id` UUID | Frontend | [bug-patterns/frontend.md](bug-patterns/frontend.md#bp-330) |
 | BP-331 | Screener Revenue Column Always Blank: `revenue_usd` Nested Under `metrics`, Not Top-Level | Frontend | [bug-patterns/frontend.md](bug-patterns/frontend.md#bp-331) |
-| BP-332 | Embedding Model Name Mismatch (HuggingFace ID vs Ollama Tag) Silently Disables ANN Seeder | Config & Docker | [bug-patterns/config-docker.md](bug-patterns/config-docker.md#bp-331) |
+| BP-332 | TanStack Controlled Sort Race: `getNextSortingOrder()` Captures Stale State Outside Updater When `useDeferredValue` Deferred Pass Is Pending | Frontend | [bug-patterns/frontend.md](bug-patterns/frontend.md#bp-332) |
+| BP-333 | Embedding Model Name Mismatch (HuggingFace ID vs Ollama Tag) Silently Disables ANN Seeder | Config & Docker | [bug-patterns/config-docker.md](bug-patterns/config-docker.md#bp-331) |
 
 ---
 
