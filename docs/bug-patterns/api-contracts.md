@@ -2,7 +2,7 @@
 
 > **Category**: api-contracts
 > **Description**: FastAPI routing, Pydantic schemas, API contract drift, PRD/plan assumption failures, cross-service field name mismatches
-> **Count**: 36 patterns
+> **Count**: 37 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -906,5 +906,52 @@ Orchestration logic that needs the routing cache or UoW factory belongs in the *
 **Prevention**:
 - Before adding any startup hook to a service, read the service's `app.py` (or `main.py`) lifespan and list every attribute stored on `app.state`. Only reference attributes that actually exist.
 - In multi-process services (R22), never assume the API process has the same wired dependencies as the scheduler or worker processes.
+
+---
+
+## BP-342: KG entity_id passed to market-data API that expects market-data instrument_id → 404 on all fundamentals fetches
+
+**Date discovered**: 2026-05-03
+**Service affected**: `knowledge-graph` (`FundamentalsRefreshWorker`)
+
+**Category**: API & Contracts
+**Severity**: HIGH (all fundamentals fetches return 404, worker produces no output)
+
+### Symptom
+
+- `fundamentals_refresh_market_data_unavailable` for all ticker entities
+- Debug reveals `GET /api/v1/fundamentals/{entity_id}` returns 404: "No fundamentals found for instrument: {entity_id}"
+- Auth is valid (200 returned when using the correct instrument_id)
+
+### Root Cause
+
+The KG service (`intelligence_db`) uses UUIDs in the format `11111111-0001-7000-8000-000000000001` for its `canonical_entities.entity_id`. The market-data service (`market_data_db`) has its own UUID namespace for `instruments.id` (e.g., `01900000-0000-7000-8000-000000001001`). These are different ID spaces — KG entity_id ≠ market-data instrument_id.
+
+The `FundamentalsRefreshWorker` was passing `entity_id` as the path parameter to market-data, which caused 404 for every entity.
+
+### Fix
+
+Add a `_resolve_instrument_id` method that calls `GET /api/v1/instruments/symbol/{ticker}` to look up the market-data instrument_id before calling fundamentals endpoints:
+
+```python
+async def _resolve_instrument_id(self, http: httpx.AsyncClient, ticker: str) -> UUID | None:
+    data = await self._fetch_json(http, f"{self._market_data_url}/api/v1/instruments/symbol/{ticker}")
+    if data is None:
+        return None
+    try:
+        return UUID(str(data["id"]))
+    except (KeyError, ValueError):
+        return None
+```
+
+Then use `instrument_id` (not `entity_id`) for all market-data API calls.
+
+### Prevention
+
+- When a worker calls a different service's REST API using an ID from its own DB, NEVER assume the IDs are the same. Always check both services' ID schemas.
+- In KG workers: `entity_id` is the KG canonical entity UUID; market-data `instrument_id` is the market-data service's own UUID. They differ and must be resolved by ticker/symbol.
+- Test pattern: route mock GET calls by URL substring so that `/instruments/symbol/` and `/fundamentals/` return different fixtures.
+
+**Regression test**: `tests/unit/infrastructure/workers/test_fundamentals_refresh_worker.py::TestFundamentalsRefreshWorkerS3Failure::test_successful_fetch_calls_upsert`
 
 ---
