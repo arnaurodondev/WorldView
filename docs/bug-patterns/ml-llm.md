@@ -760,3 +760,42 @@ isin = _isin_raw if (_isin_raw and re.fullmatch(r"[A-Z0-9]{12}", _isin_raw)) els
 - Always validate LLM-generated DB values against column constraints before write
 
 ---
+
+## BP-339 — `reasoning_effort=none` Corrupts Qwen3.x Description Output
+
+**Date discovered**: 2026-05-03
+**Service affected**: `knowledge-graph` (S7) / `libs/ml-clients` `DeepInfraDescriptionAdapter`
+
+### Symptom
+
+All entity descriptions from the DeepInfra description adapter are either empty strings (primary model `Qwen3-235B-A22B-Instruct-2507` returns `'\n'`) or malformed text with every word on its own line separated by `\n\n` (fallback `Qwen3-32B`). Logs show `deepinfra_description_empty` for primary and silent fallback to Qwen3-32B which produces the line-per-word output.
+
+### Root cause
+
+The `extra_body={"reasoning_effort": "none"}` parameter was added to the description adapter call.
+- **Qwen3-235B-A22B**: Honours the flag but returns only `'\n'` (empty content) — the model enters a constrained non-reasoning mode that produces no output for description tasks.
+- **Qwen3-32B** (fallback): Ignores the flag and outputs words separated by double newlines, producing gibberish descriptions.
+
+`reasoning_effort=none` is designed for DeepSeek models; it should never be passed to Qwen3.x models.
+
+### Fix
+
+```python
+# Bad — Qwen3-235B returns '\n' (empty), Qwen3-32B outputs words on separate lines
+extra_body={
+    "reasoning_effort": "none",
+    "prompt_cache_key": "entity_description_v1",
+}
+
+# Good — omit reasoning_effort entirely for Qwen3.x description tasks
+extra_body={"prompt_cache_key": "entity_description_v1"}
+```
+
+### Prevention
+
+- **Never pass `reasoning_effort` to Qwen3.x models** for generative tasks (descriptions, summarisation). Only DeepSeek models (`deepseek-ai/DeepSeek-*`) handle this parameter correctly.
+- `reasoning_effort=none` IS safe for classification tasks using Llama-3.1-8B (confirmed working in `unresolved_resolution_worker.py`).
+- If adding a new LLM adapter for a thinking model: test that `reasoning_effort=none` produces non-empty content before shipping; if output is `'\n'`, remove the flag.
+- Add an integration smoke-test for description adapters that asserts `len(description) > 50` after the first API call.
+
+---
