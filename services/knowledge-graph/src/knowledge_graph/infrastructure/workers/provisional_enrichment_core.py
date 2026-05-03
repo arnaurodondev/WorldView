@@ -29,8 +29,31 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
-_DEFAULT_EMBED_MODEL_ID = "nomic-embed-text"
 _EXTRACT_MODEL_ID = "kg-entity-profile-v1"
+
+
+def _build_dirtied_event(entity_id: UUID, dirty_reason: str = "profile_updated") -> bytes:
+    """Build a fully-populated entity.dirtied.v1 payload (all required Avro fields).
+
+    B-3 fix: previously callers emitted ``{"entity_id": "<uuid>"}`` which is
+    missing ``event_id``, ``event_type``, ``schema_version``, ``occurred_at``,
+    and ``dirty_reason`` — all required by the Avro schema at
+    ``infra/kafka/schemas/entity.dirtied.v1.avsc``.
+    """
+    import json
+
+    return json.dumps(
+        {
+            "event_id": str(new_uuid7()),
+            "event_type": "entity.dirtied",
+            "schema_version": 1,
+            "occurred_at": utc_now().isoformat(),
+            "entity_id": str(entity_id),
+            "dirty_reason": dirty_reason,
+            "source_doc_id": None,
+            "correlation_id": None,
+        }
+    ).encode()
 
 
 async def extract_entity_profile(
@@ -90,7 +113,7 @@ async def persist_enrichment(
     mention_text: str,
     profile: dict[str, Any],
     embedding: list[float] | None = None,
-    embed_model_id: str = _DEFAULT_EMBED_MODEL_ID,
+    embed_model_id: str = "bge-large:latest",
 ) -> UUID | None:
     """Persist an LLM-extracted entity profile to intelligence_db.
 

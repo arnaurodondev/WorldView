@@ -388,8 +388,8 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                         await self.process_message(key, value, headers)
                 else:
                     await self.process_message(key, value, headers)
-                await self.mark_processed(event_id)
                 await uow.commit()
+                await self.mark_processed(event_id)
             except TimeoutError:
                 # BP-302 watchdog: poison message hung processing for timeout_s.
                 # Dump a stack trace, dead-letter the message, and continue so

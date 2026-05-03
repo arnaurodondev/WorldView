@@ -47,7 +47,7 @@ class GraphEnricher:
         # Sort each entity's relations by summary_authority (higher is better)
         for key in entity_relations:
             entity_relations[key].sort(
-                key=lambda r: r.summary_authority or "",
+                key=lambda r: r.summary_authority if r.summary_authority is not None else 0.0,
                 reverse=True,
             )
 
