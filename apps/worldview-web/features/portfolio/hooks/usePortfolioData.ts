@@ -418,21 +418,48 @@ export function usePortfolioData(
 
   /**
    * handlePositionAdded — runs after AddPositionDialog succeeds. Invalidates
-   * holdings (to show the new row) and transactions (the BUY tx) for the
-   * active portfolio.
+   * holdings (to show the new row), transactions (the BUY tx), live quotes
+   * (the new position needs a price), portfolio performance, and the bundle
+   * endpoint so all portfolio views refresh consistently.
+   *
+   * WHY guard on activePortfolioId: if for any reason we don't have an active
+   * portfolio (e.g. the dialog opened before portfolios resolved), we'd
+   * invalidate the empty-string key which is harmless but misleading. The
+   * guard makes the no-op path explicit and avoids confusing cache entries.
    */
   const handlePositionAdded = useCallback(() => {
+    if (!activePortfolioId) return;
+
     // WHY flat keys (not nested detail path): invalidation must match the
     // exact key shape used by the queries above — qk.portfolios.holdingsByPortfolio
     // and qk.portfolios.transactionsByPortfolio return ["holdings", id] and
     // ["transactions", id] respectively which is what these queries use.
     void queryClient.invalidateQueries({
-      queryKey: qk.portfolios.holdingsByPortfolio(activePortfolioId ?? ""),
+      queryKey: qk.portfolios.holdingsByPortfolio(activePortfolioId),
     });
     void queryClient.invalidateQueries({
-      queryKey: qk.portfolios.transactionsByPortfolio(activePortfolioId ?? ""),
+      queryKey: qk.portfolios.transactionsByPortfolio(activePortfolioId),
     });
-  }, [queryClient, activePortfolioId]);
+    // WHY holdingsQuotesByIds prefix invalidation: after adding a position the
+    // instrument ID set changes — the cached batch-quote key is no longer valid
+    // because it encoded the old ID list. Invalidating by the root prefix
+    // ["holdings-quotes"] catches any variant regardless of which IDs were in it.
+    void queryClient.invalidateQueries({
+      queryKey: ["holdings-quotes"],
+    });
+    // WHY performance: adding a position changes cost-basis and may change the
+    // period return_pct / return_abs computed server-side. Stale performance
+    // data would show the wrong P&L in the KPI strip after the add.
+    void queryClient.invalidateQueries({
+      queryKey: qk.portfolios.performance(activePortfolioId, selectedPeriod),
+    });
+    // WHY bundle: PLAN-0070 C-1 introduced a bundle endpoint that pre-fetches
+    // holdings + transactions + performance in one round-trip. If this page was
+    // previously loaded via the bundle, that cached snapshot is now stale.
+    void queryClient.invalidateQueries({
+      queryKey: qk.portfolios.bundle(activePortfolioId),
+    });
+  }, [queryClient, activePortfolioId, selectedPeriod]);
 
   // ── F-013: Delete portfolio mutation ──────────────────────────────────
   // WHY here: needs ["portfolios"] invalidation + a fall-back of the active
@@ -441,7 +468,18 @@ export function usePortfolioData(
     mutationFn: (portfolioId: string) =>
       createGateway(accessToken).deletePortfolio(portfolioId),
     onSuccess: (_, deletedId) => {
+      // WHY qk.portfolios.all: the root ["portfolios"] key cascades to every
+      // portfolio-scoped child query so the portfolio selector re-loads the
+      // updated list without the deleted entry.
       void queryClient.invalidateQueries({ queryKey: qk.portfolios.all });
+      // WHY bundle: the PLAN-0070 C-1 bundle caches holdings + transactions +
+      // performance keyed by portfolioId. Deleting a portfolio leaves a ghost
+      // bundle in the TanStack cache that would surface stale data if the
+      // portfolio ID were ever reused or the cache weren't purged. Explicit
+      // invalidation ensures the ghost entry is evicted immediately.
+      void queryClient.invalidateQueries({
+        queryKey: qk.portfolios.bundle(deletedId),
+      });
       // If we just deleted the active one, fall back to whichever portfolio
       // sortedPortfolios?.[0] resolves to next render (typically root).
       if (activePortfolioId === deletedId) {
