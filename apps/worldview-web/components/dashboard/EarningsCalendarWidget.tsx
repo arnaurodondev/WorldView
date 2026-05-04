@@ -25,6 +25,8 @@ import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AlertTriangle } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import type { EarningsEvent } from "@/types/api";
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -39,7 +41,7 @@ import type { EarningsEvent } from "@/types/api";
 export function EarningsCalendarWidget() {
   const { accessToken } = useAuth();
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     // WHY "earnings-calendar" queryKey: TanStack Query uses this to cache and
     // deduplicate fetches across components. Using the same key as the route
     // name keeps it easy to invalidate when real-time earnings data arrives.
@@ -97,14 +99,16 @@ export function EarningsCalendarWidget() {
       )}
 
       {/* ── Error state ─────────────────────────────────────────────────── */}
-      {/* WHY muted (not destructive red): backend service offline is not a user
-          error. Muted text avoids making the dashboard look broken. */}
+      {/* WHY min-h-[88px]: 4 rows × 22px = 88px; preserves widget height so the
+          dashboard grid doesn't reflow when the error state appears. */}
       {isError && (
-        // WHY px-3 py-2: T-F-6-03 standardised inner content padding
-        // WHY text-[11px]: terminal data rows use 11px density — text-sm (14px) is consumer app scale (Bloomberg convention)
-        <p className="flex-1 px-3 py-2 text-[11px] text-muted-foreground">
-          Earnings calendar unavailable — events will appear once earnings data is ingested.
-        </p>
+        <div className="flex flex-1 min-h-[88px] items-center justify-center gap-2">
+          <AlertTriangle className="h-3 w-3 text-destructive" strokeWidth={1.5} />
+          <span className="text-xs text-muted-foreground">Earnings data unavailable</span>
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </div>
       )}
 
       {/* ── Empty state ─────────────────────────────────────────────────── */}
