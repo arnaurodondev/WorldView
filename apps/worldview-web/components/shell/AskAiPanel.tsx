@@ -64,6 +64,10 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
   // WHY useRef for EventSource: the SSE connection is imperative infrastructure,
   // not UI state. Storing it in a ref avoids unnecessary re-renders on connect/disconnect.
   const eventSourceRef = useRef<EventSource | null>(null);
+  // F-027: AbortController ref so the fetch SSE stream can be cancelled when the
+  // panel unmounts or a new request starts. Without this, an in-flight stream would
+  // continue consuming memory and calling setState on an unmounted component.
+  const abortControllerRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Focus input when panel opens
@@ -82,12 +86,17 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  // Cleanup SSE stream on unmount
+  // F-027: Cleanup SSE stream on unmount — abort the fetch so the reader loop exits.
   useEffect(() => {
     return () => {
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
+      }
+      // Abort any in-flight fetch stream to prevent setState-after-unmount.
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
       }
     };
   }, []);
@@ -111,6 +120,12 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
+    // F-027: abort any in-flight fetch stream before starting a new one.
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     setIsStreaming(true);
     setResponse("");
@@ -119,6 +134,8 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
     try {
       const res = await fetch("/api/v1/chat/stream", {
         method: "POST",
+        // F-027: pass the abort signal so the fetch is cancelled on unmount.
+        signal: controller.signal,
         headers: {
           "Content-Type": "application/json",
           // WHY Authorization header: S9 requires Bearer token for all authenticated endpoints

@@ -235,15 +235,36 @@ class TestAgeSyncWorkerEntities:
         session.__aexit__ = AsyncMock(return_value=False)
         session.commit = AsyncMock()
 
-        # First two calls: LOAD 'age' and SET search_path (return values ignored)
-        # Third call: entity SELECT returns one row
-        # Fourth call: entity MERGE Cypher
-        # Fifth call: relation SELECT → empty
-        # Sixth call: temporal_events SELECT → empty
-        # Seventh call: exposures SELECT → empty
+        # F-016: _setup_age_session (2 calls) is now invoked 3 times — once
+        # before entities, once after the entities commit, once after the
+        # relations commit — so the full execute sequence is:
+        #  1-2: initial LOAD age + SET search_path
+        #  3:   entity SELECT → one row
+        #  4:   entity MERGE Cypher
+        #  [commit]
+        #  5-6: second LOAD age + SET search_path
+        #  7:   relation SELECT → empty
+        #  [commit]
+        #  8-9: third LOAD age + SET search_path
+        #  10:  temporal_events SELECT → empty
+        #  11:  exposures SELECT → empty
         entity_result = _make_result([entity_row])
         empty = _make_result([])
-        session.execute = AsyncMock(side_effect=[None, None, entity_result, None, empty, empty, empty])
+        session.execute = AsyncMock(
+            side_effect=[
+                None,
+                None,  # initial _setup_age_session
+                entity_result,
+                None,  # entity SELECT + MERGE
+                None,
+                None,  # second _setup_age_session (after entities commit)
+                empty,  # relation SELECT
+                None,
+                None,  # third _setup_age_session (after relations commit)
+                empty,
+                empty,  # temporal_events SELECT + exposures SELECT
+            ]
+        )
 
         sf = _make_session_factory(session)
         settings = _make_settings()
@@ -281,12 +302,16 @@ class TestAgeSyncWorkerEntities:
         session.execute = AsyncMock(
             side_effect=[
                 None,
+                None,  # initial _setup_age_session
+                _make_result([entity_row]),
+                None,  # entity SELECT + MERGE
                 None,
-                _make_result([entity_row]),  # entities SELECT
-                None,  # entity Cypher MERGE
-                _make_result([]),  # relations
-                _make_result([]),  # temporal events
-                _make_result([]),  # exposures
+                None,  # second _setup_age_session
+                _make_result([]),  # relation SELECT
+                None,
+                None,  # third _setup_age_session
+                _make_result([]),
+                _make_result([]),  # temporal + exposures
             ]
         )
         sf = _make_session_factory(session)
@@ -353,16 +378,23 @@ class TestAgeSyncWorkerRelations:
         session.__aenter__ = AsyncMock(return_value=session)
         session.__aexit__ = AsyncMock(return_value=False)
         session.commit = AsyncMock()
-        # LOAD, SET, entities→empty, relation SELECT, relation Cypher, temporal→empty, exposures→empty
+        # F-016: _setup_age_session now called 3x. Full sequence:
+        #  0-1: initial LOAD+SET, 2: entities empty, commit
+        #  3-4: second LOAD+SET, 5: relations SELECT, 6: relation MERGE, commit
+        #  7-8: third LOAD+SET, 9: temporal empty, 10: exposures empty, commit
         session.execute = AsyncMock(
             side_effect=[
                 None,
+                None,  # initial _setup_age_session
+                _make_result([]),  # entities SELECT
                 None,
-                _make_result([]),  # entities
-                _make_result([relation_row]),  # relations SELECT
-                None,  # relation Cypher MERGE
-                _make_result([]),  # temporal events
-                _make_result([]),  # exposures
+                None,  # second _setup_age_session
+                _make_result([relation_row]),
+                None,  # relations SELECT + MERGE
+                None,
+                None,  # third _setup_age_session
+                _make_result([]),  # temporal events SELECT
+                _make_result([]),  # exposures SELECT
             ]
         )
 
@@ -375,8 +407,8 @@ class TestAgeSyncWorkerRelations:
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
         asyncio.run(worker.run())
 
-        # The Cypher call should contain COMPETES_WITH
-        cypher_call = session.execute.call_args_list[4]
+        # The Cypher call should contain COMPETES_WITH (index 6 after F-016)
+        cypher_call = session.execute.call_args_list[6]
         call_text = str(cypher_call[0][0])
         assert "COMPETES_WITH" in call_text
 
@@ -391,11 +423,15 @@ class TestAgeSyncWorkerRelations:
         session.execute = AsyncMock(
             side_effect=[
                 None,
+                None,  # initial _setup_age_session
+                _make_result([]),  # entities SELECT
                 None,
-                _make_result([]),  # entities
-                _make_result([relation_row]),  # relations SELECT
-                _make_result([]),  # temporal events
-                _make_result([]),  # exposures
+                None,  # second _setup_age_session
+                _make_result([relation_row]),  # relations SELECT (unknown type → no Cypher)
+                None,
+                None,  # third _setup_age_session
+                _make_result([]),  # temporal events SELECT
+                _make_result([]),  # exposures SELECT
             ]
         )
 
@@ -408,8 +444,8 @@ class TestAgeSyncWorkerRelations:
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
         asyncio.run(worker.run())
 
-        # Total execute calls: LOAD, SET, entities Q, relations SELECT (no Cypher), temporal Q, exposures Q = 6
-        assert session.execute.await_count == 6
+        # F-016: 3x _setup_age_session (6 calls) + entities(1) + relations(1) + temporal(1) + exposures(1) = 10
+        assert session.execute.await_count == 10
 
     def test_prometheus_relation_counter_incremented(self) -> None:
         """s7_age_sync_relations_total is incremented by the number of relations synced."""
@@ -426,12 +462,16 @@ class TestAgeSyncWorkerRelations:
         session.execute = AsyncMock(
             side_effect=[
                 None,
+                None,  # initial _setup_age_session
+                _make_result([]),  # entities SELECT
                 None,
-                _make_result([]),  # entities
-                _make_result([relation_row]),  # relations SELECT
-                None,  # Cypher MERGE
-                _make_result([]),  # temporal events
-                _make_result([]),  # exposures
+                None,  # second _setup_age_session
+                _make_result([relation_row]),
+                None,  # relations SELECT + Cypher MERGE
+                None,
+                None,  # third _setup_age_session
+                _make_result([]),  # temporal events SELECT
+                _make_result([]),  # exposures SELECT
             ]
         )
 
@@ -532,14 +572,20 @@ class TestSyncTemporalEventsPagination:
         session.__aenter__ = AsyncMock(return_value=session)
         session.__aexit__ = AsyncMock(return_value=False)
         session.commit = AsyncMock()
-        # LOAD 'age', SET search_path, entities→empty, relations→empty,
-        # temporal_events SELECT→empty, exposures SELECT→empty
+        # F-016: 3x _setup_age_session. Full sequence:
+        #  0-1: LOAD+SET, 2: entities empty, commit
+        #  3-4: LOAD+SET, 5: relations empty, commit
+        #  6-7: LOAD+SET, 8: temporal empty, 9: exposures empty, commit
         session.execute = AsyncMock(
             side_effect=[
-                None,  # LOAD
-                None,  # SET search_path
+                None,
+                None,  # initial _setup_age_session
                 _make_result([]),  # entities SELECT
+                None,
+                None,  # second _setup_age_session
                 _make_result([]),  # relations SELECT
+                None,
+                None,  # third _setup_age_session
                 _make_result([]),  # temporal_events SELECT
                 _make_result([]),  # exposures SELECT
             ]
@@ -553,8 +599,8 @@ class TestSyncTemporalEventsPagination:
         worker = AgeSyncWorker(session_factory=sf, valkey_client=valkey, settings=settings)
         asyncio.run(worker.run())
 
-        # Exactly 6 execute calls: LOAD, SET, entities, relations, temporal, exposures
-        assert session.execute.await_count == 6
+        # F-016: 3x2 setup calls + 4 data calls = 10 total
+        assert session.execute.await_count == 10
 
     def test_partial_page_terminates_loop(self) -> None:
         """A page smaller than event_batch (2000) stops pagination without a second SELECT."""
@@ -564,16 +610,22 @@ class TestSyncTemporalEventsPagination:
         session.__aenter__ = AsyncMock(return_value=session)
         session.__aexit__ = AsyncMock(return_value=False)
         session.commit = AsyncMock()
-        # LOAD, SET search_path, entities→empty, relations→empty,
-        # temporal SELECT (1 row < 2000) → Cypher MERGE, exposures SELECT→empty
+        # F-016: 3x _setup_age_session. Full sequence:
+        #  0-1: LOAD+SET, 2: entities empty, commit
+        #  3-4: LOAD+SET, 5: relations empty, commit
+        #  6-7: LOAD+SET, 8: temporal SELECT (1 row), 9: temporal MERGE, 10: exposures empty, commit
         session.execute = AsyncMock(
             side_effect=[
                 None,
+                None,  # initial _setup_age_session
+                _make_result([]),  # entities SELECT
                 None,
-                _make_result([]),  # entities
-                _make_result([]),  # relations
-                _make_result([event_row]),  # temporal SELECT — 1 row < batch
-                None,  # temporal Cypher MERGE
+                None,  # second _setup_age_session
+                _make_result([]),  # relations SELECT
+                None,
+                None,  # third _setup_age_session
+                _make_result([event_row]),
+                None,  # temporal SELECT + MERGE
                 _make_result([]),  # exposures SELECT
             ]
         )
@@ -603,15 +655,23 @@ class TestSyncTemporalEventsPagination:
         session.__aenter__ = AsyncMock(return_value=session)
         session.__aexit__ = AsyncMock(return_value=False)
         session.commit = AsyncMock()
+        # F-016: 3x _setup_age_session. Full sequence:
+        #  0-1: LOAD+SET, 2: entities empty, commit
+        #  3-4: LOAD+SET, 5: relations empty, commit
+        #  6-7: LOAD+SET, 8: temporal SELECT, 9: temporal Cypher, 10: exposures empty, commit
         session.execute = AsyncMock(
             side_effect=[
                 None,
+                None,  # initial _setup_age_session
+                _make_result([]),  # entities SELECT
                 None,
-                _make_result([]),  # entities
-                _make_result([]),  # relations
-                _make_result([event_row]),  # temporal SELECT
-                None,  # temporal Cypher
-                _make_result([]),  # exposures
+                None,  # second _setup_age_session
+                _make_result([]),  # relations SELECT
+                None,
+                None,  # third _setup_age_session
+                _make_result([event_row]),
+                None,  # temporal SELECT + Cypher
+                _make_result([]),  # exposures SELECT
             ]
         )
         sf = _make_session_factory(session)
@@ -621,8 +681,8 @@ class TestSyncTemporalEventsPagination:
         worker = AgeSyncWorker(session_factory=sf, valkey_client=_make_valkey(), settings=_make_settings())
         asyncio.run(worker.run())
 
-        # Cypher call is index 5 (0-based: LOAD, SET, entities, relations, temporal_select, cypher)
-        cypher_call = session.execute.call_args_list[5]
+        # F-016: temporal Cypher is at index 9 (was 5 before intermediate commits)
+        cypher_call = session.execute.call_args_list[9]
         cypher_sql = str(cypher_call[0][0])
         assert "TemporalEvent" in cypher_sql
 

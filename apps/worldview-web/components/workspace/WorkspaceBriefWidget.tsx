@@ -27,6 +27,11 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+// F-044: use centralised query key factory instead of inline string array.
+// qk.dashboard.morningBrief() returns ["dashboard", "morning-brief"] which
+// matches the key used by the dashboard snapshot route (qk.dashboard.snapshot
+// primes this entry) so cache sharing works correctly.
+import { qk } from "@/lib/query/keys";
 // PLAN-0062-W4 T-W4-E-03: StructuredBrief renders W4+ sections with citation
 // chips in the expanded workspace panel. When sections is empty/absent the
 // component falls back to the existing plain-text preview path — no behaviour
@@ -38,7 +43,7 @@ export function WorkspaceBriefWidget() {
   const [expanded, setExpanded] = useState(false);
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["morning-brief"],
+    queryKey: qk.dashboard.morningBrief(),
     queryFn: () => createGateway(accessToken).getMorningBrief(),
     enabled: !!accessToken,
     // WHY 10min staleTime: morning briefs are generated once daily at market open.

@@ -81,6 +81,9 @@ export const qk = {
     // would cause stale data until the old cache entry expires).
     holdingsByPortfolio: (portfolioId: string) =>
       ["holdings", portfolioId] as const,
+    // F-045: root prefix key used for prefix-invalidation of all holdings-quotes
+    // cache entries regardless of which instrument IDs were in the batch.
+    holdingsQuotesAll: ["holdings-quotes"] as const,
     holdingsQuotesByIds: (ids: readonly string[]) =>
       ["holdings-quotes", [...ids].sort()] as const,
     transactionsByPortfolio: (portfolioId: string) =>

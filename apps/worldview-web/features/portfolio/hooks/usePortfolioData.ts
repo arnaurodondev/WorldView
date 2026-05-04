@@ -440,12 +440,12 @@ export function usePortfolioData(
     void queryClient.invalidateQueries({
       queryKey: qk.portfolios.transactionsByPortfolio(activePortfolioId),
     });
-    // WHY holdingsQuotesByIds prefix invalidation: after adding a position the
+    // WHY holdingsQuotesAll prefix invalidation: after adding a position the
     // instrument ID set changes — the cached batch-quote key is no longer valid
-    // because it encoded the old ID list. Invalidating by the root prefix
-    // ["holdings-quotes"] catches any variant regardless of which IDs were in it.
+    // because it encoded the old ID list. qk.portfolios.holdingsQuotesAll is the
+    // root prefix ["holdings-quotes"] that matches all variant keys (F-045).
     void queryClient.invalidateQueries({
-      queryKey: ["holdings-quotes"],
+      queryKey: qk.portfolios.holdingsQuotesAll,
     });
     // WHY performance: adding a position changes cost-basis and may change the
     // period return_pct / return_abs computed server-side. Stale performance

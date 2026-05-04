@@ -120,6 +120,13 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
     """
     if getattr(request.state, "user", None) is None:
         raise HTTPException(status_code=401, detail="Authentication required")
+    # F-026: validate company_id is a UUID to prevent path traversal attacks.
+    import uuid as _uuid
+
+    try:
+        _uuid.UUID(company_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid company_id — must be a UUID")  # noqa: B904
     try:
         return await get_company_overview(
             _clients(request),
@@ -149,6 +156,13 @@ async def instrument_page_bundle(instrument_id: str, request: Request) -> dict[s
     """
     if getattr(request.state, "user", None) is None:
         raise HTTPException(status_code=401, detail="Authentication required")
+    # F-026: validate instrument_id is a UUID to prevent path traversal attacks.
+    import uuid as _uuid
+
+    try:
+        _uuid.UUID(instrument_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid instrument_id — must be a UUID")  # noqa: B904
     return await get_instrument_page_bundle(
         _clients(request),
         instrument_id,
@@ -987,9 +1001,20 @@ async def batch_ohlcv(payload: _BatchOHLCVRequest, request: Request) -> Response
         for item in payload.requests
     ]
     try:
-        results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=False), timeout=30.0)
+        # F-012: return_exceptions=True so one failed symbol doesn't raise for all.
+        # Each result is then checked: if it's an Exception, it is logged and
+        # replaced with a null sentinel so the frontend can render partial data.
+        raw_results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=30.0)
     except TimeoutError:
         raise HTTPException(status_code=504, detail="Upstream timeout")  # noqa: B904
+
+    results: list[Any] = []
+    for r in raw_results:
+        if isinstance(r, Exception):
+            logger.warning("batch_ohlcv_leg_failed", exc_info=r)
+            results.append(None)
+        else:
+            results.append(r)
 
     body = {"results": results, "fetched_at": datetime.now(tz=UTC).isoformat()}
     # Cache-Control: 5 minutes, ``private`` so a shared CDN/edge cache CANNOT
@@ -2282,8 +2307,13 @@ async def recompute_portfolio_snapshot(portfolio_id: str, request: Request) -> A
     the broad authorization because the auth-roles wiring (admin tier) is
     deferred (PRD-0025) and the operation is non-destructive.
     """
-    if not getattr(request.state, "user", None):
+    user = getattr(request.state, "user", None)
+    if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
+    # F-013: require admin role — this endpoint triggers a server-side computation
+    # and should not be accessible to regular authenticated users.
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
     headers = _portfolio_headers(request)
     clients = _clients(request)
     resp = await clients.portfolio.post(

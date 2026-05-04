@@ -198,8 +198,15 @@ class AgeSyncWorker:
 
         async with self._sf() as session:
             await _setup_age_session(session)
+            # F-016: intermediate commits after each batch type so that a failure
+            # mid-sync does not roll back all previously completed work. AGE MERGE
+            # is idempotent (re-run is safe), so partial commits are correct here.
             entities_synced = await self._sync_entities(session, watermark)
+            await session.commit()
+            await _setup_age_session(session)  # reload AGE after commit
             relations_synced = await self._sync_relations(session, watermark)
+            await session.commit()
+            await _setup_age_session(session)
             temporal_events_synced = await self._sync_temporal_events(session, watermark)
             await session.commit()
 
