@@ -286,14 +286,29 @@ class FundamentalsRefreshWorker:
                         )
                         continue  # Don't update next_refresh_at — will retry next cycle
 
+                    # When embedding fails (e.g. transient DeepInfra error), retry
+                    # in 6 hours instead of deferring 30 days (BP-351).
+                    embedding_ok = result["embedding"] is not None
+                    next_at = (
+                        utc_now() + timedelta(days=_REFRESH_INTERVAL_DAYS)  # type: ignore[no-any-return, operator]
+                        if embedding_ok
+                        else utc_now() + timedelta(hours=6)  # type: ignore[no-any-return, operator]
+                    )
+                    if not embedding_ok:
+                        logger.warning(  # type: ignore[no-any-return]
+                            "fundamentals_refresh_embedding_failed",
+                            entity_id=str(entity_id),
+                            ticker=result["ticker"],
+                            retry_in_hours=6,
+                        )
                     await emb_repo.upsert(
                         entity_id,
                         VIEW_FUNDAMENTALS,
                         embedding=result["embedding"],
-                        model_id=self._embed_model_id if result["embedding"] else None,
+                        model_id=self._embed_model_id if embedding_ok else None,
                         source_text=result["narrative"],
                         source_hash=result["source_hash"],
-                        next_refresh_at=utc_now() + timedelta(days=_REFRESH_INTERVAL_DAYS),  # type: ignore[no-any-return, operator]
+                        next_refresh_at=next_at,
                     )
                     refreshed += 1
 
