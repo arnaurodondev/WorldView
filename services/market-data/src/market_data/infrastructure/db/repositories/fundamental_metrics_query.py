@@ -89,11 +89,43 @@ async def query_screen(
     allowed field names before reaching this function — it is never interpolated
     into raw SQL; column references are resolved via SQLAlchemy ORM attributes.
     """
+    instr = InstrumentModel
+
     if not filters:
-        return [], 0
+        # No filters — return ALL instruments sorted by symbol with pagination.
+        # Uses COUNT(*) OVER() for the total so callers can paginate.
+        total_col = func.count().over().label("total_count")
+        stmt = (
+            select(
+                instr.id.label("instrument_id"),
+                instr.symbol.label("ticker"),
+                instr.name.label("name"),
+                instr.exchange.label("exchange"),
+                instr.sector.label("sector"),
+                total_col,
+            )
+            .order_by(instr.symbol.asc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result: Any = await session.execute(stmt)
+        rows = result.all()
+        if not rows:
+            return [], 0
+        total = int(rows[0].total_count)
+        return [
+            ScreenResult(
+                instrument_id=str(row.instrument_id),
+                ticker=row.ticker,
+                name=row.name,
+                exchange=row.exchange,
+                sector=row.sector,
+                metrics={},
+            )
+            for row in rows
+        ], total
 
     m = FundamentalMetricModel
-    instr = InstrumentModel
 
     # Build a subquery for each filter: latest value per instrument for that metric.
     filter_subqueries: list[Any] = []
@@ -188,8 +220,8 @@ async def query_screen(
 
     stmt = stmt.offset(offset).limit(limit)
 
-    result: Any = await session.execute(stmt)
-    rows = result.all()
+    screen_result: Any = await session.execute(stmt)
+    rows = screen_result.all()
 
     if not rows:
         return [], 0

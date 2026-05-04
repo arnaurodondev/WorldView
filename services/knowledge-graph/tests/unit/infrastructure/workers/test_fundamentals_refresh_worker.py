@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
@@ -178,6 +179,73 @@ class TestFundamentalsRefreshWorkerS3Failure:
 
         llm.embed.assert_awaited_once()
         emb_repo.upsert.assert_awaited_once()
+
+    def test_embedding_failure_uses_short_retry_interval(self) -> None:
+        """BP-351: when LLM embedding returns None, next_refresh_at must be ≤6h not 30d."""
+        from datetime import timedelta
+
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+
+        due_rows = [
+            {
+                "entity_id": _ENTITY_ID,
+                "ticker": "AAPL",
+                "canonical_name": "Apple Inc.",
+                "entity_type": "financial_instrument",
+            },
+        ]
+        sf, emb_repo = _make_session_factory(due_rows)
+
+        _INSTRUMENT_ID = UUID("01900000-0000-7000-8000-000000001001")
+        instrument_resp = MagicMock()
+        instrument_resp.status_code = 200
+        instrument_resp.json = MagicMock(return_value={"id": str(_INSTRUMENT_ID), "symbol": "AAPL"})
+
+        fundamentals_resp = MagicMock()
+        fundamentals_resp.status_code = 200
+        fundamentals_resp.json = MagicMock(return_value={"revenue_usd_millions": 390000.0, "price": 189.0})
+
+        def _route_get(url: str, **_kwargs: object) -> object:
+            if "/instruments/symbol/" in url:
+                return instrument_resp
+            return fundamentals_resp
+
+        http_client = AsyncMock()
+        http_client.get = AsyncMock(side_effect=_route_get)
+        http_client.aclose = AsyncMock()
+
+        # Simulate DeepInfra/LLM transient failure — embed returns empty list
+        llm = AsyncMock()
+        llm.embed = AsyncMock(return_value=[])
+
+        with patch(_EMB_REPO, return_value=emb_repo):
+            worker = FundamentalsRefreshWorker(sf, llm, "http://market-data:8003", http_client=http_client)
+            asyncio.run(worker.run())
+
+        emb_repo.upsert.assert_awaited_once()
+        call_kwargs = emb_repo.upsert.call_args
+        assert call_kwargs is not None
+
+        # Embedding should be None (failed)
+        embedding_arg = call_kwargs.args[2] if len(call_kwargs.args) > 2 else call_kwargs.kwargs.get("embedding")
+        assert embedding_arg is None, "embedding should be None when LLM fails"
+
+        # next_refresh_at must be ≤ 12h from now (BP-351: 6h, not 30 days)
+        import inspect
+        from datetime import datetime
+
+        next_at = call_kwargs.kwargs.get("next_refresh_at")
+        if next_at is None:
+            # Could be positional — check the upsert signature
+            for i, param in enumerate(inspect.signature(emb_repo.upsert).parameters):
+                if param == "next_refresh_at" and i < len(call_kwargs.args):
+                    next_at = call_kwargs.args[i]
+                    break
+
+        assert next_at is not None, "next_refresh_at must be set even on embedding failure"
+        now_utc = datetime.now(tz=UTC)
+        delta = next_at - now_utc
+        assert delta < timedelta(hours=12), f"BP-351: embedding failure should retry in <12h, got {delta}"
 
 
 # ── T-C-4-01: Earnings event insertion ───────────────────────────────────────

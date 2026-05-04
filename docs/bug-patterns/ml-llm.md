@@ -833,3 +833,48 @@ Add `.upper()` to the `event_type` string in `_build_raw_events()` at `article_c
 - JSON schema `enum` constraints in `_EXTRACTION_SCHEMA` can guide the model but are not a substitute for normalization — small models do not always respect them.
 
 **Regression test**: `tests/unit/infrastructure/test_consumer.py` (event_type normalization assertions)
+
+---
+
+### BP-351: Transient LLM Embedding Failure Defers Retry 30 Days
+
+**Category**: ML & LLM
+**Severity**: MEDIUM
+**First seen**: 2026-05-04
+**Services**: knowledge-graph (FundamentalsRefreshWorker)
+
+**Symptoms**:
+- `entity_embedding_state.fundamentals_ohlcv` rows have `source_text IS NOT NULL` but `embedding IS NULL`
+- `next_refresh_at` is 30 days in the future for entities with failed embeddings
+- `fundamentals_refresh_worker_complete` logs `refreshed=0` despite entities with source_text present
+- No embedding errors in logs (failure was transient — API rate limit, network timeout, empty response)
+
+**Root cause**:
+`fundamentals_refresh.py` calls `self._llm.embed()` and gets back `[]` (empty list) due to a transient DeepInfra API error. The code then correctly sets `embedding=None` but UNCONDITIONALLY sets `next_refresh_at = utc_now() + timedelta(days=30)`. The `get_due_for_refresh` query requires `next_refresh_at < now()`, so the entity is skipped for the full 30-day refresh interval even though only the embedding step failed.
+
+**Example**:
+```python
+# Bad — same retry interval regardless of whether embedding succeeded
+await emb_repo.upsert(
+    entity_id, VIEW_FUNDAMENTALS,
+    embedding=result["embedding"],  # None on failure
+    next_refresh_at=utc_now() + timedelta(days=30),  # always 30d
+)
+
+# Good — short retry when embedding failed
+embedding_ok = result["embedding"] is not None
+next_at = (
+    utc_now() + timedelta(days=30) if embedding_ok
+    else utc_now() + timedelta(hours=6)
+)
+```
+
+**Fix**:
+`services/knowledge-graph/src/knowledge_graph/infrastructure/workers/fundamentals_refresh.py` — set `next_refresh_at = utc_now() + timedelta(hours=6)` when `result["embedding"] is None`.
+
+**Prevention**:
+- In any "compute + store" worker, distinguish between "data unavailable" (skip, don't update next_refresh_at) and "computation failed" (update next_refresh_at with a SHORT retry interval).
+- Never use the long refresh interval as a fallback for failures — it silently masks transient errors for weeks.
+- Add a metric/warning log on embedding failure so it's visible in Prometheus/logs.
+
+**Regression test**: `tests/unit/infrastructure/workers/test_fundamentals_refresh_worker.py::TestFundamentalsRefreshWorkerS3Failure::test_embedding_failure_uses_short_retry_interval`
