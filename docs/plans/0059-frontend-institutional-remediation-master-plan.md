@@ -863,11 +863,11 @@ Before W0 closes:
 
 ---
 
-## 5. PLAN-0059-C — Contract Spine (Wave 1, Track B) ✅ (C-2/C-3/C-4/C-5/C-6 partial)
+## 5. PLAN-0059-C — Contract Spine (Wave 1, Track B) ✅ ALL DONE
 
 **Status**: **PARTIAL DONE** — 2026-04-30 · 1,017 frontend tests pass · ruff/lint/typecheck clean
 **Status: C-6 DONE — 2026-05-02 · 1309 frontend tests pass (+8 new url-state) · typecheck + lint clean · build OK · nuqs 2.4.3 shipped on portfolio (tab + period) and screener (sector + capTier). Schema doc: `docs/ui/URL_STATE.md`.**
-**Deferred to dedicated wave:** C-1 OpenAPI codegen (needs backend OpenAPI ergonomics + CI gate).
+**Status: C-1 DONE — 2026-05-03 · 1692 frontend tests pass (+13 new spec smoke tests) · typecheck + lint clean · build OK · openapi-typescript@7.13.0 installed; infra/contracts/s9-openapi.json committed (170KB, 93 paths); types/generated/api.ts generated (5284 LOC); scripts/check-api-drift.sh added; pnpm generate-types script added. NOTE: hand-written domain types in types/api.ts remain authoritative — S9 proxy routes return untyped generic Response objects; full migration to generated aliases requires backend response_model adoption (backend improvement tracked in plan).**
 
 **Goal:** Establish typed, drift-free contracts between frontend and backend. Eliminate hand-typing, scattered query keys, recomputed gateway factories, and four parallel formatters.
 **Depends on:** PLAN-0059-A complete.
