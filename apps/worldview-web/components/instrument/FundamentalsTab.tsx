@@ -204,7 +204,12 @@ function MetricRow({
   unit?: string;
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 py-1">
+    // WHY h-[22px] items-center (T-B-2-04): replaces py-1 items-baseline for
+    // consistent terminal-standard 22px row height. Fixed height ensures the
+    // section cards don't vary in height between sections with different metric counts.
+    // items-center (not items-baseline) aligns label and value vertically at midpoint
+    // — with fixed-height rows there is no baseline to align to.
+    <div className="flex h-[22px] items-center justify-between gap-4">
       <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">{label}</span>
       <span className="font-mono text-[11px] tabular-nums">
         {children}
@@ -410,7 +415,10 @@ export function FundamentalsTab({
             gap-6 (24px) between sections is too wide for a terminal grid; gap-2 (8px)
             keeps sections close while the section border/header provides visual separation.
             p-3 (12px) is the standard terminal panel padding per design system. */}
-        <div className="grid grid-cols-2 gap-2 p-3 lg:grid-cols-3">
+        {/* WHY no lg:grid-cols-3 (T-B-2-04): a 3-column layout makes sections too narrow
+            (<200px each at 1280px viewport) causing metric label truncation and value
+            overlap. md:grid-cols-2 is the maximum density that keeps all rows readable. */}
+        <div className="grid grid-cols-2 gap-2 p-3">
         {/* ── Valuation ──────────────────────────────────────────────────── */}
         <Section title="Valuation">
           {/* Market cap: no color threshold — it's a scale metric, not good/bad */}
@@ -757,8 +765,15 @@ export function FundamentalsTab({
               WHY last: technicals are secondary to fundamentals on a fundamentals
               tab. Beta / MA / short interest are reference numbers, not the
               primary analysis surface — traders who need technicals use the
-              Overview tab's price chart. */}
-          <TechnicalSnapshot instrumentId={instrumentId} />
+              Overview tab's price chart.
+              WHY currentPrice (T-B-2-06): passed so TechnicalSnapshot can color-code
+              50DayMA and 200DayMA relative to current price (bull green / bear red).
+              Uses `fund.daily_return` field context — the instrument price is in the
+              FundamentalsTab's parent props as `currentPrice`. */}
+          <TechnicalSnapshot
+            instrumentId={instrumentId}
+            currentPrice={currentPrice ?? undefined}
+          />
         </div>
 
         {/* ── Data quality footer ───────────────────────────────────────────

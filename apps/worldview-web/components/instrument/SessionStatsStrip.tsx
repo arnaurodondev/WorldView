@@ -112,14 +112,16 @@ export function SessionStatsStrip({
   return (
     // WHY h-5 (20px): §0.2 layout density — strip is intentionally thinner than
     // a full data row (22px) because it is supplemental context, not primary data.
-    // WHY bg-card: sits visually between the chart (bg-background) and the tabs row.
+    // WHY bg-background (was bg-card): using bg-card created a visible seam against
+    // the OHLCV chart which is bg-background. Unified to bg-background eliminates
+    // the Z-seam that traders reported as visual noise (T-B-2-01).
     // WHY border-b: separates from the timeframe selector bar below.
     <div
       // PLAN-0050 T-F-6-10 (closes F-I-022): added overflow-x-auto + min-w-0
       // so the strip can scroll horizontally on tablet-width viewports (the
       // O/H/L/V/VWAP cluster is ~280px and would clip on narrow shells).
       // Children keep whitespace-nowrap via the inline Stat component.
-      className="flex h-5 min-w-0 items-center gap-3 overflow-x-auto border-b border-border bg-card px-3"
+      className="flex h-5 min-w-0 items-center gap-3 overflow-x-auto border-b border-border bg-background px-3"
       aria-label="Session statistics"
     >
       <Stat label="O" value={fmtPrice(open)} />

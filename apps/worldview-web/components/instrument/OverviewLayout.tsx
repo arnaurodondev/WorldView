@@ -57,6 +57,17 @@ import { OverviewSidebarMetrics } from "@/components/instrument/InstrumentKeyMet
 import { InstrumentTopNews } from "@/components/instrument/InstrumentTopNews";
 import { FundamentalSparkline } from "@/components/instrument/FundamentalSparkline";
 import { InstrumentAskAiButton } from "@/components/instrument/InstrumentAskAiButton";
+// WHY shadcn Select (T-B-2-03): finance mandate prohibits native <select> elements.
+// The native select has system-default styling that breaks the terminal dark theme and
+// produces OS-chrome dropdowns (white background on macOS). shadcn Select uses a Radix
+// UI popover with consistent dark theme styling across all platforms.
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { OHLCVBar, Fundamentals, Instrument } from "@/types/api";
 
 // ── Lazy-loaded heavy components ──────────────────────────────────────────────
@@ -93,17 +104,17 @@ const OHLCVChart = dynamic(
  * for tooltip positioning — a browser layout API unavailable during SSR.
  * Lazy-loading also shaves the SVG + tooltip state code from the initial bundle.
  *
- * WHY h-[280px] Skeleton: EntityGraphPanel renders at exactly 280px height
- * (the fixed HEIGHT constant inside the component). Matching the Skeleton
- * height prevents the news column from collapsing and then jumping.
+ * WHY h-[400px] Skeleton (T-B-2-05): EntityGraphPanel container was expanded
+ * from 280px to 400px to give the SVG radial layout more vertical room.
+ * The Skeleton matches the new container height to prevent layout shift.
  */
 const EntityGraphPanel = dynamic(
   () => import("@/components/instrument/EntityGraphPanel").then((m) => ({ default: m.EntityGraphPanel })),
   {
     ssr: false, // getBoundingClientRect() is browser-only
     loading: () => (
-      // WHY h-[280px]: matches EntityGraphPanel's fixed HEIGHT = 280 constant
-      <Skeleton className="h-[280px] w-full rounded-none" />
+      // WHY h-[400px]: matches the T-B-2-05 EntityGraphPanel container height
+      <Skeleton className="h-[400px] w-full rounded-none" />
     ),
   },
 );
@@ -232,8 +243,11 @@ export function OverviewLayout({
       {/* ── Lower section: news + entity graph (50/50) ───────────────────── */}
       {/* WHY grid-cols-2 (was 3fr:3fr:4fr): news gets 50% (was 30%) and graph
           gets 50% (was 40%). More news width allows 6 headlines without overflow;
-          the graph SVG has more canvas for the radial layout. */}
-      <div className="grid grid-cols-2 min-h-0">
+          the graph SVG has more canvas for the radial layout.
+          WHY min-h-[320px] (T-B-2-05): prevents the bottom section from collapsing
+          to zero height on initial render before EntityGraphPanel and news data loads.
+          Without it, the section flashes as a 0px bar before content fills it. */}
+      <div className="grid grid-cols-2 min-h-[320px]">
 
         {/* Zone 6: Top News */}
         <div className="border-r border-border">
@@ -244,10 +258,16 @@ export function OverviewLayout({
         </div>
 
         {/* Zone 7: Entity Graph */}
-        <EntityGraphPanel
-          entityId={entityId}
-          centerLabel={centerLabel}
-        />
+        {/* WHY h-[400px] (T-B-2-05): was h-[280px] inside EntityGraphPanel — the
+            graph SVG had too little vertical room for the radial node layout to
+            be legible with >6 edges. 400px gives the SVG enough canvas for a
+            proper radial arrangement without nodes overlapping the center label. */}
+        <div className="h-[400px]">
+          <EntityGraphPanel
+            entityId={entityId}
+            centerLabel={centerLabel}
+          />
+        </div>
       </div>
 
       {/* ── PLAN-0050 T-A-1-04: floating Ask-AI button (instrument-scoped).
@@ -275,9 +295,17 @@ export function OverviewLayout({
  * makes the panel testable in isolation. The panel encapsulates the header +
  * select + sparkline unit — a logical composition boundary.
  *
- * WHY native <select> (not shadcn/ui Select): in a 280px sidebar, the native
- * select at 10px font is more compact than any Radix UI dropdown. The native
- * select also renders faster (no portal, no animation).
+ * WHY shadcn Select (T-B-2-03): Finance mandate prohibits native <select> elements.
+ * shadcn Select renders a Radix UI combobox with consistent dark-theme styling —
+ * no OS-chrome white background dropdowns on macOS.
+ *
+ * WHY dynamic label (T-B-2-03): The header was hardcoded "TREND" which gave no
+ * context about which metric was selected. Now the label mirrors the selected metric
+ * (e.g. "P/E RATIO") so the panel is self-describing without opening the dropdown.
+ *
+ * WHY height={68} (T-B-2-05): was 48px — too short for meaningful trendlines on
+ * quarterly data. 68px gives the sparkline enough vertical range to distinguish
+ * compression vs expansion without dominating the sidebar.
  */
 function SparklinePanel({
   instrumentId,
@@ -290,47 +318,68 @@ function SparklinePanel({
   onMetricChange: (metric: string) => void;
   availableMetrics: { value: string; label: string }[];
 }) {
+  // Build the full metric list (current metric + available — no duplicates)
+  // WHY include current metric even if filtered out by sibling: the sibling panel
+  // filters out the same metric to prevent duplicate selection. The current panel
+  // always needs its active metric in the list so the Select shows its value.
+  const fullMetricList = [
+    ...availableMetrics,
+    ...(availableMetrics.some((m) => m.value === metric)
+      ? []
+      : SPARKLINE_METRICS.filter((m) => m.value === metric)),
+  ];
+
+  // Derive the human-readable label for the currently selected metric.
+  // WHY dynamic label: header mirrors active metric so the panel is self-describing
+  // without opening the dropdown — analysts glance at the label, not the trigger.
+  const currentLabel =
+    SPARKLINE_METRICS.find((m) => m.value === metric)?.label.toUpperCase() ?? "TREND";
+
   return (
     // WHY border-t: hairline separator above each sparkline panel
     <div className="border-t border-border">
 
-      {/* Panel header row: "TREND" label + metric selector */}
+      {/* Panel header row: dynamic metric label + shadcn Select */}
       <div className="flex items-center justify-between px-2 h-6">
+        {/* WHY dynamic label (T-B-2-03): was hardcoded "TREND" — now mirrors the
+            selected metric name so the panel is self-describing at a glance. */}
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-          TREND
+          {currentLabel}
         </span>
 
-        {/* Metric dropdown
-            WHY bg-transparent border-none: blends into the dark panel background.
-            The select is identified by its position (right side of label row), not
-            a visible box outline — matches Bloomberg's minimal control chrome. */}
-        <select
-          value={metric}
-          onChange={(e) => onMetricChange(e.target.value)}
-          aria-label="Select trend metric"
-          className="bg-transparent text-[10px] text-muted-foreground border-none outline-none cursor-pointer hover:text-foreground transition-colors"
-        >
-          {/* Always include the current metric so it stays selected after sibling changes */}
-          {[
-            ...availableMetrics,
-            // Add current metric if filtered out by the sibling panel's exclusion
-            ...(availableMetrics.some((m) => m.value === metric)
-              ? []
-              : (SPARKLINE_METRICS.filter((m) => m.value === metric))),
-          ].map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.label}
-            </option>
-          ))}
-        </select>
+        {/* Metric selector — shadcn Select (T-B-2-03)
+            WHY h-6 text-[11px]: matches the panel row height; compact trigger
+            that blends into the 280px sidebar without extra chrome. */}
+        <Select value={metric} onValueChange={onMetricChange}>
+          <SelectTrigger
+            className="h-6 text-[11px] w-auto min-w-[80px] border-none bg-transparent px-1 focus:ring-0"
+            aria-label="Select trend metric"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {fullMetricList.map((m) => (
+              <SelectItem
+                key={m.value}
+                value={m.value}
+                className="text-[11px]"
+              >
+                {m.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Sparkline chart — fetches timeseries data for the selected metric */}
+      {/* WHY height={68} (T-B-2-05): was 48px — too short for meaningful trendlines
+          on quarterly fundamental data. 68px gives enough vertical range to show
+          compression vs expansion without dominating the 280px sidebar. */}
       <div className="px-2 pb-2">
         <FundamentalSparkline
           instrumentId={instrumentId}
           metric={metric}
-          height={48}
+          height={68}
           showAxis={true}
         />
       </div>

@@ -41,6 +41,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 interface TechnicalSnapshotProps {
   instrumentId: string;
+  /**
+   * Current market price — used to color-code 50DayMA and 200DayMA values.
+   *
+   * WHY price-relative coloring (T-B-2-06): traders read price vs MA in <1 second.
+   * A green MA means price is above the average (bullish momentum), red means
+   * below (bearish). The ±0.5% dead band prevents noise from trivially small
+   * differences that have no trading significance.
+   *
+   * Thresholds (Damodaran / Bloomberg convention):
+   *   price > maValue * 1.005 → text-[#26A69A]  (bull green, >0.5% above MA)
+   *   price < maValue * 0.995 → text-[#EF5350]  (bear red, >0.5% below MA)
+   *   else                    → text-muted-foreground  (neutral, within ±0.5%)
+   */
+  currentPrice?: number;
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -114,6 +128,38 @@ function formatMa(value: number | null | undefined): string {
 }
 
 /**
+ * getMaClass — color-code a moving average relative to the current price.
+ *
+ * WHY price-relative coloring (T-B-2-06): traders read price vs MA in <1 second —
+ * showing the MA value in green/red removes the mental arithmetic of "is current
+ * price above or below this level?". The visual encoding matches Bloomberg terminal
+ * color conventions for technical levels.
+ *
+ * WHY ±0.5% dead band: a price within 0.5% of the MA is effectively "at the MA" —
+ * coloring it bullish or bearish would be misleading noise. The ±0.5% band treats
+ * prices within that range as neutral (muted), preventing false signals on small
+ * intraday fluctuations that have no actual technical significance.
+ *
+ * @param currentPrice  Live market price (null = no data)
+ * @param maValue       Moving average value from EODHD (null = not available)
+ * @returns Tailwind className string for the MA value span
+ */
+function getMaClass(
+  currentPrice: number | null | undefined,
+  maValue: number | null | undefined,
+): string {
+  // WHY null checks: currentPrice and maValue can both be absent at different
+  // lifecycle stages. No price = no signal; no MA = no signal.
+  if (!currentPrice || !maValue) return "text-muted-foreground";
+  // WHY 1.005 / 0.995 (not 1.01/0.99): ±0.5% is the standard technical analysis
+  // dead band for "at the moving average". Tighter bands produce too much noise;
+  // wider bands would suppress valid bullish/bearish readings.
+  if (currentPrice > maValue * 1.005) return "text-[#26A69A]"; // bull green — >0.5% above MA
+  if (currentPrice < maValue * 0.995) return "text-[#EF5350]"; // bear red — >0.5% below MA
+  return "text-muted-foreground"; // within ±0.5% — neutral, price "at" the MA
+}
+
+/**
  * formatShortPct — convert EODHD decimal short percent to display string.
  *
  * WHY * 100: ShortPercent from EODHD is a decimal fraction (0.0086 = 0.86%).
@@ -150,7 +196,7 @@ function MetricRow({
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function TechnicalSnapshot({ instrumentId }: TechnicalSnapshotProps) {
+export function TechnicalSnapshot({ instrumentId, currentPrice }: TechnicalSnapshotProps) {
   const { accessToken } = useAuth();
   const gateway = createGateway(accessToken);
 
@@ -230,18 +276,24 @@ export function TechnicalSnapshot({ instrumentId }: TechnicalSnapshotProps) {
       />
 
       {/* ── 50-Day Moving Average ────────────────────────────────────────── */}
-      {/* WHY no color: MA value alone (without current price context) has no
-          directional signal. Coloring would require the current price prop.
-          The value itself is informational — analysts compare it mentally. */}
+      {/* WHY price-relative color (T-B-2-06): getMaClass computes bull/bear/neutral
+          from currentPrice vs MA with a ±0.5% dead band. See getMaClass docstring
+          for threshold rationale. When currentPrice is not passed, renders muted. */}
       <MetricRow
         label="50-DAY MA"
         value={formatMa(tech["50DayMA"])}
+        valueClass={getMaClass(currentPrice, tech["50DayMA"])}
       />
 
       {/* ── 200-Day Moving Average ───────────────────────────────────────── */}
+      {/* WHY same coloring as 50DMA: the 200DayMA is an even stronger long-term
+          trend signal. Price below 200DayMA is broadly bearish (red); above is
+          bullish (green). Consistent coloring between the two MAs lets traders
+          immediately compare short-term vs long-term trend alignment. */}
       <MetricRow
         label="200-DAY MA"
         value={formatMa(tech["200DayMA"])}
+        valueClass={getMaClass(currentPrice, tech["200DayMA"])}
       />
 
       {/* ── Short Ratio (days to cover) ──────────────────────────────────── */}
