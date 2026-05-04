@@ -157,11 +157,57 @@ export function createDashboardApi(t: string | undefined) {
 
     /**
      * getEconomicCalendar — upcoming macro economic events
+     *
+     * WHY transform: S9 passes through S7's raw TemporalEventsListResponse which
+     * uses different field names. S7 uses `active_from` (not `event_date`), `region`
+     * (not `country`), `confidence` (not `impact`), and embeds values in a free-text
+     * `description` field ("Actual: X, Previous: Y"). Without this transform,
+     * `new Date(event.event_date)` throws RangeError: Invalid time value (BP-370)
+     * because `event.event_date` is undefined — crashing the panel silently.
      */
-    getEconomicCalendar(): Promise<EconomicCalendarResponse> {
-      return apiFetch<EconomicCalendarResponse>("/v1/fundamentals/economic-calendar", {
-        token: t,
+    async getEconomicCalendar(): Promise<EconomicCalendarResponse> {
+      const raw = await apiFetch<{
+        events: Array<{
+          event_id: string;
+          title: string;
+          region?: string;
+          description?: string;
+          active_from: string;
+          confidence?: number;
+        }>;
+        total?: number;
+      }>("/v1/fundamentals/economic-calendar", { token: t });
+
+      // Parse "Actual: X, Previous: Y, Forecast: Z" from S7 description text
+      const parseDesc = (desc?: string) => {
+        const m = (label: string) => {
+          const match = desc?.match(new RegExp(`${label}:\\s*([\\-\\d.]+)`));
+          return match ? parseFloat(match[1]) : null;
+        };
+        return { actual: m("Actual"), previous: m("Previous"), forecast: m("Forecast") };
+      };
+
+      // Derive EconomicImpact from S7 confidence score (no impact enum in S7)
+      const toImpact = (c?: number): import("@/types/api").EconomicImpact =>
+        (c ?? 0.5) >= 0.8 ? "HIGH" : (c ?? 0.5) >= 0.5 ? "MEDIUM" : "LOW";
+
+      const events = (raw.events ?? []).map((ev) => {
+        const { actual, previous, forecast } = parseDesc(ev.description);
+        return {
+          event_id: ev.event_id,
+          title: ev.title,
+          country: ev.region ?? "US",
+          currency: null as string | null,
+          event_date: ev.active_from, // S7 uses active_from; remap to expected field
+          actual,
+          previous,
+          forecast,
+          impact: toImpact(ev.confidence),
+          unit: null as string | null,
+        };
       });
+
+      return { events };
     },
 
     /**
