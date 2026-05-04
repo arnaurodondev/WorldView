@@ -2,7 +2,7 @@
  * components/instrument/InstrumentAISubheader.tsx — Collapsible AI brief subheader
  *
  * WHY THIS EXISTS: Replaces InstrumentBriefPanel with a terminal-style collapsed
- * band (h-9) that the analyst can expand to read the full AI brief. The panel
+ * band (h-7, 28px) that the analyst can expand to read the full AI brief. The panel
  * sits between the compact header and the tab navigation — always visible
  * regardless of which tab is active.
  *
@@ -121,7 +121,7 @@ export function InstrumentAISubheader({ entityId }: InstrumentAISubheaderProps) 
     if (isError) {
       return (
         <div className="border-b border-border border-l-2 border-l-primary bg-primary/10 shrink-0">
-          <div className="flex items-center h-9 px-2 gap-1.5">
+          <div className="flex items-center h-7 px-2 gap-1.5">
             <ChevronRight className="h-3 w-3 text-primary shrink-0" />
             <span className="text-[10px] uppercase tracking-[0.08em] text-primary shrink-0">
               AI BRIEF
@@ -141,13 +141,15 @@ export function InstrumentAISubheader({ entityId }: InstrumentAISubheaderProps) 
   if (isLoading) {
     return (
       <div className="border-b border-border border-l-2 border-l-primary bg-primary/10 shrink-0">
-        <div className="flex items-center h-9 px-2 gap-1.5">
+        {/* WHY h-7 (28px): T-B-2-02 — collapsed band is now the terminal-standard
+            h-7 row height. Was h-9 (36px) which was non-standard. */}
+        <div className="flex items-center h-7 px-2 gap-1.5">
           <ChevronRight className="h-3 w-3 text-primary shrink-0" />
           <span className="text-[10px] uppercase tracking-[0.08em] text-primary shrink-0">
             AI BRIEF
           </span>
           {/* WHY skeleton inside collapsed row (not full-height): the skeleton
-              should not shift layout — it stays within the fixed h-9 band. */}
+              should not shift layout — it stays within the fixed h-7 band. */}
           <Skeleton className="h-3 flex-1 ml-1" />
         </div>
       </div>
@@ -170,12 +172,15 @@ export function InstrumentAISubheader({ entityId }: InstrumentAISubheaderProps) 
     // in the worldview design system. Keeps it visually consistent with other AI panels.
     <div className="border-b border-border border-l-2 border-l-primary bg-primary/10 shrink-0">
 
-      {/* ── Collapsed row (always visible, h-9) ──────────────────────────── */}
+      {/* ── Collapsed row (always visible, h-7) ──────────────────────────── */}
+      {/* WHY h-7 (28px): T-B-2-02 — collapsed band uses the terminal-standard h-7
+          height. Was h-9 (36px) which was non-standard for terminal rows.
+          Expanded state height is controlled by grid-template-rows, not this button. */}
       {/* WHY button wrapping the whole row: makes the entire band clickable for
           expand/collapse — not just the chevron. Bloomberg panel headers work this way. */}
       <button
         onClick={toggle}
-        className="flex items-center w-full h-9 px-2 gap-1.5 text-left"
+        className="flex items-center w-full h-7 px-2 gap-1.5 text-left"
         aria-expanded={expanded}
         aria-label={expanded ? "Collapse AI brief" : "Expand AI brief"}
       >
