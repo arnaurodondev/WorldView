@@ -50,6 +50,7 @@ vi.mock("lightweight-charts", () => ({
     applyOptions: vi.fn(),
     timeScale: vi.fn(() => ({
       fitContent: vi.fn(),
+      scrollToRealTime: vi.fn(),
       timeToCoordinate: vi.fn(() => null),
       coordinateToTime: vi.fn(() => null),
       // OHLCVChart anchors the initial visible range via setVisibleLogicalRange
@@ -845,6 +846,7 @@ describe("OHLCVChart — Wave C integration", () => {
         applyOptions: vi.fn(),
         timeScale: vi.fn(() => ({
           fitContent: vi.fn(),
+          scrollToRealTime: vi.fn(),
           timeToCoordinate: vi.fn(() => null),
           coordinateToTime: vi.fn(() => null),
         })),
