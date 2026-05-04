@@ -42,6 +42,25 @@ import { formatMarketCap, formatRatio, formatPercent } from "@/lib/utils";
 import { WeekRangeBar } from "@/components/instrument/52WeekRangeBar";
 import type { Fundamentals, FundamentalsSnapshot, FundamentalsSectionResponse, Instrument } from "@/types/api";
 
+// ── Local types ────────────────────────────────────────────────────────────────
+
+/**
+ * TechnicalsRaw — PascalCase shape extracted from FundamentalsRecord.data for
+ * the technicals_snapshot section. Mirrors the same interface in TechnicalSnapshot.tsx.
+ *
+ * WHY duplicate (not shared): TechnicalSnapshot.tsx owns its type locally too.
+ * Exporting and sharing would couple two independent UI zones that happen to need
+ * the same EODHD fields. If the technicals section ever splits into separate
+ * endpoints, they should evolve independently.
+ *
+ * WHY quoted keys ("50DayMA", "200DayMA"): TypeScript interface keys that start
+ * with a digit must be quoted. Access via bracket notation: data["50DayMA"].
+ */
+interface TechnicalsRaw {
+  "50DayMA"?: number | null;
+  "200DayMA"?: number | null;
+}
+
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 interface OverviewSidebarMetricsProps {
@@ -114,6 +133,27 @@ export function OverviewSidebarMetrics({
     staleTime: 10 * 60_000,
   });
 
+  // ── Technicals query (50DayMA, 200DayMA for MA Signal row) ───────────────
+  // WHY fetch here (T-C-3-02): the MA Signal row needs 50-day and 200-day moving
+  // averages from the EODHD technicals_snapshot section. TechnicalSnapshot.tsx
+  // already fetches this on the Fundamentals tab — fetching it here too is a
+  // second consumer of the same queryKey ["technicals", instrumentId], so
+  // TanStack Query deduplicates the network request when both components mount.
+  // WHY staleTime 300_000 (5min): technicals update once at market close. This
+  // matches TechnicalSnapshot.tsx's staleTime so the cache entry is shared.
+  const { data: techData } = useQuery<FundamentalsSectionResponse>({
+    queryKey: ["technicals", instrumentId],
+    queryFn: () => createGateway(accessToken).getTechnicals(instrumentId!),
+    enabled: !!accessToken && !!instrumentId,
+    staleTime: 300_000,
+  });
+
+  // Extract 50DayMA and 200DayMA from the first technicals record.
+  // WHY records[0]: technicals is a snapshot (one latest record per instrument).
+  const tech = (techData?.records?.[0]?.data as TechnicalsRaw | undefined) ?? null;
+  const sma50 = tech?.["50DayMA"] ?? null;
+  const sma200 = tech?.["200DayMA"] ?? null;
+
   // ── Color helpers ──────────────────────────────────────────────────────────
   // WHY inline helpers (not imported): these thresholds are specific to this component's
   // display context. Sharing with FundamentalsTab would couple two unrelated UI zones.
@@ -149,6 +189,40 @@ export function OverviewSidebarMetrics({
     if (r < 0) return "text-negative";
     return "text-foreground";
   };
+
+  // MA Signal color — same ±0.5% dead-band convention as TechnicalSnapshot.tsx.
+  // WHY ±0.5%: a price within 0.5% of the MA is "at the MA" — coloring it bullish
+  // or bearish would be misleading noise. Mirrors TechnicalSnapshot's getMaClass logic.
+  // text-[#26A69A] = worldview bull green (matches TechnicalSnapshot.tsx)
+  // text-[#EF5350] = worldview bear red (matches TechnicalSnapshot.tsx)
+  const getMaSignalClass = (price: number | null | undefined, ma: number | null | undefined): string => {
+    if (!price || !ma) return "text-muted-foreground";
+    if (price > ma * 1.005) return "text-[#26A69A]"; // bull: >0.5% above MA
+    if (price < ma * 0.995) return "text-[#EF5350]"; // bear: >0.5% below MA
+    return "text-muted-foreground";                   // neutral: within ±0.5%
+  };
+
+  // Build MA Signal text — "ABOVE 50D / BELOW 200D" style composite label.
+  // WHY composite (not two rows): the sidebar has 12 existing rows; adding two
+  // separate MA rows would push the DataTimestamp footer off screen. A single
+  // "MA SIGNAL" row with a compact two-part value fits the 280px column width.
+  // WHY only render when data is available: if technicals haven't loaded or
+  // instrument has no EODHD technicals, the row shows "—" (Bloomberg convention).
+  const buildMaSignalParts = (): { text50: string; text200: string } | null => {
+    if (!currentPrice || (!sma50 && !sma200)) return null;
+    // WHY "ABOVE"/"BELOW"/"—" (not numeric values): the sidebar already shows raw
+    // P/E, Beta, ROE numbers. The MA row communicates directional signal at a glance —
+    // the analyst drills into the Fundamentals tab for precise MA values.
+    const t50 = sma50
+      ? (currentPrice > sma50 * 1.005 ? "ABOVE 50D" : currentPrice < sma50 * 0.995 ? "BELOW 50D" : "AT 50D")
+      : null;
+    const t200 = sma200
+      ? (currentPrice > sma200 * 1.005 ? "ABOVE 200D" : currentPrice < sma200 * 0.995 ? "BELOW 200D" : "AT 200D")
+      : null;
+    return { text50: t50 ?? "—", text200: t200 ?? "—" };
+  };
+
+  const maSignalParts = buildMaSignalParts();
 
   return (
     <div>
@@ -278,6 +352,45 @@ export function OverviewSidebarMetrics({
         value={formatPercent(fundamentals?.daily_return ?? null)}
         valueClass={returnClass(fundamentals?.daily_return ?? null)}
       />
+
+      {/* ── Row 13: MA Signal (T-C-3-02) ─────────────────────────────────── */}
+      {/* WHY MA Signal in the sidebar (T-C-3-02): moving average crossovers are
+          the most-watched technical signal for non-quant analysts. "ABOVE 50D /
+          BELOW 200D" in a single row tells the analyst the short-term vs long-term
+          trend stance immediately — no arithmetic required.
+          WHY only render when data is available: the technicals endpoint is separate
+          from the CompanyOverview waterfall. If it fails (e.g., no EODHD technicals
+          for this instrument), we render a placeholder "—" via maSignalParts=null check.
+          WHY NOT use MetricRow for this row: the value combines two color-coded spans
+          ("ABOVE 50D" green + " / " + "BELOW 200D" red) which MetricRow's single
+          valueClass cannot express. We inline the row structure matching MetricRow
+          exactly (same h-[22px], px-2, typography) but with two coloured spans. */}
+      <div className="flex items-center h-[22px] px-2 border-b border-border/30 last:border-0">
+        {/* Label — same uppercase 10px style as all other metric rows */}
+        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground flex-1 truncate">
+          MA SIGNAL
+        </span>
+        {/* Value — two-part colored compound: "ABOVE 50D / BELOW 200D" */}
+        {maSignalParts ? (
+          <span className="font-mono text-[11px] tabular-nums truncate max-w-[65%] text-right flex items-center gap-0.5">
+            {/* 50-day MA signal (green if above, red if below, muted if neutral/missing) */}
+            <span className={getMaSignalClass(currentPrice ?? null, sma50)}>
+              {maSignalParts.text50}
+            </span>
+            {/* Separator — muted so it doesn't compete with the signal colors */}
+            <span className="text-muted-foreground/50">/</span>
+            {/* 200-day MA signal — same coloring logic as 50D */}
+            <span className={getMaSignalClass(currentPrice ?? null, sma200)}>
+              {maSignalParts.text200}
+            </span>
+          </span>
+        ) : (
+          // No price or no technicals data yet — show placeholder dash
+          <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right">
+            —
+          </span>
+        )}
+      </div>
 
       {/* ── T-D-4-05: DataTimestamp footer ───────────────────────────────── */}
       {/* WHY show "as of" timestamp: analysts need to know how stale the snapshot

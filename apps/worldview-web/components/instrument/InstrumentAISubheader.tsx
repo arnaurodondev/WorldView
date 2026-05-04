@@ -93,6 +93,12 @@ export function InstrumentAISubheader({ entityId }: InstrumentAISubheaderProps) 
     });
   };
 
+  // TODO(T-C-3-01): No per-symbol earnings endpoint in S9 — wire when
+  // /v1/entities/{id}/earnings is added. An "upcoming earnings" chip would sit
+  // alongside the AI BRIEF label in the collapsed row (e.g., "AAPL earnings in 12d").
+  // The dashboard uses a separate /calendar/earnings endpoint that returns a list,
+  // not a per-symbol lookup, so it cannot be reused here without filtering.
+
   // ── Brief data query ──────────────────────────────────────────────────────
   // WHY staleTime 30min: instrument briefs are generated on-demand by S8 and
   // cached in Valkey for 24h. No need to refetch aggressively.
