@@ -19,9 +19,12 @@ function Skeleton({
   return (
     <div
       className={cn(
-        // animate-pulse with our custom skeleton-pulse keyframe (2s, gentler than default)
+        // WHY no animate-pulse: Bloomberg terminals use STATIC skeleton bars — no movement.
+        // Finance users interpret animation as "something is happening" (streaming, thinking).
+        // Static bars make the loading state feel intentional, not broken.
+        // Custom skeleton-pulse keyframe remains in globals.css for opt-in use via className.
         // bg-muted: elevated surface color from Bloomberg Dark (#1A2030)
-        "animate-pulse rounded-[2px] bg-muted",
+        "rounded-[2px] bg-muted",
         className,
       )}
       {...props}

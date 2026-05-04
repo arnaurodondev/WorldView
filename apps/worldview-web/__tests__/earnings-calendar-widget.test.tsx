@@ -123,8 +123,8 @@ describe("EarningsCalendarWidget — loading state", () => {
 
     // WHY getByRole("generic"): skeletons render as div elements (no semantic role).
     // We assert that at least one skeleton is present — exact count is an impl detail.
-    // Using getAllByRole("generic") would match too broadly; checking for the
-    // Skeleton component by its animate-pulse class is more targeted.
+    // Using getAllByRole("generic") would match too broadly; after T-D-4-01, Skeleton
+    // uses static .bg-muted bars (no animate-pulse per Bloomberg terminal standard).
     // Pragmatically, we just verify the header is present and no event rows appear yet.
     expect(screen.queryByText(/No upcoming earnings events/i)).not.toBeInTheDocument();
     expect(screen.queryByText("AAPL")).not.toBeInTheDocument();

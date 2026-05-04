@@ -41,7 +41,9 @@ const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-xs font-medium ring-offset-background transition-all",
+      // WHY text-[11px] not text-xs (12px): finance mandate — all data text 11px for density.
+      // text-[11px] is an explicit override to bypass Tailwind's font-size scale lookup.
+      "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-[11px] font-medium ring-offset-background transition-all",
       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
       // PLAN-0059 W0 F-VISUAL-027: explicit tokens (was opacity-50)
       "disabled:pointer-events-none disabled:text-[hsl(var(--disabled-foreground))]",
