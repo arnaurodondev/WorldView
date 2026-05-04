@@ -162,7 +162,7 @@ export function CreatePortfolioDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-sm bg-card border-border">
         <DialogHeader>
-          <DialogTitle className="text-[13px] font-mono uppercase tracking-[0.08em]">
+          <DialogTitle className="text-[11px] font-mono uppercase tracking-[0.08em]">
             New Portfolio
           </DialogTitle>
         </DialogHeader>
@@ -192,7 +192,7 @@ export function CreatePortfolioDialog({
                           void form.handleSubmit(onSubmit)();
                         }
                       }}
-                      className="h-8 text-[12px] font-mono bg-background border-border"
+                      className="h-8 text-[11px] font-mono bg-background border-border"
                       {...field}
                     />
                   </FormControl>

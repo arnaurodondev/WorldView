@@ -92,7 +92,7 @@ export function WorkspaceWatchlistWidget() {
     return (
       <p className="px-2 py-1 text-[11px] text-muted-foreground">
         No watchlist yet.{" "}
-        <Link href="/portfolio" className="text-primary hover:underline">
+        <Link href="/portfolio" className="text-primary hover:text-primary/80">
           Create one →
         </Link>
       </p>

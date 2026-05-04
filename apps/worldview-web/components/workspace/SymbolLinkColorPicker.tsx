@@ -89,7 +89,10 @@ export function SymbolLinkColorPicker({ panelId }: SymbolLinkColorPickerProps) {
             // WHY h-2 w-2 (8px): a 12-by-12px hit target with the dot itself ~8px.
             // The h-3 w-3 padding around it gives a comfortable click zone without
             // pushing the panel chrome past 24px.
-            "h-2 w-2 rounded-full shrink-0 cursor-pointer",
+            // WHY rounded-[2px] (not rounded-full): Bloomberg terminal mandate — no
+            // rounded-full on interactive controls. 2px radius still reads as a dot
+            // at 8px size but follows the design system corner-radius rule.
+            "h-2 w-2 rounded-[2px] shrink-0 cursor-pointer",
             "ring-offset-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
             // WHY border on "none": an outline-only dot reads as "no color set" without
             // requiring a separate icon. Familiar Bloomberg pattern (empty group circle).

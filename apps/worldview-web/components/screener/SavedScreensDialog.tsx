@@ -125,7 +125,7 @@ export function SavedScreensDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-[12px] font-mono uppercase tracking-[0.08em]">
+          <DialogTitle className="text-[11px] font-mono uppercase tracking-[0.08em]">
             Saved Screens
           </DialogTitle>
           <DialogDescription className="text-[11px]">
@@ -175,7 +175,7 @@ export function SavedScreensDialog({
               )}
               aria-label="Save current filter set"
             >
-              <Save className="h-3 w-3" aria-hidden />
+              <Save className="h-3 w-3" aria-hidden strokeWidth={1.5} />
               Save
             </button>
           </TabsContent>
@@ -207,7 +207,7 @@ export function SavedScreensDialog({
                       className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-primary/10 border border-primary/60 text-primary rounded-[2px] hover:bg-primary/20 transition-colors"
                       aria-label={`Load screen ${s.name}`}
                     >
-                      <FolderOpen className="h-3 w-3" aria-hidden />
+                      <FolderOpen className="h-3 w-3" aria-hidden strokeWidth={1.5} />
                       Load
                     </button>
                     <button
@@ -216,7 +216,7 @@ export function SavedScreensDialog({
                       className="flex h-7 items-center justify-center px-2 text-muted-foreground hover:text-destructive transition-colors"
                       aria-label={`Delete screen ${s.name}`}
                     >
-                      <Trash2 className="h-3 w-3" aria-hidden />
+                      <Trash2 className="h-3 w-3" aria-hidden strokeWidth={1.5} />
                     </button>
                   </li>
                 ))}

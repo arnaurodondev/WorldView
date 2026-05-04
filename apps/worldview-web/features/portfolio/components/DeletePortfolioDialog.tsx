@@ -62,9 +62,9 @@ export function DeletePortfolioDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Delete portfolio?</DialogTitle>
+          <DialogTitle className="text-[11px] font-mono uppercase tracking-[0.08em]">Delete portfolio?</DialogTitle>
         </DialogHeader>
-        <p className="text-[12px] text-muted-foreground font-sans">
+        <p className="text-[11px] text-muted-foreground font-mono">
           {/* Quoted name guards against weird display in mixed-charset
               portfolios. The "Holdings will be unaffected" line is an
               important reassurance — S1 archives the portfolio (soft

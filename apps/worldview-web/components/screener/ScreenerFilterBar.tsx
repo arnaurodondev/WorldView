@@ -194,6 +194,7 @@ export function ScreenerFilterBar({
                 isOpen && "rotate-180",
               )}
               aria-hidden
+              strokeWidth={1.5}
             />
           </button>
           {/* Reset — visible in header for quick reset without opening the panel */}

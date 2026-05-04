@@ -317,9 +317,12 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         }`}
       >
         {message.content || (message.streaming ? (
-          // WHY inline dots (not TypingIndicator): avoids importing the full
+          // WHY inline cursor character (not TypingIndicator): avoids importing the full
           // TypingIndicator component from the chat page, keeping bundle size smaller.
-          <span className="text-muted-foreground animate-pulse">▋</span>
+          // WHY no animate-pulse: Bloomberg-terminal standard — no pulsing animations on
+          // interactive surfaces (§0 mandate). The static cursor character still reads
+          // as "awaiting response" without animating.
+          <span className="text-muted-foreground">▋</span>
         ) : null)}
       </div>
     </div>

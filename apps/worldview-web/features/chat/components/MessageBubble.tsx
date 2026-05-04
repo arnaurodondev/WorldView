@@ -56,10 +56,13 @@ export function TypingIndicator() {
         <Bot className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />
       </div>
       <div className="rounded-[2px] bg-muted px-4 py-3">
+        {/* WHY static dots (no animate-bounce): Bloomberg-terminal mandate — no
+            bounce/pulse animations on data surfaces. Three static dots still
+            convey "generating" when paired with the TypingIndicator label. */}
         <div className="flex gap-1" aria-label="AI is generating a response">
-          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:0ms]" />
-          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:150ms]" />
-          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:300ms]" />
+          <span className="h-1.5 w-1.5 rounded-[2px] bg-muted-foreground" />
+          <span className="h-1.5 w-1.5 rounded-[2px] bg-muted-foreground" />
+          <span className="h-1.5 w-1.5 rounded-[2px] bg-muted-foreground" />
         </div>
       </div>
     </div>
@@ -161,7 +164,8 @@ export function StreamingBubble({ streaming }: { streaming: StreamingMessage }) 
         <div className="rounded-[2px] bg-muted px-4 py-3 text-[11px] leading-[1.5]">
           <LazyMarkdownContent size="compact">{streaming.text}</LazyMarkdownContent>
           {streaming.active && (
-            <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-primary align-middle" />
+            // WHY no animate-pulse: terminal mandate — static cursor still reads as "streaming".
+            <span className="ml-0.5 inline-block h-4 w-0.5 bg-primary align-middle" />
           )}
         </div>
       </div>

@@ -189,7 +189,7 @@ export default function BetaProgramPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Beaker className="h-4 w-4 text-primary" aria-hidden="true" />
+            <Beaker className="h-4 w-4 text-primary" aria-hidden="true" strokeWidth={1.5} />
             Beta Program
           </CardTitle>
           <CardDescription>
@@ -221,6 +221,7 @@ export default function BetaProgramPage() {
                 <Loader2
                   className="h-3.5 w-3.5 motion-safe:animate-spin text-muted-foreground"
                   aria-hidden="true"
+                  strokeWidth={1.5}
                 />
               )}
               {/* PLAN-0052 Wave E QA-iter1 a11y/M-2: removed aria-label so the
@@ -271,7 +272,7 @@ export default function BetaProgramPage() {
                 onClick={handleSaveNotes}
               >
                 {patch.isPending && (
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden="true" />
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden="true" strokeWidth={1.5} />
                 )}
                 Save notes
               </Button>
