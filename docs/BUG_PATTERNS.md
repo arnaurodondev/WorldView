@@ -381,3 +381,7 @@
 ```
 
 > **Legacy note**: The original monolithic BUG_PATTERNS.md (8,775 lines) was restructured into this indexed format on 2026-05-03 to reduce LLM context load. All content is preserved in category files.
+| BP-368 | Screener default: mandatory `current_price`, `pe_ratio`, `daily_return` enrichment filters — `current_price` not a fundamentals metric (invalid → INNER JOIN → 0 results); pe_ratio/daily_return only available on 8/31 instruments | Frontend | [bug-patterns/frontend.md](bug-patterns/frontend.md#bp-368) |
+| BP-369 | FundamentalsTab all "—": S3 returns `{security_id, records:[...]}` not flat Fundamentals object; gateway `apiFetch<Fundamentals>` returned wrong shape; fix: add records→Fundamentals transformer | Frontend | [bug-patterns/frontend.md](bug-patterns/frontend.md#bp-369) |
+| BP-370 | EconomicCalendar empty: S7 uses `active_from`/`region`/`confidence` but component expected `event_date`/`country`/`impact`; `new Date(undefined).toISOString()` threw RangeError, crashing panel silently | Frontend | [bug-patterns/frontend.md](bug-patterns/frontend.md#bp-370) |
+| BP-371 | WorkspaceScreenerWidget sent `filters:[]` → backend 422 (min_length=1); fix: use `market_capitalization min=0` as universal no-op filter | Frontend | [bug-patterns/frontend.md](bug-patterns/frontend.md#bp-371) |
