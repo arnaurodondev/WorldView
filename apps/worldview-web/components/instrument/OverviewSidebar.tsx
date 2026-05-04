@@ -285,71 +285,72 @@ function CompetitorsZone({
     staleTime: 600_000,
   });
 
-  // WHY both source + target: COMPETES_WITH edges can be either direction.
-  // WHY slice(0, 4): the zone has room for the current ticker + ~4 peer rows.
-  const competitorIds: string[] = (graph?.edges ?? [])
-    .filter((e) => e.label === "COMPETES_WITH")
+  // WHY ticker map + lowercase filter: S9 normalises edge labels to lowercase
+  // ("competes_with"), and includes `ticker` in each node so we can bridge
+  // KG entity_id → S3 instrument without a second lookup (ADR-F-12, BP-367).
+  const nodeTickerMap = new Map<string, string>(
+    (graph?.nodes ?? [])
+      .filter((n) => n.ticker)
+      .map((n) => [n.id, n.ticker!]),
+  );
+  const competitorEntityIds: string[] = (graph?.edges ?? [])
+    .filter((e) => e.label.toLowerCase() === "competes_with")
     .map((e) => (e.source === entityId ? e.target : e.source))
     .filter((id) => id !== entityId)
     .slice(0, 4);
+  const kgTickers = new Set<string>(
+    competitorEntityIds.map((id) => nodeTickerMap.get(id) ?? "").filter(Boolean),
+  );
 
-  // ── Screener for competitor metrics ───────────────────────────────────────
-  const { data: peerData, isLoading: peersLoading } = useQuery({
-    queryKey: ["overview-peers", competitorIds.join(",")],
+  // ── Single screener call for all instruments (KG + sector fill) ───────────
+  // WHY single call: the backend screener has no ticker/entity_id filter.
+  // Fetch all + client-side partition — same approach as PeerComparisonPanel v2.
+  const { data: screenerAll, isLoading: screenerLoading } = useQuery({
+    queryKey: ["all-instruments-screener-v2"],
     queryFn: () =>
       gateway.runScreener({
         filters: [
-          {
-            field: "entity_id",
-            operator: "in",
-            value: competitorIds,
-          },
+          { metric: "market_capitalization", min_value: 0 },
+          { metric: "pe_ratio", min_value: -999999, max_value: 999999 },
+          { metric: "daily_return", min_value: -100, max_value: 100 },
         ],
         sort_by: "market_capitalization",
         sort_dir: "desc",
-        limit: 4,
+        limit: 100,
       }),
-    enabled: !!accessToken && competitorIds.length > 0 && !graphLoading,
+    enabled: !!accessToken && !graphLoading,
     staleTime: 300_000,
   });
+  const allResults = screenerAll?.results ?? [];
 
-  // ── Sector fallback ───────────────────────────────────────────────────────
-  // WHY sector fallback: thin/new tickers may have no COMPETES_WITH edges.
-  const hasGraphPeers = (peerData?.results?.length ?? 0) > 0;
-  const { data: sectorData, isLoading: sectorLoading } = useQuery({
-    queryKey: ["overview-sector-peers", instrument?.gics_sector],
-    queryFn: () =>
-      gateway.runScreener({
-        filters: [
-          {
-            field: "gics_sector",
-            operator: "eq",
-            value: instrument?.gics_sector ?? "",
-          },
-          {
-            field: "entity_id",
-            operator: "neq",
-            value: entityId,
-          },
-        ],
-        sort_by: "market_capitalization",
-        sort_dir: "desc",
-        limit: 4,
-      }),
-    enabled:
-      !!accessToken &&
-      !!instrument?.gics_sector &&
-      !graphLoading &&
-      !peersLoading &&
-      !hasGraphPeers,
-    staleTime: 300_000,
-  });
+  // KG competitors matched by ticker
+  const kgPeers: ScreenerResult[] = allResults.filter(
+    (r) => kgTickers.has(r.ticker) && r.ticker !== (instrument?.ticker ?? ""),
+  );
 
-  const peers: ScreenerResult[] = hasGraphPeers
-    ? (peerData?.results ?? [])
-    : (sectorData?.results ?? []);
-  const isLoading = graphLoading || peersLoading || sectorLoading;
-  const dataSource = hasGraphPeers ? "KG" : instrument?.gics_sector ? "sector" : "";
+  // Sector fill when KG returns fewer than 4 peers
+  const slotsLeft = 4 - kgPeers.length;
+  const kgTickerSet = new Set(kgPeers.map((p) => p.ticker));
+  const sectorPeers: ScreenerResult[] = slotsLeft > 0
+    ? allResults
+        .filter(
+          (r) =>
+            r.gics_sector === instrument?.gics_sector &&
+            r.ticker !== (instrument?.ticker ?? "") &&
+            !kgTickerSet.has(r.ticker) &&
+            !kgTickers.has(r.ticker),
+        )
+        .slice(0, slotsLeft)
+    : [];
+
+  const hasKgPeers = kgPeers.length > 0;
+  const peers: ScreenerResult[] = [...kgPeers, ...sectorPeers];
+  const isLoading = graphLoading || screenerLoading;
+  const dataSource = hasKgPeers
+    ? (sectorPeers.length > 0 ? "KG+sector" : "KG")
+    : instrument?.gics_sector
+    ? "sector"
+    : "";
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="border-b border-border">
