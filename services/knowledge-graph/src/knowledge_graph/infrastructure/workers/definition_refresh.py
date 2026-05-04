@@ -38,9 +38,12 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _REFRESH_INTERVAL_DAYS = 90
-_BATCH_LIMIT = 50
 _DEFAULT_EMBED_MODEL_ID = "nomic-embed-text"
 _FINANCIAL_INSTRUMENT = "financial_instrument"
+
+# Maximum texts to send in a single embed() call.  DeepInfra and most providers
+# accept batches of several hundred inputs; 200 is a conservative safe ceiling.
+_EMBED_CHUNK_SIZE = 200
 
 
 def _fallback_description(canonical_name: str, entity_type: str) -> str:
@@ -73,6 +76,7 @@ class DefinitionRefreshWorker:
         description_client: EntityDescriptionClient | None = None,
         usage_logger: LlmUsageLogProtocol | None = None,
         embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
+        batch_limit: int = 0,
     ) -> None:
         self._sf = session_factory
         self._llm = llm_client
@@ -88,6 +92,7 @@ class DefinitionRefreshWorker:
             _adapter = getattr(self._description_client, "_adapter", None)
             if _adapter is not None:
                 _adapter._usage_logger = usage_logger
+        self._batch_limit = batch_limit
 
     async def run(self) -> None:
         """Periodic fallback: refresh definition embeddings due for refresh.
@@ -95,18 +100,23 @@ class DefinitionRefreshWorker:
         Execution is split into three phases to avoid holding a DB session
         across external I/O (HTTP description generation + ML embedding calls):
 
-        Phase 1 — Read: fetch due rows, close session immediately.
-        Phase 2 — Process: generate descriptions + embeddings (no session open).
+        Phase 1 — Read: fetch due rows, generate descriptions, close session.
+        Phase 2 — Embed: call embed() ONCE for all changed texts (no session open).
         Phase 3 — Write: upsert all results in a single session + commit.
         """
+        from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]
+
         from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
             EntityEmbeddingStateRepository,
         )
 
         # ── Phase 1: Read ────────────────────────────────────────────────────
+        # Fetch all due rows and resolve source texts (including LLM description
+        # generation for non-company entities).  Session is released before any
+        # embed() calls.
         async with self._sf() as session:
             emb_repo = EntityEmbeddingStateRepository(session)
-            due = await emb_repo.get_due_for_refresh(VIEW_DEFINITION, _BATCH_LIMIT)
+            due = await emb_repo.get_due_for_refresh(VIEW_DEFINITION, self._batch_limit)
         # Session released here — FOR UPDATE lock released, that is acceptable
         # because this worker runs as a single periodic process.
 
@@ -118,9 +128,10 @@ class DefinitionRefreshWorker:
             )
             return
 
-        # ── Phase 2: Process ─────────────────────────────────────────────────
+        # ── Phase 2: Process + batch embed ───────────────────────────────────
         # No DB session open during description generation or embedding calls.
-        refreshed = 0
+        # We first collect ALL entities that need new embeddings, then call
+        # embed() ONCE with all texts (chunked by _EMBED_CHUNK_SIZE).
         skipped = 0
 
         @dataclasses.dataclass
@@ -131,7 +142,10 @@ class DefinitionRefreshWorker:
             embedding: list[float] | None
             model_id: str | None
 
-        to_write: list[_Update] = []
+        # Rows where hash matches — push next_refresh_at forward, no re-embed.
+        unchanged: list[_Update] = []
+        # Rows that need fresh embeddings: (entity_id, source_text, source_hash).
+        needs_embed: list[tuple[UUID, str, str]] = []
 
         for row in due:
             entity_id: UUID = row["entity_id"]  # type: ignore[assignment]
@@ -147,7 +161,7 @@ class DefinitionRefreshWorker:
             new_hash = sha256_hex(source_text)
             if new_hash == row.get("source_hash"):
                 # Unchanged — push next_refresh_at forward, keep existing embedding.
-                to_write.append(
+                unchanged.append(
                     _Update(
                         entity_id=entity_id,
                         source_text=source_text,
@@ -159,11 +173,29 @@ class DefinitionRefreshWorker:
                 skipped += 1
                 continue
 
-            embedding = await self._embed(entity_id, source_text)
+            needs_embed.append((entity_id, source_text, new_hash))
+
+        # Batch embed all changed entities in one (or a few) API calls.
+        # Chunk by _EMBED_CHUNK_SIZE to stay within provider batch limits.
+        embed_results: list[list[float] | None] = []
+        if needs_embed:
+            inputs_all = [EmbeddingInput(text=text, model_id=self._embed_model_id) for _, text, _ in needs_embed]
+            for chunk_start in range(0, len(inputs_all), _EMBED_CHUNK_SIZE):
+                chunk_inputs = inputs_all[chunk_start : chunk_start + _EMBED_CHUNK_SIZE]
+                outputs = await self._llm.embed(chunk_inputs)
+                for i in range(len(chunk_inputs)):
+                    if outputs and i < len(outputs):
+                        embed_results.append(outputs[i].embedding)
+                    else:
+                        embed_results.append(None)
+
+        # Build the write list from batch embed results.
+        to_write: list[_Update] = list(unchanged)
+        refreshed = 0
+        for (entity_id, source_text, new_hash), embedding in zip(needs_embed, embed_results, strict=False):
             if embedding is None:
                 # Fallback exhausted; next_refresh_at unchanged → retry next cycle
                 continue
-
             to_write.append(
                 _Update(
                     entity_id=entity_id,

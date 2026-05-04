@@ -474,3 +474,144 @@ class TestSectorRelationUpsert:
 
         # Advisory-lock upsert is called on every run (idempotency handled at DB level)
         assert relation_repo.upsert.await_count == 4  # 2 relations x 2 runs
+
+
+# ── Batch embed tests (perf-fix) ─────────────────────────────────────────────
+
+_ENTITY_ID_A = UUID("00000000-0000-0000-0000-000000000010")
+_ENTITY_ID_B = UUID("00000000-0000-0000-0000-000000000011")
+_ENTITY_ID_C = UUID("00000000-0000-0000-0000-000000000012")
+
+
+def _make_multi_entity_http(instrument_id: UUID) -> AsyncMock:
+    """HTTP client that successfully routes instrument-symbol lookups and fundamentals."""
+    instrument_resp = MagicMock()
+    instrument_resp.status_code = 200
+    instrument_resp.json = MagicMock(return_value={"id": str(instrument_id), "symbol": "TEST"})
+
+    fundamentals_resp = MagicMock()
+    fundamentals_resp.status_code = 200
+    fundamentals_resp.json = MagicMock(return_value={"revenue_usd_millions": 100.0, "price": 50.0})
+
+    # 404 for earnings and profile so those paths complete quickly
+    not_found_resp = MagicMock()
+    not_found_resp.status_code = 404
+
+    def _route(url: str, **_kwargs: object) -> object:
+        if "/instruments/symbol/" in url:
+            return instrument_resp
+        if "/earnings" in url or "/company-profile" in url:
+            return not_found_resp
+        return fundamentals_resp
+
+    http = AsyncMock()
+    http.get = AsyncMock(side_effect=_route)
+    http.aclose = AsyncMock()
+    return http
+
+
+def _make_session_factory_multi(due_rows: list) -> tuple:
+    """Session factory for multi-entity tests."""
+    session = AsyncMock()
+    session.commit = AsyncMock()
+
+    def _make_cm() -> AsyncMock:
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=session)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        return cm
+
+    sf = MagicMock(side_effect=lambda: _make_cm())
+
+    emb_repo = AsyncMock()
+    emb_repo.get_due_for_refresh = AsyncMock(return_value=due_rows)
+    emb_repo.upsert = AsyncMock()
+
+    return sf, emb_repo
+
+
+class TestBatchEmbedding:
+    """Verify that the batch-embed refactor sends all inputs in a single embed() call."""
+
+    def test_multiple_entities_embed_called_once_with_all_inputs(self) -> None:
+        """3 entities → embed() called exactly once with 3 inputs (not 3 separate calls)."""
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+        from ml_clients.dataclasses import EmbeddingOutput  # type: ignore[import-untyped]
+
+        _INSTRUMENT_ID = UUID("01900000-0000-7000-8000-000000002001")
+        due_rows = [
+            {
+                "entity_id": eid,
+                "ticker": f"TKR{i}",
+                "canonical_name": f"Company {i}",
+                "entity_type": "financial_instrument",
+            }
+            for i, eid in enumerate([_ENTITY_ID_A, _ENTITY_ID_B, _ENTITY_ID_C])
+        ]
+
+        sf, emb_repo = _make_session_factory_multi(due_rows)
+        http = _make_multi_entity_http(_INSTRUMENT_ID)
+
+        llm = AsyncMock()
+        # Return 3 outputs for the 3 narratives.
+        llm.embed = AsyncMock(
+            return_value=[
+                EmbeddingOutput(embedding=[0.1] * 10, model_id="nomic-embed-text", dimension=10) for _ in range(3)
+            ]
+        )
+
+        with patch(_EMB_REPO, return_value=emb_repo):
+            worker = FundamentalsRefreshWorker(sf, llm, "http://market-data:8003", http_client=http)
+            asyncio.run(worker.run())
+
+        # embed() must be called once with all 3 narratives.
+        llm.embed.assert_awaited_once()
+        inputs = llm.embed.call_args.args[0]
+        assert len(inputs) == 3, f"Expected 3 embed inputs, got {len(inputs)}"
+
+        # upsert called once per entity that has a narrative.
+        assert emb_repo.upsert.await_count == 3
+
+    def test_entities_processed_concurrently(self) -> None:
+        """3 entities: asyncio.gather path ensures embed receives 3 inputs in one call."""
+        from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+        from ml_clients.dataclasses import EmbeddingOutput  # type: ignore[import-untyped]
+
+        _INSTRUMENT_ID = UUID("01900000-0000-7000-8000-000000002002")
+        due_rows = [
+            {
+                "entity_id": eid,
+                "ticker": f"SYM{i}",
+                "canonical_name": f"Corp {i}",
+                "entity_type": "financial_instrument",
+            }
+            for i, eid in enumerate([_ENTITY_ID_A, _ENTITY_ID_B, _ENTITY_ID_C])
+        ]
+
+        sf, emb_repo = _make_session_factory_multi(due_rows)
+        http = _make_multi_entity_http(_INSTRUMENT_ID)
+
+        embed_call_count = 0
+
+        async def _tracking_embed(inputs: list, **_kwargs: object) -> list:
+            nonlocal embed_call_count
+            embed_call_count += 1
+            return [EmbeddingOutput(embedding=[0.2] * 10, model_id="nomic-embed-text", dimension=10) for _ in inputs]
+
+        llm = AsyncMock()
+        llm.embed = _tracking_embed
+
+        with patch(_EMB_REPO, return_value=emb_repo):
+            worker = FundamentalsRefreshWorker(
+                sf,
+                llm,
+                "http://market-data:8003",
+                http_client=http,
+                concurrency=3,  # allow all 3 entities to run concurrently
+            )
+            asyncio.run(worker.run())
+
+        # Batch embed means exactly 1 embed call for all 3 entities.
+        assert embed_call_count == 1, f"Expected 1 embed call, got {embed_call_count}"
+        # All 3 entities have narratives → 3 upserts.
+        assert emb_repo.upsert.await_count == 3

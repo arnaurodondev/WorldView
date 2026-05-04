@@ -125,6 +125,13 @@ class Settings(BaseSettings):
     worker_provisional_enrichment_concurrency: int = 5  # concurrent LLM calls
     worker_provisional_enrichment_max_retries: int = 5  # terminal 'failed' after N failures
 
+    # Embedding worker batch controls (PLAN perf-fix)
+    # 0 = all due entities per cycle (recommended — lets workers drain the full queue).
+    # Set to a positive integer to cap the batch size for rate-limited environments.
+    worker_embedding_batch_limit: int = 0  # KNOWLEDGE_GRAPH_WORKER_EMBEDDING_BATCH_LIMIT
+    # Parallel HTTP concurrency for FundamentalsRefreshWorker Phase 2.
+    worker_fundamentals_concurrency: int = 5  # KNOWLEDGE_GRAPH_WORKER_FUNDAMENTALS_CONCURRENCY
+
     # Entity description generation (PRD-0017 §6.5 — DefinitionRefreshWorker)
     # "deepinfra" → DeepInfraDescriptionAdapter (Qwen3-235B-A22B primary, Qwen3-32B fallback)
     # "gemini"    → GeminiDescriptionAdapter (gemini-3.1-flash-lite)

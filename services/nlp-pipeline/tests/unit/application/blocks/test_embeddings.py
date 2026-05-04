@@ -33,9 +33,14 @@ def _make_section(text: str, section_index: int = 0, speaker: str | None = None)
 def _make_embedding_client(dimension: int = 1024) -> MagicMock:
     from ml_clients.dataclasses import EmbeddingOutput  # type: ignore[import-not-found]
 
-    output = EmbeddingOutput(embedding=[0.1] * dimension, model_id="bge", dimension=dimension)
+    # Return one output per input so batch calls work correctly.
+    # The old `return_value=[output]` only returned 1 item regardless of how many
+    # inputs were passed; `side_effect` lets us scale to the actual batch size.
+    async def _embed(inputs: list) -> list:
+        return [EmbeddingOutput(embedding=[0.1] * dimension, model_id="bge", dimension=dimension) for _ in inputs]
+
     client = MagicMock()
-    client.embed = AsyncMock(return_value=[output])
+    client.embed = _embed
     return client
 
 
@@ -265,7 +270,8 @@ class TestRunEmbeddingsBlockOptionC:
 
             for inp in inputs:
                 captured_texts.append(inp.text)
-            return [EmbeddingOutput(embedding=[0.1] * 1024, model_id="bge", dimension=1024)]
+            # Return one output per input so batch callers get the right count.
+            return [EmbeddingOutput(embedding=[0.1] * 1024, model_id="bge", dimension=1024)] * len(inputs)
 
         client = MagicMock()
         client.embed = _fake_embed
@@ -280,7 +286,9 @@ class TestRunEmbeddingsBlockOptionC:
 
         assert len(section_embeddings) == 1
         # The text sent to the embedding client must be the first chunk's text
-        # (which for a single-sentence/short section equals the section text)
+        # (which for a single-sentence/short section equals the section text).
+        # With batch embed, all section texts are sent in one call; for a single
+        # section with no chunk embeddings that means exactly 1 text.
         assert len(captured_texts) == 1
         assert captured_texts[0] in text  # first chunk text is a substring/equal of section
 
@@ -419,3 +427,94 @@ class TestRunEmbeddingsBlockChunkTextStore:
         assert store.put.await_count == len(chunks)
         for chunk in chunks:
             assert chunk.text_key is not None
+
+
+@pytest.mark.unit
+class TestBatchEmbedSingleCall:
+    """Verify the batch-embed refactor sends all texts in ONE embed() call."""
+
+    @pytest.mark.asyncio
+    async def test_batch_embed_single_call_for_multiple_sections(self) -> None:
+        """3 sections, generate_chunk_embeddings=False → embed() called ONCE with 3 inputs."""
+        sections = [
+            _make_section("Apple reported record earnings this quarter.", section_index=0),
+            _make_section("Tesla delivered more vehicles than expected.", section_index=1),
+            _make_section("Amazon Web Services revenue beat estimates.", section_index=2),
+        ]
+
+        embed_call_count = 0
+        all_captured_inputs: list[list] = []
+
+        async def _counting_embed(inputs: list) -> list:
+            nonlocal embed_call_count
+            embed_call_count += 1
+            all_captured_inputs.append(list(inputs))
+            from ml_clients.dataclasses import EmbeddingOutput  # type: ignore[import-not-found]
+
+            return [EmbeddingOutput(embedding=[0.1] * 1024, model_id="bge", dimension=1024) for _ in inputs]
+
+        client = MagicMock()
+        client.embed = _counting_embed
+
+        _, _, section_embeddings, failures = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=False,
+        )
+
+        # Exactly 1 embed() call for all 3 sections (not 3 separate calls).
+        assert embed_call_count == 1, f"Expected 1 embed call, got {embed_call_count}"
+
+        # The single call should have received 3 inputs (one per section).
+        assert (
+            len(all_captured_inputs[0]) == 3
+        ), f"Expected 3 inputs in single embed call, got {len(all_captured_inputs[0])}"
+
+        # All 3 section embeddings produced.
+        assert len(section_embeddings) == 3
+        assert not failures
+
+    @pytest.mark.asyncio
+    async def test_batch_embed_sections_and_chunks(self) -> None:
+        """2 sections with chunk embeddings → embed() called once with (2 sections + N chunks) inputs."""
+        # Use short texts that each produce exactly 1 chunk.
+        sections = [
+            _make_section("Apple quarterly results beat estimates. Revenue grew.", section_index=0),
+            _make_section("Microsoft cloud division reported strong growth. Azure up.", section_index=1),
+        ]
+
+        embed_call_count = 0
+        total_inputs_seen = 0
+
+        async def _counting_embed(inputs: list) -> list:
+            nonlocal embed_call_count, total_inputs_seen
+            embed_call_count += 1
+            total_inputs_seen += len(inputs)
+            from ml_clients.dataclasses import EmbeddingOutput  # type: ignore[import-not-found]
+
+            return [EmbeddingOutput(embedding=[0.1] * 1024, model_id="bge", dimension=1024) for _ in inputs]
+
+        client = MagicMock()
+        client.embed = _counting_embed
+
+        chunks, chunk_embeddings, section_embeddings, failures = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=True,
+        )
+
+        # embed() must be called exactly once regardless of the number of texts.
+        assert embed_call_count == 1, f"Expected 1 embed call, got {embed_call_count}"
+
+        # Total inputs = 2 section texts + however many chunks were produced.
+        expected_total = len(sections) + len(chunks)
+        assert total_inputs_seen == expected_total, f"Expected {expected_total} total inputs, got {total_inputs_seen}"
+
+        # All embeddings produced successfully.
+        assert len(section_embeddings) == 2
+        assert len(chunk_embeddings) == len(chunks)
+        assert not failures

@@ -163,9 +163,16 @@ ON CONFLICT (entity_id, view_type) DO NOTHING
     async def get_due_for_refresh(
         self,
         view_type: str,
-        limit: int = 100,
+        limit: int = 0,
     ) -> list[dict[str, object]]:
-        """Fetch entities whose embedding is due for refresh (next_refresh_at < now())."""
+        """Fetch entities whose embedding is due for refresh (next_refresh_at < now()).
+
+        When ``limit == 0`` (the default), a practical ceiling of 100 000 rows is
+        applied so workers always drain the full due-queue in one cycle.  Pass an
+        explicit positive integer to cap the result set.
+        """
+        # 0 means "unlimited" — use a practical ceiling to avoid unbounded scans.
+        effective_limit = limit if limit > 0 else 100_000
         result = await self._session.execute(
             text("""
 SELECT ees.entity_id, ees.source_hash, ees.source_text, ce.canonical_name,
@@ -179,7 +186,7 @@ ORDER BY ees.next_refresh_at
 LIMIT :limit
 FOR UPDATE OF ees SKIP LOCKED
 """),
-            {"view_type": view_type, "limit": limit},
+            {"view_type": view_type, "limit": effective_limit},
         )
         rows = result.fetchall()
         return [
