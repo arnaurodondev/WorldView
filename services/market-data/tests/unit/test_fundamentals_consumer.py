@@ -1052,6 +1052,109 @@ async def test_consumer_snapshot_failure_does_not_propagate() -> None:
     await consumer.process_message(None, _make_message(), {})
 
 
+@pytest.mark.asyncio
+async def test_upsert_snapshot_ohlcv_fallback_for_avg_volume() -> None:
+    """OHLCV fallback: when EODHD Technicals lacks AverageVolume, _upsert_fundamentals_snapshot
+    queries ohlcv_bars for the last 30 daily bars and writes the computed avg to the snapshot.
+
+    WHY this test: EODHD Technicals rarely includes AverageVolume for non-US-large-cap
+    instruments. The fallback was added to compute it from ohlcv_bars instead of leaving
+    avg_volume_30d permanently NULL. This test verifies the fallback SQL path fires and
+    the computed value reaches upsert_snapshot.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from market_data.infrastructure.messaging.consumers.fundamentals_consumer import FundamentalsConsumer
+
+    instrument_id = "instr-ohlcv-test-001"
+
+    # Mock UoW with a write session that returns a computed avg_vol row.
+    # WHY MagicMock for result_proxy: session.execute() is awaited (AsyncMock),
+    # but the returned CursorResult has a SYNCHRONOUS .one_or_none() method —
+    # wrapping it in AsyncMock would return a coroutine and break attribute access.
+    mock_session = AsyncMock()
+    mock_row = MagicMock()
+    mock_row.avg_vol = 25_571_060  # realistic AAPL-like avg volume
+    result_proxy = MagicMock()
+    result_proxy.one_or_none.return_value = mock_row
+    mock_session.execute = AsyncMock(return_value=result_proxy)
+
+    mock_uow = AsyncMock()
+    # _write() must return the session; the consumer calls it multiple times
+    mock_uow._write = MagicMock(return_value=mock_session)
+
+    # Payload: no AverageVolume in technicals → avg_volume_30d starts as None
+    payload = {
+        "highlights": {"EarningsShare": 7.89},
+        "technicals_snapshot": {"Beta": 1.1},  # no AverageVolume
+    }
+
+    consumer = FundamentalsConsumer.__new__(FundamentalsConsumer)
+
+    captured_snaps: list[dict] = []
+
+    async def _mock_upsert_snapshot(session: object, iid: str, snap: dict) -> None:
+        captured_snaps.append(snap)
+
+    with patch(
+        "market_data.infrastructure.messaging.consumers.fundamentals_consumer.upsert_snapshot",
+        side_effect=_mock_upsert_snapshot,
+    ):
+        await consumer._upsert_fundamentals_snapshot(mock_uow, instrument_id, payload)
+
+    assert len(captured_snaps) == 1, "upsert_snapshot must be called once"
+    snap = captured_snaps[0]
+    # Fallback should have populated avg_volume_30d from the OHLCV query result
+    assert (
+        snap["avg_volume_30d"] == 25_571_060
+    ), f"Expected OHLCV fallback value 25_571_060 but got {snap['avg_volume_30d']!r}"
+    # Other fields derived from payload should still be set correctly
+    assert snap["beta"] == pytest.approx(1.1)
+
+
+@pytest.mark.asyncio
+async def test_upsert_snapshot_ohlcv_fallback_skipped_when_eodhd_provides_volume() -> None:
+    """OHLCV fallback is NOT queried when EODHD already provides AverageVolume.
+
+    WHY: avoid an unnecessary DB round-trip when the field is already populated.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from market_data.infrastructure.messaging.consumers.fundamentals_consumer import FundamentalsConsumer
+
+    instrument_id = "instr-ohlcv-test-002"
+
+    mock_session = AsyncMock()
+    mock_uow = AsyncMock()
+    mock_uow._write = MagicMock(return_value=mock_session)
+
+    # Payload WITH AverageVolume in technicals → avg_volume_30d will be set by derive_fundamentals_snapshot
+    payload = {
+        "highlights": {"EarningsShare": 7.89},
+        "technicals_snapshot": {"Beta": 1.1, "AverageVolume": 60_000_000},
+    }
+
+    consumer = FundamentalsConsumer.__new__(FundamentalsConsumer)
+    captured_snaps: list[dict] = []
+
+    async def _mock_upsert_snapshot(session: object, iid: str, snap: dict) -> None:
+        captured_snaps.append(snap)
+
+    with patch(
+        "market_data.infrastructure.messaging.consumers.fundamentals_consumer.upsert_snapshot",
+        side_effect=_mock_upsert_snapshot,
+    ):
+        await consumer._upsert_fundamentals_snapshot(mock_uow, instrument_id, payload)
+
+    assert len(captured_snaps) == 1
+    snap = captured_snaps[0]
+    # EODHD value takes precedence — no OHLCV DB query needed
+    assert snap["avg_volume_30d"] == 60_000_000
+    # The OHLCV fallback query should NOT have been called (session.execute is from _write,
+    # but since avg_volume_30d was already set, the execute block is skipped)
+    mock_session.execute.assert_not_called()
+
+
 # ── Unit tests for fundamentals_snapshot_writer helpers ─────────────────────
 
 

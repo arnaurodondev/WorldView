@@ -7,6 +7,8 @@ import re
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any, cast
 
+from sqlalchemy import text
+
 from market_data.domain.entities import FundamentalsRecord, Instrument, Security
 from market_data.domain.enums import FundamentalsSection, PeriodType
 from market_data.domain.events import InstrumentCreated
@@ -637,6 +639,24 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
                 instrument_id=instrument_id,
             )
             return
+
+        # EODHD Technicals rarely includes AverageVolume; fall back to
+        # computing it from the last 30 daily OHLCV bars when missing.
+        if snap.get("avg_volume_30d") is None:
+            row = (
+                await write_session_fn().execute(
+                    text(
+                        "SELECT ROUND(AVG(volume)::numeric, 0)::bigint AS avg_vol "
+                        "FROM (SELECT volume FROM ohlcv_bars "
+                        "WHERE instrument_id = :iid AND timeframe = '1d' "
+                        "ORDER BY bar_date DESC LIMIT 30) sub"
+                    ),
+                    {"iid": instrument_id},
+                )
+            ).one_or_none()
+            if row and row.avg_vol is not None:
+                snap = {**snap, "avg_volume_30d": int(row.avg_vol)}
+
         await upsert_snapshot(write_session_fn(), instrument_id, snap)
         logger.info(
             "fundamentals_consumer.snapshot_upserted",
