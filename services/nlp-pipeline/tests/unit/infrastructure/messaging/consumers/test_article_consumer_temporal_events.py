@@ -16,6 +16,7 @@ import pytest
 from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
     _emit_temporal_events,
     _infer_temporal_scope,
+    _normalize_temporal_events_for_emit,
 )
 
 # ---------------------------------------------------------------------------
@@ -343,3 +344,179 @@ class TestEmitTemporalEvents:
         # Must be a parseable ISO-8601 string.
         dt = datetime.fromisoformat(active_from)
         assert dt.tzinfo is not None
+
+
+# ---------------------------------------------------------------------------
+# _normalize_temporal_events_for_emit  (BP-349 + QG-3 regression tests)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestNormalizeTemporalEventsForEmit:
+    """Regression guard for BP-349: raw LLM field names must be normalized before
+    being passed to _emit_temporal_events.
+
+    Before the fix, article_consumer.py line 620 passed the raw extraction dict
+    directly to _emit_temporal_events.  _emit_temporal_events reads
+    'extraction_confidence' (0.0 default), so all events failed the 0.5 threshold
+    and zero temporal events were ever emitted.
+
+    QG-3 guard: macro/geopolitical events with no resolvable entity refs must NOT
+    be skipped — they are globally scoped and the temporal_event record is valuable
+    even when exposed_entities=[].
+    """
+
+    def test_maps_confidence_to_extraction_confidence(self) -> None:
+        """BP-349: raw LLM 'confidence' key must be renamed to 'extraction_confidence'."""
+        raw = [{"event_type": "MACRO", "description": "Fed hikes rates", "confidence": 0.8}]
+        result = _normalize_temporal_events_for_emit(raw, {}, frozenset())
+        assert len(result) == 1
+        assert result[0]["extraction_confidence"] == 0.8
+        assert "confidence" not in result[0]
+
+    def test_maps_description_to_event_text(self) -> None:
+        """BP-349: raw LLM 'description' key must be renamed to 'event_text'."""
+        raw = [{"event_type": "MACRO", "description": "Fed raises rates", "confidence": 0.7}]
+        result = _normalize_temporal_events_for_emit(raw, {}, frozenset())
+        assert result[0]["event_text"] == "Fed raises rates"
+        assert "description" not in result[0]
+
+    def test_uppercases_event_type(self) -> None:
+        """BP-347: event_type from LLM may be lowercase; normalizer must uppercase it."""
+        raw = [{"event_type": "macro", "description": "text", "confidence": 0.7}]
+        result = _normalize_temporal_events_for_emit(raw, {}, frozenset())
+        assert result[0]["event_type"] == "MACRO"
+
+    def test_resolves_entity_refs_to_participant_ids(self) -> None:
+        """BP-349: entity_refs strings must be resolved to UUIDs via entity_id_by_ref."""
+        entity_id = str(uuid.uuid4())
+        raw = [
+            {
+                "event_type": "EARNINGS_RELEASE",
+                "description": "Apple beats estimates",
+                "confidence": 0.9,
+                "entity_refs": ["Apple", "AAPL"],
+            }
+        ]
+        entity_id_by_ref = {"apple": entity_id, "aapl": entity_id}
+        result = _normalize_temporal_events_for_emit(raw, entity_id_by_ref, frozenset())
+        # Both refs resolve to the same entity_id; deduplication is not required here,
+        # _emit_temporal_events handles it via the exposed_entities filter.
+        assert entity_id in result[0]["participant_entity_ids"]
+
+    def test_does_not_skip_events_with_no_entity_refs(self) -> None:
+        """QG-3: macro events with no entity_refs must NOT be dropped.
+
+        _build_raw_events skips such events (it requires a resolvable subject entity).
+        _normalize_temporal_events_for_emit must include them with participant_entity_ids=[].
+        """
+        raw = [
+            {"event_type": "MACRO", "description": "Fed raises rates", "confidence": 0.7},
+            {"event_type": "GEOPOLITICAL", "description": "Russia sanctions", "confidence": 0.8},
+        ]
+        result = _normalize_temporal_events_for_emit(raw, {}, frozenset())
+        assert len(result) == 2
+        assert result[0]["participant_entity_ids"] == []
+        assert result[1]["participant_entity_ids"] == []
+
+    def test_excludes_provisional_ids_from_participant_ids(self) -> None:
+        """Provisional queue UUIDs must not appear in participant_entity_ids."""
+        canonical_id = str(uuid.uuid4())
+        provisional_id = str(uuid.uuid4())
+        entity_id_by_ref = {
+            "apple": canonical_id,
+            "nasdaq": provisional_id,
+        }
+        raw = [
+            {
+                "event_type": "MACRO",
+                "description": "text",
+                "confidence": 0.7,
+                "entity_refs": ["Apple", "Nasdaq"],
+            }
+        ]
+        result = _normalize_temporal_events_for_emit(raw, entity_id_by_ref, frozenset({provisional_id}))
+        assert canonical_id in result[0]["participant_entity_ids"]
+        assert provisional_id not in result[0]["participant_entity_ids"]
+
+    def test_defaults_confidence_to_0_5_when_missing(self) -> None:
+        """When LLM omits 'confidence', default to 0.5 (passes the 0.5 threshold)."""
+        raw = [{"event_type": "MACRO", "description": "text"}]
+        result = _normalize_temporal_events_for_emit(raw, {}, frozenset())
+        assert result[0]["extraction_confidence"] == 0.5
+
+    def test_empty_input_returns_empty_list(self) -> None:
+        result = _normalize_temporal_events_for_emit([], {}, frozenset())
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_end_to_end_pipeline_with_raw_llm_output(self) -> None:
+        """Integration: raw LLM output through normalize → emit produces outbox call.
+
+        This is the regression test for BP-349.  Before the fix, passing raw LLM
+        dicts to _emit_temporal_events would result in zero outbox calls because
+        evt_d.get('extraction_confidence', 0.0) == 0.0 < 0.5 for all events.
+        After the fix, the normalization step ensures the correct field name.
+        """
+        raw_llm_events = [
+            {
+                "event_type": "MACRO",
+                "description": "Federal Reserve raises rates by 25 basis points",
+                "confidence": 0.82,
+                "entity_refs": [],
+            }
+        ]
+        outbox_repo = _make_outbox_repo()
+        settings = _make_settings()
+
+        normalized = _normalize_temporal_events_for_emit(raw_llm_events, {}, frozenset())
+
+        with patch(
+            "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.serialize_confluent_avro",
+            return_value=b"avro_bytes",
+        ):
+            await _emit_temporal_events(
+                raw_events=normalized,
+                entity_id_by_ref={},
+                provisional_entity_ids=frozenset(),
+                doc_id=uuid.uuid4(),
+                published_at=_PUBLISHED_AT,
+                outbox_repo=outbox_repo,
+                settings=settings,
+            )
+
+        # The temporal event must have been published — before BP-349 fix, this was 0 calls.
+        outbox_repo.add.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_raw_llm_output_without_normalization_fails_confidence_threshold(self) -> None:
+        """Documents the BP-349 failure: raw LLM dict without normalization → 0 outbox calls.
+
+        This test demonstrates WHY the normalization step is necessary.
+        _emit_temporal_events.get('extraction_confidence', 0.0) returns 0.0 for
+        raw LLM dicts (which use 'confidence', not 'extraction_confidence').
+        """
+        raw_llm_event_without_normalization = {
+            "event_type": "MACRO",
+            "description": "Fed raises rates",
+            "confidence": 0.82,  # raw key name — _emit_temporal_events reads 'extraction_confidence'
+            "entity_refs": [],
+        }
+        outbox_repo = _make_outbox_repo()
+
+        with patch(
+            "nlp_pipeline.infrastructure.messaging.consumers.article_consumer.serialize_confluent_avro",
+            return_value=b"bytes",
+        ):
+            await _emit_temporal_events(
+                raw_events=[raw_llm_event_without_normalization],
+                entity_id_by_ref={},
+                provisional_entity_ids=frozenset(),
+                doc_id=uuid.uuid4(),
+                published_at=_PUBLISHED_AT,
+                outbox_repo=outbox_repo,
+                settings=_make_settings(),
+            )
+
+        # Without normalization, extraction_confidence defaults to 0.0 < 0.5 → skipped.
+        outbox_repo.add.assert_not_called()
