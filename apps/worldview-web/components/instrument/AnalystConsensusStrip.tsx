@@ -53,74 +53,15 @@ export function AnalystConsensusStrip({ fundamentals }: AnalystConsensusStripPro
         />
       )}
 
-      {/* ── Consensus data (all fields show "—" — data pending in Fundamentals type) */}
+      {/* ── Consensus data — analyst fields not yet populated in Fundamentals type.
+          WHY show "unavailable" row instead of broken equal-weight bars:
+          Rendering three flex-1 bars with "—" counts looks like a broken chart.
+          A single compact text row conveys the same "data pending" message without
+          visual confusion. The data binding will be added when S3/S9 exposes
+          buy_count / hold_count / sell_count. */}
       {fundamentals && (
-        <div>
-          {/* Buy/Hold/Sell horizontal bar row */}
-          {/* WHY h-6 (24px) for bar row: slightly taller than data rows to give the
-              bar visual breathing room while staying below section header height. */}
-          <div className="flex items-center h-6 px-2 gap-2 border-b border-border/30">
-            <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground shrink-0">
-              RATINGS
-            </span>
-
-            {/* Segmented bar: 3 colored segments + total count */}
-            {/* WHY show even at 0/0/0: establishes the visual structure so when
-                data is available the layout doesn't shift. */}
-            <div className="flex-1 flex h-3 rounded-[2px] overflow-hidden gap-px">
-              {/* BUY segment — green */}
-              <div
-                className="bg-positive/50 h-full"
-                style={{ flex: "1" }}
-                title="BUY"
-              />
-              {/* HOLD segment — muted */}
-              <div
-                className="bg-muted h-full"
-                style={{ flex: "1" }}
-                title="HOLD"
-              />
-              {/* SELL segment — red */}
-              <div
-                className="bg-negative/50 h-full"
-                style={{ flex: "1" }}
-                title="SELL"
-              />
-            </div>
-
-            {/* Analyst count */}
-            <span className="font-mono text-[10px] tabular-nums text-muted-foreground shrink-0">
-              — analysts
-            </span>
-          </div>
-
-          {/* Price target row */}
-          <div className="flex items-center h-[22px] px-2 gap-0 border-b border-border/30">
-            <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground flex-1">
-              PRICE TARGET
-            </span>
-            <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-              HIGH —
-            </span>
-            <span className="px-1.5 text-border" aria-hidden>│</span>
-            <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-              MED —
-            </span>
-            <span className="px-1.5 text-border" aria-hidden>│</span>
-            <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-              LOW —
-            </span>
-          </div>
-
-          {/* EPS estimate row */}
-          <div className="flex items-center h-[22px] px-2 border-b border-border/30">
-            <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground flex-1">
-              EPS ESTIMATE
-            </span>
-            <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-              $— —
-            </span>
-          </div>
+        <div className="flex h-[22px] items-center px-2">
+          <span className="text-[11px] text-muted-foreground">Analyst consensus data unavailable</span>
         </div>
       )}
     </div>

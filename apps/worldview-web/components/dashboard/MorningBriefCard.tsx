@@ -78,10 +78,9 @@ function BriefMarkdownSkeleton() {
       {Array.from({ length: 5 }).map((_, i) => (
         <div
           key={i}
-          className="h-3 animate-pulse rounded-[2px] bg-muted/40"
+          className="h-3 rounded-[2px] bg-muted/40"
           style={{
             width: i === 4 ? "66%" : "100%",
-            animationDelay: `${i * 50}ms`,
           }}
         />
       ))}
@@ -306,7 +305,7 @@ export function MorningBriefCard() {
             (R19 forbids deleting/weakening tests). The label also
             disambiguates the timestamp from "current UTC time" so users
             don't confuse the brief's mtime with wall-clock time. */}
-        <span className="w-[152px] shrink-0 whitespace-nowrap font-mono text-[9px] tabular-nums text-muted-foreground/60">
+        <span className="min-w-[120px] max-w-[140px] shrink-0 whitespace-nowrap font-mono text-[9px] tabular-nums text-muted-foreground/60">
           Generated {ts} UTC
         </span>
 
@@ -339,7 +338,7 @@ export function MorningBriefCard() {
           {isLong && !expanded && (
             <button
               onClick={() => setExpanded(true)}
-              className="text-[9px] text-primary hover:underline"
+              className="text-[9px] text-primary"
               aria-label="Expand morning brief"
             >
               Read more →
@@ -365,7 +364,7 @@ export function MorningBriefCard() {
             (~21px), paragraph margin-bottom 16px. On a terminal card these create blog-like
             spacing that breaks data density. These overrides enforce 10-11px headers, 1.4
             line-height, and tight paragraph margins matching Bloomberg briefing panels. */}
-        <div className="text-[10px] leading-snug text-foreground/90 [&_a]:text-primary [&_a]:hover:underline [&_h1]:mb-0.5 [&_h1]:text-[9px] [&_h1]:font-semibold [&_h1]:uppercase [&_h1]:tracking-[0.08em] [&_h1]:text-muted-foreground [&_h2]:mb-0.5 [&_h2]:mt-2 [&_h2]:text-[10px] [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-[0.08em] [&_h2]:text-muted-foreground [&_h3]:mb-0.5 [&_h3]:text-[10px] [&_h3]:font-semibold [&_h3]:uppercase [&_h3]:tracking-[0.06em] [&_h3]:text-muted-foreground [&_li]:leading-[1.4] [&_li]:text-[11px] [&_p]:mb-1 [&_p]:leading-[1.4] [&_strong]:font-semibold [&_ul]:mb-1 [&_ul]:pl-3">
+        <div className="text-[10px] leading-snug text-foreground/90 [&_a]:text-primary [&_h1]:mb-0.5 [&_h1]:text-[9px] [&_h1]:font-semibold [&_h1]:uppercase [&_h1]:tracking-[0.08em] [&_h1]:text-muted-foreground [&_h2]:mb-0.5 [&_h2]:mt-2 [&_h2]:text-[10px] [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-[0.08em] [&_h2]:text-muted-foreground [&_h3]:mb-0.5 [&_h3]:text-[10px] [&_h3]:font-semibold [&_h3]:uppercase [&_h3]:tracking-[0.06em] [&_h3]:text-muted-foreground [&_li]:leading-[1.4] [&_li]:text-[11px] [&_p]:mb-1 [&_p]:leading-[1.4] [&_strong]:font-semibold [&_ul]:mb-1 [&_ul]:pl-3">
           {!expanded ? (
             // ── Collapsed view: brief.summary rendered at full readability ──
             // WHY no line-clamp when summary is present: the v2.2 prompt
@@ -383,7 +382,7 @@ export function MorningBriefCard() {
                 remarkPlugins={REMARK_PLUGINS}
                 components={{
                   a: ({ href, children }) => (
-                    <Link href={href ?? "#"} className="text-primary hover:underline">
+                    <Link href={href ?? "#"} className="text-primary">
                       {children}
                     </Link>
                   ),
@@ -432,7 +431,7 @@ export function MorningBriefCard() {
                 remarkPlugins={REMARK_PLUGINS}
                 components={{
                   a: ({ href, children }) => (
-                    <Link href={href ?? "#"} className="text-primary hover:underline">
+                    <Link href={href ?? "#"} className="text-primary">
                       {children}
                     </Link>
                   ),

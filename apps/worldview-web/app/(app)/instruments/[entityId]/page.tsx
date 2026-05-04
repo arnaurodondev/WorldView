@@ -34,6 +34,7 @@
 // WHY "use client": uses useQuery for CompanyOverview + tab state (useState).
 
 import { useEffect, useMemo, useState } from "react";
+import { ArrowRight } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 // WHY useRouter: used for router.back() in the back nav button so the user returns
 // to their previous page (e.g., screener, dashboard) rather than always going to /dashboard.
@@ -204,12 +205,13 @@ export default function InstrumentDetailPage() {
   if (!instrument) {
     return (
       <div className="p-3">
-        <p className="text-xs text-muted-foreground">Instrument not found.</p>
+        <p className="text-[11px] text-muted-foreground">Instrument not found.</p>
         <button
           onClick={() => router.back()}
-          className="mt-1 text-xs text-primary hover:underline"
+          className="mt-1 inline-flex items-center gap-1 text-[11px] text-primary"
         >
-          ← Go back
+          <ArrowRight className="h-3 w-3" strokeWidth={1.5} />
+          Go back
         </button>
       </div>
     );
@@ -272,14 +274,14 @@ export default function InstrumentDetailPage() {
           button programmatically switches to the "news" tab. Uncontrolled Tabs
           (defaultValue) cannot be changed imperatively from a child component. */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
-        <TabsList className="shrink-0 rounded-none border-b border-border/40 bg-transparent px-4">
+        <TabsList className="shrink-0 rounded-none border-b border-border/40 bg-transparent px-2">
           {/* WHY compact tabs: bloomberg-style — tabs are small, content area is large */}
-          <TabsTrigger value="overview" className="text-xs">Overview</TabsTrigger>
-          <TabsTrigger value="fundamentals" className="text-xs">Fundamentals</TabsTrigger>
+          <TabsTrigger value="overview" className="text-[11px]">Overview</TabsTrigger>
+          <TabsTrigger value="fundamentals" className="text-[11px]">Fundamentals</TabsTrigger>
           {/* WHY no count badge: PLAN-0050 — NewsTab manages its own data fetch.
               The article count is shown in the NewsTab filter toolbar. */}
-          <TabsTrigger value="news" className="text-xs">News</TabsTrigger>
-          <TabsTrigger value="intelligence" className="text-xs">Intelligence</TabsTrigger>
+          <TabsTrigger value="news" className="text-[11px]">News</TabsTrigger>
+          <TabsTrigger value="intelligence" className="text-[11px]">Intelligence</TabsTrigger>
         </TabsList>
 
         {/* ── Overview tab ─────────────────────────────────────────────────── */}
