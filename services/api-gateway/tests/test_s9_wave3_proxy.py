@@ -263,7 +263,9 @@ async def test_economic_calendar_proxies_to_s7(authed_app, authed_mock_clients) 
     authed_mock_clients.knowledge_graph.get.assert_called_once()
     call_kwargs = authed_mock_clients.knowledge_graph.get.call_args[1]
     # R-002 fix: S7 expects `event_type`, not `type` — assertion updated from "type" to "event_type"
-    assert call_kwargs["params"]["event_type"] == "economic"
+    # BP-340 fix (PLAN-0068): EventType.MACRO = "macro"; economic events are stored as "macro",
+    # not "economic". Using "economic" matched no rows and silently returned an empty list.
+    assert call_kwargs["params"]["event_type"] == "macro"
 
 
 # ── AI signals proxy (PLAN-0029: stub replaced with real S6 proxy) ──���────────
