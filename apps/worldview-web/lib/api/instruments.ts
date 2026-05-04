@@ -247,14 +247,71 @@ export function createInstrumentsApi(t: string | undefined) {
     },
 
     /**
-     * getFundamentals — all fundamental metrics for an instrument
-     * Used by Instrument Detail → Fundamentals tab
+     * getFundamentals — all fundamental metrics for an instrument.
+     * Used by Instrument Detail → Fundamentals tab.
+     *
+     * WHY transformer: S3 returns {security_id, records: [{section, data}]} but
+     * FundamentalsTab expects a flat Fundamentals object (market_cap, pe_ratio…).
+     * The transformer extracts the singleton "highlights", "valuation_ratios", and
+     * "technicals_snapshot" sections and assembles the flat shape. Fields that
+     * require time-series joins (debt_to_equity, current_ratio) return null until
+     * the backfill populates the snapshot table. (BP-369)
      */
-    getFundamentals(instrumentId: string): Promise<Fundamentals> {
-      return apiFetch<Fundamentals>(
+    async getFundamentals(instrumentId: string): Promise<Fundamentals> {
+      const raw = await apiFetch<{ security_id: string; records: Array<Record<string, unknown>> }>(
         `/v1/fundamentals/${encodeURIComponent(instrumentId)}`,
         { token: t },
       );
+      const num = (v: unknown): number | null => {
+        if (v == null || v === "") return null;
+        const n = typeof v === "number" ? v : Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
+      // Extract singleton sections (one record each)
+      let hi: Record<string, unknown> = {};
+      let vr: Record<string, unknown> = {};
+      let ts: Record<string, unknown> = {};
+      let updatedAt: string | null = null;
+      for (const rec of raw.records ?? []) {
+        const data = (rec["data"] ?? {}) as Record<string, unknown>;
+        const section = rec["section"] as string | undefined;
+        if (section === "highlights" && !Object.keys(hi).length) { hi = data; updatedAt = rec["ingested_at"] as string ?? null; }
+        else if (section === "valuation_ratios" && !Object.keys(vr).length) vr = data;
+        else if (section === "technicals_snapshot" && !Object.keys(ts).length) ts = data;
+      }
+      const grossMarginTTM = (num(hi["GrossProfitTTM"]) != null && num(hi["RevenueTTM"]) != null && num(hi["RevenueTTM"])! > 0)
+        ? num(hi["GrossProfitTTM"])! / num(hi["RevenueTTM"])!
+        : null;
+      const eps = num(hi["EarningsShare"]);
+      const div = num(hi["DividendShare"]);
+      const payoutRatio = eps != null && eps > 0 && div != null ? div / eps : null;
+      return {
+        instrument_id: raw.security_id ?? instrumentId,
+        ticker: "",  // populated by overview; FundamentalsTab doesn't render this
+        name: "",    // populated by overview
+        market_cap:           num(hi["MarketCapitalization"]),
+        pe_ratio:             num(hi["PERatio"]),
+        forward_pe:           num(vr["ForwardPE"]),
+        price_to_book:        num(vr["PriceBookMRQ"]),
+        price_to_sales:       num(vr["PriceSalesTTM"]),
+        ev_to_ebitda:         num(vr["EnterpriseValueEbitda"]),
+        gross_margin:         grossMarginTTM,
+        operating_margin:     num(hi["OperatingMarginTTM"]),
+        net_margin:           num(hi["ProfitMargin"]),
+        roe:                  num(hi["ReturnOnEquityTTM"]),
+        roa:                  num(hi["ReturnOnAssetsTTM"]),
+        revenue_growth_yoy:   num(hi["QuarterlyRevenueGrowthYOY"]),
+        earnings_growth_yoy:  num(hi["QuarterlyEarningsGrowthYOY"]),
+        dividend_yield:       num(hi["DividendYield"]),
+        payout_ratio:         payoutRatio,
+        debt_to_equity:       null, // requires balance-sheet join; populated by snapshot
+        current_ratio:        null, // requires balance-sheet join; populated by snapshot
+        quick_ratio:          null, // requires balance-sheet join; populated by snapshot
+        week_52_high:         num(ts["52WeekHigh"]),
+        week_52_low:          num(ts["52WeekLow"]),
+        daily_return:         null, // derived from OHLCV; available in overview.fundamentals
+        updated_at:           updatedAt,
+      };
     },
 
     /**
