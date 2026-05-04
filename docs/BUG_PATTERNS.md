@@ -12,7 +12,7 @@
 
 | Category | File | Patterns | Description |
 |----------|------|----------|-------------|
-| [Kafka & Messaging](bug-patterns/kafka-messaging.md) | `bug-patterns/kafka-messaging.md` | 37 | Kafka, Avro, outbox, DLQ, Schema Registry |
+| [Kafka & Messaging](bug-patterns/kafka-messaging.md) | `bug-patterns/kafka-messaging.md` | 38 | Kafka, Avro, outbox, DLQ, Schema Registry |
 | [Database & ORM](bug-patterns/database-orm.md) | `bug-patterns/database-orm.md` | 42 | SQLAlchemy, asyncpg, Alembic, PostgreSQL, pgvector |
 | [Async & Concurrency](bug-patterns/async-concurrency.md) | `bug-patterns/async-concurrency.md` | 14 | asyncio, event loops, concurrency, React concurrent mode |
 | [Auth & Security](bug-patterns/auth-security.md) | `bug-patterns/auth-security.md` | 28 | JWT/OIDC, SSRF, XSS, tenant isolation, CSP, middleware |
@@ -343,6 +343,7 @@
 | BP-346 | Stale container missing module added after last build — `contracts.events.nlp.article_enriched` added in PLAN-0062 after container built 2026-04-13; every Kafka message crashed with `ModuleNotFoundError`; fix: always rebuild consumers after shared-lib changes | Config & Docker | [bug-patterns/config-docker.md](bug-patterns/config-docker.md#bp-346) |
 | BP-347 | LLM returns lowercase event_type despite uppercase enum in prompt — 8B-class models return `earnings_release` instead of `EARNINGS_RELEASE`; fix: `.upper()` normalization in `article_consumer.py:_build_raw_events()` before Kafka payload | ML & LLM | [bug-patterns/ml-llm.md](bug-patterns/ml-llm.md#bp-347) |
 | BP-348 | Provider format mismatch silently drops all earnings calendar data — consumer expects Finnhub `"earningsCalendar"`/`"epsEstimate"`/`"symbol"` fields; EODHD uses `"earnings"`/`"estimate"`/`"code"` (with `.US` suffix); fix: multi-key parsing + field normalization in `earnings_calendar_dataset_consumer.py` | Kafka & Messaging | [bug-patterns/kafka-messaging.md](bug-patterns/kafka-messaging.md#bp-348) |
+| BP-349 | Raw vs processed event dict field name mismatch silently drops all Block 13E temporal events — `_emit_temporal_events()` reads `"extraction_confidence"` (normalized) but receives raw LLM dicts with `"confidence"`; default 0.0 fails confidence filter; fix: run `_build_raw_events()` before passing to `_emit_temporal_events()` | Kafka & Messaging | [bug-patterns/kafka-messaging.md](bug-patterns/kafka-messaging.md#bp-349) |
 
 ---
 
