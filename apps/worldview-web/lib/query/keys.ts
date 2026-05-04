@@ -251,6 +251,11 @@ export const qk = {
         : (["dashboard", "economic-calendar"] as const),
     marketHeatmap: () => ["dashboard", "market-heatmap"] as const,
     aiSignals: () => ["dashboard", "ai-signals"] as const,
+    // PLAN-0070 C-2: single-fetch key for the dashboard snapshot bundle.
+    // WHY no params: the snapshot always fetches the same 6 legs with fixed
+    // limits (news:8, markets:5, earnings:7d, alerts:10). No pagination or
+    // filter variation — a single stable key covers all callers.
+    snapshot: () => ["dashboard", "snapshot"] as const,
   },
 
   // ── Workspace widgets ────────────────────────────────────────────────────

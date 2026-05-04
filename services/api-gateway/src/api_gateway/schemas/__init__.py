@@ -10,6 +10,7 @@ cause validation errors in production.
 
 from api_gateway.schemas.alerts import AlertResponse
 from api_gateway.schemas.common import Meta
+from api_gateway.schemas.dashboard import DashboardSnapshotResponse
 from api_gateway.schemas.fundamentals import (
     EarningsCalendarResponse,
     EarningsEvent,
@@ -33,6 +34,7 @@ from api_gateway.schemas.watchlists import WatchlistResponse
 
 __all__ = [
     "AlertResponse",
+    "DashboardSnapshotResponse",
     "EarningsCalendarResponse",
     "EarningsEvent",
     "FundamentalsRecord",
