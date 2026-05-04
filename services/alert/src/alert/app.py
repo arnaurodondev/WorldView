@@ -119,7 +119,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 8. Kafka health producer (lightweight — for /readyz Kafka connectivity check)
     from confluent_kafka import Producer as _KafkaProducer  # type: ignore[import-untyped]
 
-    kafka_health_producer = _KafkaProducer({"bootstrap.servers": settings.kafka_bootstrap_servers})
+    kafka_health_producer = _KafkaProducer(
+        {
+            "bootstrap.servers": settings.kafka_bootstrap_servers,
+            # Larger socket timeout so the background connect thread succeeds before
+            # list_topics(timeout=8) fires on the first /readyz call (BP-350).
+            "socket.timeout.ms": "10000",
+            "message.timeout.ms": "10000",
+        }
+    )
     app.state.kafka_health_producer = kafka_health_producer
 
     log.info("service_started", service=settings.service_name)  # type: ignore[no-any-return]

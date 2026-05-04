@@ -49,7 +49,7 @@ async def readyz(request: Request) -> Response:
         producer = request.app.state.kafka_health_producer
         # list_topics — initial connection establishment can take 3-4s on cold start;
         # 5s gives enough headroom without blocking health checks too long (BP-350)
-        await asyncio.get_event_loop().run_in_executor(None, lambda: producer.list_topics(timeout=5))
+        await asyncio.get_running_loop().run_in_executor(None, lambda: producer.list_topics(timeout=8))
         checks["kafka"] = "ok"
     except Exception:
         _log.warning("readyz_kafka_failed", exc_info=True)  # type: ignore[no-any-return]
