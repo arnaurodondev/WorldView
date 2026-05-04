@@ -63,6 +63,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { rowsToTsv, rowsToCsv, downloadCsv } from "@/lib/format/csv-tsv";
+import { Skeleton } from "@/components/ui/skeleton";
 
 // Re-export from canonical location for backwards-compat (a Wave-F downstream
 // task identified this as a layer smell; keeping the re-export so consumers
@@ -79,8 +80,8 @@ const ROW_HEIGHT_PX: Record<DataTableDensity, number> = {
 
 const TEXT_SIZE: Record<DataTableDensity, string> = {
   compact: "text-[11px]",
-  default: "text-xs",
-  comfortable: "text-sm",
+  default: "text-[11px]",
+  comfortable: "text-[11px]",
 };
 
 export interface DataTableBulkAction<TData> {
@@ -570,9 +571,9 @@ export function DataTable<TData>({
                 className="flex items-center border-b border-border/30 px-2 gap-2"
                 style={{ height: ROW_HEIGHT_PX[density] }}
               >
-                <div className="h-2 w-10 bg-muted/40 rounded-none animate-pulse" />
-                <div className="h-2 w-32 bg-muted/40 rounded-none animate-pulse" />
-                <div className="h-2 w-20 bg-muted/30 rounded-none animate-pulse ml-auto" />
+                <Skeleton className="h-2 w-10" />
+                <Skeleton className="h-2 w-32" />
+                <Skeleton className="h-2 w-20 ml-auto" />
               </div>
             ))}
           </div>

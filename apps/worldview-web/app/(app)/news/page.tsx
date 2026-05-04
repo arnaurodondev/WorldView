@@ -97,7 +97,7 @@ export default function NewsHubPage() {
     <div className="flex h-full flex-col overflow-hidden">
       {/* Header */}
       <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border px-3">
-        <Newspaper className="h-3 w-3 text-muted-foreground" aria-hidden />
+        <Newspaper className="h-3 w-3 text-muted-foreground" aria-hidden strokeWidth={1.5} />
         <h1 className="font-mono text-[11px] uppercase tracking-[0.08em] text-foreground">
           News
         </h1>
@@ -130,7 +130,7 @@ export default function NewsHubPage() {
 
           {/* Tier filter */}
           <div className="flex items-center gap-1">
-            <Filter className="h-3 w-3 text-muted-foreground/60" aria-hidden />
+            <Filter className="h-3 w-3 text-muted-foreground/60" aria-hidden strokeWidth={1.5} />
             {(["ALL", "DEEP", "MEDIUM", "LIGHT"] as const).map((t) => (
               <button
                 key={t}
@@ -222,11 +222,11 @@ function ArticleRow({ article: a }: { article: RankedArticle }) {
 
   const sentimentIcon =
     a.sentiment === "positive" ? (
-      <TrendingUp className="h-3 w-3 text-positive" aria-label="Positive sentiment" />
+      <TrendingUp className="h-3 w-3 text-positive" aria-label="Positive sentiment" strokeWidth={1.5} />
     ) : a.sentiment === "negative" ? (
-      <TrendingDown className="h-3 w-3 text-negative" aria-label="Negative sentiment" />
+      <TrendingDown className="h-3 w-3 text-negative" aria-label="Negative sentiment" strokeWidth={1.5} />
     ) : a.sentiment === "mixed" ? (
-      <Zap className="h-3 w-3 text-warning" aria-label="Mixed sentiment" />
+      <Zap className="h-3 w-3 text-warning" aria-label="Mixed sentiment" strokeWidth={1.5} />
     ) : null;
 
   // LIGHT tier: dim per existing convention (PRD-0027 OQ-6 → opacity 0.6).
