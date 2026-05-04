@@ -418,13 +418,20 @@ export interface GraphNode {
   size?: number;      // relative importance score for sigma.js node sizing
   x?: number;         // layout position (set by sigma.js)
   y?: number;
+  /** Ticker symbol — included by S9 proxy for financial_instrument nodes so
+   *  components can resolve entity_id → S3 instrument without a second lookup.
+   *  Empty string for non-instrument entities (sectors, people, events).
+   *  WHY needed: KG entity_id ≠ S3 instrument_id; ticker is the stable bridge. */
+  ticker?: string;
 }
 
 export interface GraphEdge {
   id: string;
   source: string;     // entity_id
   target: string;     // entity_id
-  label: string;      // relationship type (e.g., "CEO_OF", "COMPETES_WITH")
+  /** Relationship type — always lowercase (S9 normalises DB mixed-case).
+   *  Examples: "competes_with", "has_executive", "listed_on" */
+  label: string;
   weight: number;     // confidence / strength [0, 1]
 }
 

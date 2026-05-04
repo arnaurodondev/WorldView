@@ -13,31 +13,35 @@
  *
  * WHY COMBINED KG + SECTOR APPROACH (user request, investigation 2026-05-04):
  * KG competitors give precision (curated, relationship-aware). Sector peers sorted
- * by market cap proximity give coverage when KG has fewer than 4 competitors, or
- * when no COMPETES_WITH edges exist yet (newly listed / niche companies).
- * The source badge ("KG", "KG+sector", "sector") lets analysts know what they're seeing.
+ * by market cap proximity give coverage when KG has fewer than 4 competitors.
  *
- * WHY getCompanyOverview PER COMPETITOR (not screener):
- * The screener POST /v1/fundamentals/screen accepts ScreenFilterRequest which requires
- * metric/min_value/max_value — it has no entity_id filter. Using getCompanyOverview
- * per competitor resolves correctly because entity_id = instrument_id (M-017 convention),
- * so each call fetches ticker + fundamentals for exactly the right company.
+ * ARCHITECTURE — KG entity_id ≠ S3 instrument_id (ADR-F-12, BP-367):
+ * The KG entity_id (from COMPETES_WITH edges) is NOT the same UUID as S3's
+ * instrument_id. S9 proxy normalises graph nodes to include `ticker` so that the
+ * frontend can bridge the two ID spaces without a second lookup.
+ * Resolution path: COMPETES_WITH edge → competitor entity_id → graph node.ticker
+ * → screener result (matched by ticker) → fundamentals metrics.
  *
- * BUG FIX 2026-05-04 (BP-367):
- *   Root cause #1: e.label === "COMPETES_WITH" — DB stores lowercase "competes_with";
- *   the proxy sets label from canonical_type which is lowercase. The UPPERCASE filter
- *   never matched, producing 0 competitor entity_ids every time.
+ * WHY SINGLE SCREENER CALL (not N getCompanyOverview calls):
+ * The screener returns all instruments with their fundamentals in one request.
+ * With ~30 instruments in the system, fetching all and filtering client-side by
+ * ticker is efficient. This avoids N parallel getCompanyOverview calls where each
+ * hits 4+ downstream services.
  *
- *   Root cause #2: Screener called with legacy {field, operator, value} format which
- *   the backend's ScreenFilterRequest model doesn't accept (requires metric/min_value).
+ * BUG FIX 2026-05-04 (BP-367, v2):
+ *   v1 used `e.label === "COMPETES_WITH"` (case mismatch) and tried screener
+ *   entity_id filter (unsupported). v2 fixes:
+ *   1. S9 now normalises edge labels to lowercase → `"competes_with"` always
+ *   2. S9 now includes `ticker` in graph nodes → resolve entity → S3 instrument
+ *   3. Single screener call → client-side ticker matching → no entity_id filter needed
  *
  * WHO USES IT: FundamentalsTab right sidebar (Wave D-2)
- * DATA SOURCE: S9 graph + company overview + screener endpoints
+ * DATA SOURCE: S9 graph + screener endpoints
  * DESIGN REFERENCE: PLAN-0041 §T-D-2-03
  */
 
 "use client";
-// WHY "use client": uses useQuery for graph + overview + screener fetches.
+// WHY "use client": uses useQuery for graph + screener fetches.
 
 import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
@@ -58,10 +62,9 @@ interface PeerComparisonPanelProps {
   currentDailyReturn?: number | null;
 }
 
-// ── Internal display row (unified shape for KG + sector peers) ────────────────
+// ── Internal display row ───────────────────────────────────────────────────────
 
 interface PeerRow {
-  /** React list key — instrument_id or entity_id */
   key: string;
   ticker: string;
   pe_ratio: number | null;
@@ -73,7 +76,7 @@ interface PeerRow {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-const MAX_PEERS = 4; // max peer rows (current instrument row is shown separately above)
+const MAX_PEERS = 4;
 
 export function PeerComparisonPanel({
   entityId,
@@ -86,107 +89,104 @@ export function PeerComparisonPanel({
   const gateway = createGateway(accessToken);
 
   // ── Fetch entity graph for COMPETES_WITH edges ────────────────────────────
-  // WHY depth=1: we only need direct competitors (1 hop), not their competitors.
-  // WHY staleTime 600_000: knowledge graph relationships change very rarely.
+  // WHY staleTime 600_000: KG relationships change very rarely.
   const { data: graph, isLoading: graphLoading } = useQuery({
     queryKey: ["entity-graph", entityId, 1],
     queryFn: () => gateway.getEntityGraph(entityId, 1),
     enabled: !!accessToken && !!entityId,
-    staleTime: 600_000, // 10 min — KG data changes very rarely
+    staleTime: 600_000,
   });
 
-  // ── Extract competitor entity IDs from COMPETES_WITH edges ───────────────
-  // WHY lowercase "competes_with": S9 proxy sets edge label from canonical_type
-  // (proxy.py:1649 `rel.get("canonical_type")`). The DB stores lowercase
-  // relation types ("competes_with" not "COMPETES_WITH"). See BP-367.
-  // WHY both source + target: COMPETES_WITH edges can be bidirectional.
-  // Extract the "other" entity_id in each case.
+  // ── Extract competitor entity_ids and build entity_id → ticker map ────────
+  // WHY toLowerCase(): S9 normalises canonical_type to lowercase (proxy.py fix),
+  // but older seeded edges in the DB use uppercase ("COMPETES_WITH"). S9 now
+  // lowercases in _transform_graph_response so this is defensive.
+  // WHY build ticker map from nodes: S9 now includes ticker in each node.
+  // KG entity_id ≠ S3 instrument_id — ticker is the bridge between the two
+  // ID spaces (the only stable cross-service key). See BP-367 v2.
+  const nodeTickerMap = new Map<string, string>(
+    (graph?.nodes ?? [])
+      .filter((n) => n.ticker)
+      .map((n) => [n.id, n.ticker!]),
+  );
+
   const competitorEntityIds: string[] = (graph?.edges ?? [])
-    .filter((e) => e.label === "competes_with")
+    .filter((e) => e.label.toLowerCase() === "competes_with")
     .map((e) => (e.source === entityId ? e.target : e.source))
     .filter((id) => id !== entityId)
     .slice(0, MAX_PEERS);
 
-  // ── Fetch company overview for each KG competitor ────────────────────────
-  // WHY getCompanyOverview (not screener): screener POST /v1/fundamentals/screen
-  // requires ScreenFilterRequest{metric, min_value, max_value} and has no entity_id
-  // filter. getCompanyOverview(entityId) works because entity_id = instrument_id
-  // per M-017 convention — S9 calls S3 at /api/v1/instruments/{entityId}.
-  // WHY Promise.all in queryFn: a single cache entry per competitor set is simpler
-  // than useQueries — the set changes rarely (KG COMPETES_WITH is near-static).
-  const cacheKey = competitorEntityIds.slice().sort().join(",");
-  const { data: kgOverviews, isLoading: kgLoading } = useQuery({
-    queryKey: ["peer-overviews", cacheKey],
-    queryFn: async () => {
-      const results = await Promise.all(
-        competitorEntityIds.map((id) =>
-          gateway
-            .getCompanyOverview(id)
-            .catch(() => null), // WHY catch: one 404 should not kill the whole batch
-        ),
-      );
-      return results;
-    },
-    enabled: !!accessToken && competitorEntityIds.length > 0 && !graphLoading,
-    staleTime: 300_000, // 5 min — fundamentals change rarely
-  });
+  // Tickers of KG competitors — used to match screener results below.
+  const competitorTickers = new Set<string>(
+    competitorEntityIds
+      .map((id) => nodeTickerMap.get(id) ?? "")
+      .filter(Boolean),
+  );
 
-  // ── Build KG peer rows from overview data ────────────────────────────────
-  const kgPeers: PeerRow[] = (kgOverviews ?? [])
-    .filter((ov) => ov !== null && ov.instrument)
-    .map((ov) => ({
-      key: ov!.instrument.instrument_id,
-      ticker: ov!.instrument.ticker,
-      pe_ratio: ov!.fundamentals?.pe_ratio ?? null,
-      market_cap: ov!.fundamentals?.market_cap ?? null,
-      daily_return: ov!.fundamentals?.daily_return ?? null,
-      source: "kg" as const,
-    }));
-
-  // ── Sector fill-in screener ───────────────────────────────────────────────
-  // WHY always run when kgPeers < MAX_PEERS (not only when 0):
-  // User request: combine KG precision + market-cap similarity for coverage.
-  // We fill remaining slots with sector peers sorted by |market_cap - current_market_cap|.
-  // WHY metric="market_capitalization" min_value=0: ScreenFilterRequest requires a
-  // `metric` (required field pattern ^[a-z_][a-z0-9_]{0,63}$). The sector field on
-  // the filter narrows results to the same GICS sector without a separate filter clause.
-  // WHY min_value=0: excludes negative/null market caps from results.
-  const slotsLeft = MAX_PEERS - kgPeers.length;
-  const { data: sectorData, isLoading: sectorLoading } = useQuery({
-    queryKey: ["sector-peers-fill", instrument?.gics_sector, entityId],
+  // ── Fetch all instruments via screener ────────────────────────────────────
+  // WHY fetch all (not per-competitor): screener has no entity_id or ticker
+  // filter. With ~30-50 instruments total, fetching all and matching client-side
+  // by ticker is efficient (1 request vs N parallel getCompanyOverview calls
+  // that each fan-out to 4+ downstream services).
+  // WHY wait until graph loaded: we need competitorTickers before we know
+  // if we should enable the sector fallback or not. But the screener query
+  // is cheap — always run it so sector fill-in works without a second roundtrip.
+  // WHY three metrics in filters: backend ScreenFilterRequest only includes a
+  // metric in the response `metrics` dict when it is listed in the filters.
+  // The screener uses INNER JOIN per filter — instruments missing any metric
+  // are excluded. This is acceptable: liquid large-caps (which have all three)
+  // are exactly the instruments meaningful for ratio comparison.
+  // WHY wide pe_ratio/daily_return ranges: no actual filtering desired — just
+  // include them so they appear in the response metrics dict alongside market_cap.
+  const { data: screenerData, isLoading: screenerLoading } = useQuery({
+    queryKey: ["all-instruments-screener-v2"],
     queryFn: () =>
       gateway.runScreener({
         filters: [
-          {
-            metric: "market_capitalization",
-            min_value: 0,
-            // WHY sector on the filter (not a separate clause): ScreenFilterRequest
-            // has an optional `sector` field that scopes the metric filter to a
-            // single GICS sector without needing a second filter entry.
-            sector: instrument?.gics_sector ?? undefined,
-          },
+          { metric: "market_capitalization", min_value: 0 },
+          { metric: "pe_ratio", min_value: -999999, max_value: 999999 },
+          { metric: "daily_return", min_value: -1, max_value: 1 },
         ],
         sort_by: "market_cap",
         sort_dir: "desc",
-        limit: 20, // fetch more than needed so we can exclude self + KG peers + sort by similarity
+        limit: 100, // cover entire instrument universe in one call
       }),
-    enabled:
-      !!accessToken &&
-      !!instrument?.gics_sector &&
-      !graphLoading &&
-      !kgLoading &&
-      slotsLeft > 0,
+    enabled: !!accessToken && !graphLoading,
     staleTime: 300_000,
   });
 
-  // ── Build sector fill rows sorted by market-cap similarity ───────────────
-  // WHY exclude KG competitors: they're already shown in kgPeers; avoid duplicates.
-  // WHY sort by |mcap - current|: closest peers by size are most meaningful
-  // for ratio comparison (P/E of a $10B company vs a $10B benchmark is relevant;
-  // vs a $500B mega-cap it's less so).
-  const kgIds = new Set(competitorEntityIds);
-  const sectorFill: PeerRow[] = (sectorData?.results ?? [])
-    .filter((r) => r.entity_id !== entityId && !kgIds.has(r.entity_id))
+  const allResults = screenerData?.results ?? [];
+
+  // ── Partition screener results → KG competitors first, then sector fill ───
+  const kgPeers: PeerRow[] = allResults
+    .filter(
+      (r) =>
+        competitorTickers.has(r.ticker) &&
+        r.ticker !== (instrument?.ticker ?? ""),
+    )
+    .slice(0, MAX_PEERS)
+    .map((r) => ({
+      key: r.entity_id || r.instrument_id,
+      ticker: r.ticker,
+      pe_ratio: r.pe_ratio,
+      market_cap: r.market_cap,
+      daily_return: r.daily_return,
+      source: "kg" as const,
+    }));
+
+  // WHY sector + market-cap similarity fill: user asked for "similarity data"
+  // combined with graph knowledge. After KG peers, fill remaining slots with
+  // instruments from the same GICS sector sorted by closest market cap.
+  const slotsLeft = MAX_PEERS - kgPeers.length;
+  const kgTickers = new Set(kgPeers.map((p) => p.ticker));
+  const sectorFill: PeerRow[] = allResults
+    .filter(
+      (r) =>
+        r.gics_sector === instrument?.gics_sector &&
+        r.ticker !== (instrument?.ticker ?? "") &&
+        !kgTickers.has(r.ticker) &&
+        !competitorTickers.has(r.ticker), // exclude KG peers already shown
+    )
     .sort(
       (a, b) =>
         Math.abs((a.market_cap ?? 0) - (currentMarketCap ?? 0)) -
@@ -202,23 +202,20 @@ export function PeerComparisonPanel({
       source: "sector" as const,
     }));
 
-  // ── Final peers list — KG first, then sector fill ─────────────────────────
   const peers: PeerRow[] = [...kgPeers, ...sectorFill];
   const hasKg = kgPeers.length > 0;
   const hasSectorFill = sectorFill.length > 0;
 
-  // ── Source badge label ────────────────────────────────────────────────────
-  // WHY three states: analysts need to know if they're seeing analyst-curated
-  // relationships, mechanical sector peers, or a combination of both.
-  const sourceLabel = hasKg && hasSectorFill
-    ? "KG+sector"
-    : hasKg
-    ? "KG"
-    : instrument?.gics_sector
-    ? "sector"
-    : "";
+  const sourceLabel =
+    hasKg && hasSectorFill
+      ? "KG+sector"
+      : hasKg
+        ? "KG"
+        : instrument?.gics_sector
+          ? "sector"
+          : "";
 
-  const isLoading = graphLoading || kgLoading || sectorLoading;
+  const isLoading = graphLoading || screenerLoading;
 
   return (
     <div>
@@ -227,8 +224,6 @@ export function PeerComparisonPanel({
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           COMPETITORS
         </span>
-        {/* WHY source label: shows analyst whether they're seeing curated KG peers,
-            sector fill-in, or a hybrid — different quality signals. */}
         <span className="ml-auto text-[9px] font-mono text-muted-foreground/60">
           {sourceLabel}
         </span>
