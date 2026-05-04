@@ -83,6 +83,7 @@ class TestGetEntityGraphUseCase:
 
         entity_repo = _make_entity_repo(entity=center)
         entity_repo.get = AsyncMock(side_effect=lambda eid: center if eid == _ENT_ID else neighbor)
+        entity_repo.get_batch = AsyncMock(return_value=[neighbor])
         relation_repo = _make_relation_repo(rows=[rel])
 
         entity_row, relation_rows, entities_map = asyncio.run(

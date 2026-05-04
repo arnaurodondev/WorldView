@@ -245,6 +245,12 @@ def build_workers(
                     market_data_base_url=getattr(settings, "market_data_base_url", "http://market-data:8003"),
                     embedding_model_id=embed_model,
                     concurrency=settings.worker_fundamentals_concurrency,
+                    # F-015: pass the RS256 private key when configured so the worker
+                    # issues a cryptographically verifiable JWT for market-data calls.
+                    # Falls back to HS256 dev token when the key is absent.
+                    internal_jwt_private_key_pem=getattr(
+                        settings, "internal_jwt_private_key", type("_", (), {"get_secret_value": lambda _: ""})()
+                    ).get_secret_value(),
                 ),
                 "provisional_enrichment": ProvisionalEnrichmentWorker(
                     session_factory,
