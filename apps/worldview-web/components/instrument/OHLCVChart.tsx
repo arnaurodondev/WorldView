@@ -271,11 +271,26 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   // blank space. Financial UI must NEVER silently fail — blank charts erode trust.
   const [chartError, setChartError] = useState(false);
 
+  // WHY hasScrolledToRealTime ref: scrollToRealTime() must only fire ONCE on
+  // first data load — not on every background refresh. Without this guard,
+  // React Query's background refetch (staleTime=60s) re-fires the data-update
+  // effect and resets the view position, snapping the user back to the right edge
+  // even if they had scrolled left to review historical bars.
+  // Reset to false when instrumentId changes so switching instruments scrolls again.
+  const hasScrolledToRealTime = useRef(false);
+
   // WHY sync effect: keeps isFullscreenRef.current in step with the state value so
   // the ResizeObserver closure (which is stale by design) can read the current value.
   useEffect(() => {
     isFullscreenRef.current = isFullscreen;
   }, [isFullscreen]);
+
+  // WHY reset hasScrolledToRealTime on instrumentId change: when the user navigates
+  // to a different instrument, the chart reinitialises with new bars and should
+  // scroll to the right edge (most recent bar) on that first load.
+  useEffect(() => {
+    hasScrolledToRealTime.current = false;
+  }, [instrumentId]);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -837,7 +852,14 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     // re-render when profile data changes. Refs would prevent the re-render.
     setVolumeProfileBuckets(computeVolumeProfile(formattedBars, 24));
 
-    if (formattedBars.length > 0) {
+    // WHY guard with hasScrolledToRealTime: scroll to the right edge only on the
+    // FIRST data load for this instrument. React Query background refetches
+    // (triggered every staleTime=60s interval) would otherwise snap the view
+    // back to the current bar even when the user has manually scrolled left to
+    // review historical price action. The ref persists across renders without
+    // causing re-renders itself, making it the right tool here (not state).
+    if (formattedBars.length > 0 && !hasScrolledToRealTime.current) {
+      hasScrolledToRealTime.current = true;
       // WHY scrollToRealTime (not fitContent): fitContent zooms to ALL historical
       // data from the first bar (1985 for older tickers), landing the view 35+
       // years in the past — the "infinite scroll to the left" bug reported in QA.
