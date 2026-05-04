@@ -75,24 +75,40 @@ _INDUSTRY_BASE_CONFIDENCE = 0.85
 
 # Signing key for dev: market-data has MARKET_DATA_INTERNAL_JWT_SKIP_VERIFICATION=true
 # so any HS256 JWT with a decodable header is accepted in local dev.
+# F-015: this is only used as a fallback when no RS256 private key is configured.
 _INTERNAL_JWT_DEV_KEY = "dev-skip-verification-key-for-kg-fundamentals"
 
 
-def _system_jwt_headers() -> dict[str, str]:
+def _system_jwt_headers(private_key_pem: str = "") -> dict[str, str]:
+    """Generate X-Internal-JWT for service-to-service calls to market-data.
+
+    F-015: when ``private_key_pem`` is provided (non-empty), issues an RS256 JWT
+    signed with the same key as S9 api-gateway so market-data (and other backends)
+    can verify it via the gateway JWKS.  Falls back to the HS256 dev token when
+    the key is absent — market-data must have skip_verification=True for this to
+    work (acceptable in dev/test; guarded by a production check in market-data config).
+    """
     now = int(time.time())
-    token = jwt.encode(
-        {
-            "iss": "worldview-gateway",
-            "sub": "system:kg-fundamentals-refresh",
-            "user_id": "00000000-0000-0000-0000-000000000000",
-            "tenant_id": "00000000-0000-0000-0000-000000000000",
-            "role": "system",
-            "iat": now,
-            "exp": now + 86400,
-        },
-        _INTERNAL_JWT_DEV_KEY,
-        algorithm="HS256",
-    )
+    payload = {
+        "iss": "worldview-gateway",
+        "sub": "system:kg-fundamentals-refresh",
+        "user_id": "00000000-0000-0000-0000-000000000000",
+        "tenant_id": "00000000-0000-0000-0000-000000000000",
+        "role": "system",
+        "iat": now,
+        # WHY 1-hour TTL (not 24h HS256 dev token): RS256 tokens are more
+        # expensive to issue but cryptographically verifiable, so a shorter TTL
+        # is safer. The worker runs every 2h and creates a new client each run.
+        "exp": now + 3600,
+    }
+    if private_key_pem:
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+        private_key = load_pem_private_key(private_key_pem.encode(), password=None)
+        token = jwt.encode(payload, private_key, algorithm="RS256")
+    else:
+        # Fallback: HS256 dev token — only accepted when skip_verification=True
+        token = jwt.encode(payload, _INTERNAL_JWT_DEV_KEY, algorithm="HS256")
     return {"X-Internal-JWT": token}
 
 
@@ -120,6 +136,7 @@ class FundamentalsRefreshWorker:
         http_client: httpx.AsyncClient | None = None,
         embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
         concurrency: int = 5,
+        internal_jwt_private_key_pem: str = "",
     ) -> None:
         self._sf = session_factory
         self._llm = llm_client
@@ -127,6 +144,8 @@ class FundamentalsRefreshWorker:
         self._http = http_client
         self._embed_model_id = embedding_model_id
         self._concurrency = concurrency
+        # F-015: store the RS256 private key PEM (may be empty for HS256 dev fallback)
+        self._internal_jwt_private_key_pem = internal_jwt_private_key_pem
 
     async def run(self) -> None:
         """Refresh fundamentals embeddings due for refresh.
@@ -147,7 +166,11 @@ class FundamentalsRefreshWorker:
         )
 
         own_http = self._http is None
-        http = self._http or _httpx.AsyncClient(timeout=15.0, headers=_system_jwt_headers())
+        # F-015: pass private key PEM so RS256 JWT is issued when available.
+        http = self._http or _httpx.AsyncClient(
+            timeout=15.0,
+            headers=_system_jwt_headers(self._internal_jwt_private_key_pem),
+        )
 
         refreshed = 0
         skipped = 0

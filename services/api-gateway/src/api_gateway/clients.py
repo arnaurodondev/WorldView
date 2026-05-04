@@ -174,6 +174,7 @@ async def get_company_overview(
     *,
     headers: dict[str, str] | None = None,
     make_headers: Callable[[], dict[str, str]] | None = None,
+    overall_timeout_s: float = 15.0,
 ) -> dict[str, Any]:
     """Compose CompanyOverview from Market Data.
 
@@ -200,6 +201,9 @@ async def get_company_overview(
     time of the bug).  Using ``start=90 days ago`` guarantees ~90 trading-day
     bars of 1D data are returned regardless of ingestion timing, while S3's
     own ``limit`` param (default 200) provides a safe upper cap.
+
+    F-008: the whole composition is wrapped in asyncio.wait_for(overall_timeout_s)
+    so a single sluggish downstream cannot hang the page indefinitely.
     """
     from datetime import UTC, datetime, timedelta
 
@@ -207,179 +211,187 @@ async def get_company_overview(
         return make_headers() if make_headers is not None else (headers or {})
 
     async def _safe(path: str, **kwargs: Any) -> dict[str, Any]:
-        """_checked_get variant that returns {} on any DownstreamError."""
+        """_checked_get variant that returns {} on any DownstreamError or network error."""
         try:
             return await _checked_get(clients.market_data, "market-data", path, headers=_h(), **kwargs)
-        except DownstreamError:
+        except Exception:
+            # F-008: log warnings for any failure so partial failures are visible
+            # in observability without silently returning empty data.
+            logger.warning("company_overview_leg_failed", leg=path, exc_info=True)
             return {}
 
-    # Request 90 days of daily bars so the chart has enough history to render
-    # meaningful trends even when markets are closed for holidays/weekends.
-    # 90 calendar days ≈ 63 trading days — well above any 30-bar chart window.
-    # Use UTC-aware datetime (.date()) per project UTC-only convention (CLAUDE.md Rule 7).
-    start_90d_ago = (datetime.now(tz=UTC) - timedelta(days=90)).date().isoformat()
+    async def _compose() -> dict[str, Any]:
+        # Request 90 days of daily bars so the chart has enough history to render
+        # meaningful trends even when markets are closed for holidays/weekends.
+        # 90 calendar days ≈ 63 trading days — well above any 30-bar chart window.
+        # Use UTC-aware datetime (.date()) per project UTC-only convention (CLAUDE.md Rule 7).
+        start_90d_ago = (datetime.now(tz=UTC) - timedelta(days=90)).date().isoformat()
 
-    # Instrument metadata is required; the rest degrade gracefully to null.
-    # Each call gets its own fresh JWT via _h() so parallel calls don't share JTIs.
-    # WHY 5 parallel calls (was 4): highlights gives us the header stats
-    # (market_cap, pe_ratio) and technicals gives us the 52w range without
-    # an extra round-trip after render. The general fundamentals endpoint
-    # returns all sections in one call; we filter by section name below.
-    instrument_raw, profile_raw, ohlcv_raw, quote_raw, all_fundamentals_raw = await asyncio.gather(
-        _checked_get(clients.market_data, "market-data", f"/api/v1/instruments/{company_id}", headers=_h()),
-        _safe(f"/api/v1/fundamentals/{company_id}/company-profile"),
-        _safe(f"/api/v1/ohlcv/{company_id}", params={"timeframe": "1d", "start": start_90d_ago}),
-        _safe(f"/api/v1/quotes/{company_id}"),
-        _safe(f"/api/v1/fundamentals/{company_id}"),
-    )
+        # Instrument metadata is required; the rest degrade gracefully to null.
+        # Each call gets its own fresh JWT via _h() so parallel calls don't share JTIs.
+        # WHY 5 parallel calls (was 4): highlights gives us the header stats
+        # (market_cap, pe_ratio) and technicals gives us the 52w range without
+        # an extra round-trip after render. The general fundamentals endpoint
+        # returns all sections in one call; we filter by section name below.
+        instrument_raw, profile_raw, ohlcv_raw, quote_raw, all_fundamentals_raw = await asyncio.gather(
+            _checked_get(clients.market_data, "market-data", f"/api/v1/instruments/{company_id}", headers=_h()),
+            _safe(f"/api/v1/fundamentals/{company_id}/company-profile"),
+            _safe(f"/api/v1/ohlcv/{company_id}", params={"timeframe": "1d", "start": start_90d_ago}),
+            _safe(f"/api/v1/quotes/{company_id}"),
+            _safe(f"/api/v1/fundamentals/{company_id}"),
+        )
 
-    # WHY KG entity_id lookup (not instrument_id): ADR-F-12 — KG entity_id ≠ instrument_id.
-    # The market-data service (S3) has no entity_id; entity linking lives in S7.
-    # We resolve instrument ticker → KG entity_id via the KG lookup endpoint so that
-    # briefing/graph/news endpoints on the instrument page receive the correct KG id.
-    # Falls back to company_id when the ticker isn't seeded in the KG.
-    ticker_symbol: str = instrument_raw.get("symbol", "")
-    kg_entity_id: str = company_id  # default: fall back to company_id (instrument_id)
-    if ticker_symbol:
-        try:
-            kg_resp = await _checked_get(
-                clients.knowledge_graph,
-                "knowledge-graph",
-                "/api/v1/entities/lookup",
-                headers=_h(),
-                params={"ticker": ticker_symbol},
-            )
-            if kg_resp.get("entity_id"):
-                kg_entity_id = str(kg_resp["entity_id"])
-        except Exception as e:
-            # T-A-1-03: KG lookup is best-effort (fall back to company_id), but
-            # silent failures hide integration issues.  Log at WARNING with enough
-            # context to diagnose the root cause without alarming the on-call.
-            logger.warning(
-                "kg_lookup_failed",
-                ticker=ticker_symbol,
-                company_id=company_id,
-                exc=str(e),
-                exc_info=True,
-            )
+        # WHY KG entity_id lookup (not instrument_id): ADR-F-12 — KG entity_id ≠ instrument_id.
+        # The market-data service (S3) has no entity_id; entity linking lives in S7.
+        # We resolve instrument ticker → KG entity_id via the KG lookup endpoint so that
+        # briefing/graph/news endpoints on the instrument page receive the correct KG id.
+        # Falls back to company_id when the ticker isn't seeded in the KG.
+        ticker_symbol: str = instrument_raw.get("symbol", "")
+        kg_entity_id: str = company_id  # default: fall back to company_id (instrument_id)
+        if ticker_symbol:
+            try:
+                kg_resp = await _checked_get(
+                    clients.knowledge_graph,
+                    "knowledge-graph",
+                    "/api/v1/entities/lookup",
+                    headers=_h(),
+                    params={"ticker": ticker_symbol},
+                )
+                if kg_resp.get("entity_id"):
+                    kg_entity_id = str(kg_resp["entity_id"])
+            except Exception as e:
+                # T-A-1-03: KG lookup is best-effort (fall back to company_id), but
+                # silent failures hide integration issues.  Log at WARNING with enough
+                # context to diagnose the root cause without alarming the on-call.
+                logger.warning(
+                    "kg_lookup_failed",
+                    ticker=ticker_symbol,
+                    company_id=company_id,
+                    exc=str(e),
+                    exc_info=True,
+                )
 
-    # Extract name / currency / sector from the first company-profile record's data blob.
-    profile_data: dict[str, Any] = {}
-    for rec in profile_raw.get("records", []):
-        profile_data = rec.get("data") or {}
-        if profile_data:
-            break
+        # Extract name / currency / sector from the first company-profile record's data blob.
+        profile_data: dict[str, Any] = {}
+        for rec in profile_raw.get("records", []):
+            profile_data = rec.get("data") or {}
+            if profile_data:
+                break
 
-    # Extract highlights (market_cap, pe_ratio) and technicals (52w range) from
-    # the all-sections fundamentals response. The general endpoint returns records
-    # with a "section" field so we can filter without additional API calls.
-    highlights_data: dict[str, Any] = {}
-    technicals_data: dict[str, Any] = {}
-    for rec in all_fundamentals_raw.get("records", []):
-        section = rec.get("section", "")
-        data = rec.get("data") or {}
-        if section == "highlights" and not highlights_data:
-            highlights_data = data
-        elif section == "technicals_snapshot" and not technicals_data:
-            technicals_data = data
+        # Extract highlights (market_cap, pe_ratio) and technicals (52w range) from
+        # the all-sections fundamentals response. The general endpoint returns records
+        # with a "section" field so we can filter without additional API calls.
+        highlights_data: dict[str, Any] = {}
+        technicals_data: dict[str, Any] = {}
+        for rec in all_fundamentals_raw.get("records", []):
+            section = rec.get("section", "")
+            data = rec.get("data") or {}
+            if section == "highlights" and not highlights_data:
+                highlights_data = data
+            elif section == "technicals_snapshot" and not technicals_data:
+                technicals_data = data
 
-    # Build the frontend Instrument shape.
-    # WHY description from profile_data["Description"]: EODHD stores company
-    # descriptions in the General.Description field of the fundamentals payload.
-    # market-data persists this in company_profiles.data JSONB under key "Description".
-    # S9 extracts it here so the frontend gets description in the same CompanyOverview
-    # response — no extra round-trip needed (UI-004 fix, 2026-04-24).
-    instrument: dict[str, Any] = {
-        "instrument_id": instrument_raw.get("id", company_id),
-        "entity_id": kg_entity_id,
-        "ticker": instrument_raw.get("symbol", ""),
-        "name": profile_data.get("Name") or instrument_raw.get("symbol", ""),
-        "exchange": instrument_raw.get("exchange", ""),
-        "currency": profile_data.get("Currency", "USD"),
-        "gics_sector": profile_data.get("GicSector"),
-        "gics_industry": profile_data.get("GicGroup"),
-        "isin": profile_data.get("ISIN"),
-        "country": profile_data.get("CountryISO"),
-        "description": profile_data.get("Description") or None,
-    }
-
-    # Map the market-data QuoteResponse → frontend Quote shape (best-effort; no change/change_pct).
-    quote: dict[str, Any] | None = None
-    if quote_raw:
-        last = quote_raw.get("last")
-        quote = {
-            "instrument_id": quote_raw.get("instrument_id", company_id),
+        # Build the frontend Instrument shape.
+        # WHY description from profile_data["Description"]: EODHD stores company
+        # descriptions in the General.Description field of the fundamentals payload.
+        # market-data persists this in company_profiles.data JSONB under key "Description".
+        # S9 extracts it here so the frontend gets description in the same CompanyOverview
+        # response — no extra round-trip needed (UI-004 fix, 2026-04-24).
+        instrument: dict[str, Any] = {
+            "instrument_id": instrument_raw.get("id", company_id),
+            "entity_id": kg_entity_id,
             "ticker": instrument_raw.get("symbol", ""),
-            "price": float(last) if last else 0.0,
-            # T-A-1-04: S3 QuoteResponse has no intraday change field.
-            # Return None (honest) instead of 0.0 (misleading — implies no movement).
-            # Frontend TypeScript types are updated separately to accept null.
-            "change": None,
-            "change_pct": None,
-            "timestamp": str(quote_raw.get("timestamp", "")),
-            "volume": quote_raw.get("volume"),
+            "name": profile_data.get("Name") or instrument_raw.get("symbol", ""),
+            "exchange": instrument_raw.get("exchange", ""),
+            "currency": profile_data.get("Currency", "USD"),
+            "gics_sector": profile_data.get("GicSector"),
+            "gics_industry": profile_data.get("GicGroup"),
+            "isin": profile_data.get("ISIN"),
+            "country": profile_data.get("CountryISO"),
+            "description": profile_data.get("Description") or None,
         }
 
-    # Normalize market-data OHLCVListResponse → frontend OHLCVResponse shape.
-    # S3 returns: {items: [{bar_date, open: str, high: str, ...}], total, timeframe}
-    # Frontend expects: {instrument_id, ticker, timeframe, bars: [{timestamp, open: float, ...}]}
-    ohlcv_out: dict[str, Any] | None = None
-    if ohlcv_raw:
-        raw_items: list[dict[str, Any]] = ohlcv_raw.get("items") or []
-        ohlcv_out = {
-            "instrument_id": company_id,
-            "ticker": instrument_raw.get("symbol", ""),
-            "timeframe": "1D",
-            "bars": [
-                {
-                    "timestamp": item.get("bar_date", ""),
-                    "open": float(item["open"]) if item.get("open") else 0.0,
-                    "high": float(item["high"]) if item.get("high") else 0.0,
-                    "low": float(item["low"]) if item.get("low") else 0.0,
-                    "close": float(item["close"]) if item.get("close") else 0.0,
-                    "volume": item.get("volume") or 0,
-                }
-                for item in raw_items
-            ],
+        # Map the market-data QuoteResponse → frontend Quote shape (best-effort; no change/change_pct).
+        quote: dict[str, Any] | None = None
+        if quote_raw:
+            last = quote_raw.get("last")
+            quote = {
+                "instrument_id": quote_raw.get("instrument_id", company_id),
+                "ticker": instrument_raw.get("symbol", ""),
+                "price": float(last) if last else 0.0,
+                # T-A-1-04: S3 QuoteResponse has no intraday change field.
+                # Return None (honest) instead of 0.0 (misleading — implies no movement).
+                # Frontend TypeScript types are updated separately to accept null.
+                "change": None,
+                "change_pct": None,
+                "timestamp": str(quote_raw.get("timestamp", "")),
+                "volume": quote_raw.get("volume"),
+            }
+
+        # Normalize market-data OHLCVListResponse → frontend OHLCVResponse shape.
+        # S3 returns: {items: [{bar_date, open: str, high: str, ...}], total, timeframe}
+        # Frontend expects: {instrument_id, ticker, timeframe, bars: [{timestamp, open: float, ...}]}
+        ohlcv_out: dict[str, Any] | None = None
+        if ohlcv_raw:
+            raw_items: list[dict[str, Any]] = ohlcv_raw.get("items") or []
+            ohlcv_out = {
+                "instrument_id": company_id,
+                "ticker": instrument_raw.get("symbol", ""),
+                "timeframe": "1D",
+                "bars": [
+                    {
+                        "timestamp": item.get("bar_date", ""),
+                        "open": float(item["open"]) if item.get("open") else 0.0,
+                        "high": float(item["high"]) if item.get("high") else 0.0,
+                        "low": float(item["low"]) if item.get("low") else 0.0,
+                        "close": float(item["close"]) if item.get("close") else 0.0,
+                        "volume": item.get("volume") or 0,
+                    }
+                    for item in raw_items
+                ],
+            }
+
+        # Build the overview fundamentals snapshot for the instrument detail header.
+        # WHY here (not in FundamentalsTab): the header stats (market_cap, pe_ratio,
+        # 52w range, daily_return) need to load with the initial overview request so
+        # they appear before the user selects the Fundamentals tab. The FundamentalsTab
+        # fetches a full detailed breakdown separately on tab activation.
+        # daily_return is computed from the last two OHLCV bars (no dedicated endpoint).
+        overview_fundamentals: dict[str, Any] | None = None
+        if highlights_data or technicals_data:
+            raw_bars = (ohlcv_out or {}).get("bars") or []
+            daily_return: float | None = None
+            if len(raw_bars) >= 2:
+                prev_close = raw_bars[-2].get("close") or 0.0
+                last_close = raw_bars[-1].get("close") or 0.0
+                if prev_close > 0:
+                    daily_return = (last_close - prev_close) / prev_close
+
+            market_cap_raw = highlights_data.get("MarketCapitalization")
+            pe_raw = highlights_data.get("PERatio")
+            w52_high_raw = technicals_data.get("52WeekHigh")
+            w52_low_raw = technicals_data.get("52WeekLow")
+
+            overview_fundamentals = {
+                "market_cap": float(market_cap_raw) if market_cap_raw is not None else None,
+                "pe_ratio": float(pe_raw) if pe_raw is not None else None,
+                "week_52_high": float(w52_high_raw) if w52_high_raw is not None else None,
+                "week_52_low": float(w52_low_raw) if w52_low_raw is not None else None,
+                "daily_return": daily_return,
+            }
+
+        return {
+            "instrument": instrument,
+            "quote": quote,
+            # Overview fundamentals: key header stats. FundamentalsTab fetches the
+            # full per-section breakdown separately on tab activation.
+            "fundamentals": overview_fundamentals,
+            "ohlcv": ohlcv_out,
         }
 
-    # Build the overview fundamentals snapshot for the instrument detail header.
-    # WHY here (not in FundamentalsTab): the header stats (market_cap, pe_ratio,
-    # 52w range, daily_return) need to load with the initial overview request so
-    # they appear before the user selects the Fundamentals tab. The FundamentalsTab
-    # fetches a full detailed breakdown separately on tab activation.
-    # daily_return is computed from the last two OHLCV bars (no dedicated endpoint).
-    overview_fundamentals: dict[str, Any] | None = None
-    if highlights_data or technicals_data:
-        raw_bars = (ohlcv_out or {}).get("bars") or []
-        daily_return: float | None = None
-        if len(raw_bars) >= 2:
-            prev_close = raw_bars[-2].get("close") or 0.0
-            last_close = raw_bars[-1].get("close") or 0.0
-            if prev_close > 0:
-                daily_return = (last_close - prev_close) / prev_close
-
-        market_cap_raw = highlights_data.get("MarketCapitalization")
-        pe_raw = highlights_data.get("PERatio")
-        w52_high_raw = technicals_data.get("52WeekHigh")
-        w52_low_raw = technicals_data.get("52WeekLow")
-
-        overview_fundamentals = {
-            "market_cap": float(market_cap_raw) if market_cap_raw is not None else None,
-            "pe_ratio": float(pe_raw) if pe_raw is not None else None,
-            "week_52_high": float(w52_high_raw) if w52_high_raw is not None else None,
-            "week_52_low": float(w52_low_raw) if w52_low_raw is not None else None,
-            "daily_return": daily_return,
-        }
-
-    return {
-        "instrument": instrument,
-        "quote": quote,
-        # Overview fundamentals: key header stats. FundamentalsTab fetches the
-        # full per-section breakdown separately on tab activation.
-        "fundamentals": overview_fundamentals,
-        "ohlcv": ohlcv_out,
-    }
+    # F-008: wrap the entire composition in a timeout budget (15 s by default).
+    # A sluggish downstream cannot hang the page indefinitely.
+    return await asyncio.wait_for(_compose(), timeout=overall_timeout_s)
 
 
 # ── Instrument page bundle (PLAN-0059 I-5) ──────────────────────────────

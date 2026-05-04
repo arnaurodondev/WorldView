@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -96,21 +97,38 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         rsa_key_id,
     )
 
-    try:
-        oidc_config = await fetch_oidc_discovery(settings.oidc_issuer_url, httpx_client)
-        app.state.oidc_config = oidc_config
-        logger.info("oidc_discovery_complete", issuer=oidc_config.issuer)
-    except Exception as exc:
+    # F-025: 3-attempt exponential backoff (0.5s → 1.5s → —) so a transient
+    # Zitadel restart at container boot-up doesn't permanently fail the gateway.
+    # Delays: attempt 1 = immediate, attempt 2 = 0.5 s, attempt 3 = 1.5 s.
+    _oidc_backoff = (0.0, 0.5, 1.5)
+    _oidc_last_exc: Exception | None = None
+    for _attempt, _delay in enumerate(_oidc_backoff):
+        if _delay:
+            await asyncio.sleep(_delay)
+        try:
+            oidc_config = await fetch_oidc_discovery(settings.oidc_issuer_url, httpx_client)
+            app.state.oidc_config = oidc_config
+            logger.info("oidc_discovery_complete", issuer=oidc_config.issuer)
+            _oidc_last_exc = None
+            break
+        except Exception as exc:
+            _oidc_last_exc = exc
+            logger.warning(
+                "oidc_discovery_attempt_failed",
+                attempt=_attempt + 1,
+                error=str(exc),
+            )
+    if _oidc_last_exc is not None:
         if settings.oidc_discovery_optional:
             app.state.oidc_config = None
             logger.warning(
                 "oidc_discovery_skipped",
-                error=str(exc),
+                error=str(_oidc_last_exc),
                 detail="OIDC_DISCOVERY_OPTIONAL=true; starting with internal-JWT-only auth",
             )
         else:
-            logger.error("oidc_discovery_failed", error=str(exc))
-            raise RuntimeError(f"OIDC discovery failed at startup: {exc}") from exc
+            logger.error("oidc_discovery_failed", error=str(_oidc_last_exc))
+            raise RuntimeError(f"OIDC discovery failed at startup: {_oidc_last_exc}") from _oidc_last_exc
 
     # 5. RSA keypair for internal JWT signing
     private_key = load_rsa_private_key(settings.internal_jwt_private_key.get_secret_value())

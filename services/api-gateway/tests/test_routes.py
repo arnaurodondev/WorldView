@@ -178,7 +178,7 @@ async def test_company_overview_propagates_downstream_error(authed_client, authe
     authed_mock_clients.market_data.get = AsyncMock(return_value=err_resp)
 
     response = await authed_client.get(
-        "/v1/companies/UNKNOWN/overview",
+        "/v1/companies/00000000-0000-0000-0000-000000000404/overview",
         headers={"Authorization": f"Bearer {_make_jwt()}"},
     )
     assert response.status_code == 404

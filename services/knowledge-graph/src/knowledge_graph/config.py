@@ -160,6 +160,15 @@ class Settings(BaseSettings):
     # Auth
     api_gateway_url: str = "http://api-gateway:8000"
 
+    # F-015: Optional RS256 private key PEM for service-to-service JWT signing.
+    # When set, FundamentalsRefreshWorker issues RS256-signed internal JWTs
+    # (the same key pair used by S9 api-gateway). When empty (default), the
+    # worker falls back to the HS256 dev token, which market-data accepts when
+    # MARKET_DATA_INTERNAL_JWT_SKIP_VERIFICATION=true (dev/test only).
+    # Set KNOWLEDGE_GRAPH_INTERNAL_JWT_PRIVATE_KEY to the PEM contents of the
+    # same RS256 key that S9 uses so backends can verify with the gateway JWKS.
+    internal_jwt_private_key: SecretStr = SecretStr("")
+
     # F-001: When True, InternalJWTMiddleware decodes JWTs WITHOUT signature
     # verification if the JWKS public key is unavailable. NEVER enable in
     # production — only for E2E tests that run without a full S9 stack.

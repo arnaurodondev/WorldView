@@ -54,11 +54,16 @@ class GetEntityGraphUseCase:
             if isinstance(obj, UUID) and obj != entity_id:
                 referenced_ids.add(obj)
 
+        # F-017: replace per-entity get() loop with a single get_batch() call so
+        # the N+1 query pattern is eliminated. For a graph with 50 relations this
+        # reduces up to 100 individual queries to 1 batch query.
         entities_map: dict[str, dict[str, Any]] = {}
-        for ref_id in referenced_ids:
-            ref_row = await entity_repo.get(ref_id)
-            if ref_row is not None:
-                entities_map[str(ref_id)] = ref_row
+        if referenced_ids:
+            batch_rows = await entity_repo.get_batch(list(referenced_ids))
+            for row in batch_rows:
+                row_id = row.get("entity_id")
+                if row_id is not None:
+                    entities_map[str(row_id)] = row
 
         return entity_row, relation_rows, entities_map
 

@@ -203,6 +203,12 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
                     logger.warning("valkey_user_cache_read_failed", exc_info=True)
 
             if user_data_oidc is None:
+                # F-041: log cache miss at debug level so it is visible in
+                # observability without being noisy on every cold-start request.
+                logger.debug(  # type: ignore[no-any-return]
+                    "valkey_user_cache_miss",
+                    sub=sub,
+                )
                 # Fall back to token claims
                 user_data_oidc = {
                     "sub": sub,
@@ -218,7 +224,13 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
             user_data_oidc["role"] = oidc_role
             request.state.user = user_data_oidc
 
-        except (jwt.InvalidTokenError, Exception):
+        except jwt.InvalidTokenError:
+            # Expected path: invalid/expired OIDC token — user gets no auth context.
+            request.state.user = None
+        except Exception:
+            # Unexpected errors (network, config) — log for debugging but still
+            # fail-open so a Valkey outage doesn't lock every user out.
+            logger.debug("oidc_auth_unexpected_error", exc_info=True)
             request.state.user = None
 
         return cast("Response", await call_next(request))
