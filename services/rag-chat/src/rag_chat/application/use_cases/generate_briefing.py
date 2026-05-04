@@ -20,8 +20,8 @@ from uuid import UUID
 
 import structlog
 
-from rag_chat.api.schemas import BriefBullet, BriefCitation, BriefSection
 from rag_chat.application.pipeline.prompts.intent_prompts import EMAIL_DEEP_BRIEF_PROMPT
+from rag_chat.domain.brief import BriefBullet, BriefCitation, BriefSection
 from rag_chat.domain.errors import RateLimitExceededError
 
 if TYPE_CHECKING:

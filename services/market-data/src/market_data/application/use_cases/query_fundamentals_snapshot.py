@@ -50,7 +50,9 @@ async def _query_snapshot(
         return None
 
     return {
-        "instrument_id": row["instrument_id"],
+        "instrument_id": str(
+            row["instrument_id"]
+        ),  # asyncpg returns UUID; FundamentalsSnapshotResponse.instrument_id is str
         "eps_ttm": float(row["eps_ttm"]) if row["eps_ttm"] is not None else None,
         "beta": float(row["beta"]) if row["beta"] is not None else None,
         "avg_volume_30d": int(row["avg_volume_30d"]) if row["avg_volume_30d"] is not None else None,
