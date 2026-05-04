@@ -32,20 +32,23 @@ describe("buildScreenerFilters — Part 4 defaults: daily_return + pe_ratio alwa
     const filters = buildScreenerFilters(DEFAULT_FILTERS);
     const dr = findFilter(filters, "daily_return");
     expect(dr).toBeDefined();
-    // WHY full-range bounds: -1 to 1 forces the backend to include the field
-    // in every result row, not just rows that exceed an unset threshold.
-    expect(dr?.min_value).toBe(-1);
-    expect(dr?.max_value).toBe(1);
+    // WHY ±100 bounds: daily_return is stored as a percentage (5.0 = 5%).
+    // The old ±1 bounds only matched stocks with <1% daily move, excluding
+    // almost everything on any given trading day. ±100 covers all realistic
+    // daily moves regardless of whether the value is decimal or percentage.
+    expect(dr?.min_value).toBe(-100);
+    expect(dr?.max_value).toBe(100);
   });
 
   it("includes pe_ratio when user has set no filters", () => {
     const filters = buildScreenerFilters(DEFAULT_FILTERS);
     const pe = findFilter(filters, "pe_ratio");
     expect(pe).toBeDefined();
-    // WHY -9999 to 9999: permissive enough to include all real P/E values
-    // (negative P/E is valid for companies with negative earnings).
-    expect(pe?.min_value).toBe(-9999);
-    expect(pe?.max_value).toBe(9999);
+    // WHY ±999999: stocks without PE data (negative earnings) were excluded
+    // with the old ±9999 bound. Ultra-wide bounds ensure all stocks are
+    // returned regardless of earnings sign or whether PE data is present.
+    expect(pe?.min_value).toBe(-999999);
+    expect(pe?.max_value).toBe(999999);
   });
 
   it("does not duplicate pe_ratio when user has explicitly set a pe_ratio range", () => {

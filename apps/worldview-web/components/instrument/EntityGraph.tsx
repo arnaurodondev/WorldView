@@ -292,7 +292,10 @@ function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) {
     for (const edge of data.edges) {
       // WHY both-endpoint check: API may return edges to nodes not in the node list
       // (e.g., depth boundary trimming). Skipping prevents graphology errors.
-      if (graph.hasNode(edge.source) && graph.hasNode(edge.target)) {
+      // WHY self-loop guard (edge.source !== edge.target): the API may return edges
+      // where source and target are the same node (sentinel/null entity placeholder).
+      // graphology throws "UsageGraphError: allowSelfLoops is false" in that case.
+      if (graph.hasNode(edge.source) && graph.hasNode(edge.target) && edge.source !== edge.target) {
         // WHY hasEdge check: undirected graph with multi:false still needs this
         // guard because the API may return bidirectional duplicate edges.
         if (!graph.hasEdge(edge.source, edge.target)) {
