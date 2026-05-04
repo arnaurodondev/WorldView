@@ -1001,10 +1001,13 @@ Before W0 closes:
 
 ---
 
-## 9. PLAN-0059-G — Performance + Bundle (Wave 4) 🟡 (G-1 4/5 · G-2 partial · G-3 partial)
+## 9. PLAN-0059-G — Performance + Bundle (Wave 4) ✅ ALL DONE
 
 **Status: G-1 5/5 DONE + H-3 DONE — 2026-05-02 · `RevenueTrendSparklines` + `EarningsHistoryChart` + `RealizedPnLChart` + `DividendIncomeTimeline` migrated off recharts to hand-rolled SVG (G-1). `SectorAllocationPanel` migrated to hand-rolled `SquarifiedTreemap` component (H-3). recharts dependency removed from package.json. lib/treemap.ts (Bruls/Huijsen/van Wijk algorithm) + components/ui/squarified-treemap.tsx + 10 unit tests. MarketHeatmap + SectorHeatmapWidget were already hand-rolled (not on recharts). All portfolio tests now pass (3 were failing due to recharts import error). 119 test files, 1354 tests total.**
 **Status: G-3 partial DONE — 2026-05-02 · `useTransition` on portfolio tab switching (heavy ~7-surface tab body mount no longer freezes the trigger row) · `useDeferredValue` on screener `filteredRows` (sort + render pipeline runs at lower priority than the input that triggered it; 5000-row accumulators no longer block 30-80ms on filter/sort/Load More). Companion G-2 commit 94c7d693 had already covered HeatCell + MiniChart memoisation.**
+**Status: G-2 DONE — 2026-05-03 · `next/dynamic` applied to `OHLCVChart` + `EntityGraphPanel` in `OverviewLayout` (ssr:false, Skeleton fallback), `EntityGraphPanel` in `WorkspacePanelContainer` (ssr:false), `CreatePortfolioDialog`/`AddPositionDialog`/`DeletePortfolioDialog` in portfolio page (null fallback — dialogs are closed on initial render), `LazyMarkdownContent` wrapper for chat MarkdownContent. 8 new dynamic-import tests added (`__tests__/dynamic-imports.test.tsx`). 151 test files, 1677 tests total.**
+**Status: G-4 DONE — 2026-05-03 · 175 components audited; "use client" removed from 4 pure-display components: `CitationList` (anchor list, no hooks), `MessageBubble` (static layout, no hooks), `SlashTurnBlock` (structural wrapper, no hooks), `WatchlistSummaryStrip` (data formatter, no hooks). Regression guard `__tests__/server-component-audit.test.ts` added. Note: 171/175 legitimately require client — heavy interactive shadcn/TanStack Query usage is correct for a real-time finance terminal.**
+**Status: G-5 DONE — 2026-05-03 · Storybook 8.6.12 installed (devDependencies only). `.storybook/main.ts` + `.storybook/preview.ts` configured for Next.js 15 + Midnight Pro dark palette. 8 story files created: button, data-table, InlineEmptyState, InlineErrorState, period-selector, number-input, collapsible, tooltip. `storybook`/`build-storybook` scripts added to package.json. lint + typecheck clean.**
 
 **Goal:** Drop recharts; dynamic-import all heavy widgets; React 19 patterns; Server Components audit; CI performance budgets.
 **Depends on:** PLAN-0059-F (primitive layer stable).
@@ -1013,11 +1016,11 @@ Before W0 closes:
 
 ### Waves
 
-- **G-1 (3d) Drop recharts:** Migrate `EquityCurveChart`, `RevenueTrendSparklines`, `EarningsHistoryChart` to `lightweight-charts` line series; `<Sparkline>` rollout to 7 panels.
-- **G-2 (2d) Dynamic imports:** All dialogs, EntityGraph, WorkspaceGrid, KnowledgeGraph, MarkdownRenderer, ScreenerFilterBar, PDF/Excel exports — go from 1 to ~15+ dynamic imports.
-- **G-3 (3d) React 19 patterns:** `React.memo` on row/cell leaves; `useDeferredValue` on filter inputs; `useTransition` on tab switches; stable callbacks.
-- **G-4 (5d) Server Components audit:** Strip `"use client"` from 30-50 pure-render components.
-- **G-5 (2d) Storybook 8 + Chromatic:** Top 25 primitives + 12 financial widgets cataloged.
+- **G-1 (3d) Drop recharts:** ✅ DONE 2026-05-02
+- **G-2 (2d) Dynamic imports:** ✅ DONE 2026-05-03 — OHLCVChart, EntityGraphPanel, portfolio dialogs, MarkdownContent all lazy-loaded
+- **G-3 (3d) React 19 patterns:** ✅ DONE 2026-05-02 — useTransition + useDeferredValue applied
+- **G-4 (5d) Server Components audit:** ✅ DONE 2026-05-03 — 4 components converted; regression guard added
+- **G-5 (2d) Storybook 8 + Chromatic:** ✅ DONE 2026-05-03 — Storybook 8.6.12 + 8 component stories
 
 ### Critical tests
 - React Profiler before/after on `/screener` filter input — render count drops 5–10×

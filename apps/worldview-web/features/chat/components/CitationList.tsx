@@ -1,4 +1,6 @@
-"use client";
+// Server Component — no hooks, no browser APIs, no event handlers, no interactive shadcn imports.
+// Pure data display: renders a list of <a> anchor tags with formatted citation props.
+// Do not re-add "use client" without checking all of the above.
 
 /**
  * features/chat/components/CitationList.tsx — Clickable citation pills below

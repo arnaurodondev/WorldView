@@ -34,6 +34,10 @@
  * WHO USES IT: app/(app)/instruments/[entityId]/page.tsx (Overview tab content)
  * DATA SOURCE: Props from CompanyOverview + child components fetch their own data
  * DESIGN REFERENCE: PLAN-0041 §T-C-1-01, §T-C-1-03
+ * PLAN-0059-G Wave G-2: OHLCVChart + EntityGraphPanel are lazy-loaded via
+ * next/dynamic to reduce the initial JS bundle on the instrument detail page.
+ * Both components use browser-only APIs (lightweight-charts needs a DOM node;
+ * EntityGraphPanel reads SVG getBoundingClientRect), so ssr:false is required.
  */
 
 "use client";
@@ -42,14 +46,67 @@
 // must declare its own boundary.
 
 import { useState } from "react";
-import { OHLCVChart } from "@/components/instrument/OHLCVChart";
+import dynamic from "next/dynamic";
+// WHY dynamic import for OHLCVChart: lightweight-charts initialises a WebGL/Canvas
+// context inside a useEffect — it MUST run in the browser. Lazy-loading saves
+// ~100KB from the initial instrument-page bundle so above-the-fold metrics render
+// faster. The Skeleton fills the chart area while the bundle downloads.
+import { Skeleton } from "@/components/ui/skeleton";
 import { SessionStatsStrip } from "@/components/instrument/SessionStatsStrip";
 import { OverviewSidebarMetrics } from "@/components/instrument/InstrumentKeyMetrics";
 import { InstrumentTopNews } from "@/components/instrument/InstrumentTopNews";
-import { EntityGraphPanel } from "@/components/instrument/EntityGraphPanel";
 import { FundamentalSparkline } from "@/components/instrument/FundamentalSparkline";
 import { InstrumentAskAiButton } from "@/components/instrument/InstrumentAskAiButton";
 import type { OHLCVBar, Fundamentals, Instrument } from "@/types/api";
+
+// ── Lazy-loaded heavy components ──────────────────────────────────────────────
+
+/**
+ * OHLCVChart — lazy-loaded candlestick chart (lightweight-charts ~100KB).
+ *
+ * WHY ssr:false: lightweight-charts calls document.createElement() on import.
+ * Server-side rendering has no document object — importing synchronously would
+ * crash the SSR pass. next/dynamic with ssr:false skips SSR and hydrates the
+ * chart client-side only.
+ *
+ * WHY the chart-height Skeleton: OHLCVChart renders at a fixed 360px height
+ * (set by the chart container). The Skeleton reserves that space so the page
+ * layout does not shift when the bundle loads — prevents CLS (Cumulative Layout
+ * Shift), which would push the session-stats strip and news row downward.
+ */
+const OHLCVChart = dynamic(
+  () => import("@/components/instrument/OHLCVChart").then((m) => ({ default: m.OHLCVChart })),
+  {
+    ssr: false, // lightweight-charts requires browser DOM — SSR would crash
+    loading: () => (
+      // WHY h-[360px]: matches the default chart container height so the page
+      // layout is stable while the ~100KB bundle downloads + initialises.
+      <Skeleton className="h-[360px] w-full rounded-none" />
+    ),
+  },
+);
+
+/**
+ * EntityGraphPanel — lazy-loaded SVG entity relationship graph.
+ *
+ * WHY ssr:false: EntityGraphPanel calls svgRef.current.getBoundingClientRect()
+ * for tooltip positioning — a browser layout API unavailable during SSR.
+ * Lazy-loading also shaves the SVG + tooltip state code from the initial bundle.
+ *
+ * WHY h-[280px] Skeleton: EntityGraphPanel renders at exactly 280px height
+ * (the fixed HEIGHT constant inside the component). Matching the Skeleton
+ * height prevents the news column from collapsing and then jumping.
+ */
+const EntityGraphPanel = dynamic(
+  () => import("@/components/instrument/EntityGraphPanel").then((m) => ({ default: m.EntityGraphPanel })),
+  {
+    ssr: false, // getBoundingClientRect() is browser-only
+    loading: () => (
+      // WHY h-[280px]: matches EntityGraphPanel's fixed HEIGHT = 280 constant
+      <Skeleton className="h-[280px] w-full rounded-none" />
+    ),
+  },
+);
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 

@@ -11,7 +11,40 @@
  *
  * DATA SOURCE: docs/specs/0028-worldview-web-frontend.md §6.2
  * DESIGN REFERENCE: All canvas states reference these types.
+ *
+ * CODEGEN STATUS (PLAN-0059-C1 — 2026-05-03):
+ *   Generated path types live in types/generated/api.ts (run `pnpm generate-types`
+ *   to refresh from infra/contracts/s9-openapi.json).
+ *
+ *   WHY hand-written types remain: S9 is a proxy API. FastAPI proxy routes return
+ *   generic `Response` objects — not Pydantic models — so the OpenAPI spec defines
+ *   only 8 named component schemas (admin + validation types). Every 200 response
+ *   schema is an untyped `{}` object in the spec. Migration to pure generated
+ *   aliases requires S9 routes to adopt `response_model=` annotations (backend
+ *   work tracked in PLAN-0059-C1 notes). Until then, the hand-written types below
+ *   ARE the authoritative source of truth.
+ *
+ *   Migration path: once a route gets a response_model, delete the matching
+ *   hand-written interface below and replace with:
+ *     export type Portfolio = S9Paths["/v1/portfolios"]["get"]["responses"][200]["content"]["application/json"]
  */
+
+// ── Generated path surface (PLAN-0059-C1) ─────────────────────────────────
+// WHY re-export: makes the generated path/operation/component types available to
+// any consumer that needs to type-check against the raw spec surface (e.g. the
+// drift-gate test, typed fetch helpers). The aliases below expose the useful
+// generated sub-types under stable names.
+export type { paths as S9Paths, components as S9Components, operations as S9Operations } from "./generated/api";
+
+// Named aliases for the 8 component schemas the spec actually defines.
+// WHY import type (not value): openapi-typescript generates pure type definitions.
+import type { components as S9Gen } from "./generated/api";
+/** Pydantic ValidationError shape returned on 422 responses. */
+export type S9ValidationError = S9Gen["schemas"]["HTTPValidationError"];
+/** Admin LLM cost breakdown response. */
+export type S9AdminLlmCostsResponse = S9Gen["schemas"]["AdminLlmCostsResponse"];
+/** POST /v1/ohlcv/batch request body. */
+export type S9BatchOHLCVRequest = S9Gen["schemas"]["_BatchOHLCVRequest"];
 
 // ── Authentication ─────────────────────────────────────────────────────────
 

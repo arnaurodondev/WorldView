@@ -1,4 +1,6 @@
-"use client";
+// Server Component — no hooks, no browser APIs, no event handlers, no interactive shadcn imports.
+// Pure data display: formats and renders WatchlistInsights props as static JSX.
+// Do not re-add "use client" without checking all of the above.
 
 /**
  * features/dashboard/components/WatchlistSummaryStrip.tsx
