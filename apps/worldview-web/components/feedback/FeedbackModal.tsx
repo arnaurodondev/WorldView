@@ -301,7 +301,7 @@ export function FeedbackModal({
         >
           <TabsList className="flex flex-wrap">
             {TABS.map((t) => (
-              <TabsTrigger key={t.id} value={t.id} className="text-xs">
+              <TabsTrigger key={t.id} value={t.id}>
                 {t.label}
               </TabsTrigger>
             ))}

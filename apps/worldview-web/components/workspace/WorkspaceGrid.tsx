@@ -159,7 +159,7 @@ function AddPanelTray({ isOpen, onClose }: AddPanelTrayProps) {
         <button
           onClick={onClose}
           aria-label="Close add panel tray"
-          className="leading-none text-muted-foreground hover:text-foreground text-base"
+          className="leading-none text-muted-foreground hover:text-foreground"
         >
           ×
         </button>

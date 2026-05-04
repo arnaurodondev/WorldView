@@ -30,6 +30,7 @@ import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { formatPrice, formatPercent, priceChangeClass } from "@/lib/utils";
 import { StaleBadge } from "@/components/ui/StaleBadge";
+import { Skeleton } from "@/components/ui/skeleton";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -86,7 +87,7 @@ export function LiveQuoteBadge({ instrumentId, initialPrice, compact = false }: 
     // ── Loading: compact mode shows nothing (price displayed by parent); full mode shows skeleton
     if (compact) return null;
     return (
-      <div className="h-10 w-32 animate-pulse rounded-[2px] bg-muted" />
+      <Skeleton className="h-10 w-32" />
     );
   }
 

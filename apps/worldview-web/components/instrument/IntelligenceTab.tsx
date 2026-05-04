@@ -62,7 +62,7 @@ const EntityGraph = dynamic(
     ssr: false,
     loading: () => (
       <div className="flex h-[460px] items-center justify-center rounded-[2px] border border-border/40 bg-card/30">
-        <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" strokeWidth={1.5} />
+        <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" strokeWidth={1.5} />
       </div>
     ),
   },
@@ -172,7 +172,7 @@ function ContradictionCard({
           </span>
 
           {/* Expand chevron */}
-          <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+          <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" strokeWidth={1.5} />
         </button>
       </div>
     );
@@ -197,7 +197,7 @@ function ContradictionCard({
             className="text-muted-foreground hover:text-foreground"
             aria-label="Collapse contradiction"
           >
-            <ChevronDown className="h-3 w-3" />
+            <ChevronDown className="h-3 w-3" strokeWidth={1.5} />
           </button>
         </div>
       </div>
@@ -214,9 +214,9 @@ function ContradictionCard({
           <p className="mt-1 text-[10px] text-muted-foreground">— {item.source_a}</p>
         </div>
         <div className="flex items-center justify-center">
-          <AlertTriangle className={`h-3 w-3 ${styles.icon}`} />
+          <AlertTriangle className={`h-3 w-3 ${styles.icon}`} strokeWidth={1.5} />
           <span className={`mx-1 text-[9px] font-semibold uppercase ${styles.icon}`}>vs</span>
-          <AlertTriangle className={`h-3 w-3 ${styles.icon}`} />
+          <AlertTriangle className={`h-3 w-3 ${styles.icon}`} strokeWidth={1.5} />
         </div>
         <div className="rounded-[2px] bg-negative/5 p-2">
           <p className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Claim B</p>
@@ -775,7 +775,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
             daily by the S7 extraction pipeline. */}
         {isGraphStale && (
           <div className="mb-2 flex items-center gap-2 rounded-[2px] border border-warning/30 bg-warning/5 px-3 py-1.5">
-            <Clock className="h-3 w-3 shrink-0 text-warning" aria-hidden="true" />
+            <Clock className="h-3 w-3 shrink-0 text-warning" aria-hidden="true" strokeWidth={1.5} />
             <span className="text-[11px] text-warning">
               Graph last updated {graphAgeHours}h ago — newer relations may not be reflected.
             </span>
@@ -816,7 +816,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
           </>
         ) : (
           <div className="flex h-[460px] items-center justify-center rounded-[2px] border border-border/40 bg-card/30">
-            <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" strokeWidth={1.5} />
+            <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" strokeWidth={1.5} />
           </div>
         )}
       </section>
