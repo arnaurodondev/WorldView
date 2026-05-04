@@ -83,11 +83,19 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
   // WHY always include daily_return + pe_ratio + current_price: without these,
   // the backend omits those columns from result rows when no filter constraint
   // is set. All three are mandatory enrichment filters regardless of user input.
+  // WHY -100 to 100 (not -1 to 1): daily_return is stored as a percentage
+  // (e.g., 5.0 = 5%). Using ±1 would only match stocks with less than 1%
+  // daily move, excluding most stocks on any given trading day. ±100 covers
+  // all realistic daily moves regardless of whether the value is decimal or %.
   if (!filters.some((f) => f.metric === "daily_return")) {
-    filters.push({ metric: "daily_return", min_value: -1, max_value: 1 });
+    filters.push({ metric: "daily_return", min_value: -100, max_value: 100 });
   }
+  // WHY ±999999 (not ±9999): stocks without PE data (negative earnings) were
+  // excluded when the bound was ±9999 — they have no PE value at all and the
+  // backend skips rows that don't meet the filter range. Ultra-wide bounds
+  // ensure all stocks are returned regardless of earnings sign.
   if (!filters.some((f) => f.metric === "pe_ratio")) {
-    filters.push({ metric: "pe_ratio", min_value: -9999, max_value: 9999 });
+    filters.push({ metric: "pe_ratio", min_value: -999999, max_value: 999999 });
   }
   // WHY current_price enrichment: the PRICE column on the screener table needs
   // current_price on every row even when the user has set no price filter.

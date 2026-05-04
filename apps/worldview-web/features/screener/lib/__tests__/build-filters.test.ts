@@ -74,26 +74,27 @@ function findFilter(filters: ScreenerFilter[], metric: string): ScreenerFilter |
 // ── Always-include enrichment filters ─────────────────────────────────────────
 
 describe("buildScreenerFilters — always-include enrichment filters", () => {
-  it("always includes daily_return filter with correct bounds (-1 to 1 = decimal format)", () => {
-    // WHY decimal bounds: daily_return is stored as 0.023 (2.3%), not 2.3.
-    // min_value: -1 = -100% daily move (theoretical worst case).
-    // max_value: 1 = +100% daily move (circuit breaker max for most exchanges).
+  it("always includes daily_return filter with correct bounds (-100 to 100 = percentage format)", () => {
+    // WHY ±100 bounds: daily_return is stored as a percentage (5.0 = 5%).
+    // The old ±1 bounds only matched stocks with <1% daily move, causing the
+    // screener default to return 0 results on most trading days.
+    // ±100 covers all realistic daily moves regardless of storage format.
     const filters = buildScreenerFilters(makeFilters());
     const dr = findFilter(filters, "daily_return");
     expect(dr).toBeDefined();
-    expect(dr?.min_value).toBe(-1);
-    expect(dr?.max_value).toBe(1);
+    expect(dr?.min_value).toBe(-100);
+    expect(dr?.max_value).toBe(100);
   });
 
-  it("always includes pe_ratio filter with wide bounds (-9999 to 9999)", () => {
-    // WHY wide bounds: P/E can be negative (loss-making firms) or extremely high
-    // (growth stocks). The bounds must include all real-world P/E values while
-    // signalling to the backend "compute this column for every row".
+  it("always includes pe_ratio filter with wide bounds (-999999 to 999999)", () => {
+    // WHY ±999999 bounds: P/E can be negative (loss-making firms) or extremely high
+    // (growth stocks). The old ±9999 bound excluded stocks with no PE data.
+    // Ultra-wide bounds ensure all stocks are returned regardless of earnings sign.
     const filters = buildScreenerFilters(makeFilters());
     const pe = findFilter(filters, "pe_ratio");
     expect(pe).toBeDefined();
-    expect(pe?.min_value).toBe(-9999);
-    expect(pe?.max_value).toBe(9999);
+    expect(pe?.min_value).toBe(-999999);
+    expect(pe?.max_value).toBe(999999);
   });
 
   it("always includes current_price filter (0 to 9,999,999)", () => {
