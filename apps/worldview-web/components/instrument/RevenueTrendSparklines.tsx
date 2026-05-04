@@ -127,6 +127,7 @@ export function RevenueTrendSparklines({
       gateway.getFundamentalsTimeseries(instrumentId, "revenue", {
         period_type: "QUARTERLY",
         limit: 12,
+        order: "desc",
       }),
     enabled: !!accessToken && !!instrumentId,
     staleTime: 300_000,
@@ -140,13 +141,21 @@ export function RevenueTrendSparklines({
       gateway.getFundamentalsTimeseries(instrumentId, "earnings_per_share", {
         period_type: "QUARTERLY",
         limit: 12,
+        order: "desc",
       }),
     enabled: !!accessToken && !!instrumentId,
     staleTime: 300_000,
   });
 
-  const revenuePoints: TimeseriesDataPoint[] = revenueTsResp?.data ?? [];
-  const epsPoints: TimeseriesDataPoint[] = epsTsResp?.data ?? [];
+  // WHY sort ascending after DESC fetch: API returns newest-first (order:"desc")
+  // so we get the 12 most recent quarters. Sort ASC here so the chart renders
+  // oldest-on-left → newest-on-right (standard financial convention).
+  const revenuePoints: TimeseriesDataPoint[] = [...(revenueTsResp?.data ?? [])].sort(
+    (a, b) => a.as_of_date.localeCompare(b.as_of_date),
+  );
+  const epsPoints: TimeseriesDataPoint[] = [...(epsTsResp?.data ?? [])].sort(
+    (a, b) => a.as_of_date.localeCompare(b.as_of_date),
+  );
 
   // Some companies only have ANNUAL data; switch the X-axis label format
   // when the API returns annual records.

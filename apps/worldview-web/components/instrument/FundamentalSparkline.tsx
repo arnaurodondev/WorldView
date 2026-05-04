@@ -129,7 +129,7 @@ export function FundamentalSparkline({
   const { data, isLoading, isError } = useQuery({
     queryKey: ["fundamentals-ts", instrumentId, metric],
     queryFn: () =>
-      createGateway().getFundamentalsTimeseries(instrumentId, metric, { limit: 20 }),
+      createGateway().getFundamentalsTimeseries(instrumentId, metric, { limit: 20, order: "desc" }),
     staleTime: 300_000, // 5 min — fundamentals are slow-moving data
     enabled: !!instrumentId && !!metric,
   });
@@ -147,7 +147,11 @@ export function FundamentalSparkline({
   // ── Error / empty state ──────────────────────────────────────────────────
   // WHY render a placeholder line (not nothing): keeps the layout stable across
   // loading, error, and success states so surrounding panels don't shift.
-  const points = data?.data ?? [];
+  // WHY sort ascending: API returns DESC order (most recent first) so we get
+  // the 20 newest points. Sort ASC so the sparkline flows left-to-right.
+  const points = [...(data?.data ?? [])].sort((a, b) =>
+    a.as_of_date.localeCompare(b.as_of_date),
+  );
   const numericValues = points
     .map((p) => p.value_numeric)
     .filter((v): v is number => v != null);
