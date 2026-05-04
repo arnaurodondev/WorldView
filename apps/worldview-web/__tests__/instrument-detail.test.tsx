@@ -623,9 +623,10 @@ describe("LiveQuoteBadge", () => {
 
     render(<LiveQuoteBadge instrumentId="ins-001" />, { wrapper });
 
-    // Without initialPrice and while loading, a pulse skeleton is shown
-    // The animate-pulse class indicates the loading skeleton
-    expect(document.querySelector(".animate-pulse")).toBeInTheDocument();
+    // Without initialPrice and while loading, a static skeleton bar is shown.
+    // After T-D-4-01, Skeleton renders with bg-muted (no animate-pulse) — static bars
+    // are the Bloomberg terminal standard; animation is reserved for streaming states.
+    expect(document.querySelector(".bg-muted")).toBeInTheDocument();
   });
 });
 
@@ -702,7 +703,8 @@ describe("OHLCVChart", () => {
 
     render(<OHLCVChart instrumentId="ins-001" initialBars={initialBars} />, { wrapper });
 
-    // Skeleton should NOT render when we have initialBars
-    expect(document.querySelector(".animate-pulse")).toBeNull();
+    // Skeleton should NOT render when we have initialBars.
+    // After T-D-4-01, Skeleton uses .bg-muted (not .animate-pulse) — verify neither is present.
+    expect(document.querySelector(".bg-muted")).toBeNull();
   });
 });

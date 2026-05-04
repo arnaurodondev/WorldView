@@ -131,9 +131,9 @@ describe("FundamentalSparkline — showAxis wiring (T-F-6-11, T-F-6-07)", () => 
       { wrapper: makeWrapper() },
     );
 
-    // WHY animate-pulse: all Skeleton components use the animate-pulse class to
-    // indicate loading state. Checking for it confirms the skeleton is rendered.
-    expect(container.querySelector(".animate-pulse")).not.toBeNull();
+    // WHY bg-muted: after T-D-4-01, Skeleton renders with rounded-[2px] bg-muted
+    // (static, no animation). Checking for .bg-muted confirms the skeleton is rendered.
+    expect(container.querySelector(".bg-muted")).not.toBeNull();
   });
 
   it("renders extra skeleton row when showAxis=true (loading state)", async () => {
@@ -147,9 +147,10 @@ describe("FundamentalSparkline — showAxis wiring (T-F-6-11, T-F-6-07)", () => 
     );
 
     // WHY 2 skeletons: showAxis=true renders a sparkline skeleton AND an x-axis
-    // skeleton row below it. The presence of exactly 2 animate-pulse elements
+    // skeleton row below it. The presence of at least 2 bg-muted elements
     // confirms showAxis propagates into the loading state.
-    const skeletons = container.querySelectorAll(".animate-pulse");
+    // After T-D-4-01 Skeleton is static (no animate-pulse); use .bg-muted instead.
+    const skeletons = container.querySelectorAll(".bg-muted");
     // WHY >= 2: the loading state may render the sparkline + axis skeleton.
     // We assert at least 2 to confirm the axis skeleton row is present.
     expect(skeletons.length).toBeGreaterThanOrEqual(2);
@@ -160,9 +161,9 @@ describe("FundamentalSparkline — showAxis wiring (T-F-6-11, T-F-6-07)", () => 
       "@/components/instrument/FundamentalSparkline"
     );
 
-    // WHY toBeInTheDocument check on animate-pulse: the simplest assertion that
-    // the component mounted without throwing. A component in error state throws
-    // before returning JSX, so this test failing == an uncaught render error.
+    // WHY firstChild check: the simplest assertion that the component mounted without
+    // throwing. A component in error state throws before returning JSX, so this
+    // test failing == an uncaught render error.
     const { container } = render(
       <FundamentalSparkline instrumentId="ins-001" metric="revenue" showAxis={false} />,
       { wrapper: makeWrapper() },
@@ -184,11 +185,11 @@ describe("Instrument page loading skeleton — 9-section layout (T-F-6-12)", () 
 
     const { container } = render(<InstrumentDetailPage />, { wrapper: makeWrapper() });
 
-    // WHY count animate-pulse elements: each Skeleton component renders with
-    // animate-pulse. The old skeleton had 3 elements; the new 9-section skeleton
-    // has significantly more. We assert at least 6 to confirm the expanded skeleton
-    // (exact count may vary as some elements share classes).
-    const skeletons = container.querySelectorAll(".animate-pulse");
+    // WHY count bg-muted elements: after T-D-4-01, Skeleton renders with static
+    // rounded-[2px] bg-muted bars (no animate-pulse). The old skeleton had 3 elements;
+    // the new 9-section skeleton has significantly more. We assert at least 6 to
+    // confirm the expanded skeleton (exact count may vary as some elements share classes).
+    const skeletons = container.querySelectorAll(".bg-muted");
     expect(skeletons.length).toBeGreaterThanOrEqual(6);
   });
 
