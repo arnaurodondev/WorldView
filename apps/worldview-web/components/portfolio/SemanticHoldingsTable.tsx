@@ -241,8 +241,10 @@ export function SemanticHoldingsTable({
           totals strip has a different role and a different visual treatment
           (border-t-2, condensed text, font-semibold). */}
       <div className="flex h-[22px] items-center border-t-2 border-border">
-        {/* Left columns spacer (TICKER + NAME + QTY + AVG COST + CURRENT + DAY$ + DAY%) */}
-        <div className="shrink-0 w-[560px] px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+        {/* Left columns spacer (TICKER + NAME + QTY + AVG COST + CURRENT + DAY$ + DAY%)
+            WHY w-[640px]: sum of the 7 data columns = 80+130+80+90+90+90+80 = 640px.
+            Previously 560px (off by 80px), causing TOTAL label to misalign with P&L/Value. */}
+        <div className="shrink-0 w-[640px] px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           TOTAL
         </div>
 
