@@ -38,6 +38,11 @@
     ".next/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "**/*.stories.tsx",
+    "**/*.stories.ts",
+    ".storybook",
+    "vitest.config.ts",
+    "playwright.config.ts"
   ]
 }
