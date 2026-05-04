@@ -603,6 +603,9 @@ export interface paths {
          *
          *     Public endpoint — issues a system JWT so the backend's InternalJWTMiddleware
          *     accepts the request.  S3 returns 400 for no filters, 422 for invalid metric/sort_by.
+         *
+         *     WHY response_model=ScreenerResponse: S3 ScreenResponse has {results, count, total}.
+         *     ScreenerResponse mirrors this shape (extra=allow passes count through).
          */
         post: operations["screen_instruments_v1_fundamentals_screen_post"];
         delete?: never;
@@ -802,6 +805,10 @@ export interface paths {
          *
          *     Requires authentication. Forwards query params (status, limit, offset,
          *     category) and auth headers derived from the JWT payload.
+         *
+         *     WHY response_model=PredictionMarketsListResponse: S3 returns
+         *     {items: [...], total, limit, offset}. PredictionMarketsListResponse
+         *     mirrors that shape exactly (extra=allow passes any new fields through).
          */
         get: operations["list_prediction_markets_v1_signals_prediction_markets_get"];
         put?: never;
@@ -853,6 +860,11 @@ export interface paths {
          * @description Proxy GET /api/v1/prediction-markets/{id} → S3 Market Data.
          *
          *     Requires authentication. S3 returns 404 if the market_id is unknown.
+         *
+         *     WHY response_model=PredictionMarket: S3 PredictionMarketDetailResponse
+         *     is a superset of PredictionMarketSummaryResponse (adds description +
+         *     created_at). PredictionMarket uses extra=allow so those extra fields
+         *     pass through without a validation error.
          */
         get: operations["get_prediction_market_v1_signals_prediction_markets__market_id__get"];
         put?: never;
@@ -1187,6 +1199,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/fundamentals/earnings-calendar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Earnings Calendar
+         * @description Proxy GET /api/v1/temporal-events → S7 Knowledge Graph (corporate earnings).
+         *
+         *     Returns upcoming company earnings events for the EarningsCalendarWidget on
+         *     the dashboard.  Injects ``event_type=corporate`` so only earnings events from
+         *     the EarningsCalendarDatasetConsumer (13D-9) are returned — prevents the
+         *     widget accidentally showing macro/geopolitical events.
+         *
+         *     Auth: JWT required (same pattern as economic-calendar endpoint above).
+         *
+         *     Passes through optional query params from the caller:
+         *       - from_date (date): earliest active_from to include
+         *       - to_date   (date): latest active_from to include
+         *       - limit     (int):  max rows to return (S7 default: 20)
+         *
+         *     WHY response_model=EarningsCalendarResponse: S7 TemporalEventsListResponse
+         *     returns {events: list[TemporalEventResponse], total: int}. EarningsCalendarResponse
+         *     mirrors that shape with EarningsEvent matching TemporalEventResponse fields.
+         */
+        get: operations["earnings_calendar_v1_fundamentals_earnings_calendar_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/fundamentals/{instrument_id}/technicals": {
         parameters: {
             query?: never;
@@ -1372,6 +1420,11 @@ export interface paths {
          *
          *     Requires authentication. Forwards query parameters (fields, etc.) to S3 for
          *     fundamentals data retrieval. Distinct from the public screener endpoints.
+         *
+         *     WHY response_model=FundamentalsResponse: S3 returns {security_id, records[]}.
+         *     FundamentalsResponse mirrors that shape. Note: S3 uses security_id (not
+         *     instrument_id) as the primary key — the frontend resolves via the overview
+         *     endpoint's instrument_id → security_id mapping.
          */
         get: operations["get_fundamentals_v1_fundamentals__instrument_id__get"];
         put?: never;
@@ -1634,6 +1687,40 @@ export interface paths {
          *     but the server-side guard is the authoritative check.
          */
         delete: operations["delete_portfolio_v1_portfolios__portfolio_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/portfolio/{portfolio_id}/bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Portfolio Bundle Endpoint
+         * @description Portfolio page bundle — collapses 4 portfolio queries into 1 round-trip.
+         *
+         *     PLAN-0070 C-1 / T-C-1-02. Returns:
+         *       - portfolio: portfolio metadata (GET /api/v1/portfolios/{id})
+         *       - holdings: holdings list (GET /api/v1/holdings/{id})
+         *       - transactions: recent 30 transactions (GET /api/v1/portfolios/{id}/transactions)
+         *       - value_history: equity curve data (GET /api/v1/portfolios/{id}/value-history)
+         *
+         *     Each sub-resource degrades independently — failed legs return null so the
+         *     frontend can render partial UIs while showing "—" for unavailable data.
+         *     _meta.partial=True when any leg failed; _meta.legs_failed counts the misses.
+         *
+         *     WHY auth required: all portfolio sub-resources are tenant-scoped; unauthenticated
+         *     access would expose financial data. OIDCAuthMiddleware does NOT enforce auth
+         *     by itself — individual routes must check.
+         */
+        get: operations["get_portfolio_bundle_endpoint_v1_portfolio__portfolio_id__bundle_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2317,6 +2404,36 @@ export interface components {
             /** Grand Total Calls */
             grand_total_calls: number;
         };
+        /**
+         * AlertResponse
+         * @description A single alert from S10.
+         *
+         *     Mirrors the Alert TypeScript interface in types/api.ts.
+         *     WHY title is optional: PLAN-0049 added the title column; alerts created
+         *     before the migration may have NULL title. The frontend falls back to
+         *     signal_label → humanised alert_type.
+         *     WHY alert_id (not id): S10's AlertResponse uses alert_id as the PK field
+         *     name to match the domain entity naming convention.
+         */
+        AlertResponse: {
+            /** Alert Id */
+            alert_id: string;
+            /** Title */
+            title?: string | null;
+            /** Severity */
+            severity?: string | null;
+            /** Entity Id */
+            entity_id?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /**
+             * Acknowledged
+             * @default false
+             */
+            acknowledged: boolean;
+        } & {
+            [key: string]: unknown;
+        };
         /** CostBreakdownItemSchema */
         CostBreakdownItemSchema: {
             /** Dimension */
@@ -2332,10 +2449,462 @@ export interface components {
             /** Success Rate */
             success_rate: number;
         };
+        /**
+         * EarningsCalendarResponse
+         * @description Response from GET /v1/fundamentals/earnings-calendar.
+         *
+         *     Mirrors S7 TemporalEventsListResponse with event_type=corporate filter.
+         *     WHY total: S7 returns total for pagination support even when limit is
+         *     applied. Frontend renders "showing N of M events".
+         */
+        EarningsCalendarResponse: {
+            /**
+             * Events
+             * @default []
+             */
+            events: components["schemas"]["EarningsEvent"][];
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * EarningsEvent
+         * @description A single corporate earnings event from S7 temporal-events.
+         *
+         *     Mirrors the S7 TemporalEventResponse schema (knowledge-graph service)
+         *     filtered to event_type=corporate by the proxy route.
+         *
+         *     WHY region = ticker: The EarningsCalendarDatasetConsumer (13D-9) stores
+         *     the company ticker symbol in `region` because temporal_events.region is
+         *     a free-text label. Frontend extracts the ticker from this field.
+         *
+         *     WHY active_from / active_until (not report_date): S7 uses a lifecycle
+         *     model where active_from = report datetime and active_until = residual
+         *     impact end (typically active_from + 7 days).
+         */
+        EarningsEvent: {
+            /** Event Id */
+            event_id: string;
+            /** Event Type */
+            event_type?: string | null;
+            /** Scope */
+            scope?: string | null;
+            /** Region */
+            region?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Active From */
+            active_from?: string | null;
+            /** Active Until */
+            active_until?: string | null;
+            /** Confidence */
+            confidence?: number | null;
+            /** Lifecycle Phase */
+            lifecycle_phase?: string | null;
+            /** Exposed Entity Count */
+            exposed_entity_count?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * FundamentalsRecord
+         * @description One fundamentals data record for a given section and period.
+         *
+         *     Mirrors S3 FundamentalsRecordResponse.
+         *     WHY data is dict: EODHD fundamentals sections (Highlights, Technicals,
+         *     ShareStatistics, etc.) each have different key-value structures. Typing as
+         *     dict[str, Any] with extra=allow passes the raw data through without loss.
+         */
+        FundamentalsRecord: {
+            /** Id */
+            id?: string | null;
+            /** Security Id */
+            security_id?: string | null;
+            /** Section */
+            section?: string | null;
+            /** Period End */
+            period_end?: string | null;
+            /** Period Type */
+            period_type?: string | null;
+            /** Data */
+            data?: Record<string, never> | null;
+            /** Source */
+            source?: string | null;
+            /** Ingested At */
+            ingested_at?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * FundamentalsResponse
+         * @description All fundamentals records for a security (all sections).
+         *
+         *     Mirrors S3 FundamentalsResponse. Proxied by GET /v1/fundamentals/{id}.
+         *
+         *     WHY security_id (not instrument_id): S3 uses security_id as its primary
+         *     identifier (mapped from instrument_id at ingestion time). The frontend
+         *     joins via the instrument overview response.
+         *
+         *     WHY records list: S3 stores each EODHD section as a separate row so
+         *     different section types can have different period cadences (daily
+         *     technicals vs annual income statements).
+         */
+        FundamentalsResponse: {
+            /** Security Id */
+            security_id: string;
+            /**
+             * Records
+             * @default []
+             */
+            records: components["schemas"]["FundamentalsRecord"][];
+        } & {
+            [key: string]: unknown;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * InstrumentSearchResult
+         * @description Single search result from GET /v1/search/instruments.
+         *
+         *     Mirrors the SearchResult TypeScript interface in types/api.ts.
+         *     WHY extra=allow: S3 may add fields (e.g. asset_class, gics_sector)
+         *     without requiring a gateway schema change.
+         */
+        InstrumentSearchResult: {
+            /** Instrument Id */
+            instrument_id: string;
+            /** Ticker */
+            ticker: string;
+            /** Name */
+            name?: string | null;
+            /** Exchange */
+            exchange?: string | null;
+            /** Currency */
+            currency?: string | null;
+            /** Asset Class */
+            asset_class?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * NewsArticle
+         * @description A single ranked news article from S6 (PRD-0026).
+         *
+         *     Mirrors the RankedArticle TypeScript interface in types/api.ts.
+         *     WHY so many optional fields: routing_score/llm_relevance/market_impact
+         *     are absent for LIGHT-tier articles (skipped by S6's scoring pipeline)
+         *     and for very recent articles not yet through the impact-window computation.
+         */
+        NewsArticle: {
+            /** Article Id */
+            article_id: string;
+            /** Title */
+            title?: string | null;
+            /** Url */
+            url?: string | null;
+            /** Published At */
+            published_at?: string | null;
+            /** Source Type */
+            source_type?: string | null;
+            /** Source Name */
+            source_name?: string | null;
+            /** Display Relevance Score */
+            display_relevance_score?: number | null;
+            /** Market Impact Score */
+            market_impact_score?: number | null;
+            /** Llm Relevance Score */
+            llm_relevance_score?: number | null;
+            /** Routing Tier */
+            routing_tier?: string | null;
+            /** Routing Score */
+            routing_score?: number | null;
+            /** Primary Entity Id */
+            primary_entity_id?: string | null;
+            /** Primary Entity Symbol */
+            primary_entity_symbol?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * NewsTopResponse
+         * @description Response from GET /v1/news/top (PRD-0026 §6.2).
+         *
+         *     Mirrors the RankedNewsResponse TypeScript interface in types/api.ts.
+         *     WHY no offset/limit: S6's ranked endpoint uses total-count-based
+         *     pagination — clients track offset locally using total.
+         */
+        NewsTopResponse: {
+            /**
+             * Articles
+             * @default []
+             */
+            articles: components["schemas"]["NewsArticle"][];
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * OHLCVBar
+         * @description One OHLCV bar.
+         *
+         *     Mirrors the OHLCVBar TypeScript interface in types/api.ts.
+         *     WHY volume is optional: S3 returns null volume for some synthetic
+         *     instruments (e.g. indices) where volume data is unavailable.
+         */
+        OHLCVBar: {
+            /** Timestamp */
+            timestamp: string;
+            /** Open */
+            open: number;
+            /** High */
+            high: number;
+            /** Low */
+            low: number;
+            /** Close */
+            close: number;
+            /** Volume */
+            volume?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * OHLCVResponse
+         * @description Response from GET /v1/ohlcv/{instrument_id}.
+         *
+         *     Mirrors the OHLCVResponse TypeScript interface in types/api.ts.
+         */
+        OHLCVResponse: {
+            /** Instrument Id */
+            instrument_id: string;
+            /** Ticker */
+            ticker?: string | null;
+            /** Timeframe */
+            timeframe: string;
+            /**
+             * Bars
+             * @default []
+             */
+            bars: components["schemas"]["OHLCVBar"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * PortfolioResponse
+         * @description A single portfolio.
+         *
+         *     Mirrors the Portfolio TypeScript interface in types/api.ts.
+         *     WHY kind is optional: older S1 builds may not emit the kind discriminator
+         *     field (added in PLAN-0046 Wave 3). Once all deployments include it,
+         *     this can become required.
+         */
+        PortfolioResponse: {
+            /** Portfolio Id */
+            portfolio_id: string;
+            /** Name */
+            name: string;
+            /** Kind */
+            kind?: string | null;
+            /** Currency */
+            currency?: string | null;
+            /** Tenant Id */
+            tenant_id?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * PredictionMarket
+         * @description A single prediction market summary row.
+         *
+         *     Mirrors S3 PredictionMarketSummaryResponse (used in the list endpoint).
+         *
+         *     WHY outcomes list (not yes_probability/no_probability): S3 stores
+         *     multi-choice market outcomes as a list of {name, token_id, price} entries.
+         *     YES/NO markets have two outcomes; multi-choice can have more.
+         *     Frontend code extracts yes_probability from outcomes[0].price for binary
+         *     markets.
+         *
+         *     WHY extra=allow: The detail endpoint (PredictionMarketDetailResponse) is a
+         *     superset of this schema — adding description + created_at. With extra=allow,
+         *     the same Python model covers both list and detail responses without a
+         *     validation error.
+         */
+        PredictionMarket: {
+            /** Market Id */
+            market_id: string;
+            /** Question */
+            question?: string | null;
+            /**
+             * Outcomes
+             * @default []
+             */
+            outcomes: components["schemas"]["PredictionMarketOutcome"][];
+            /** Volume 24H */
+            volume_24h?: number | null;
+            /** Close Time */
+            close_time?: string | null;
+            /** Resolution Status */
+            resolution_status?: string | null;
+            /** Resolved Answer */
+            resolved_answer?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Market Slug */
+            market_slug?: string | null;
+            /** Category */
+            category?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * PredictionMarketOutcome
+         * @description Outcome price for a single market outcome (YES/NO or multi-choice).
+         *
+         *     Mirrors S3 OutcomePriceResponse.
+         */
+        PredictionMarketOutcome: {
+            /** Name */
+            name: string;
+            /** Token Id */
+            token_id?: string | null;
+            /** Price */
+            price?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * PredictionMarketsListResponse
+         * @description Paginated list of prediction markets.
+         *
+         *     Mirrors S3 PredictionMarketsListResponse (note: S3 uses `items` not `markets`).
+         *     WHY items (not markets): S3's schema uses `items`; the TypeScript
+         *     PredictionMarketsResponse uses `markets`. Until S9 adds a transformation
+         *     layer, the wire carries `items`. Frontend code should read `items`.
+         */
+        PredictionMarketsListResponse: {
+            /**
+             * Items
+             * @default []
+             */
+            items: components["schemas"]["PredictionMarket"][];
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /**
+             * Limit
+             * @default 20
+             */
+            limit: number;
+            /**
+             * Offset
+             * @default 0
+             */
+            offset: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * QuoteResponse
+         * @description Response from GET /v1/quotes/{instrument_id}.
+         *
+         *     Mirrors the Quote TypeScript interface in types/api.ts.
+         *     WHY many optional fields: freshness fields were added in PLAN-0036 Wave 1;
+         *     older quote responses from the legacy S3 endpoint may not include them.
+         */
+        QuoteResponse: {
+            /** Instrument Id */
+            instrument_id: string;
+            /** Ticker */
+            ticker?: string | null;
+            /** Price */
+            price: number;
+            /** Change */
+            change?: number | null;
+            /** Change Pct */
+            change_pct?: number | null;
+            /** Timestamp */
+            timestamp?: string | null;
+            /** Volume */
+            volume?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ScreenerResponse
+         * @description Response from POST /v1/fundamentals/screen.
+         *
+         *     Mirrors the TypeScript ScreenerResponse interface and S3 ScreenResponse.
+         *
+         *     WHY both count + total: S3 returns both `count` (rows in this page) and
+         *     `total` (total rows matching filters). The frontend uses `total` for
+         *     pagination. `count` is forwarded via extra="allow".
+         *
+         *     WHY offset default 0 / limit default 50: S9 injects these when the frontend
+         *     omits them so paginators can render correctly even for partial responses.
+         */
+        ScreenerResponse: {
+            /**
+             * Results
+             * @default []
+             */
+            results: components["schemas"]["ScreenerResultItem"][];
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+            /**
+             * Offset
+             * @default 0
+             */
+            offset: number;
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ScreenerResultItem
+         * @description One instrument row in a screener result.
+         *
+         *     Mirrors S3 ScreenInstrumentResponse and the TypeScript ScreenerResult interface.
+         *     WHY extra=allow: S3 may add new top-level fields (e.g. entity_id) without
+         *     requiring a gateway schema bump.
+         */
+        ScreenerResultItem: {
+            /** Instrument Id */
+            instrument_id: string;
+            /** Ticker */
+            ticker?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Exchange */
+            exchange?: string | null;
+            /** Sector */
+            sector?: string | null;
+            /** Metrics */
+            metrics?: {
+                [key: string]: number | null;
+            } | null;
+        } & {
+            [key: string]: unknown;
         };
         /** ServiceCostSummary */
         ServiceCostSummary: {
@@ -2381,6 +2950,29 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /**
+         * WatchlistResponse
+         * @description A single watchlist.
+         *
+         *     Mirrors the Watchlist TypeScript interface in types/api.ts.
+         *     WHY members is list[dict]: WatchlistMember detail varies (entity_id,
+         *     instrument_id, ticker, name, added_at, resolution) but the shape is
+         *     not worth a separate schema at this tier — kept flexible so S1 can
+         *     evolve the member payload without requiring a schema change here.
+         */
+        WatchlistResponse: {
+            /** Watchlist Id */
+            watchlist_id: string;
+            /** Name */
+            name: string;
+            /**
+             * Members
+             * @default []
+             */
+            members: Record<string, never>[];
+        } & {
+            [key: string]: unknown;
         };
         /**
          * _BatchOHLCVRequest
@@ -3112,7 +3704,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ScreenerResponse"];
                 };
             };
         };
@@ -3192,7 +3784,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["AlertResponse"][];
                 };
             };
         };
@@ -3328,7 +3920,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PredictionMarketsListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3379,7 +3971,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PredictionMarket"];
                 };
             };
             /** @description Validation Error */
@@ -3605,7 +4197,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OHLCVResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3689,7 +4281,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["QuoteResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3770,6 +4362,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    earnings_calendar_v1_fundamentals_earnings_calendar_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EarningsCalendarResponse"];
                 };
             };
         };
@@ -4008,7 +4620,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["FundamentalsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4101,7 +4713,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["NewsTopResponse"];
                 };
             };
         };
@@ -4234,7 +4846,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PortfolioResponse"][];
                 };
             };
         };
@@ -4276,6 +4888,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_portfolio_bundle_endpoint_v1_portfolio__portfolio_id__bundle_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                portfolio_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
             };
             /** @description Validation Error */
             422: {
@@ -4658,7 +5301,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["WatchlistResponse"][];
                 };
             };
         };
@@ -4827,7 +5470,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["InstrumentSearchResult"][];
                 };
             };
             /** @description Validation Error */

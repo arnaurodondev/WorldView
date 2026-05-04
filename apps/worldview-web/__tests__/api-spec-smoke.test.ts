@@ -111,6 +111,19 @@ describe("S9 OpenAPI spec smoke tests", () => {
 
   // ── Component schemas ────────────────────────────────────────────────────
 
+  // ── Schema count ratchet (PLAN-0070-B-3) ──────────────────────────────────
+  // WHY ≥25: After PLAN-0070 Waves B-1+B-2 the spec has 26 named component
+  // schemas. If someone accidentally removes a response_model= annotation or
+  // commits a stale spec snapshot, this threshold fails immediately — catching
+  // regression before it silently produces an under-typed generated/api.ts.
+  //
+  // Raise the threshold after each new wave adds schemas; NEVER lower it.
+  it("has at least 25 named component schemas (ratchet after B-1+B-2)", () => {
+    const schemas = spec.components?.schemas ?? {};
+    const count = Object.keys(schemas).length;
+    expect(count).toBeGreaterThanOrEqual(25);
+  });
+
   it("includes HTTPValidationError in component schemas", () => {
     // WHY: This is the only validation error shape that appears across all 422
     // responses. Its presence confirms the schemas section is populated.
@@ -121,5 +134,57 @@ describe("S9 OpenAPI spec smoke tests", () => {
     // WHY: The batch OHLCV request is one of the typed request bodies. Its
     // presence confirms request schemas are being exported from the spec.
     expect(spec.components?.schemas?.["_BatchOHLCVRequest"]).toBeDefined();
+  });
+
+  // ── Tier-1 schema presence checks (PLAN-0070-B-1) ────────────────────────
+  // These 8 schemas correspond to the highest-traffic S9 routes. If any of
+  // them disappears from the spec (e.g. someone removes a response_model=
+  // annotation), this test fails immediately. Each schema name is checked
+  // individually so the failure message is specific about which schema is missing.
+
+  it("includes QuoteResponse schema (GET /v1/quotes/{id})", () => {
+    expect(spec.components?.schemas?.["QuoteResponse"]).toBeDefined();
+  });
+
+  it("includes NewsTopResponse schema (GET /v1/news/top)", () => {
+    expect(spec.components?.schemas?.["NewsTopResponse"]).toBeDefined();
+  });
+
+  it("includes NewsArticle schema (items of NewsTopResponse.articles)", () => {
+    expect(spec.components?.schemas?.["NewsArticle"]).toBeDefined();
+  });
+
+  it("includes PortfolioResponse schema (GET /v1/portfolios)", () => {
+    expect(spec.components?.schemas?.["PortfolioResponse"]).toBeDefined();
+  });
+
+  it("includes OHLCVResponse schema (GET /v1/ohlcv/{id})", () => {
+    expect(spec.components?.schemas?.["OHLCVResponse"]).toBeDefined();
+  });
+
+  it("includes AlertResponse schema (GET /v1/alerts/pending)", () => {
+    expect(spec.components?.schemas?.["AlertResponse"]).toBeDefined();
+  });
+
+  it("includes WatchlistResponse schema (GET /v1/watchlists)", () => {
+    expect(spec.components?.schemas?.["WatchlistResponse"]).toBeDefined();
+  });
+
+  it("includes InstrumentSearchResult schema (GET /v1/search/instruments)", () => {
+    expect(spec.components?.schemas?.["InstrumentSearchResult"]).toBeDefined();
+  });
+
+  // ── Tier-2 schema presence checks (PLAN-0070-B-2) ────────────────────────
+
+  it("includes ScreenerResponse schema (POST /v1/fundamentals/screen)", () => {
+    expect(spec.components?.schemas?.["ScreenerResponse"]).toBeDefined();
+  });
+
+  it("includes PredictionMarketsListResponse schema (GET /v1/signals/prediction-markets)", () => {
+    expect(spec.components?.schemas?.["PredictionMarketsListResponse"]).toBeDefined();
+  });
+
+  it("includes EarningsCalendarResponse schema (GET /v1/fundamentals/earnings-calendar)", () => {
+    expect(spec.components?.schemas?.["EarningsCalendarResponse"]).toBeDefined();
   });
 });
