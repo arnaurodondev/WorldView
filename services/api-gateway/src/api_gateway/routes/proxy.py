@@ -27,7 +27,7 @@ from api_gateway.jwt_utils import issue_public_jwt, issue_user_jwt
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
 router = APIRouter(prefix="/v1")
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -836,7 +836,8 @@ class _BatchOHLCVRequest(BaseModel):
 async def _fetch_one_ohlcv(
     *,
     clients: Any,
-    headers: dict[str, str],
+    headers: dict[str, str] | None = None,
+    make_headers: Callable[[], dict[str, str]] | None = None,
     item: _BatchOHLCVRequestItem,
 ) -> dict[str, Any]:
     """Fetch one symbol's bars; return ``{instrument_id, timeframe, bars, error?}``.
@@ -845,6 +846,12 @@ async def _fetch_one_ohlcv(
     a whole always returns 200 — partial success is preferable to all-or-nothing
     for dashboard widgets.
     """
+    # T-A-1-02: resolve header factory once per call so each per-instrument
+    # request gets a fresh JWT with a unique JTI.  Prevents replay-detection
+    # rejection when the batch fan-out issues many parallel requests that would
+    # otherwise share the single token captured at batch-start time.
+    _h: dict[str, str] = make_headers() if make_headers is not None else (headers or {})
+
     # Module-level UTC/datetime/timedelta imports are reused — no local re-import.
     params: dict[str, Any] = {"timeframe": item.timeframe}
     # Mirror the singular endpoint's lookback defaults so each batch call gets a
@@ -868,7 +875,7 @@ async def _fetch_one_ohlcv(
         resp = await clients.market_data.get(
             f"/api/v1/ohlcv/{item.instrument_id}",
             params=params,
-            headers=headers,
+            headers=_h,
         )
         if resp.status_code != 200:
             return {
@@ -908,13 +915,27 @@ async def batch_ohlcv(payload: _BatchOHLCVRequest, request: Request) -> Response
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
-    headers = _auth_headers(request)
     clients = _clients(request)
 
-    # asyncio.gather parallelises the per-symbol fan-out so total latency is
-    # bounded by the slowest symbol rather than sum-of-RTTs.
-    tasks = [_fetch_one_ohlcv(clients=clients, headers=headers, item=item) for item in payload.requests]
-    results = await asyncio.gather(*tasks, return_exceptions=False)
+    # T-A-1-02: pass the header factory (not a captured static dict) into each
+    # per-symbol fetch so every parallel S3 call gets a fresh JTI.  A batch of
+    # 50 symbols would otherwise share one JWT and trigger replay-detection on
+    # InternalJWTMiddleware (BP-146 variant).
+    # T-A-1-01: wrap the entire gather in asyncio.wait_for(30s) — the per-symbol
+    # httpx timeout (5s default) handles individual slow symbols; the outer budget
+    # guards against the edge case where many symbols stall simultaneously.
+    tasks = [
+        _fetch_one_ohlcv(
+            clients=clients,
+            make_headers=lambda: _auth_headers(request),
+            item=item,
+        )
+        for item in payload.requests
+    ]
+    try:
+        results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=False), timeout=30.0)
+    except TimeoutError:
+        raise HTTPException(status_code=504, detail="Upstream timeout")  # noqa: B904
 
     body = {"results": results, "fetched_at": datetime.now(tz=UTC).isoformat()}
     # Cache-Control: 5 minutes, ``private`` so a shared CDN/edge cache CANNOT
@@ -2503,7 +2524,8 @@ async def top_movers(
             mover_type=mover_type,
             limit=limit,
             period=period,
-            headers=_auth_headers(request),
+            # T-A-1-02: pass factory so each downstream call issues a fresh JWT.
+            make_headers=lambda: _auth_headers(request),
         )
     except DownstreamError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
