@@ -12,21 +12,32 @@
  * DATA SOURCE: docs/specs/0028-worldview-web-frontend.md §6.2
  * DESIGN REFERENCE: All canvas states reference these types.
  *
- * CODEGEN STATUS (PLAN-0059-C1 — 2026-05-03):
- *   Generated path types live in types/generated/api.ts (run `pnpm generate-types`
+ * CODEGEN STATUS (PLAN-0070-B-3 — 2026-05-03):
+ *   Generated path types live in types/generated/api.ts (run npx openapi-typescript
+ *   infra/contracts/s9-openapi.json -o apps/worldview-web/types/generated/api.ts
  *   to refresh from infra/contracts/s9-openapi.json).
  *
- *   WHY hand-written types remain: S9 is a proxy API. FastAPI proxy routes return
- *   generic `Response` objects — not Pydantic models — so the OpenAPI spec defines
- *   only 8 named component schemas (admin + validation types). Every 200 response
- *   schema is an untyped `{}` object in the spec. Migration to pure generated
- *   aliases requires S9 routes to adopt `response_model=` annotations (backend
- *   work tracked in PLAN-0059-C1 notes). Until then, the hand-written types below
- *   ARE the authoritative source of truth.
+ *   As of PLAN-0070 Waves B-1 + B-2, S9 now has 26 named component schemas
+ *   (Tier-1 + Tier-2 response_model annotations). The generated spec has correct
+ *   OpenAPI shapes for QuoteResponse, NewsTopResponse, PortfolioResponse, etc.
  *
- *   Migration path: once a route gets a response_model, delete the matching
- *   hand-written interface below and replace with:
- *     export type Portfolio = S9Paths["/v1/portfolios"]["get"]["responses"][200]["content"]["application/json"]
+ *   WHY hand-written types STILL remain (PLAN-0070-B-3 finding):
+ *   The generated Pydantic schemas use `extra="allow"`, which openapi-typescript
+ *   translates to `& { [key: string]: unknown }`. This covers additional backend
+ *   fields at runtime but REMOVES TypeScript's named type safety for optional
+ *   fields added post-schema (e.g. Quote.freshness_status, Quote.data_as_of,
+ *   Quote.stale_reason). Components that index into Quote["freshness_status"]
+ *   (StaleBadge.tsx, LiveQuoteBadge.tsx) would break if Quote were replaced with
+ *   the generated alias — TypeScript would no longer know the field exists.
+ *
+ *   Full migration requires the Pydantic schemas to declare every optional field
+ *   explicitly (not relying on extra="allow"). Once that backend work is done,
+ *   replace each hand-written type with the path-keyed alias pattern:
+ *     export type Quote = S9Paths["/v1/quotes/{instrument_id}"]["get"]["responses"]["200"]["content"]["application/json"]
+ *
+ *   Until then, the hand-written types below ARE the authoritative source of truth.
+ *   The S9Gen aliases below provide access to the generated shapes for callers that
+ *   want to work with the spec-level types directly (e.g. contract tests).
  */
 
 // ── Generated path surface (PLAN-0059-C1) ─────────────────────────────────
@@ -36,15 +47,56 @@
 // generated sub-types under stable names.
 export type { paths as S9Paths, components as S9Components, operations as S9Operations } from "./generated/api";
 
-// Named aliases for the 8 component schemas the spec actually defines.
+// ── Named aliases for generated component schemas (PLAN-0070-B-3) ─────────
 // WHY import type (not value): openapi-typescript generates pure type definitions.
+// WHY separate from hand-written types: these aliases provide access to the exact
+// schema shapes that S9's Pydantic models define — useful for contract tests and
+// type-narrowing helpers that need to work at the spec level. Hand-written types
+// (Quote, Portfolio, etc.) remain the authoritative types for UI components because
+// they declare all optional fields by name (see CODEGEN STATUS comment above).
 import type { components as S9Gen } from "./generated/api";
 /** Pydantic ValidationError shape returned on 422 responses. */
 export type S9ValidationError = S9Gen["schemas"]["HTTPValidationError"];
-/** Admin LLM cost breakdown response. */
+/** Admin LLM cost breakdown response (GET /v1/admin/llm/costs). */
 export type S9AdminLlmCostsResponse = S9Gen["schemas"]["AdminLlmCostsResponse"];
 /** POST /v1/ohlcv/batch request body. */
 export type S9BatchOHLCVRequest = S9Gen["schemas"]["_BatchOHLCVRequest"];
+// Tier-1 response schemas (added in PLAN-0070 Wave B-1)
+/** Generated shape of GET /v1/quotes/{instrument_id} 200 response. */
+export type S9QuoteResponse = S9Gen["schemas"]["QuoteResponse"];
+/** Generated shape of GET /v1/news/top 200 response (articles array container). */
+export type S9NewsTopResponse = S9Gen["schemas"]["NewsTopResponse"];
+/** Generated shape of a single news article from GET /v1/news/top. */
+export type S9NewsArticle = S9Gen["schemas"]["NewsArticle"];
+/** Generated shape of a single portfolio from GET /v1/portfolios. */
+export type S9PortfolioResponse = S9Gen["schemas"]["PortfolioResponse"];
+/** Generated shape of GET /v1/ohlcv/{instrument_id} 200 response. */
+export type S9OHLCVResponse = S9Gen["schemas"]["OHLCVResponse"];
+/** Generated shape of a single OHLCV bar. */
+export type S9OHLCVBar = S9Gen["schemas"]["OHLCVBar"];
+/** Generated shape of a single pending alert from GET /v1/alerts/pending. */
+export type S9AlertResponse = S9Gen["schemas"]["AlertResponse"];
+/** Generated shape of a single watchlist from GET /v1/watchlists. */
+export type S9WatchlistResponse = S9Gen["schemas"]["WatchlistResponse"];
+/** Generated shape of a single instrument search result from GET /v1/search/instruments. */
+export type S9InstrumentSearchResult = S9Gen["schemas"]["InstrumentSearchResult"];
+// Tier-2 response schemas (added in PLAN-0070 Wave B-2)
+/** Generated shape of POST /v1/fundamentals/screen response. */
+export type S9ScreenerResponse = S9Gen["schemas"]["ScreenerResponse"];
+/** Generated shape of a single screener result row. */
+export type S9ScreenerResultItem = S9Gen["schemas"]["ScreenerResultItem"];
+/** Generated shape of GET /v1/signals/prediction-markets response. */
+export type S9PredictionMarketsListResponse = S9Gen["schemas"]["PredictionMarketsListResponse"];
+/** Generated shape of a single prediction market. */
+export type S9PredictionMarket = S9Gen["schemas"]["PredictionMarket"];
+/** Generated shape of GET /v1/fundamentals/earnings-calendar response. */
+export type S9EarningsCalendarResponse = S9Gen["schemas"]["EarningsCalendarResponse"];
+/** Generated shape of a single earnings calendar event. */
+export type S9EarningsEvent = S9Gen["schemas"]["EarningsEvent"];
+/** Generated shape of GET /v1/fundamentals/{id} response. */
+export type S9FundamentalsResponse = S9Gen["schemas"]["FundamentalsResponse"];
+/** Generated shape of a single fundamentals section record. */
+export type S9FundamentalsRecord = S9Gen["schemas"]["FundamentalsRecord"];
 
 // ── Authentication ─────────────────────────────────────────────────────────
 
@@ -1347,6 +1399,46 @@ export interface HeatmapSector {
 
 export interface MarketHeatmapResponse {
   sectors: HeatmapSector[];
+}
+
+// ── Dashboard Snapshot Bundle (PLAN-0070 C-2) ─────────────────────────────
+
+/**
+ * DashboardSnapshotResponse — all dashboard initial data in one request.
+ *
+ * WHY: replaces 6+ individual useQuery hooks on the dashboard page with a
+ * single bundle call to GET /v1/dashboard/snapshot. S9 fans out to 6 upstream
+ * services concurrently and returns them in one response.
+ *
+ * Per-leg null means that upstream call failed — the frontend renders "—" or
+ * a skeleton for null legs. _meta.partial=true when any leg is null.
+ *
+ * NOT included in the snapshot (require per-instrument lookups or lazy-load):
+ *   - top movers  : N quote calls after screener (PreMarketMoversWidget fetches directly)
+ *   - watchlist   : requires S1 member lookup (WatchlistMoversWidget fetches directly)
+ *
+ * DATA SOURCE: GET /v1/dashboard/snapshot (S9 composition endpoint, PLAN-0070 C-2)
+ */
+export interface DashboardSnapshotResponse {
+  /** Top 8 ranked articles from S6 nlp-pipeline. */
+  news: RankedNewsResponse | null;
+  /** GICS sector heatmap from S3 market-data (11 sectors, 1D returns). */
+  heatmap: MarketHeatmapResponse | null;
+  /**
+   * Top 5 prediction markets from S3 market-data.
+   * WHY items (not markets): S3's PredictionMarketsListResponse uses `items`
+   * — the TypeScript PredictionMarketsResponse uses `markets`. The wire carries
+   * `items`; this type reflects what the API actually returns.
+   */
+  prediction_markets: { items: PredictionMarket[]; total: number } | null;
+  /** Upcoming 7-day company earnings from S7 knowledge-graph. */
+  earnings_calendar: EarningsCalendarResponse | null;
+  /** Top 10 pending alerts from S10 alert service. */
+  alerts: AlertsResponse | null;
+  /** AI-generated morning brief from S8 rag-chat. */
+  morning_brief: BriefingResponse | null;
+  /** Server-side metadata: partial=true when ≥1 leg failed. */
+  _meta?: { partial: boolean; legs_failed: number };
 }
 
 // ── Top Movers ────────────────────────────────────────────────────────────
