@@ -838,7 +838,13 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     setVolumeProfileBuckets(computeVolumeProfile(formattedBars, 24));
 
     if (formattedBars.length > 0) {
-      chartRef.current?.timeScale().fitContent();
+      // WHY scrollToRealTime (not fitContent): fitContent zooms to ALL historical
+      // data from the first bar (1985 for older tickers), landing the view 35+
+      // years in the past — the "infinite scroll to the left" bug reported in QA.
+      // scrollToRealTime positions the right edge at the most-recent bar, which is
+      // the analyst's primary concern on page load. Traders open a chart to see
+      // NOW, not the 1987 crash.
+      chartRef.current?.timeScale().scrollToRealTime();
     }
   }, [data?.bars]);
 
