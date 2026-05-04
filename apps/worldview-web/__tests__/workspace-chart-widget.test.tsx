@@ -83,7 +83,7 @@ vi.mock("lightweight-charts", () => ({
     removeSeries: vi.fn(),
     applyOptions: mockApplyOptions,
     priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
-    timeScale: vi.fn(() => ({ fitContent: mockFitContent })),
+    timeScale: vi.fn(() => ({ fitContent: mockFitContent, scrollToRealTime: vi.fn() })),
     subscribeCrosshairMove: vi.fn(),
     unsubscribeCrosshairMove: vi.fn(),
     remove: mockRemove,

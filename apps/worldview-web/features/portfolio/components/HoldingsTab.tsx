@@ -80,13 +80,15 @@ export function HoldingsTab({
     );
   }
 
-  // WHY min-h-full: TabsContent is `flex-1`, so the scroll container is taller
-  // than its children when the tab content is short. Without min-h-full, the
-  // unfilled portion shows the page background (terminal-dark = black) above
-  // and below the data, which the user perceives as "half the screen is
-  // black". Forcing the wrapper to fill eliminates that empty band.
+  // WHY bg-background (not min-h-full): min-height: 100% does NOT resolve
+  // reliably when the parent is an overflow-y:auto scroll container whose
+  // height is flex-derived (no explicit pixel height). The browser sees the
+  // scroll container's "content height" as the reference — not its visual
+  // height — so the child stays short and exposes the terminal-dark (#09090b)
+  // page background below the data. Painting bg-background on the wrapper
+  // covers that gap without fighting CSS height resolution semantics.
   return (
-    <div className="min-h-full p-2">
+    <div className="p-2 bg-background">
       {/* PLAN-0053 T-B-2-04: Cash management card just below the KPI strip —
           at-a-glance dry-powder + cash drag awareness. */}
       <CashManagementCard portfolioId={activePortfolioId} />
