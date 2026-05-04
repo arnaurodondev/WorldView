@@ -67,8 +67,9 @@ const CardTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <h3
     ref={ref}
-    // text-sm font-medium: compact card titles — finance panels don't need large headings
-    className={cn("text-sm font-medium leading-none tracking-tight", className)}
+    // WHY text-[11px] not text-sm (14px): finance mandate — 11px data text everywhere.
+    // Explicit [11px] overrides Tailwind scale; matches Bloomberg terminal label density.
+    className={cn("text-[11px] font-medium leading-none tracking-tight", className)}
     {...props}
   />
 ));
