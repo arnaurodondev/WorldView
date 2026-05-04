@@ -101,10 +101,10 @@ class Settings(BaseSettings):
 
     # Deep extraction via external API (DeepInfra / OpenAI-compatible)
     # When extraction_api_key is set, DeepSeekExtractionAdapter is used instead of OllamaExtractionAdapter.
-    # qwen2.5:7b-instruct is not available locally (too large for CPU); DeepInfra hosts it at $0.03/M tokens.
+    # Qwen3-235B-A22B-Instruct-2507: $0.071/$0.10 per 1M tokens; 250k context >> 24k max extraction window.
     extraction_api_key: str = ""  # NLP_PIPELINE_EXTRACTION_API_KEY
     extraction_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # NLP_PIPELINE_EXTRACTION_API_BASE_URL
-    extraction_api_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"  # NLP_PIPELINE_EXTRACTION_API_MODEL_ID
+    extraction_api_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"  # NLP_PIPELINE_EXTRACTION_API_MODEL_ID
 
     # GLiNER: when set, use the HTTP adapter (containerised GLiNER server).
     # Leave empty to fall back to GLiNERLocalAdapter (in-process model).
