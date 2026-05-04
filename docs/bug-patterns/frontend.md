@@ -2,7 +2,7 @@
 
 > **Category**: frontend
 > **Description**: React hooks, Next.js, WebSocket/SSE, TypeScript, CSS, component lifecycle, API contract mismatches in UI code
-> **Count**: 24 patterns
+> **Count**: 26 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -811,5 +811,50 @@ async function fillNumberInput(user: ReturnType<typeof userEvent.setup>, label: 
 **Prevention**: Any test for a NumberInput (or other commit-on-blur input) rendered inside a Radix Dialog, Sheet, or Popover should use `fireEvent.blur` to commit the value, not keyboard navigation.
 
 **Regression test**: `apps/worldview-web/__tests__/add-position-dialog.test.tsx` — `fillQuantity()` helper uses `fireEvent.blur` — PLAN-0059 F-2.
+
+---
+
+## BP-355 — Unicode emoji characters render as colorful glyphs on Windows/Linux
+
+**Symptom**: Warning/arrow/checkmark characters (⚠, ✓, →, ▴) in React TSX render as full-color emoji glyphs on Windows and inconsistently on Linux (depends on system emoji font). Design intention (inline amber warning icon) becomes a distracting multicolor symbol at 10-11px text size.
+
+**Root cause**: These code points are in the Unicode Emoji range. When placed inside a styled `<span>`, the OS emoji font overrides the text color — Tailwind's `text-warning` has no effect because the glyph is rendered as a bitmap emoji, not a typeface glyph.
+
+**Exceptions**: These Unicode characters ARE safe as text glyphs (not emoji) because they're in the block elements / arrows range that pre-dates the emoji standard: `—` (em-dash), `│` (box drawing), `▲`/`▼` (geometric shapes U+25B2/U+25BC) — all render reliably in `font-mono` contexts.
+
+**Fix**: Use Lucide icons for all iconography in React components. Never use ⚠, ✓, →, ✕, ★, or any code point above U+25FF in visible UI text.
+
+```tsx
+// WRONG — renders as emoji on Windows:
+<span className="text-warning">⚠ Limited coverage</span>
+
+// CORRECT — respects text-warning color:
+<AlertTriangle className="h-3 w-3 inline-block mr-1" strokeWidth={1.5} />
+<span>Limited coverage</span>
+```
+
+**Prevention**: Lint rule (eslint-plugin-no-restricted-syntax on JSX text nodes containing ⚠/✓/→/✕) or code review check. The `/investigate` and `/review` checklists now flag Unicode emoji in JSX string literals.
+
+---
+
+## BP-354 — AI brief `[cN]` citation markers leak as raw text in lead block
+
+**Symptom**: The AI brief lead sentence displays literal text like `[c6][c7][c10]` inline: "CBOE VIX fell to 16 [c6][c7][c10]." The citation markers appear as raw characters, not rendered links or footnotes.
+
+**Root cause**: The backend `BriefingResponse.lead` field intentionally preserves `[cN]` markers (per schema comment: "inline [cN] markers"). The `LeadProse` component in `StructuredBrief.tsx` renders `{lead}` directly as text without stripping these markers. The frontend was expected to either render them as citation chips or strip them, but this was never implemented in `LeadProse`.
+
+**Why markers are in the `lead` field**: The backend parses `## LEAD` block and populates `lead` with 1-3 sentences including citation references. `BriefBullet.citations` handles citation objects for the section bullets, but the lead block has no associated citations array — it references them inline only.
+
+**Fix**: Strip `[cN]` markers from the lead before rendering:
+```tsx
+const cleanLead = lead.replace(/\[c\d+\]/g, "").replace(/\s{2,}/g, " ").trim();
+// render {cleanLead} instead of {lead}
+```
+
+The citation context is already visible via `CitationChips` on the section bullets — stripping `[cN]` from the lead does not lose information for the user.
+
+**Prevention**: When adding new string fields that contain markup tokens, document whether the frontend must process them. Fields like `lead` should be either (a) pre-processed by the backend or (b) have a frontend processing step documented in the component.
+
+**Regression test**: `apps/worldview-web/__tests__/structured-brief.test.tsx` — verify lead renders without `[c` characters.
 
 ---

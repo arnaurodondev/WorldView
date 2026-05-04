@@ -132,24 +132,33 @@ interface EdgeTooltip {
 
 export class GraphErrorBoundary extends React.Component<
   { children: React.ReactNode },
-  { hasError: boolean }
+  { hasError: boolean; errorMessage: string | null }
 > {
   constructor(props: { children: React.ReactNode }) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, errorMessage: null };
   }
 
-  static getDerivedStateFromError(): { hasError: boolean } {
-    // WHY: React calls this when a child throws during render.
-    // We flip hasError to show the fallback UI.
-    return { hasError: true };
+  static getDerivedStateFromError(error: Error): { hasError: boolean; errorMessage: string | null } {
+    // WHY capture message: the sigma WebGL error and graphology data errors have
+    // distinct messages — capturing helps diagnose "WebGL required" vs "UsageGraphError".
+    return { hasError: true, errorMessage: error?.message ?? null };
   }
 
   override render() {
     if (this.state.hasError) {
+      // WHY check "webgl" in message: if sigma threw a non-WebGL error (e.g., graphology
+      // UsageGraphError from malformed data), show the actual message so the user knows
+      // why the graph failed rather than blaming WebGL incorrectly.
+      const isWebGLError =
+        !this.state.errorMessage ||
+        /webgl|context creation|rendering context/i.test(this.state.errorMessage);
+      const displayMessage = isWebGLError
+        ? "Graph unavailable — enable WebGL (hardware acceleration) in your browser."
+        : `Graph unavailable: ${this.state.errorMessage}`;
       return (
         <div className="rounded-[2px] border border-border/40 bg-card/50 px-3 py-3">
-          <p className="text-xs text-muted-foreground">Graph unavailable — WebGL required.</p>
+          <p className="text-xs text-muted-foreground">{displayMessage}</p>
           {/* WHY window.location.reload: simplest recovery — no state to preserve */}
           <button
             onClick={() => window.location.reload()}
