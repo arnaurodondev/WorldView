@@ -31,6 +31,12 @@ interface AnalystConsensusStripProps {
   fundamentals: Fundamentals | null;
 }
 
+// TODO(T-C-3-03): No analyst consensus endpoint in S9 — wire when
+// /v1/entities/{id}/consensus is added. The consensus strip would show
+// buy/hold/sell counts, price target median, and analyst count.
+// Wave A (T-A-1-04) already changed the zero-analyst branch to show
+// "Analyst consensus data unavailable" instead of broken equal-weight bars.
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function AnalystConsensusStrip({ fundamentals }: AnalystConsensusStripProps) {
