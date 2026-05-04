@@ -1616,6 +1616,9 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 "label": center.get("canonical_name") or "",
                 "type": center.get("entity_type") or "unknown",
                 "size": 2,  # Center node rendered larger than neighbors
+                # WHY ticker: PeerComparisonPanel needs ticker to look up S3
+                # fundamentals (entity_id ≠ instrument_id; resolved by ticker).
+                "ticker": center.get("ticker") or "",
             }
         )
 
@@ -1629,11 +1632,16 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 "label": entity_data.get("canonical_name") or "",
                 "type": entity_data.get("entity_type") or "unknown",
                 "size": 1,
+                "ticker": entity_data.get("ticker") or "",
             }
         )
 
     # Build edges from S7 relations; skip any relation missing required fields
     # (relation_id / subject / object) rather than emitting a malformed edge.
+    # WHY .lower(): canonical_type is stored lowercase in the DB for relations
+    # created via the NLP pipeline but some seeded relations used uppercase
+    # (e.g., "COMPETES_WITH"). Normalising to lowercase here means frontend
+    # code can always filter with a single lowercase comparison.
     edges: list[dict[str, Any]] = []
     for rel in relations:
         rel_id = str(rel.get("relation_id") or "")
@@ -1646,7 +1654,7 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 "id": rel_id,
                 "source": src,
                 "target": tgt,
-                "label": rel.get("canonical_type") or "",
+                "label": (rel.get("canonical_type") or "").lower(),
                 "weight": float(rel.get("confidence") or 0.5),
             }
         )
