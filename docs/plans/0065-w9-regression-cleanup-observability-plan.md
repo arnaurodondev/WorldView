@@ -5,7 +5,7 @@
 > **Tier**: 2 (regression cleanup) + 3 (observability).
 > **Estimate**: 1.5 dev-days (PRD §15) — confirmed achievable; the four BP-302/F-VISUAL-002/F-E8/F-D4 code fixes are **already merged** in commit `f27e266b` (verified 2026-05-03 against current `main`/`feat/content-ingestion-wave-a1`). The remaining work is operational (redeploy + verify) and net-new (Sentry / UptimeRobot / status page).
 > **Author**: `/plan` skill, 2026-05-03; revised 2026-05-03 per audit `docs/audits/2026-05-03-revise-plan-0065-w9.md` (3 BLOCKING + 6 IMPORTANT + 3 NICE-TO-HAVE applied; 2 NICE-TO-HAVE deferred to §15 Follow-ups).
-> **Status**: in-progress (Wave A complete 2026-05-04).
+> **Status**: in-progress (Wave A complete 2026-05-04; Wave B complete 2026-05-04).
 > **Revision 2 changes** (2026-05-04): Wire `init_sentry()` into **all 10 backend services** (S1–S10), not just S9/S6/S8; add Sentry issue-alert email notification to `arnaurodondev@gmail.com`; add Grafana error-observability dashboard; expand worldview-gitops env var coverage to all 10 service `.env` files and `values.yaml`; zero deferrals. See T-C-05 (new), T-E-03 (new), T-E-04 (new).
 
 ---
@@ -188,12 +188,13 @@ Read the actual source files (not docs) and recorded the current state of every 
 
 ---
 
-### Wave B — Operational Cleanup: Redeploy + Offset Reset + Smoke
+### Wave B — Operational Cleanup: Redeploy + Offset Reset + Smoke ✅
 
 **Goal**: Convert the merged-but-possibly-not-yet-effective code fixes into observable healthy production state. Reset the article-consumer offset only if Wave A flagged it stuck. Verify acceptance criteria from PRD-0034 §3 FR-T2-3.
 
 **Depends on**: Wave A (T-A-01, T-A-02).
 **Estimated effort**: 45–90 min (was 30–60; +15 min for T-B-04 EU economic-events offset reset per audit B-001/I-003).
+**Status**: **DONE** — 2026-05-04 · 18 Playwright a11y tests pass · T-B-04 executed · FR-T2-3 verified.
 **Architecture layer**: ops.
 
 #### Tasks
@@ -352,9 +353,9 @@ Only if T-A-01 flagged a stuck offset:
 
 #### Validation Gate
 
-- [ ] All container restarts result in healthy `/health` 200.
-- [ ] No new structlog `error` events in 15 min post-action.
-- [ ] Smoke checklist all green or deferred items documented.
+- [x] All container restarts result in healthy `/health` 200.
+- [x] No new structlog `error` events in 15 min post-action.
+- [x] Smoke checklist all green or deferred items documented.
 
 #### Break Impact
 
