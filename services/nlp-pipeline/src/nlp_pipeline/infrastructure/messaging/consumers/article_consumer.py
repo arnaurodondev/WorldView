@@ -616,15 +616,26 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                     str(_m.provisional_queue_id) for _m in final_mentions if _m.provisional_queue_id is not None
                 )
 
-                await _emit_temporal_events(
-                    raw_events=extraction_result.get("events", []),
-                    entity_id_by_ref=_te_entity_id_by_ref,
-                    provisional_entity_ids=_te_provisional_ids,
-                    doc_id=doc_id,
-                    published_at=published_at,
-                    outbox_repo=outbox_repo,
-                    settings=self._settings,
+                # BP-349: normalize raw LLM output (confidence→extraction_confidence,
+                # description→event_text, entity_refs→participant_entity_ids) before
+                # passing to _emit_temporal_events which expects the processed format.
+                # QG-3: _normalize_temporal_events_for_emit does NOT skip events with
+                # zero resolvable entity refs — macro events are globally scoped.
+                _te_normalized = _normalize_temporal_events_for_emit(
+                    extraction_result.get("events", []),
+                    _te_entity_id_by_ref,
+                    _te_provisional_ids,
                 )
+                if _te_normalized:
+                    await _emit_temporal_events(
+                        raw_events=_te_normalized,
+                        entity_id_by_ref=_te_entity_id_by_ref,
+                        provisional_entity_ids=_te_provisional_ids,
+                        doc_id=doc_id,
+                        published_at=published_at,
+                        outbox_repo=outbox_repo,
+                        settings=self._settings,
+                    )
 
             # ── D-004: Commit NLP FIRST, then intel ──────────────────────────
             # If nlp_session.commit() fails, intel_session rolls back
@@ -1241,6 +1252,39 @@ def _build_raw_relations(
                 "evidence_text": str(rel_d.get("evidence_text", "")) or None,
                 "entity_provisional": subject_is_provisional or object_is_provisional,
                 "provisional_queue_id": provisional_qid,
+            }
+        )
+    return result
+
+
+def _normalize_temporal_events_for_emit(
+    raw_events: list[Any],
+    entity_id_by_ref: dict[str, str],
+    provisional_ids: frozenset[str],
+) -> list[dict[str, Any]]:
+    """Normalize raw LLM event dicts into the format _emit_temporal_events expects.
+
+    Unlike _build_raw_events, this does NOT skip events with no resolvable entity
+    refs — macro/geopolitical events are globally scoped and often have no
+    company-specific participants.  In that case participant_entity_ids=[] is emitted
+    and S7 stores a temporal_event with an empty entity_event_exposures set.
+
+    Maps: confidence→extraction_confidence, description→event_text, entity_refs→participant_entity_ids
+    """
+    result: list[dict[str, Any]] = []
+    for evt in raw_events:
+        evt_d: dict[str, Any] = dict(evt) if not isinstance(evt, dict) else evt  # type: ignore[call-overload]
+        participant_ids: list[str] = []
+        for ref in evt_d.get("entity_refs", []) or []:
+            eid, _ = _resolve_ref(str(ref), entity_id_by_ref)
+            if eid is not None and eid not in provisional_ids:
+                participant_ids.append(eid)
+        result.append(
+            {
+                "event_type": str(evt_d.get("event_type", "")).upper(),
+                "event_text": str(evt_d.get("description", "")),
+                "extraction_confidence": float(evt_d.get("confidence", 0.5)),
+                "participant_entity_ids": participant_ids,
             }
         )
     return result
