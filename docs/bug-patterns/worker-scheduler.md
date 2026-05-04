@@ -1074,3 +1074,57 @@ After the watermark reset, the scheduler creates new tasks on the next tick and 
 - Log `watermark_stale_bar_ts_without_success` at startup when `last_success_at IS NULL AND last_success_bar_ts IS NOT NULL` is detected
 
 **Regression test**: N/A (operational runbook, not a code bug)
+
+---
+
+### BP-359: Single-item embed loop — batch API never called with full batch
+
+**Category**: Workers & Schedulers
+**Severity**: HIGH
+**First seen**: 2026-05-04
+**Services**: knowledge-graph (NarrativeRefreshWorker, DefinitionRefreshWorker, EmbeddingRefreshWorker, FundamentalsRefreshWorker), nlp-pipeline (Block 7 run_embeddings_block)
+
+**Symptoms**:
+- Embedding backlog drains slowly despite healthy worker logs (e.g., 807/1888 narrative embeddings after multiple days)
+- `llm_usage_log` shows hundreds of individual 1-item embedding entries per worker cycle instead of 1 multi-item entry
+- Worker cycle completes but processes only 100 entities per hour at DeepInfra latency (~15s for 100 × 150ms sequential calls)
+- `entity_embedding_state` overdue count stays high relative to the cycle interval
+
+**Root cause**:
+Every embedding worker called `embed([single_input])` once per entity inside a sequential `for` loop. The `DeepInfraEmbeddingAdapter.embed()` method already accepts a list of any size and sends all texts in a single HTTP request body (`"input": [text1, text2, ...]`). The workers were never updated to exploit batch semantics, resulting in N HTTP round-trips where N = number of due entities (up to 100+).
+
+Additionally, the hardcoded `_BATCH_LIMIT` constants (50–100) capped how many entities were fetched per cycle, meaning the backlog shrank by at most 100 entities per hour even if the embed call itself was fast.
+
+```python
+# Bad — 100 sequential HTTP calls for 100 entities
+for row in due:
+    outputs = await self._llm.embed([inp])   # 1 item, 1 HTTP call
+    await emb_repo.upsert(...)
+
+# Good — 1 HTTP call for all entities
+all_inputs = [EmbeddingInput(text=t) for _, t in texts_with_meta]
+all_outputs = await self._llm.embed(all_inputs)  # all items, 1 HTTP call
+```
+
+**Fix**:
+1. In each worker's `run()`, collect ALL texts first (Phase 1).
+2. Call `embed(all_inputs)` once, chunked by `_EMBED_CHUNK_SIZE = 200` when len > 200.
+3. Map outputs back to entity_ids by index.
+4. Remove hardcoded `_BATCH_LIMIT`; replace with `batch_limit=0` constructor param (0 = all due entities, translated to `LIMIT 100_000` in the DB query).
+5. For workers with per-entity external I/O (FundamentalsRefreshWorker), parallelize entity fetches with `asyncio.gather` + `asyncio.Semaphore(concurrency)` before the batch embed.
+
+**Performance impact**:
+- DeepInfra (~150ms/call): 100 entities sequential = 15s → 1 batch call = 150ms (100× speedup)
+- Ollama CPU (~10s/call): 100 entities sequential = 1000s → minimal improvement (Ollama processes sequentially on CPU even in batch mode, but fewer Python/event-loop overhead)
+- Backlog drain: with `batch_limit=0`, all overdue entities drain in a single cycle instead of 100/cycle/hour
+
+**Prevention**:
+- Any new worker that embeds N entities MUST call `embed(all_N_inputs)` outside the loop, not `embed([single])` inside the loop.
+- Review checklist: when reviewing a worker with a `for row in batch` loop that calls `embed()`, flag if the call is inside the loop with a single input.
+- `_EMBED_CHUNK_SIZE = 200` constant guards against API request-size limits — always chunk when > 200 inputs.
+
+**Regression tests**:
+- `services/knowledge-graph/tests/unit/infrastructure/workers/test_narrative_refresh_worker.py::TestNarrativeRefreshWorker::test_embed_called_once_for_batch_of_entities`
+- `services/knowledge-graph/tests/unit/infrastructure/workers/test_embedding_refresh_worker.py::TestEmbeddingRefreshWorker::test_embed_called_once_for_batch`
+- `services/knowledge-graph/tests/unit/infrastructure/workers/test_fundamentals_refresh_worker.py::TestBatchEmbedding::test_multiple_entities_embed_called_once_with_all_inputs`
+- `services/nlp-pipeline/tests/unit/application/blocks/test_embeddings.py::TestBatchEmbedSingleCall::test_batch_embed_single_call_for_multiple_sections`
