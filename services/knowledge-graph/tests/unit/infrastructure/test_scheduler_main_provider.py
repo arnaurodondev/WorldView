@@ -97,7 +97,7 @@ class TestSchedulerMainExtractionProviderConfig:
             storage_secret_key="test",
         )
         assert s.deepinfra_api_key == ""
-        assert s.deepinfra_extraction_model_id == "deepseek-ai/DeepSeek-V4-Flash"
+        assert s.deepinfra_extraction_model_id == "Qwen/Qwen3-235B-A22B-Instruct-2507"
         assert s.deepinfra_extraction_base_url == "https://api.deepinfra.com/v1/openai"
         assert s.deepinfra_extraction_concurrency == 5
 

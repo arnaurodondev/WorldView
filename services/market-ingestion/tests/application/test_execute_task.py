@@ -680,8 +680,8 @@ async def test_minio_write_skipped_on_retry_if_object_exists() -> None:
     """
     task = _make_task(dataset_type=DatasetType.OHLCV)
     store = _make_store()
-    # bronze exists (skip put), canonical does not yet (allow put)
-    store.exists = AsyncMock(side_effect=[True, False])
+    # bronze exists (skip put); canonical is always PUT without an exists() check
+    store.exists = AsyncMock(side_effect=[True])
     uc, _, _, store, _ = _make_use_case(store=store)
 
     await uc.execute(task)
@@ -690,8 +690,8 @@ async def test_minio_write_skipped_on_retry_if_object_exists() -> None:
     assert store.put.await_count == 1
     # Pipeline still completes
     task.succeed.assert_called_once()
-    # exists() was queried for both bronze and canonical keys
-    assert store.exists.await_count == 2
+    # exists() is only queried for the bronze key (canonical always overwrites)
+    assert store.exists.await_count == 1
 
 
 @pytest.mark.unit

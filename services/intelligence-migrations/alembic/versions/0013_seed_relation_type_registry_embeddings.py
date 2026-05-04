@@ -23,7 +23,7 @@ at runtime, so ANN distances are consistent.
 Behaviour when Ollama is unavailable
 -------------------------------------
 If Ollama is not reachable (e.g. CI, offline build), the migration finishes
-successfully but prints a warning.  Embeddings remain NULL; Step 2 stays
+successfully and emits a warnings.warn().  Embeddings remain NULL; Step 2 stays
 bypassed until the migration is re-applied on a system with Ollama running.
 To re-apply: downgrade to 0012, then upgrade to head.
 
@@ -85,13 +85,9 @@ def upgrade() -> None:
     ).fetchall()
 
     if not rows:
-        print("0013: all relation_type_registry embeddings already populated — skipping")  # noqa: T201
         return
 
-    print(f"0013: seeding embeddings for {len(rows)} relation type(s) via {_OLLAMA_URL}")  # noqa: T201
     warned = False
-    seeded = 0
-    skipped = 0
 
     for type_id, canonical_type in rows:
         emb = _get_embedding(canonical_type)
@@ -105,7 +101,6 @@ def upgrade() -> None:
                     stacklevel=2,
                 )
                 warned = True
-            skipped += 1
             continue
 
         # pgvector accepts a text array literal cast to vector.
@@ -114,12 +109,6 @@ def upgrade() -> None:
             sa.text("UPDATE relation_type_registry " "SET embedding = :vec::vector " "WHERE type_id = :tid"),
             {"vec": vec_literal, "tid": str(type_id)},
         )
-        seeded += 1
-
-    if skipped > 0:
-        print(f"0013: {skipped} embedding(s) skipped (Ollama unavailable)")  # noqa: T201
-    else:
-        print(f"0013: {seeded} embedding(s) seeded successfully")  # noqa: T201
 
 
 def downgrade() -> None:
