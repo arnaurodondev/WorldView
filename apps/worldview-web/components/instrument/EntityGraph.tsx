@@ -541,7 +541,7 @@ export function EntityGraph({ data, centerEntityId }: EntityGraphProps) {
   // ── Empty state ─────────────────────────────────────────────────────────────
   if (!data.nodes.length) {
     return (
-      <div className="flex h-[460px] items-center justify-center rounded-[2px] border border-border/40 bg-card/30 text-sm text-muted-foreground">
+      <div className="flex h-[460px] items-center justify-center rounded-[2px] border border-border/40 bg-card/30 text-[11px] text-muted-foreground">
         No relationship data available
       </div>
     );

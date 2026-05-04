@@ -260,6 +260,7 @@ async def get_company_overview(
                 ticker=ticker_symbol,
                 company_id=company_id,
                 exc=str(e),
+                exc_info=True,
             )
 
     # Extract name / currency / sector from the first company-profile record's data blob.
@@ -440,12 +441,14 @@ async def get_instrument_page_bundle(
         try:
             return await _checked_get(clients.market_data, "market-data", path, headers=_h(), **kwargs)
         except Exception:
+            logger.warning("instrument_bundle_leg_failed", leg=path, exc_info=True)
             return None
 
     async def _safe_nlp(path: str, **kwargs: Any) -> dict[str, Any] | None:
         try:
             return await _checked_get(clients.nlp_pipeline, "nlp-pipeline", path, headers=_h(), **kwargs)
         except Exception:
+            logger.warning("instrument_bundle_leg_failed", leg=path, exc_info=True)
             return None
 
     async def _safe_overview() -> dict[str, Any] | None:
@@ -457,6 +460,7 @@ async def get_instrument_page_bundle(
                 headers=headers,
             )
         except Exception:
+            logger.warning("instrument_bundle_leg_failed", leg="overview", exc_info=True)
             return None
 
     async def _compose() -> dict[str, Any]:
@@ -560,6 +564,7 @@ async def get_portfolio_bundle(
         try:
             return await _checked_get(clients.portfolio, "portfolio", path, headers=_h(), **kwargs)
         except Exception:
+            logger.warning("portfolio_bundle_leg_failed", leg=path, exc_info=True)
             return None
 
     async def _compose() -> dict[str, Any]:

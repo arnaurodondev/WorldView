@@ -118,6 +118,8 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
     Passes a JWT factory so each of the 4 parallel downstream calls gets a fresh
     JWT with a unique JTI, preventing replay detection on market-data.
     """
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     try:
         return await get_company_overview(
             _clients(request),
@@ -241,6 +243,8 @@ async def chat_stream(request: Request) -> Any:
 @router.post("/threads")
 async def create_thread(request: Request) -> Any:
     """Create a new conversation thread (proxy to S8)."""
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     body = await request.body()
     headers = _auth_headers(request)
     clients = _clients(request)
@@ -255,6 +259,8 @@ async def create_thread(request: Request) -> Any:
 @router.get("/threads")
 async def list_threads(request: Request) -> Any:
     """List conversation threads for the authenticated user (proxy to S8)."""
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
     resp = await clients.rag_chat.get(
@@ -268,6 +274,8 @@ async def list_threads(request: Request) -> Any:
 @router.get("/threads/{thread_id}")
 async def get_thread(thread_id: str, request: Request) -> Any:
     """Get a single conversation thread (proxy to S8)."""
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
     resp = await clients.rag_chat.get(
@@ -280,6 +288,8 @@ async def get_thread(thread_id: str, request: Request) -> Any:
 @router.delete("/threads/{thread_id}", status_code=200)
 async def delete_thread(thread_id: str, request: Request) -> Any:
     """Delete a conversation thread (proxy to S8)."""
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
     resp = await clients.rag_chat.delete(
@@ -299,6 +309,8 @@ async def update_thread(thread_id: str, request: Request) -> Any:
     sidebar title). Body is forwarded unchanged so future patchable fields
     don't require a gateway change.
     """
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     body = await request.body()
     headers = _auth_headers(request)
     clients = _clients(request)
@@ -320,6 +332,8 @@ async def get_email_preferences(request: Request) -> Any:
     Passes X-Tenant-Id and X-User-Id headers derived from the JWT payload
     so S10 can enforce per-user isolation.
     """
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
     resp = await clients.alert.get(
@@ -336,6 +350,8 @@ async def update_email_preferences(request: Request) -> Any:
     Passes request body unchanged; forwards X-Tenant-Id and X-User-Id headers.
     S10 returns 400 on invalid preference values (e.g., send_day_of_week > 6).
     """
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     body = await request.body()
     headers = _auth_headers(request)
     clients = _clients(request)

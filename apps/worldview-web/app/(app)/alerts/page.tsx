@@ -421,7 +421,7 @@ function NewsFeedTab({ accessToken }: TabProps) {
         ) : (
           <div className="mt-2 space-y-2">
             {filtered.length === 0 ? (
-              <p className="py-3 text-center text-xs text-muted-foreground">
+              <p className="py-3 text-center text-[11px] text-muted-foreground">
                 No {activeCategory} articles in this feed.
               </p>
             ) : (
@@ -529,7 +529,7 @@ function TopTodayTab({ accessToken }: TabProps) {
         ) : (
           <div className="mt-2 space-y-2">
             {filtered.length === 0 ? (
-              <p className="py-3 text-center text-xs text-muted-foreground">
+              <p className="py-3 text-center text-[11px] text-muted-foreground">
                 No {activeCategory} articles in top today.
               </p>
             ) : (

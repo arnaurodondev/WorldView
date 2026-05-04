@@ -197,7 +197,7 @@ function ConnectionRow({ connection }: ConnectionRowProps) {
         <div className="min-w-0 flex-1">
           {/* Brokerage name — bold; "Unnamed brokerage" fallback when SnapTrade
               hasn't confirmed the broker yet (pending status) */}
-          <p className="truncate text-sm font-medium text-foreground">
+          <p className="truncate text-[11px] font-medium text-foreground">
             {connection.brokerage_name ?? "Unnamed brokerage"}
           </p>
 
@@ -362,7 +362,7 @@ export function ConnectedBrokeragesList({ portfolioId }: ConnectedBrokeragesList
       <div className="rounded-[2px] border border-destructive/30 bg-destructive/10 px-4 py-3">
         <div className="flex items-center gap-2">
           <AlertCircle className="h-4 w-4 text-destructive" aria-hidden="true" />
-          <p className="text-sm text-destructive">
+          <p className="text-[11px] text-destructive">
             Failed to load brokerage connections. Please refresh.
           </p>
         </div>

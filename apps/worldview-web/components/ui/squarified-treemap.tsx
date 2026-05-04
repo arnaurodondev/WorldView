@@ -143,7 +143,7 @@ export function SquarifiedTreemap<T>({
     >
       {!size && (
         // First-paint skeleton — single grey block at full size.
-        <div className="absolute inset-0 animate-pulse bg-muted/30 rounded-[2px]" />
+        <div className="absolute inset-0 bg-muted/30 rounded-[2px]" />
       )}
       {cells.map((cell, i) => {
         const w = Math.max(0, cell.width - gap);

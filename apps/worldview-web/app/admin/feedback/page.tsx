@@ -151,7 +151,7 @@ function NPSStrip() {
   if (!data) {
     return (
       <div
-        className="mb-4 h-16 animate-pulse rounded-[2px] border border-border bg-card/30"
+        className="mb-4 h-16 rounded-[2px] border border-border bg-card/30"
         role="status"
         aria-busy="true"
         aria-label="Loading NPS aggregate"
