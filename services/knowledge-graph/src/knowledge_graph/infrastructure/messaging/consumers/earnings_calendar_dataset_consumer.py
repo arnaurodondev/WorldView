@@ -6,26 +6,31 @@ Consumes: ``market.dataset.fetched`` WHERE dataset_type='earnings_calendar'.
 Processing:
   1. Filter messages to dataset_type='earnings_calendar'.
   2. Download canonical NDJSON envelope from MinIO (claim-check pattern).
-  3. Parse the passthrough envelope: ``{"dataset_type": ..., "symbol": "CALENDAR",
-     "source": "finnhub", "payload": {"earningsCalendar": [...]}, "fetched_at": "..."}``.
+  3. Parse the passthrough envelope (Finnhub or EODHD format — see below).
   4. Upsert each earnings event into ``temporal_events`` with event_type=CORPORATE,
      scope=LOCAL, region=ticker symbol.
 
-Envelope shape from Finnhub (S2 canonical adapter):
-  The canonical_ref payload for earnings_calendar contains the raw Finnhub
-  ``/calendar/earnings`` response body, or a wrapper dict with an "earningsCalendar" key.
-  Each item in the list has fields like:
-    - symbol      (str)  company ticker e.g. "AAPL"
-    - name        (str)  company name
-    - reportDate  (str)  ISO date "2026-05-01"
-    - epsEstimate (float | None) expected EPS
-    - epsActual   (float | None) reported EPS (None if not yet released)
-    - hour        (str)  "bmo" (before market open), "amc" (after market close), ""
+Envelope shapes supported (BP-348 — both providers pass through verbatim):
 
-WHY filter on epsEstimate is None:
-  When epsEstimate is None the earnings date is tentative — Finnhub has no firm
-  date yet. These events are not useful for the calendar widget. We skip them to
-  avoid cluttering temporal_events with placeholder rows.
+  Finnhub shape (source="finnhub"):
+    payload key:     "earningsCalendar"
+    ticker field:    "symbol"   e.g. "AAPL"
+    eps estimate:    "epsEstimate"
+    eps actual:      "epsActual"
+    date field:      "reportDate"
+    timing field:    "hour"  ("bmo" / "amc" / "dmh" / "")
+
+  EODHD shape (source="eodhd"):
+    payload key:     "earnings"
+    ticker field:    "code"   e.g. "AAPL.US" — exchange suffix stripped
+    eps estimate:    "estimate"
+    eps actual:      "actual"
+    date field:      "report_date"
+    timing field:    "before_after_market"  ("BeforeMarket" / "AfterMarket" / null)
+
+WHY filter on eps_estimate is None:
+  When the estimate is None the earnings date is tentative — no confirmed report
+  date yet. These events are not useful for the calendar widget.
 
 Idempotency:
   Natural key = (event_type='corporate', region=ticker, title, active_from::date).
@@ -239,13 +244,15 @@ class EarningsCalendarDatasetConsumer(BaseKafkaConsumer[None]):
 
         # The envelope payload may be:
         #   (a) A list directly: [{"symbol": "AAPL", ...}, ...]
-        #   (b) A dict with "earningsCalendar" key: {"earningsCalendar": [...]}
-        #   (c) A dict with "payload" key (canonical wrapper): {"payload": [...]}
-        # We handle all three shapes defensively.
+        #   (b) Finnhub dict with "earningsCalendar" key
+        #   (c) EODHD dict with "earnings" key (BP-348)
+        #   (d) A dict with "payload" key (canonical wrapper): {"payload": [...]}
+        # We handle all shapes defensively.
         raw_payload = envelope.get("payload", envelope)
         if isinstance(raw_payload, dict):
-            # Shape (b): Finnhub raw response wrapped in the canonical envelope
-            events: list[dict[str, Any]] = raw_payload.get("earningsCalendar", [])
+            # BP-348: EODHD uses "earnings" key; Finnhub uses "earningsCalendar".
+            # Try both — first non-empty list wins.
+            events: list[dict[str, Any]] = raw_payload.get("earningsCalendar") or raw_payload.get("earnings") or []
         elif isinstance(raw_payload, list):
             # Shape (a) or (c) unwrapped: direct list
             events = raw_payload
@@ -313,14 +320,23 @@ class EarningsCalendarDatasetConsumer(BaseKafkaConsumer[None]):
         )
 
     def _upserted_ticker(self, ev: dict[str, Any]) -> str | None:
-        """Extract and validate the ticker symbol from an earnings event dict.
+        """Extract and normalise the ticker symbol from an earnings event dict.
+
+        Handles both Finnhub ("symbol" field) and EODHD ("code" field, e.g.
+        "AAPL.US").  The exchange suffix is stripped so both providers resolve
+        to the same canonical ticker stored in the KG.
 
         Returns None if ticker is absent or empty.
         """
-        ticker = ev.get("symbol") or ev.get("ticker") or ""
-        if not isinstance(ticker, str) or not ticker.strip():
+        raw = ev.get("symbol") or ev.get("ticker") or ev.get("code") or ""
+        if not isinstance(raw, str) or not raw.strip():
             return None
-        return ticker.strip().upper()
+        ticker = raw.strip().upper()
+        # BP-348: EODHD appends an exchange suffix (e.g. "AAPL.US", "AIR.PA").
+        # Strip everything after the first dot so we match KG canonical tickers.
+        if "." in ticker:
+            ticker = ticker.split(".")[0]
+        return ticker or None
 
     async def _upsert_event(
         self,
@@ -342,29 +358,39 @@ class EarningsCalendarDatasetConsumer(BaseKafkaConsumer[None]):
         This ensures one row per ticker per earnings date, with UPSERT semantics
         on repeated ingestion.
         """
-        # Skip tentative events where no EPS estimate is provided yet.
-        # These indicate Finnhub has a placeholder but no confirmed report date.
-        eps_estimate = ev.get("epsEstimate")
+        # BP-348: normalise EPS fields — Finnhub uses "epsEstimate"/"epsActual",
+        # EODHD uses "estimate"/"actual".
+        eps_estimate = ev.get("epsEstimate") if "epsEstimate" in ev else ev.get("estimate")
         if eps_estimate is None:
             return False
 
-        # Parse the report date — required for natural key and display
-        report_date_str = str(ev.get("reportDate") or ev.get("date") or "")
+        # BP-348: normalise date field — Finnhub uses "reportDate", EODHD uses "report_date".
+        report_date_str = str(ev.get("reportDate") or ev.get("report_date") or ev.get("date") or "")
         active_from = _parse_report_date(report_date_str)
         if active_from is None:
             logger.warning(  # type: ignore[no-any-return]
                 "earnings_calendar_consumer_invalid_date",
                 ticker=ticker,
-                raw_date=ev.get("reportDate"),
+                raw_date=report_date_str or None,
             )
             return False
 
+        # BP-348: normalise timing field.
+        # Finnhub: "hour" = "bmo" / "amc" / "dmh" / "".
+        # EODHD:   "before_after_market" = "BeforeMarket" / "AfterMarket" / null.
+        hour = str(ev.get("hour") or "")
+        if not hour:
+            bam = str(ev.get("before_after_market") or "").lower()
+            if "after" in bam:
+                hour = "amc"
+            elif "before" in bam:
+                hour = "bmo"
+
         # Build title (natural key component) and description
         name = str(ev.get("name") or ticker)
-        hour = str(ev.get("hour") or "")
         title = _build_title(ticker, name, report_date_str[:10], hour)
 
-        eps_actual: float | None = ev.get("epsActual")
+        eps_actual: float | None = ev.get("epsActual") if "epsActual" in ev else ev.get("actual")
         description = _build_description(name, eps_estimate, eps_actual, hour)
 
         # active_until: 1 trading day after the report (earnings volatility window)

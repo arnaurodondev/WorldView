@@ -632,6 +632,193 @@ class TestParsReportDate:
         assert _parse_report_date("not-a-date") is None
 
 
+# ── Test: EODHD provider format (BP-348) ──────────────────────────────────────
+
+
+# EODHD earnings event shape (from /calendar/earnings endpoint)
+_EODHD_EVENT: dict[str, Any] = {
+    "code": "AAPL.US",  # exchange suffix — must be stripped to "AAPL"
+    "report_date": "2026-05-01",
+    "before_after_market": "AfterMarket",
+    "actual": None,
+    "estimate": 1.52,
+    # No "name" field in EODHD — consumer falls back to ticker
+    # No "hour" field — mapped from before_after_market
+}
+
+_EODHD_TENTATIVE_EVENT: dict[str, Any] = {
+    "code": "NVDA.US",
+    "report_date": "2026-05-28",
+    "before_after_market": None,
+    "actual": None,
+    "estimate": None,  # EODHD tentative — must be skipped
+}
+
+_EODHD_BEFORE_MARKET_EVENT: dict[str, Any] = {
+    "code": "MSFT.PA",  # non-US exchange suffix
+    "report_date": "2026-04-29",
+    "before_after_market": "BeforeMarket",
+    "actual": 3.46,
+    "estimate": 2.94,
+}
+
+
+def _make_eodhd_envelope(events: list[dict[str, Any]]) -> bytes:
+    """Build EODHD-style canonical envelope bytes with 'earnings' key."""
+    envelope = {
+        "dataset_type": "earnings_calendar",
+        "symbol": "CALENDAR",
+        "source": "eodhd",
+        "payload": {"type": "Earnings", "earnings": events},
+        "fetched_at": "2026-05-03T06:00:00+00:00",
+    }
+    return (json.dumps(envelope) + "\n").encode("utf-8")
+
+
+class TestEohdEarningsFormat:
+    def test_eodhd_earnings_key_parsed(self) -> None:
+        """EODHD 'earnings' key in payload is parsed; event is upserted."""
+        consumer, event_repo, exposure_repo, entity_repo = _make_consumer()
+        consumer._storage.get_bytes = AsyncMock(return_value=_make_eodhd_envelope([_EODHD_EVENT]))
+
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_ENTITY_REPO, return_value=entity_repo),
+        ):
+            asyncio.run(consumer.process_message(None, _make_message(), {}))
+
+        event_repo.upsert_by_natural_key.assert_awaited_once()
+
+    def test_eodhd_ticker_exchange_suffix_stripped(self) -> None:
+        """'AAPL.US' from EODHD is normalised to 'AAPL' as the KG region."""
+        consumer, event_repo, exposure_repo, entity_repo = _make_consumer()
+        consumer._storage.get_bytes = AsyncMock(return_value=_make_eodhd_envelope([_EODHD_EVENT]))
+
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_ENTITY_REPO, return_value=entity_repo),
+        ):
+            asyncio.run(consumer.process_message(None, _make_message(), {}))
+
+        kwargs = event_repo.upsert_by_natural_key.call_args.kwargs
+        assert kwargs["region"] == "AAPL"
+
+    def test_eodhd_estimate_field_used(self) -> None:
+        """EODHD 'estimate' field is used when Finnhub 'epsEstimate' is absent."""
+        consumer, event_repo, exposure_repo, entity_repo = _make_consumer()
+        consumer._storage.get_bytes = AsyncMock(return_value=_make_eodhd_envelope([_EODHD_EVENT]))
+
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_ENTITY_REPO, return_value=entity_repo),
+        ):
+            asyncio.run(consumer.process_message(None, _make_message(), {}))
+
+        desc = event_repo.upsert_by_natural_key.call_args.kwargs["description"]
+        assert "1.52" in desc
+
+    def test_eodhd_null_estimate_skipped(self) -> None:
+        """EODHD event with estimate=null is skipped (tentative date)."""
+        consumer, event_repo, exposure_repo, entity_repo = _make_consumer()
+        consumer._storage.get_bytes = AsyncMock(return_value=_make_eodhd_envelope([_EODHD_TENTATIVE_EVENT]))
+
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_ENTITY_REPO, return_value=entity_repo),
+        ):
+            asyncio.run(consumer.process_message(None, _make_message(), {}))
+
+        event_repo.upsert_by_natural_key.assert_not_awaited()
+
+    def test_eodhd_before_market_maps_to_bmo(self) -> None:
+        """'BeforeMarket' in before_after_market field maps to 'BMO' in title."""
+        consumer, event_repo, exposure_repo, entity_repo = _make_consumer()
+        consumer._storage.get_bytes = AsyncMock(return_value=_make_eodhd_envelope([_EODHD_BEFORE_MARKET_EVENT]))
+
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_ENTITY_REPO, return_value=entity_repo),
+        ):
+            asyncio.run(consumer.process_message(None, _make_message(), {}))
+
+        title = event_repo.upsert_by_natural_key.call_args.kwargs["title"]
+        assert "BMO" in title
+        assert "MSFT" in title
+
+    def test_eodhd_after_market_maps_to_amc(self) -> None:
+        """'AfterMarket' in before_after_market field maps to 'AMC' in title."""
+        consumer, event_repo, exposure_repo, entity_repo = _make_consumer()
+        consumer._storage.get_bytes = AsyncMock(return_value=_make_eodhd_envelope([_EODHD_EVENT]))
+
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_ENTITY_REPO, return_value=entity_repo),
+        ):
+            asyncio.run(consumer.process_message(None, _make_message(), {}))
+
+        title = event_repo.upsert_by_natural_key.call_args.kwargs["title"]
+        assert "AMC" in title
+
+    def test_eodhd_actual_field_used(self) -> None:
+        """EODHD 'actual' field is reflected in description when non-None."""
+        consumer, event_repo, exposure_repo, entity_repo = _make_consumer()
+        consumer._storage.get_bytes = AsyncMock(return_value=_make_eodhd_envelope([_EODHD_BEFORE_MARKET_EVENT]))
+
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_ENTITY_REPO, return_value=entity_repo),
+        ):
+            asyncio.run(consumer.process_message(None, _make_message(), {}))
+
+        desc = event_repo.upsert_by_natural_key.call_args.kwargs["description"]
+        # EPS Actual: 3.46 beat estimate 2.94
+        assert "3.46" in desc
+        assert "beat" in desc
+
+    def test_eodhd_report_date_field_parsed(self) -> None:
+        """EODHD 'report_date' field (snake_case) is correctly parsed as active_from."""
+        consumer, event_repo, exposure_repo, entity_repo = _make_consumer()
+        consumer._storage.get_bytes = AsyncMock(return_value=_make_eodhd_envelope([_EODHD_EVENT]))
+
+        with (
+            patch(_TEMPORAL_EVENT_REPO, return_value=event_repo),
+            patch(_EXPOSURE_REPO, return_value=exposure_repo),
+            patch(_ENTITY_REPO, return_value=entity_repo),
+        ):
+            asyncio.run(consumer.process_message(None, _make_message(), {}))
+
+        kwargs = event_repo.upsert_by_natural_key.call_args.kwargs
+        assert kwargs["active_from"].year == 2026
+        assert kwargs["active_from"].month == 5
+        assert kwargs["active_from"].day == 1
+
+    def test_non_us_exchange_suffix_stripped(self) -> None:
+        """Non-US exchange suffixes (e.g. 'MSFT.PA') are stripped to bare ticker."""
+        from knowledge_graph.infrastructure.messaging.consumers.earnings_calendar_dataset_consumer import (
+            EarningsCalendarDatasetConsumer,
+        )
+
+        from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+
+        config = ConsumerConfig(
+            bootstrap_servers="localhost:9092",
+            group_id="test",
+            topics=["market.dataset.fetched"],
+        )
+        sf = MagicMock()
+        consumer = EarningsCalendarDatasetConsumer(config=config, session_factory=sf)
+        assert consumer._upserted_ticker({"code": "MSFT.PA"}) == "MSFT"
+        assert consumer._upserted_ticker({"code": "AIR.DE"}) == "AIR"
+        assert consumer._upserted_ticker({"symbol": "AAPL"}) == "AAPL"
+
+
 # ── Test: dedup infrastructure ────────────────────────────────────────────────
 
 
