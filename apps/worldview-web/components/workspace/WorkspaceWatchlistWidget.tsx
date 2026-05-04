@@ -57,7 +57,13 @@ export function WorkspaceWatchlistWidget() {
 
   // Step 2: Extract entity IDs from the first watchlist's members array
   const firstWatchlist = watchlists?.[0];
-  const entityIds: string[] = (firstWatchlist?.members ?? []).map((m) => m.entity_id);
+  // WHY filter before map: members may arrive with an empty entity_id string at
+  // runtime if the watchlist was seeded with incomplete data. Filtering here prevents
+  // downstream quote lookups from using "" as a key (which silently returns undefined
+  // from the quotes map and renders a blank row).
+  const entityIds: string[] = (firstWatchlist?.members ?? [])
+    .filter((m) => Boolean(m.entity_id))
+    .map((m) => m.entity_id);
 
   // Step 3: Fetch live quotes for those entity IDs
   // WHY entity_ids as IDs: getBatchQuotes takes entity_ids (not instrument_ids)
@@ -133,11 +139,16 @@ export function WorkspaceWatchlistWidget() {
         const change = q?.change_pct;
 
         return (
-          <div
+          // WHY Link (not div): clicking a watchlist row navigates to the instrument
+          // detail page. Using a real <a> element (via Link) gives keyboard focus,
+          // screen-reader semantics, and middle-click / open-in-new-tab behaviour for
+          // free — impossible with a bare <div onClick>.
+          // WHY h-[22px] py-0: §0.2 row height mandate. Vertical space is controlled
+          // entirely by row height — py-0 is explicit to override any Tailwind base.
+          <Link
             key={entityId}
-            // WHY h-[22px] py-0: §0.2 row height mandate. Vertical space is controlled
-            // entirely by row height — py-0 is explicit to override any Tailwind base.
-            className="flex items-center px-2 h-[22px] hover:bg-muted/40"
+            href={`/instruments/${entityId}`}
+            className="flex items-center px-2 h-[22px] hover:bg-muted/40 text-foreground"
           >
             {/* Ticker — monospace, left-aligned */}
             <span className="w-10 truncate font-mono text-[11px] tabular-nums font-medium text-foreground">
@@ -151,7 +162,7 @@ export function WorkspaceWatchlistWidget() {
             <span className={cn("w-14 text-right font-mono text-[11px] tabular-nums", changeColor(change))}>
               {formatPct(change)}
             </span>
-          </div>
+          </Link>
         );
       })}
     </div>
