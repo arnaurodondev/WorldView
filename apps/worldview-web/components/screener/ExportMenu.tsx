@@ -144,7 +144,7 @@ export function ExportMenu<T>({
           aria-label="Export results"
           className="flex h-7 items-center gap-1 px-2 text-[10px] font-mono uppercase tracking-[0.06em] bg-background border border-border text-muted-foreground hover:text-foreground hover:border-border/80 rounded-[2px] transition-colors disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))] disabled:cursor-not-allowed"
         >
-          <Download className="h-3 w-3" aria-hidden />
+          <Download className="h-3 w-3" aria-hidden strokeWidth={1.5} />
           Export
         </button>
       </DropdownMenuTrigger>
@@ -152,15 +152,15 @@ export function ExportMenu<T>({
         {/* WHY explicit aria-label per item: lucide icons are aria-hidden, so
             each menuitem needs its own label for screen readers. */}
         <DropdownMenuItem onSelect={handleCsv} aria-label="Export as CSV" className="text-[11px] gap-2">
-          <FileText className="h-3 w-3" aria-hidden />
+          <FileText className="h-3 w-3" aria-hidden strokeWidth={1.5} />
           CSV
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={handleXlsx} aria-label="Export as Excel" className="text-[11px] gap-2">
-          <FileSpreadsheet className="h-3 w-3" aria-hidden />
+          <FileSpreadsheet className="h-3 w-3" aria-hidden strokeWidth={1.5} />
           Excel (.xlsx)
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={handlePdf} aria-label="Export as PDF" className="text-[11px] gap-2">
-          <FileImage className="h-3 w-3" aria-hidden />
+          <FileImage className="h-3 w-3" aria-hidden strokeWidth={1.5} />
           PDF
         </DropdownMenuItem>
       </DropdownMenuContent>

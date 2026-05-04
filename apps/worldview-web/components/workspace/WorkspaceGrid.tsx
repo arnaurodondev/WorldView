@@ -150,14 +150,16 @@ function AddPanelTray({ isOpen, onClose }: AddPanelTrayProps) {
           Add Panel
         </span>
         {/*
-         * WHY text-xl leading-none: the × close icon needs a slightly larger
-         * click target without adding height to the header. text-xl + leading-none
-         * gives ≈18px glyph in a 28px tap zone.
+         * WHY leading-none: provides a compact click target without adding height
+         * to the header. The × glyph is ~18px in a 28px tap zone.
+         * NOTE: text-xl removed — it violates the finance-grade terminal mandate
+         * (no text-xl on UI chrome). The × character renders at the inherited
+         * text-[11px] size which is sufficient as a close affordance.
          */}
         <button
           onClick={onClose}
           aria-label="Close add panel tray"
-          className="text-xl leading-none text-muted-foreground hover:text-foreground"
+          className="leading-none text-muted-foreground hover:text-foreground text-base"
         >
           ×
         </button>
@@ -187,7 +189,7 @@ function AddPanelTray({ isOpen, onClose }: AddPanelTrayProps) {
             }}
             className="flex cursor-grab items-center gap-2 rounded-[2px] px-2 py-1.5 text-[11px] text-muted-foreground hover:bg-muted/40 hover:text-foreground active:cursor-grabbing"
           >
-            <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden strokeWidth={1.5} />
             <span>{label}</span>
           </div>
         ))}
@@ -456,7 +458,7 @@ export function WorkspaceGrid({ workspace }: WorkspaceGridProps) {
           // Paired with the tray's aria-hidden so the tree is consistent.
           aria-expanded={trayOpen}
         >
-          <Plus className="h-3 w-3" aria-hidden />
+          <Plus className="h-3 w-3" aria-hidden strokeWidth={1.5} />
           Add Panel
         </button>
       </div>

@@ -141,7 +141,7 @@ export function ColumnSettingsPopover({
           className="flex h-7 w-7 items-center justify-center rounded-[2px] text-muted-foreground hover:text-foreground hover:bg-white/[0.04] transition-colors"
           title="Show / hide / reorder columns"
         >
-          <Settings2 className="h-3.5 w-3.5" aria-hidden />
+          <Settings2 className="h-3.5 w-3.5" aria-hidden strokeWidth={1.5} />
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-64 p-2">
@@ -156,7 +156,7 @@ export function ColumnSettingsPopover({
                 className="flex items-center gap-0.5 text-[10px] uppercase tracking-[0.06em] text-positive"
                 aria-live="polite"
               >
-                <Check className="h-3 w-3" aria-hidden />
+                <Check className="h-3 w-3" aria-hidden strokeWidth={1.5} />
                 Saved
               </span>
             )}
@@ -167,7 +167,7 @@ export function ColumnSettingsPopover({
             className="flex items-center gap-1 text-[10px] uppercase tracking-[0.06em] font-mono text-muted-foreground hover:text-foreground"
             aria-label="Reset columns to default"
           >
-            <RotateCcw className="h-3 w-3" aria-hidden />
+            <RotateCcw className="h-3 w-3" aria-hidden strokeWidth={1.5} />
             Reset
           </button>
         </div>
@@ -198,7 +198,7 @@ export function ColumnSettingsPopover({
                 dragIdx === idx && "opacity-50",
               )}
             >
-              <GripVertical className="h-3 w-3 text-muted-foreground shrink-0" aria-hidden />
+              <GripVertical className="h-3 w-3 text-muted-foreground shrink-0" aria-hidden strokeWidth={1.5} />
               {/* WHY <label> wrapping checkbox + text: bigger click target */}
               <label className="flex flex-1 items-center gap-2 cursor-pointer min-w-0">
                 <input

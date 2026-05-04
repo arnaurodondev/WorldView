@@ -413,7 +413,7 @@ export function DataTable<TData>({
               void navigator.clipboard.writeText(tsv);
             }}
           >
-            <Copy className="h-3 w-3" aria-hidden />
+            <Copy className="h-3 w-3" aria-hidden strokeWidth={1.5} />
             <span className="flex-1">Copy row (TSV)</span>
             <ContextMenuShortcut>⌘C</ContextMenuShortcut>
           </ContextMenuItem>
@@ -462,7 +462,7 @@ export function DataTable<TData>({
                 void navigator.clipboard.writeText(tsv);
               }}
             >
-              <Copy className="h-3 w-3" /> Copy TSV
+              <Copy className="h-3 w-3" strokeWidth={1.5} /> Copy TSV
             </Button>
             <Button
               density="compact"
@@ -472,7 +472,7 @@ export function DataTable<TData>({
                 downloadCsv(`selection-${Date.now()}.csv`, csv);
               }}
             >
-              <Download className="h-3 w-3" /> CSV
+              <Download className="h-3 w-3" strokeWidth={1.5} /> CSV
             </Button>
             <Button
               density="compact"
@@ -530,17 +530,17 @@ export function DataTable<TData>({
                             but has no text content, so we add a hidden accessible label.
                             This pattern satisfies both visual design and test assertions. */}
                         <span className="sr-only"> ▲</span>
-                        <ChevronUp className="h-3 w-3 text-primary" aria-hidden="true" />
+                        <ChevronUp className="h-3 w-3 text-primary" aria-hidden="true" strokeWidth={1.5} />
                       </>
                     ) : sorted === "desc" ? (
                       <>
                         <span className="sr-only"> ▼</span>
-                        <ChevronDown className="h-3 w-3 text-primary" aria-hidden="true" />
+                        <ChevronDown className="h-3 w-3 text-primary" aria-hidden="true" strokeWidth={1.5} />
                       </>
                     ) : (
                       // Per UX agent: only show inactive chevron on column-header
                       // hover. opacity-0 → group-hover:opacity-100 reveals.
-                      <ChevronsUpDown className="h-2.5 w-2.5 text-muted-foreground/60 opacity-0 transition-opacity group-hover/header:opacity-100" />
+                      <ChevronsUpDown className="h-2.5 w-2.5 text-muted-foreground/60 opacity-0 transition-opacity group-hover/header:opacity-100" strokeWidth={1.5} />
                     )}
                   </span>
                 )}

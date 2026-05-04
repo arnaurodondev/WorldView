@@ -82,7 +82,7 @@ export function SlashCommandAutocomplete({
           className={cn(
             "flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left",
             "border-b border-border/40 last:border-b-0",
-            "text-[12px] font-mono",
+            "text-[11px] font-mono",
             "hover:bg-muted/50 focus:bg-muted/50 focus:outline-none",
           )}
           onClick={() => onPick(cmd)}

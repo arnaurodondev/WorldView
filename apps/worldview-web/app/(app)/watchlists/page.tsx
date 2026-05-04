@@ -71,7 +71,7 @@ export default function WatchlistsHubPage() {
       {
         id: "view",
         label: "View members",
-        icon: <Eye className="h-3 w-3" />,
+        icon: <Eye className="h-3 w-3" strokeWidth={1.5} />,
         shortcut: "↵",
         onClick: (wl) => router.push(`/watchlists/${wl.watchlist_id}`),
       },
@@ -116,7 +116,7 @@ export default function WatchlistsHubPage() {
           <div className="flex flex-col items-start gap-2 p-4">
             <InlineEmptyState message="No watchlists yet. Group instruments to track them across dashboard, alerts, and the screener." />
             <Button density="compact" onClick={() => setCreateOpen(true)}>
-              <Plus className="h-3 w-3" /> Create watchlist
+              <Plus className="h-3 w-3" strokeWidth={1.5} /> Create watchlist
             </Button>
           </div>
         </PageShell>
@@ -172,7 +172,7 @@ function PageShell({
     <div className="flex h-full flex-col overflow-hidden">
       {/* Section header — matches the institutional terminal density. */}
       <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border px-3">
-        <ListChecks className="h-3 w-3 text-muted-foreground" aria-hidden />
+        <ListChecks className="h-3 w-3 text-muted-foreground" aria-hidden strokeWidth={1.5} />
         <h1 className={cn("font-mono text-[11px] uppercase tracking-[0.08em] text-foreground")}>
           Watchlists
         </h1>
@@ -183,7 +183,7 @@ function PageShell({
         )}
         <div className="ml-auto flex items-center gap-1">
           <Button density="compact" onClick={onCreate}>
-            <Plus className="h-3 w-3" /> New
+            <Plus className="h-3 w-3" strokeWidth={1.5} /> New
           </Button>
         </div>
       </div>

@@ -266,7 +266,7 @@ function ArticleRow({ article: a }: { article: RankedArticle }) {
         )}
 
         {/* Title */}
-        <span className="flex-1 truncate text-[12px] leading-snug text-foreground">
+        <span className="flex-1 truncate text-[11px] leading-snug text-foreground">
           {a.title ?? "(untitled)"}
         </span>
 
