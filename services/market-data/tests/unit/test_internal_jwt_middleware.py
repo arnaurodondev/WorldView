@@ -352,7 +352,7 @@ def test_internal_jwt_rejects_wrong_issuer() -> None:
         "app": mock_app,
     }
 
-    result = asyncio.get_event_loop().run_until_complete(mw.dispatch(Request(scope), _mock_call_next))
+    result = asyncio.run(mw.dispatch(Request(scope), _mock_call_next))
 
     # Wrong issuer → PyJWT raises InvalidIssuerError → middleware returns 401
     assert result.status_code == 401
