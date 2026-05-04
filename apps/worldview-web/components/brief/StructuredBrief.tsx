@@ -153,6 +153,12 @@ export function LeadProse({
         : // "inline" — single line, truncated
           "truncate text-[11px] leading-none text-foreground/90";
 
+  // WHY strip [cN]: the backend intentionally keeps [cN] markers in the lead
+  // field for inline display, but the frontend uses citation chips on bullets
+  // instead of inline superscripts. Raw "[c6][c7]" leaks into the rendered
+  // text when no chip rendering is wired to the lead block.
+  const cleanLead = lead.replace(/\[c\d+\]/g, "").replace(/\s{2,}/g, " ").trim();
+
   return (
     // WHY border-l: visual signal that the lead is the primary takeaway from
     // the brief — mirrors Bloomberg's "lead paragraph" left-rail design pattern.
@@ -160,7 +166,7 @@ export function LeadProse({
       className={`border-l-2 border-primary/60 pl-2 ${textClass}`}
       data-testid="brief-lead"
     >
-      {lead}
+      {cleanLead}
     </p>
   );
 }
