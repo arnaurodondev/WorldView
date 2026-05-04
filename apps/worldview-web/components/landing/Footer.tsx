@@ -37,7 +37,7 @@ const COLUMNS: Array<{ heading: string; links: Array<{ label: string; href: stri
     heading: "Company",
     links: [
       { label: "About", href: "/docs/about" },
-      { label: "Status", href: "https://status.worldview.local" },
+      { label: "Status", href: "/status" },
       { label: "Contact", href: "mailto:hello@worldview.local" },
       { label: "Feedback", href: "/feedback" },
     ],
@@ -85,14 +85,13 @@ export function Footer() {
               >
                 <Github className="h-4 w-4" aria-hidden="true" />
               </a>
-              <a
-                href="https://status.worldview.local"
-                rel="noopener noreferrer"
+              <Link
+                href="/status"
                 aria-label="Status page"
                 className="text-muted-foreground hover:text-primary"
               >
                 <Globe className="h-4 w-4" aria-hidden="true" />
-              </a>
+              </Link>
             </div>
             {/* WHY a status badge: lets visitors verify uptime at a glance.
                 The pulsing dot tracks the design system convention for live
