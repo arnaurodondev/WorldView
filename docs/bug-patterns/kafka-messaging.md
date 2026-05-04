@@ -1229,3 +1229,66 @@ result.append({
 **Regression test**: `services/nlp-pipeline/tests/unit/application/blocks/test_deep_extraction.py`
 
 ---
+
+### BP-348: Provider Format Mismatch Silently Drops All Earnings Calendar Data
+
+**Category**: Kafka & Messaging
+**Severity**: HIGH
+**First seen**: 2026-05-03
+**Services**: knowledge-graph (earnings_calendar_dataset_consumer)
+
+**Symptoms**:
+- `temporal_events` table has rows from Finnhub fetches but zero rows from EODHD fetches
+- `entity_event_exposures = 0` even after `earnings_calendar_dataset_consumer` starts
+- Consumer logs show `earnings_calendar_consumer_empty_payload` for every EODHD-sourced message
+- `ingestion_tasks.fetched_by_provider = 'eodhd'` tasks produce 0 temporal_events
+
+**Root cause**:
+The consumer was written for Finnhub's response shape only. When `_preferred_provider()` falls
+back to EODHD (Finnhub unavailable), S2 stores the raw EODHD payload verbatim. The consumer
+then looks for `"earningsCalendar"` (Finnhub key) which doesn't exist in EODHD's `"earnings"` key
+→ empty list → silent drop of every event. Three additional field mismatches also caused silent
+data corruption when the ticker/EPS fields were being read:
+
+| Field | Finnhub | EODHD |
+|-------|---------|-------|
+| Payload root key | `"earningsCalendar"` | `"earnings"` |
+| Ticker | `"symbol"` (`"AAPL"`) | `"code"` (`"AAPL.US"` — exchange suffix) |
+| EPS estimate | `"epsEstimate"` | `"estimate"` |
+| EPS actual | `"epsActual"` | `"actual"` |
+| Report date | `"reportDate"` | `"report_date"` |
+| Timing | `"hour"` (`"bmo"` / `"amc"`) | `"before_after_market"` (`"BeforeMarket"` / `"AfterMarket"`) |
+
+**Example**:
+```python
+# Bad — only handles Finnhub
+events = raw_payload.get("earningsCalendar", [])          # returns [] for EODHD
+ticker = ev.get("symbol") or ev.get("ticker") or ""       # misses EODHD "code"
+eps_estimate = ev.get("epsEstimate")                       # None for EODHD
+
+# Good — handles both providers
+events = raw_payload.get("earningsCalendar") or raw_payload.get("earnings") or []
+ticker_raw = ev.get("symbol") or ev.get("ticker") or ev.get("code") or ""
+# Strip EODHD exchange suffix: "AAPL.US" → "AAPL"
+if "." in ticker_raw:
+    ticker_raw = ticker_raw.split(".")[0]
+eps_estimate = ev.get("epsEstimate") if "epsEstimate" in ev else ev.get("estimate")
+```
+
+**Fix**:
+1. Multi-key payload extraction: `raw_payload.get("earningsCalendar") or raw_payload.get("earnings") or []`
+2. `_upserted_ticker()`: add `ev.get("code")` fallback; strip `.XX` exchange suffix
+3. `_upsert_event()`: normalize `epsEstimate`/`estimate`, `epsActual`/`actual`, `reportDate`/`report_date`
+4. Map `"before_after_market"` string → `"bmo"`/`"amc"` hour code
+
+**Prevention**:
+- When writing a consumer that handles data from a multi-provider S2 pipeline, always check
+  what format EACH provider returns — never assume the canonical envelope normalizes field names
+- The `serialize_passthrough()` adapter in S2 stores the raw provider response verbatim inside
+  `payload`; field names are provider-specific and must be handled in the consumer
+- Add provider-specific test fixtures for every consumer that reads `market.dataset.fetched`
+  (both Finnhub and EODHD shapes)
+
+**Regression test**: `services/knowledge-graph/tests/unit/infrastructure/consumer/test_earnings_calendar_dataset_consumer.py::TestEohdEarningsFormat`
+
+---
