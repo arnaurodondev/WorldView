@@ -25,6 +25,7 @@ from observability.metrics import (  # type: ignore[import-untyped]
     create_metrics,
     create_ml_metrics,
 )
+from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 from rag_chat.api import health as health_router
 from rag_chat.api.routes import briefings as briefings_router
@@ -78,6 +79,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             service_name=settings.service_name,
             otlp_endpoint=settings.otlp_endpoint,
         )
+
+    # 2b. Sentry — fourth observability pillar (default-off: SENTRY_ENABLED=false)
+    init_sentry(service_name=settings.service_name, settings=SentrySettings())
 
     # 3. DB session factory — R23 dual-URL
     from rag_chat.infrastructure.db.session import create_rag_session_factory

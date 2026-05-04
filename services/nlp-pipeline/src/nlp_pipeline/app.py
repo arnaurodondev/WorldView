@@ -35,6 +35,7 @@ from observability.metrics import (  # type: ignore[import-untyped]
     create_metrics,
     create_ml_metrics,
 )
+from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -133,6 +134,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             service_name=settings.service_name,
             otlp_endpoint=settings.otlp_endpoint,
         )
+
+    # 2b. Sentry — fourth observability pillar (default-off: SENTRY_ENABLED=false)
+    init_sentry(service_name=settings.service_name, settings=SentrySettings())
 
     # 3. Start InternalJWTMiddleware — fetch JWKS from S9 at startup
     jwt_middleware: InternalJWTMiddleware | None = getattr(app.state, "_jwt_middleware", None)

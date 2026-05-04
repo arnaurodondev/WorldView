@@ -15,6 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from observability import configure_logging, configure_tracing, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware  # type: ignore[import-untyped]
 from portfolio.api.exception_handlers import domain_error_handler, unhandled_exception_handler
 from portfolio.api.internal import internal_router
@@ -71,6 +72,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 2. Tracing config (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:
         configure_tracing(service_name=settings.service_name, otlp_endpoint=settings.otlp_endpoint)
+
+    # 2b. Sentry — fourth observability pillar (default-off: SENTRY_ENABLED=false)
+    init_sentry(service_name=settings.service_name, settings=SentrySettings())
 
     logger.info("portfolio_service_starting", service=settings.service_name)  # type: ignore[no-any-return]
 
