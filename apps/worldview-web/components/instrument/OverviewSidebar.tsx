@@ -332,7 +332,7 @@ function CompetitorsZone({
             value: entityId,
           },
         ],
-        sort_by: "market_cap",
+        sort_by: "market_capitalization",
         sort_dir: "desc",
         limit: 4,
       }),
