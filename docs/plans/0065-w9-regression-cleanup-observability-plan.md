@@ -5,7 +5,7 @@
 > **Tier**: 2 (regression cleanup) + 3 (observability).
 > **Estimate**: 1.5 dev-days (PRD §15) — confirmed achievable; the four BP-302/F-VISUAL-002/F-E8/F-D4 code fixes are **already merged** in commit `f27e266b` (verified 2026-05-03 against current `main`/`feat/content-ingestion-wave-a1`). The remaining work is operational (redeploy + verify) and net-new (Sentry / UptimeRobot / status page).
 > **Author**: `/plan` skill, 2026-05-03; revised 2026-05-03 per audit `docs/audits/2026-05-03-revise-plan-0065-w9.md` (3 BLOCKING + 6 IMPORTANT + 3 NICE-TO-HAVE applied; 2 NICE-TO-HAVE deferred to §15 Follow-ups).
-> **Status**: in-progress (Wave A complete 2026-05-04; Wave B complete 2026-05-04; Wave C complete 2026-05-04).
+> **Status**: completed (Wave A complete 2026-05-04; Wave B complete 2026-05-04; Wave C complete 2026-05-04; Wave D complete 2026-05-04; Wave E complete 2026-05-04).
 > **Revision 2 changes** (2026-05-04): Wire `init_sentry()` into **all 10 backend services** (S1–S10), not just S9/S6/S8; add Sentry issue-alert email notification to `arnaurodondev@gmail.com`; add Grafana error-observability dashboard; expand worldview-gitops env var coverage to all 10 service `.env` files and `values.yaml`; zero deferrals. See T-C-05 (new), T-E-03 (new), T-E-04 (new).
 
 ---
@@ -1050,12 +1050,13 @@ SENTRY_PROJECT=
 
 ---
 
-### Wave E — UptimeRobot + Public Status Page + Final FR-T3-1 Verification
+### Wave E — UptimeRobot + Public Status Page + Final FR-T3-1 Verification ✅
 
 **Goal**: Stand up an external uptime probe and a public status page, then run the FR-T3-1 acceptance test (synthetic exception captured in Sentry within 60s; status page shows live uptime).
 
 **Depends on**: Wave C (T-C-05, T-C-05-EXT, T-C-06), Wave D (T-D-03), Wave B (T-B-03, T-B-04).
 **Estimated effort**: 240 min (rev-2: +60 for T-E-03 Grafana dashboard, +60 for T-E-04 Sentry alert setup + runbook, +30 for T-E-05 PRD amendment, +30 for verification of all 10 service probes).
+**Status**: **DONE** — 2026-05-04 · 27 new tests pass (24 frontend + 3 api-gateway contract) · 1,750 total frontend tests pass · ruff + mypy clean. Operational items (live UptimeRobot, Sentry alert rules) tracked in close-out report.
 **Architecture layer**: ops + minimal frontend.
 
 #### Tasks
