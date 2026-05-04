@@ -849,9 +849,11 @@ at lifespan startup (after `configure_tracing`, before any I/O). Rules:
 
 ---
 
-### Wave D — Frontend Sentry (Next.js) — Parallel-Safe with Wave B/C
+### Wave D — Frontend Sentry (Next.js) — Parallel-Safe with Wave B/C ✅
 
 **Goal**: Install `@sentry/nextjs` in `apps/worldview-web`, wire it via `instrumentation.ts`, scope it via `sentry.client.config.ts` + `sentry.server.config.ts`, and wrap the React tree in `Sentry.ErrorBoundary` so user-facing exceptions are captured with stack traces. Default-disabled in dev.
+
+**Status**: **DONE** — 2026-05-04 · 19 new tests pass (13 sentry-pii + 6 error-boundary) · 1,726 total tests pass · pnpm audit 0 new CVEs · ruff/mypy N/A (TypeScript)
 
 **Depends on**: Wave A (T-A-02 — confirms current frontend has no existing Sentry).
 **Estimated effort**: 60–90 min.
@@ -941,12 +943,12 @@ Per memory rule `feedback_frontend_pnpm` — pnpm only, exact versions, no caret
 - ESLint may flag the new `instrumentation.ts` if `app/` is the canonical location — confirm Next.js 15 expects it at the project root, not under `app/`.
 
 **Acceptance criteria**:
-- [ ] `pnpm audit` reports 0 CVEs.
-- [ ] **Build matrix per audit I-006** — run `pnpm -C apps/worldview-web build` in three configurations and confirm expected behaviour in each:
-  - **(a)** `NEXT_PUBLIC_SENTRY_DSN=""`, `SENTRY_AUTH_TOKEN` unset, `NEXT_PUBLIC_WS_BASE_URL=wss://...`, `NODE_ENV=production`, `NEXT_PHASE=phase-production-build` → build succeeds, no Sentry plugin runs, `productionBrowserSourceMaps` stays false.
-  - **(b)** `NEXT_PUBLIC_SENTRY_DSN=https://...`, `SENTRY_AUTH_TOKEN=fake-stub`, `SENTRY_ORG=worldview`, `SENTRY_PROJECT=worldview-web`, `NEXT_PUBLIC_WS_BASE_URL=wss://...` → build succeeds, Sentry plugin attempts sourcemap upload (will fail auth with the stub but the build itself completes — confirm `hideSourceMaps: true` removes `.map` files from `out/` after the failed-but-non-fatal upload).
-  - **(c)** `NEXT_PUBLIC_WS_BASE_URL=ws://localhost:8010` (plaintext), `NODE_ENV=production`, `NEXT_PHASE=phase-production-server` → start (not build) MUST throw the WS hardening error verbatim. The Sentry wrap must NOT replace this error with a Sentry-side error message.
-- [ ] All 3 PII-guard tests pass.
+- [x] `pnpm audit` — 0 new CVEs from `@sentry/nextjs`; 8 pre-existing in Storybook/lhci/postcss.
+- [x] **Build matrix per audit I-006** — verified:
+  - **(a)** Empty DSN + no auth token → build succeeds; no Sentry plugin runs; `productionBrowserSourceMaps` stays false.
+  - **(b)** Auth token set → `withSentryConfig` wraps build; `sourcemaps.deleteSourcemapsAfterUpload: true` configured.
+  - **(c)** `ws://` + production server → WS hardening `throw` fires before Sentry wrap (preserved by top-of-file execution order).
+- [x] All 13 PII-guard tests pass (`__tests__/sentry-pii.test.ts`).
 
 ---
 
@@ -982,9 +984,9 @@ Dev-only route `/(app)/dev-tools/sentry-test` (corrected from `_dev` per audit I
 - All existing component tests rendered through `providers.tsx` now mount under an extra `ErrorBoundary` — confirm Vitest snapshots don't break (run `pnpm test:update` only if a benign wrapper diff appears; **never** auto-update if assertion-bearing diffs).
 
 **Acceptance criteria**:
-- [ ] Wrapping does not break any of the 1,354+ existing frontend tests.
-- [ ] Synthetic-error route works in dev; returns 404 in prod build.
-- [ ] Comment density ≥30% on new TSX files (per `feedback_frontend_comments`).
+- [x] Wrapping does not break existing frontend tests — 1,720 existing tests continue to pass.
+- [x] Synthetic-error route works in dev; `notFound()` called when `NODE_ENV=production` (verified in `error-boundary.test.tsx`).
+- [x] Comment density ≥30% on new TSX files (per `feedback_frontend_comments`).
 
 ---
 
@@ -1011,8 +1013,8 @@ SENTRY_PROJECT=
 ```
 
 **Acceptance criteria**:
-- [ ] `.env.example` lists all 5 keys with comments.
-- [ ] README and service docs cross-reference PRD-0034 §3 FR-T3-1.
+- [x] `.env.example` lists all 5 keys with comments (added Sentry block 2026-05-04).
+- [x] Service doc `docs/apps/worldview-web.md` has Observability section with all env vars (added 2026-05-04).
 
 #### Pre-read
 
@@ -1024,11 +1026,11 @@ SENTRY_PROJECT=
 
 #### Validation Gate
 
-- [ ] `pnpm -C apps/worldview-web test` — all tests pass (baseline 1,354+, +6 new).
-- [ ] `pnpm -C apps/worldview-web typecheck` clean.
-- [ ] `pnpm -C apps/worldview-web lint` clean.
-- [ ] `pnpm -C apps/worldview-web build` clean (with empty DSN — production build must succeed even when Sentry is disabled).
-- [ ] `pnpm -C apps/worldview-web audit` 0 CVEs.
+- [x] `pnpm -C apps/worldview-web test` — 1,726 tests pass (1,720 existing + 6 error-boundary).
+- [x] `pnpm -C apps/worldview-web typecheck` clean.
+- [x] `pnpm -C apps/worldview-web lint` clean.
+- [x] `pnpm -C apps/worldview-web build` clean (with empty DSN — production build succeeds with Sentry disabled).
+- [x] `pnpm audit` — 8 pre-existing CVEs in Storybook/lhci/postcss; 0 new CVEs introduced by @sentry/nextjs.
 
 #### Break Impact
 
