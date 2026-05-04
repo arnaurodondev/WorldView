@@ -1292,3 +1292,59 @@ eps_estimate = ev.get("epsEstimate") if "epsEstimate" in ev else ev.get("estimat
 **Regression test**: `services/knowledge-graph/tests/unit/infrastructure/consumer/test_earnings_calendar_dataset_consumer.py::TestEohdEarningsFormat`
 
 ---
+
+### BP-349: Raw vs Processed Event Dict Field Name Mismatch Silently Drops All Events
+
+**Category**: Kafka & Messaging
+**Severity**: CRITICAL
+**First seen**: 2026-05-04
+**Services**: nlp-pipeline (article_consumer Block 13E)
+
+**Symptoms**:
+- `intelligence.temporal_event.v1` outbox always empty despite MACRO/REGULATORY events extracted
+- `temporal_events` table has 0 NLP-derived rows after Block 13E deployment
+- All extracted MACRO/GEOPOLITICAL events silently filtered — no log output from `_emit_temporal_events`
+- `extraction_confidence` key missing from event dicts → defaults to 0.0 → fails confidence threshold
+
+**Root cause**:
+`_emit_temporal_events()` was written to receive **processed** event dicts (output of `_build_raw_events()`
+with normalized field names). But its call site passed **raw** LLM output dicts instead.
+
+Field name mismatch:
+| Use case | LLM raw field | Processed field (`_build_raw_events` output) |
+|----------|--------------|----------------------------------------------|
+| Confidence | `"confidence"` | `"extraction_confidence"` |
+| Event text | `"description"` | `"event_text"` |
+| Entities | `"entity_refs"` (strings) | `"participant_entity_ids"` (resolved UUIDs) |
+
+Since `evt_d.get("extraction_confidence", 0.0)` returns `0.0` for raw dicts, every event fails
+`if confidence < 0.5: continue` — all events silently discarded.
+
+**Example**:
+```python
+# Bad — passes raw LLM output dicts
+await _emit_temporal_events(
+    raw_events=extraction_result.get("events", []),  # has "confidence", not "extraction_confidence"
+    ...
+)
+
+# Good — normalize through _build_raw_events() first
+_te_provisional_refs = {v for v, eid in _te_entity_id_by_ref.items() if eid in _te_provisional_ids}
+_te_processed = _build_raw_events(extraction_result.get("events", []), _te_entity_id_by_ref, _te_provisional_refs)
+if _te_processed:
+    await _emit_temporal_events(raw_events=_te_processed, ...)
+```
+
+**Fix**:
+At the Block 13E call site in `_run_pipeline()`, call `_build_raw_events()` on the raw events
+before passing to `_emit_temporal_events`. This normalizes field names and resolves entity refs.
+
+**Prevention**:
+- When a helper function is designed for pre-processed data, enforce this with a type alias or
+  `TypedDict` parameter type so callers can't accidentally pass raw dicts
+- Add structured logging inside filter steps: `logger.debug("temporal_event_skipped", reason="low_confidence", confidence=confidence)` — makes silent filters visible in logs
+- Write a unit test that verifies the end-to-end path: raw_LLM_output → _build_raw_events → _emit_temporal_events → outbox_repo.add() called
+
+**Regression test**: Add to `services/nlp-pipeline/tests/unit/infrastructure/messaging/consumers/test_article_consumer_temporal_events.py`
+
+---
