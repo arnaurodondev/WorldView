@@ -260,7 +260,7 @@ export function HoldingsMoversWidget() {
             widget from collapsing when the portfolio fetch fails cold. */}
         {isError && (
           <div className="flex flex-1 min-h-[140px] items-center justify-center gap-2">
-            <AlertTriangle className="h-3 w-3 text-destructive" />
+            <AlertTriangle className="h-3 w-3 text-destructive" strokeWidth={1.5} />
             <span className="text-xs text-muted-foreground">Failed to load</span>
             <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={handleRetry}>
               Retry
@@ -295,7 +295,7 @@ export function HoldingsMoversWidget() {
               {Array.from({ length: 5 }).map((_, i) => (
                 <div
                   key={`g-skel-${i}`}
-                  className="flex h-7 items-center gap-2 px-2"
+                  className="flex h-[22px] items-center gap-2 px-2"
                 >
                   <Skeleton className="h-3 w-[40px]" />
                   <Skeleton className="h-3 w-[60px]" />
@@ -307,7 +307,7 @@ export function HoldingsMoversWidget() {
               {Array.from({ length: 5 }).map((_, i) => (
                 <div
                   key={`l-skel-${i}`}
-                  className="flex h-7 items-center gap-2 px-2"
+                  className="flex h-[22px] items-center gap-2 px-2"
                 >
                   <Skeleton className="h-3 w-[40px]" />
                   <Skeleton className="h-3 w-[60px]" />
@@ -394,7 +394,7 @@ interface MoverRowProps {
 function MoverRow({ mover, side, onClick }: MoverRowProps) {
   return (
     <div
-      className="flex h-7 cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30"
+      className="flex h-[22px] cursor-pointer items-center gap-1.5 px-2 transition-colors hover:bg-muted/30"
       onClick={onClick}
       onKeyDown={(e) => {
         if (e.key === "Enter") onClick();

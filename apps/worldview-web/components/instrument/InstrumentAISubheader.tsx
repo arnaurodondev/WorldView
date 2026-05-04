@@ -128,7 +128,7 @@ export function InstrumentAISubheader({ entityId }: InstrumentAISubheaderProps) 
       return (
         <div className="border-b border-border border-l-2 border-l-primary bg-primary/10 shrink-0">
           <div className="flex items-center h-7 px-2 gap-1.5">
-            <ChevronRight className="h-3 w-3 text-primary shrink-0" />
+            <ChevronRight className="h-3 w-3 text-primary shrink-0" strokeWidth={1.5} />
             <span className="text-[10px] uppercase tracking-[0.08em] text-primary shrink-0">
               AI BRIEF
             </span>
@@ -150,7 +150,7 @@ export function InstrumentAISubheader({ entityId }: InstrumentAISubheaderProps) 
         {/* WHY h-7 (28px): T-B-2-02 — collapsed band is now the terminal-standard
             h-7 row height. Was h-9 (36px) which was non-standard. */}
         <div className="flex items-center h-7 px-2 gap-1.5">
-          <ChevronRight className="h-3 w-3 text-primary shrink-0" />
+          <ChevronRight className="h-3 w-3 text-primary shrink-0" strokeWidth={1.5} />
           <span className="text-[10px] uppercase tracking-[0.08em] text-primary shrink-0">
             AI BRIEF
           </span>
@@ -192,8 +192,8 @@ export function InstrumentAISubheader({ entityId }: InstrumentAISubheaderProps) 
       >
         {/* Toggle chevron — right when collapsed, down when expanded */}
         {expanded
-          ? <ChevronDown className="h-3 w-3 text-primary shrink-0" />
-          : <ChevronRight className="h-3 w-3 text-primary shrink-0" />
+          ? <ChevronDown className="h-3 w-3 text-primary shrink-0" strokeWidth={1.5} />
+          : <ChevronRight className="h-3 w-3 text-primary shrink-0" strokeWidth={1.5} />
         }
 
         {/* Label — uppercase terminal style */}

@@ -345,7 +345,7 @@ export function WatchlistMoversWidget() {
             fails cold (no cached data). */}
         {isError && (
           <div className="flex flex-1 min-h-[140px] items-center justify-center gap-2">
-            <AlertTriangle className="h-3 w-3 text-destructive" />
+            <AlertTriangle className="h-3 w-3 text-destructive" strokeWidth={1.5} />
             <span className="text-xs text-muted-foreground">Failed to load</span>
             <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={handleRetry}>
               Retry
@@ -374,7 +374,7 @@ export function WatchlistMoversWidget() {
           <div className="flex flex-1 gap-0">
             <div className="flex-1 divide-y divide-border/30">
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={`g-skel-${i}`} className="flex h-7 items-center gap-2 px-2">
+                <div key={`g-skel-${i}`} className="flex h-[22px] items-center gap-2 px-2">
                   <Skeleton className="h-3 w-[40px]" />
                   <Skeleton className="h-3 w-[60px]" />
                   <Skeleton className="ml-auto h-3 w-[40px]" />
@@ -383,7 +383,7 @@ export function WatchlistMoversWidget() {
             </div>
             <div className="flex-1 divide-y divide-border/30 border-l border-border/30">
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={`l-skel-${i}`} className="flex h-7 items-center gap-2 px-2">
+                <div key={`l-skel-${i}`} className="flex h-[22px] items-center gap-2 px-2">
                   <Skeleton className="h-3 w-[40px]" />
                   <Skeleton className="h-3 w-[60px]" />
                   <Skeleton className="ml-auto h-3 w-[40px]" />
