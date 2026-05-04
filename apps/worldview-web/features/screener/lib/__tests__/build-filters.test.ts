@@ -71,57 +71,40 @@ function findFilter(filters: ScreenerFilter[], metric: string): ScreenerFilter |
   return filters.find((f) => f.metric === metric);
 }
 
-// ── Always-include enrichment filters ─────────────────────────────────────────
+// ── No mandatory enrichment filters (removed in BP-368 fix) ─────────────────
 
-describe("buildScreenerFilters — always-include enrichment filters", () => {
-  it("always includes daily_return filter with correct bounds (-100 to 100 = percentage format)", () => {
-    // WHY ±100 bounds: daily_return is stored as a percentage (5.0 = 5%).
-    // The old ±1 bounds only matched stocks with <1% daily move, causing the
-    // screener default to return 0 results on most trading days.
-    // ±100 covers all realistic daily moves regardless of storage format.
+describe("buildScreenerFilters — no mandatory enrichment filters", () => {
+  it("does NOT always include daily_return — backend INNER JOIN excluded 23/31 instruments", () => {
+    // WHY removed: the backend uses INNER JOIN per filter metric.
+    // Only 8/31 instruments have daily_return data; adding it as a mandatory
+    // filter silently excludes the 23 without that metric.
+    // Users who want to filter by daily_return add it explicitly.
     const filters = buildScreenerFilters(makeFilters());
     const dr = findFilter(filters, "daily_return");
-    expect(dr).toBeDefined();
-    expect(dr?.min_value).toBe(-100);
-    expect(dr?.max_value).toBe(100);
+    expect(dr).toBeUndefined();
   });
 
-  it("always includes pe_ratio filter with wide bounds (-999999 to 999999)", () => {
-    // WHY ±999999 bounds: P/E can be negative (loss-making firms) or extremely high
-    // (growth stocks). The old ±9999 bound excluded stocks with no PE data.
-    // Ultra-wide bounds ensure all stocks are returned regardless of earnings sign.
+  it("does NOT always include pe_ratio — backend INNER JOIN excluded instruments with no earnings data", () => {
+    // WHY removed: same INNER JOIN issue; instruments without PE data
+    // (e.g. pre-earnings, negative EPS) would be excluded from default view.
     const filters = buildScreenerFilters(makeFilters());
     const pe = findFilter(filters, "pe_ratio");
-    expect(pe).toBeDefined();
-    expect(pe?.min_value).toBe(-999999);
-    expect(pe?.max_value).toBe(999999);
+    expect(pe).toBeUndefined();
   });
 
-  it("always includes current_price filter (0 to 9,999,999)", () => {
-    // WHY current_price enrichment: the PRICE column on the screener table
-    // needs current_price on every row even when the user has set no price filter.
+  it("does NOT include current_price — not a valid screener metric, caused 0-result default", () => {
+    // WHY: `current_price` does not exist in fundamentals_metrics table.
+    // The backend screener fields endpoint doesn't list it. Adding it caused
+    // INNER JOIN → 0 results on every default screener load.
     const filters = buildScreenerFilters(makeFilters());
     const price = findFilter(filters, "current_price");
-    expect(price).toBeDefined();
-    expect(price?.min_value).toBe(0);
-    expect(price?.max_value).toBe(9_999_999);
+    expect(price).toBeUndefined();
   });
 
-  it("does not duplicate daily_return when user explicitly sets a daily_return range", () => {
-    // WHY: if the user sets peMin=5, pe_ratio is already in filters from the
-    // user's constraint. The always-include logic must not add a second pe_ratio
-    // entry — two filters for the same metric would be ambiguous.
-    // This tests the equivalent pattern for daily_return (which the code avoids with .some()).
-    const filters = buildScreenerFilters(makeFilters());
-    const drFilters = filters.filter((f) => f.metric === "daily_return");
-    expect(drFilters).toHaveLength(1);
-  });
-
-  it("does not duplicate pe_ratio when user sets a P/E range", () => {
+  it("includes user-specified pe_ratio constraint when explicitly set", () => {
     const filters = buildScreenerFilters(makeFilters({ peMin: 10, peMax: 20 }));
     const peFilters = filters.filter((f) => f.metric === "pe_ratio");
     expect(peFilters).toHaveLength(1);
-    // The user's constraint should be preserved, not overwritten by the wide-range default.
     const pe = findFilter(filters, "pe_ratio");
     expect(pe?.min_value).toBe(10);
     expect(pe?.max_value).toBe(20);

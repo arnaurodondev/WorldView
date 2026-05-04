@@ -27,66 +27,48 @@ function findFilter(filters: ReturnType<typeof buildScreenerFilters>, metric: st
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe("buildScreenerFilters — Part 4 defaults: daily_return + pe_ratio always present", () => {
-  it("includes daily_return when user has set no filters", () => {
+describe("buildScreenerFilters — no mandatory enrichment defaults (BP-368 fix)", () => {
+  it("does NOT include daily_return by default — INNER JOIN excluded 23/31 instruments", () => {
+    // WHY removed: only 8/31 instruments have daily_return data; mandatory filter
+    // meant the default screener view always returned 0 (when current_price was
+    // also present) or only 8 stocks.
     const filters = buildScreenerFilters(DEFAULT_FILTERS);
     const dr = findFilter(filters, "daily_return");
-    expect(dr).toBeDefined();
-    // WHY ±100 bounds: daily_return is stored as a percentage (5.0 = 5%).
-    // The old ±1 bounds only matched stocks with <1% daily move, excluding
-    // almost everything on any given trading day. ±100 covers all realistic
-    // daily moves regardless of whether the value is decimal or percentage.
-    expect(dr?.min_value).toBe(-100);
-    expect(dr?.max_value).toBe(100);
+    expect(dr).toBeUndefined();
   });
 
-  it("includes pe_ratio when user has set no filters", () => {
+  it("does NOT include pe_ratio by default — instruments without earnings data were excluded", () => {
     const filters = buildScreenerFilters(DEFAULT_FILTERS);
     const pe = findFilter(filters, "pe_ratio");
-    expect(pe).toBeDefined();
-    // WHY ±999999: stocks without PE data (negative earnings) were excluded
-    // with the old ±9999 bound. Ultra-wide bounds ensure all stocks are
-    // returned regardless of earnings sign or whether PE data is present.
-    expect(pe?.min_value).toBe(-999999);
-    expect(pe?.max_value).toBe(999999);
+    expect(pe).toBeUndefined();
   });
 
-  it("does not duplicate pe_ratio when user has explicitly set a pe_ratio range", () => {
+  it("includes user-specified pe_ratio when explicitly set", () => {
     const filters = buildScreenerFilters({
       ...DEFAULT_FILTERS,
       peMin: 10,
       peMax: 30,
     });
     const peFilters = filters.filter((f) => f.metric === "pe_ratio");
-    // WHY exactly 1: the user's value must not get duplicated by the default guard.
     expect(peFilters).toHaveLength(1);
-    // And the user's value is preserved (not overwritten by defaults)
     expect(peFilters[0].min_value).toBe(10);
     expect(peFilters[0].max_value).toBe(30);
   });
 
-  it("does not duplicate daily_return when user has set a daily_return range", () => {
-    // daily_return is a technical filter — it is not currently a UI-exposed field
-    // but the guard should still skip adding a second entry if one already exists.
-    // We simulate this by calling the function twice and checking idempotency.
-    const filters1 = buildScreenerFilters(DEFAULT_FILTERS);
-    // Count daily_return entries — should be exactly 1 even after the guard runs
-    const drEntries = filters1.filter((f) => f.metric === "daily_return");
-    expect(drEntries).toHaveLength(1);
+  it("uses market_capitalization as the only default filter when no user filters set", () => {
+    const filters = buildScreenerFilters(DEFAULT_FILTERS);
+    expect(filters.length).toBe(1);
+    expect(filters[0].metric).toBe("market_capitalization");
+    expect(filters[0].min_value).toBe(0);
   });
 
-  it("appends defaults at the end (after user-specified filters)", () => {
+  it("user-specified pe_ratio appears in output at its position in the filter list", () => {
     const filters = buildScreenerFilters({
       ...DEFAULT_FILTERS,
       peMin: 5,
       peMax: 25,
     });
-    // pe_ratio from user input comes first (pushIfRange in valuation section)
     const peIdx = filters.findIndex((f) => f.metric === "pe_ratio");
-    const drIdx = filters.findIndex((f) => f.metric === "daily_return");
-    // daily_return is appended after the explicit filters
-    expect(drIdx).toBeGreaterThan(0);
-    // pe_ratio was set by user so the default guard skips it
     expect(peIdx).toBeGreaterThan(-1);
     expect(filters[peIdx].min_value).toBe(5);
   });
