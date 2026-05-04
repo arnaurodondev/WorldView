@@ -215,6 +215,7 @@ def build_workers(
     if llm_client is not None:
         description_client = _build_description_client(settings, valkey_client)
         embed_model = settings.embedding_model_id
+        embed_batch_limit = settings.worker_embedding_batch_limit
         # PLAN-0057 A-5 / F-CRIT-03: thread the cost logger into workers that
         # explicitly accept it.  ``DefinitionRefreshWorker`` already exposes
         # ``usage_logger`` (used by GeminiDescriptionAdapter); the new
@@ -226,6 +227,7 @@ def build_workers(
             description_client,
             usage_logger=usage_logger,
             embedding_model_id=embed_model,
+            batch_limit=embed_batch_limit,
         )
         workers.update(
             {
@@ -235,12 +237,14 @@ def build_workers(
                     session_factory,
                     llm_client,
                     embedding_model_id=embed_model,
+                    batch_limit=embed_batch_limit,
                 ),
                 "fundamentals_embedding": FundamentalsRefreshWorker(
                     session_factory,
                     llm_client,
                     market_data_base_url=getattr(settings, "market_data_base_url", "http://market-data:8003"),
                     embedding_model_id=embed_model,
+                    concurrency=settings.worker_fundamentals_concurrency,
                 ),
                 "provisional_enrichment": ProvisionalEnrichmentWorker(
                     session_factory,
@@ -255,6 +259,7 @@ def build_workers(
                     session_factory,
                     llm_client,
                     embedding_model_id=embed_model,
+                    batch_limit=embed_batch_limit,
                 ),
             },
         )

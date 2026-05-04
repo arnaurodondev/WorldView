@@ -24,6 +24,15 @@ from api_gateway.clients import (
     get_watchlist_insights,
 )
 from api_gateway.jwt_utils import issue_public_jwt, issue_user_jwt
+from api_gateway.schemas import (
+    AlertResponse,
+    InstrumentSearchResult,
+    NewsTopResponse,
+    OHLCVResponse,
+    PortfolioResponse,
+    QuoteResponse,
+    WatchlistResponse,
+)
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -403,7 +412,7 @@ async def find_similar_entities(request: Request) -> Any:
 # ── Alert endpoints (PRD-0025 T-D-1-10) ──────────────────────────────────────
 
 
-@router.get("/alerts/pending")
+@router.get("/alerts/pending", response_model=list[AlertResponse], response_model_exclude_none=True)
 async def get_pending_alerts(request: Request) -> Any:
     """Proxy GET /api/v1/alerts/pending → S10 Alert service.
 
@@ -753,7 +762,7 @@ def _portfolio_headers(request: Request) -> dict[str, str]:
 # ── OHLCV + Quotes + Fundamentals (PRD-0028 Wave S9-1) ──────────────────────
 
 
-@router.get("/ohlcv/{instrument_id}")
+@router.get("/ohlcv/{instrument_id}", response_model=OHLCVResponse, response_model_exclude_none=True)
 async def get_ohlcv(instrument_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/ohlcv/{instrument_id} → S3 Market Data.
 
@@ -1062,7 +1071,7 @@ async def get_quote_stream_stub(request: Request) -> Response:
     )
 
 
-@router.get("/quotes/{instrument_id}")
+@router.get("/quotes/{instrument_id}", response_model=QuoteResponse, response_model_exclude_none=True)
 async def get_quote(instrument_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/quotes/{instrument_id} → S3 PriceSnapshot (with fallback).
 
@@ -1650,7 +1659,7 @@ async def get_entity_contradictions(entity_id: str, request: Request) -> Any:
 # ── News (PRD-0028 Wave S9-1) ────────────────────────────────────────────────
 
 
-@router.get("/news/top")
+@router.get("/news/top", response_model=NewsTopResponse, response_model_exclude_none=True)
 async def get_news_top(request: Request) -> Any:
     """Proxy GET /api/v1/news/top → S6 NLP Pipeline (PRD-0026 §6.7 Flow C).
 
@@ -1765,7 +1774,7 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> Any:
 # ── Portfolio + Holdings + Transactions (PRD-0028 Wave S9-2) ─────────────────
 
 
-@router.get("/portfolios")
+@router.get("/portfolios", response_model=list[PortfolioResponse], response_model_exclude_none=True)
 async def list_portfolios(request: Request) -> Any:
     """Proxy GET /api/v1/portfolios → S1 Portfolio service.
 
@@ -2273,7 +2282,7 @@ async def rename_watchlist(watchlist_id: str, request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
-@router.get("/watchlists")
+@router.get("/watchlists", response_model=list[WatchlistResponse], response_model_exclude_none=True)
 async def list_watchlists(request: Request) -> Any:
     """Proxy GET /api/v1/watchlists → S1 Portfolio service.
 
@@ -2446,7 +2455,11 @@ async def watchlist_insights(watchlist_id: str, request: Request) -> Response:
 # ── Search (PRD-0028 Wave S9-3, OQ-01) ──────────────────────────────────────
 
 
-@router.get("/search/instruments")
+@router.get(
+    "/search/instruments",
+    response_model=list[InstrumentSearchResult],
+    response_model_exclude_none=True,
+)
 async def search_instruments(
     request: Request,
     q: str = Query("", max_length=200, description="Search query"),

@@ -40,7 +40,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { DataTimestamp } from "@/components/ui/data-timestamp";
 import { formatMarketCap, formatRatio, formatPercent } from "@/lib/utils";
 import { WeekRangeBar } from "@/components/instrument/52WeekRangeBar";
-import type { Fundamentals, FundamentalsSnapshot, Instrument } from "@/types/api";
+import type { Fundamentals, FundamentalsSnapshot, FundamentalsSectionResponse, Instrument } from "@/types/api";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 

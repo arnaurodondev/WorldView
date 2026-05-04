@@ -10,6 +10,12 @@ Source text (deterministic template — NO LLM):
 
 Truncated to 512 tokens (approx. 2048 chars).
 UPSERT with next_refresh_at = now() + 7 days.
+
+Performance (batch embed):
+  Phase 1 — Read all due entities and build narrative texts (DB session, then close).
+  Phase 2 — Call embed() ONCE with all texts (no session held).
+  Phase 3 — Write all upserts in a single session + commit.
+  This eliminates N round-trips to the embedding API (was one per entity).
 """
 
 from __future__ import annotations
@@ -32,9 +38,12 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _REFRESH_INTERVAL_DAYS = 7
-_BATCH_LIMIT = 100
 _DEFAULT_EMBED_MODEL_ID = "nomic-embed-text"
 _MAX_CHARS = 2048  # ~512 tokens
+
+# Maximum texts to send in a single embed() call.  DeepInfra and most providers
+# accept batches of several hundred inputs; 200 is a conservative safe ceiling.
+_EMBED_CHUNK_SIZE = 200
 
 
 class NarrativeRefreshWorker:
@@ -44,10 +53,13 @@ class NarrativeRefreshWorker:
 
     Args:
     ----
-        session_factory:   Read/write sessionmaker for intelligence_db.
-        llm_client:        FallbackChainClient (embedding path only).
+        session_factory:    Read/write sessionmaker for intelligence_db.
+        llm_client:         FallbackChainClient (embedding path only).
         embedding_model_id: Model ID passed to EmbeddingInput (default: nomic-embed-text).
-                           Set via KNOWLEDGE_GRAPH_EMBEDDING_MODEL_ID env var.
+                            Set via KNOWLEDGE_GRAPH_EMBEDDING_MODEL_ID env var.
+        batch_limit:        Maximum entities to process per cycle. 0 (default) means
+                            all due entities (no cap).  Set via
+                            KNOWLEDGE_GRAPH_WORKER_EMBEDDING_BATCH_LIMIT.
 
     """
 
@@ -56,23 +68,46 @@ class NarrativeRefreshWorker:
         session_factory: async_sessionmaker[AsyncSession],
         llm_client: FallbackChainClient,
         embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
+        batch_limit: int = 0,
     ) -> None:
         self._sf = session_factory
         self._embed_model_id = embedding_model_id
         self._llm = llm_client
+        self._batch_limit = batch_limit
 
     async def run(self) -> None:
-        """Refresh narrative embeddings due for refresh."""
+        """Refresh narrative embeddings due for refresh.
+
+        Execution is split into three phases to avoid holding a DB session
+        open during external HTTP/LLM calls (ARCH-003/004 pattern):
+
+        Phase 1 — Read: fetch all due entities, build narrative texts, close session.
+        Phase 2 — Embed: call embed() ONCE with all texts (no session held).
+        Phase 3 — Write: upsert all results in a single session + commit.
+        """
+        import dataclasses
         from datetime import timedelta
+
+        from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]
 
         from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
             EntityEmbeddingStateRepository,
         )
 
-        refreshed = 0
+        # ── Phase 1: Read ────────────────────────────────────────────────────
+        # Open a single session, build all narrative texts, then close.
+        # _build_narrative_text issues SQL queries but does not write anything.
+        @dataclasses.dataclass
+        class _Prepared:
+            entity_id: UUID
+            source_text: str
+            source_hash: str
+
+        prepared: list[_Prepared] = []
+
         async with self._sf() as session:
             emb_repo = EntityEmbeddingStateRepository(session)
-            due = await emb_repo.get_due_for_refresh(VIEW_NARRATIVE, _BATCH_LIMIT)
+            due = await emb_repo.get_due_for_refresh(VIEW_NARRATIVE, self._batch_limit)
 
             for row in due:
                 entity_id: UUID = row["entity_id"]  # type: ignore[assignment]
@@ -86,23 +121,49 @@ class NarrativeRefreshWorker:
                 source_text = source_text[:_MAX_CHARS]
                 source_hash = sha256_hex(source_text)
 
-                from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]
+                prepared.append(_Prepared(entity_id=entity_id, source_text=source_text, source_hash=source_hash))
+        # Session released — no DB connection held during embed() calls.
 
-                inp = EmbeddingInput(text=source_text, model_id=self._embed_model_id)
-                outputs = await self._llm.embed([inp], entity_id=entity_id)
-                embedding = outputs[0].embedding if outputs else None
+        if not prepared:
+            logger.info(  # type: ignore[no-any-return]
+                "narrative_refresh_worker_complete",
+                refreshed=0,
+            )
+            return
 
+        # ── Phase 2: Batch embed ─────────────────────────────────────────────
+        # Build ONE list of all inputs and call embed() once (or in chunks of
+        # _EMBED_CHUNK_SIZE when the entity count exceeds the API batch ceiling).
+        all_embeddings: list[list[float] | None] = []
+
+        inputs_all = [EmbeddingInput(text=p.source_text, model_id=self._embed_model_id) for p in prepared]
+
+        # Chunk the inputs to stay within API batch limits.
+        for chunk_start in range(0, len(inputs_all), _EMBED_CHUNK_SIZE):
+            chunk_inputs = inputs_all[chunk_start : chunk_start + _EMBED_CHUNK_SIZE]
+            outputs = await self._llm.embed(chunk_inputs)
+            # Map outputs back by index; missing outputs (transient failure) → None.
+            for i in range(len(chunk_inputs)):
+                if outputs and i < len(outputs):
+                    all_embeddings.append(outputs[i].embedding)
+                else:
+                    all_embeddings.append(None)
+
+        # ── Phase 3: Write ───────────────────────────────────────────────────
+        refreshed = 0
+        async with self._sf() as session:
+            emb_repo = EntityEmbeddingStateRepository(session)
+            for p, embedding in zip(prepared, all_embeddings, strict=False):
                 await emb_repo.upsert(
-                    entity_id,
+                    p.entity_id,
                     VIEW_NARRATIVE,
                     embedding=embedding,
-                    model_id=self._embed_model_id if embedding else None,
-                    source_text=source_text,
-                    source_hash=source_hash,
+                    model_id=self._embed_model_id if embedding is not None else None,
+                    source_text=p.source_text,
+                    source_hash=p.source_hash,
                     next_refresh_at=utc_now() + timedelta(days=_REFRESH_INTERVAL_DAYS),  # type: ignore[no-any-return, operator]
                 )
                 refreshed += 1
-
             await session.commit()
 
         logger.info(  # type: ignore[no-any-return]

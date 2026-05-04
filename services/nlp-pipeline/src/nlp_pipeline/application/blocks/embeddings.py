@@ -5,6 +5,12 @@ Produces:
   - Chunk embeddings for MEDIUM/DEEP only (via should_generate_chunk_embeddings).
   - Chunk text uploads to MinIO (ALL tiers, best-effort via ChunkTextStorePort).
   - Failed embeddings → EmbeddingPendingEntry (never raises on partial failure).
+
+Performance (batch embed):
+  run_embeddings_block() now collects ALL texts (section + optional chunk texts)
+  and calls embedding_client.embed() ONCE per run (or in chunks of
+  _EMBED_CHUNK_SIZE if > 200 texts).  This eliminates N sequential API
+  round-trips — was one call per section + one per chunk.
 """
 
 from __future__ import annotations
@@ -39,6 +45,10 @@ CHUNK_OVERLAP_TOKENS: int = 64
 
 #: Sentence boundary pattern
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
+
+# Maximum texts to send in a single embed() call.  DeepInfra and most providers
+# accept batches of several hundred inputs; 200 is a conservative safe ceiling.
+_EMBED_CHUNK_SIZE = 200
 
 # ── Sentence-aware chunking ───────────────────────────────────────────────────
 
@@ -195,7 +205,12 @@ async def _embed_text(
     instruction_prefix: str,
     embedding_client: EmbeddingClient,
 ) -> list[float] | None:
-    """Embed a single text. Returns None on failure (caller logs pending entry)."""
+    """Embed a single text. Returns None on failure (caller logs pending entry).
+
+    NOTE: This helper is kept for backward-compatibility.  The main
+    ``run_embeddings_block()`` path now uses batch embed via
+    ``_embed_batch()`` instead of calling this per-text.
+    """
     from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
 
     inp = EmbeddingInput(text=text, model_id=model_id, instruction_prefix=instruction_prefix)
@@ -206,6 +221,44 @@ async def _embed_text(
     except Exception as exc:
         logger.debug("embeddings.embed_failed", error=str(exc))
     return None
+
+
+async def _embed_batch(
+    texts: list[str],
+    model_id: str,
+    instruction_prefix: str,
+    embedding_client: EmbeddingClient,
+) -> list[list[float] | None]:
+    """Embed a batch of texts in one API call (chunked by _EMBED_CHUNK_SIZE).
+
+    Returns a list of the same length as ``texts``.  Entries are None when
+    the embed call raised an exception or returned fewer outputs than inputs
+    (transient failure).
+
+    Chunking: sends at most _EMBED_CHUNK_SIZE texts per call so we stay
+    within provider batch limits.  For typical article sizes (< 50 sections
+    + chunks) this is a single API call.
+    """
+    from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
+
+    results: list[list[float] | None] = []
+
+    for chunk_start in range(0, len(texts), _EMBED_CHUNK_SIZE):
+        chunk_texts = texts[chunk_start : chunk_start + _EMBED_CHUNK_SIZE]
+        inputs = [EmbeddingInput(text=t, model_id=model_id, instruction_prefix=instruction_prefix) for t in chunk_texts]
+        try:
+            outputs = await embedding_client.embed(inputs)
+        except Exception as exc:
+            logger.debug("embeddings.batch_embed_failed", error=str(exc))
+            outputs = []
+
+        for i in range(len(chunk_texts)):
+            if outputs and i < len(outputs):
+                results.append(outputs[i].embedding)
+            else:
+                results.append(None)
+
+    return results
 
 
 async def _upload_chunk_texts(
@@ -264,6 +317,10 @@ async def run_embeddings_block(
     Failed embeddings are recorded as EmbeddingPendingEntry entries; they are
     never re-raised to the caller.
 
+    Performance: all embedding inputs are collected first, then a SINGLE
+    embed() call is made with all texts (Option C: section uses first chunk
+    text as representative).  This reduces API round-trips from O(N+M) to O(1).
+
     Returns:
         (chunks, chunk_embeddings, section_embeddings, pending_failures)
     """
@@ -274,61 +331,94 @@ async def run_embeddings_block(
 
     now = common.time.utc_now()  # type: ignore[no-any-return]
 
+    # ── Step 1: Chunk all sections ────────────────────────────────────────────
+    # Build the chunk objects and collect all texts that need embedding.
+    # We track (kind, id, text) tuples: kind='section' or kind='chunk'.
+
+    # Records: list of (kind, section_id_or_chunk_id, doc_id, text, section_id)
+    # used to map embed outputs back to the right objects.
+    @dataclasses.dataclass
+    class _EmbedRecord:
+        kind: str  # 'section' or 'chunk'
+        target_id: UUID  # section_id or chunk_id
+        doc_id: UUID
+        section_id: UUID
+        text: str
+
+    embed_records: list[_EmbedRecord] = []
+    section_chunks_map: list[tuple[Section, list[Chunk]]] = []
+
     for section in sections:
         # ── Chunk splitting (done first so Option C can use chunks[0]) ────
         section_chunks = chunk_section(section, max_tokens=max_tokens, overlap_tokens=overlap_tokens)
         all_chunks.extend(section_chunks)
+        section_chunks_map.append((section, section_chunks))
 
         # ── Section embedding (ALL tiers) — Option C: use first chunk as
         #    representative.  Consecutive chunks already carry CHUNK_OVERLAP_TOKENS
         #    of context from the previous chunk, so embeddings preserve local
         #    context across boundaries.  Fall back to section.text if no chunks.
         sec_emb_text = section_chunks[0].text if section_chunks else section.text
-        sec_vec = await _embed_text(
-            sec_emb_text,
-            model_id=model_id,
-            instruction_prefix=instruction_prefix,
-            embedding_client=embedding_client,
-        )
-        if sec_vec is not None:
-            section_embeddings.append((section.section_id, sec_vec))
-        else:
-            pending_failures.append(
-                EmbeddingPendingEntry(
-                    doc_id=section.doc_id,
-                    chunk_id=None,
-                    section_id=section.section_id,
-                    error_detail="section embedding failed",
-                    created_at=now,
-                    embedding_text=sec_emb_text,
-                ),
+        embed_records.append(
+            _EmbedRecord(
+                kind="section",
+                target_id=section.section_id,
+                doc_id=section.doc_id,
+                section_id=section.section_id,
+                text=sec_emb_text,
             )
+        )
 
         if not generate_chunk_embeddings:
             continue
 
         # ── Chunk embeddings (MEDIUM/DEEP only) ───────────────────────────
-        # Each chunk already includes CHUNK_OVERLAP_TOKENS of overlap text
-        # from the adjacent chunk (built by chunk_section), so embeddings
-        # capture cross-boundary context without extra re-processing.
         for chunk in section_chunks:
-            chunk_vec = await _embed_text(
-                chunk.text,
-                model_id=model_id,
-                instruction_prefix=instruction_prefix,
-                embedding_client=embedding_client,
+            embed_records.append(
+                _EmbedRecord(
+                    kind="chunk",
+                    target_id=chunk.chunk_id,
+                    doc_id=chunk.doc_id,
+                    section_id=chunk.section_id,
+                    text=chunk.text,
+                )
             )
-            if chunk_vec is not None:
-                chunk_embeddings.append((chunk.chunk_id, chunk_vec))
+
+    # ── Step 2: Batch embed — ONE call for ALL texts ──────────────────────────
+    all_texts = [r.text for r in embed_records]
+    embed_results: list[list[float] | None] = (
+        await _embed_batch(all_texts, model_id, instruction_prefix, embedding_client) if all_texts else []
+    )
+
+    # ── Step 3: Map outputs back to section_embeddings / chunk_embeddings ─────
+    for record, vec in zip(embed_records, embed_results, strict=False):
+        if vec is not None:
+            if record.kind == "section":
+                section_embeddings.append((record.target_id, vec))
+            else:
+                chunk_embeddings.append((record.target_id, vec))
+        else:
+            # Embed failed for this text — record a pending failure for retry.
+            if record.kind == "section":
+                pending_failures.append(
+                    EmbeddingPendingEntry(
+                        doc_id=record.doc_id,
+                        chunk_id=None,
+                        section_id=record.section_id,
+                        error_detail="section embedding failed",
+                        created_at=now,
+                        embedding_text=record.text,
+                    ),
+                )
             else:
                 pending_failures.append(
                     EmbeddingPendingEntry(
-                        doc_id=chunk.doc_id,
-                        chunk_id=chunk.chunk_id,
-                        section_id=chunk.section_id,
+                        doc_id=record.doc_id,
+                        chunk_id=record.target_id,
+                        section_id=record.section_id,
                         error_detail="chunk embedding failed",
                         created_at=now,
-                        embedding_text=chunk.text,
+                        embedding_text=record.text,
                     ),
                 )
 

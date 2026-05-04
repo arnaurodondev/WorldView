@@ -202,7 +202,7 @@ Lines 221–222 hardcode `change=0.0, change_pct=0.0` because S3's QuoteResponse
 
 ---
 
-### Wave A-2: Retry Logic for Transient Downstream Failures
+### Wave A-2: Retry Logic for Transient Downstream Failures ✅
 
 **Goal**: Add 3-retry + exponential backoff to `_checked_get` and `_checked_post` for 500/503 responses from downstream services.
 **Depends on**: Wave A-1 (clients.py already stabilized)
@@ -263,7 +263,7 @@ async def _with_retry(coro_factory, ...):
 
 ---
 
-### Wave B-1: Schema Library + Tier-1 Routes
+### ✅ Wave B-1: Schema Library + Tier-1 Routes
 
 **Goal**: Create `api_gateway/schemas/` package with Pydantic v2 models for the 8 most critical routes. Annotate those routes with `response_model=`.
 **Depends on**: none (can start in parallel with A-1 if desired)
@@ -850,8 +850,8 @@ D-1 (error states) — parallel, no deps
 | T-A-1-03 | Replace silent exceptions with structured logging | A | A-1 | pending |
 | T-A-1-04 | Fix company_overview hardcoded change=0.0 | A | A-1 | pending |
 | T-A-2-01 | Add retry wrapper to _checked_get/_checked_post | A | A-2 | pending |
-| T-B-1-01 | Create api_gateway/schemas/ package | B | B-1 | pending |
-| T-B-1-02 | Annotate Tier-1 proxy routes with response_model | B | B-1 | pending |
+| T-B-1-01 | Create api_gateway/schemas/ package | B | B-1 | done |
+| T-B-1-02 | Annotate Tier-1 proxy routes with response_model | B | B-1 | done |
 | T-B-2-01 | Tier-2 schemas | B | B-2 | pending |
 | T-B-2-02 | Annotate Tier-2 routes | B | B-2 | pending |
 | T-B-3-01 | Replace Tier-1 hand-written types with generated aliases | B | B-3 | pending |

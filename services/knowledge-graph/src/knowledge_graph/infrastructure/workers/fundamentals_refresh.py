@@ -17,6 +17,7 @@ Wave C-4 additions:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import timedelta
@@ -50,8 +51,11 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _REFRESH_INTERVAL_DAYS = 30
-_BATCH_LIMIT = 50
 _DEFAULT_EMBED_MODEL_ID = "nomic-embed-text"
+
+# Maximum texts to send in a single embed() call.  DeepInfra and most providers
+# accept batches of several hundred inputs; 200 is a conservative safe ceiling.
+_EMBED_CHUNK_SIZE = 200
 
 # Relation type constants (from relation_type_registry seed in migration 0002)
 _IS_IN_SECTOR_TYPE = "is_in_sector"
@@ -115,12 +119,14 @@ class FundamentalsRefreshWorker:
         market_data_base_url: str,
         http_client: httpx.AsyncClient | None = None,
         embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
+        concurrency: int = 5,
     ) -> None:
         self._sf = session_factory
         self._llm = llm_client
         self._market_data_url = market_data_base_url.rstrip("/")
         self._http = http_client
         self._embed_model_id = embedding_model_id
+        self._concurrency = concurrency
 
     async def run(self) -> None:
         """Refresh fundamentals embeddings due for refresh.
@@ -153,7 +159,8 @@ class FundamentalsRefreshWorker:
             due_entities: list[dict[str, Any]] = []
             async with self._sf() as session:
                 emb_repo = EntityEmbeddingStateRepository(session)
-                due = await emb_repo.get_due_for_refresh(VIEW_FUNDAMENTALS, _BATCH_LIMIT)
+                # 0 = unlimited (drain full queue); see EntityEmbeddingStateRepository.get_due_for_refresh
+                due = await emb_repo.get_due_for_refresh(VIEW_FUNDAMENTALS, 0)
                 for row in due:
                     ticker: str | None = row.get("ticker")  # type: ignore[assignment]
                     if not ticker:
@@ -171,67 +178,101 @@ class FundamentalsRefreshWorker:
                     )
             # Session released — no DB connection held during HTTP calls.
 
-            # ── Phase 2: All HTTP + LLM calls (no session held) ──
-            # For each entity, fetch earnings, company profile, fundamentals,
-            # and compute embedding — all outside any DB session.
+            # ── Phase 2: All HTTP calls (no session held, concurrent per entity) ──
+            # Entities are processed concurrently up to self._concurrency via a
+            # semaphore.  Embed calls are batched AFTER all HTTP fetches complete.
             from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]
 
-            entity_io_results: list[dict[str, Any]] = []
-            for ent in due_entities:
-                entity_id: UUID = ent["entity_id"]
-                ticker_str: str = str(ent["ticker"])
+            semaphore = asyncio.Semaphore(self._concurrency)
 
-                # Resolve ticker → market-data instrument_id (KG entity_id ≠ market-data instrument_id)
-                instrument_id = await self._resolve_instrument_id(http, ticker_str)
-                if instrument_id is None:
-                    logger.debug(  # type: ignore[no-any-return]
-                        "fundamentals_refresh_instrument_not_found",
-                        entity_id=str(entity_id),
-                        ticker=ticker_str,
-                    )
-                    entity_io_results.append(
-                        {
-                            "entity_id": entity_id,
-                            "ticker": ticker_str,
+            async def _process_entity_io(ent: dict[str, Any]) -> dict[str, Any]:
+                """Fetch all HTTP data for one entity; returns result dict (no embed yet)."""
+                async with semaphore:
+                    _entity_id: UUID = ent["entity_id"]
+                    _ticker_str: str = str(ent["ticker"])
+
+                    # Resolve ticker → market-data instrument_id
+                    _instrument_id = await self._resolve_instrument_id(http, _ticker_str)
+                    if _instrument_id is None:
+                        logger.debug(  # type: ignore[no-any-return]
+                            "fundamentals_refresh_instrument_not_found",
+                            entity_id=str(_entity_id),
+                            ticker=_ticker_str,
+                        )
+                        return {
+                            "entity_id": _entity_id,
+                            "ticker": _ticker_str,
                             "canonical_name": ent["canonical_name"],
                             "earnings_data": None,
                             "profile_data": None,
                             "narrative": None,
-                            "embedding": None,
-                            "source_hash": None,
                         }
+
+                    # Fetch earnings, profile, and fundamentals narrative in parallel.
+                    _earnings_data, _profile_data, _narrative = await asyncio.gather(
+                        self._fetch_earnings_data(http, _instrument_id, _ticker_str),
+                        self._fetch_company_profile_data(http, _instrument_id),
+                        self._build_fundamentals_narrative(_entity_id, _ticker_str, ent["row"], http, _instrument_id),
                     )
-                    continue
 
-                # Fetch earnings data (HTTP only, no DB)
-                earnings_data = await self._fetch_earnings_data(http, instrument_id, ticker_str)
+                    return {
+                        "entity_id": _entity_id,
+                        "ticker": _ticker_str,
+                        "canonical_name": ent["canonical_name"],
+                        "earnings_data": _earnings_data,
+                        "profile_data": _profile_data,
+                        "narrative": _narrative,
+                    }
 
-                # Fetch company-profile data (HTTP only, no DB)
-                profile_data = await self._fetch_company_profile_data(http, instrument_id)
+            # Run all entity HTTP fetches concurrently.
+            raw_results: list[dict[str, Any]] = list(
+                await asyncio.gather(*[_process_entity_io(e) for e in due_entities])
+            )
 
-                # Fetch fundamentals + build narrative (HTTP only, no DB)
-                narrative = await self._build_fundamentals_narrative(
-                    entity_id, ticker_str, ent["row"], http, instrument_id
-                )
+            # ── Batch embed after all HTTP fetches ──
+            # Collect narratives that need an embedding, then call embed() ONCE.
+            narratives_to_embed: list[tuple[int, str]] = []  # (raw_results index, narrative)
+            for idx, res in enumerate(raw_results):
+                if res["narrative"] is not None:
+                    narratives_to_embed.append((idx, res["narrative"]))
 
-                # Compute embedding (LLM HTTP call, no DB)
-                embedding: list[float] | None = None
+            # Map embed outputs back to raw_results by index.
+            embed_map: dict[int, list[float] | None] = {}
+            if narratives_to_embed:
+                inputs_all = [
+                    EmbeddingInput(text=text, model_id=self._embed_model_id) for _, text in narratives_to_embed
+                ]
+                embed_outputs: list[list[float] | None] = []
+                for chunk_start in range(0, len(inputs_all), _EMBED_CHUNK_SIZE):
+                    chunk_inputs = inputs_all[chunk_start : chunk_start + _EMBED_CHUNK_SIZE]
+                    outputs = await self._llm.embed(chunk_inputs)
+                    for i in range(len(chunk_inputs)):
+                        if outputs and i < len(outputs):
+                            embed_outputs.append(outputs[i].embedding)
+                        else:
+                            embed_outputs.append(None)
+                for (idx, _narrative), embedding in zip(narratives_to_embed, embed_outputs, strict=False):
+                    embed_map[idx] = embedding
+
+            # Build final entity_io_results with embedding + source_hash attached.
+            entity_io_results: list[dict[str, Any]] = []
+            for idx, res in enumerate(raw_results):
+                narrative = res["narrative"]
+                embedding_out: list[float] | None = None
                 source_hash: str | None = None
                 if narrative is not None:
                     source_hash = sha256_hex(narrative)
-                    inp = EmbeddingInput(text=narrative, model_id=self._embed_model_id)
-                    outputs = await self._llm.embed([inp], entity_id=entity_id)
-                    embedding = outputs[0].embedding if outputs else None
+                    embedding_out = embed_map.get(idx)
 
                 entity_io_results.append(
                     {
-                        "entity_id": entity_id,
-                        "ticker": ticker_str,
-                        "canonical_name": ent["canonical_name"],
-                        "earnings_data": earnings_data,
-                        "profile_data": profile_data,
+                        "entity_id": res["entity_id"],
+                        "ticker": res["ticker"],
+                        "canonical_name": res["canonical_name"],
+                        "earnings_data": res["earnings_data"],
+                        "profile_data": res["profile_data"],
                         "narrative": narrative,
-                        "embedding": embedding,
+                        "embedding": embedding_out,
                         "source_hash": source_hash,
                     },
                 )
