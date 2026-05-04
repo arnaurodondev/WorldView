@@ -5,7 +5,7 @@
 > **Tier**: 2 (regression cleanup) + 3 (observability).
 > **Estimate**: 1.5 dev-days (PRD §15) — confirmed achievable; the four BP-302/F-VISUAL-002/F-E8/F-D4 code fixes are **already merged** in commit `f27e266b` (verified 2026-05-03 against current `main`/`feat/content-ingestion-wave-a1`). The remaining work is operational (redeploy + verify) and net-new (Sentry / UptimeRobot / status page).
 > **Author**: `/plan` skill, 2026-05-03; revised 2026-05-03 per audit `docs/audits/2026-05-03-revise-plan-0065-w9.md` (3 BLOCKING + 6 IMPORTANT + 3 NICE-TO-HAVE applied; 2 NICE-TO-HAVE deferred to §15 Follow-ups).
-> **Status**: in-progress (Wave A complete 2026-05-04; Wave B complete 2026-05-04).
+> **Status**: in-progress (Wave A complete 2026-05-04; Wave B complete 2026-05-04; Wave C complete 2026-05-04).
 > **Revision 2 changes** (2026-05-04): Wire `init_sentry()` into **all 10 backend services** (S1–S10), not just S9/S6/S8; add Sentry issue-alert email notification to `arnaurodondev@gmail.com`; add Grafana error-observability dashboard; expand worldview-gitops env var coverage to all 10 service `.env` files and `values.yaml`; zero deferrals. See T-C-05 (new), T-E-03 (new), T-E-04 (new).
 
 ---
@@ -373,12 +373,13 @@ If offset reset skips a message that downstream consumers expected: confirmed ac
 
 ---
 
-### Wave C — Backend Sentry Integration (libs/observability)
+### Wave C — Backend Sentry Integration (libs/observability) ✅
 
 **Goal**: Add Sentry SDK as a fourth observability pillar (alongside structlog/Loki, OTel/Tempo, Prometheus). Implementation is centralised in `libs/observability` so all 10 services pick it up by adding a single `init_sentry()` call at startup. Make it opt-in via `SENTRY_ENABLED=false` default so dev/test environments do not need a DSN.
 
 **Depends on**: Wave A (baseline doc).
 **Estimated effort**: 150–180 min (was 90–120; T-C-01 +30 for rate-limiter, T-C-05 +60 for S6 + S8 wiring per audit I-001/I-002).
+**Status**: **DONE** — 2026-05-04 · 38 tests pass (28 observability + 10 service sentry_init) · ruff + mypy clean · 100 architecture tests pass
 **Architecture layer**: infrastructure (libs).
 
 #### Tasks

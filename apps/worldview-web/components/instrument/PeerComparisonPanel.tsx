@@ -147,7 +147,7 @@ export function PeerComparisonPanel({
           { metric: "pe_ratio", min_value: -999999, max_value: 999999 },
           { metric: "daily_return", min_value: -1, max_value: 1 },
         ],
-        sort_by: "market_cap",
+        sort_by: "market_capitalization",
         sort_dir: "desc",
         limit: 100, // cover entire instrument universe in one call
       }),

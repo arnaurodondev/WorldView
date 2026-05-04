@@ -29,6 +29,7 @@ from observability.metrics import (  # type: ignore[import-untyped]
     create_metrics,
     create_ml_metrics,
 )
+from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 from storage.factory import build_object_storage  # type: ignore[import-untyped]
 from storage.settings import StorageSettings  # type: ignore[import-untyped]
@@ -95,6 +96,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             service_name=settings.service_name,
             otlp_endpoint=settings.otlp_endpoint,
         )
+
+    # 2b. Sentry — fourth observability pillar (default-off: SENTRY_ENABLED=false)
+    init_sentry(service_name=settings.service_name, settings=SentrySettings())
 
     # 3. Database — dual session factory (R23: read/write split)
     engine, read_engine, write_factory, read_factory = _build_factories(settings)
