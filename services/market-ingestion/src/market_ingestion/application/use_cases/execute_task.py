@@ -620,7 +620,23 @@ class ExecuteTaskUseCase:
 
             today = utc_now().date()
             # symbol encodes country: "EVENTS.USA" → "USA"
-            country = task.symbol.split(".")[-1] if "." in task.symbol else "USA"
+            _raw_country = task.symbol.split(".")[-1] if "." in task.symbol else "USA"
+            # WHY normalize: EODHD /economic-events uses ISO-3166 alpha-2 codes (US, GB),
+            # but the seed symbols use alpha-3 (USA, GBR) for consistency with other
+            # datasets. Map 3→2 before the API call; alpha-2 codes pass through unchanged.
+            iso3_to_iso2 = {
+                "USA": "US",
+                "GBR": "GB",
+                "EUR": "EU",
+                "JPN": "JP",
+                "CHN": "CN",
+                "CAN": "CA",
+                "AUS": "AU",
+                "DEU": "DE",
+                "FRA": "FR",
+                "ITA": "IT",
+            }
+            country = iso3_to_iso2.get(_raw_country, _raw_country)
             ext_adapter = cast("Any", adapter)
             return cast(
                 "ProviderFetchResult",
@@ -765,17 +781,11 @@ class ExecuteTaskUseCase:
         canonical_bytes: bytes,
     ) -> ObjectRef:
         key = f"market-ingestion/canonical/{task.provider}/{task.dataset_type}/{task.symbol}/{task.id}.jsonl"
-        # D-008: On retry, the object may already exist — skip the upload and
-        # reconstruct the ObjectRef using a locally-computed SHA-256.
-        if await self._store.exists(self._canonical_bucket, key):
-            sha256 = hashlib.sha256(canonical_bytes).hexdigest()
-            return ObjectRef(
-                bucket=self._canonical_bucket,
-                key=key,
-                sha256=sha256,
-                byte_length=len(canonical_bytes),
-                mime_type="application/x-ndjson",
-            )
+        # WHY always PUT (no skip-if-exists): D-008 skip was correct for pure retries
+        # (same task, same bytes), but breaks when a task is rescheduled after a provider
+        # fix — the old file has stale payload while the outbox SHA256 reflects the new
+        # bytes, causing the consumer to download an empty canonical and silently drop it.
+        # MinIO PUT is idempotent (overwrite), so retries are still safe (BP-357).
         return await self._store.put(
             self._canonical_bucket,
             key,
