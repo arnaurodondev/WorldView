@@ -6,7 +6,7 @@
 
 ---
 
-## Three Pillars Overview
+## Four Pillars Overview
 
 ```mermaid
 flowchart LR
@@ -14,17 +14,20 @@ flowchart LR
         LOG["structlog\nJSON logs"]
         MET["prometheus-client\nCounters / Histograms"]
         TRC["opentelemetry-sdk\nSpans / Traces"]
+        SNT["sentry-sdk\nError tracking"]
     end
 
     subgraph INFRA["Observability Infrastructure"]
         LO["Log aggregator\n(Loki / CloudWatch)"]
         PR["Prometheus\nscrape /metrics"]
         JG["Jaeger / Tempo\n(OTLP gRPC)"]
+        SD["Sentry\n(error events)"]
     end
 
     LOG -->|stdout JSON| LO
     MET -->|HTTP GET /metrics| PR
     TRC -->|OTLP gRPC| JG
+    SNT -->|HTTPS| SD
 
     NOTE["trace_id + span_id\ninjected into every log line\nby OTel middleware"]
     TRC -.->|context| LOG
@@ -105,6 +108,37 @@ Output format (JSON, one line per event):
 | `get_tracer(name)` | Returns an OTel tracer |
 | `add_otel_middleware(app)` | FastAPI middleware for automatic span creation |
 
+### Sentry (Error Tracking — PLAN-0065)
+
+| Symbol | Purpose |
+|--------|---------|
+| `SentrySettings` | Pydantic-settings model (`SENTRY_` prefix env vars) |
+| `init_sentry(service_name, *, settings)` | Initialise sentry-sdk; returns `True` if enabled, `False` if disabled |
+
+`SentrySettings` fields:
+
+| Field | Env var | Default | Description |
+|-------|---------|---------|-------------|
+| `enabled` | `SENTRY_ENABLED` | `False` | Master switch — off by default |
+| `dsn` | `SENTRY_DSN` | `None` | Required when enabled (SecretStr) |
+| `environment` | `SENTRY_ENVIRONMENT` | `"development"` | Sentry environment tag |
+| `traces_sample_rate` | `SENTRY_TRACES_SAMPLE_RATE` | `0.1` | Fraction of transactions sampled |
+| `release` | `SENTRY_RELEASE` | `None` | App version string (optional) |
+| `fingerprint_rate_limit` | `SENTRY_FINGERPRINT_RATE_LIMIT` | `10` | Max events per fingerprint per hour |
+
+**PII protection** — `_before_send` strips cookies, `Authorization` / `X-Internal-JWT` headers, redacts ticker symbols and entity UUIDs from URLs, and sha256-hashes `user.email` before any event leaves the process.
+
+**Error capture integration** — `register_error_handlers(app)` (via `error_capture.py`) automatically calls `sentry_sdk.capture_exception()` for unhandled exceptions when Sentry is initialised. No per-route instrumentation needed.
+
+**Canonical lifespan wiring** (all 10 backend services):
+
+```python
+# Step 2b in lifespan — after configure_tracing, before DB
+from observability.sentry import SentrySettings, init_sentry
+
+init_sentry(service_name=settings.service_name, settings=SentrySettings())
+```
+
 ---
 
 ## Usage
@@ -138,6 +172,14 @@ LOG_LEVEL=INFO              # DEBUG | INFO | WARNING | ERROR
 LOG_FORMAT=json             # json | console  (console = coloured dev output)
 OTEL_EXPORTER_ENDPOINT=     # blank = tracing disabled
 OTEL_SERVICE_NAME=          # auto-set by configure_tracing()
+
+# Sentry (fourth pillar — default-off)
+SENTRY_ENABLED=false        # set true in staging/production
+SENTRY_DSN=                 # required when SENTRY_ENABLED=true
+SENTRY_ENVIRONMENT=development
+SENTRY_TRACES_SAMPLE_RATE=0.1
+SENTRY_RELEASE=             # optional: image tag / git SHA
+SENTRY_FINGERPRINT_RATE_LIMIT=10   # max events per fingerprint per hour
 ```
 
 ---
@@ -197,6 +239,7 @@ OTEL_SERVICE_NAME=          # auto-set by configure_tracing()
 - `opentelemetry-sdk >= 1.24`
 - `opentelemetry-exporter-otlp-proto-grpc >= 1.24`
 - `opentelemetry-instrumentation-fastapi >= 0.45b0`
+- `sentry-sdk[fastapi] >= 2.18, < 3` (fourth pillar — PLAN-0065)
 
 ---
 

@@ -23,6 +23,7 @@ from alert.config import Settings
 from alert.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -80,6 +81,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             service_name=settings.service_name,
             otlp_endpoint=settings.otlp_endpoint,
         )
+
+    # 2b. Sentry — fourth observability pillar (default-off: SENTRY_ENABLED=false)
+    init_sentry(service_name=settings.service_name, settings=SentrySettings())
 
     # 3. Database — R23 dual factory (write + read)
     from alert.infrastructure.db.session import _build_factories
