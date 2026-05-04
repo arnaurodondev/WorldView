@@ -1128,3 +1128,52 @@ all_outputs = await self._llm.embed(all_inputs)  # all items, 1 HTTP call
 - `services/knowledge-graph/tests/unit/infrastructure/workers/test_embedding_refresh_worker.py::TestEmbeddingRefreshWorker::test_embed_called_once_for_batch`
 - `services/knowledge-graph/tests/unit/infrastructure/workers/test_fundamentals_refresh_worker.py::TestBatchEmbedding::test_multiple_entities_embed_called_once_with_all_inputs`
 - `services/nlp-pipeline/tests/unit/application/blocks/test_embeddings.py::TestBatchEmbedSingleCall::test_batch_embed_single_call_for_multiple_sections`
+
+---
+
+## BP-365: `_store_canonical` skip-if-exists serves stale empty canonical to consumers
+
+**Service**: market-ingestion
+**Severity**: HIGH
+**Discovered**: 2026-05-03
+
+**Symptom**: Kafka consumers download canonical NDJSON from MinIO and find `payload: []` — zero rows — even though the ingestion worker logged a successful fetch. `temporal_events` stays empty for all non-EU economic event symbols.
+
+**Root cause**: `_store_canonical` in `execute_task.py` had a D-008 idempotency guard that skipped the MinIO PUT if the object key already existed:
+
+```python
+if await self._store.exists(self._canonical_bucket, key):
+    sha256 = hashlib.sha256(canonical_bytes).hexdigest()
+    return ObjectRef(...)  # returns without uploading!
+```
+
+This is correct when a task is retried with identical bytes. But when a task is rescheduled after a provider bug fix (e.g., alpha-2 country code correction), the old empty canonical file (144 bytes, `payload: []`) remains on disk while the outbox records the new SHA-256. The consumer downloads the old file and silently drops all rows.
+
+**Fix**: Always PUT the canonical file — MinIO PUT is idempotent (overwrites). Remove the skip-if-exists guard entirely. Also reset `last_success_sha256 = NULL` in `ingestion_watermarks` for affected symbols to force outbox re-publication.
+
+**Also required**: Purge Valkey dedup cache keys (`kg:eco_events:*`) so the consumer re-processes the new Kafka messages (TTL is 7 days; stale event_ids would otherwise be deduplicated).
+
+**File**: `services/market-ingestion/src/market_ingestion/application/use_cases/execute_task.py` — `_store_canonical`
+
+---
+
+## BP-366: ISO-3166 alpha-3 codes sent to EODHD `/economic-events`
+
+**Service**: market-ingestion
+**Severity**: HIGH
+**Discovered**: 2026-05-03
+
+**Symptom**: All economic event symbols except `EVENTS.EU` returned empty payloads. EU happened to work because EODHD accepts "EU" as both an alpha-2 and unofficial alpha-3 code; "USA", "JPN", "CHN" returned empty lists.
+
+**Root cause**: `_fetch_provider_data` extracted the country code from the task symbol (`EVENTS.USA` → `"USA"`) and passed it directly to `ext_adapter.fetch_economic_events(country="USA")`. EODHD `/economic-events` requires ISO-3166 alpha-2 codes (US, JP, CN).
+
+**Fix**: Add `iso3_to_iso2` dict in `_fetch_provider_data` before the API call:
+
+```python
+iso3_to_iso2 = {"USA": "US", "GBR": "GB", "JPN": "JP", "CHN": "CN", ...}
+country = iso3_to_iso2.get(_raw_country, _raw_country)
+```
+
+The `get(x, x)` fallback means valid alpha-2 codes (e.g., "EU") pass through unchanged.
+
+**File**: `services/market-ingestion/src/market_ingestion/application/use_cases/execute_task.py` — `_fetch_provider_data`, `DatasetType.ECONOMIC_EVENTS` branch
