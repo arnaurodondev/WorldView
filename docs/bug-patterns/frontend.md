@@ -2,7 +2,7 @@
 
 > **Category**: frontend
 > **Description**: React hooks, Next.js, WebSocket/SSE, TypeScript, CSS, component lifecycle, API contract mismatches in UI code
-> **Count**: 26 patterns
+> **Count**: 28 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -814,7 +814,7 @@ async function fillNumberInput(user: ReturnType<typeof userEvent.setup>, label: 
 
 ---
 
-## BP-355 — Unicode emoji characters render as colorful glyphs on Windows/Linux
+## BP-357 — Unicode emoji characters render as colorful glyphs on Windows/Linux
 
 **Symptom**: Warning/arrow/checkmark characters (⚠, ✓, →, ▴) in React TSX render as full-color emoji glyphs on Windows and inconsistently on Linux (depends on system emoji font). Design intention (inline amber warning icon) becomes a distracting multicolor symbol at 10-11px text size.
 
@@ -856,5 +856,21 @@ The citation context is already visible via `CitationChips` on the section bulle
 **Prevention**: When adding new string fields that contain markup tokens, document whether the frontend must process them. Fields like `lead` should be either (a) pre-processed by the backend or (b) have a frontend processing step documented in the component.
 
 **Regression test**: `apps/worldview-web/__tests__/structured-brief.test.tsx` — verify lead renders without `[c` characters.
+
+---
+
+## BP-358 — shadcn Skeleton Primitive Uses animate-pulse — All Loading States Animated
+
+**Context**: Bloomberg-grade terminal UI — `apps/worldview-web/components/ui/skeleton.tsx`
+
+**Symptom**: Every data-loading skeleton in the app (instrument panel, news feed, dashboard widgets, screener rows) pulses with a fade animation. Bloomberg and Refinitiv Eikon terminals use static skeleton bars — animation signals "unstable" to professional finance users.
+
+**Root cause**: The shadcn `Skeleton` base component sets `animate-pulse` in its default className. This cascades to every consumer without any per-callsite override.
+
+**Fix**: Remove `animate-pulse` from `skeleton.tsx` base class; use `bg-muted/60` for lighter static placeholder appearance.
+
+**Prevention**: Design system standard is "static skeleton bars only." Do not add `animate-pulse` to skeleton-type components. Use `animate-spin` only for explicit real-time streaming indicators (RefreshCw).
+
+**Related**: BP-182 (no animate-pulse on any chrome element).
 
 ---
