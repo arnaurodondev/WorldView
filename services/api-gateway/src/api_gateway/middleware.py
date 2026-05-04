@@ -133,8 +133,10 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
                             # dev-login or the gateway), so we trust that value.
                             user_data.setdefault("role", payload.get("role", "user"))
                             request.state.user = user_data
-                    except (jwt.InvalidTokenError, Exception):  # noqa: S110
-                        pass  # Not a valid internal JWT — leave user as None
+                    except jwt.InvalidTokenError:
+                        pass  # Expected: token was not meant for internal validation
+                    except Exception:
+                        logger.debug("dev_login_jwt_validation_error", exc_info=True)
             return cast("Response", await call_next(request))
 
         # Real OIDC validation path — reset user first
@@ -197,8 +199,8 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
                     cached = await valkey.get(f"auth:user:{sub}")
                     if cached:
                         user_data_oidc = json.loads(cached)
-                except Exception:  # noqa: S110 — fail-open: Valkey cache miss falls back to token claims
-                    pass
+                except Exception:  # — fail-open: Valkey unavailable, rebuild from token claims
+                    logger.warning("valkey_user_cache_read_failed", exc_info=True)
 
             if user_data_oidc is None:
                 # Fall back to token claims
@@ -368,11 +370,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         try:
             current = await valkey.incr(key)
-            # SEC-009 fix: always set EXPIRE (idempotent) to prevent orphaned
-            # keys if a crash occurred between INCR and EXPIRE on a previous
-            # request.  expire() is a no-op if the TTL is already set and the
-            # remaining time is still within the window.
-            await valkey.expire(key, self.window_seconds)
+            # Only set EXPIRE when the key is brand-new (current == 1). Setting
+            # it on every request would reset the TTL on each hit, allowing a
+            # sustained flow to never expire and permanently bypass the limit.
+            # If a crash occurred between INCR and EXPIRE on a previous request
+            # the key is already present (current > 1) but has no TTL; the next
+            # new window (new key from fresh INCR) will set the TTL correctly.
+            if current == 1:
+                await valkey.expire(key, self.window_seconds)
             if current > limit:
                 # PLAN-0052 platform-QA fix: include Retry-After header so
                 # clients (and the user) know when to retry. We use the

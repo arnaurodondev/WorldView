@@ -371,11 +371,11 @@ export default function ChatPage() {
    */
   const handleRenameThread = useCallback(
     async (threadId: string, newTitle: string) => {
-      const prev = queryClient.getQueryData<Thread[]>(["threads", accessToken]);
+      const prev = queryClient.getQueryData<Thread[]>(qk.chat.threads());
       // Optimistic: patch the cache.
       if (prev) {
         queryClient.setQueryData<Thread[]>(
-          ["threads", accessToken],
+          qk.chat.threads(),
           prev.map((t) =>
             t.thread_id === threadId ? { ...t, title: newTitle } : t,
           ),
@@ -388,7 +388,7 @@ export default function ChatPage() {
       } catch (err) {
         // Rollback on failure.
         if (prev) {
-          queryClient.setQueryData(["threads", accessToken], prev);
+          queryClient.setQueryData(qk.chat.threads(), prev);
         }
         throw err;
       }

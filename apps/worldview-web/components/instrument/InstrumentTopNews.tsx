@@ -169,7 +169,7 @@ export function InstrumentTopNews({ entityId, onViewAll }: InstrumentTopNewsProp
       <div className="flex items-center px-2 h-[22px]">
         <button
           onClick={onViewAll}
-          className="text-[10px] text-primary hover:underline"
+          className="text-[10px] text-primary"
         >
           → More news
         </button>
