@@ -9,10 +9,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
+import structlog
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     import httpx
+
+# Module-level logger — structlog only (CLAUDE.md Rule 10).
+# T-A-1-03: replaces silent `except Exception: pass` patterns with WARNING logs.
+logger = structlog.get_logger()  # type: ignore[no-any-return]
 
 
 class DownstreamError(Exception):
@@ -167,8 +173,16 @@ async def get_company_overview(
             )
             if kg_resp.get("entity_id"):
                 kg_entity_id = str(kg_resp["entity_id"])
-        except Exception:  # noqa: S110
-            pass  # KG lookup is best-effort; fall back to company_id
+        except Exception as e:
+            # T-A-1-03: KG lookup is best-effort (fall back to company_id), but
+            # silent failures hide integration issues.  Log at WARNING with enough
+            # context to diagnose the root cause without alarming the on-call.
+            logger.warning(
+                "kg_lookup_failed",
+                ticker=ticker_symbol,
+                company_id=company_id,
+                exc=str(e),
+            )
 
     # Extract name / currency / sector from the first company-profile record's data blob.
     profile_data: dict[str, Any] = {}
@@ -218,8 +232,11 @@ async def get_company_overview(
             "instrument_id": quote_raw.get("instrument_id", company_id),
             "ticker": instrument_raw.get("symbol", ""),
             "price": float(last) if last else 0.0,
-            "change": 0.0,  # market-data QuoteResponse has no intraday change field
-            "change_pct": 0.0,
+            # T-A-1-04: S3 QuoteResponse has no intraday change field.
+            # Return None (honest) instead of 0.0 (misleading — implies no movement).
+            # Frontend TypeScript types are updated separately to accept null.
+            "change": None,
+            "change_pct": None,
             "timestamp": str(quote_raw.get("timestamp", "")),
             "volume": quote_raw.get("volume"),
         }
@@ -562,50 +579,76 @@ async def get_market_heatmap(
     """
     import asyncio
 
-    # For weekly/monthly periods, call the dedicated S3 aggregate endpoint
-    # rather than making 11 parallel screener calls. The S3 endpoint computes
-    # averages from OHLCV bars for these longer timeframes.
-    if period in ("1W", "1M"):
-        _h = make_headers if make_headers is not None else (lambda: headers or {})
-        resp = await clients.market_data.get(
-            f"/api/v1/market/sector-returns?period={period}",
-            headers=_h(),
-        )
-        if resp.status_code >= 400:
-            raise DownstreamError("market-data", resp.status_code, resp.text)
-        return cast("dict[str, Any]", resp.json())
+    from fastapi import HTTPException
 
     _h = make_headers if make_headers is not None else (lambda: headers or {})
-    # _h() called 11x in the comprehension (before gather), each producing a
-    # fresh JWT — coroutine objects capture the headers value at creation time.
-    calls = [_screener_for_sector(clients.market_data, sector, headers=_h()) for sector in GICS_SECTORS]
-    results = await asyncio.gather(*calls, return_exceptions=True)
 
-    sectors = []
-    # F-012: strict=True ensures len(results) == len(GICS_SECTORS) — catches gather bugs
-    for sector_name, result in zip(GICS_SECTORS, results, strict=True):
-        if isinstance(result, BaseException) or (isinstance(result, dict) and result.get("error")):
-            sectors.append({"name": sector_name, "change_pct": None, "instrument_count": 0})
-            continue
-        instruments = result.get("results", [])
-        daily_returns = [
-            inst["metrics"]["daily_return"]
-            for inst in instruments
-            if inst.get("metrics", {}).get("daily_return") is not None
-        ]
-        avg_change = sum(daily_returns) / len(daily_returns) if daily_returns else None
-        sectors.append(
-            {
-                "name": sector_name,
-                # WHY * 100: S3 stores daily_return as a decimal fraction (0.031 = 3.1%).
-                # The frontend HeatmapSector.change_pct field is treated as a percentage
-                # value (0.16 = 0.16%) — multiply here so the display shows correct values.
-                "change_pct": round(avg_change * 100, 2) if avg_change is not None else None,
-                "instrument_count": len(instruments),
-            }
-        )
+    # T-A-1-01: Both 1W/1M and 1D paths are wrapped in asyncio.wait_for(15s) so
+    # a single sluggish S3 call cannot hang the dashboard indefinitely (BP-235).
+    # The httpx client default timeout (5s per connect/read) fires first; the
+    # outer budget only guards against the edge case where httpx itself stalls.
 
-    return {"sectors": sectors}
+    if period in ("1W", "1M"):
+        # For weekly/monthly periods, call the dedicated S3 aggregate endpoint
+        # rather than making 11 parallel screener calls. The S3 endpoint computes
+        # averages from OHLCV bars for these longer timeframes.
+        async def _compose_1wm() -> dict[str, Any]:
+            resp = await clients.market_data.get(
+                f"/api/v1/market/sector-returns?period={period}",
+                headers=_h(),
+            )
+            if resp.status_code >= 400:
+                raise DownstreamError("market-data", resp.status_code, resp.text)
+            return cast("dict[str, Any]", resp.json())
+
+        try:
+            return await asyncio.wait_for(_compose_1wm(), timeout=15.0)
+        except TimeoutError:
+            raise HTTPException(status_code=504, detail="Upstream timeout")  # noqa: B904
+
+    async def _compose_1d() -> dict[str, Any]:
+        # _h() called 11x in the comprehension (before gather), each producing a
+        # fresh JWT — coroutine objects capture the headers value at creation time.
+        calls = [_screener_for_sector(clients.market_data, sector, headers=_h()) for sector in GICS_SECTORS]
+        results = await asyncio.gather(*calls, return_exceptions=True)
+
+        sectors = []
+        # F-012: strict=True ensures len(results) == len(GICS_SECTORS) — catches gather bugs
+        for sector_name, result in zip(GICS_SECTORS, results, strict=True):
+            if isinstance(result, BaseException) or (isinstance(result, dict) and result.get("error")):
+                # T-A-1-03: log failed sectors at WARNING with sector context so
+                # partial heatmap failures are visible without crashing the endpoint.
+                if isinstance(result, BaseException):
+                    logger.warning(
+                        "heatmap_sector_failed",
+                        sector=sector_name,
+                        exc=str(result),
+                    )
+                sectors.append({"name": sector_name, "change_pct": None, "instrument_count": 0})
+                continue
+            instruments = result.get("results", [])
+            daily_returns = [
+                inst["metrics"]["daily_return"]
+                for inst in instruments
+                if inst.get("metrics", {}).get("daily_return") is not None
+            ]
+            avg_change = sum(daily_returns) / len(daily_returns) if daily_returns else None
+            sectors.append(
+                {
+                    "name": sector_name,
+                    # WHY * 100: S3 stores daily_return as a decimal fraction (0.031 = 3.1%).
+                    # The frontend HeatmapSector.change_pct field is treated as a percentage
+                    # value (0.16 = 0.16%) — multiply here so the display shows correct values.
+                    "change_pct": round(avg_change * 100, 2) if avg_change is not None else None,
+                    "instrument_count": len(instruments),
+                }
+            )
+        return {"sectors": sectors}
+
+    try:
+        return await asyncio.wait_for(_compose_1d(), timeout=15.0)
+    except TimeoutError:
+        raise HTTPException(status_code=504, detail="Upstream timeout")  # noqa: B904
 
 
 async def get_top_movers(
@@ -615,6 +658,7 @@ async def get_top_movers(
     period: str = "1D",
     *,
     headers: dict[str, str] | None = None,
+    make_headers: Callable[[], dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Get top gainers or losers from the screener (1D) or OHLCV bars (1W/1M).
 
@@ -625,16 +669,25 @@ async def get_top_movers(
     computes period returns from OHLCV bars — more accurate than screener which
     only has the current day's daily_return metric.
 
-    ``headers`` are forwarded so ``X-Internal-JWT`` reaches S3's
-    InternalJWTMiddleware.
+    ``make_headers`` is a factory called each time a fresh JWT is needed so the
+    JTI replay-detection in InternalJWTMiddleware does not reject parallel calls
+    that share the same token.  ``headers`` is kept for backwards compatibility
+    (tests, single calls); if both are provided ``make_headers`` takes precedence.
+
+    T-A-1-02: use the factory on every downstream call rather than capturing a
+    single JWT at batch start — prevents stale-token failures on long-running
+    batches (e.g. batch_ohlcv fan-out in proxy.py).
     """
     import json as _json
+
+    # Resolve header factory once: prefer make_headers, fall back to static headers dict.
+    _h = make_headers if make_headers is not None else (lambda: headers or {})
 
     # For weekly/monthly periods, call the dedicated S3 period-movers endpoint.
     if period in ("1W", "1M"):
         resp = await clients.market_data.get(
             f"/api/v1/market/period-movers?period={period}&type={mover_type}&limit={limit}",
-            headers=headers or {},
+            headers=_h(),
         )
         if resp.status_code >= 400:
             raise DownstreamError("market-data", resp.status_code, resp.text)
@@ -652,7 +705,7 @@ async def get_top_movers(
     resp = await clients.market_data.post(
         "/api/v1/fundamentals/screen",
         content=body.encode(),
-        headers={"Content-Type": "application/json", **(headers or {})},
+        headers={"Content-Type": "application/json", **_h()},
     )
     if resp.status_code >= 400:
         raise DownstreamError("market-data", resp.status_code, resp.text)
@@ -709,8 +762,16 @@ async def get_watchlist_insights(
         "biggest_news": { … } | None,          # highest-impact article touching any member
         "alerts_count": int                    # count of pending alerts that match members
       }
+
+    T-A-1-01: The entire composition is wrapped in asyncio.wait_for(15s) so a
+    single sluggish downstream (S1 members / S3 quotes / S6 news) cannot hang
+    the dashboard widget indefinitely.  A 15s budget is generous for this
+    composition; if it trips, the cluster is under serious load and a 504 is
+    the correct signal to the frontend.
     """
     import asyncio
+
+    from fastapi import HTTPException
 
     def _h() -> dict[str, str]:
         return make_headers()
@@ -727,294 +788,307 @@ async def get_watchlist_insights(
         except DownstreamError:
             return {}
 
-    # ── 1. Members + news + alerts in parallel ─────────────────────────────────
-    # WHY parallel: members controls the rest of the composition, but news +
-    # alerts are watchlist-agnostic until we know the member set, so we can
-    # speculatively fetch the global lists in the same window. We filter by
-    # member identity once members resolves.
-    #
-    # F-QA-01 fix: members MUST use _checked_get (not _safe_get). S1 enforces
-    # ownership on /watchlists/{id}/members — a 403/404 from S1 means "this is
-    # not your watchlist (or it doesn't exist)". The prior _safe_get swallowed
-    # those errors and returned an empty 200, which is BOTH a correctness bug
-    # (user sees their own watchlist as empty) AND a contract leak (the
-    # gateway silently overrides S1's permission decision). Best-effort policy
-    # is correct only for ENRICHMENT sub-calls (news/alerts/quotes/overviews).
-    async def _members() -> dict[str, Any]:
-        return await _checked_get(
-            clients.portfolio,
-            "portfolio",
-            f"/api/v1/watchlists/{watchlist_id}/members",
-            headers=_h(),
+    async def _compose() -> dict[str, Any]:
+        # T-A-1-01: entire composition wrapped here so asyncio.wait_for(15s)
+        # can cancel the whole fan-out if any leg stalls indefinitely.
+
+        # ── 1. Members + news + alerts in parallel ─────────────────────────────────
+        # WHY parallel: members controls the rest of the composition, but news +
+        # alerts are watchlist-agnostic until we know the member set, so we can
+        # speculatively fetch the global lists in the same window. We filter by
+        # member identity once members resolves.
+        #
+        # F-QA-01 fix: members MUST use _checked_get (not _safe_get). S1 enforces
+        # ownership on /watchlists/{id}/members — a 403/404 from S1 means "this is
+        # not your watchlist (or it doesn't exist)". The prior _safe_get swallowed
+        # those errors and returned an empty 200, which is BOTH a correctness bug
+        # (user sees their own watchlist as empty) AND a contract leak (the
+        # gateway silently overrides S1's permission decision). Best-effort policy
+        # is correct only for ENRICHMENT sub-calls (news/alerts/quotes/overviews).
+        async def _members() -> dict[str, Any]:
+            return await _checked_get(
+                clients.portfolio,
+                "portfolio",
+                f"/api/v1/watchlists/{watchlist_id}/members",
+                headers=_h(),
+            )
+
+        members_raw, news_raw, alerts_raw = await asyncio.gather(
+            _members(),
+            # 30 articles is enough to find a few hits for a typical 5-25-ticker
+            # watchlist while staying within the S6 endpoint's healthy range.
+            _safe_get(clients.nlp_pipeline, "nlp-pipeline", "/api/v1/news/top", params={"limit": 30}),
+            _safe_get(clients.alert, "alert", "/api/v1/alerts/pending", params={"limit": 50}),
         )
 
-    members_raw, news_raw, alerts_raw = await asyncio.gather(
-        _members(),
-        # 30 articles is enough to find a few hits for a typical 5-25-ticker
-        # watchlist while staying within the S6 endpoint's healthy range.
-        _safe_get(clients.nlp_pipeline, "nlp-pipeline", "/api/v1/news/top", params={"limit": 30}),
-        _safe_get(clients.alert, "alert", "/api/v1/alerts/pending", params={"limit": 50}),
-    )
+        members: list[dict[str, Any]] = members_raw.get("members") or []
+        # Filter to members with a resolved instrument_id — matches the widget's
+        # client-side filter so we never compute insights against unresolved rows.
+        resolved_members = [m for m in members if m.get("instrument_id")]
+        members_count = len(resolved_members)
+        instrument_ids = [str(m["instrument_id"]) for m in resolved_members]
+        entity_ids = {str(m.get("entity_id")) for m in resolved_members if m.get("entity_id")}
 
-    members: list[dict[str, Any]] = members_raw.get("members") or []
-    # Filter to members with a resolved instrument_id — matches the widget's
-    # client-side filter so we never compute insights against unresolved rows.
-    resolved_members = [m for m in members if m.get("instrument_id")]
-    members_count = len(resolved_members)
-    instrument_ids = [str(m["instrument_id"]) for m in resolved_members]
-    entity_ids = {str(m.get("entity_id")) for m in resolved_members if m.get("entity_id")}
+        # ── 2. Per-member quote + overview (parallel, capped) ──────────────────────
+        # WHY cap at 25: users with a 100-symbol watchlist would otherwise fan out
+        # 200 downstream requests. The widget renders only top-5 gainers + losers,
+        # so 25 is more than enough to find the extremes without amplifying load.
+        capped_ids = instrument_ids[:member_overview_cap]
 
-    # ── 2. Per-member quote + overview (parallel, capped) ──────────────────────
-    # WHY cap at 25: users with a 100-symbol watchlist would otherwise fan out
-    # 200 downstream requests. The widget renders only top-5 gainers + losers,
-    # so 25 is more than enough to find the extremes without amplifying load.
-    capped_ids = instrument_ids[:member_overview_cap]
-
-    async def _quote(iid: str) -> dict[str, Any]:
-        # F-Q1-02 fix (PLAN-0050 QA iter-1): switch from the legacy internal
-        # QuoteResponse endpoint (/api/v1/quotes/{iid}) to the PriceSnapshot
-        # endpoint (/internal/v1/price/{iid}).
-        #
-        # WHY: the legacy endpoint returns {last, bid, ask, volume, timestamp}
-        # which has NO change_pct field.  Every mover was showing change_pct=null
-        # because quote.get("change_pct") always returned None.  The PriceSnapshot
-        # endpoint is the authoritative price source for S9 (used by the /v1/quotes
-        # proxy) and returns {price, price_change, price_change_pct, ...}.
-        #
-        # WHY not call S9's own /v1/quotes/{iid}: that would add a loopback HTTP
-        # hop (gateway → gateway).  Calling S3 directly via the market_data client
-        # is cheaper and already the pattern used by the /v1/quotes proxy route.
-        #
-        # F-Q1-08 closed by this same fix: the stale `last` price from the legacy
-        # quote table (e.g. NVDA 199.64 vs 209.53) came from reading the wrong
-        # field.  PriceSnapshot's `price` field is resolved via the freshness chain
-        # (FRESH_QUOTE → BULK_QUOTE → INTRADAY → DAILY_CLOSE → STALE) — same
-        # authoritative source that the instrument detail page uses.
-        snap = await _safe_get(clients.market_data, "market-data", f"/internal/v1/price/{iid}")
-        if not snap:
-            return {}
-        # Map PriceSnapshot fields → the shape the composer reads below:
-        #   price       ← snap["price"]          (best available price string)
-        #   change_pct  ← snap["price_change_pct"] (signed % change string or None)
-        price_str = snap.get("price")
-        pct_str = snap.get("price_change_pct")
-        try:
-            price = float(price_str) if price_str is not None else None
-        except (ValueError, TypeError):
-            price = None
-        try:
-            change_pct = float(pct_str) if pct_str is not None else None
-        except (ValueError, TypeError):
-            change_pct = None
-        # Return a normalised dict that uses the same field names the loop below
-        # reads so we do not have to touch the per-member construction block.
-        return {"price": price, "change_pct": change_pct}
-
-    async def _overview(iid: str) -> dict[str, Any]:
-        # Just the instrument record gives us GICS sector — the per-member
-        # `getCompanyOverview` would also fetch fundamentals + OHLCV which we
-        # don't need here. Saves ~3x the per-member load.
-        return await _safe_get(clients.market_data, "market-data", f"/api/v1/instruments/{iid}")
-
-    quote_results, overview_results = await asyncio.gather(
-        asyncio.gather(*[_quote(iid) for iid in capped_ids]),
-        asyncio.gather(*[_overview(iid) for iid in capped_ids]),
-    )
-
-    # ── 3. Index news + alerts by entity for O(1) per-member lookup ────────────
-    # WHY entity_id (not instrument_id): articles + alerts are tagged with KG
-    # entity_id (ADR-F-12). Matching against instrument_id would silently miss
-    # everything because instrument_id ≠ entity_id by design.
-    news_articles = news_raw.get("articles") or []
-    # Cutoff for the "news_count_24h" badge. The frontend cares about
-    # "did this name make the news today?" — older articles inflate the count.
-    from datetime import UTC, datetime, timedelta
-
-    cutoff = datetime.now(tz=UTC) - timedelta(hours=news_lookback_hours)
-    news_by_entity: dict[str, list[dict[str, Any]]] = {}
-    for art in news_articles:
-        # F-QA2-01 fix: S6's RankedArticleResponse emits `primary_entity_id`
-        # (singular, optional UUID) — NOT a `entity_ids` list. The prior
-        # implementation read a non-existent field, so news_by_entity was
-        # always empty and every member's news_count_24h was 0 in
-        # production. We also accept a fallback `entity_ids` list shape
-        # so tests and any future schema change that introduces multiple
-        # tagged entities still flow through.
-        primary_eid = art.get("primary_entity_id")
-        ents: list[str] = []
-        if isinstance(primary_eid, str) and primary_eid:
-            ents.append(primary_eid)
-        legacy = art.get("entity_ids")
-        if isinstance(legacy, list):
-            ents.extend(str(x) for x in legacy if x)
-        if not ents:
-            continue
-        # Apply the 24h cutoff. published_at is ISO 8601 — best-effort parse.
-        published = art.get("published_at")
-        in_window = True
-        if isinstance(published, str):
+        async def _quote(iid: str) -> dict[str, Any]:
+            # F-Q1-02 fix (PLAN-0050 QA iter-1): switch from the legacy internal
+            # QuoteResponse endpoint (/api/v1/quotes/{iid}) to the PriceSnapshot
+            # endpoint (/internal/v1/price/{iid}).
+            #
+            # WHY: the legacy endpoint returns {last, bid, ask, volume, timestamp}
+            # which has NO change_pct field.  Every mover was showing change_pct=null
+            # because quote.get("change_pct") always returned None.  The PriceSnapshot
+            # endpoint is the authoritative price source for S9 (used by the /v1/quotes
+            # proxy) and returns {price, price_change, price_change_pct, ...}.
+            #
+            # WHY not call S9's own /v1/quotes/{iid}: that would add a loopback HTTP
+            # hop (gateway → gateway).  Calling S3 directly via the market_data client
+            # is cheaper and already the pattern used by the /v1/quotes proxy route.
+            #
+            # F-Q1-08 closed by this same fix: the stale `last` price from the legacy
+            # quote table (e.g. NVDA 199.64 vs 209.53) came from reading the wrong
+            # field.  PriceSnapshot's `price` field is resolved via the freshness chain
+            # (FRESH_QUOTE → BULK_QUOTE → INTRADAY → DAILY_CLOSE → STALE) — same
+            # authoritative source that the instrument detail page uses.
+            snap = await _safe_get(clients.market_data, "market-data", f"/internal/v1/price/{iid}")
+            if not snap:
+                return {}
+            # Map PriceSnapshot fields → the shape the composer reads below:
+            #   price       ← snap["price"]          (best available price string)
+            #   change_pct  ← snap["price_change_pct"] (signed % change string or None)
+            price_str = snap.get("price")
+            pct_str = snap.get("price_change_pct")
             try:
-                # Accept both with/without timezone — assume UTC if naive.
-                ts = datetime.fromisoformat(published.replace("Z", "+00:00"))
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=UTC)
-                in_window = ts >= cutoff
-            except ValueError:
-                in_window = True  # malformed date → keep it
-        if not in_window:
-            continue
-        for eid in ents:
-            news_by_entity.setdefault(eid, []).append(art)
+                price = float(price_str) if price_str is not None else None
+            except (ValueError, TypeError):
+                price = None
+            try:
+                change_pct = float(pct_str) if pct_str is not None else None
+            except (ValueError, TypeError):
+                change_pct = None
+            # Return a normalised dict that uses the same field names the loop below
+            # reads so we do not have to touch the per-member construction block.
+            return {"price": price, "change_pct": change_pct}
 
-    # Pending alerts indexed by entity_id (each alert may reference one).
-    alerts_by_entity: dict[str, int] = {}
-    pending_alerts = alerts_raw.get("alerts") or []
-    for alert in pending_alerts:
-        eid = alert.get("entity_id")
-        if eid:
-            alerts_by_entity[str(eid)] = alerts_by_entity.get(str(eid), 0) + 1
+        async def _overview(iid: str) -> dict[str, Any]:
+            # Just the instrument record gives us GICS sector — the per-member
+            # `getCompanyOverview` would also fetch fundamentals + OHLCV which we
+            # don't need here. Saves ~3x the per-member load.
+            return await _safe_get(clients.market_data, "market-data", f"/api/v1/instruments/{iid}")
 
-    # ── 4. Build per-member rows ───────────────────────────────────────────────
-    # We zip the parallel quote + overview results back to the resolved-member
-    # list. Anything past member_overview_cap gets a price-only row (no
-    # sector / news / alert lookup) — those rows still render but without
-    # enrichment, which is the right tradeoff for very large watchlists.
-    movers_out: list[dict[str, Any]] = []
-    for idx, member in enumerate(resolved_members):
-        iid = str(member["instrument_id"])
-        ticker = member.get("ticker") or "—"
-        name = member.get("name") or ticker
-        eid = str(member.get("entity_id") or "")
+        quote_results, overview_results = await asyncio.gather(
+            asyncio.gather(*[_quote(iid) for iid in capped_ids]),
+            asyncio.gather(*[_overview(iid) for iid in capped_ids]),
+        )
 
-        if idx < len(quote_results):
-            quote = quote_results[idx]
-            overview = overview_results[idx]
-            # F-Q1-02: _quote() now returns {"price": float|None, "change_pct": float|None}
-            # normalised from PriceSnapshot (not the legacy QuoteResponse {last, bid, ask}).
-            last = quote.get("price")
-            change_pct = quote.get("change_pct")
-            sector = (overview or {}).get("gics_sector") or member.get("sector")
-        else:
-            last = None
-            change_pct = None
-            sector = member.get("sector")
+        # ── 3. Index news + alerts by entity for O(1) per-member lookup ────────────
+        # WHY entity_id (not instrument_id): articles + alerts are tagged with KG
+        # entity_id (ADR-F-12). Matching against instrument_id would silently miss
+        # everything because instrument_id ≠ entity_id by design.
+        news_articles = news_raw.get("articles") or []
+        # Cutoff for the "news_count_24h" badge. The frontend cares about
+        # "did this name make the news today?" — older articles inflate the count.
+        from datetime import UTC, datetime, timedelta
 
-        # Top news for this member, if any. We pick the highest impact_score.
-        member_news = news_by_entity.get(eid, []) if eid else []
-        member_news_sorted = sorted(
-            member_news,
-            key=lambda a: float(a.get("market_impact_score") or a.get("display_relevance_score") or 0.0),
+        cutoff = datetime.now(tz=UTC) - timedelta(hours=news_lookback_hours)
+        news_by_entity: dict[str, list[dict[str, Any]]] = {}
+        for art in news_articles:
+            # F-QA2-01 fix: S6's RankedArticleResponse emits `primary_entity_id`
+            # (singular, optional UUID) — NOT a `entity_ids` list. The prior
+            # implementation read a non-existent field, so news_by_entity was
+            # always empty and every member's news_count_24h was 0 in
+            # production. We also accept a fallback `entity_ids` list shape
+            # so tests and any future schema change that introduces multiple
+            # tagged entities still flow through.
+            primary_eid = art.get("primary_entity_id")
+            ents: list[str] = []
+            if isinstance(primary_eid, str) and primary_eid:
+                ents.append(primary_eid)
+            legacy = art.get("entity_ids")
+            if isinstance(legacy, list):
+                ents.extend(str(x) for x in legacy if x)
+            if not ents:
+                continue
+            # Apply the 24h cutoff. published_at is ISO 8601 — best-effort parse.
+            published = art.get("published_at")
+            in_window = True
+            if isinstance(published, str):
+                try:
+                    # Accept both with/without timezone — assume UTC if naive.
+                    ts = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=UTC)
+                    in_window = ts >= cutoff
+                except ValueError:
+                    in_window = True  # malformed date → keep it
+            if not in_window:
+                continue
+            for eid in ents:
+                news_by_entity.setdefault(eid, []).append(art)
+
+        # Pending alerts indexed by entity_id (each alert may reference one).
+        alerts_by_entity: dict[str, int] = {}
+        pending_alerts = alerts_raw.get("alerts") or []
+        for alert in pending_alerts:
+            eid = alert.get("entity_id")
+            if eid:
+                alerts_by_entity[str(eid)] = alerts_by_entity.get(str(eid), 0) + 1
+
+        # ── 4. Build per-member rows ───────────────────────────────────────────────
+        # We zip the parallel quote + overview results back to the resolved-member
+        # list. Anything past member_overview_cap gets a price-only row (no
+        # sector / news / alert lookup) — those rows still render but without
+        # enrichment, which is the right tradeoff for very large watchlists.
+        movers_out: list[dict[str, Any]] = []
+        for idx, member in enumerate(resolved_members):
+            iid = str(member["instrument_id"])
+            ticker = member.get("ticker") or "—"
+            name = member.get("name") or ticker
+            eid = str(member.get("entity_id") or "")
+
+            if idx < len(quote_results):
+                quote = quote_results[idx]
+                overview = overview_results[idx]
+                # F-Q1-02: _quote() now returns {"price": float|None, "change_pct": float|None}
+                # normalised from PriceSnapshot (not the legacy QuoteResponse {last, bid, ask}).
+                last = quote.get("price")
+                change_pct = quote.get("change_pct")
+                sector = (overview or {}).get("gics_sector") or member.get("sector")
+            else:
+                last = None
+                change_pct = None
+                sector = member.get("sector")
+
+            # Top news for this member, if any. We pick the highest impact_score.
+            member_news = news_by_entity.get(eid, []) if eid else []
+            member_news_sorted = sorted(
+                member_news,
+                key=lambda a: float(a.get("market_impact_score") or a.get("display_relevance_score") or 0.0),
+                reverse=True,
+            )
+            top_news = member_news_sorted[0] if member_news_sorted else None
+
+            movers_out.append(
+                {
+                    "instrument_id": iid,
+                    "entity_id": eid or None,
+                    "ticker": ticker,
+                    "name": name,
+                    "sector": sector,
+                    # F-Q1-02: `last` is already a float|None from the PriceSnapshot
+                    # normalisation in _quote().  The float() cast remains for the
+                    # fallback path (idx >= member_overview_cap) where last is still None.
+                    "price": float(last) if last is not None else None,
+                    "change_pct": float(change_pct) if change_pct is not None else None,
+                    "news_count_24h": len(member_news),
+                    # F-QA-06 fix: defensive against an empty-string entity_id
+                    # accidentally matching all members without an entity_id. The
+                    # alerts_by_entity build already filters falsy keys, but the
+                    # explicit `bool(eid)` guard means a future regression that
+                    # lets "" through cannot reintroduce the false-positive.
+                    "has_active_alert": bool(eid) and eid in alerts_by_entity,
+                    "top_news_title": (top_news or {}).get("title"),
+                    "top_news_url": (top_news or {}).get("url"),
+                }
+            )
+
+        # ── 5. Aggregates ─────────────────────────────────────────────────────────
+        # Equal-weighted return: average change_pct across members for which we
+        # actually got a live quote. Members without a quote do not contribute
+        # (treating them as 0 would lie about the watchlist's day).
+        contributing = [m["change_pct"] for m in movers_out if m["change_pct"] is not None]
+        weighted_return_1d: float | None = sum(contributing) / len(contributing) if contributing else None
+
+        # Sector breakdown — count of members in each GICS bucket. The widget
+        # renders this as a stacked horizontal mini-bar so we return both count
+        # and weight (count / members_count) for convenience.
+        sector_counts: dict[str, int] = {}
+        for m in movers_out:
+            s = m["sector"] or "Unknown"
+            sector_counts[s] = sector_counts.get(s, 0) + 1
+        total_with_sector = sum(sector_counts.values()) or 1
+        sectors_out: list[dict[str, Any]] = sorted(
+            ({"sector": s, "count": c, "weight": c / total_with_sector} for s, c in sector_counts.items()),
+            key=lambda x: cast("int", x["count"]),
             reverse=True,
         )
-        top_news = member_news_sorted[0] if member_news_sorted else None
 
-        movers_out.append(
-            {
-                "instrument_id": iid,
-                "entity_id": eid or None,
-                "ticker": ticker,
-                "name": name,
-                "sector": sector,
-                # F-Q1-02: `last` is already a float|None from the PriceSnapshot
-                # normalisation in _quote().  The float() cast remains for the
-                # fallback path (idx >= member_overview_cap) where last is still None.
-                "price": float(last) if last is not None else None,
-                "change_pct": float(change_pct) if change_pct is not None else None,
-                "news_count_24h": len(member_news),
-                # F-QA-06 fix: defensive against an empty-string entity_id
-                # accidentally matching all members without an entity_id. The
-                # alerts_by_entity build already filters falsy keys, but the
-                # explicit `bool(eid)` guard means a future regression that
-                # lets "" through cannot reintroduce the false-positive.
-                "has_active_alert": bool(eid) and eid in alerts_by_entity,
-                "top_news_title": (top_news or {}).get("title"),
-                "top_news_url": (top_news or {}).get("url"),
+        # Biggest news (T-B-2-06): highest-impact article whose entity touches ANY
+        # watchlist member. Falls back to None on a quiet news day.
+        member_news_pool: list[dict[str, Any]] = []
+        for eid in entity_ids:
+            member_news_pool.extend(news_by_entity.get(eid, []))
+        # Dedup by article_id (an article can mention multiple watchlist members).
+        seen: set[str] = set()
+        deduped: list[dict[str, Any]] = []
+        for art in member_news_pool:
+            aid = str(art.get("article_id") or "")
+            if aid and aid in seen:
+                continue
+            if aid:
+                seen.add(aid)
+            deduped.append(art)
+        biggest_news_article = max(
+            deduped,
+            key=lambda a: float(a.get("market_impact_score") or a.get("display_relevance_score") or 0.0),
+            default=None,
+        )
+        biggest_news_out: dict[str, Any] | None = None
+        if biggest_news_article is not None:
+            biggest_news_out = {
+                "article_id": biggest_news_article.get("article_id"),
+                "title": biggest_news_article.get("title"),
+                "url": biggest_news_article.get("url"),
+                "published_at": biggest_news_article.get("published_at"),
+                "ticker": biggest_news_article.get("ticker"),
+                "impact_score": (
+                    float(biggest_news_article["market_impact_score"])
+                    if biggest_news_article.get("market_impact_score") is not None
+                    else None
+                ),
             }
+
+        # Pending alert count restricted to members.
+        alerts_count = sum(alerts_by_entity.get(eid, 0) for eid in entity_ids)
+
+        # F-Q1-13 fix (PLAN-0050 QA iter-1): sort movers by absolute change_pct
+        # descending so the WatchlistMoversWidget's gainers/losers split always
+        # shows the MOST moved instruments, not whatever order S1 returns members.
+        #
+        # WHY server-side (not client-side): the frontend renders the top-N from
+        # this list without re-sorting; the gateway cap (member_overview_cap=25) means
+        # an alphabetically-first watchlist member would monopolise top-5 slots if
+        # we returned them unsorted.  Sorting here guarantees the extremes appear
+        # first regardless of watchlist member order.
+        #
+        # WHY abs(): a -5% mover is equally "interesting" as a +5% mover for the
+        # purpose of identifying the most volatile names.  Members with null
+        # change_pct (no price data) are pushed to the end.
+        movers_out.sort(
+            key=lambda m: abs(m["change_pct"]) if m["change_pct"] is not None else -1.0,
+            reverse=True,
         )
 
-    # ── 5. Aggregates ─────────────────────────────────────────────────────────
-    # Equal-weighted return: average change_pct across members for which we
-    # actually got a live quote. Members without a quote do not contribute
-    # (treating them as 0 would lie about the watchlist's day).
-    contributing = [m["change_pct"] for m in movers_out if m["change_pct"] is not None]
-    weighted_return_1d: float | None = sum(contributing) / len(contributing) if contributing else None
-
-    # Sector breakdown — count of members in each GICS bucket. The widget
-    # renders this as a stacked horizontal mini-bar so we return both count
-    # and weight (count / members_count) for convenience.
-    sector_counts: dict[str, int] = {}
-    for m in movers_out:
-        s = m["sector"] or "Unknown"
-        sector_counts[s] = sector_counts.get(s, 0) + 1
-    total_with_sector = sum(sector_counts.values()) or 1
-    sectors_out: list[dict[str, Any]] = sorted(
-        ({"sector": s, "count": c, "weight": c / total_with_sector} for s, c in sector_counts.items()),
-        key=lambda x: cast("int", x["count"]),
-        reverse=True,
-    )
-
-    # Biggest news (T-B-2-06): highest-impact article whose entity touches ANY
-    # watchlist member. Falls back to None on a quiet news day.
-    member_news_pool: list[dict[str, Any]] = []
-    for eid in entity_ids:
-        member_news_pool.extend(news_by_entity.get(eid, []))
-    # Dedup by article_id (an article can mention multiple watchlist members).
-    seen: set[str] = set()
-    deduped: list[dict[str, Any]] = []
-    for art in member_news_pool:
-        aid = str(art.get("article_id") or "")
-        if aid and aid in seen:
-            continue
-        if aid:
-            seen.add(aid)
-        deduped.append(art)
-    biggest_news_article = max(
-        deduped,
-        key=lambda a: float(a.get("market_impact_score") or a.get("display_relevance_score") or 0.0),
-        default=None,
-    )
-    biggest_news_out: dict[str, Any] | None = None
-    if biggest_news_article is not None:
-        biggest_news_out = {
-            "article_id": biggest_news_article.get("article_id"),
-            "title": biggest_news_article.get("title"),
-            "url": biggest_news_article.get("url"),
-            "published_at": biggest_news_article.get("published_at"),
-            "ticker": biggest_news_article.get("ticker"),
-            "impact_score": (
-                float(biggest_news_article["market_impact_score"])
-                if biggest_news_article.get("market_impact_score") is not None
-                else None
-            ),
+        return {
+            "watchlist_id": watchlist_id,
+            "members_count": members_count,
+            "movers": movers_out,
+            "weighted_return_1d": weighted_return_1d,
+            "sectors": sectors_out,
+            "biggest_news": biggest_news_out,
+            "alerts_count": alerts_count,
         }
 
-    # Pending alert count restricted to members.
-    alerts_count = sum(alerts_by_entity.get(eid, 0) for eid in entity_ids)
-
-    # F-Q1-13 fix (PLAN-0050 QA iter-1): sort movers by absolute change_pct
-    # descending so the WatchlistMoversWidget's gainers/losers split always
-    # shows the MOST moved instruments, not whatever order S1 returns members.
-    #
-    # WHY server-side (not client-side): the frontend renders the top-N from
-    # this list without re-sorting; the gateway cap (member_overview_cap=25) means
-    # an alphabetically-first watchlist member would monopolise top-5 slots if
-    # we returned them unsorted.  Sorting here guarantees the extremes appear
-    # first regardless of watchlist member order.
-    #
-    # WHY abs(): a -5% mover is equally "interesting" as a +5% mover for the
-    # purpose of identifying the most volatile names.  Members with null
-    # change_pct (no price data) are pushed to the end.
-    movers_out.sort(
-        key=lambda m: abs(m["change_pct"]) if m["change_pct"] is not None else -1.0,
-        reverse=True,
-    )
-
-    return {
-        "watchlist_id": watchlist_id,
-        "members_count": members_count,
-        "movers": movers_out,
-        "weighted_return_1d": weighted_return_1d,
-        "sectors": sectors_out,
-        "biggest_news": biggest_news_out,
-        "alerts_count": alerts_count,
-    }
+    # T-A-1-01: outer wait_for budget — 15s covers the full fan-out:
+    # S1 members + S6 news + S10 alerts (parallel) → S3 quotes x N + S3 overviews x N
+    # (capped at 25 each). If the budget fires the widget gets a 504 rather than
+    # hanging until the browser's own timeout (30s+), which is a better UX signal.
+    try:
+        return await asyncio.wait_for(_compose(), timeout=15.0)
+    except TimeoutError:
+        raise HTTPException(status_code=504, detail="Upstream timeout")  # noqa: B904
