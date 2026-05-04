@@ -65,6 +65,14 @@ export const qk = {
       ["portfolios", "detail", portfolioId, "realized-pnl", period] as const,
     summary: (portfolioId: string) =>
       ["portfolios", "detail", portfolioId, "summary"] as const,
+    // WHY bundle key: the portfolio page bundle endpoint (PLAN-0070 C-1) fetches
+    // all sub-resources in one round-trip. This key is ONLY for the bundle fetch —
+    // the dedicated hooks (holdingsByPortfolio, transactionsByPortfolio, etc.)
+    // continue using their own keys for targeted invalidation after mutations.
+    // Invalidating qk.portfolios.bundle(id) triggers a full-page refetch; use it
+    // after mutations that affect multiple portfolio sub-resources at once.
+    bundle: (portfolioId: string) =>
+      ["portfolios", "bundle", portfolioId] as const,
     // ── Flat legacy-shape keys for usePortfolioData queries ─────────────
     // WHY different shape from holdings()/transactions() above: those keys nest
     // under ["portfolios","detail",id,...] for cascade-invalidation. The queries
