@@ -442,8 +442,10 @@ export type Quote = paths["/v1/quotes/{instrument_id}"]["get"]["responses"]["200
 
 ---
 
-### Wave C-1: Portfolio Page Bundle Endpoint
+### Wave C-1: Portfolio Page Bundle Endpoint ✅
 
+**Status**: DONE — 2026-05-03
+**Commit**: feat(s9+web): PLAN-0070-C-1 — portfolio bundle endpoint
 **Goal**: Replace the 9 separate portfolio hooks with a single `GET /v1/portfolio/{id}/bundle` endpoint that returns all required data in one response.
 **Depends on**: Sub-Plan A Wave A-1 complete
 **Estimated effort**: 2.5 hours
