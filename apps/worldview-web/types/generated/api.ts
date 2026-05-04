@@ -1726,6 +1726,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/dashboard/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dashboard Snapshot Endpoint
+         * @description Dashboard snapshot — collapses 6+ initial queries into 1 round-trip.
+         *
+         *     PLAN-0070 C-2 / T-C-2-02. Returns all data needed for the dashboard page
+         *     initial cold-start load:
+         *       - news              : top 8 ranked articles (S6 nlp-pipeline)
+         *       - heatmap           : GICS sector heatmap (S3 market-data, 11-sector fan-out)
+         *       - prediction_markets: top 5 prediction markets (S3 market-data)
+         *       - earnings_calendar : upcoming 7-day company earnings (S7 knowledge-graph)
+         *       - alerts            : top 10 pending alerts (S10 alert)
+         *       - morning_brief     : AI-generated morning briefing (S8 rag-chat)
+         *
+         *     NOT included (require per-instrument lookups or are lazy-loaded):
+         *       - top movers (requires N individual quote calls after screener)
+         *       - watchlist insights (requires portfolio service member lookup)
+         *
+         *     Each sub-resource degrades independently — failed legs return null so the
+         *     frontend can render partial UIs while showing "—" for unavailable data.
+         *     _meta.partial=True when any leg failed; _meta.legs_failed counts the misses.
+         *
+         *     WHY auth required: all sub-resources are tenant-scoped (alerts, briefings)
+         *     or rely on the X-Internal-JWT header being forwarded to downstream services.
+         *     OIDCAuthMiddleware does NOT enforce auth by itself — individual routes must check.
+         */
+        get: operations["get_dashboard_snapshot_endpoint_v1_dashboard_snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/holdings/{portfolio_id}": {
         parameters: {
             query?: never;
@@ -2450,6 +2491,37 @@ export interface components {
             success_rate: number;
         };
         /**
+         * DashboardSnapshotResponse
+         * @description Dashboard snapshot — all initial page data in one response.
+         *
+         *     PLAN-0070 C-2: collapses 6 dashboard page requests into one round-trip.
+         *     Each leg is independently nullable — _meta.partial=True when any leg failed.
+         *
+         *     Fields:
+         *       news              : top 8 ranked articles (S6 nlp-pipeline)
+         *       heatmap           : GICS sector heatmap (S3 market-data, 11-sector fan-out)
+         *       prediction_markets: top 5 prediction markets (S3 market-data)
+         *       earnings_calendar : upcoming 7-day company earnings (S7 knowledge-graph)
+         *       alerts            : top 10 pending alerts (S10 alert)
+         *       morning_brief     : AI-generated morning briefing (S8 rag-chat)
+         */
+        DashboardSnapshotResponse: {
+            /** News */
+            news?: Record<string, never> | null;
+            /** Heatmap */
+            heatmap?: Record<string, never> | null;
+            /** Prediction Markets */
+            prediction_markets?: Record<string, never> | null;
+            /** Earnings Calendar */
+            earnings_calendar?: Record<string, never> | null;
+            /** Alerts */
+            alerts?: Record<string, never> | null;
+            /** Morning Brief */
+            morning_brief?: Record<string, never> | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * EarningsCalendarResponse
          * @description Response from GET /v1/fundamentals/earnings-calendar.
          *
@@ -2698,6 +2770,37 @@ export interface components {
              * @default []
              */
             bars: components["schemas"]["OHLCVBar"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * PortfolioBundleResponse
+         * @description Portfolio page bundle — all data needed for the portfolio page initial load.
+         *
+         *     PLAN-0070 C-1: collapses 4 portfolio page requests into one round-trip.
+         *     Each leg is independently nullable — partial=True in bundle_meta when
+         *     any downstream call failed.
+         *
+         *     WHY extra="allow": the bundle passes through upstream fields as-is;
+         *     new S1 fields added in future don't need a schema update here.
+         *     WHY bundle_meta (not _meta): Pydantic v2 treats leading-underscore field
+         *     names as private attributes — they cannot be declared as model fields.
+         *     The client function returns "_meta" as a dict key which extra="allow"
+         *     captures automatically. bundle_meta serves as the validated alias form.
+         */
+        PortfolioBundleResponse: {
+            /** Portfolio Id */
+            portfolio_id: string;
+            /** Portfolio */
+            portfolio?: Record<string, never> | null;
+            /** Holdings */
+            holdings?: Record<string, never> | null;
+            /** Transactions */
+            transactions?: Record<string, never> | null;
+            /** Value History */
+            value_history?: Record<string, never> | null;
+            /** Bundle Meta */
+            bundle_meta?: Record<string, never> | null;
         } & {
             [key: string]: unknown;
         };
@@ -4917,7 +5020,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["PortfolioBundleResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4927,6 +5030,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_dashboard_snapshot_endpoint_v1_dashboard_snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardSnapshotResponse"];
                 };
             };
         };

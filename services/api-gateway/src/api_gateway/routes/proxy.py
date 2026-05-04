@@ -34,6 +34,7 @@ from api_gateway.schemas import (
     InstrumentSearchResult,
     NewsTopResponse,
     OHLCVResponse,
+    PortfolioBundleResponse,
     PortfolioResponse,
     PredictionMarket,
     PredictionMarketsListResponse,
@@ -1911,7 +1912,11 @@ async def delete_portfolio(portfolio_id: str, request: Request) -> Response:
 # ── PLAN-0070 C-1: Portfolio page bundle ─────────────────────────────────────
 
 
-@router.get("/portfolio/{portfolio_id}/bundle")
+@router.get(
+    "/portfolio/{portfolio_id}/bundle",
+    response_model=PortfolioBundleResponse,
+    response_model_exclude_none=True,
+)
 async def get_portfolio_bundle_endpoint(
     portfolio_id: str,
     request: Request,
