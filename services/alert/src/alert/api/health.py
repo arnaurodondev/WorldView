@@ -47,8 +47,9 @@ async def readyz(request: Request) -> Response:
     # 2. Kafka (check producer metadata — lightweight)
     try:
         producer = request.app.state.kafka_health_producer
-        # list_topics with short timeout — raises on connection failure
-        await asyncio.get_event_loop().run_in_executor(None, lambda: producer.list_topics(timeout=2))
+        # list_topics — initial connection establishment can take 3-4s on cold start;
+        # 5s gives enough headroom without blocking health checks too long (BP-350)
+        await asyncio.get_event_loop().run_in_executor(None, lambda: producer.list_topics(timeout=5))
         checks["kafka"] = "ok"
     except Exception:
         _log.warning("readyz_kafka_failed", exc_info=True)  # type: ignore[no-any-return]
