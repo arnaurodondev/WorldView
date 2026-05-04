@@ -117,12 +117,12 @@ export function ArticleCard({ article }: ArticleCardProps) {
     <article className={cn(
       // WHY rounded-[2px] (not rounded-lg): terminal aesthetic — 2px radius per design system rule.
       // rounded-lg looks consumer/friendly; 2px is the institutional standard throughout the app.
-      "group rounded-[2px] border border-border/40 bg-card p-3 transition-colors hover:border-border hover:bg-muted/30",
+      "group rounded-[2px] border border-border/40 bg-card py-1 px-2 transition-colors hover:border-border hover:bg-muted/30",
       isLightTier && "opacity-60",  // WHY: de-emphasise LIGHT-tier; opacity on the wrapper dims the entire card
     )}>
 
       {/* ── Top row: source + routing tier pill + timestamp ────────────────── */}
-      <div className="mb-1.5 flex items-center justify-between gap-2">
+      <div className="mb-0.5 flex items-center justify-between gap-2">
 
         {/* Left cluster: source badge + optional HIGH-tier pill */}
         <div className="flex shrink-0 items-center gap-1.5">
@@ -183,7 +183,7 @@ export function ArticleCard({ article }: ArticleCardProps) {
         href={safeExternalUrl(article.url)}
         target="_blank"
         rel="noopener noreferrer"
-        className="mb-1.5 block text-sm font-medium leading-snug text-foreground transition-colors group-hover:text-primary"
+        className="mb-0.5 block text-[11px] font-medium leading-snug text-foreground transition-colors group-hover:text-primary"
       >
         <span className="flex items-start gap-1">
           <span className="line-clamp-2 flex-1">{article.title}</span>
@@ -200,7 +200,7 @@ export function ArticleCard({ article }: ArticleCardProps) {
           summary field at all; getSummary() returns null for those. The empty string
           check handles both null and "" from the API without layout shift. */}
       {summary && summary.trim() !== "" && (
-        <p className="mb-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+        <p className="mb-0 line-clamp-2 text-[10px] leading-relaxed text-muted-foreground">
           {summary}
         </p>
       )}
