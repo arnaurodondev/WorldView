@@ -2,7 +2,7 @@
 
 > **Category**: kafka-messaging
 > **Description**: Kafka consumers/producers, Avro serialization, outbox pattern, DLQ, Schema Registry, topic routing, message retention, idempotency
-> **Count**: 34 patterns
+> **Count**: 35 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -1350,3 +1350,52 @@ before passing to `_emit_temporal_events`. This normalizes field names and resol
 **Status**: FIXED 2026-05-04 — added `_normalize_temporal_events_for_emit()` called at Block 13E call site; also fixes QG-3 (macro events with no entity refs are now emitted with empty exposed_entities).
 
 ---
+
+---
+
+### BP-356: Kafka Consumer Silent Death — Container Healthy, Consumer Group Dead
+
+**Category**: Kafka & Messaging
+**Severity**: HIGH
+**First seen**: 2026-05-04
+**Services**: market-data, knowledge-graph, portfolio
+
+**Symptoms**:
+- Consumer containers are `Up X hours (healthy)` in `docker ps`
+- `kafka-consumer-groups --describe` shows `Consumer group 'X' has no active members`
+- Kafka lag accumulates on affected partitions
+- No recent log output from the container (4 lines total from startup)
+- Container startup logs show: `SESSTMOUT ... revoking assignment and rejoining group`
+- Data stops flowing into the target DB (e.g., `fundamental_metrics` not updating)
+
+**Root cause**:
+The container's Docker healthcheck only checks process liveness (e.g., HTTP GET /healthz returns 200). It does NOT verify that the Kafka consumer is part of an active consumer group. After a `GroupCoordinator` session timeout (SESSTMOUT), the consumer logs that it's "rejoining" but silently dies in the background. The container process stays alive, the healthcheck passes, but the consumer group membership is gone.
+
+This was discovered when 7 consumer groups (market-data-fundamentals, market-data-quotes, market-data-ohlcv, market-data-intraday-resampling, kg-service-group-fundamentals, kg-service-group-instrument, portfolio-instrument-sync) all had no active members simultaneously. The root cause was SESSTMOUT at container startup, likely due to Kafka broker connection delays during platform initialization.
+
+**Fix**:
+```bash
+# 1. Check which groups have no active members
+docker exec worldview-kafka-1 kafka-consumer-groups \
+  --bootstrap-server localhost:9092 --list 2>&1 | while read group; do
+  result=$(docker exec worldview-kafka-1 kafka-consumer-groups \
+    --bootstrap-server localhost:9092 --group "$group" --describe 2>&1)
+  if echo "$result" | grep -q "no active members"; then
+    echo "DEAD: $group"
+  fi
+done
+
+# 2. Restart affected containers
+docker restart worldview-market-data-fundamentals-consumer-1 \
+  worldview-market-data-quotes-consumer-1 \
+  worldview-market-data-ohlcv-consumer-1 \
+  worldview-knowledge-graph-fundamentals-consumer-1
+# ...etc
+```
+
+**Prevention**:
+- Add consumer group membership to health/readiness checks: the `/readyz` endpoint should verify the consumer is part of an active Kafka group
+- Add a Prometheus alert rule: `kafka_consumer_group_lag > 0 AND kafka_consumer_group_members == 0` → PagerDuty
+- Consider setting `session.timeout.ms=90000` and `heartbeat.interval.ms=15000` in confluent_kafka consumer config to give more headroom on slow broker connections at startup
+
+**Regression test**: N/A (infrastructure resilience issue)
