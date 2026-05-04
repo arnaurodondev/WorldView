@@ -874,3 +874,32 @@ The citation context is already visible via `CitationChips` on the section bulle
 **Related**: BP-182 (no animate-pulse on any chrome element).
 
 ---
+
+---
+
+## BP-367 — PeerComparisonPanel: Case Mismatch on KG Edge Label + Wrong Screener Filter Format
+
+**Context**: `apps/worldview-web/components/instrument/PeerComparisonPanel.tsx` — FundamentalsTab competitor comparison panel.
+
+**Symptom**: Competitors panel always shows "No peer data available" even when 147+ `competes_with` relations exist in the knowledge graph.
+
+**Root cause 1** (primary): `(graph?.edges ?? []).filter((e) => e.label === "COMPETES_WITH")` — uppercase filter. S9 proxy (`proxy.py:1649`) sets edge label from `canonical_type` which the DB stores lowercase ("competes_with"). The uppercase filter never matched any edge → `competitorEntityIds` was always empty.
+
+**Root cause 2** (secondary): The screener queryFn used legacy `{field, operator, value}` format. Backend `ScreenFilterRequest` requires `{metric, min_value, max_value}` (pattern `^[a-z_][a-z0-9_]{0,63}$` on `metric`). Even if edges had been found, the screener call would have returned 422 or 0 results.
+
+**Root cause 3** (architecture): The screener has no `entity_id` filter. Using screener to look up specific competitors by entity_id is architecturally unsupported — use `getCompanyOverview(entityId)` instead (works because entity_id = instrument_id per M-017 convention).
+
+**Fix**:
+1. `e.label === "competes_with"` (lowercase)
+2. Replace entity_id screener call with `Promise.all(competitorEntityIds.map(id => gateway.getCompanyOverview(id)))`
+3. Sector fallback: `{metric: "market_capitalization", min_value: 0, sector: gics_sector}` (correct API format)
+4. Enhancement: fill remaining slots (up to 4 total) with sector peers sorted by |market_cap - current_market_cap|
+
+**Prevention**:
+- When filtering frontend graph edges by type, always verify the casing by checking `proxy.py`'s `_transform_graph_response` — canonical_type comes from DB lowercase.
+- The screener API only supports metric range filters (`metric/min_value/max_value/sector`). Never attempt entity_id, ticker, or string-equality filters.
+- To get fundamentals for a specific entity_id: use `getCompanyOverview(entityId)` not screener.
+
+**Related**: BP-342 (entity_id vs instrument_id in market-data), M-017 convention (entity_id = instrument_id for cross-service references).
+
+---
