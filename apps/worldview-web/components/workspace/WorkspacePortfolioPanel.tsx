@@ -107,11 +107,15 @@ export function WorkspacePortfolioPanel() {
               : "text-muted-foreground";
 
         return (
-          <div
+          // WHY Link (not div): clicking a holding row should navigate to the instrument
+          // detail page. A real <a> element gives keyboard navigation, screen-reader
+          // semantics, and middle-click / open-in-new-tab for free.
+          // WHY h-[22px]: §0.2 row height mandate. py-0: row height controls vertical
+          // spacing entirely. px-2: 8px horizontal gutter per §0.2 cell padding spec.
+          <Link
             key={h.holding_id}
-            // WHY h-[22px]: §0.2 row height mandate. py-0: row height controls vertical
-            // spacing entirely. px-2: 8px horizontal gutter per §0.2 cell padding spec.
-            className="flex items-center gap-2 px-2 h-[22px] hover:bg-muted/40"
+            href={`/instruments/${h.entity_id}`}
+            className="flex items-center gap-2 px-2 h-[22px] hover:bg-muted/40 text-foreground"
           >
             {/* Ticker — monospace, left-aligned */}
             <span className="w-14 shrink-0 font-mono text-[11px] tabular-nums font-medium text-foreground">
@@ -133,7 +137,7 @@ export function WorkspacePortfolioPanel() {
                 ? `${unrealizedPnl >= 0 ? "+" : ""}${unrealizedPnl.toFixed(0)}`
                 : "—"}
             </span>
-          </div>
+          </Link>
         );
       })}
 
