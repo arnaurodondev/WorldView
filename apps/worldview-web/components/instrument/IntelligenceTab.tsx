@@ -62,7 +62,7 @@ const EntityGraph = dynamic(
     ssr: false,
     loading: () => (
       <div className="flex h-[460px] items-center justify-center rounded-[2px] border border-border/40 bg-card/30">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-primary" />
+        <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" strokeWidth={1.5} />
       </div>
     ),
   },
@@ -816,7 +816,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
           </>
         ) : (
           <div className="flex h-[460px] items-center justify-center rounded-[2px] border border-border/40 bg-card/30">
-            <div className="h-6 w-6 animate-spin rounded-full border-2 border-border border-t-primary" />
+            <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" strokeWidth={1.5} />
           </div>
         )}
       </section>
@@ -849,7 +849,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
 
         {/* Error state */}
         {isError && !isLoading && (
-          <p className="text-sm text-muted-foreground">
+          <p className="text-[11px] text-muted-foreground">
             Could not load intelligence data. Try again shortly.
           </p>
         )}
