@@ -16,6 +16,7 @@ from api_gateway.clients import (
     DownstreamError,
     ServiceClients,
     get_company_overview,
+    get_dashboard_snapshot,
     get_instrument_page_bundle,
     get_map_layers,
     get_market_heatmap,
@@ -27,6 +28,7 @@ from api_gateway.clients import (
 from api_gateway.jwt_utils import issue_public_jwt, issue_user_jwt
 from api_gateway.schemas import (
     AlertResponse,
+    DashboardSnapshotResponse,
     EarningsCalendarResponse,
     FundamentalsResponse,
     InstrumentSearchResult,
@@ -1949,6 +1951,51 @@ async def get_portfolio_bundle_endpoint(
         # WHY lambda (not _auth_headers() called once): each downstream leg needs
         # a fresh JWT with a unique JTI. Calling _auth_headers() once and sharing
         # the result would trigger JTI replay detection on all 4 parallel calls.
+        make_headers=lambda: _auth_headers(request),
+    )
+    return result  # type: ignore[no-any-return]
+
+
+# ── Dashboard snapshot bundle (PLAN-0070 C-2) ─────────────────────────────────
+
+
+@router.get(
+    "/dashboard/snapshot",
+    response_model=DashboardSnapshotResponse,
+    response_model_exclude_none=True,
+)
+async def get_dashboard_snapshot_endpoint(request: Request) -> dict[str, Any]:
+    """Dashboard snapshot — collapses 6+ initial queries into 1 round-trip.
+
+    PLAN-0070 C-2 / T-C-2-02. Returns all data needed for the dashboard page
+    initial cold-start load:
+      - news              : top 8 ranked articles (S6 nlp-pipeline)
+      - heatmap           : GICS sector heatmap (S3 market-data, 11-sector fan-out)
+      - prediction_markets: top 5 prediction markets (S3 market-data)
+      - earnings_calendar : upcoming 7-day company earnings (S7 knowledge-graph)
+      - alerts            : top 10 pending alerts (S10 alert)
+      - morning_brief     : AI-generated morning briefing (S8 rag-chat)
+
+    NOT included (require per-instrument lookups or are lazy-loaded):
+      - top movers (requires N individual quote calls after screener)
+      - watchlist insights (requires portfolio service member lookup)
+
+    Each sub-resource degrades independently — failed legs return null so the
+    frontend can render partial UIs while showing "—" for unavailable data.
+    _meta.partial=True when any leg failed; _meta.legs_failed counts the misses.
+
+    WHY auth required: all sub-resources are tenant-scoped (alerts, briefings)
+    or rely on the X-Internal-JWT header being forwarded to downstream services.
+    OIDCAuthMiddleware does NOT enforce auth by itself — individual routes must check.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    result = await get_dashboard_snapshot(
+        _clients(request),
+        # WHY lambda (not _auth_headers() called once): each of the 6 downstream
+        # legs needs a fresh JWT with a unique JTI. Calling _auth_headers() once
+        # and sharing the result would trigger JTI replay detection.
         make_headers=lambda: _auth_headers(request),
     )
     return result  # type: ignore[no-any-return]

@@ -4,6 +4,7 @@
  */
 
 import type {
+  DashboardSnapshotResponse,
   EarningsCalendarResponse,
   EconomicCalendarResponse,
   MarketHeatmapResponse,
@@ -218,6 +219,24 @@ export function createDashboardApi(t: string | undefined) {
      */
     getAiSignals(limit = 8): Promise<AiSignalsResponse> {
       return apiFetch<AiSignalsResponse>(`/v1/signals/ai?limit=${limit}`, {
+        token: t,
+      });
+    },
+
+    /**
+     * getDashboardSnapshot — fetch all dashboard initial data in one request.
+     *
+     * WHY: collapses 6+ individual useQuery hooks on the dashboard cold-start
+     * into a single bundle request. S9 fans out to 6 upstream services
+     * concurrently (asyncio.gather) and returns the results in one response.
+     *
+     * Per-leg null means that upstream call failed — the frontend renders "—"
+     * or a skeleton for null legs. _meta.partial=true when any leg is null.
+     *
+     * PLAN-0070 C-2 / T-C-2-03.
+     */
+    getDashboardSnapshot(): Promise<DashboardSnapshotResponse> {
+      return apiFetch<DashboardSnapshotResponse>(`/v1/dashboard/snapshot`, {
         token: t,
       });
     },
