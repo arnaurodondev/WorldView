@@ -515,6 +515,99 @@ async def get_instrument_page_bundle(
         }
 
 
+# ── Portfolio page bundle (PLAN-0070 C-1) ───────────────────────────────
+
+
+async def get_portfolio_bundle(
+    clients: ServiceClients,
+    portfolio_id: str,
+    *,
+    make_headers: Callable[[], dict[str, str]] | None = None,
+    headers: dict[str, str] | None = None,
+    overall_timeout_s: float = 25.0,
+) -> dict[str, Any]:
+    """Compose portfolio page data in a single round-trip (PLAN-0070 C-1).
+
+    Returns all data needed for the portfolio page initial load:
+      - portfolio: portfolio metadata (GET /api/v1/portfolios/{id})
+      - holdings: holdings list (GET /api/v1/holdings/{id})
+      - transactions: recent 30 transactions (GET /api/v1/portfolios/{id}/transactions)
+      - value_history: equity curve data (GET /api/v1/portfolios/{id}/value-history)
+
+    WHY only 4 legs (not 7 as originally specced in PLAN-0070):
+      - performance, risk-metrics: S9 composition endpoints that internally fan out to
+        S3 (OHLCV) + S1 (holdings). Calling them from inside another composition creates
+        recursive HTTP overhead and JTI replay risk. Bundle the raw data instead.
+      - allocation: no S1 endpoint exists; computed client-side from holdings + overviews.
+    Each downstream call gets a fresh JWT via the make_headers() factory so
+    InternalJWTMiddleware's JTI replay detection accepts the parallel fan-out.
+
+    Uses asyncio.gather() so all 4 legs fly concurrently. _safe() wraps each
+    call to degrade to None on failure — _meta.partial=True when any leg fails.
+    Wrapped in asyncio.wait_for(overall_timeout_s) for hang protection.
+    """
+
+    def _h() -> dict[str, str]:
+        # WHY factory per call: each downstream request needs a fresh JWT with a
+        # unique JTI so InternalJWTMiddleware's replay detection doesn't reject
+        # any of the parallel calls (see _auth_headers comment in proxy.py).
+        return make_headers() if make_headers is not None else (headers or {})
+
+    async def _safe(path: str, **kwargs: Any) -> dict[str, Any] | None:
+        # WHY broad except: degrade to None on any failure (DownstreamError,
+        # httpx network errors, parse errors). Partial data is better than a
+        # 500 — the frontend renders the available legs and shows "—" for nulls.
+        try:
+            return await _checked_get(clients.portfolio, "portfolio", path, headers=_h(), **kwargs)
+        except Exception:
+            return None
+
+    async def _compose() -> dict[str, Any]:
+        # Fan-out: all 4 legs fly concurrently. return_exceptions=False is safe
+        # because _safe() already catches all exceptions and returns None.
+        (
+            portfolio_data,
+            holdings_data,
+            transactions_data,
+            value_history_data,
+        ) = await asyncio.gather(
+            _safe(f"/api/v1/portfolios/{portfolio_id}"),
+            _safe(f"/api/v1/holdings/{portfolio_id}"),
+            _safe(f"/api/v1/portfolios/{portfolio_id}/transactions", params={"limit": 30}),
+            _safe(f"/api/v1/portfolios/{portfolio_id}/value-history", params={"period": "1Y"}),
+        )
+
+        legs_failed = sum(
+            1 for leg in [portfolio_data, holdings_data, transactions_data, value_history_data] if leg is None
+        )
+
+        return {
+            "portfolio_id": portfolio_id,
+            "portfolio": portfolio_data,
+            "holdings": holdings_data,
+            "transactions": transactions_data,
+            "value_history": value_history_data,
+            # WHY _meta: a leading underscore keeps this field visually distinct
+            # from the domain payload fields. Pydantic model uses extra="allow"
+            # so it passes through to the response without needing a named field.
+            "_meta": {"partial": legs_failed > 0, "legs_failed": legs_failed},
+        }
+
+    try:
+        return await asyncio.wait_for(_compose(), timeout=overall_timeout_s)
+    except TimeoutError:
+        # Return a minimal partial bundle rather than a 504 — at least the
+        # portfolio_id is present so the frontend can show a skeleton + retry.
+        return {
+            "portfolio_id": portfolio_id,
+            "portfolio": None,
+            "holdings": None,
+            "transactions": None,
+            "value_history": None,
+            "_meta": {"partial": True, "legs_failed": 4, "timed_out": True},
+        }
+
+
 async def get_relevant_news(
     clients: ServiceClients,
     limit: int = 20,

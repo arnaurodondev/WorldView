@@ -352,8 +352,10 @@ Use `response_model_exclude_none=True` on all routes to avoid nulls cluttering t
 
 ---
 
-### Wave B-2: Tier-2 Routes (Instruments, Screener, Prediction Markets)
+### Wave B-2: Tier-2 Routes (Instruments, Screener, Prediction Markets) ✅
 
+**Status**: DONE — 2026-05-03
+**Commit**: feat(s9): PLAN-0070-B-2 — Tier-2 response_model annotations
 **Goal**: Annotate 10 more routes with response models — instrument page bundle, fundamentals, screener, prediction markets.
 **Depends on**: Wave B-1 (schema package established)
 **Estimated effort**: 3 hours
@@ -852,8 +854,8 @@ D-1 (error states) — parallel, no deps
 | T-A-2-01 | Add retry wrapper to _checked_get/_checked_post | A | A-2 | pending |
 | T-B-1-01 | Create api_gateway/schemas/ package | B | B-1 | done |
 | T-B-1-02 | Annotate Tier-1 proxy routes with response_model | B | B-1 | done |
-| T-B-2-01 | Tier-2 schemas | B | B-2 | pending |
-| T-B-2-02 | Annotate Tier-2 routes | B | B-2 | pending |
+| T-B-2-01 | Tier-2 schemas | B | B-2 | done |
+| T-B-2-02 | Annotate Tier-2 routes | B | B-2 | done |
 | T-B-3-01 | Replace Tier-1 hand-written types with generated aliases | B | B-3 | pending |
 | T-C-1-01 | Portfolio bundle client function | C | C-1 | pending |
 | T-C-1-02 | Portfolio bundle proxy route | C | C-1 | pending |

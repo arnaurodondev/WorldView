@@ -19,6 +19,7 @@ from api_gateway.clients import (
     get_instrument_page_bundle,
     get_map_layers,
     get_market_heatmap,
+    get_portfolio_bundle,
     get_relevant_news,
     get_top_movers,
     get_watchlist_insights,
@@ -26,11 +27,16 @@ from api_gateway.clients import (
 from api_gateway.jwt_utils import issue_public_jwt, issue_user_jwt
 from api_gateway.schemas import (
     AlertResponse,
+    EarningsCalendarResponse,
+    FundamentalsResponse,
     InstrumentSearchResult,
     NewsTopResponse,
     OHLCVResponse,
     PortfolioResponse,
+    PredictionMarket,
+    PredictionMarketsListResponse,
     QuoteResponse,
+    ScreenerResponse,
     WatchlistResponse,
 )
 from observability.logging import get_logger  # type: ignore[import-untyped]
@@ -341,12 +347,15 @@ async def update_email_preferences(request: Request) -> Any:
 # ── Screener + Timeseries (PRD-0017 Wave C-1) ─────────────────────────────────
 
 
-@router.post("/fundamentals/screen")
+@router.post("/fundamentals/screen", response_model=ScreenerResponse, response_model_exclude_none=True)
 async def screen_instruments(request: Request) -> Any:
     """Proxy POST /api/v1/fundamentals/screen → S3 Market Data.
 
     Public endpoint — issues a system JWT so the backend's InternalJWTMiddleware
     accepts the request.  S3 returns 400 for no filters, 422 for invalid metric/sort_by.
+
+    WHY response_model=ScreenerResponse: S3 ScreenResponse has {results, count, total}.
+    ScreenerResponse mirrors this shape (extra=allow passes count through).
     """
     body = await request.body()
     clients = _clients(request)
@@ -532,7 +541,11 @@ async def list_alert_history(request: Request) -> Response:
 # ── Prediction Markets (PRD-0019 Wave C-1) ────────────────────────────────────
 
 
-@router.get("/signals/prediction-markets")
+@router.get(
+    "/signals/prediction-markets",
+    response_model=PredictionMarketsListResponse,
+    response_model_exclude_none=True,
+)
 async def list_prediction_markets(
     request: Request,
     # PLAN-0049 T-C-3-03 — declared explicitly (rather than left as a generic
@@ -554,6 +567,10 @@ async def list_prediction_markets(
 
     Requires authentication. Forwards query params (status, limit, offset,
     category) and auth headers derived from the JWT payload.
+
+    WHY response_model=PredictionMarketsListResponse: S3 returns
+    {items: [...], total, limit, offset}. PredictionMarketsListResponse
+    mirrors that shape exactly (extra=allow passes any new fields through).
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -597,11 +614,20 @@ async def get_prediction_market_categories(request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
-@router.get("/signals/prediction-markets/{market_id}")
+@router.get(
+    "/signals/prediction-markets/{market_id}",
+    response_model=PredictionMarket,
+    response_model_exclude_none=True,
+)
 async def get_prediction_market(market_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/prediction-markets/{id} → S3 Market Data.
 
     Requires authentication. S3 returns 404 if the market_id is unknown.
+
+    WHY response_model=PredictionMarket: S3 PredictionMarketDetailResponse
+    is a superset of PredictionMarketSummaryResponse (adds description +
+    created_at). PredictionMarket uses extra=allow so those extra fields
+    pass through without a validation error.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1299,7 +1325,11 @@ async def economic_calendar(request: Request) -> Any:
 # (same reason as economic-calendar above — literal sub-paths shadow path params in FastAPI
 # only when registered FIRST in the same router).
 # PLAN-0068 Wave A-2.
-@router.get("/fundamentals/earnings-calendar")
+@router.get(
+    "/fundamentals/earnings-calendar",
+    response_model=EarningsCalendarResponse,
+    response_model_exclude_none=True,
+)
 async def earnings_calendar(request: Request) -> Any:
     """Proxy GET /api/v1/temporal-events → S7 Knowledge Graph (corporate earnings).
 
@@ -1314,6 +1344,10 @@ async def earnings_calendar(request: Request) -> Any:
       - from_date (date): earliest active_from to include
       - to_date   (date): latest active_from to include
       - limit     (int):  max rows to return (S7 default: 20)
+
+    WHY response_model=EarningsCalendarResponse: S7 TemporalEventsListResponse
+    returns {events: list[TemporalEventResponse], total: int}. EarningsCalendarResponse
+    mirrors that shape with EarningsEvent matching TemporalEventResponse fields.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1479,12 +1513,21 @@ async def get_fundamentals_snapshot(instrument_id: str, request: Request) -> Any
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
-@router.get("/fundamentals/{instrument_id}")
+@router.get(
+    "/fundamentals/{instrument_id}",
+    response_model=FundamentalsResponse,
+    response_model_exclude_none=True,
+)
 async def get_fundamentals(instrument_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/fundamentals/{instrument_id} → S3 Market Data.
 
     Requires authentication. Forwards query parameters (fields, etc.) to S3 for
     fundamentals data retrieval. Distinct from the public screener endpoints.
+
+    WHY response_model=FundamentalsResponse: S3 returns {security_id, records[]}.
+    FundamentalsResponse mirrors that shape. Note: S3 uses security_id (not
+    instrument_id) as the primary key — the frontend resolves via the overview
+    endpoint's instrument_id → security_id mapping.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1861,6 +1904,54 @@ async def delete_portfolio(portfolio_id: str, request: Request) -> Response:
     # S1 returns 204 with no body on success. Pass status + body through
     # so the frontend can read the error envelope on failures.
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── PLAN-0070 C-1: Portfolio page bundle ─────────────────────────────────────
+
+
+@router.get("/portfolio/{portfolio_id}/bundle")
+async def get_portfolio_bundle_endpoint(
+    portfolio_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """Portfolio page bundle — collapses 4 portfolio queries into 1 round-trip.
+
+    PLAN-0070 C-1 / T-C-1-02. Returns:
+      - portfolio: portfolio metadata (GET /api/v1/portfolios/{id})
+      - holdings: holdings list (GET /api/v1/holdings/{id})
+      - transactions: recent 30 transactions (GET /api/v1/portfolios/{id}/transactions)
+      - value_history: equity curve data (GET /api/v1/portfolios/{id}/value-history)
+
+    Each sub-resource degrades independently — failed legs return null so the
+    frontend can render partial UIs while showing "—" for unavailable data.
+    _meta.partial=True when any leg failed; _meta.legs_failed counts the misses.
+
+    WHY auth required: all portfolio sub-resources are tenant-scoped; unauthenticated
+    access would expose financial data. OIDCAuthMiddleware does NOT enforce auth
+    by itself — individual routes must check.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # WHY UUID validation: prevents path injection. portfolio_id appears in
+    # 4 downstream URLs; a crafted string like "../../etc" could traverse paths
+    # on services with naive routing. UUID format is the only valid S1 ID shape.
+    import uuid as _uuid
+
+    try:
+        _uuid.UUID(portfolio_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid portfolio_id — must be a UUID")  # noqa: B904
+
+    result = await get_portfolio_bundle(
+        _clients(request),
+        portfolio_id,
+        # WHY lambda (not _auth_headers() called once): each downstream leg needs
+        # a fresh JWT with a unique JTI. Calling _auth_headers() once and sharing
+        # the result would trigger JTI replay detection on all 4 parallel calls.
+        make_headers=lambda: _auth_headers(request),
+    )
+    return result  # type: ignore[no-any-return]
 
 
 @router.get("/holdings/{portfolio_id}")
