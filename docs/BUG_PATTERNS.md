@@ -17,7 +17,7 @@
 | [Async & Concurrency](bug-patterns/async-concurrency.md) | `bug-patterns/async-concurrency.md` | 14 | asyncio, event loops, concurrency, React concurrent mode |
 | [Auth & Security](bug-patterns/auth-security.md) | `bug-patterns/auth-security.md` | 28 | JWT/OIDC, SSRF, XSS, tenant isolation, CSP, middleware |
 | [Testing](bug-patterns/testing.md) | `bug-patterns/testing.md` | 26 | pytest, AsyncMock, fixtures, Vitest, pre-commit, CI |
-| [Frontend](bug-patterns/frontend.md) | `bug-patterns/frontend.md` | 29 | React, Next.js, WebSocket/SSE, TypeScript, CSS |
+| [Frontend](bug-patterns/frontend.md) | `bug-patterns/frontend.md` | 30 | React, Next.js, WebSocket/SSE, TypeScript, CSS |
 | [Config & Docker](bug-patterns/config-docker.md) | `bug-patterns/config-docker.md` | 30 | pydantic-settings, Docker, Compose, env vars, images |
 | [ML & LLM](bug-patterns/ml-llm.md) | `bug-patterns/ml-llm.md` | 27 | Ollama, GLiNER, DeepInfra, embeddings, LLM prompt patterns |
 | [Observability](bug-patterns/observability.md) | `bug-patterns/observability.md` | 9 | Prometheus, Grafana, Alertmanager, structlog, OTel |
@@ -346,6 +346,9 @@
 | BP-349 | Raw vs processed event dict field name mismatch silently drops all Block 13E temporal events — `_emit_temporal_events()` reads `"extraction_confidence"` (normalized) but receives raw LLM dicts with `"confidence"`; default 0.0 fails confidence filter; fix: run `_build_raw_events()` before passing to `_emit_temporal_events()` | Kafka & Messaging | [bug-patterns/kafka-messaging.md](bug-patterns/kafka-messaging.md#bp-349) |
 | BP-350 | confluent_kafka Producer `list_topics(timeout=N)` fails with `_TRANSPORT` on first health-check call — the Python Producer lazy-connects in a background thread; a short timeout (2s) fires before the TCP handshake + metadata exchange completes; fix: set `socket.timeout.ms=10000` in producer config AND use `timeout=8` in `list_topics()` | Config & Docker | [bug-patterns/config-docker.md](bug-patterns/config-docker.md#bp-350) |
 | BP-351 | Transient LLM embedding failure defers next retry 30 days — `fundamentals_refresh.py` always sets `next_refresh_at = now() + 30d` even when `embed()` returns `[]`/`None`; entity is silently skipped for 30 days; fix: use 6h retry when embedding is None | ML & LLM | [bug-patterns/ml-llm.md](bug-patterns/ml-llm.md#bp-351) |
+| BP-352 | confluent_kafka Consumer Group stuck in permanent REQTMOUT loop — consumer sends GroupCoordinator join request but TCP connection never fully establishes in time; Docker healthcheck reports healthy but consumer has no active members; symptom: `REQTMOUT | thrd:GroupCoordinator` repeating every 56s with no successful group join; fix: container restart (clean reconnect); long-term: set `session.timeout.ms=90000` + `request.timeout.ms=30000` | Kafka & Messaging | [bug-patterns/kafka-messaging.md](bug-patterns/kafka-messaging.md#bp-352) |
+| BP-353 | Screener returns empty list when no filters applied — `query_screen()` early-return guard `if not filters: return [], 0` blocks the all-instruments default query; fix: add an alternate query path for the empty-filters case that queries `instruments` table directly with `COUNT(*) OVER()` + `ORDER BY symbol ASC` | API & Contracts | [bug-patterns/api-contracts.md](bug-patterns/api-contracts.md#bp-353) |
+| BP-354 | AI brief citation markers `[cN]` leak as raw text in lead block — backend intentionally keeps `[cN]` markers in `BriefingResponse.lead` for inline display, but frontend `LeadProse` renders `{lead}` as raw text without stripping them; fix: `lead.replace(/\[c\d+\]/g, "")` before rendering | Frontend | [bug-patterns/frontend.md](bug-patterns/frontend.md#bp-354) |
 
 ---
 

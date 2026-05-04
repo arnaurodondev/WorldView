@@ -237,11 +237,11 @@ describe("EntityGraph", () => {
         </GraphErrorBoundary>,
       );
 
-      // WHY exact text including the em-dash: the production component renders
-      // "Graph unavailable — WebGL required." (U+2014).  Asserting on the exact
-      // string catches accidental copy edits / dash-style drift in code review.
+      // WHY partial match: the exact text changes based on error type detection.
+      // Assert on the stable prefix "Graph unavailable" rather than the full
+      // message, which varies for WebGL vs non-WebGL errors.
       expect(
-        screen.getByText("Graph unavailable — WebGL required."),
+        screen.getByText(/Graph unavailable/),
       ).toBeInTheDocument();
       // The "Reload page" button is the user's only recovery affordance — it
       // must be rendered so we can click it (and it must be a real <button>).
