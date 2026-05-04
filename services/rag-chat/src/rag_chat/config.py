@@ -77,7 +77,7 @@ class Settings(BaseSettings):
 
     # ── Completion model config (PRD-0016 §6.2, T-B-2-01) ────────────────────
     completion_provider: str = "deepinfra"  # RAG_CHAT_COMPLETION_PROVIDER
-    completion_model: str = "Qwen/Qwen3-32B"  # RAG_CHAT_COMPLETION_MODEL
+    completion_model: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"  # RAG_CHAT_COMPLETION_MODEL
     # OpenRouter fallback model — configurable independently from the DeepInfra primary.
     openrouter_completion_model: str = "deepseek/deepseek-r1-distill-qwen-32b"  # RAG_CHAT_OPENROUTER_COMPLETION_MODEL
 
