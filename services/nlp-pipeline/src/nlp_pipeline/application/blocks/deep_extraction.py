@@ -62,7 +62,25 @@ _EXTRACTION_SCHEMA: dict[str, object] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "event_type": {"type": "string"},
+                    "event_type": {
+                        "type": "string",
+                        "enum": [
+                            "EARNINGS_RELEASE",
+                            "M_AND_A",
+                            "REGULATORY_ACTION",
+                            "MACRO",
+                            "MANAGEMENT_CHANGE",
+                            "PRODUCT_LAUNCH",
+                            "CAPITAL_RAISE",
+                            "LEGAL",
+                            "ANALYST_RATING",
+                            "GUIDANCE_RAISE",
+                            "NATURAL_DISASTER",
+                            "GEOPOLITICAL",
+                            "SANCTIONS",
+                            "OTHER",
+                        ],
+                    },
                     "description": {"type": "string"},
                     "entity_refs": {"type": "array", "items": {"type": "string"}},
                     "valid_from": {"type": ["string", "null"]},

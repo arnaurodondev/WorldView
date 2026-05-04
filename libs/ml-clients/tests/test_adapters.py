@@ -1006,8 +1006,10 @@ class TestDeepInfraDescriptionAdapter:
 
         async def _capture_create(**kwargs: object) -> MagicMock:
             messages = kwargs.get("messages", [])
-            if messages:
-                captured_prompts.append(messages[0]["content"])
+            if len(messages) > 1:
+                # messages[0] is the static system prompt; messages[1] is the user-turn
+                # which contains the entity name, type, and context_hints.
+                captured_prompts.append(messages[1]["content"])
             mock_choice = MagicMock()
             mock_choice.message.content = "Description with context."
             mock_response = MagicMock()
