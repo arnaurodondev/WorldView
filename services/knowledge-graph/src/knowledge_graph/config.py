@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     # KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY — set via secret; empty = extraction chain skips DeepInfra
     deepinfra_api_key: str = ""
     # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_MODEL_ID
-    deepinfra_extraction_model_id: str = "deepseek-ai/DeepSeek-V4-Flash"
+    deepinfra_extraction_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"
     # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_BASE_URL
     deepinfra_extraction_base_url: str = "https://api.deepinfra.com/v1/openai"
     # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_CONCURRENCY
