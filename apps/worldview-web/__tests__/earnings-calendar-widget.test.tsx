@@ -230,9 +230,11 @@ describe("EarningsCalendarWidget — error state", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/Earnings calendar unavailable/i),
+        screen.getByText(/Earnings data unavailable/i),
       ).toBeInTheDocument();
     });
+    // WHY Retry button: error state now includes AlertTriangle + Retry affordance
+    expect(screen.getByRole("button", { name: /Retry/i })).toBeInTheDocument();
 
     // WHY verify no event rows: error state must not show stale data
     expect(screen.queryByText("AAPL")).not.toBeInTheDocument();

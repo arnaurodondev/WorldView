@@ -63,6 +63,10 @@ import { EconomicCalendar } from "@/components/dashboard/EconomicCalendar";
 import { EarningsCalendarWidget } from "@/components/dashboard/EarningsCalendarWidget";
 import { PortfolioNewsWidget } from "@/components/dashboard/PortfolioNewsWidget";
 import { RecentAlerts } from "@/components/dashboard/RecentAlerts";
+// PLAN-0070 C-2: DashboardSnapshotPrefetcher is a thin client wrapper that fires
+// useDashboardSnapshot() to warm the TanStack Query cache in one round-trip.
+// Returns null — no visible UI. Individual widgets still own their own queries.
+import { DashboardSnapshotPrefetcher } from "@/components/dashboard/DashboardSnapshotPrefetcher";
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -111,6 +115,9 @@ export default function DashboardPage() {
           "var(--dashboard-grid-rows, auto 130px minmax(220px, 1fr) minmax(200px, 1fr))",
       }}
     >
+      {/* PLAN-0070 C-2: fires GET /v1/dashboard/snapshot to warm the TanStack
+          Query cache in a single round-trip. Returns null — no visible UI. */}
+      <DashboardSnapshotPrefetcher />
 
       {/* ── Row 1: Morning Brief — full width ───────────────────────────── */}
       {/* WHY col-span-12: brief always spans all columns — it's the primary

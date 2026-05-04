@@ -106,6 +106,8 @@ import { PerformanceStrip } from "@/features/portfolio/components/PerformanceStr
 import { HoldingsTab } from "@/features/portfolio/components/HoldingsTab";
 import { TransactionsTab } from "@/features/portfolio/components/TransactionsTab";
 import { usePortfolioData } from "@/features/portfolio/hooks/usePortfolioData";
+// PLAN-0070 C-1: fire the bundle endpoint to warm the cache in one round-trip.
+import { usePortfolioBundle } from "@/features/portfolio/hooks/usePortfolioBundle";
 
 // ── PortfolioPage ───────────────────────────────────────────────────────────
 
@@ -198,6 +200,14 @@ export default function PortfolioPage() {
     handlePositionAdded,
     deletePortfolioMutation,
   } = data;
+
+  // PLAN-0070 C-1: fire the bundle endpoint for the active portfolio.
+  // WHY here (not inside usePortfolioData): the bundle is an optimisation layer —
+  // individual queries still own their own cache entries. Calling the hook here
+  // fires GET /v1/portfolio/{id}/bundle once activePortfolioId is known,
+  // collapsing 4 downstream requests into 1 round-trip on cold start.
+  // The hook is a no-op when portfolioId or accessToken are null.
+  usePortfolioBundle({ portfolioId: activePortfolioId, accessToken });
 
   // ── Loading state (initial mount, no portfolios yet) ──────────────────
   if (portfoliosLoading || (holdingsLoading && !holdingsResp)) {
