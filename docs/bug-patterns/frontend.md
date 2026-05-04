@@ -903,3 +903,85 @@ The citation context is already visible via `CitationChips` on the section bulle
 **Related**: BP-342 (entity_id vs instrument_id in market-data), M-017 convention (entity_id = instrument_id for cross-service references).
 
 ---
+
+## BP-368 — Screener Default: Invalid Mandatory Enrichment Filters (current_price, pe_ratio, daily_return)
+
+**Context**: `apps/worldview-web/features/screener/lib/build-filters.ts` — buildScreenerFilters function.
+
+**Symptom**: Screener shows 0 stocks by default. No filter is visible in the UI but the backend returns 0 results.
+
+**Root cause**: Three mandatory enrichment filters were always appended to every screener request:
+1. `current_price` (min=0, max=9,999,999): `current_price` is NOT a valid metric in the `fundamentals_metrics` table. The backend performs INNER JOIN per filter metric — invalid metric → 0 rows matched → always 0 results.
+2. `pe_ratio` (min=-999999, max=999999): Only 8/31 instruments have PE data. INNER JOIN excludes 23/31 instruments from all default screener views.
+3. `daily_return` (min=-100, max=100): Only 8/31 instruments have daily_return data. Same INNER JOIN exclusion.
+
+**Fix**: Remove all three mandatory enrichment filters. Use only `market_capitalization min=0` as the universal fallback filter when no user constraints are set. Users who want PE/daily_return-filtered views explicitly add those filters.
+
+**Prevention**:
+- Never add enrichment filters "so the column shows data" — the INNER JOIN semantics of the screener backend means mandatory metric filters silently exclude instruments that don't have that metric.
+- The screener's NULL-safe formatters (`—` for missing values) handle missing metric columns correctly; there is no need for mandatory metric presence.
+- When testing screener defaults, always check `total` in the response — 0 total with no 422 error indicates an invalid metric filter.
+
+---
+
+## BP-369 — FundamentalsTab: All Entries Empty — Records Format Mismatch
+
+**Context**: `apps/worldview-web/lib/api/instruments.ts` — `getFundamentals()` gateway method.
+
+**Symptom**: Fundamentals tab shows "—" for all fields even with EODHD premium API key and 823 records in the database.
+
+**Root cause**: S3's `GET /v1/fundamentals/{id}` returns `{security_id, records: [{section, period_end, data: {...}}]}` — a list of records grouped by section. The frontend `getFundamentals()` was calling `apiFetch<Fundamentals>(...)` expecting a flat Fundamentals object, but receiving the raw records response. All fields were `undefined`.
+
+**Fix**: Add a records→Fundamentals transformer in `getFundamentals()`:
+1. Parse the `records` array, grouping by section: `highlights`, `valuation_ratios`, `technicals_snapshot`
+2. Map fields: `pe_ratio` ← `hi.PERatio`, `forward_pe` ← `vr.ForwardPE`, etc.
+3. Compute derived fields: `gross_margin = GrossProfitTTM / RevenueTTM`, `payout_ratio = DividendShare / EarningsShare`
+
+**Prevention**:
+- Always test gateway methods with the actual backend response (curl) before writing the transformer type.
+- S3 fundamentals endpoint returns `records[]` not a flat object; every section-keyed field lookup requires finding the correct section first.
+- Check the `section` field in records before accessing `data` — records include time-series sections (income_statement, balance_sheet) that should not be mapped to the spot fundamentals.
+
+---
+
+## BP-370 — EconomicCalendar: S7 Field Name Mismatch → RangeError crash
+
+**Context**: `apps/worldview-web/lib/api/dashboard.ts` — `getEconomicCalendar()`, `components/dashboard/EconomicCalendar.tsx`.
+
+**Symptom**: Economic calendar widget shows empty on the dashboard.
+
+**Root cause**: S9 passes through S7's raw `TemporalEventsListResponse` without transformation. S7 uses:
+- `active_from` (not `event_date`)
+- `region` (not `country`)
+- `confidence` (not `impact` enum)
+- Description text "Actual: X, Previous: Y" (not separate `forecast`/`previous`/`actual` fields)
+
+The component called `new Date(event.event_date)` which received `undefined`, then called `.toISOString()` on the Invalid Date → `RangeError: Invalid time value`. React error boundary caught the crash, showing an empty panel.
+
+**Fix**: Add a S7→EconomicEvent transformer in `getEconomicCalendar()`:
+- `active_from → event_date`
+- `region → country`
+- `confidence → impact` (≥0.8=HIGH, ≥0.5=MEDIUM, else LOW)
+- Parse description text with regex for Actual/Previous/Forecast values
+
+**Prevention**:
+- When proxying through S9, always check whether the backend uses field aliases different from the frontend type. `apiFetch<FrontendType>(url)` does NOT validate field names at runtime — TypeScript types are erased.
+- Any component that calls `.toISOString()` on a date field must guard against `undefined`: `event_date ? new Date(event_date).toISOString() : null`.
+
+---
+
+## BP-371 — WorkspaceScreenerWidget: Empty filters[] → 422 Backend Rejection
+
+**Context**: `apps/worldview-web/components/workspace/WorkspaceScreenerWidget.tsx`.
+
+**Symptom**: Workspace screener panel shows error state / no data.
+
+**Root cause**: `runScreener({ filters: [] })` — the backend's `POST /v1/fundamentals/screen` validates `filters` with `min_length=1`. Empty array triggers HTTP 422: "List should have at least 1 item after validation, not 0". The component had no retry or fallback and showed permanent error state.
+
+**Fix**: Use `filters: [{ metric: "market_capitalization", min_value: 0 }]` as the universal no-op filter. Every instrument has a market cap ≥ 0, so no rows are excluded.
+
+**Prevention**:
+- The screener API's `min_length=1` constraint on `filters[]` is documented in the OpenAPI schema. Any component that builds a screener request must ensure at least one filter is present.
+- `buildScreenerFilters(DEFAULT_FILTERS)` from `features/screener/lib/build-filters.ts` already handles this correctly — reuse it instead of hardcoding filters.
+
+---
