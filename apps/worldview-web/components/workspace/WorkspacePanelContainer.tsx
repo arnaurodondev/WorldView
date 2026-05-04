@@ -20,12 +20,17 @@
  * WHO USES IT: WorkspaceGrid renders one WorkspacePanelContainer per panel slot.
  * DATA SOURCE: SymbolLinkingContext (current symbol per panel id).
  * DESIGN REFERENCE: PRD-0031 §5.4 Panel chrome spec; DESIGN_SYSTEM.md §6.13.
+ * PLAN-0059-G Wave G-2: EntityGraphPanel is lazy-loaded via next/dynamic so the
+ * workspace route bundle does not include the SVG graph code until a "graph" panel
+ * is actually added to the workspace. The panel's SVG tooltip positioning uses
+ * getBoundingClientRect() — a browser-only API — so ssr:false is required.
  */
 
 "use client";
 // WHY "use client": references context hooks (useWorkspace, useSymbolLink) and
 // renders a Popover (Radix portals require browser DOM).
 
+import dynamic from "next/dynamic";
 import {
   TrendingUp,
   Newspaper,
@@ -41,7 +46,26 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { EntityGraphPanel } from "@/components/instrument/EntityGraphPanel";
+import { Skeleton } from "@/components/ui/skeleton";
+
+// ── Lazy-loaded graph panel ───────────────────────────────────────────────────
+// WHY next/dynamic for EntityGraphPanel here: the graph panel is one of 10 panel
+// types in the workspace. Most workspaces have no graph panel — loading the SVG
+// graph code eagerly for all workspaces wastes bandwidth for 90%+ of sessions.
+// Loading it on demand (when a "graph" panel is first rendered) is the right split.
+// WHY ssr:false: EntityGraphPanel calls svgRef.current.getBoundingClientRect()
+// for tooltip positioning — this is a browser layout API with no SSR equivalent.
+const EntityGraphPanel = dynamic(
+  () => import("@/components/instrument/EntityGraphPanel").then((m) => ({ default: m.EntityGraphPanel })),
+  {
+    ssr: false, // getBoundingClientRect() is browser-only
+    loading: () => (
+      // WHY h-full: the workspace panel slot is flex + flex-1, so h-full fills
+      // the available slot height. The Skeleton shows while the bundle loads.
+      <Skeleton className="h-full w-full rounded-none" />
+    ),
+  },
+);
 import { AlertsList } from "@/components/alerts/AlertsList";
 import { WorkspaceScreenerWidget } from "./WorkspaceScreenerWidget";
 import { WorkspaceChatWidget } from "./WorkspaceChatWidget";

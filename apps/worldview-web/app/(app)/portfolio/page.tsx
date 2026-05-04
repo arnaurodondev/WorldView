@@ -27,6 +27,11 @@
  * WHO USES IT: Authenticated users navigating to /portfolio.
  * DATA SOURCE: S9 portfolio + watchlist + brokerage routes (via the hook).
  * DESIGN REFERENCE: PRD-0031 §8 Portfolio, Wave 4.
+ * PLAN-0059-G Wave G-2: The three portfolio dialogs (Create, AddPosition, Delete)
+ * are lazy-loaded via next/dynamic. Dialogs are only rendered after a button click
+ * — loading their JS (react-hook-form, zod, Radix Dialog portal) eagerly on page
+ * load wastes parse budget. Lazy-loading saves ~60–80KB from the initial bundle.
+ * These dialogs use Radix Dialog which opens a DOM portal — ssr:false is correct.
  */
 
 "use client";
@@ -40,6 +45,7 @@ import { useState, useTransition } from "react";
 // `parseAsStringLiteral` constrains the value to the allowed set; an
 // unknown URL value falls back to the default instead of crashing.
 import { useQueryState, parseAsStringLiteral } from "nuqs";
+import dynamic from "next/dynamic";
 
 import { useAuth } from "@/hooks/useAuth";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -59,10 +65,42 @@ import { ConnectBrokerageModal } from "@/components/brokerage/ConnectBrokerageMo
 // ── Terminal primitives ─────────────────────────────────────────────────────
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 
-// ── Extracted dialogs + tab bodies + orchestrator hook ─────────────────────
-import { CreatePortfolioDialog } from "@/features/portfolio/components/CreatePortfolioDialog";
-import { AddPositionDialog } from "@/features/portfolio/components/AddPositionDialog";
-import { DeletePortfolioDialog } from "@/features/portfolio/components/DeletePortfolioDialog";
+// ── Lazy-loaded portfolio dialogs ───────────────────────────────────────────
+// WHY next/dynamic for dialogs: the three dialogs each pull in react-hook-form,
+// zod, and the Radix Dialog portal. None of these are needed on initial page load
+// — they only mount when the user clicks a header button. Deferring their load
+// saves ~60–80KB of JS parse cost from the /portfolio initial bundle.
+// WHY ssr:false: Radix Dialog renders a portal (document.body append) which
+// requires a browser DOM. SSR would produce a hydration mismatch.
+// WHY null loading: dialog components are controlled (open=false by default).
+// The <Dialog open={false}> renders nothing visible — a loading Skeleton would
+// never appear to the user because `open` stays false until the button is clicked,
+// by which time the bundle will have loaded (dialogs are tiny, <30KB each).
+const CreatePortfolioDialog = dynamic(
+  () => import("@/features/portfolio/components/CreatePortfolioDialog").then((m) => ({ default: m.CreatePortfolioDialog })),
+  {
+    ssr: false, // Radix Dialog portal requires browser DOM
+    loading: () => null, // dialog starts closed; skeleton is never visible
+  },
+);
+
+const AddPositionDialog = dynamic(
+  () => import("@/features/portfolio/components/AddPositionDialog").then((m) => ({ default: m.AddPositionDialog })),
+  {
+    ssr: false, // Radix Dialog portal requires browser DOM
+    loading: () => null, // dialog starts closed; skeleton is never visible
+  },
+);
+
+const DeletePortfolioDialog = dynamic(
+  () => import("@/features/portfolio/components/DeletePortfolioDialog").then((m) => ({ default: m.DeletePortfolioDialog })),
+  {
+    ssr: false, // Radix Dialog portal requires browser DOM
+    loading: () => null, // dialog starts closed; skeleton is never visible
+  },
+);
+
+// ── Static imports (needed immediately on paint) ───────────────────────────
 import { PortfolioPageHeader } from "@/features/portfolio/components/PortfolioPageHeader";
 import { PerformanceStrip } from "@/features/portfolio/components/PerformanceStrip";
 import { HoldingsTab } from "@/features/portfolio/components/HoldingsTab";
