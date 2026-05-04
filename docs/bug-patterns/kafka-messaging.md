@@ -1345,6 +1345,8 @@ before passing to `_emit_temporal_events`. This normalizes field names and resol
 - Add structured logging inside filter steps: `logger.debug("temporal_event_skipped", reason="low_confidence", confidence=confidence)` — makes silent filters visible in logs
 - Write a unit test that verifies the end-to-end path: raw_LLM_output → _build_raw_events → _emit_temporal_events → outbox_repo.add() called
 
-**Regression test**: Add to `services/nlp-pipeline/tests/unit/infrastructure/messaging/consumers/test_article_consumer_temporal_events.py`
+**Regression test**: `services/nlp-pipeline/tests/unit/infrastructure/messaging/consumers/test_article_consumer_temporal_events.py::TestNormalizeTemporalEventsForEmit::test_end_to_end_pipeline_with_raw_llm_output` + `test_raw_llm_output_without_normalization_fails_confidence_threshold`
+
+**Status**: FIXED 2026-05-04 — added `_normalize_temporal_events_for_emit()` called at Block 13E call site; also fixes QG-3 (macro events with no entity refs are now emitted with empty exposed_entities).
 
 ---
