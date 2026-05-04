@@ -10,6 +10,12 @@ cause validation errors in production.
 
 from api_gateway.schemas.alerts import AlertResponse
 from api_gateway.schemas.common import Meta
+from api_gateway.schemas.fundamentals import (
+    EarningsCalendarResponse,
+    EarningsEvent,
+    FundamentalsRecord,
+    FundamentalsResponse,
+)
 from api_gateway.schemas.instruments import (
     InstrumentSearchResult,
     OHLCVBar,
@@ -17,18 +23,32 @@ from api_gateway.schemas.instruments import (
     QuoteResponse,
 )
 from api_gateway.schemas.news import NewsArticle, NewsTopResponse
-from api_gateway.schemas.portfolios import PortfolioResponse
+from api_gateway.schemas.portfolios import PortfolioBundleResponse, PortfolioResponse
+from api_gateway.schemas.prediction_markets import (
+    PredictionMarket,
+    PredictionMarketsListResponse,
+)
+from api_gateway.schemas.screener import ScreenerResponse, ScreenerResultItem
 from api_gateway.schemas.watchlists import WatchlistResponse
 
 __all__ = [
     "AlertResponse",
+    "EarningsCalendarResponse",
+    "EarningsEvent",
+    "FundamentalsRecord",
+    "FundamentalsResponse",
     "InstrumentSearchResult",
     "Meta",
     "NewsArticle",
     "NewsTopResponse",
     "OHLCVBar",
     "OHLCVResponse",
+    "PortfolioBundleResponse",
     "PortfolioResponse",
+    "PredictionMarket",
+    "PredictionMarketsListResponse",
     "QuoteResponse",
+    "ScreenerResponse",
+    "ScreenerResultItem",
     "WatchlistResponse",
 ]
