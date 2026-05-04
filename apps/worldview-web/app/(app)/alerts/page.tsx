@@ -196,8 +196,8 @@ export default function AlertsPage() {
       {/* ── Page header ────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight text-foreground">Alerts &amp; News</h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">
+          <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono">Alerts &amp; News</h1>
+          <p className="mt-0.5 text-[10px] text-muted-foreground">
             Pending alerts and latest market news
           </p>
         </div>
@@ -238,16 +238,16 @@ export default function AlertsPage() {
           and ARIA roles (role="tablist", role="tab", role="tabpanel"). */}
       <Tabs defaultValue={defaultTab} className="w-full">
         <TabsList className="mb-2 grid w-full grid-cols-3">
-          <TabsTrigger value="alerts" className="gap-1.5 text-xs">
-            <BellRing className="h-3.5 w-3.5" aria-hidden="true" />
+          <TabsTrigger value="alerts" className="gap-1.5 text-[11px]">
+            <BellRing className="h-3 w-3" aria-hidden="true" strokeWidth={1.5} />
             Alerts
           </TabsTrigger>
-          <TabsTrigger value="news" className="gap-1.5 text-xs">
-            <Newspaper className="h-3.5 w-3.5" aria-hidden="true" />
+          <TabsTrigger value="news" className="gap-1.5 text-[11px]">
+            <Newspaper className="h-3 w-3" aria-hidden="true" strokeWidth={1.5} />
             News Feed
           </TabsTrigger>
-          <TabsTrigger value="top" className="gap-1.5 text-xs">
-            <TrendingUp className="h-3.5 w-3.5" aria-hidden="true" />
+          <TabsTrigger value="top" className="gap-1.5 text-[11px]">
+            <TrendingUp className="h-3 w-3" aria-hidden="true" strokeWidth={1.5} />
             Top Today
           </TabsTrigger>
         </TabsList>
@@ -395,11 +395,11 @@ function NewsFeedTab({ accessToken }: TabProps) {
       {/* Error state */}
       {isError && (
         <div className="mt-2 rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-center">
-          <p className="text-sm text-destructive">Failed to load news feed</p>
+          <p className="text-[11px] text-destructive">Failed to load news feed</p>
           <button
             type="button"
             onClick={() => void refetch()}
-            className="mt-2 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            className="mt-2 text-[11px] text-muted-foreground hover:text-foreground"
           >
             Try again
           </button>
@@ -410,8 +410,8 @@ function NewsFeedTab({ accessToken }: TabProps) {
       {!isLoading && !isError && (
         allArticles.length === 0 ? (
           <div className="mt-2 rounded-[2px] border border-border/40 p-3 text-center">
-            <Newspaper className="mx-auto mb-2 h-8 w-8 text-muted-foreground/50" aria-hidden="true" />
-            <p className="text-sm text-muted-foreground">No news available</p>
+            <Newspaper className="mx-auto mb-2 h-4 w-4 text-muted-foreground/50" aria-hidden="true" strokeWidth={1.5} />
+            <p className="text-[11px] text-muted-foreground">No news available</p>
           </div>
         ) : (
           <div className="mt-2 space-y-2">
@@ -500,11 +500,11 @@ function TopTodayTab({ accessToken }: TabProps) {
       {/* Error state */}
       {isError && (
         <div className="mt-2 rounded-[2px] border border-destructive/30 bg-destructive/10 p-3 text-center">
-          <p className="text-sm text-destructive">Failed to load top news</p>
+          <p className="text-[11px] text-destructive">Failed to load top news</p>
           <button
             type="button"
             onClick={() => void refetch()}
-            className="mt-2 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            className="mt-2 text-[11px] text-muted-foreground hover:text-foreground"
           >
             Try again
           </button>
@@ -515,8 +515,8 @@ function TopTodayTab({ accessToken }: TabProps) {
       {!isLoading && !isError && (
         articles.length === 0 ? (
           <div className="mt-2 rounded-[2px] border border-border/40 p-3 text-center">
-            <TrendingUp className="mx-auto mb-2 h-8 w-8 text-muted-foreground/50" aria-hidden="true" />
-            <p className="text-sm text-muted-foreground">No top stories in the last 72 hours</p>
+            <TrendingUp className="mx-auto mb-2 h-4 w-4 text-muted-foreground/50" aria-hidden="true" strokeWidth={1.5} />
+            <p className="text-[11px] text-muted-foreground">No top stories in the last 72 hours</p>
           </div>
         ) : (
           <div className="mt-2 space-y-2">

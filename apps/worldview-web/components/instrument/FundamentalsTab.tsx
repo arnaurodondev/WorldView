@@ -36,6 +36,7 @@
 // browser-only APIs — "use client" is needed because useQuery requires React context.
 
 import { useQuery } from "@tanstack/react-query";
+import { AlertTriangle } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -320,7 +321,7 @@ export function FundamentalsTab({
     return (
       <div className="px-2 py-3 text-[11px] text-destructive/80">
         Failed to load fundamentals — check connection or retry.
-        <button onClick={() => refetch()} className="text-[10px] text-primary hover:underline ml-2">Retry</button>
+        <button onClick={() => refetch()} className="text-[10px] text-primary ml-2">Retry</button>
       </div>
     );
   }
@@ -386,7 +387,7 @@ export function FundamentalsTab({
             role="status"
             className="border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-[11px] text-warning"
           >
-            <span className="font-mono uppercase tracking-wider text-[10px] mr-2">⚠ Limited coverage</span>
+            <AlertTriangle className="h-3 w-3 text-warning shrink-0 inline mr-1" strokeWidth={1.5} /><span className="font-mono uppercase tracking-wider text-[10px] mr-2">Limited coverage</span>
             Coverage for this ticker is limited ({nullFieldCount} of {SNAPSHOT_FIELDS.length} key
             metrics unavailable from current data providers).
           </div>
