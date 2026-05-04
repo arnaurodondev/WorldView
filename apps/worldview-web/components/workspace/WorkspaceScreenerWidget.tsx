@@ -57,12 +57,14 @@ export function WorkspaceScreenerWidget() {
     queryKey: ["workspace-screener-top"],
     queryFn: () =>
       createGateway(accessToken).runScreener({
-        filters: [],
+        // WHY market_capitalization min=0: backend rejects empty filter arrays (422).
+        // This is the minimal always-true filter — every instrument has a market cap
+        // ≥ 0 — so no rows are excluded (BP-371: empty filters[] → 422 from backend).
+        filters: [{ metric: "market_capitalization", min_value: 0 }],
         limit: WIDGET_LIMIT,
         offset: 0,
-        // WHY no sort_by in request: the gateway runScreener uses the S9 default
-        // which returns by market_impact_score desc when no sort_by is specified.
-        // This avoids client-side re-sorting and keeps the hot path simple.
+        sort_by: "market_capitalization",
+        sort_dir: "desc",
       }),
     enabled: !!accessToken,
     // WHY 60s staleTime: screener data is refreshed every 1 minute — aggressive
