@@ -163,7 +163,7 @@ export function PortfolioSummary() {
     return (
       <p className="py-3 text-xs text-muted-foreground">
         No portfolio yet —{" "}
-        <Link href="/portfolio" className="text-primary hover:underline">
+        <Link href="/portfolio" className="text-primary">
           create one
         </Link>
       </p>

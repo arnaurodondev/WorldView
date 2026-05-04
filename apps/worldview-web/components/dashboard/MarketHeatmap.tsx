@@ -57,7 +57,7 @@ export function MarketHeatmap() {
 
   if (isLoading) {
     // Single fade-in pulse — no relayout snap when real data arrives.
-    return <div className="h-56 animate-pulse rounded-[2px] bg-muted/20" aria-busy="true" />;
+    return <div className="h-56 rounded-[2px] bg-muted/20" aria-busy="true" />;
   }
 
   if (isError || !data) {

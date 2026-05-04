@@ -1121,7 +1121,7 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
           className="flex items-center justify-center rounded-[2px] border border-border bg-card"
           style={{ height: CHART_HEIGHT }}
         >
-          <p className="text-sm text-muted-foreground">Chart unavailable</p>
+          <p className="text-[11px] text-muted-foreground">Chart unavailable</p>
         </div>
       )}
 

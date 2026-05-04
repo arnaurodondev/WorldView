@@ -92,7 +92,7 @@ const ReactMarkdown = dynamic(() => import("react-markdown"), {
   ssr: false,
   loading: () => <BriefMarkdownSkeleton />,
 });
-import { RefreshCw } from "lucide-react";
+import { ChevronRight, ChevronUp, RefreshCw } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -338,19 +338,19 @@ export function MorningBriefCard() {
           {isLong && !expanded && (
             <button
               onClick={() => setExpanded(true)}
-              className="text-[9px] text-primary"
+              className="flex items-center gap-0.5 text-[9px] text-primary"
               aria-label="Expand morning brief"
             >
-              Read more →
+              Read more <ChevronRight className="h-3 w-3 shrink-0" strokeWidth={1.5} />
             </button>
           )}
           {isLong && expanded && (
             <button
               onClick={() => setExpanded(false)}
-              className="text-[9px] text-muted-foreground hover:text-foreground"
+              className="flex items-center gap-0.5 text-[9px] text-muted-foreground hover:text-foreground"
               aria-label="Collapse morning brief"
             >
-              show less ↑
+              show less <ChevronUp className="h-3 w-3 shrink-0" strokeWidth={1.5} />
             </button>
           )}
         </div>

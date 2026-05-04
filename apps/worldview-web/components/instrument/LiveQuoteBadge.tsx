@@ -159,10 +159,10 @@ export function LiveQuoteBadge({ instrumentId, initialPrice, compact = false }: 
         {/* Change amount + percentage */}
         <div className={`flex items-center gap-1 ${priceChangeClass(quote.change_pct)}`}>
           <TrendIcon className="h-3.5 w-3.5" />
-          <span className="font-mono text-sm tabular-nums">
+          <span className="font-mono text-[11px] tabular-nums">
             {quote.change >= 0 ? "+" : ""}{formatPrice(Math.abs(quote.change))}
           </span>
-          <span className="font-mono text-sm tabular-nums">
+          <span className="font-mono text-[11px] tabular-nums">
             ({formatPercent(quote.change_pct / 100)})
           </span>
         </div>

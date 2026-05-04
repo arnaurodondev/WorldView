@@ -30,9 +30,6 @@ from knowledge_graph.application.blocks.canonicalization import (
     EmbeddingClientProtocol,
     canonicalize_relation_type,
 )
-from knowledge_graph.application.blocks.contradiction import (
-    detect_and_record_contradictions,
-)
 from knowledge_graph.application.blocks.graph_write import (
     DirectKafkaProducerProtocol,
     RawClaim,
@@ -40,9 +37,6 @@ from knowledge_graph.application.blocks.graph_write import (
     RawRelation,
     _build_entity_dirtied_payload,
     materialize_graph,
-)
-from knowledge_graph.infrastructure.intelligence_db.repositories.contradiction import (
-    ContradictionRepository,
 )
 from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
     OutboxRepository,
@@ -239,7 +233,6 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
             outbox_repo = OutboxRepository(session)
             relation_repo = RelationRepository(session)
             evidence_repo = RelationEvidenceRepository(session)
-            contradiction_repo = ContradictionRepository(session)
 
             # ----------------------------------------------------------
             # Block 11: Canonicalize all relation types
@@ -314,23 +307,17 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
             # ----------------------------------------------------------
             # Block 12b: Contradiction detection for each new claim
             # ----------------------------------------------------------
-            # Detect against claims materialized in this batch
+            # F-006: detect_and_record_contradictions requires real claim_id from materialize_graph
+            # which does not yet return per-claim IDs. Contradiction detection is deferred to
+            # ContradictionBatchWorker which processes evidence in batch with correct IDs.
+            # See QA-2026-05-04 F-006 for the full fix plan.
             for raw_claim in raw_claims:
                 if raw_claim.polarity == "neutral":
                     continue
-                # Use a placeholder claim_id and raw_evidence_id (in
-                # production these come from the materialize_graph return)
-                await detect_and_record_contradictions(
-                    raw_evidence_id=_sentinel_uuid(),
-                    claim_id=_sentinel_uuid(),
-                    subject_entity_id=raw_claim.subject_entity_id,
-                    claim_type=raw_claim.claim_type,
-                    polarity=raw_claim.polarity,
-                    new_claim_confidence=raw_claim.extraction_confidence,
-                    is_backfill=raw_claim.is_backfill,
-                    contradiction_repo=contradiction_repo,  # type: ignore[arg-type]
-                    outbox_repo=outbox_repo,  # type: ignore[arg-type]
-                    correlation_id=correlation_id,
+                logger.debug(  # type: ignore[no-any-return]
+                    "hot_path_contradiction_detection_deferred",
+                    subject_entity_id=str(raw_claim.subject_entity_id),
+                    message="Contradiction detection deferred to batch worker — hot path lacks real claim_id",
                 )
 
             await session.commit()
@@ -603,10 +590,3 @@ def _parse_dt(value: Any) -> datetime:
         except ValueError:
             pass
     return datetime.now(tz=UTC)
-
-
-def _sentinel_uuid() -> UUID:
-    """Return a new UUIDv7 as a sentinel for claim/evidence IDs in contradiction detection."""
-    from common.ids import new_uuid7  # type: ignore[import-untyped]
-
-    return new_uuid7()  # type: ignore[return-value]

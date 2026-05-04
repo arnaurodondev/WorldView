@@ -297,7 +297,7 @@ class TestDefinitionRefreshWorkerPhasedRun:
 
         llm_client = AsyncMock()
 
-        async def _embed_and_record(inp, entity_id):
+        async def _embed_and_record(inp):
             # Record whether session was open (exited = closed) when embed was called
             # session_exited[0] is True when Phase 1 session context exited
             session_open_during_embed_check.append(session_exited[0])

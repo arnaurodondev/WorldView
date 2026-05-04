@@ -37,7 +37,7 @@ export function RecentAlerts() {
 
   // ── Poll historical alerts from REST endpoint ──────────────────────────────
   // WHY poll: WebSocket gaps could miss alerts. REST is the authoritative source.
-  const { data: alertsResp, isLoading } = useQuery({
+  const { data: alertsResp, isLoading, isError } = useQuery({
     queryKey: ["alerts-pending"],
     queryFn: () => createGateway(accessToken).getPendingAlerts({ limit: 10 }),
     enabled: !!accessToken,
@@ -111,19 +111,26 @@ export function RecentAlerts() {
         </div>
       )}
 
+      {/* ── Error state ─────────────────────────────────────────────────── */}
+      {isError && merged.length === 0 && (
+        <div className="flex h-[22px] items-center gap-1.5 px-1">
+          <span className="text-[11px] text-destructive">Failed to load alerts</span>
+        </div>
+      )}
+
       {/* ── Empty state ─────────────────────────────────────────────────── */}
       {/* WHY descriptive message (not "No recent alerts"): the empty state may confuse
           new traders into thinking alerts are disabled. Telling them where to create
           alert rules guides them to the action that will populate this widget.
           The second line is a softer hint about where to go — not an error state. */}
       {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-2) */}
-      {!isLoading && merged.length === 0 && (
+      {!isLoading && !isError && merged.length === 0 && (
         <div className="flex flex-1 flex-col gap-0.5 px-3 py-2">
           {/* WHY text-[10px]: terminal labels/metadata use 10px density — text-xs (12px) is consumer app scale (Bloomberg convention) */}
           <p className="text-[10px] text-muted-foreground">No recent alerts.</p>
           <p className="text-[10px] text-muted-foreground/60">
             Create alert rules on the{" "}
-            <a href="/alerts" className="text-primary hover:underline">Alerts page</a>
+            <a href="/alerts" className="text-primary">Alerts page</a>
             {" "}to receive notifications here.
           </p>
         </div>

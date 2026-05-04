@@ -561,7 +561,7 @@ function NewsZone({
           <button
             type="button"
             onClick={onViewAllNews}
-            className="text-[10px] text-primary hover:underline"
+            className="text-[10px] text-primary"
           >
             More news →
           </button>
