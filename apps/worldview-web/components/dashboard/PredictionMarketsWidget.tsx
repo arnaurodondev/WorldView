@@ -25,6 +25,8 @@ import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+import { AlertTriangle } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 // ── ECON filter ───────────────────────────────────────────────────────────────
@@ -221,7 +223,7 @@ export function PredictionMarketsWidget() {
   // key changes; switching from "all" to "macro" must trigger a new request
   // with the higher limit, otherwise the cache returns the smaller list.
   const effectiveLimit = categoryFilter ? 50 : 25;
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["dashboard-prediction-markets", categoryFilter, effectiveLimit],
     queryFn: () =>
       createGateway(accessToken).getPredictionMarkets({ status: "open", limit: effectiveLimit }),
@@ -360,15 +362,29 @@ export function PredictionMarketsWidget() {
         </div>
       )}
 
-      {/* ── Error / empty state ──────────────────────────────────────────────
+      {/* ── Error state ──────────────────────────────────────────────────────
+          WHY separate isError branch: a network failure is distinct from an
+          empty result set. Showing "data loading…" on error is misleading;
+          AlertTriangle + Retry gives the trader an action to recover. */}
+      {isError && (
+        <div className="flex flex-1 min-h-[110px] items-center justify-center gap-2">
+          <AlertTriangle className="h-3 w-3 text-destructive" strokeWidth={1.5} />
+          <span className="text-xs text-muted-foreground">Markets unavailable</span>
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {/* ── Empty state ──────────────────────────────────────────────────────
           PLAN-0053 T-C-3-05: when a category filter yields 0 results, surface
           the bucket size so the user understands WHY (Polymarket simply has
           few markets in that bucket today — it's not a bug). When no filter is
           active and we still have 0 results, we keep the original "loading…"
           text since that's typically a fetch race rather than an empty universe. */}
-      {(isError || (!isLoading && topMarkets.length === 0)) && (
+      {!isError && !isLoading && topMarkets.length === 0 && (
         <div className="flex-1 px-2">
-          {!isError && categoryFilter ? (
+          {categoryFilter ? (
             (() => {
               // Look up the count for the active category — null when the
               // counts query hasn't returned yet.

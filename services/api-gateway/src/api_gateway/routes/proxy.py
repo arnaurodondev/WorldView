@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid as _uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -121,8 +122,6 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
     if getattr(request.state, "user", None) is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     # F-026: validate company_id is a UUID to prevent path traversal attacks.
-    import uuid as _uuid
-
     try:
         _uuid.UUID(company_id)
     except ValueError:
@@ -157,8 +156,6 @@ async def instrument_page_bundle(instrument_id: str, request: Request) -> dict[s
     if getattr(request.state, "user", None) is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     # F-026: validate instrument_id is a UUID to prevent path traversal attacks.
-    import uuid as _uuid
-
     try:
         _uuid.UUID(instrument_id)
     except ValueError:
@@ -1984,8 +1981,6 @@ async def get_portfolio_bundle_endpoint(
     # WHY UUID validation: prevents path injection. portfolio_id appears in
     # 4 downstream URLs; a crafted string like "../../etc" could traverse paths
     # on services with naive routing. UUID format is the only valid S1 ID shape.
-    import uuid as _uuid
-
     try:
         _uuid.UUID(portfolio_id)
     except ValueError:

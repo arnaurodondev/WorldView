@@ -38,6 +38,8 @@ import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+import { AlertTriangle } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { formatRelativeTime, cn } from "@/lib/utils";
 import { getNewsLinkTarget, isSafeNewsUrl } from "@/hooks/useNewsLinkTarget";
 import type { RankedArticle } from "@/types/api";
@@ -69,7 +71,7 @@ export function PortfolioNewsWidget() {
   const [activeTiers, setActiveTiers] = useState<Set<Tier>>(new Set());
 
   // ── 1. Top news ─────────────────────────────────────────────────────────
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["dashboard-portfolio-news"],
     // PLAN-0050 T-F-6-02 / PLAN-0053 T-D-4-01: limit=20 keeps the filter
     // candidate pool deep enough that a tier or ticker filter doesn't
@@ -263,10 +265,15 @@ export function PortfolioNewsWidget() {
         </div>
       )}
 
-      {/* ── Error / empty state ────────────────────────────────────────────── */}
+      {/* ── Error state ────────────────────────────────────────────────────── */}
+      {/* WHY min-h-[110px]: matches skeleton height so widget footprint is stable. */}
       {isError && (
-        <div className="flex-1 px-3 py-2">
-          <InlineEmptyState message="No recent news" />
+        <div className="flex flex-1 min-h-[110px] items-center justify-center gap-2">
+          <AlertTriangle className="h-3 w-3 text-destructive" strokeWidth={1.5} />
+          <span className="text-xs text-muted-foreground">News unavailable</span>
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => void refetch()}>
+            Retry
+          </Button>
         </div>
       )}
 
