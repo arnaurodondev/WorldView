@@ -1,4 +1,12 @@
-"use client";
+// Server Component — no hooks, no browser APIs, no direct event handlers.
+// Renders static JSX using props only. Imports MarkdownContent via the
+// LazyMarkdownContent client wrapper (see below) and CitationBar which are
+// Client Components — that is valid: Server Components can render Client Components.
+// Do not re-add "use client" without checking all of the above.
+// PLAN-0059-G Wave G-2: The dynamic import for MarkdownContent is in the
+// LazyMarkdownContent client wrapper (features/chat/components/LazyMarkdownContent.tsx)
+// — Server Components cannot call next/dynamic directly, so the split is done
+// in a dedicated "use client" wrapper component.
 
 /**
  * features/chat/components/MessageBubble.tsx — Single chat message bubble.
@@ -10,14 +18,25 @@
  * so the three "bubble" renderers stay together.
  *
  * WAVE E CHANGES (T-E-5-02 + T-E-5-04):
- *   - Assistant messages now render via <MarkdownContent> (tables, code,
- *     copy buttons). User messages remain plain (they typed the text).
+ *   - Assistant messages now render via <LazyMarkdownContent> (tables, code,
+ *     copy buttons), which lazy-loads MarkdownContent via next/dynamic.
  *   - A CitationBar (segmented red/yellow/green confidence strip) sits
  *     below assistant messages, complementing the existing pill list.
+ *
+ * WHY LazyMarkdownContent (not MarkdownContent directly):
+ * PLAN-0059-G Wave G-2 requires lazy-loading react-markdown + remark-gfm (~50KB).
+ * next/dynamic must be called inside a Client Component — MessageBubble is a
+ * Server Component and cannot call next/dynamic. LazyMarkdownContent is a thin
+ * "use client" wrapper that owns the dynamic import boundary, keeping this file
+ * as a Server Component (enforced by server-component-audit.test.ts).
+ *
+ * WHO USES IT: app/(app)/chat/page.tsx, WorkspaceChatWidget.tsx, StructuredBrief.tsx
+ * DATA SOURCE: Chat messages from TanStack Query cache (thread messages endpoint).
+ * DESIGN REFERENCE: PRD-0028 §6.9 Chat; PLAN-0059-G Wave G-2 dynamic imports.
  */
 
 import { Bot } from "lucide-react";
-import { MarkdownContent } from "@/components/ui/markdown-content";
+import { LazyMarkdownContent } from "./LazyMarkdownContent";
 import { CitationBar } from "@/components/chat/CitationBar";
 import type { Message } from "@/types/api";
 import { CitationList } from "./CitationList";
@@ -92,7 +111,7 @@ export function MessageBubble({ message }: { message: Message }) {
             <pre className="whitespace-pre-wrap font-sans text-[11px]">{message.content}</pre>
           ) : (
             <div id={anchorPrefix}>
-              <MarkdownContent size="compact">{message.content}</MarkdownContent>
+              <LazyMarkdownContent size="compact">{message.content}</LazyMarkdownContent>
             </div>
           )}
 
@@ -140,7 +159,7 @@ export function StreamingBubble({ streaming }: { streaming: StreamingMessage }) 
         {/* WHY text-[11px] leading-[1.5] + size="compact": streaming bubble must
             match the final settled MessageBubble density — same 11px terminal rule. */}
         <div className="rounded-[2px] bg-muted px-4 py-3 text-[11px] leading-[1.5]">
-          <MarkdownContent size="compact">{streaming.text}</MarkdownContent>
+          <LazyMarkdownContent size="compact">{streaming.text}</LazyMarkdownContent>
           {streaming.active && (
             <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-primary align-middle" />
           )}

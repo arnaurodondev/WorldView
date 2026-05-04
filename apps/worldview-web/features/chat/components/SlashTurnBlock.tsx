@@ -1,4 +1,7 @@
-"use client";
+// Server Component — no hooks, no browser APIs, no event handlers.
+// Pure structural wrapper: renders a layout around SlashCommandCard (a Client Component).
+// Server Components CAN render Client Components — no boundary violation here.
+// Do not re-add "use client" without checking all of the above.
 
 /**
  * features/chat/components/SlashTurnBlock.tsx — Render a slash-command
