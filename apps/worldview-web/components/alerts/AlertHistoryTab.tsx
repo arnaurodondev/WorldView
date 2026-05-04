@@ -123,7 +123,7 @@ export function AlertHistoryTab({ fixedStatus }: AlertHistoryTabProps = {}) {
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-1">
       {/* ── Filter row ──────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-2 rounded-[2px] border border-border/40 bg-muted/10 p-2">
         {/* Severity filter pills */}

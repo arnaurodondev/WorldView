@@ -194,7 +194,7 @@ export default function AlertsPage() {
   return (
     // WHY full-width p-3: terminal alert feeds should use the full viewport width.
     // p-3 (12px) is the standard terminal panel padding per design system.
-    <div className="space-y-2 p-3">
+    <div className="space-y-1 p-3">
 
       {/* ── Page header ────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
@@ -240,7 +240,7 @@ export default function AlertsPage() {
           Radix UI handles keyboard navigation (Left/Right arrows + Home/End)
           and ARIA roles (role="tablist", role="tab", role="tabpanel"). */}
       <Tabs defaultValue={defaultTab} className="w-full">
-        <TabsList className="mb-2 grid w-full grid-cols-3">
+        <TabsList className="mb-1 grid w-full grid-cols-3">
           <TabsTrigger value="alerts" className="gap-1.5 text-[11px]">
             <BellRing className="h-3 w-3" aria-hidden="true" strokeWidth={1.5} />
             Alerts
@@ -262,7 +262,7 @@ export default function AlertsPage() {
             with a fixed status filter via AlertHistoryTab. */}
         <TabsContent value="alerts">
           <Tabs defaultValue="active" className="w-full">
-            <TabsList className="mb-2 grid w-full grid-cols-4">
+            <TabsList className="mb-1 grid w-full grid-cols-4">
               <TabsTrigger value="active" className="text-[11px]">
                 Active
               </TabsTrigger>
@@ -340,7 +340,7 @@ function CategoryFilterRail({ active, onChange }: CategoryFilterRailProps) {
           // WHY h-7 px-3 (not h-[22px]): category chips are nav elements, not data
           // rows. Slightly taller gives adequate tap target for mobile.
           className={cn(
-            "h-7 shrink-0 border-b-2 px-3 text-[10px] uppercase tracking-[0.08em]",
+            "h-6 shrink-0 border-b-2 px-3 text-[10px] uppercase tracking-[0.08em]",
             "transition-colors duration-0",
             active === cat
               ? "border-primary text-foreground"
@@ -414,14 +414,14 @@ function NewsFeedTab({ accessToken }: TabProps) {
       {/* Article list — only rendered after data is available */}
       {!isLoading && !isError && (
         allArticles.length === 0 ? (
-          <div className="mt-2 rounded-[2px] border border-border/40 p-3 text-center">
+          <div className="mt-2 rounded-[2px] border border-border/40 py-1 px-2 text-center">
             <Newspaper className="mx-auto mb-2 h-4 w-4 text-muted-foreground/50" aria-hidden="true" strokeWidth={1.5} />
             <p className="text-[11px] text-muted-foreground">No news available</p>
           </div>
         ) : (
-          <div className="mt-2 space-y-2">
+          <div className="mt-2 space-y-1">
             {filtered.length === 0 ? (
-              <p className="py-3 text-center text-[11px] text-muted-foreground">
+              <p className="py-1 text-center text-[11px] text-muted-foreground">
                 No {activeCategory} articles in this feed.
               </p>
             ) : (
@@ -522,14 +522,14 @@ function TopTodayTab({ accessToken }: TabProps) {
       {/* Article list */}
       {!isLoading && !isError && (
         articles.length === 0 ? (
-          <div className="mt-2 rounded-[2px] border border-border/40 p-3 text-center">
+          <div className="mt-2 rounded-[2px] border border-border/40 py-1 px-2 text-center">
             <TrendingUp className="mx-auto mb-2 h-4 w-4 text-muted-foreground/50" aria-hidden="true" strokeWidth={1.5} />
             <p className="text-[11px] text-muted-foreground">No top stories in the last 72 hours</p>
           </div>
         ) : (
-          <div className="mt-2 space-y-2">
+          <div className="mt-2 space-y-1">
             {filtered.length === 0 ? (
-              <p className="py-3 text-center text-[11px] text-muted-foreground">
+              <p className="py-1 text-center text-[11px] text-muted-foreground">
                 No {activeCategory} articles in top today.
               </p>
             ) : (
@@ -552,9 +552,9 @@ function TopTodayTab({ accessToken }: TabProps) {
  */
 function NewsSkeletons() {
   return (
-    <div className="space-y-2" aria-busy="true" aria-label="Loading news">
+    <div className="space-y-1" aria-busy="true" aria-label="Loading news">
       {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i} className="space-y-2 rounded-[2px] border border-border/40 p-3">
+        <div key={i} className="space-y-2 rounded-[2px] border border-border/40 py-1 px-2">
           <div className="flex items-center justify-between">
             <Skeleton className="h-4 w-16" />
             <Skeleton className="h-3 w-10" />
