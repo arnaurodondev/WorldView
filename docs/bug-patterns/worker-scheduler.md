@@ -1026,3 +1026,51 @@ if not evidence_rows:
 **Regression test**: `services/knowledge-graph/tests/unit/infrastructure/workers/test_summary_worker.py::TestSummaryWorkerRawFallback`
 
 ---
+
+---
+
+### BP-355: ProviderAuthError Permanently Blocks Re-scheduling After API Key Rotation
+
+**Category**: Workers & Schedulers
+**Severity**: HIGH
+**First seen**: 2026-05-04
+**Services**: market-ingestion
+
+**Symptoms**:
+- Tasks for a dataset type fail with `EODHD auth failed: HTTP 403` (or similar) after an API key rotation
+- Scheduler logs show `tasks_enqueued=0` every tick despite the new key being active
+- Watermarks show `last_success_bar_ts` from a previous successful run but `last_success_at = NULL`
+- Data freshness is stale for weeks/months — scheduler doesn't re-run until the polling interval expires from the old watermark date
+
+**Root cause**:
+`ProviderAuthError` is treated as a **fatal, non-retryable** error by design: `_persist_fail()` sets `status='failed', next_attempt_at=NULL`. This is correct for permanent auth failures (e.g., revoked key, wrong service URL). However, when the underlying cause is a temporary auth issue (wrong API key that was later fixed in gitops), the tasks are permanently dead with no automatic recovery path.
+
+Additionally, watermarks for previously-successful tasks retain `last_success_bar_ts` from the last successful run. With a long polling interval (e.g., 90 days for fundamentals), the scheduler correctly computes `is_due(last_success_bar_ts) = False` and doesn't re-schedule. The fix requires manually resetting the watermarks.
+
+**Root cause detail (why last_success_bar_ts was set without last_success_at)**:
+In an older version of `watermark_repository.py::save()` (pre-commit `66258435`), `last_success_at` was not written — only `last_success_bar_ts`. Watermarks from that era have `last_success_bar_ts` set from genuine successful runs but `last_success_at = NULL`. The scheduler uses `last_success_bar_ts` for the `is_due()` check and correctly considers these symbols as recently-fetched (not due for 90 days).
+
+**Fix**:
+```sql
+-- Reset watermarks for symbols that never succeeded under the new code
+-- (last_success_at IS NULL = "was set by old code or never succeeded")
+UPDATE ingestion_watermarks
+SET last_success_bar_ts = NULL,
+    last_success_at = NULL,
+    updated_at = NOW()
+WHERE provider = 'eodhd'
+  AND dataset_type = '<affected_dataset_type>'
+  AND last_success_at IS NULL;
+-- The scheduler will treat reset symbols as "never run" (is_due(NULL) = True)
+-- and create new tasks on the next tick.
+```
+
+After the watermark reset, the scheduler creates new tasks on the next tick and processes them with the updated API key.
+
+**Prevention**:
+- When an API key is rotated in gitops, document the runbook: reset watermarks for the affected provider + dataset_types
+- Consider adding an admin API endpoint: `POST /v1/admin/providers/{provider}/reset-watermarks?dataset_type=X` to avoid direct SQL manipulation
+- Add a check to the `_persist_fail()` path: log `scheduler_will_not_retry_until=<date>` so the silence is visible in logs
+- Log `watermark_stale_bar_ts_without_success` at startup when `last_success_at IS NULL AND last_success_bar_ts IS NOT NULL` is detected
+
+**Regression test**: N/A (operational runbook, not a code bug)
