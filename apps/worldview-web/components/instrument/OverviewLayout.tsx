@@ -113,8 +113,18 @@ const EntityGraphPanel = dynamic(
   {
     ssr: false, // getBoundingClientRect() is browser-only
     loading: () => (
-      // WHY h-[400px]: matches the T-B-2-05 EntityGraphPanel container height
-      <Skeleton className="h-[400px] w-full rounded-none" />
+      // WHY flex h-full items-center justify-center: the loading placeholder fills
+      // the entire 400px container (set by the parent div) and centres the Skeleton
+      // within it. Using h-full (not h-[400px]) makes the loader responsive to the
+      // parent container height — if the container height changes in future, the
+      // loader adapts without a separate constant to update.
+      // WHY Skeleton h-full w-full: gives a subtle shimmer that signals "content
+      // loading" rather than a blank or solid-black rectangle (the previous state
+      // before Cytoscape.js initialised). Consistent with how OHLCVChart and other
+      // async panels signal loading state in this layout.
+      <div className="flex h-full items-center justify-center">
+        <Skeleton className="h-full w-full" />
+      </div>
     ),
   },
 );
@@ -173,15 +183,21 @@ export function OverviewLayout({
     <div className="flex flex-col min-h-0">
 
       {/* ── Upper section: chart + right sidebar ─────────────────────────── */}
-      {/* WHY grid-cols-[1fr_280px]: chart takes all remaining width; sidebar is
-          fixed at 280px. 1fr > 280px ensures the chart always has a useful width
-          (never collapses below sidebar width). */}
+      {/* WHY flex (was grid grid-cols-[1fr_280px]): flex lets the chart column
+          grow to fill remaining space (flex-1) while the sidebar stays at a
+          fixed w-[280px] flex-shrink-0. This makes the sidebar truly independent
+          of the chart — resizing the chart no longer affects sidebar width.
+          Grid's 1fr column tracks the grid container width, which can cause the
+          sidebar to shift slightly when scrollbars appear; flex avoids that. */}
       {/* WHY border-b: separates chart row from news+graph bottom row */}
-      <div className="grid grid-cols-[1fr_280px] min-h-0 border-b border-border">
+      <div className="flex min-h-0 border-b border-border">
 
         {/* ── Left column: chart + session stats strip ───────────────────── */}
+        {/* WHY flex-1: chart column absorbs all horizontal space the sidebar
+            does not claim. min-h-0 prevents the flex child from overflowing
+            the parent height in column-direction flex contexts. */}
         {/* WHY border-r: hairline separator between chart and sidebar */}
-        <div className="flex flex-col min-h-0 border-r border-border">
+        <div className="flex flex-col flex-1 min-h-0 border-r border-border">
 
           {/* Zone 1: Price chart */}
           {/* WHY no padding: OHLCVChart fills its container edge-to-edge.
@@ -203,14 +219,16 @@ export function OverviewLayout({
         </div>
 
         {/* ── Right column: scrollable sidebar ────────────────────────────── */}
-        {/* WHY overflow-y-auto: sidebar content (12 metrics + 2 sparklines) may
+        {/* WHY w-[280px] flex-shrink-0: sidebar must stay exactly 280px regardless
+            of chart width. flex-shrink-0 prevents the flex algorithm from squeezing
+            it when the container is narrow — the chart (flex-1) absorbs all compression.
+            WHY overflow-y-auto: sidebar content (12 metrics + 2 sparklines) may
             exceed the chart height. Independent scroll preserves the chart view.
             T-F-6-16 (sidebar scroll unification): this single overflow-y-auto on the
             column wrapper IS the unified scroll block. Neither OverviewSidebarMetrics
             nor SparklinePanel define their own overflow classes — both render as
-            normal flow content that the parent scroll container scrolls as one unit.
-            The "unified scroll" requirement is already satisfied; no change needed. */}
-        <div className="flex flex-col overflow-y-auto">
+            normal flow content that the parent scroll container scrolls as one unit. */}
+        <div className="w-[280px] flex-shrink-0 flex flex-col overflow-y-auto">
 
           {/* Zone 3: Key Metrics panel — 12+ rows */}
           <OverviewSidebarMetrics
@@ -261,8 +279,11 @@ export function OverviewLayout({
         {/* WHY h-[400px] (T-B-2-05): was h-[280px] inside EntityGraphPanel — the
             graph SVG had too little vertical room for the radial node layout to
             be legible with >6 edges. 400px gives the SVG enough canvas for a
-            proper radial arrangement without nodes overlapping the center label. */}
-        <div className="h-[400px]">
+            proper radial arrangement without nodes overlapping the center label.
+            WHY bg-card/20: provides a subtle non-black background while the graph
+            is loading or if the panel is empty — avoids the jarring all-black
+            rectangle that appeared before Cytoscape.js initialised. */}
+        <div className="h-[400px] bg-card/20">
           <EntityGraphPanel
             entityId={entityId}
             centerLabel={centerLabel}
