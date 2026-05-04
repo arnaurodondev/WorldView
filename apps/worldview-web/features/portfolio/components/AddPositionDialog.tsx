@@ -170,7 +170,7 @@ export function AddPositionDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-sm bg-card border-border">
         <DialogHeader>
-          <DialogTitle className="text-[13px] font-mono uppercase tracking-[0.08em]">
+          <DialogTitle className="text-[11px] font-mono uppercase tracking-[0.08em]">
             Add Position
           </DialogTitle>
         </DialogHeader>
@@ -198,7 +198,7 @@ export function AddPositionDialog({
                       name={field.name}
                       ref={field.ref}
                       disabled={form.formState.isSubmitting}
-                      className="h-8 text-[12px] font-mono bg-background border-border"
+                      className="h-8 text-[11px] font-mono bg-background border-border"
                     />
                   </FormControl>
                   <FormMessage />

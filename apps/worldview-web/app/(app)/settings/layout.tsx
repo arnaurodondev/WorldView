@@ -83,7 +83,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
                         : "border-l-2 border-l-transparent -ml-px text-muted-foreground hover:bg-muted/40 hover:text-foreground",
                     )}
                   >
-                    <Icon className="h-3 w-3 shrink-0" aria-hidden />
+                    <Icon className="h-3 w-3 shrink-0" aria-hidden strokeWidth={1.5} />
                     <span className="flex-1 truncate">{item.label}</span>
                     {item.badge && (
                       <span className="shrink-0 rounded-[2px] bg-muted/60 px-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">

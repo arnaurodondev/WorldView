@@ -62,7 +62,7 @@ export function WorkspacePortfolioPanel() {
     return (
       <p className="px-2 py-1 text-[11px] text-muted-foreground">
         No portfolio.{" "}
-        <Link href="/portfolio" className="text-primary hover:underline">
+        <Link href="/portfolio" className="text-primary hover:text-primary/80">
           Set up →
         </Link>
       </p>

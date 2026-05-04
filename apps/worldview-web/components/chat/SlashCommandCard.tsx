@@ -113,7 +113,7 @@ function CardSkeleton({ rows = 3 }: { rows?: number }) {
   return (
     <div className="space-y-1">
       {Array.from({ length: rows }).map((_, i) => (
-        <div key={i} className="h-3 w-full animate-pulse rounded-[2px] bg-muted-foreground/10" />
+        <div key={i} className="h-3 w-full rounded-[2px] bg-muted-foreground/10" />
       ))}
     </div>
   );
@@ -156,13 +156,13 @@ function QuoteCard({ ticker }: { ticker: string }) {
   });
 
   return (
-    <CardShell icon={<TrendingUp className="h-3.5 w-3.5 text-primary" />} title={`Quote: ${ticker}`}>
+    <CardShell icon={<TrendingUp className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />} title={`Quote: ${ticker}`}>
       {isLoading && <CardSkeleton rows={2} />}
       {error && <CardError message="Failed to load quote." />}
       {data && (
-        <div className="flex items-center gap-3 text-[12px]">
+        <div className="flex items-center gap-3 text-[11px]">
           {/* Price headline */}
-          <div className="text-[15px] font-semibold text-foreground">
+          <div className="text-[11px] font-semibold text-foreground">
             {formatPrice(data.price)}
           </div>
           {/* Change pill — green/red coloured per change direction */}
@@ -214,17 +214,17 @@ function PortfolioCard() {
   });
 
   return (
-    <CardShell icon={<Briefcase className="h-3.5 w-3.5 text-primary" />} title="Portfolio summary">
+    <CardShell icon={<Briefcase className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />} title="Portfolio summary">
       {(pLoading || hLoading) && <CardSkeleton rows={3} />}
       {error && <CardError message="Failed to load portfolio." />}
       {!pLoading && !portfolio && !error && (
         <div className="text-[11px] text-muted-foreground">No portfolio yet.</div>
       )}
       {holdings && portfolio && (
-        <div className="grid grid-cols-3 gap-3 text-[12px]">
+        <div className="grid grid-cols-3 gap-3 text-[11px]">
           <div>
             <div className="text-[10px] uppercase text-muted-foreground">Total value</div>
-            <div className="text-[14px] font-semibold text-foreground">
+            <div className="text-[11px] font-semibold text-foreground">
               {formatPrice(holdings.total_value)}
             </div>
           </div>
@@ -232,7 +232,7 @@ function PortfolioCard() {
             <div className="text-[10px] uppercase text-muted-foreground">Unreal P&amp;L</div>
             <div
               className={cn(
-                "text-[14px] font-semibold",
+                "text-[11px] font-semibold",
                 (holdings.total_unrealised_pnl ?? 0) >= 0
                   ? "text-positive"
                   : "text-negative",
@@ -248,7 +248,7 @@ function PortfolioCard() {
           </div>
           <div>
             <div className="text-[10px] uppercase text-muted-foreground">Holdings</div>
-            <div className="text-[14px] font-semibold text-foreground">
+            <div className="text-[11px] font-semibold text-foreground">
               {holdings.holdings.length}
             </div>
           </div>
@@ -283,7 +283,7 @@ function NewsCard({ params }: { params: Record<string, string> }) {
   });
 
   return (
-    <CardShell icon={<Newspaper className="h-3.5 w-3.5 text-primary" />} title="Recent news">
+    <CardShell icon={<Newspaper className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />} title="Recent news">
       {isLoading && <CardSkeleton rows={5} />}
       {error && <CardError message="Failed to load news." />}
       {data && (
@@ -345,7 +345,7 @@ function WatchlistCard({ name }: { name: string }) {
 
   return (
     <CardShell
-      icon={<ListChecks className="h-3.5 w-3.5 text-primary" />}
+      icon={<ListChecks className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />}
       title={`Watchlist: ${name}`}
     >
       {lLoading && <CardSkeleton rows={3} />}
@@ -394,7 +394,7 @@ function AlertsCard() {
   });
 
   return (
-    <CardShell icon={<AlertCircle className="h-3.5 w-3.5 text-primary" />} title="Active alerts">
+    <CardShell icon={<AlertCircle className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />} title="Active alerts">
       {isLoading && <CardSkeleton rows={3} />}
       {error && <CardError message="Failed to load alerts." />}
       {data && data.alerts.length === 0 && (
@@ -439,10 +439,10 @@ function AlertsCard() {
  */
 function ScreenerCard() {
   return (
-    <CardShell icon={<Search className="h-3.5 w-3.5 text-primary" />} title="Screener">
+    <CardShell icon={<Search className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />} title="Screener">
       <Link
         href="/screener"
-        className="text-[12px] text-primary hover:underline"
+        className="text-[11px] text-primary hover:text-primary/80"
       >
         Open screener →
       </Link>
@@ -475,7 +475,7 @@ export function SlashCommandCard({ command }: SlashCommandCardProps) {
       return <ScreenerCard />;
     default:
       return (
-        <CardShell icon={<Search className="h-3.5 w-3.5 text-primary" />} title="Unknown command">
+        <CardShell icon={<Search className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />} title="Unknown command">
           <CardError message={`Unknown slash command: /${command.kind}`} />
         </CardShell>
       );
