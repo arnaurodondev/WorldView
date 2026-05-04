@@ -210,13 +210,14 @@ preferable to all-or-nothing for dashboard widgets.
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
-| GET | `/v1/portfolios` | List portfolios | Yes |
+| GET | `/v1/portfolios` | List portfolios. `response_model=list[PortfolioResponse]` | Yes |
 | GET | `/v1/portfolios/{id}/value-history` | Equity-curve snapshots (PLAN-0046 / T-46-5-01) | Yes |
 | GET | `/v1/portfolios/{id}/exposure` | Invested / cash / leverage breakdown (PLAN-0046 / T-46-5-02) | Yes |
 | GET | `/v1/portfolios/{id}/realized-pnl` | Realised P&L (FIFO, PLAN-0051 / T-A-1-04). Forwards `from`/`to`. Adds `Cache-Control: max-age=300` on 200. | Yes |
 | GET | `/v1/holdings/{portfolio_id}` | Holdings for a portfolio | Yes |
 | GET | `/v1/transactions` | List transactions (API-004: `portfolio_id` forwarded as `X-Portfolio-ID` header, not query param) | Yes |
 | POST | `/v1/transactions` | Create transaction | Yes |
+| GET | `/v1/portfolio/{id}/bundle` | **BFF bundle (PLAN-0070 C-1)** — collapses portfolio + holdings + transactions + value_history into 1 round-trip. Each leg degrades independently (`null` on failure). `_meta.partial=True` when any leg fails. `asyncio.wait_for(25s)`. UUID validation on `id`. `response_model=PortfolioBundleResponse` | Yes |
 
 ### Watchlist Endpoints (→ S1 Portfolio)
 
@@ -292,11 +293,17 @@ preferable to all-or-nothing for dashboard widgets.
 | GET | `/v1/briefings/morning` | AI morning briefing (stub) | Yes |
 | GET | `/v1/briefings/instrument/{entity_id}` | Instrument briefing (stub) | Yes |
 
+### Dashboard Snapshot (PLAN-0070 C-2)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/v1/dashboard/snapshot` | **BFF bundle** — collapses 6 dashboard page queries into 1 round-trip: news (top 8), heatmap (11 sectors), prediction_markets (top 5), earnings_calendar (7-day), alerts (top 10), morning_brief. Each leg degrades independently (`null` on failure). `_meta.partial=True` when any leg fails. `asyncio.wait_for(20s)`. `response_model=DashboardSnapshotResponse` | Yes |
+
 ### Search & Signals Endpoints
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
-| GET | `/v1/search/instruments` | Search instruments by name/ticker | No |
+| GET | `/v1/search/instruments` | Search instruments by name/ticker. `response_model=list[InstrumentSearchResult]` | No |
 | GET | `/v1/signals/ai` | AI signals (stub — returns empty) | Yes |
 
 ### Feedback Endpoints (→ S1 Portfolio, PLAN-0052 Wave D)
@@ -461,6 +468,32 @@ All env vars are prefixed with `API_GATEWAY_`:
 
 ---
 
+## S9 Reliability Guarantees (PLAN-0070)
+
+**Timeouts** — every composition endpoint is wrapped in `asyncio.wait_for`:
+
+| Endpoint | Budget |
+|----------|--------|
+| `GET /v1/instruments/{id}/page-bundle` | 20 s |
+| `GET /v1/portfolio/{id}/bundle` | 25 s |
+| `GET /v1/dashboard/snapshot` | 20 s |
+| `GET /v1/market/heatmap` | 15 s |
+| `GET /v1/watchlists/{id}/insights` | 15 s |
+| `GET /v1/ohlcv/batch` | 30 s |
+
+On timeout: HTTP 504 with `{"detail": "composition timeout"}`.
+
+**Retry logic** — `_checked_get()` retries 3× with backoff (0.1 s, 0.5 s, 1.5 s) on 500/503 responses. `_checked_post()` does NOT retry (idempotency unsafe).
+
+**JWT factory** — `make_headers=lambda: _auth_headers(request)` is passed to every `asyncio.gather` fan-out so each parallel downstream call gets a fresh JWT with a unique JTI, preventing JTI replay detection failures.
+
+**Pydantic response_model** — 25+ S9 routes have `response_model=` annotations generating named OpenAPI component schemas. The committed spec is at `infra/contracts/s9-openapi.json`; TypeScript types at `apps/worldview-web/types/generated/api.ts`.
+
+**Schemas package** — `services/api-gateway/src/api_gateway/schemas/` contains 9 modules:
+`common`, `instruments`, `news`, `portfolios`, `alerts`, `watchlists`, `screener`, `prediction_markets`, `fundamentals`, `dashboard`. All schemas use `ConfigDict(extra="allow")`.
+
+---
+
 ## Internal Modules
 
 ```
@@ -473,11 +506,23 @@ services/api-gateway/src/api_gateway/
 ├── jwt_utils.py             # RS256 JWT issuance (user/system/ws)
 ├── pkce.py                  # PKCE verifier/challenge/state + Valkey storage
 ├── clients.py               # Typed httpx clients for downstream services
+├── schemas/                 # Pydantic response schemas (PLAN-0070 B-1+B-2+C-1+C-2)
+│   ├── __init__.py          # Exports all public schemas
+│   ├── common.py            # Meta helper
+│   ├── instruments.py       # InstrumentSearchResult, OHLCVBar, OHLCVResponse, QuoteResponse
+│   ├── news.py              # NewsArticle, NewsTopResponse
+│   ├── portfolios.py        # PortfolioResponse, PortfolioBundleResponse
+│   ├── alerts.py            # AlertResponse
+│   ├── watchlists.py        # WatchlistResponse
+│   ├── screener.py          # ScreenerResultItem, ScreenerResponse
+│   ├── prediction_markets.py# PredictionMarket, PredictionMarketsListResponse
+│   ├── fundamentals.py      # FundamentalsResponse, EarningsCalendarResponse
+│   └── dashboard.py         # DashboardSnapshotResponse
 └── routes/
     ├── auth.py              # 7 OIDC auth endpoints
     ├── health.py            # /healthz, /readyz
     ├── internal.py          # GET /internal/jwks
-    └── proxy.py             # 48 proxy/composition routes
+    └── proxy.py             # 96 proxy/composition routes
 ```
 
 ---
