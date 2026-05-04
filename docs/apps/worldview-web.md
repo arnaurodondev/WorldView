@@ -280,6 +280,35 @@ pnpm test:e2e              # Playwright (auto-starts dev server)
 
 ---
 
+## Observability
+
+**Error tracking**: `@sentry/nextjs 10.51.0` (PLAN-0065 T-D-01, PRD-0034 §3 FR-T3-1).
+
+| Concern | Implementation |
+|---------|----------------|
+| Browser exceptions | `sentry.client.config.ts` — `Sentry.init()` with empty DSN no-op in dev |
+| Server-side SSR errors | `sentry.server.config.ts` loaded via `instrumentation.ts` `register()` |
+| Edge runtime | `sentry.edge.config.ts` (minimal; edge runtime not heavily used) |
+| React render errors | `<Sentry.ErrorBoundary fallback={<GlobalErrorFallback />}>` wraps full app in `providers.tsx` |
+| Build-time sourcemaps | `withSentryConfig(...)` in `next.config.ts` — **only when `SENTRY_AUTH_TOKEN` is set**; maps deleted after upload (`sourcemaps.deleteSourcemapsAfterUpload: true`) |
+| PII guard | `lib/sentry/strip-pii.ts` — strips cookies, auth headers, URL slugs; hashes `user.email` with SHA-256 |
+
+**Default-disabled in dev**: `NEXT_PUBLIC_SENTRY_DSN=""` puts the SDK in no-op mode — no network calls.
+
+**Dev smoke-test route**: `/(app)/dev-tools/sentry-test` — throws a synthetic error when clicked; 404s in production via `notFound()` guard.
+
+**Env vars** (see `.env.example`):
+
+| Variable | Side | Purpose |
+|----------|------|---------|
+| `NEXT_PUBLIC_SENTRY_DSN` | client+server | Sentry DSN (empty = disabled) |
+| `NEXT_PUBLIC_SENTRY_ENVIRONMENT` | client+server | Sentry environment label |
+| `SENTRY_AUTH_TOKEN` | build-time CI only | Sourcemap upload; never in `.env.local` |
+| `SENTRY_ORG` | build-time CI only | Sentry org slug |
+| `SENTRY_PROJECT` | build-time CI only | Sentry project slug |
+
+---
+
 ## Design System Reference
 
 | Token | Value |

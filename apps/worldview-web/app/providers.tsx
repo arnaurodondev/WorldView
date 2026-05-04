@@ -13,6 +13,7 @@
 
 "use client";
 
+import * as Sentry from "@sentry/nextjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { useState, type ReactNode } from "react";
@@ -30,6 +31,9 @@ import { AlertStreamProvider } from "@/contexts/AlertStreamContext";
 // Must be INSIDE AuthProvider (reads accessToken) and INSIDE
 // QueryClientProvider (so useAuthedQuery has the cache).
 import { ApiClientProvider } from "@/lib/api-client";
+// PLAN-0065 T-D-02: Fallback shown by Sentry.ErrorBoundary when an unhandled
+// render error propagates to the root of the React tree.
+import { GlobalErrorFallback } from "@/components/sentry/GlobalErrorFallback";
 
 // WHY useState for QueryClient (not module-level singleton):
 // In Next.js App Router, module-level singletons are shared across ALL requests
@@ -69,10 +73,28 @@ export function Providers({ children }: ProvidersProps) {
   const [queryClient] = useState(() => makeQueryClient());
 
   return (
-    // C-6: NuqsAdapter wraps everything else so any component in the tree
-    // can call useQueryState/useQueryStates without further provider
-    // configuration. The adapter does NOT render any DOM — it only wires
-    // nuqs's internals to Next.js router events.
+    // PLAN-0065 T-D-02: Sentry.ErrorBoundary is the outermost wrapper.
+    //
+    // WHY OUTERMOST: any unhandled render error inside ANY provider or page
+    // component is caught here. If it were inside QueryClientProvider, errors
+    // from the auth layer would escape. Outermost = maximum coverage.
+    //
+    // WHY Sentry.ErrorBoundary vs React's built-in error.tsx:
+    // Next.js's error.tsx catches errors at the route segment level and shows
+    // a "Try again" button. Sentry.ErrorBoundary runs BEFORE that (the outer
+    // catch) and also sends the error to Sentry with a full stack trace +
+    // React component tree context. The two are complementary — error.tsx
+    // handles per-route errors cleanly; this handles catastrophic failures
+    // where the entire provider tree collapses.
+    //
+    // WHEN DISABLED: if NEXT_PUBLIC_SENTRY_DSN is empty (""), the SDK is
+    // in disabled mode — Sentry.ErrorBoundary still catches errors and renders
+    // the fallback, but does NOT send them to Sentry. Fallback UX works in dev.
+    <Sentry.ErrorBoundary fallback={<GlobalErrorFallback />}>
+    {/* C-6: NuqsAdapter wraps everything else so any component in the tree
+        can call useQueryState/useQueryStates without further provider
+        configuration. The adapter does NOT render any DOM — it only wires
+        nuqs's internals to Next.js router events. */}
     <NuqsAdapter>
     {/* WHY QueryClientProvider wraps AuthProvider: Auth state depends on React Query
         only indirectly (via the gateway client), but placing QueryClient at the top
@@ -126,5 +148,6 @@ export function Providers({ children }: ProvidersProps) {
       )}
     </QueryClientProvider>
     </NuqsAdapter>
+    </Sentry.ErrorBoundary>
   );
 }
