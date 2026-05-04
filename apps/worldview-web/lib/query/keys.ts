@@ -65,6 +65,24 @@ export const qk = {
       ["portfolios", "detail", portfolioId, "realized-pnl", period] as const,
     summary: (portfolioId: string) =>
       ["portfolios", "detail", portfolioId, "summary"] as const,
+    // ── Flat legacy-shape keys for usePortfolioData queries ─────────────
+    // WHY different shape from holdings()/transactions() above: those keys nest
+    // under ["portfolios","detail",id,...] for cascade-invalidation. The queries
+    // in usePortfolioData.ts historically used the flat shapes below so we
+    // preserve them here rather than silently changing the cache identity (which
+    // would cause stale data until the old cache entry expires).
+    holdingsByPortfolio: (portfolioId: string) =>
+      ["holdings", portfolioId] as const,
+    holdingsQuotesByIds: (ids: readonly string[]) =>
+      ["holdings-quotes", [...ids].sort()] as const,
+    transactionsByPortfolio: (portfolioId: string) =>
+      ["transactions", portfolioId] as const,
+    performance: (portfolioId: string, period: string) =>
+      ["portfolio-performance", portfolioId, period] as const,
+    holdingOverviews: (ids: readonly string[]) =>
+      ["holdings-overviews", [...ids].sort()] as const,
+    watchlistQuotes: (ids: readonly string[]) =>
+      ["watchlist-quotes", [...ids].sort()] as const,
   },
 
   // ── Watchlists ───────────────────────────────────────────────────────────
@@ -116,6 +134,17 @@ export const qk = {
       ["instruments", "detail", instrumentId, "contradictions"] as const,
     ownership: (instrumentId: string) =>
       ["instruments", "detail", instrumentId, "ownership"] as const,
+    // WHY pageBundle: the instrument detail page pre-fetches a bundle of all
+    // sub-resources in one round-trip and seeds child-component caches. This
+    // key is ONLY for the bundle fetch — child components continue using their
+    // own keys (fundamentals, overview, etc.) so their invalidation semantics
+    // stay correct.
+    pageBundle: (entityId: string) =>
+      ["instrument-page-bundle", entityId] as const,
+    // WHY browse: the /instruments list page runs the screener with a simple
+    // name_ticker filter. Keeping it under instruments.* lets
+    // `qc.invalidateQueries({ queryKey: qk.instruments.all })` cascade.
+    browse: (query: string) => ["instruments-browse", query] as const,
   },
 
   // ── Quotes (live prices) ─────────────────────────────────────────────────
@@ -140,6 +169,15 @@ export const qk = {
       params
         ? (["news", "entity", entityId, params] as const)
         : (["news", "entity", entityId] as const),
+    // WHY separate key: relevance-ranked news (S6-scored) is a distinct
+    // endpoint from the simple top-news list. Keeping it separate prevents
+    // cache collisions with qk.news.top().
+    relevant: () => ["news-relevant"] as const,
+    // WHY topToday: the alerts/page.tsx TopTodayTab uses a flat key
+    // ["news-top-today", { hours, limit }] for its paginated news query.
+    // We preserve that exact shape so cache entries survive the migration.
+    topToday: (params: Readonly<Record<string, unknown>>) =>
+      ["news-top-today", params] as const,
   },
 
   // ── Screener ─────────────────────────────────────────────────────────────
@@ -148,6 +186,12 @@ export const qk = {
     fields: () => ["screener", "fields"] as const,
     query: (request: Readonly<Record<string, unknown>>) =>
       ["screener", "query", request] as const,
+    // WHY filter+offset variant: the screener page uses a flat 3-element key
+    // ["screener", filterSerialized, offset] for its paginated query so that
+    // each page offset gets its own cache entry. We preserve that shape here
+    // (rather than nesting under query()) so the cache identity doesn't change.
+    page: (filterSerialized: string, offset: number) =>
+      ["screener", filterSerialized, offset] as const,
     saved: () => ["screener", "saved-screens"] as const,
     sparklines: (instrumentIds: readonly string[]) =>
       ["screener", "sparklines", [...instrumentIds].sort()] as const,
@@ -163,6 +207,10 @@ export const qk = {
         ? (["alerts", "history", params] as const)
         : (["alerts", "history"] as const),
     rules: () => ["alerts", "rules"] as const,
+    // WHY pendingCount: layout.tsx polls a lightweight pending-count query every
+    // 60s independently of the AlarmsPanel's full alert list. A dedicated key
+    // avoids cache collisions with qk.alerts.list() which carries filters.
+    pendingCount: () => ["layout-pending-alert-count"] as const,
   },
 
   // ── Chat / RAG threads ───────────────────────────────────────────────────
@@ -170,6 +218,11 @@ export const qk = {
     all: ["chat"] as const,
     threads: () => ["chat", "threads"] as const,
     thread: (threadId: string) => ["chat", "threads", threadId] as const,
+    // WHY entityResolve: the chat page resolves UUID entity_id URL params to
+    // tickers via the company-overview endpoint. Keeping this under chat.* lets
+    // `qc.invalidateQueries({ queryKey: qk.chat.all })` cascade to it on logout.
+    entityResolve: (entityId: string) =>
+      ["chat", "entity-resolve", entityId] as const,
   },
 
   // ── Dashboard widgets ────────────────────────────────────────────────────

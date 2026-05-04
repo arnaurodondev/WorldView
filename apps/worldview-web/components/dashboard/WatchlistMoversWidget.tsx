@@ -45,8 +45,10 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
+import { AlertTriangle } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { DashboardEmptyState } from "@/components/ui/dashboard-empty-state";
@@ -103,7 +105,7 @@ export function WatchlistMoversWidget() {
   // fall back to the oldest one. That maps to "the watchlist I made first"
   // which for >90% of users is their main / default list.
   // WHY staleTime 60_000: watchlist membership rarely changes intra-session.
-  const { data: watchlists, isLoading: watchlistsLoading } = useQuery({
+  const { data: watchlists, isLoading: watchlistsLoading, isError: watchlistsError, refetch: refetchWatchlists } = useQuery({
     queryKey: ["dashboard-watchlist-movers-watchlists"],
     queryFn: () => createGateway(accessToken).getWatchlists(),
     enabled: !!accessToken,
@@ -207,8 +209,13 @@ export function WatchlistMoversWidget() {
   const isLoading =
     watchlistsLoading || (!!firstWatchlist && (insightsLoading || periodDataLoading));
 
+  // WHY isError: surface a Retry when the watchlist fetch fails — otherwise
+  // the user sees a permanently blank widget with no feedback.
+  const isError = watchlistsError;
+  const handleRetry = () => { void refetchWatchlists(); };
+
   // ── 9. Empty state (no watchlist) ─────────────────────────────────────
-  const noWatchlist = !watchlistsLoading && !firstWatchlist;
+  const noWatchlist = !watchlistsLoading && !watchlistsError && !firstWatchlist;
 
   // ── Render ────────────────────────────────────────────────────────────
   return (
@@ -254,7 +261,7 @@ export function WatchlistMoversWidget() {
       {/* WHY hide pills for the empty-state branch: when the user has no
           watchlist, sector filters make no sense yet — the empty-state is
           the only thing that should occupy the panel. */}
-      {!noWatchlist && (
+      {!isError && !noWatchlist && (
         <div
           className="-mx-2 flex shrink-0 gap-1 overflow-x-auto border-b border-border/30 px-2 pb-1 pt-1"
           // role="tablist": same ARIA semantics as PreMarketMoversWidget for
@@ -293,7 +300,7 @@ export function WatchlistMoversWidget() {
           a watchlist, not a portfolio — users hand-pick names they want
           to track equally. A market-cap weight would silently dominate
           the readout with whichever megacap they happen to follow. */}
-      {!noWatchlist && period === "1D" && insights && (
+      {!isError && !noWatchlist && period === "1D" && insights && (
         <WatchlistSummaryStrip insights={insights} />
       )}
 
@@ -301,7 +308,7 @@ export function WatchlistMoversWidget() {
           Above the gainers/losers split so the highest-impact story
           touching any watchlist member is the first thing the user
           reads. Click opens the article (new tab, noopener). */}
-      {!noWatchlist && period === "1D" && insights?.biggest_news?.title && (
+      {!isError && !noWatchlist && period === "1D" && insights?.biggest_news?.title && (
         <BiggestNewsRow news={insights.biggest_news} />
       )}
 
@@ -310,7 +317,7 @@ export function WatchlistMoversWidget() {
           chrome consistent makes the empty state feel like a deliberate
           state, not a broken widget. Hidden when there's no watchlist
           since the panel is fully replaced by the empty-state CTA. */}
-      {!noWatchlist && (
+      {!isError && !noWatchlist && (
         <div className="flex shrink-0 border-b border-border/30">
           <div className="flex h-[22px] flex-1 items-center px-2">
             <span className="text-[10px] uppercase tracking-[0.08em] text-positive/70">
@@ -332,13 +339,27 @@ export function WatchlistMoversWidget() {
           would prevent the overflow-auto from clipping. */}
       <div className="flex min-h-0 flex-1 overflow-auto">
 
+        {/* ── Error state ────────────────────────────────────────────────── */}
+        {/* WHY min-h-[140px]: 5 rows × h-7 (28px) = 140px; prevents the
+            widget from collapsing to zero height when the watchlist fetch
+            fails cold (no cached data). */}
+        {isError && (
+          <div className="flex flex-1 min-h-[140px] items-center justify-center gap-2">
+            <AlertTriangle className="h-3 w-3 text-destructive" />
+            <span className="text-xs text-muted-foreground">Failed to load</span>
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={handleRetry}>
+              Retry
+            </Button>
+          </div>
+        )}
+
         {/* Empty: no watchlist at all (PLAN-0050 T-F-6-04 — DashboardEmptyState).
             Why the shared component: the prior bespoke 3-element JSX block
             duplicated the heading/message/CTA pattern that already lived in
             DashboardEmptyState. Using the shared component pins the visual
             voice across all dashboard widgets — no widget can drift on the
             empty-state pattern after this. */}
-        {noWatchlist && (
+        {!isError && noWatchlist && (
           <div className="flex flex-1 items-center justify-center">
             <DashboardEmptyState
               title="No watchlist yet"
@@ -349,7 +370,7 @@ export function WatchlistMoversWidget() {
         )}
 
         {/* Loading: show 5 placeholder rows in each column */}
-        {!noWatchlist && isLoading && (
+        {!isError && !noWatchlist && isLoading && (
           <div className="flex flex-1 gap-0">
             <div className="flex-1 divide-y divide-border/30">
               {Array.from({ length: 5 }).map((_, i) => (
@@ -373,7 +394,8 @@ export function WatchlistMoversWidget() {
         )}
 
         {/* Empty: watchlist exists but no movers (rare — flat day) */}
-        {!noWatchlist &&
+        {!isError &&
+          !noWatchlist &&
           !isLoading &&
           gainers.length === 0 &&
           losers.length === 0 && (
@@ -383,7 +405,7 @@ export function WatchlistMoversWidget() {
           )}
 
         {/* Data: gainers column */}
-        {!noWatchlist && !isLoading && (gainers.length > 0 || losers.length > 0) && (
+        {!isError && !noWatchlist && !isLoading && (gainers.length > 0 || losers.length > 0) && (
           <div className="flex-1 divide-y divide-border/30">
             {gainers.map((m) => (
               <WatchlistMoverRow
@@ -403,7 +425,7 @@ export function WatchlistMoversWidget() {
         )}
 
         {/* Data: losers column */}
-        {!noWatchlist && !isLoading && (gainers.length > 0 || losers.length > 0) && (
+        {!isError && !noWatchlist && !isLoading && (gainers.length > 0 || losers.length > 0) && (
           <div className="flex-1 divide-y divide-border/30 border-l border-border/30">
             {losers.map((m) => (
               <WatchlistMoverRow
@@ -428,7 +450,7 @@ export function WatchlistMoversWidget() {
           lets users see at a glance which watchlist they're looking at when
           multiple watchlists are common (so they're not confused why a
           ticker they "added" isn't here — it's in another list). */}
-      {!noWatchlist && firstWatchlist && (
+      {!isError && !noWatchlist && firstWatchlist && (
         <div className="shrink-0 border-t border-border/30 px-2 py-0.5">
           <span className="text-[10px] text-muted-foreground/60">
             {firstWatchlist.name}

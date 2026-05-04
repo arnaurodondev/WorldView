@@ -37,9 +37,11 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
+import { AlertTriangle } from "lucide-react";
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { DashboardEmptyState } from "@/components/ui/dashboard-empty-state";
@@ -74,7 +76,7 @@ export function HoldingsMoversWidget() {
   // WHY first by created_at: matches the WatchlistMovers "default
   // watchlist" heuristic — there is no `is_default` flag, so the oldest
   // portfolio approximates the user's main book.
-  const { data: portfolios, isLoading: portfoliosLoading } = useQuery({
+  const { data: portfolios, isLoading: portfoliosLoading, isError: portfoliosError, refetch: refetchPortfolios } = useQuery({
     queryKey: ["dashboard-holdings-movers-portfolios"],
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
@@ -197,8 +199,14 @@ export function HoldingsMoversWidget() {
     portfoliosLoading ||
     (!!firstPortfolio && (holdingsLoading || periodDataLoading));
 
+  // WHY isError: surface a Retry button when the portfolio list fails so
+  // the user isn't left with a permanently silent widget. Holdings/quotes
+  // errors fall back to the empty-movers list (graceful degradation).
+  const isError = portfoliosError;
+  const handleRetry = () => { void refetchPortfolios(); };
+
   // ── 8. Empty state — no portfolio OR no holdings ───────────────────────
-  const noPortfolio = !portfoliosLoading && !firstPortfolio;
+  const noPortfolio = !portfoliosLoading && !portfoliosError && !firstPortfolio;
   const noHoldings =
     !holdingsLoading && !!holdingsResp && holdings.length === 0;
 
@@ -230,7 +238,7 @@ export function HoldingsMoversWidget() {
       </div>
 
       {/* Sub-headers GAINERS | LOSERS — only when we have content to show */}
-      {!noPortfolio && !noHoldings && (
+      {!isError && !noPortfolio && !noHoldings && (
         <div className="flex shrink-0 border-b border-border/30">
           <div className="flex h-[22px] flex-1 items-center px-2">
             <span className="text-[10px] uppercase tracking-[0.08em] text-positive/70">
@@ -247,8 +255,21 @@ export function HoldingsMoversWidget() {
 
       {/* Content */}
       <div className="flex min-h-0 flex-1 overflow-auto">
+        {/* ── Error state ────────────────────────────────────────────────── */}
+        {/* WHY min-h-[140px]: 5 rows × h-7 (28px) = 140px; prevents the
+            widget from collapsing when the portfolio fetch fails cold. */}
+        {isError && (
+          <div className="flex flex-1 min-h-[140px] items-center justify-center gap-2">
+            <AlertTriangle className="h-3 w-3 text-destructive" />
+            <span className="text-xs text-muted-foreground">Failed to load</span>
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={handleRetry}>
+              Retry
+            </Button>
+          </div>
+        )}
+
         {/* No-portfolio empty state — primary CTA is brokerage connection. */}
-        {noPortfolio && (
+        {!isError && noPortfolio && (
           <div className="flex flex-1 items-center justify-center">
             <DashboardEmptyState
               title="No portfolio yet"
@@ -258,7 +279,7 @@ export function HoldingsMoversWidget() {
           </div>
         )}
 
-        {!noPortfolio && noHoldings && (
+        {!isError && !noPortfolio && noHoldings && (
           <div className="flex flex-1 items-center justify-center">
             <DashboardEmptyState
               title="No holdings"
@@ -268,7 +289,7 @@ export function HoldingsMoversWidget() {
           </div>
         )}
 
-        {!noPortfolio && !noHoldings && isLoading && (
+        {!isError && !noPortfolio && !noHoldings && isLoading && (
           <div className="flex flex-1 gap-0">
             <div className="flex-1 divide-y divide-border/30">
               {Array.from({ length: 5 }).map((_, i) => (
@@ -297,7 +318,8 @@ export function HoldingsMoversWidget() {
           </div>
         )}
 
-        {!noPortfolio &&
+        {!isError &&
+          !noPortfolio &&
           !noHoldings &&
           !isLoading &&
           gainers.length === 0 &&
@@ -307,7 +329,7 @@ export function HoldingsMoversWidget() {
             </div>
           )}
 
-        {!noPortfolio && !noHoldings && !isLoading && (gainers.length > 0 || losers.length > 0) && (
+        {!isError && !noPortfolio && !noHoldings && !isLoading && (gainers.length > 0 || losers.length > 0) && (
           <>
             <div className="flex-1 divide-y divide-border/30">
               {gainers.map((m) => (

@@ -68,6 +68,9 @@ import { FeedbackDeepLinkHandler } from "@/components/feedback/FeedbackDeepLinkH
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { useAlertStream } from "@/contexts/AlertStreamContext";
 import { createGateway } from "@/lib/gateway";
+// WHY qk: replaces the inline ["layout-pending-alert-count"] literal with the
+// factory so tests and the AlarmsPanel invalidation share the same key shape.
+import { qk } from "@/lib/query/keys";
 import { usePortfolioMetrics } from "@/hooks/usePortfolioMetrics";
 // PLAN-0059-C C-4: corruption-safe localStorage wrapper. Replaces six
 // hand-rolled `typeof window === "undefined"` guards + `parseInt` + NaN-fallback
@@ -117,7 +120,11 @@ export default function AppLayout({ children }: AppLayoutProps) {
   // must show the persistent DB pending count so it matches the AlarmsPanel sidebar.
   // We poll every 60s (low frequency — this is layout-level, not a critical widget).
   const { data: pendingAlertsData } = useQuery({
-    queryKey: ["layout-pending-alert-count"],
+    // WHY qk.alerts.pendingCount(): factory wrapper for ["layout-pending-alert-count"].
+    // The layout polls this lightweight count-only query at 60s; the full AlarmsPanel
+    // list uses qk.alerts.list() — separate keys prevent the badge poll from
+    // displacing the richer panel data from cache.
+    queryKey: qk.alerts.pendingCount(),
     queryFn: () => createGateway(accessToken).getPendingAlerts({ limit: 1 }),
     enabled: !!accessToken && isAuthenticated,
     staleTime: 60_000,

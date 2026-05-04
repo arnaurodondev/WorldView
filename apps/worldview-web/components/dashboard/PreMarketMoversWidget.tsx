@@ -21,8 +21,10 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
+import { AlertTriangle } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { cn } from "@/lib/utils";
@@ -72,7 +74,7 @@ export function PreMarketMoversWidget() {
   // so each side can be independently cached and refetched.
   // WHY period in queryKey: ensures a cache miss and re-fetch when the user
   // switches between 1D, 1W, and 1M — otherwise stale 1D results would persist.
-  const { data: gainersData, isLoading: gainersLoading } = useQuery({
+  const { data: gainersData, isLoading: gainersLoading, isError: gainersError, refetch: refetchGainers } = useQuery({
     queryKey: ["dashboard-top-movers-gainers", period],
     queryFn: () => createGateway(accessToken).getTopMovers("gainers", 10, period),
     enabled: !!accessToken,
@@ -81,7 +83,7 @@ export function PreMarketMoversWidget() {
     refetchInterval: 60_000,
   });
 
-  const { data: losersData, isLoading: losersLoading } = useQuery({
+  const { data: losersData, isLoading: losersLoading, isError: losersError, refetch: refetchLosers } = useQuery({
     queryKey: ["dashboard-top-movers-losers", period],
     queryFn: () => createGateway(accessToken).getTopMovers("losers", 10, period),
     enabled: !!accessToken,
@@ -90,6 +92,14 @@ export function PreMarketMoversWidget() {
   });
 
   const isLoading = gainersLoading || losersLoading;
+  // WHY isError from both queries: either leg failing means the two-column
+  // layout would render half-empty. We treat either error as a widget-level
+  // failure and surface a single Retry that re-fetches both sides.
+  const isError = gainersError || losersError;
+  // WHY extracted function (not inline): void-wrapping two calls in JSX onClick
+  // would require an IIFE which is harder to read. A named function keeps the
+  // JSX one-liner and satisfies the no-floating-promises lint rule.
+  const refetchAll = () => { void refetchGainers(); void refetchLosers(); };
 
   // ── Pre-filter raw lists ────────────────────────────────────────────────
   // WHY overfetch (10 then slice to 5): once the sector filter is active,
@@ -291,15 +301,30 @@ export function PreMarketMoversWidget() {
           </div>
         )}
 
+        {/* ── Error state ────────────────────────────────────────────────── */}
+        {/* WHY shown when !isLoading: a loading skeleton takes precedence —
+            we only show the error once the failed state is confirmed.
+            WHY min-h-[110px]: 5 rows × 22px each = 110px; matches the skeleton
+            height so the widget footprint doesn't collapse on error. */}
+        {!isLoading && isError && (
+          <div className="flex flex-1 min-h-[110px] items-center justify-center gap-2">
+            <AlertTriangle className="h-3 w-3 text-destructive" />
+            <span className="text-xs text-muted-foreground">Failed to load</span>
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={refetchAll}>
+              Retry
+            </Button>
+          </div>
+        )}
+
         {/* Empty state — shown only when not loading and both lists are empty */}
-        {!isLoading && gainers.length === 0 && losers.length === 0 && (
+        {!isLoading && !isError && gainers.length === 0 && losers.length === 0 && (
           <div className="flex-1 px-2">
             <InlineEmptyState message="Market mover data loading…" />
           </div>
         )}
 
         {/* ── Gainers column ─────────────────────────────────────────────── */}
-        {!isLoading && (
+        {!isLoading && !isError && (
           <div className="flex-1 divide-y divide-border/30">
             {gainers.map((mover) => (
               <MoverRow key={mover.instrument_id} mover={mover} side="gainer" />
@@ -313,7 +338,7 @@ export function PreMarketMoversWidget() {
         )}
 
         {/* ── Losers column ──────────────────────────────────────────────── */}
-        {!isLoading && (
+        {!isLoading && !isError && (
           <div className="flex-1 divide-y divide-border/30 border-l border-border/30">
             {losers.map((mover) => (
               <MoverRow key={mover.instrument_id} mover={mover} side="loser" />

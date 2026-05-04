@@ -39,6 +39,10 @@ import { useState, useMemo, useCallback } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 
 import { createGateway } from "@/lib/gateway";
+// WHY qk: all queryKey literals must go through the central factory so
+// invalidations from mutations, callbacks, and test assertions all point at
+// the same cache entry. Inline string arrays are migration targets (PLAN-0070 D-1).
+import { qk } from "@/lib/query/keys";
 import {
   useRealizedPnL,
   defaultRealizedPnLRange,
@@ -162,12 +166,14 @@ export function usePortfolioData(
   );
 
   // ── Query 1: portfolio list ────────────────────────────────────────────
+  // WHY qk.portfolios.all: the root ["portfolios"] key; invalidating it
+  // cascades to any partial-match child query under this prefix.
   const {
     data: portfolios,
     isLoading: portfoliosLoading,
     isError: portfoliosError,
   } = useQuery({
-    queryKey: ["portfolios"],
+    queryKey: qk.portfolios.all,
     queryFn: () => createGateway(accessToken).getPortfolios(),
     enabled: !!accessToken,
     staleTime: 60_000,
@@ -197,8 +203,10 @@ export function usePortfolioData(
   const activeIsRoot = activePortfolio?.kind === "root";
 
   // ── Query 2: holdings ───────────────────────────────────────────────────
+  // WHY holdingsByPortfolio: uses the flat ["holdings", id] shape (not the
+  // nested portfolios.detail path) to match the legacy cache entry shape.
   const { data: holdingsResp, isLoading: holdingsLoading } = useQuery({
-    queryKey: ["holdings", activePortfolioId],
+    queryKey: qk.portfolios.holdingsByPortfolio(activePortfolioId ?? ""),
     queryFn: () => createGateway(accessToken).getHoldings(activePortfolioId!),
     enabled: !!accessToken && !!activePortfolioId,
     staleTime: 30_000,
@@ -213,8 +221,11 @@ export function usePortfolioData(
     () => holdingsResp?.holdings.map((h) => h.instrument_id) ?? [],
     [holdingsResp],
   );
+  // WHY holdingsQuotesByIds: the quotes key includes sorted instrument IDs so
+  // the same set of holdings always hits the same cache bucket regardless of
+  // iteration order (e.g. after a re-sort by the server response).
   const { data: holdingsQuotesData } = useQuery({
-    queryKey: ["holdings-quotes", holdingInstrumentIds],
+    queryKey: qk.portfolios.holdingsQuotesByIds(holdingInstrumentIds),
     queryFn: () =>
       createGateway(accessToken).getBatchQuotes(holdingInstrumentIds),
     enabled: holdingInstrumentIds.length > 0 && !!accessToken,
@@ -223,8 +234,11 @@ export function usePortfolioData(
   });
 
   // ── Query 4: transactions ───────────────────────────────────────────────
+  // WHY transactionsByPortfolio: uses the flat ["transactions", id] shape to
+  // match the legacy cache entry — different from qk.portfolios.transactions()
+  // which nests under the detail path.
   const { data: transactionsResp, isLoading: txLoading } = useQuery({
-    queryKey: ["transactions", activePortfolioId],
+    queryKey: qk.portfolios.transactionsByPortfolio(activePortfolioId ?? ""),
     queryFn: () =>
       createGateway(accessToken).getTransactions(activePortfolioId!, {
         limit: 100,
@@ -234,8 +248,10 @@ export function usePortfolioData(
   });
 
   // ── Query 5: watchlists ────────────────────────────────────────────────
+  // WHY qk.watchlists.all: the root ["watchlists"] key. Safe to use here
+  // since shape is identical to the old inline literal.
   const { data: watchlists, isLoading: watchlistsLoading } = useQuery({
-    queryKey: ["watchlists"],
+    queryKey: qk.watchlists.all,
     queryFn: () => createGateway(accessToken).getWatchlists(),
     enabled: !!accessToken,
     staleTime: 60_000,
@@ -249,8 +265,10 @@ export function usePortfolioData(
         .filter((id): id is string => id !== null),
     [watchlists],
   );
+  // WHY watchlistQuotes(ids): sorted IDs give a stable cache key regardless of
+  // watchlist ordering. The sort is done inside the factory method.
   const { data: watchlistQuotesData } = useQuery({
-    queryKey: ["watchlist-quotes", watchlistInstrumentIds],
+    queryKey: qk.portfolios.watchlistQuotes(watchlistInstrumentIds),
     queryFn: () =>
       createGateway(accessToken).getBatchQuotes(watchlistInstrumentIds),
     enabled: watchlistInstrumentIds.length > 0 && !!accessToken,
@@ -272,8 +290,11 @@ export function usePortfolioData(
   // WHY independent from holdings queries: performance depends on OHLCV
   // data from S3, not live quotes. Re-runs only when the portfolio or
   // period changes — not on the 15s quote poll cycle.
+  // WHY performance(id, period): the period is part of the cache key because
+  // performance data is computed server-side per horizon (1D vs 1W vs 1M
+  // return different OHLCV windows).
   const { data: performanceData, isLoading: performanceLoading } = useQuery({
-    queryKey: ["portfolio-performance", activePortfolioId, selectedPeriod],
+    queryKey: qk.portfolios.performance(activePortfolioId ?? "", selectedPeriod),
     queryFn: () =>
       createGateway(accessToken).getPortfolioPerformance(
         activePortfolioId!,
@@ -286,8 +307,10 @@ export function usePortfolioData(
   // ── Query 9: company overviews for holdings (sector + ticker) ─────────
   // WHY 5-min staleTime: gics_sector rebalances annually; ticker/name are
   // permanent. Avoids redundant requests on tab switches.
+  // WHY holdingOverviews(ids): sorted IDs ensure a stable cache bucket even if
+  // holdingInstrumentIds is produced in different iteration order after mutations.
   const { data: holdingOverviews } = useQuery({
-    queryKey: ["holdings-overviews", holdingInstrumentIds],
+    queryKey: qk.portfolios.holdingOverviews(holdingInstrumentIds),
     queryFn: async () => {
       const results = await Promise.all(
         holdingInstrumentIds.map((id) =>
@@ -384,7 +407,10 @@ export function usePortfolioData(
    */
   const handlePortfolioCreated = useCallback(
     (newPortfolio: Portfolio) => {
-      void queryClient.invalidateQueries({ queryKey: ["portfolios"] });
+      // WHY qk.portfolios.all: invalidating the root key cascades to every
+      // portfolio-scoped child query (holdings, transactions, performance, etc.)
+      // so the new portfolio appears across all sub-views without extra calls.
+      void queryClient.invalidateQueries({ queryKey: qk.portfolios.all });
       setSelectedPortfolioId(newPortfolio.portfolio_id);
     },
     [queryClient],
@@ -396,11 +422,15 @@ export function usePortfolioData(
    * active portfolio.
    */
   const handlePositionAdded = useCallback(() => {
+    // WHY flat keys (not nested detail path): invalidation must match the
+    // exact key shape used by the queries above — qk.portfolios.holdingsByPortfolio
+    // and qk.portfolios.transactionsByPortfolio return ["holdings", id] and
+    // ["transactions", id] respectively which is what these queries use.
     void queryClient.invalidateQueries({
-      queryKey: ["holdings", activePortfolioId],
+      queryKey: qk.portfolios.holdingsByPortfolio(activePortfolioId ?? ""),
     });
     void queryClient.invalidateQueries({
-      queryKey: ["transactions", activePortfolioId],
+      queryKey: qk.portfolios.transactionsByPortfolio(activePortfolioId ?? ""),
     });
   }, [queryClient, activePortfolioId]);
 
@@ -411,7 +441,7 @@ export function usePortfolioData(
     mutationFn: (portfolioId: string) =>
       createGateway(accessToken).deletePortfolio(portfolioId),
     onSuccess: (_, deletedId) => {
-      void queryClient.invalidateQueries({ queryKey: ["portfolios"] });
+      void queryClient.invalidateQueries({ queryKey: qk.portfolios.all });
       // If we just deleted the active one, fall back to whichever portfolio
       // sortedPortfolios?.[0] resolves to next render (typically root).
       if (activePortfolioId === deletedId) {

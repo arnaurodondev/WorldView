@@ -43,6 +43,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+// WHY qk: replaces the inline ["instrument-page-bundle", entityId] literal with
+// the factory method so tests and cache-priming effects share one definition.
+import { qk } from "@/lib/query/keys";
 import { FundamentalsTab } from "@/components/instrument/FundamentalsTab";
 import { IntelligenceTab } from "@/components/instrument/IntelligenceTab";
 import { NewsTab } from "@/components/instrument/NewsTab";
@@ -93,7 +96,12 @@ export default function InstrumentDetailPage() {
   // user-driven refresh flows through their own hook.
   const queryClient = useQueryClient();
   const { data: bundle, isLoading: overviewLoading } = useQuery({
-    queryKey: ["instrument-page-bundle", entityId],
+    // WHY qk.instruments.pageBundle: factory wrapper for ["instrument-page-bundle", id].
+    // The bundle endpoint pre-loads multiple sub-resources in one round-trip; child
+    // components still use their own dedicated keys (fundamentals, overview, etc.)
+    // so their invalidation semantics remain correct. This key is only for the
+    // bundle fetch; setQueryData seeds each child's cache from the bundle result.
+    queryKey: qk.instruments.pageBundle(entityId),
     queryFn: () => createGateway(accessToken).getInstrumentPageBundle(entityId),
     enabled: !!accessToken && !!entityId,
     // 5min — overview is expensive; LiveQuoteBadge handles intraday refresh.
