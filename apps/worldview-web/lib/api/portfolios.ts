@@ -23,6 +23,7 @@ import type {
   RiskMetricsResponse,
   RealizedPnLResponse,
   PaginationParams,
+  PortfolioBundleResponse,
 } from "@/types/api";
 import { apiFetch } from "./_client";
 
@@ -662,6 +663,32 @@ export function createPortfoliosApi(t: string | undefined) {
         executed_at: raw.executed_at,
         notes: null,
       };
+    },
+
+    /**
+     * getPortfolioBundle — fetch all portfolio page data in a single request.
+     *
+     * WHY: replaces individual getPortfolios(), getHoldings(), getTransactions(),
+     * and getValueHistory() calls on portfolio page cold start with one bundle
+     * endpoint. Reduces cold-start request count from N individual calls to 1
+     * (PLAN-0070 C-1).
+     *
+     * IMPORTANT: the bundle returns raw S1 shapes for holdings/transactions, NOT
+     * the transformed frontend shapes from getHoldings()/getTransactions(). Components
+     * that need the fully-typed, transformed shapes (Holding[], Transaction[]) should
+     * continue using the dedicated methods. The bundle is intended for seeding the
+     * page's initial data awareness — showing "data is available" before the
+     * individual hooks complete their own fetches.
+     *
+     * @param portfolioId resolved portfolio UUID (validated server-side)
+     */
+    getPortfolioBundle(portfolioId: string): Promise<PortfolioBundleResponse> {
+      // WHY encodeURIComponent: portfolioId is a UUID but defensive encoding
+      // prevents any path injection if validation on the S9 side is ever loosened.
+      return apiFetch<PortfolioBundleResponse>(
+        `/v1/portfolio/${encodeURIComponent(portfolioId)}/bundle`,
+        { token: t },
+      );
     },
   };
 }

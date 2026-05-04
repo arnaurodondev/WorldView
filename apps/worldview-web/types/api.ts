@@ -848,6 +848,51 @@ export interface RealizedPnLResponse {
   currency: string;
 }
 
+// ── Portfolio Bundle (PLAN-0070 C-1) ─────────────────────────────────────────
+
+/**
+ * GET /v1/portfolio/{portfolio_id}/bundle response.
+ *
+ * Collapses 4 portfolio page requests into one round-trip (PLAN-0070 C-1).
+ * Each leg is independently nullable — bundle_meta.partial=true when any
+ * downstream call failed. Components must handle null gracefully by rendering
+ * "—" or a skeleton state for the missing section.
+ *
+ * WHY value_history not equity_curve: the S1 endpoint is /value-history and
+ * the type name mirrors the existing ValueHistoryResponse convention.
+ *
+ * WHY _meta uses a leading underscore: the Python backend returns "_meta" as
+ * a dict key (not a typed field); Pydantic extra="allow" passes it through.
+ * TypeScript types the key name verbatim here to match the wire shape.
+ */
+export interface PortfolioBundleResponse {
+  portfolio_id: string;
+  /** Raw S1 PortfolioResponse shape. null when portfolio fetch failed. */
+  portfolio: Portfolio | null;
+  /**
+   * Raw S1 holdings envelope. null when holdings fetch failed.
+   * WHY raw dict (not HoldingsResponse): the bundle leg returns the S1 native
+   * shape (PaginatedResponse[HoldingResponse] = {items, total, limit, offset}).
+   * The dedicated getHoldings() transform is not run on bundle-fetched data.
+   * Consumers of this field should use getHoldings() for full transformation.
+   */
+  holdings: Record<string, unknown> | null;
+  /**
+   * Raw S1 transactions envelope. null when transactions fetch failed.
+   * Capped at 30 items. Use getTransactions() for full paginated access.
+   */
+  transactions: Record<string, unknown> | null;
+  /**
+   * Raw S1 value-history response. null when value-history fetch failed.
+   * WHY period=1Y: bundle always fetches 1Y for the equity curve chart.
+   */
+  value_history: Record<string, unknown> | null;
+  // WHY _meta key (not bundle_meta): the wire protocol uses "_meta" as a
+  // top-level JSON key. TypeScript can index arbitrary string keys via
+  // Record<> but typing it as optional here makes the partial check explicit.
+  _meta?: { partial: boolean; legs_failed: number; timed_out?: boolean };
+}
+
 // ── Watchlist ──────────────────────────────────────────────────────────────
 
 export interface WatchlistMember {
