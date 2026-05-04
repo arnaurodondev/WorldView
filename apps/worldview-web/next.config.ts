@@ -10,9 +10,20 @@
  *
  * CRITICAL RULE: Frontend NEVER constructs direct backend URLs.
  * All data fetching goes through /api/* → S9 gateway.
+ *
+ * SENTRY WRAP (PLAN-0065 T-D-01):
+ * At the BOTTOM of this file, `withSentryConfig` conditionally wraps `nextConfig`
+ * when `SENTRY_AUTH_TOKEN` is set (build-time sourcemap upload). When unset,
+ * the plain config is exported — `pnpm dev` and CI without Sentry credentials
+ * work without any Sentry involvement.
+ *
+ * IMPORTANT: The ws:// security `throw` at lines 27-34 runs BEFORE this wrap
+ * because top-level module code executes before the export statement. A bad
+ * WS URL must take down the build before Sentry sees it — not after.
  */
 
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs";
 
 // PLAN-0059 W0 fix F-016 (2026-04-30): in production SERVING (not build), refuse
 // to start with ws:// — previous behaviour was a console.warn that was easy to
@@ -185,4 +196,48 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// ─── Sentry sourcemap upload wrap (PLAN-0065 T-D-01) ───────────────────────
+//
+// WHY CONDITIONAL: sourcemap upload requires a Sentry auth token which is a
+// build-time secret. When the token is absent (local dev, CI without Sentry),
+// we export `nextConfig` unchanged so builds succeed with no Sentry involvement.
+//
+// WHY `productionBrowserSourceMaps: true` only when Sentry is active:
+// Source maps let Sentry de-minify stack traces so errors show original
+// TypeScript line numbers. Without maps they are gibberish. We ONLY generate
+// them when Sentry is wired because without upload+deletion they would be
+// served publicly at /_next/static/chunks/*.js.map — exposing unminified
+// source to anyone with devtools. The `hideSourceMaps: true` option instructs
+// the Sentry webpack plugin to DELETE the .map files from the output directory
+// AFTER uploading them, so they never land in the deployed bundle.
+//
+// NOTE: `deleteSourcemapsAfterUpload` is the canonical v10 option name;
+// `hideSourceMaps` is a convenience alias that also sets this.
+//
+// WHY `silent: true`: suppresses Sentry build-plugin output in normal CI logs;
+// errors still surface as build failures.
+
+const sentryEnabled = Boolean(process.env.SENTRY_AUTH_TOKEN);
+
+// Only flip productionBrowserSourceMaps when Sentry will upload + delete them.
+const finalConfig: NextConfig = sentryEnabled
+  ? { ...nextConfig, productionBrowserSourceMaps: true }
+  : nextConfig;
+
+export default sentryEnabled
+  ? withSentryConfig(finalConfig, {
+      // Sentry organisation slug (set in SENTRY_ORG env var at build time)
+      org: process.env.SENTRY_ORG,
+      // Sentry project slug (set in SENTRY_PROJECT env var at build time)
+      project: process.env.SENTRY_PROJECT,
+      // Suppress Sentry plugin stdout in CI — errors still propagate
+      silent: true,
+      // WHY deleteSourcemapsAfterUpload: after Sentry uploads the .map files,
+      // it deletes them from the output directory so they are not served
+      // publicly at /_next/static/chunks/*.js.map. Source maps would expose
+      // unminified TypeScript source to anyone with browser devtools open.
+      sourcemaps: {
+        deleteSourcemapsAfterUpload: true,
+      },
+    })
+  : finalConfig;
