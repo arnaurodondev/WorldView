@@ -71,6 +71,12 @@ import {
 
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+// WHY qk: removes inline queryKey arrays and the accessToken-in-key anti-pattern.
+// Including accessToken in a queryKey causes cache thrashing when the token
+// rotates (OIDC refresh every ~30min) — old cache entries are orphaned and
+// every rotation fires an unnecessary refetch. Auth is enforced by `enabled:
+// !!accessToken`; the token itself need not be part of the cache identity.
+import { qk } from "@/lib/query/keys";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -123,7 +129,10 @@ export default function ChatPage() {
       entityIdFromUrl,
     );
   const { data: resolvedEntity } = useQuery({
-    queryKey: ["chat-entity-resolve", entityIdFromUrl],
+    // WHY qk.chat.entityResolve: avoids the old inline ["chat-entity-resolve", id]
+    // literal. Lives under the chat.* namespace so a chat-wide invalidation
+    // (e.g. on logout) clears this cache entry too.
+    queryKey: qk.chat.entityResolve(entityIdFromUrl ?? ""),
     // Only fetch when the URL value parses as a UUID — otherwise we already
     // have a usable label and would waste a round-trip.
     enabled: !!accessToken && looksLikeUuid,
@@ -173,7 +182,13 @@ export default function ChatPage() {
     error: threadsError,
     refetch: refetchThreads,
   } = useQuery<Thread[]>({
-    queryKey: ["threads", accessToken],
+    // WHY qk.chat.threads() (was ["threads", accessToken]):
+    // accessToken in the key caused cache thrashing on every 30-min OIDC
+    // token rotation — the old entry became orphaned and a new fetch fired
+    // even though the user's identity hadn't changed. Auth is enforced by
+    // `enabled: !!accessToken`; the token itself need not be part of the
+    // cache identity. See PLAN-0070 D-1 T-D-1-03.
+    queryKey: qk.chat.threads(),
     queryFn: () => createGateway(accessToken).getThreads(),
     enabled: !!accessToken,
     staleTime: 30_000,
@@ -183,10 +198,16 @@ export default function ChatPage() {
     data: activeThread,
     isLoading: threadLoading,
   } = useQuery<Thread>({
-    queryKey: ["thread", activeThreadId, accessToken],
+    // WHY qk.chat.thread(id) (was ["thread", id, accessToken]):
+    // Same accessToken-in-key anti-pattern as above. Also: staleTime was 0,
+    // which forced a full refetch every time the chat panel re-rendered
+    // (e.g. on streaming state transitions). 30s staleTime means TanStack
+    // Query returns the cached thread instantly while the background refetch
+    // runs — preventing the "blank message list on re-mount" flash.
+    queryKey: qk.chat.thread(activeThreadId ?? ""),
     queryFn: () => createGateway(accessToken).getThread(activeThreadId!),
     enabled: !!accessToken && !!activeThreadId,
-    staleTime: 0,
+    staleTime: 30_000,
   });
 
   // ── SSE chat stream ───────────────────────────────────────────────────────
@@ -447,7 +468,7 @@ export default function ChatPage() {
         {/* Header + New Chat button */}
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <div className="flex items-center gap-2">
-            <MessageSquare className="h-4 w-4 text-primary" />
+            <MessageSquare className="h-4 w-4 text-primary" strokeWidth={1.5} />
             <span className="text-sm font-semibold text-foreground">Threads</span>
           </div>
           <Button
@@ -457,7 +478,7 @@ export default function ChatPage() {
             className="h-7 gap-1 border-primary/30 px-2 text-xs text-primary hover:bg-primary/10"
             aria-label="Start new chat"
           >
-            <Plus className="h-3 w-3" />
+            <Plus className="h-3 w-3" strokeWidth={1.5} />
             New chat
           </Button>
         </div>
@@ -465,7 +486,7 @@ export default function ChatPage() {
         {/* Thread search box (T-E-5-03) — debounced 200ms via effect above */}
         <div className="border-b border-border/40 p-2">
           <div className="relative">
-            <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+            <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" strokeWidth={1.5} />
             <input
               type="search"
               value={searchInput}
@@ -584,7 +605,7 @@ export default function ChatPage() {
               onClick={handleNewChat}
               className="mt-1 gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
             >
-              <Plus className="h-3.5 w-3.5" />
+              <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
               Start a conversation
             </Button>
           </div>
@@ -610,7 +631,7 @@ export default function ChatPage() {
                 className="h-7 gap-1 border-border px-2 text-xs"
                 aria-label="Export thread as Markdown"
               >
-                <Download className="h-3 w-3" />
+                <Download className="h-3 w-3" strokeWidth={1.5} />
                 Export
               </Button>
             </div>
@@ -658,7 +679,7 @@ export default function ChatPage() {
                               "rounded-[2px] border border-border bg-card",
                               "cursor-pointer p-3 text-left",
                               "hover:border-primary/40 hover:bg-muted/40",
-                              "text-[12px] leading-relaxed text-foreground",
+                              "text-[11px] leading-relaxed text-foreground",
                               "transition-colors duration-0",
                             )}
                             onClick={() => setInput(display)}
@@ -760,7 +781,7 @@ export default function ChatPage() {
                   className="h-10 w-10 shrink-0 bg-primary p-0 text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
                   aria-label="Send message"
                 >
-                  <Send className="h-4 w-4" />
+                  <Send className="h-4 w-4" strokeWidth={1.5} />
                 </Button>
               </div>
 

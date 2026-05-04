@@ -34,6 +34,8 @@ import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+// WHY qk: replaces the inline ["instruments-browse", searchQuery] literal.
+import { qk } from "@/lib/query/keys";
 import { DataTable } from "@/components/ui/data-table/data-table";
 import { createScreenerColumns } from "@/components/screener/screener-columns";
 import type { ScreenerResult, ScreenerRequest } from "@/types/api";
@@ -102,8 +104,11 @@ export default function InstrumentsPage() {
   };
 
   const { data, isLoading, isFetching } = useQuery({
-    // WHY searchQuery in key: search changes drive refetches; stable key for cache hits
-    queryKey: ["instruments-browse", searchQuery],
+    // WHY qk.instruments.browse: factory wrapper for ["instruments-browse", query].
+    // searchQuery in key ensures a cache miss on each new search term; stable key
+    // for the empty-string (show-all) case so the full list doesn't refetch on
+    // every render.
+    queryKey: qk.instruments.browse(searchQuery),
     queryFn: () => createGateway(accessToken).runScreener(request),
     enabled: !!accessToken,
     // WHY 30s staleTime: instrument fundamentals change infrequently during a session.

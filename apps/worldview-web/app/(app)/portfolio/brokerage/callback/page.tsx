@@ -44,6 +44,8 @@ import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+// WHY qk: replaces inline ["brokerage-connections"] literals in invalidations.
+import { qk } from "@/lib/query/keys";
 import { Button } from "@/components/ui/button";
 
 // ── State machine ─────────────────────────────────────────────────────────────
@@ -130,7 +132,7 @@ export default function BrokerageCallbackPage() {
         // it becomes "active". Invalidating forces ConnectedBrokeragesList to
         // re-fetch and show the correct status immediately when the user returns
         // to the Portfolio page via the "Go to Portfolio" button.
-        void queryClient.invalidateQueries({ queryKey: ["brokerage-connections"] });
+        void queryClient.invalidateQueries({ queryKey: qk.brokerage.connections() });
         setState("success");
       })
       .catch((err: unknown) => {
@@ -138,7 +140,7 @@ export default function BrokerageCallbackPage() {
         // the connection in an "error" status on the server. Invalidating ensures
         // ConnectedBrokeragesList shows the correct error badge + recovery options
         // (Sync Now / Disconnect) so the user is not stuck on a stale "pending" view.
-        void queryClient.invalidateQueries({ queryKey: ["brokerage-connections"] });
+        void queryClient.invalidateQueries({ queryKey: qk.brokerage.connections() });
         setState("error");
         setErrorMessage(
           err instanceof Error

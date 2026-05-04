@@ -47,6 +47,9 @@ import { countAlertRules } from "@/lib/alerts/rules";
 import { ArticleCard } from "@/components/news/ArticleCard";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+// WHY qk: replaces inline ["news-relevant"] and ["news-top-today", {...}] literals
+// with factory methods so all call sites share a single key definition.
+import { qk } from "@/lib/query/keys";
 import { cn } from "@/lib/utils";
 import type { Article } from "@/types/api";
 
@@ -370,7 +373,9 @@ function NewsFeedTab({ accessToken }: TabProps) {
   const [activeCategory, setActiveCategory] = useStickyCategory();
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["news-relevant"],
+    // WHY qk.news.relevant(): factory wrapper for the flat ["news-relevant"] key.
+    // Preserves the legacy cache shape so in-flight entries are not orphaned.
+    queryKey: qk.news.relevant(),
     queryFn: () => createGateway(accessToken).getRelevantNews(20),
     // WHY 5min auto-refresh: relevance-ranked news doesn't need sub-minute freshness
     refetchInterval: 5 * 60_000,
@@ -446,7 +451,10 @@ function TopTodayTab({ accessToken }: TabProps) {
   const [activeCategory, setActiveCategory] = useStickyCategory();
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["news-top-today", { hours: 72, limit: 20 }],
+    // WHY qk.news.topToday: factory wrapper for the flat ["news-top-today", params]
+    // key. The params object is part of the cache identity so different hour/limit
+    // combos get separate buckets.
+    queryKey: qk.news.topToday({ hours: 72, limit: 20 }),
     queryFn: () => createGateway(accessToken).getTopNews({ hours: 72, limit: 20 }),
     refetchInterval: 5 * 60_000,
     staleTime: 60_000,

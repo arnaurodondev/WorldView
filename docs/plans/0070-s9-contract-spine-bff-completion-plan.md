@@ -585,7 +585,10 @@ Do NOT include per-instrument top-movers (still requires N calls for price data;
 
 ---
 
-### Wave D-1: Error States + Query Key Migration + Auth Fixes
+### Wave D-1: Error States + Query Key Migration + Auth Fixes ✅
+
+**Status**: COMPLETE (2026-05-03)
+**Commit**: PLAN-0070-D-1 — error states, queryKey migration, accessToken fix
 
 **Goal**: Add missing `isError` states to 7 widgets; migrate 32+ inline query keys to `qk.*` factory; remove `accessToken` from chat query keys.
 **Depends on**: none (no backend changes required)
@@ -858,9 +861,9 @@ D-1 (error states) — parallel, no deps
 | T-C-2-01 | Dashboard snapshot client function | C | C-2 | pending |
 | T-C-2-02 | Dashboard snapshot route | C | C-2 | pending |
 | T-C-2-03 | Frontend — use dashboard snapshot hook | C | C-2 | pending |
-| T-D-1-01 | Error states for 7 dashboard widgets | D | D-1 | pending |
-| T-D-1-02 | Migrate 32+ inline query keys to qk.* factory | D | D-1 | pending |
-| T-D-1-03 | Remove accessToken from chat query keys | D | D-1 | pending |
+| T-D-1-01 | Error states for 7 dashboard widgets | D | D-1 | done |
+| T-D-1-02 | Migrate 32+ inline query keys to qk.* factory | D | D-1 | done |
+| T-D-1-03 | Remove accessToken from chat query keys | D | D-1 | done |
 | T-D-2-01 | MoversWidget — batch quote fetch | D | D-2 | pending |
 | T-D-2-02 | Portfolio mutation cache invalidation | D | D-2 | pending |
 | T-E-1-01 | Extend api-spec-smoke.test.ts schema count gate | E | E-1 | pending |

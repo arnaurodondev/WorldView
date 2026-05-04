@@ -89,6 +89,9 @@ import {
 import { useScreenerSparklines } from "@/hooks/useScreenerSparklines";
 import { buildScreenerFilters } from "@/features/screener/lib/build-filters";
 import { applyClientFilters } from "@/features/screener/lib/apply-client-filters";
+// WHY qk: centralises the paginated screener queryKey so invalidations and
+// tests reference the same factory instead of duplicating string literals.
+import { qk } from "@/lib/query/keys";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -299,7 +302,10 @@ export default function ScreenerPage() {
   // The previous accumulator stays in component state — React Query just
   // returns the next page; we merge in a useEffect below.
   const { data, isLoading, isFetching, error } = useQuery({
-    queryKey: ["screener", filterSerialized, offset],
+    // WHY qk.screener.page: preserves the flat ["screener", filterSerialized, offset]
+    // shape so each page offset gets its own cache entry (pagination accumulator
+    // pattern). The factory is here so tests and mutations use the same key.
+    queryKey: qk.screener.page(filterSerialized, offset),
     queryFn: () => createGateway(accessToken).runScreener(request),
     enabled: !!accessToken,
     // WHY 30s staleTime: screener fundamentals change infrequently during a session.
