@@ -3,28 +3,74 @@ title: Changelog
 description: Notable changes by release.
 section: Release Notes
 order: 1
-updated: 2026-05-01
+updated: 2026-05-05
+---
+
+## v1.0.0 — 2026-05-05
+
+### Documentation hub content (PLAN-0052 Wave C)
+
+- **~50 documentation pages** authored across 10 sections: Getting Started, Dashboard, Instruments, Portfolio, Screener, Alerts, Chat & AI, Workspace, Data Sources, and API Reference
+- Full procedural guides with `<Steps>` components for all onboarding flows (sign-up, brokerage connection, first watchlist, alert creation)
+- API reference with code examples in curl, Python, and TypeScript for all major endpoint groups
+- FAQ expanded to 10 Q&A pairs covering data freshness, brokerage safety, pricing, and self-hosting
+- Changelog updated with v1.0.0 entry
+
+### Instruments
+
+- **Intelligence Graph** panel added to the workspace — knowledge graph now available in multi-panel layouts
+- Entity knowledge graph supports 2-degree expansion (right-click → Expand)
+- Article impact windows (T+0/T+1/T+2/T+5 price returns) now visible on article cards in the News tab
+
+### Portfolio
+
+- **Allocation tab** redesigned — sector treemap with benchmark comparison vs. S&P 500, Nasdaq 100, Russell 2000
+- FIFO realized P&L calculation now handles corporate actions (splits, mergers) correctly
+
+### Screener
+
+- **Saved screens** — save, load, and share screener filter presets via URL
+- Export to Excel (.xlsx) and PDF added alongside existing CSV export
+- News velocity and routing tier filters added to the filter bar
+
+### Alerts
+
+- **Alert cooldown** configurable per rule (default 1 hour, range 5 min to 24 hours)
+- Backtest: rule builder now shows how many times the condition would have fired in the last 7 days before you save
+- Portfolio-level P&L alerts added (fire when total portfolio drops by N%)
+
+### Chat & AI
+
+- Slash commands `/compare` and `/portfolio` added
+- DeepSeek R1 chain-of-thought "Thinking..." blocks now collapsible (click to expand/collapse reasoning)
+- Chat threads now have auto-generated titles based on the first message
+
 ---
 
 ## 2026-05-01
 
-- **Landing page** completely rebuilt — 11 marketing sections including
-  the live sector heatmap preview, AI demo with cited answers, and the
-  Bloomberg/IBKR/TradingView/Finviz comparison table (PLAN-0052 Wave A).
-- **Documentation hub** launched at `/docs` with cmd-K search, sidebar
-  nav, on-page TOC, MDX components (Callout / CodeBlock / Tabs / Steps),
-  thumbs feedback widget, and edit-on-GitHub links (PLAN-0052 Wave B).
+- **Landing page** completely rebuilt — 11 marketing sections including the live sector heatmap preview, AI demo with cited answers, and the Bloomberg/IBKR/TradingView/Finviz comparison table (PLAN-0052 Wave A).
+- **Documentation hub** launched at `/docs` with cmd-K search, sidebar nav, on-page TOC, MDX components (Callout / CodeBlock / Tabs / Steps), thumbs feedback widget, and edit-on-GitHub links (PLAN-0052 Wave B).
 
 ## 2026-04-29
 
-- **Feedback system backend** shipped — POST/GET/PATCH endpoints for
-  feedback submissions, NPS, micro-surveys, feature requests, and beta
-  enrollment, all with PII redaction (PLAN-0052 Wave D).
+- **Feedback system backend** shipped — POST/GET/PATCH endpoints for feedback submissions, NPS, micro-surveys, feature requests, and beta enrollment, all with PII redaction (PLAN-0052 Wave D).
 
 ## 2026-04-28
 
-- **Workspace v2** with 5 panel templates, drag-and-drop persistence,
-  symbol-linking 5-color broadcast, and shareable workspace URLs.
-- **Screener** redesign with 6-section filter bar, saved screens,
-  column customization, multi-format export (CSV / Excel / PDF), and
-  sparklines.
+- **Workspace v2** with 5 panel templates, drag-and-drop persistence, symbol-linking 5-color broadcast, and shareable workspace URLs.
+- **Screener** redesign with 6-section filter bar, saved screens, column customization, multi-format export (CSV / Excel / PDF), and sparklines.
+
+## 2026-04-27
+
+- All 4 ML components externalized to DeepInfra: embedding (BAAI/bge-large-en-v1.5), relevance scoring, unresolved entity resolution, and KG scheduler (meta-llama/Meta-Llama-3.1-8B-Instruct).
+- Ollama now used for GLiNER NER only.
+
+## 2026-04-23
+
+- Local dev bring-up fully validated — all 54 containers healthy, news pipeline flowing, 550+ unit tests pass.
+- Fixed BP-179 (empty-string env var), BP-180 (asyncpg nullable param), BP-181 (ml-clients missing from rag-chat Docker image).
+
+## 2026-04-10
+
+- **Auth foundation** (PLAN-0025) shipped — Zitadel Cloud OIDC/PKCE, RS256 internal JWT, S9 security hardening (SEC-001/003/004/007/008), S1 user provisioning endpoint.

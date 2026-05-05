@@ -1,0 +1,69 @@
+---
+title: Connect a Brokerage
+description: Sync your TastyTrade positions to track P&L alongside your research.
+section: Getting Started
+order: 4
+updated: 2026-05-05
+---
+
+Worldview integrates with real brokerage accounts via **SnapTrade**, a read-only aggregation layer. Your positions appear in the Portfolio section and the morning brief can reference your actual holdings when answering research questions.
+
+## Supported brokers
+
+Currently supported through SnapTrade:
+
+- **TastyTrade** — equity and options positions
+- More brokers coming via SnapTrade's growing catalog
+
+<Callout type="warn" title="Read-only access only">
+Worldview requests a read-only OAuth token. It cannot place orders, cancel trades, transfer funds, or modify your brokerage account in any way. The SnapTrade connection is scoped to position and transaction data only.
+</Callout>
+
+## Connect TastyTrade
+
+<Steps>
+  <Step title="Open Settings">
+    Click the gear icon in the top-right of the TopBar, or navigate to [/settings](/settings).
+  </Step>
+  <Step title="Go to Brokerage">
+    Select **Brokerage** from the Settings sidebar.
+  </Step>
+  <Step title="Click Connect TastyTrade">
+    Click the **Connect TastyTrade** button. You are redirected to SnapTrade's connection portal.
+  </Step>
+  <Step title="Authenticate with TastyTrade">
+    Enter your TastyTrade credentials in SnapTrade's secure portal. Worldview never sees your brokerage password.
+  </Step>
+  <Step title="Authorize read-only scope">
+    SnapTrade asks you to approve read-only access. Confirm the scope and click **Authorize**.
+  </Step>
+  <Step title="Return to Worldview">
+    You are redirected back to Settings. Worldview begins syncing your positions — the first sync takes up to 30 seconds.
+  </Step>
+</Steps>
+
+## What syncs
+
+After connection, Worldview imports:
+
+| Data type | Update frequency |
+|-----------|-----------------|
+| Current positions (holdings) | Every 5 minutes |
+| Transaction history | On first sync + daily |
+| Account balances | Every 5 minutes |
+
+<Callout type="info" title="Historical transactions">
+Worldview imports up to 12 months of transaction history on the first sync. FIFO realized P&L is calculated from this history. Older transactions show as "position established before sync date."
+</Callout>
+
+## Disconnect a brokerage
+
+Navigate to **Settings → Brokerage** and click **Disconnect**. Worldview deletes the SnapTrade token and removes synced position data. Transaction history is retained for accounting purposes unless you explicitly delete your account.
+
+## Troubleshooting
+
+**Positions not appearing after 2 minutes** — The initial sync may be delayed. Refresh the Portfolio page. If the issue persists, disconnect and reconnect.
+
+**Authorization failed** — Your TastyTrade password may have changed since connecting. Disconnect and reconnect with your current credentials.
+
+**Missing instruments** — Worldview requires EODHD market data coverage for an instrument to appear in Portfolio. Most US equities and ETFs are covered; options positions show the underlying instrument.

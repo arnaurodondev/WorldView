@@ -1,0 +1,75 @@
+---
+title: News Feed
+description: Article feed with AI relevance scores, sentiment icons, and news routing tiers.
+section: Instruments
+order: 3
+updated: 2026-05-05
+---
+
+The News tab on each instrument page shows a curated article feed for that instrument. Articles are ranked by an AI relevance model that scores them against the specific instrument's entity context — not just keyword matching.
+
+## Article card anatomy
+
+Each article card shows:
+
+- **Headline** — linked to the original source
+- **Source** and **publication time** (relative, e.g. "3 hours ago")
+- **Relevance score** — 0–100, shown as a colored bar
+- **Sentiment icon** — positive, negative, or neutral
+- **Routing tier** badge
+- **Entity tags** — up to 3 extracted named entities
+
+## Relevance scoring
+
+Relevance scores are computed by a two-stage model:
+
+1. **Market routing score** — based on entity co-occurrence and relationship distance in the knowledge graph (e.g., a direct mention scores higher than a supplier mention)
+2. **LLM relevance score** — `meta-llama/Meta-Llama-3.1-8B-Instruct` scores the article title against the entity's description (0–1 scale)
+3. **Display score** — a weighted blend: `0.5 × market + 0.4 × llm + 0.1 × routing_tier_weight`
+
+<Callout type="info" title="Score interpretation">
+A score of 80+ means the article is highly specific to this instrument. Scores 50–80 indicate relevant context (sector news, related company). Scores below 50 are broad market articles where this instrument was a passing mention.
+</Callout>
+
+## Sentiment icons
+
+| Icon | Meaning |
+|------|---------|
+| Green upward arrow | Positive sentiment — bullish framing, beat expectations, upgrade |
+| Red downward arrow | Negative sentiment — bearish framing, miss, downgrade, legal issue |
+| Gray dash | Neutral — factual update, routine announcement |
+
+Sentiment is assigned by the NLP pipeline's named entity sentiment model, scoped to mentions of this specific entity within the article — not the overall article tone.
+
+## Routing tiers
+
+Articles are assigned to one of four tiers based on source quality and entity directness:
+
+| Tier | Description |
+|------|-------------|
+| TIER_1 | Primary source (SEC filing, Fed statement, press release) |
+| TIER_2 | Tier-1 wire service (Reuters, Bloomberg, AP) |
+| TIER_3 | Financial media (WSJ, FT, MarketWatch, Seeking Alpha) |
+| TIER_4 | Aggregated / social signals (Reddit, Twitter-firehose) |
+
+Tier is used as a signal weight in the screener's "news velocity" filter and in the morning brief's source selection.
+
+## Article impact windows
+
+For articles published during or just after a trading session, Worldview tracks the instrument's price return in four windows:
+
+- **T+0** — same-day close vs. open
+- **T+1** — next-day close vs. publish-day close
+- **T+2** — two-day close
+- **T+5** — five-day close
+
+These windows appear as a small sparkline on article cards that are at least 5 trading days old, showing how the stock moved after the article was published.
+
+## Filtering
+
+Use the filter bar above the article list to narrow by:
+
+- **Sentiment** — All / Positive / Negative / Neutral
+- **Tier** — All / Tier 1 / Tier 1+2 / All tiers
+- **Date range** — Last 24h / 7d / 30d / Custom
+- **Minimum relevance** — slide to set a score floor

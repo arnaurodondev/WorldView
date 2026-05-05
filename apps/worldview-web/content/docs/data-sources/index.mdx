@@ -1,0 +1,48 @@
+---
+title: Data Sources
+description: Overview of all external data providers — EODHD, Finnhub, Polymarket, SEC EDGAR, and SnapTrade.
+section: Data Sources
+order: 1
+updated: 2026-05-05
+---
+
+Worldview aggregates data from multiple specialized providers. Each source contributes a different data type, and the platform's microservice architecture keeps them isolated from each other.
+
+## Provider summary
+
+| Provider | Data type | Coverage | Update frequency |
+|----------|----------|----------|-----------------|
+| EODHD | Price, OHLCV, fundamentals, intraday | 70,000+ instruments globally | EOD + intraday 1-min |
+| Finnhub | Real-time quotes, fundamentals, news | US equities + major international | 1-second ticks (quotes) |
+| SEC EDGAR | Regulatory filings | US public companies | On filing (typically same day) |
+| Polymarket | Prediction market odds | 500+ active markets | Every 5 minutes |
+| SnapTrade | Brokerage positions | User-specific (via broker connection) | Every 5 minutes |
+
+## Data flow architecture
+
+1. **Ingestion services** — dedicated microservices (S2 Market Ingestion, S3 Content Ingestion, S4 Content Store) poll external APIs on schedules
+2. **Kafka events** — raw data is published to Apache Kafka topics as Avro-encoded events
+3. **Processing services** — downstream services (S5 NLP Pipeline, S6 Knowledge Graph) consume and enrich the data
+4. **Read APIs** — S9 API Gateway exposes processed data via REST endpoints to the frontend
+
+This means the data you see in the frontend is never fetched directly from the external provider — it has passed through validation, normalization, and enrichment before reaching you.
+
+<Callout type="info" title="Data freshness vs. real-time">
+Worldview is a research and intelligence platform, not a trading execution terminal. Price data has a 1–60 second delay depending on the source and asset type. Do not use Worldview prices for time-sensitive trading execution.
+</Callout>
+
+## Coverage gaps
+
+Not all instruments are covered by all providers. Gaps include:
+- International equities may have fundamentals from EODHD but not real-time quotes from Finnhub
+- OTC instruments may have OHLCV but limited fundamentals
+- Crypto assets: OHLCV available; fundamentals not applicable
+
+When data is unavailable, fields show "—" rather than zero to distinguish missing data from a true zero value.
+
+## Related pages
+
+- [EODHD](/docs/data-sources/eodhd) — equities, ETFs, OHLCV, fundamentals
+- [Finnhub](/docs/data-sources/finnhub) — real-time quotes and news
+- [Polymarket](/docs/data-sources/polymarket) — prediction markets
+- [SEC EDGAR](/docs/data-sources/sec-edgar) — regulatory filings

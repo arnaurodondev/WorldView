@@ -1,60 +1,69 @@
 ---
-title: Getting started
+title: Getting Started
 description: From zero to a connected workspace in five minutes.
 section: Getting Started
 order: 1
-updated: 2026-05-01
+updated: 2026-05-05
 ---
 
-This guide gets you from a fresh sign-up to a working Worldview workspace with a watchlist, a chart, and the AI assistant. Total time: ~5 minutes.
+This guide gets you from a fresh sign-up to a working Worldview workspace with a watchlist, a chart, and the AI assistant. Total time: approximately five minutes.
 
 ## Before you begin
 
 You need:
 
-- A web browser (Chrome, Safari, Firefox, or Edge — all current)
+- A web browser (Chrome, Safari, Firefox, or Edge — all current versions)
 - An email address
-- *(Optional)* A TastyTrade brokerage account if you want to sync positions
+- *(Optional)* A TastyTrade brokerage account if you want to sync your positions
 
 ## Sign up
 
 <Steps>
   <Step title="Create an account">
-    Visit [the registration page](/register) and enter your email + password. We don't ask for a credit card.
+    Visit the [registration page](/register) and enter your email and password. No credit card required.
   </Step>
   <Step title="Verify your email">
-    Click the verification link in your inbox. Worldview's auth runs through Zitadel — the link expires in 24h.
+    Click the verification link in your inbox. Authentication runs through Zitadel — the link expires in 24 hours.
   </Step>
   <Step title="Land on the dashboard">
-    First sign-in lands you on `/dashboard`. The morning brief, watchlists, and AI panel are visible by default.
+    Your first sign-in lands you on `/dashboard`. The morning brief, watchlists, and AI panel are visible by default.
   </Step>
 </Steps>
 
+<Callout type="tip" title="Development login">
+When running Worldview locally, visit `/login` and click the **Dev Login** button to skip the full OIDC flow and receive a test JWT instantly.
+</Callout>
+
 ## Build your first watchlist
 
-The watchlist is the central focus list — every alert, brief, and notification scopes by it.
+The watchlist is the central focus list — every alert, morning brief, and notification scopes by it.
 
 <Callout type="info" title="Watchlist limits">
 The free tier allows 1 watchlist with up to 25 instruments. Pro and Enterprise are unlimited.
 </Callout>
 
-1. Click **Watchlists** in the left rail
-2. Click **+ New watchlist**, name it (e.g. "Tech mega-cap")
+1. Click **Watchlists** in the left navigation rail
+2. Click **+ New watchlist**, give it a name (e.g. "Tech mega-cap")
 3. Search for an instrument (try `AAPL`) and click **Add**
 4. Repeat for any tickers you actively follow
 
 ## Connect your brokerage (optional)
 
-Worldview reads brokerage positions to show actual P&L next to research. Currently we support TastyTrade.
+Worldview reads brokerage positions to show actual P&L alongside your research. Currently supported: TastyTrade.
 
 <Callout type="warn" title="Read-only access">
-Brokerage tokens are scoped read-only — Worldview cannot place orders, transfer cash, or modify your account.
+Brokerage tokens are scoped read-only — Worldview cannot place orders, transfer cash, or modify your account in any way.
 </Callout>
 
-Settings → Brokerage → **Connect TastyTrade**. Follow the OAuth flow; positions sync within ~30 seconds.
+Navigate to **Settings → Brokerage → Connect TastyTrade**. Complete the OAuth flow; your positions sync within approximately 30 seconds.
+
+## Explore the workspace
+
+The workspace gives you a multi-panel canvas where you can pin charts, news feeds, fundamentals panels, and more side-by-side. Press `G` then `W` to jump directly to the workspace from anywhere in the app.
 
 ## Next steps
 
-- [Workspace tour](/docs/getting-started/workspace-tour) — every panel type and how they link
-- [Keyboard shortcuts](/docs/dashboard/keyboard-shortcuts) — the shortcut reference card
-- [API reference](/docs/api-reference) — for programmatic access
+- [Sign-up details](/docs/getting-started/sign-up) — full registration and email verification walkthrough
+- [Workspace tour](/docs/getting-started/workspace-tour) — every panel type and how they link together
+- [Connect a brokerage](/docs/getting-started/connect-brokerage) — step-by-step TastyTrade connection
+- [Keyboard shortcuts](/docs/dashboard/keyboard-shortcuts) — learn the chord shortcuts that power users rely on

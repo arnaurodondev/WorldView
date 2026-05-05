@@ -1,0 +1,56 @@
+---
+title: EODHD
+description: EODHD coverage, update frequency, fundamentals depth, and known limitations.
+section: Data Sources
+order: 2
+updated: 2026-05-05
+---
+
+EODHD (End-of-Day Historical Data) is Worldview's primary data provider for price series, fundamentals, and instrument metadata. It covers 70,000+ tickers across 60+ exchanges globally.
+
+## Coverage
+
+| Asset class | Coverage |
+|-------------|---------|
+| US equities (NYSE/NASDAQ/AMEX) | Full — OHLCV + fundamentals |
+| US ETFs | Full — OHLCV + fund metadata |
+| International equities | Broad — 50+ exchanges; fundamentals depth varies |
+| Indices | Full — price series only |
+| Crypto | Selected — BTC/ETH/BNB/SOL/XRP and 200+ others |
+| Forex | Major pairs and crosses |
+
+## OHLCV data
+
+| Timeframe | Availability | Delay |
+|-----------|-------------|-------|
+| End-of-day | All covered instruments | ~30 min after close |
+| 1-minute intraday | US equities + ETFs | ~1 min delay |
+| 5-minute intraday | US equities + ETFs | ~5 min delay |
+
+EODHD provides up to 30 years of daily history for major US equities. Intraday history is available for the last 365 days.
+
+## Fundamentals data
+
+EODHD's fundamentals API provides:
+
+- **Income statement** — annual and quarterly, last 10 years
+- **Balance sheet** — annual and quarterly, last 10 years
+- **Cash flow statement** — annual and quarterly, last 10 years
+- **Valuation metrics** — P/E, P/S, P/B, EV/EBITDA computed by EODHD
+- **Analyst estimates** — consensus EPS and revenue for next 2 quarters and 2 fiscal years
+- **Dividends** — full dividend history
+- **Corporate actions** — splits, mergers, spin-offs
+
+<Callout type="info" title="Fundamentals update schedule">
+EODHD updates fundamentals once per day, typically between 18:00–22:00 ET. For US companies that report earnings before market open, updated fundamentals are usually available by 20:00 ET on the report date.
+</Callout>
+
+## Known limitations
+
+- **Officers and executives** — the `General.Officers` field is not populated in the EODHD API response for most companies. Worldview uses the SEC EDGAR insider transactions API for executive information instead.
+- **Institutional holders** — institutional holder details (`Holders.Institutions`) are not available from EODHD. This field is intentionally left blank rather than shown with incorrect data.
+- **Revenue segmentation** — segment revenue breakdown is not available from EODHD's API. Segment data is derived from SEC 10-K filings where available.
+
+## Instrument IDs
+
+EODHD uses a `TICKER.EXCHANGE` format for instrument IDs (e.g., `AAPL.US`, `TSLA.US`, `BP.LSE`). Worldview normalizes these to a canonical UUID-based entity ID internally — you should always use Worldview's entity ID in API calls rather than raw EODHD ticker strings.

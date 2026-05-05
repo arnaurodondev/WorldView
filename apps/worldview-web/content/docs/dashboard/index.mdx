@@ -1,0 +1,53 @@
+---
+title: Dashboard
+description: Overview of all five dashboard widgets — morning brief, heatmap, predictions, movers, and economics.
+section: Dashboard
+order: 1
+updated: 2026-05-05
+---
+
+The dashboard (`/dashboard`) is the first page you see after sign-in. It aggregates five intelligence widgets into a single view designed for a quick pre-market or intraday situation assessment.
+
+## Widget overview
+
+| Widget | Purpose | Data source |
+|--------|---------|-------------|
+| Morning Brief | AI-generated daily digest | DeepSeek R1 32B + news pipeline |
+| Sector Heatmap | 11 SPDR sectors by % move | EODHD intraday |
+| Watchlist Movers | Your instruments by absolute % change | EODHD intraday |
+| Economic Calendar | Next 5 macro events | Finnhub economic data |
+| Prediction Markets | Top Polymarket events by volume | Polymarket API |
+
+## Layout
+
+The dashboard uses a responsive 12-column grid:
+
+- **Top row** — Morning Brief spans 8 columns; Economic Calendar spans 4
+- **Bottom row** — Sector Heatmap spans 4; Watchlist Movers spans 4; Prediction Markets spans 4
+
+On screens narrower than 1280px the widgets stack vertically in the order listed above.
+
+<Callout type="tip" title="Widget refresh">
+Each widget has an independent refresh cycle. The heatmap and movers update every 60 seconds during market hours. The morning brief is generated once per day at 06:00 ET and cached until the next generation.
+</Callout>
+
+## Navigating from the dashboard
+
+Every widget is interactive:
+
+- **Morning brief** — click a company mention to open that instrument's page
+- **Sector heatmap** — click a sector cell to open the screener pre-filtered to that sector
+- **Watchlist movers** — click any row to open the instrument chart
+- **Economic calendar** — click an event to see the historical series and consensus
+- **Prediction markets** — click a market to open the Polymarket event detail
+
+## Flash alerts overlay
+
+When a flash alert triggers (price breach, news event, or technical signal), a banner appears at the top of the dashboard. The banner shows the alert severity (LOW / MEDIUM / HIGH / CRITICAL) with color coding and a dismiss button. Alerts are delivered via WebSocket so you see them without refreshing.
+
+## Related pages
+
+- [Dashboard widgets](/docs/dashboard/widgets) — deep dive on each widget
+- [Morning brief](/docs/dashboard/ai-brief) — how the AI brief is generated and scoped
+- [Alerts](/docs/dashboard/alerts) — flash alert severity tiers
+- [Keyboard shortcuts](/docs/dashboard/keyboard-shortcuts) — navigate the dashboard hands-free
