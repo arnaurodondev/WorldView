@@ -51,6 +51,7 @@ class Security:
     industry: str | None = None
     country: str | None = None
     currency: str | None = None
+    description: str | None = None
     created_at: datetime = field(default_factory=_utc_now)
     updated_at: datetime = field(default_factory=_utc_now)
 

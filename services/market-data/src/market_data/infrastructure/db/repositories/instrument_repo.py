@@ -220,3 +220,13 @@ class PgInstrumentRepository(InstrumentRepository):
         if not updates:
             return
         await self._session.execute(update(InstrumentModel).where(InstrumentModel.id == id).values(**updates))
+
+    async def find_by_isin(self, isin: str) -> Instrument | None:
+        result = await self._session.execute(select(InstrumentModel).where(InstrumentModel.isin == isin))
+        row = result.scalars().first()
+        return self._to_domain(row) if row else None
+
+    async def find_by_symbol_icase(self, symbol: str) -> Instrument | None:
+        result = await self._session.execute(select(InstrumentModel).where(InstrumentModel.symbol.ilike(symbol)))
+        row = result.scalars().first()
+        return self._to_domain(row) if row else None

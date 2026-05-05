@@ -234,18 +234,23 @@ def test_screen_returns_matching_instruments() -> None:
     assert body["results"][0]["metrics"]["pe_ratio"] == pytest.approx(15.0)
 
 
-def test_screen_empty_filters_returns_422() -> None:
-    """POST with empty filters list → HTTP 422 (min_length=1 validation)."""
+def test_screen_empty_filters_returns_200() -> None:
+    """POST with empty filters list → HTTP 200 (min_length changed to 0 to enable no-filter path).
+
+    WHY: ScreenRequest.filters now defaults to [] and min_length=0 so empty filters
+    activates the optimised 'no filter' path (returns all instruments up to limit).
+    The old min_length=1 forced callers to send a fallback filter; this was removed.
+    """
     _, client = _make_app(mock_screen_uc=_make_screen_uc())
     resp = client.post("/api/v1/fundamentals/screen", json={"filters": []})
-    assert resp.status_code == 422
+    assert resp.status_code == 200
 
 
-def test_screen_invalid_body_returns_422() -> None:
-    """POST with no body → HTTP 422."""
+def test_screen_no_body_uses_default_empty_filters() -> None:
+    """POST with no body → HTTP 200 (filters defaults to empty list)."""
     _, client = _make_app(mock_screen_uc=_make_screen_uc())
     resp = client.post("/api/v1/fundamentals/screen", json={})
-    assert resp.status_code == 422
+    assert resp.status_code == 200
 
 
 def test_screen_two_filters_passed_to_use_case() -> None:

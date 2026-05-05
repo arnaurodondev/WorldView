@@ -1,4 +1,8 @@
-"""Unit tests for Instruments API (MD-022)."""
+"""Unit tests for Instruments API (MD-022).
+
+PLAN-0073 Wave B-1: Updated to use the new /instruments/lookup endpoint that
+replaces the removed /instruments/{id} and /instruments/symbol/{symbol} routes.
+"""
 
 from __future__ import annotations
 
@@ -10,12 +14,13 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from market_data.api.dependencies import (
-    get_instrument_by_id_uc,
-    get_instrument_by_symbol_uc,
+    get_lookup_instrument_uc,
     get_search_instruments_uc,
 )
 from market_data.api.routers import instruments
+from market_data.application.use_cases.lookup_instrument import InstrumentLookupResult
 from market_data.domain.entities import Instrument
+from market_data.domain.errors import InstrumentNotFoundError
 from market_data.domain.value_objects import InstrumentFlags
 
 pytestmark = pytest.mark.unit
@@ -46,32 +51,29 @@ async def _null_lifespan(app: FastAPI):  # type: ignore[misc]
 
 
 def _make_app(
-    mock_get_by_id: AsyncMock | None = None,
-    mock_get_by_symbol: AsyncMock | None = None,
+    mock_lookup: AsyncMock | None = None,
     mock_search: AsyncMock | None = None,
 ) -> tuple[FastAPI, TestClient]:
     app = FastAPI(lifespan=_null_lifespan)
     app.include_router(instruments.router, prefix="/api/v1")
 
-    if mock_get_by_id is not None:
-        app.dependency_overrides[get_instrument_by_id_uc] = lambda: mock_get_by_id
-    if mock_get_by_symbol is not None:
-        app.dependency_overrides[get_instrument_by_symbol_uc] = lambda: mock_get_by_symbol
+    if mock_lookup is not None:
+        app.dependency_overrides[get_lookup_instrument_uc] = lambda: mock_lookup
     if mock_search is not None:
         app.dependency_overrides[get_search_instruments_uc] = lambda: mock_search
 
     return app, TestClient(app)
 
 
-def _make_get_by_id_uc(result: Instrument | None) -> MagicMock:
+def _make_lookup_uc_found(instrument: Instrument) -> MagicMock:
     uc = MagicMock()
-    uc.execute = AsyncMock(return_value=result)
+    uc.execute = AsyncMock(return_value=InstrumentLookupResult(instrument=instrument, security=None))
     return uc
 
 
-def _make_get_by_symbol_uc(result: Instrument | None) -> MagicMock:
+def _make_lookup_uc_not_found() -> MagicMock:
     uc = MagicMock()
-    uc.execute = AsyncMock(return_value=result)
+    uc.execute = AsyncMock(side_effect=InstrumentNotFoundError("not found"))
     return uc
 
 
@@ -112,34 +114,46 @@ def test_list_instruments_filter_has_ohlcv() -> None:
     assert call_kwargs.get("has_ohlcv") is True
 
 
+_VALID_UUID = "018e8e8e-0000-7000-b000-000000000001"
+
+
 def test_get_instrument_by_id_found() -> None:
-    """GET /api/v1/instruments/{id} returns the correct instrument."""
-    instrument = _make_instrument("instr-001")
-    _, client = _make_app(mock_get_by_id=_make_get_by_id_uc(instrument))
-    resp = client.get("/api/v1/instruments/instr-001")
+    """GET /api/v1/instruments/lookup?id=<uuid> returns the correct instrument."""
+    instrument = _make_instrument(_VALID_UUID)
+    _, client = _make_app(mock_lookup=_make_lookup_uc_found(instrument))
+    resp = client.get(f"/api/v1/instruments/lookup?id={_VALID_UUID}")
     assert resp.status_code == 200
-    assert resp.json()["id"] == "instr-001"
+    assert resp.json()["id"] == _VALID_UUID
     assert resp.json()["symbol"] == "AAPL"
 
 
 def test_get_instrument_by_id_not_found() -> None:
-    """GET /api/v1/instruments/{id} returns 404 for unknown ID."""
-    _, client = _make_app(mock_get_by_id=_make_get_by_id_uc(None))
-    resp = client.get("/api/v1/instruments/nonexistent")
+    """GET /api/v1/instruments/lookup?id=<uuid> returns 404 for unknown ID."""
+    _, client = _make_app(mock_lookup=_make_lookup_uc_not_found())
+    resp = client.get(f"/api/v1/instruments/lookup?id={_VALID_UUID}")
     assert resp.status_code == 404
 
 
 def test_get_instrument_by_symbol_found() -> None:
-    """GET /api/v1/instruments/symbol/{symbol} returns matching instrument."""
+    """GET /api/v1/instruments/lookup?symbol=<symbol> returns matching instrument."""
     instrument = _make_instrument("instr-002", symbol="TSLA", exchange="US")
-    _, client = _make_app(mock_get_by_symbol=_make_get_by_symbol_uc(instrument))
-    resp = client.get("/api/v1/instruments/symbol/TSLA?exchange=US")
+    _, client = _make_app(mock_lookup=_make_lookup_uc_found(instrument))
+    resp = client.get("/api/v1/instruments/lookup?symbol=TSLA")
     assert resp.status_code == 200
     assert resp.json()["symbol"] == "TSLA"
 
 
 def test_get_instrument_by_symbol_not_found() -> None:
-    """GET /api/v1/instruments/symbol/{symbol} returns 404 for unknown symbol."""
-    _, client = _make_app(mock_get_by_symbol=_make_get_by_symbol_uc(None))
-    resp = client.get("/api/v1/instruments/symbol/UNKNOWN")
+    """GET /api/v1/instruments/lookup?symbol=<symbol> returns 404 for unknown symbol."""
+    _, client = _make_app(mock_lookup=_make_lookup_uc_not_found())
+    resp = client.get("/api/v1/instruments/lookup?symbol=UNKNOWN")
     assert resp.status_code == 404
+
+
+def test_lookup_no_params_returns_400() -> None:
+    """GET /api/v1/instruments/lookup without params returns 400."""
+    uc = MagicMock()
+    uc.execute = AsyncMock(side_effect=ValueError("At least one param required"))
+    _, client = _make_app(mock_lookup=uc)
+    resp = client.get("/api/v1/instruments/lookup")
+    assert resp.status_code == 400

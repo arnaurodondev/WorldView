@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     # triggering replay rejection. Keep True in production with proper JWT rotation.
     internal_jwt_jti_check_enabled: bool = False
 
+    # EODHD on-demand enrichment (PLAN-0073 Worker 13J)
+    eodhd_api_key: SecretStr = SecretStr("")
+    eodhd_base_url: str = "https://eodhd.com"
+
     # Intraday resampling source timeframe (BP-254 — must be config-driven, not hardcoded).
     # Valid values: "1m", "5m", "15m", "1h". Changing this migrates the entire
     # ResampledOHLCVUseCase + IntradayResamplingConsumer pipeline to the new finest

@@ -1343,7 +1343,7 @@ async def refresh_instrument_price(instrument_id: str, request: Request) -> Any:
     # ── Resolve instrument symbol for S2 trigger ─────────────────────────────
     # S2's trigger endpoint needs symbol + exchange; resolve from S3.
     instr_resp = await clients.market_data.get(
-        f"/api/v1/instruments/{instrument_id}",
+        f"/api/v1/instruments/lookup?id={instrument_id}",
         headers=headers,
     )
     if instr_resp.status_code != 200:

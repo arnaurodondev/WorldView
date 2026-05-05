@@ -25,8 +25,8 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/readyz` | Readiness (DB + Valkey + Storage + Kafka) | — |
 | GET | `/metrics` | Prometheus metrics — requires `X-Internal-Token` header (M-004) | — |
 | GET | `/api/v1/instruments` | List instruments — query params: `query`, `has_ohlcv`, `has_quotes`, `has_fundamentals`, `exchange`, `limit`, `offset` (all DB-side) | — |
-| GET | `/api/v1/instruments/symbol/{symbol}` | Instrument by symbol (query param: `exchange`) | — |
-| GET | `/api/v1/instruments/{instrument_id}` | Instrument detail by UUID | — |
+| GET | `/api/v1/instruments/lookup` | Unified instrument lookup — query params: `symbol` (icase), `isin`, `id` (UUID), `extra_info` (bool, default false). Priority: id > isin > symbol. `extra_info=true` also returns `name`, `description`, `sector`, `industry`, `country`, `currency_code`. Requires `X-Internal-JWT`. | — |
+| GET | `/api/v1/instruments/on-demand-profile` | On-demand instrument profile — query param: `ticker` or `isin`. DB-first (returns `source="db"` if description populated); falls back to EODHD, persists result (`source="eodhd_persisted"`). Raises 429 if EODHD rate-limited. Requires `X-Internal-JWT`. | — |
 | GET | `/api/v1/ohlcv/bulk` | Bulk OHLCV for multiple instruments | — |
 | GET | `/api/v1/ohlcv/{instrument_id}` | OHLCV bars (query: `timeframe`, `start`, `end`) | — |
 | GET | `/api/v1/ohlcv/{instrument_id}/timeframes` | Available timeframes for instrument | — |
@@ -55,8 +55,8 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/securities/{security_id}` | Security detail by FIGI or ISIN | — |
 
 > **Note on path ordering**: Literal-segment routes (`/ohlcv/bulk`, `/quotes/latest`,
-> `/instruments/symbol/{symbol}`) are registered **before** path-param routes
-> (`/ohlcv/{instrument_id}`, `/quotes/{instrument_id}`, `/instruments/{instrument_id}`)
+> `/instruments/lookup`, `/instruments/on-demand-profile`) are registered **before** path-param routes
+> (`/ohlcv/{instrument_id}`, `/quotes/{instrument_id}`)
 > to avoid FastAPI matching the literal as a path param. The `fundamental_metrics` router
 > is registered before the `fundamentals` router so that `/fundamentals/timeseries`,
 > `/fundamentals/screen`, and `/fundamentals/metrics/{id}` are not matched by

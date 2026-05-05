@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Annotated, Any
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 
 from market_data.application.ports.uow import ReadOnlyUnitOfWork, UnitOfWork
 
@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from market_data.application.ports.cache import QuoteCachePort, ScreenFieldsCachePort
     from market_data.application.use_cases.get_period_movers import GetPeriodMoversUseCase
     from market_data.application.use_cases.get_sector_returns import GetSectorReturnsUseCase
+    from market_data.application.use_cases.lookup_instrument import InstrumentLookupUseCase
+    from market_data.application.use_cases.on_demand_profile import OnDemandProfileUseCase
     from market_data.application.use_cases.query_fundamental_metrics import (
         GetAvailableFundamentalMetricsUseCase,
         GetFundamentalMetricsTimeseriesUseCase,
@@ -40,6 +42,7 @@ if TYPE_CHECKING:
     from market_data.application.use_cases.query_quotes import GetQuotesBatchUseCase, GetQuoteUseCase
     from market_data.application.use_cases.query_securities import GetSecurityUseCase, ListSecuritiesUseCase
     from market_data.infrastructure.cache.price_snapshot_cache import PriceSnapshotCache
+    from market_data.infrastructure.eodhd.client import EodhHdClient
 
 
 # ── Core infrastructure deps ──────────────────────────────────────────────────
@@ -84,7 +87,44 @@ async def get_price_snapshot_cache(request: Request) -> PriceSnapshotCache:
     return request.app.state.price_snapshot_cache  # type: ignore[no-any-return]
 
 
+# ── EODHD client dep ─────────────────────────────────────────────────────────
+
+
+async def get_eodhd_client(request: Request) -> EodhHdClient:
+    """Return the EodhHdClient singleton stored in app state."""
+    return request.app.state.eodhd_client  # type: ignore[no-any-return]
+
+
+# ── Internal JWT guard dep ────────────────────────────────────────────────────
+
+
+async def require_internal_jwt(request: Request) -> None:
+    """Belt-and-suspenders guard: raises 401 if X-Internal-JWT header is absent.
+
+    The global InternalJWTMiddleware already enforces this, but having an
+    explicit route-level dependency makes unit tests simpler — tests can
+    override this dep without spinning up the full middleware stack.
+    """
+    if "x-internal-jwt" not in request.headers:
+        raise HTTPException(status_code=401, detail="X-Internal-JWT header required")
+
+
 # ── Instrument use case deps ──────────────────────────────────────────────────
+
+
+def get_lookup_instrument_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> InstrumentLookupUseCase:
+    from market_data.application.use_cases.lookup_instrument import InstrumentLookupUseCase
+
+    return InstrumentLookupUseCase(uow)
+
+
+def get_on_demand_profile_uc(
+    uow: UnitOfWork = Depends(get_uow),
+    eodhd_client: EodhHdClient = Depends(get_eodhd_client),
+) -> OnDemandProfileUseCase:
+    from market_data.application.use_cases.on_demand_profile import OnDemandProfileUseCase
+
+    return OnDemandProfileUseCase(uow, eodhd_client)
 
 
 def get_instrument_by_id_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetInstrumentByIdUseCase:
