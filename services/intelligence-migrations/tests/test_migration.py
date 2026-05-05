@@ -922,6 +922,178 @@ WHERE ce.entity_type IN ('sector', 'industry_group')
     conn.rollback()
 
 
+# ── PLAN-0073 Wave A-1: enrichment columns + relation provenance ──────────────
+
+
+def test_canonical_entities_enrichment_columns_exist(conn: sa.engine.Connection) -> None:
+    """Migration 0022 adds description, data_completeness, enriched_at, enrichment_attempts."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, data_type, is_nullable, column_default "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'canonical_entities' "
+            "  AND column_name IN ('description', 'data_completeness', 'enriched_at', 'enrichment_attempts') "
+            "ORDER BY column_name"
+        )
+    )
+    rows = {row[0]: (row[1], row[2], row[3]) for row in result}
+
+    assert "description" in rows, "description column missing from canonical_entities"
+    assert rows["description"][1] == "YES", "description must be nullable"
+
+    assert "data_completeness" in rows, "data_completeness column missing"
+    assert rows["data_completeness"][1] == "YES", "data_completeness must be nullable"
+
+    assert "enriched_at" in rows, "enriched_at column missing"
+    assert rows["enriched_at"][1] == "YES", "enriched_at must be nullable"
+
+    assert "enrichment_attempts" in rows, "enrichment_attempts column missing"
+    assert rows["enrichment_attempts"][1] == "NO", "enrichment_attempts must be NOT NULL"
+    assert rows["enrichment_attempts"][2] == "0", "enrichment_attempts default must be 0"
+
+
+def test_enrichment_sweep_index_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0022 creates ix_canonical_entities_enrichment_sweep partial index."""
+    result = conn.execute(
+        text("SELECT indexdef FROM pg_indexes " "WHERE indexname = 'ix_canonical_entities_enrichment_sweep'")
+    )
+    row = result.scalar_one_or_none()
+    assert row is not None, "ix_canonical_entities_enrichment_sweep index missing"
+    assert "enrichment_attempts" in row
+    assert "enriched_at" in row
+    assert "enrichment_attempts < 3" in row
+
+
+def test_enrichment_attempts_defaults_to_zero_on_insert(conn: sa.engine.Connection) -> None:
+    """New canonical_entities rows get enrichment_attempts=0 without explicit value."""
+    import uuid as _uuid
+
+    eid = str(_uuid.uuid4())
+    conn.execute(
+        text(
+            "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type) "
+            "VALUES (:eid, 'TestEnrichCo', 'financial_instrument')"
+        ),
+        {"eid": eid},
+    )
+    val = conn.execute(
+        text("SELECT enrichment_attempts FROM canonical_entities WHERE entity_id = :eid"),
+        {"eid": eid},
+    ).scalar_one()
+    assert val == 0, f"enrichment_attempts should default to 0, got {val}"
+    conn.rollback()
+
+
+def test_relation_type_registry_source_columns_exist(conn: sa.engine.Connection) -> None:
+    """Migration 0023 adds data_source and source_field to relation_type_registry."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, is_nullable "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'relation_type_registry' "
+            "  AND column_name IN ('data_source', 'source_field') "
+            "ORDER BY column_name"
+        )
+    )
+    rows = {row[0]: row[1] for row in result}
+    assert "data_source" in rows, "data_source column missing from relation_type_registry"
+    assert rows["data_source"] == "YES", "data_source must be nullable"
+    assert "source_field" in rows, "source_field column missing from relation_type_registry"
+    assert rows["source_field"] == "YES", "source_field must be nullable"
+
+
+def test_relation_type_registry_eodhd_mappings_seeded(conn: sa.engine.Connection) -> None:
+    """Migration 0023 seeds 6 EODHD/market-data relation type mappings."""
+    result = conn.execute(
+        text(
+            "SELECT canonical_type, data_source, source_field "
+            "FROM relation_type_registry "
+            "WHERE data_source IS NOT NULL "
+            "ORDER BY canonical_type, data_source"
+        )
+    )
+    rows = [(r[0], r[1], r[2]) for r in result]
+    expected = {
+        ("OPERATES_IN_SECTOR", "eodhd", "General.Sector"),
+        ("OPERATES_IN_INDUSTRY", "eodhd", "General.Industry"),
+        ("HEADQUARTERED_IN", "eodhd", "General.Country"),
+        ("LISTED_ON", "eodhd", "General.Exchange"),
+        ("OPERATES_IN_SECTOR", "market_data", "sector"),
+        ("HEADQUARTERED_IN", "market_data", "country"),
+    }
+    assert set(rows) == expected, f"Unexpected seed data: {rows}"
+
+
+def test_relation_type_registry_seed_idempotent(conn: sa.engine.Connection) -> None:
+    """Re-applying the seed UPDATE does not change rows that already have data_source."""
+    # Verify that rows updated by 0023 keep their values after a second UPDATE
+    conn.execute(
+        sa.text(
+            "UPDATE relation_type_registry "
+            "SET data_source = :src, source_field = :field "
+            "WHERE canonical_type = :type AND data_source IS NULL"
+        ).bindparams(src="eodhd", field="General.Sector", type="OPERATES_IN_SECTOR")
+    )
+    result = conn.execute(
+        text(
+            "SELECT COUNT(*) FROM relation_type_registry "
+            "WHERE canonical_type = 'OPERATES_IN_SECTOR' AND data_source = 'eodhd'"
+        )
+    ).scalar_one()
+    # Still exactly 1 row — the second UPDATE was a no-op (data_source IS NULL condition)
+    assert result == 1, f"Seed idempotency broken: found {result} rows"
+    conn.rollback()
+
+
+def test_relations_relation_source_column_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0024 adds relation_source TEXT NULL to the relations table."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, is_nullable "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'relations' AND column_name = 'relation_source'"
+        )
+    )
+    row = result.fetchone()
+    assert row is not None, "relation_source column missing from relations"
+    assert row[1] == "YES", "relation_source must be nullable"
+
+
+def test_relations_partitions_have_relation_source(conn: sa.engine.Connection) -> None:
+    """relation_source column is present on all 8 child partitions."""
+    for i in range(8):
+        result = conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = :partition AND column_name = 'relation_source'"
+            ),
+            {"partition": f"relations_p{i}"},
+        )
+        assert result.fetchone() is not None, f"relation_source missing from relations_p{i}"
+
+
+def test_relations_relation_source_nullable_on_existing_rows(conn: sa.engine.Connection) -> None:
+    """Inserting a relation without relation_source leaves it NULL."""
+    import uuid as _uuid
+
+    s = str(_uuid.uuid4())
+    o = str(_uuid.uuid4())
+    conn.execute(
+        text(
+            "INSERT INTO relations "
+            "(subject_entity_id, canonical_type, object_entity_id, decay_class, decay_alpha) "
+            "VALUES (:s, 'employs', :o, 'DURABLE', 0.000950)"
+        ),
+        {"s": s, "o": o},
+    )
+    val = conn.execute(
+        text("SELECT relation_source FROM relations WHERE subject_entity_id = :s"),
+        {"s": s},
+    ).scalar_one_or_none()
+    assert val is None, f"relation_source should default to NULL, got {val!r}"
+    conn.rollback()
+
+
 def test_seed_003_sector_self_alias_idempotent(conn: sa.engine.Connection) -> None:
     """PLAN-0057 C-5: re-running 003_seed_sector_entities.sql does not create
     duplicate alias rows — the ON CONFLICT clause on the partial UNIQUE index
