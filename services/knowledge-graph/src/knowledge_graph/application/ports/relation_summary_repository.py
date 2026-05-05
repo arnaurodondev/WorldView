@@ -53,3 +53,14 @@ class RelationSummaryRepositoryPort(ABC):
         semantic_mode: str | None = None,
         top_k: int = 15,
     ) -> list[RelationSummarySearchResult]: ...
+
+    @abstractmethod
+    async def get_current_summaries_batch(
+        self,
+        relation_ids: list[UUID],
+    ) -> dict[UUID, str | None]:
+        """Return the current summary_text per relation in a single WHERE relation_id = ANY(:ids) query.
+
+        Only rows with is_current=true are returned.  Missing relation_ids are absent from the dict.
+        # TODO(PRD-0074): upgrade to a denormalized current_summary_text scalar column on relations
+        """

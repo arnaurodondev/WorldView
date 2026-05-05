@@ -10,8 +10,10 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 if TYPE_CHECKING:
+    from knowledge_graph.application.ports.relation_summary_repository import RelationSummaryRepositoryPort
     from knowledge_graph.application.ports.repositories import (
         CanonicalEntityRepositoryPort,
+        RelationEvidenceRepositoryPort,
         RelationRepositoryPort,
     )
 
@@ -23,16 +25,21 @@ class GetEntityGraphUseCase:
         self,
         entity_repo: CanonicalEntityRepositoryPort,
         relation_repo: RelationRepositoryPort,
+        evidence_repo: RelationEvidenceRepositoryPort,
+        summary_repo: RelationSummaryRepositoryPort,
         entity_id: UUID,
         min_confidence: float,
         semantic_mode: str | None,
         limit: int,
+        evidence_limit: int = 3,
     ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], dict[str, dict[str, Any]]]:
         """Return ``(entity_row, relation_rows, referenced_entities_map)``
 
         ``entity_row`` is ``None`` when the entity does not exist.
         ``referenced_entities_map`` maps ``str(entity_id)`` to entity row dicts
         for every entity referenced by the returned relations (excluding center).
+        Each relation row is mutated in-place with ``evidence_snippets`` and
+        ``relation_summary`` keys populated via single batch queries (no N+1).
         """
         entity_row = await entity_repo.get(entity_id)
         if entity_row is None:
@@ -64,6 +71,24 @@ class GetEntityGraphUseCase:
                 row_id = row.get("entity_id")
                 if row_id is not None:
                     entities_map[str(row_id)] = row
+
+        # Batch-fetch evidence snippets and summaries — single query each (BP-025 guard).
+        # Merge results into relation_rows so the route layer can read them without
+        # additional queries.
+        if relation_rows:
+            relation_ids: list[UUID] = []
+            for r in relation_rows:
+                rid = r.get("relation_id")
+                if isinstance(rid, UUID):
+                    relation_ids.append(rid)
+            evidence_map = await evidence_repo.get_evidence_snippets_batch(
+                relation_ids, limit_per_relation=evidence_limit
+            )
+            summary_map = await summary_repo.get_current_summaries_batch(relation_ids)
+            for r in relation_rows:
+                rid = r.get("relation_id")
+                r["evidence_snippets"] = evidence_map.get(rid, []) if isinstance(rid, UUID) else []  # type: ignore[index]
+                r["relation_summary"] = summary_map.get(rid) if isinstance(rid, UUID) else None  # type: ignore[index]
 
         return entity_row, relation_rows, entities_map
 

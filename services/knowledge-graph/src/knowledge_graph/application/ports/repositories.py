@@ -180,7 +180,7 @@ class RelationRepositoryPort(ABC):
 
 
 class RelationEvidenceRepositoryPort(ABC):
-    """Port for relation evidence inserts (hot-path staging)."""
+    """Port for relation evidence inserts (hot-path staging) and read queries."""
 
     @abstractmethod
     async def insert_raw(
@@ -200,6 +200,19 @@ class RelationEvidenceRepositoryPort(ABC):
         entity_provisional: bool = False,
         provisional_queue_id: UUID | None = None,
     ) -> UUID: ...
+
+    @abstractmethod
+    async def get_evidence_snippets_batch(
+        self,
+        relation_ids: list[UUID],
+        limit_per_relation: int = 3,
+    ) -> dict[UUID, list[str]]:
+        """Return top-N evidence snippets per relation in a single CTE query.
+
+        Ordered by extraction_confidence DESC NULLS LAST, evidence_date DESC NULLS LAST.
+        Returns {} for any relation_id with no evidence text.
+        # TODO(PRD-0074): upgrade to denormalized top_evidence_snippets JSONB on relations
+        """
 
 
 # ── Canonical entity repository port ─────────────────────────────────────────

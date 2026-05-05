@@ -48,6 +48,18 @@ def _make_relation_repo(rows: list | None = None, stats: dict | None = None) -> 
     return repo
 
 
+def _make_evidence_repo(snippets: dict | None = None) -> AsyncMock:
+    repo = AsyncMock()
+    repo.get_evidence_snippets_batch = AsyncMock(return_value=snippets or {})
+    return repo
+
+
+def _make_summary_repo(summaries: dict | None = None) -> AsyncMock:
+    repo = AsyncMock()
+    repo.get_current_summaries_batch = AsyncMock(return_value=summaries or {})
+    return repo
+
+
 class TestGetEntityGraphUseCase:
     def test_entity_not_found_returns_empty(self) -> None:
         """Returns (None, [], {}) when entity does not exist."""
@@ -60,6 +72,8 @@ class TestGetEntityGraphUseCase:
             GetEntityGraphUseCase().execute(
                 entity_repo=entity_repo,
                 relation_repo=relation_repo,
+                evidence_repo=_make_evidence_repo(),
+                summary_repo=_make_summary_repo(),
                 entity_id=_ENT_ID,
                 min_confidence=0.3,
                 semantic_mode=None,
@@ -90,6 +104,8 @@ class TestGetEntityGraphUseCase:
             GetEntityGraphUseCase().execute(
                 entity_repo=entity_repo,
                 relation_repo=relation_repo,
+                evidence_repo=_make_evidence_repo(),
+                summary_repo=_make_summary_repo(),
                 entity_id=_ENT_ID,
                 min_confidence=0.5,
                 semantic_mode="RELATION_STATE",
@@ -117,6 +133,8 @@ class TestGetEntityGraphUseCase:
             GetEntityGraphUseCase().execute(
                 entity_repo=entity_repo,
                 relation_repo=relation_repo,
+                evidence_repo=_make_evidence_repo(),
+                summary_repo=_make_summary_repo(),
                 entity_id=_ENT_ID,
                 min_confidence=0.0,
                 semantic_mode=None,
@@ -138,6 +156,8 @@ class TestGetEntityGraphUseCase:
             GetEntityGraphUseCase().execute(
                 entity_repo=entity_repo,
                 relation_repo=relation_repo,
+                evidence_repo=_make_evidence_repo(),
+                summary_repo=_make_summary_repo(),
                 entity_id=_ENT_ID,
                 min_confidence=0.45,
                 semantic_mode="TEMPORAL_CLAIM",
@@ -163,6 +183,8 @@ class TestGetEntityGraphUseCase:
             GetEntityGraphUseCase().execute(
                 entity_repo=entity_repo,
                 relation_repo=relation_repo,
+                evidence_repo=_make_evidence_repo(),
+                summary_repo=_make_summary_repo(),
                 entity_id=_ENT_ID,
                 min_confidence=0.3,
                 semantic_mode=None,
@@ -172,6 +194,133 @@ class TestGetEntityGraphUseCase:
 
         assert relation_rows == []
         assert entities_map == {}
+
+    def test_evidence_snippets_merged_into_relation_rows(self) -> None:
+        """evidence_snippets from the evidence repo are merged into each relation row."""
+
+        from knowledge_graph.application.use_cases.graph_query import GetEntityGraphUseCase
+
+        rel_id = uuid4()
+        rel = {
+            "relation_id": rel_id,
+            "subject_entity_id": _ENT_ID,
+            "object_entity_id": _OBJ_ID,
+            "canonical_type": "competes_with",
+            "confidence": 0.80,
+        }
+        snippets = {rel_id: ["Apple Q3 revenue beat expectations.", "Cook cited iPhone sales."]}
+
+        entity_repo = _make_entity_repo(entity=_entity_row(_ENT_ID))
+        entity_repo.get_batch = AsyncMock(return_value=[])
+        relation_repo = _make_relation_repo(rows=[rel])
+        evidence_repo = _make_evidence_repo(snippets=snippets)
+
+        _, relation_rows, _ = asyncio.run(
+            GetEntityGraphUseCase().execute(
+                entity_repo=entity_repo,
+                relation_repo=relation_repo,
+                evidence_repo=evidence_repo,
+                summary_repo=_make_summary_repo(),
+                entity_id=_ENT_ID,
+                min_confidence=0.0,
+                semantic_mode=None,
+                limit=50,
+                evidence_limit=3,
+            )
+        )
+
+        assert len(relation_rows) == 1
+        assert relation_rows[0]["evidence_snippets"] == [
+            "Apple Q3 revenue beat expectations.",
+            "Cook cited iPhone sales.",
+        ]
+        evidence_repo.get_evidence_snippets_batch.assert_called_once_with([rel_id], limit_per_relation=3)
+
+    def test_relation_summary_merged_into_relation_rows(self) -> None:
+        """relation_summary from the summary repo is merged into each relation row."""
+        from knowledge_graph.application.use_cases.graph_query import GetEntityGraphUseCase
+
+        rel_id = uuid4()
+        rel = {
+            "relation_id": rel_id,
+            "subject_entity_id": _ENT_ID,
+            "object_entity_id": _OBJ_ID,
+            "canonical_type": "competes_with",
+            "confidence": 0.75,
+        }
+        summaries = {rel_id: "Apple competes directly with Microsoft in cloud services."}
+
+        entity_repo = _make_entity_repo(entity=_entity_row(_ENT_ID))
+        entity_repo.get_batch = AsyncMock(return_value=[])
+        relation_repo = _make_relation_repo(rows=[rel])
+        summary_repo = _make_summary_repo(summaries=summaries)
+
+        _, relation_rows, _ = asyncio.run(
+            GetEntityGraphUseCase().execute(
+                entity_repo=entity_repo,
+                relation_repo=relation_repo,
+                evidence_repo=_make_evidence_repo(),
+                summary_repo=summary_repo,
+                entity_id=_ENT_ID,
+                min_confidence=0.0,
+                semantic_mode=None,
+                limit=50,
+            )
+        )
+
+        assert len(relation_rows) == 1
+        assert relation_rows[0]["relation_summary"] == "Apple competes directly with Microsoft in cloud services."
+
+    def test_evidence_snippets_empty_when_no_evidence(self) -> None:
+        """Relations without evidence get evidence_snippets=[] (never None)."""
+        from knowledge_graph.application.use_cases.graph_query import GetEntityGraphUseCase
+
+        rel = _relation_row()
+        entity_repo = _make_entity_repo(entity=_entity_row(_ENT_ID))
+        entity_repo.get_batch = AsyncMock(return_value=[])
+        relation_repo = _make_relation_repo(rows=[rel])
+        # evidence repo returns empty dict — no snippets for any relation
+        evidence_repo = _make_evidence_repo(snippets={})
+
+        _, relation_rows, _ = asyncio.run(
+            GetEntityGraphUseCase().execute(
+                entity_repo=entity_repo,
+                relation_repo=relation_repo,
+                evidence_repo=evidence_repo,
+                summary_repo=_make_summary_repo(),
+                entity_id=_ENT_ID,
+                min_confidence=0.0,
+                semantic_mode=None,
+                limit=50,
+            )
+        )
+
+        assert relation_rows[0]["evidence_snippets"] == []
+
+    def test_no_relations_batch_repos_not_called(self) -> None:
+        """When no relation rows returned, evidence and summary batch repos are not called."""
+        from knowledge_graph.application.use_cases.graph_query import GetEntityGraphUseCase
+
+        entity_repo = _make_entity_repo(entity=_entity_row(_ENT_ID))
+        relation_repo = _make_relation_repo(rows=[])
+        evidence_repo = _make_evidence_repo()
+        summary_repo = _make_summary_repo()
+
+        asyncio.run(
+            GetEntityGraphUseCase().execute(
+                entity_repo=entity_repo,
+                relation_repo=relation_repo,
+                evidence_repo=evidence_repo,
+                summary_repo=summary_repo,
+                entity_id=_ENT_ID,
+                min_confidence=0.0,
+                semantic_mode=None,
+                limit=50,
+            )
+        )
+
+        evidence_repo.get_evidence_snippets_batch.assert_not_called()
+        summary_repo.get_current_summaries_batch.assert_not_called()
 
 
 class TestListRelationsUseCase:

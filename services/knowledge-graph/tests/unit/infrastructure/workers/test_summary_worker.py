@@ -153,6 +153,102 @@ class TestSummaryWorkerHashSkip:
         mock_sum.insert_new.assert_not_awaited()
 
 
+class TestSummaryWorkerEvidenceTextFallback:
+    """T-72-2-02: canonicalized_evidence_text used when evidence_text IS NULL."""
+
+    def test_uses_canonicalized_text_when_evidence_text_null(self) -> None:
+        """Row with evidence_text=None and canonicalized_evidence_text → text used for summary."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        # Old str(None) bug: str(e.get("evidence_text", "")) → "None" (truthy non-empty str)
+        # Fixed code: e.get("evidence_text") → None (falsy) → fallback to canonicalized_evidence_text
+        evidence_rows = [
+            {
+                "evidence_text": None,
+                "canonicalized_evidence_text": "Apple reported strong iPhone sales in Q3.",
+            }
+        ]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000020"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(
+            return_value=ExtractionOutput(
+                result={"summary": "Apple showed strong Q3 performance."},
+                raw_response='{"summary": "Apple showed strong Q3 performance."}',
+                model_id="m",
+            )
+        )
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm)
+            asyncio.run(worker.run())
+
+        # LLM should be called — the canonicalized text is valid evidence
+        llm.extract.assert_awaited_once()
+        mock_sum.insert_new.assert_awaited_once()
+
+    def test_skips_when_both_evidence_columns_null(self) -> None:
+        """Row with both evidence_text=None and canonicalized_evidence_text=None → skipped."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+
+        evidence_rows = [{"evidence_text": None, "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000021"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock()
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm)
+            asyncio.run(worker.run())
+
+        llm.extract.assert_not_awaited()
+        mock_sum.insert_new.assert_not_awaited()
+
+    def test_llm_raw_response_logged_before_parse(self) -> None:
+        """LLM raw_response is logged (length+preview) before summary parse step."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        evidence_rows = [{"evidence_text": "Apple beat Q3 revenue targets.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000022"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        raw_json = '{"summary": "Apple grew revenue in Q3."}'
+        llm = AsyncMock()
+        llm.extract = AsyncMock(
+            return_value=ExtractionOutput(
+                result={"summary": "Apple grew revenue in Q3."},
+                raw_response=raw_json,
+                model_id="kg-summary-v1",
+            )
+        )
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm)
+            # run() should not raise — diagnostic log is fire-and-forget
+            asyncio.run(worker.run())
+
+        llm.extract.assert_awaited_once()
+        # summary must have been inserted with inlined model_id (no _SUMMARY_MODEL_ID constant)
+        call_kwargs = mock_sum.insert_new.await_args.kwargs
+        assert call_kwargs["model_id"] == "kg-summary-v1"
+
+
 class TestSummaryWorkerRawFallback:
     """BP-343: SummaryWorker falls back to relation_evidence_raw when immutable table is empty."""
 
