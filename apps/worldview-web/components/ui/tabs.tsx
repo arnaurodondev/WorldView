@@ -68,6 +68,12 @@ const TabsContent = React.forwardRef<
     ref={ref}
     className={cn(
       "mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+      // WHY data-[state=inactive]:!hidden: Radix sets hidden="" on inactive panels, which relies
+      // on the UA stylesheet [hidden]{display:none}. Tailwind display classes (flex, grid, block)
+      // on the caller's className override UA styles and make the inactive panel visible.
+      // This !important guard re-applies display:none for inactive tabs regardless of any
+      // display class in the caller's className. (BP-381)
+      "data-[state=inactive]:!hidden",
       className,
     )}
     {...props}

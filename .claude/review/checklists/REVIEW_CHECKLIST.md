@@ -183,6 +183,8 @@ Mark N/A for pure backend changes.
 - [ ] SSE streams use `AbortController` with cleanup on unmount (HR-039)
 - [ ] **HTTPS-only headers (`upgrade-insecure-requests`, `Strict-Transport-Security`) are gated on actual HTTPS deployment, NOT `NODE_ENV === "production"`** — BP-324. Use `NEXT_PUBLIC_WS_BASE_URL.startsWith("wss://")` as the HTTPS signal. Sending these over HTTP breaks ALL static assets in Chrome/Safari (sub-resources silently upgraded to failing HTTPS).
 - [ ] **`style-src` in CSP includes `'nonce-N'` when `x-nonce` is set in middleware** — BP-323. Next.js 15 auto-adds `nonce` to `<link rel="stylesheet">` elements; Safari blocks stylesheets if `style-src` has no matching nonce-source.
+- [ ] **Root layout (and any layout using per-request nonces) calls `await headers()` or `await cookies()`** — BP-382. Without this, Next.js full-route cache serves stale HTML with old nonces; Safari blocks all stylesheets when nonce attribute on `<link>` doesn't match CSP `nonce-N` directive.
+- [ ] **`TabsContent` with display-setting Tailwind classes (`flex`, `grid`, `block`) uses `data-[state=active]:flex` guard** — BP-381. Tailwind author-stylesheet `flex` overrides UA `[hidden]{display:none}`, making inactive tab panels visible as black rectangles.
 
 ### 10f. Dark Theme Compliance
 - [ ] All colors use CSS variables from `docs/ui/DESIGN_SYSTEM.md §2` — no hardcoded hex (HR-037)
