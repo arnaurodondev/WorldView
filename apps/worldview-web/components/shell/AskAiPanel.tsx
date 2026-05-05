@@ -30,10 +30,140 @@
 // useRef (textarea focus, stream abort), and keyboard event handlers.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { X, Send, ExternalLink, Bot } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
+
+// ── Citation helpers ──────────────────────────────────────────────────────────
+
+/**
+ * ParsedSource — a single extracted source entry from the "Sources:" block.
+ * WHY only title (not URL): the AskAiPanel is a mini floating panel with very
+ * limited vertical real estate. Showing a full URL would overflow the 320px
+ * panel width and truncation makes URLs hard to read. The title alone is
+ * sufficient for the analyst to understand what was cited — they can open the
+ * full Chat page (/chat) to see clickable URLs via CitationList.
+ */
+interface ParsedSource {
+  title: string;
+}
+
+/**
+ * parseCitationResponse — split the raw streaming response into body + sources.
+ *
+ * WHY called post-stream (not mid-stream): parsing mid-stream produces partial
+ * false positives — a half-streamed "Sources:" header could match prematurely
+ * and truncate the visible body. Post-stream parsing waits until the full text
+ * is available, so the split is always correct.
+ *
+ * WHY two delimiters: S8 sometimes emits "## Sources" (markdown header) and
+ * sometimes "\n\nSources:" (plain text). We check both to stay resilient to
+ * minor prompt-format variations between model versions.
+ *
+ * @returns { body, sources } — body is the prose to render; sources is the list
+ *   of extracted entries (empty array if no Sources block was found).
+ */
+export function parseCitationResponse(raw: string): {
+  body: string;
+  sources: ParsedSource[];
+} {
+  // Try both delimiter styles. Priority: plain-text "\n\nSources:\n" > "## Sources".
+  const PLAIN_SEP = "\n\nSources:\n";
+  const MD_SEP = "\n## Sources\n";
+
+  let sepIdx = raw.indexOf(PLAIN_SEP);
+  let sepLen = PLAIN_SEP.length;
+  if (sepIdx === -1) {
+    sepIdx = raw.indexOf(MD_SEP);
+    sepLen = MD_SEP.length;
+  }
+
+  if (sepIdx === -1) {
+    // No sources section — return full response as body.
+    return { body: raw, sources: [] };
+  }
+
+  const body = raw.slice(0, sepIdx).trimEnd();
+  const sourceBlock = raw.slice(sepIdx + sepLen);
+
+  // Parse each numbered line: "1. Title — URL" or just "1. Title"
+  // WHY loose regex (not strict): source lines may not have URLs, may use
+  // en-dash "–" instead of em-dash "—", or may omit the dash altogether.
+  // We extract everything after the "N. " prefix as the title display string.
+  const sources: ParsedSource[] = sourceBlock
+    .split("\n")
+    .filter((line) => /^\d+\.\s/.test(line.trim()))
+    .map((line) => {
+      // Strip leading "N. " and, if present, cut the URL suffix after " — " or " – ".
+      const withoutNum = line.trim().replace(/^\d+\.\s*/, "");
+      const dashIdx = withoutNum.search(/ [—–] https?:\/\//);
+      const title = dashIdx !== -1 ? withoutNum.slice(0, dashIdx).trim() : withoutNum.trim();
+      return { title };
+    })
+    .filter((s) => s.title.length > 0);
+
+  return { body, sources };
+}
+
+/**
+ * renderWithCitations — convert raw response text into JSX, replacing
+ * "[N]" citation markers with styled <sup> elements.
+ *
+ * WHY citation rendering: AskAiPanel accumulates SSE tokens. S8 injects [N]
+ * markers from retrieved chunks. Parsing post-stream (not mid-stream) prevents
+ * partial-parse flicker — the full response is available before any rendering.
+ *
+ * WHY <sup> with bg-primary/10: the terminal design system uses primary/10 chip
+ * backgrounds for inline reference markers (same treatment as the CitationList
+ * pill style in the full Chat page — consistent visual vocabulary across surfaces).
+ */
+export function renderWithCitations(text: string): ReactNode {
+  // Split on [N] markers (one or more digits). The capture group (\d+) keeps
+  // the number in the resulting array so we know the citation index.
+  const CITATION_RE = /\[(\d+)\]/g;
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let hasMarkers = false;
+
+  while ((match = CITATION_RE.exec(text)) !== null) {
+    hasMarkers = true;
+    // Push the plain text segment before this citation marker.
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    // Push the styled superscript citation marker.
+    const citNum = match[1];
+    parts.push(
+      <sup
+        key={`cite-${match.index}`}
+        // WHY these classes: rounded-[2px] = terminal 2px radius rule;
+        // bg-primary/10 + text-primary = same chip treatment as CitationList pills;
+        // font-mono text-[8px] = minimum legible size for inline index numbers.
+        className="cursor-default rounded-[2px] bg-primary/10 px-0.5 text-[8px] font-mono text-primary"
+        title={`Citation ${citNum}`}
+      >
+        [{citNum}]
+      </sup>,
+    );
+    lastIndex = CITATION_RE.lastIndex;
+  }
+
+  // WHY early return when no markers: if no [N] patterns were found, skip the
+  // array construction and return the original string directly. This makes the
+  // return type consistent for callers that test `typeof result === "string"`,
+  // and avoids an unnecessary single-element array allocation.
+  if (!hasMarkers) return text;
+
+  // Push any remaining text after the last citation marker.
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts;
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -73,6 +203,15 @@ export function AskAiPanel({
   const [response, setResponse] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // ── P2B-1: parsed citation state ──────────────────────────────────────────
+  // WHY separate state for parsedBody + parsedSources:
+  // During streaming we display `response` directly (no parsing — partial text
+  // would produce false splits). Once isStreaming flips to false the useEffect
+  // below runs the full parse once and populates these two fields. Components
+  // below then render parsedBody (with renderWithCitations) and the Sources list.
+  const [parsedBody, setParsedBody] = useState<string>("");
+  const [parsedSources, setParsedSources] = useState<ParsedSource[]>([]);
 
   // PLAN-0071 P2A-3: build system_context from structured props when on an instrument page.
   // Returns undefined (not included in body) when no ticker is available.
@@ -130,6 +269,31 @@ export function AskAiPanel({
       }
     };
   }, []);
+
+  // ── P2B-1: parse citations once streaming completes ──────────────────────
+  // WHY post-stream (not during streaming): parsing mid-stream on every token
+  // append could produce false "Sources:" splits when the delimiter is still
+  // arriving. Waiting for isStreaming=false guarantees the full response is
+  // available before we attempt to find the Sources section.
+  // WHY reset on new `response = ""`: setResponse("") fires at the start of
+  // every new send (see handleSend). That clears parsedBody + parsedSources so
+  // the previous answer's sources don't linger while the new stream runs.
+  useEffect(() => {
+    if (!response) {
+      // New query started (or panel opened with no prior answer) — clear parsed state.
+      setParsedBody("");
+      setParsedSources([]);
+      return;
+    }
+    if (isStreaming) {
+      // Still streaming — render raw `response` (see JSX below). Skip parse.
+      return;
+    }
+    // Stream complete and we have a non-empty response — parse once.
+    const { body, sources } = parseCitationResponse(response);
+    setParsedBody(body);
+    setParsedSources(sources);
+  }, [response, isStreaming]);
 
   /**
    * handleSend — start streaming a chat response
@@ -326,13 +490,60 @@ export function AskAiPanel({
           {error ? (
             <p className="text-xs text-destructive">{error}</p>
           ) : (
-            <p className="whitespace-pre-wrap text-sm text-foreground">
-              {response}
-              {/* Blinking cursor while streaming */}
-              {isStreaming && (
-                <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-primary" />
+            <>
+              {/*
+               * WHY two render paths (streaming vs settled):
+               *
+               * STREAMING: render `response` verbatim (no citation parse).
+               * Parsing mid-stream could split on a half-arrived "Sources:"
+               * delimiter and truncate the visible body. The blinking cursor
+               * signals to the user that the answer is still generating.
+               *
+               * SETTLED (isStreaming=false): render `parsedBody` through
+               * renderWithCitations() which converts [N] tokens to styled <sup>
+               * elements, then append the Sources section if sources were found.
+               * WHY post-hoc sources: S8 appends a plain-text Sources block at
+               * the end of the response. Extracting it into a distinct UI region
+               * (bordered list) separates "answer" from "references" — the same
+               * visual convention used in the full Chat page's CitationList.
+               */}
+              <p className="whitespace-pre-wrap text-sm text-foreground">
+                {isStreaming
+                  ? (
+                    <>
+                      {response}
+                      {/* Blinking cursor while streaming */}
+                      <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-primary" />
+                    </>
+                  )
+                  : renderWithCitations(parsedBody)}
+              </p>
+
+              {/* P2B-1: Sources section — only rendered after streaming completes
+                  and only when the response contained a Sources block.
+                  WHY bordered top + "Sources" label: visually separates the
+                  answer body from the reference list, matching the CitationList
+                  pill style in the full Chat thread (consistent vocabulary). */}
+              {!isStreaming && parsedSources.length > 0 && (
+                <div className="mt-2 border-t border-border/40 pt-1.5">
+                  <p className="mb-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
+                    Sources
+                  </p>
+                  <ol className="space-y-0.5">
+                    {parsedSources.map((src, i) => (
+                      <li key={i} className="flex items-baseline gap-1 text-[10px]">
+                        {/* WHY font-mono number: matches the [N] sup style — monospace
+                            indices pair well with monospace citation markers in the body. */}
+                        <span className="shrink-0 font-mono text-[9px] text-muted-foreground">
+                          {i + 1}.
+                        </span>
+                        <span className="text-foreground/70">{src.title}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
               )}
-            </p>
+            </>
           )}
         </div>
       )}

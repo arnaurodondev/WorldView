@@ -149,7 +149,7 @@ Investigation of the reference repo (2026-05-05) confirms these density patterns
 
 ---
 
-## Phase 2 — AI Panel Context Injection and Chat Page Redesign (70% done)
+## Phase 2 — AI Panel Context Injection and Chat Page Redesign ✅ DONE
 
 **Goal:** Make AskAiPanel context-aware. Redesign Chat page as analyst tool.
 
@@ -157,15 +157,15 @@ Investigation of the reference repo (2026-05-05) confirms these density patterns
 - P2A-1..5: ✅ `system_context` built + sent in POST body; "Analyst" header; props wired from instrument page.
 - **Backend gap confirmed:** S8 `ChatRequestSchema` lacks `system_context`; see Backend Dependencies section. Must be fixed in S8 before context injection works end-to-end.
 
-### 2B: Citation display ❌ NOT DONE
-- **P2B-1:** Parse SSE response for citation markers `[N]`. Render inline `[1]` superscript spans + collapsible "Sources" section at the end of the response in `AskAiPanel`. Reference: `StreamingBubble.tsx` already handles citations in full Chat thread — reuse the same `parseCitations()` helper.
+### 2B: Citation display ✅ DONE
+- **P2B-1:** ✅ Post-stream citation parsing: `parseCitationResponse()` splits body + "Sources:" block; `renderWithCitations()` converts `[N]` to styled `<sup>` elements. Sources section renders as a bordered list below the response. Parsing fires via `useEffect` only after `isStreaming=false` to avoid mid-stream false splits. Tests added: 3 unit tests for `parseCitationResponse`, 3 for `renderWithCitations`, 3 integration tests for the full rendering pipeline.
 
-### 2C: Chat page redesign (70% done)
+### 2C: Chat page redesign ✅ DONE
 - P2C-1: ✅ `MarketContextBanner` mounted above thread list.
 - P2C-2: ✅ Portfolio-scoped starter questions in empty state.
-- P2C-3: ❌ Entity quick-chips above input in active thread — **NOT DONE**.
+- P2C-3: ✅ Entity quick-chips above chat input — tickers extracted from user messages in active thread via regex; up to 5 chips shown; clicking appends `$TICKER` to input and re-focuses the textarea.
 - P2C-4: ✅ Analyst-specific empty state copy.
-- P2C-5: ❌ Source citation rendering in full Chat thread (beyond existing `StreamingBubble`) — **NOT DONE**.
+- P2C-5: ✅ `[N]` citation superscripts in full Chat thread — `withCitationSups` prop added to `MarkdownContent` (opt-in, chat-only); preprocessing converts `[N]` to backtick-wrapped sentinel; `code` component intercepts sentinel and renders `<sup>` with consistent `bg-primary/10` styling. `MessageBubble` opts in. Existing `CitationBar` + `CitationList` handle structured `citations` array (unchanged).
 
 **Files:** `AskAiPanel.tsx`, `lib/api/chat.ts`, `app/(app)/chat/page.tsx`, `components/chat/`, **S8: `rag_chat/api/schemas.py` + `rag_chat/application/pipeline/prompt_builder.py`**
 
