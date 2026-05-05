@@ -57,25 +57,6 @@ vi.mock("react", async (importOriginal) => {
   };
 });
 
-// ── @tanstack/react-virtual mock ──────────────────────────────────────────────
-// WHY mock useVirtualizer: jsdom has no layout engine. The virtualizer measures
-// the scroll container via getBoundingClientRect() which returns zeros in jsdom.
-// This causes getTotalSize() = 0 and getVirtualItems() = [] — no rows render.
-// Mocking renders ALL items so tests can assert on data cell content.
-vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: ({ count }: { count: number; [k: string]: unknown }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, i) => ({
-        index: i,
-        key: i,
-        start: i * 22,
-        size: 22,
-      })),
-    getTotalSize: () => count * 22,
-    measure: () => undefined,
-  }),
-}));
-
 // ── Next.js router mock ───────────────────────────────────────────────────────
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({

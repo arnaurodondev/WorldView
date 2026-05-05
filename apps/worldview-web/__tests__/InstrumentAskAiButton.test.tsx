@@ -14,13 +14,39 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
 // Mock the panel before importing the button so the import boundary picks up the stub.
+// WHY render ticker/price/fundamentals: PLAN-0071 P2A-4 migrated InstrumentAskAiButton
+// to pass structured props instead of building a contextHint string. The mock surfaces
+// them as text so assertions can verify the correct values are forwarded.
 vi.mock("@/components/shell/AskAiPanel", () => ({
-  AskAiPanel: ({ contextHint, onClose }: { contextHint?: string; onClose: () => void }) => (
-    <div data-testid="mock-ask-ai-panel">
-      <span data-testid="ctx">{contextHint}</span>
-      <button onClick={onClose}>close</button>
-    </div>
-  ),
+  AskAiPanel: ({
+    ticker,
+    price,
+    fundamentals,
+    contextHint,
+    onClose,
+  }: {
+    ticker?: string;
+    price?: number;
+    fundamentals?: { pe?: number | null; marketCap?: number | null };
+    contextHint?: string;
+    onClose: () => void;
+  }) => {
+    const parts: string[] = [];
+    if (ticker) parts.push(`Ticker: ${ticker}`);
+    if (price !== undefined) parts.push(`price $${price.toFixed(2)}`);
+    if (fundamentals?.pe != null) parts.push(`P/E ${fundamentals.pe}`);
+    if (fundamentals?.marketCap != null) {
+      const billions = fundamentals.marketCap / 1_000_000_000;
+      parts.push(`mcap $${billions.toFixed(1)}B`);
+    }
+    if (contextHint) parts.push(contextHint);
+    return (
+      <div data-testid="mock-ask-ai-panel">
+        <span data-testid="ctx">{parts.join(" ")}</span>
+        <button onClick={onClose}>close</button>
+      </div>
+    );
+  },
 }));
 
 import { InstrumentAskAiButton } from "@/components/instrument/InstrumentAskAiButton";
@@ -32,7 +58,12 @@ describe("InstrumentAskAiButton", () => {
     expect(btn).toBeInTheDocument();
   });
 
-  it("opens the AskAiPanel and forwards a context hint with price + recent move", () => {
+  it("opens the AskAiPanel and forwards ticker, price, and fundamentals as structured props", () => {
+    // WHY structured props: PLAN-0071 P2A-4 replaced contextHint string-building
+    // with dedicated ticker/price/fundamentals props so AskAiPanel can include
+    // system_context in the POST body for model-side context injection.
+    // recentBars is accepted by the interface for API stability but no longer
+    // forwarded — the component ignores it.
     render(
       <InstrumentAskAiButton
         ticker="AAPL"
@@ -51,8 +82,6 @@ describe("InstrumentAskAiButton", () => {
     expect(panel).toBeInTheDocument();
     expect(ctx).toMatch(/Ticker: AAPL/);
     expect(ctx).toMatch(/price \$193\.50/);
-    // 30d-move pct ((193.5 − 180) / 180) ≈ +7.50%
-    expect(ctx).toMatch(/2d move \+7\.50%/);
     expect(ctx).toMatch(/P\/E 28\.6/);
     expect(ctx).toMatch(/mcap \$3\.0B/);
   });

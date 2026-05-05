@@ -474,6 +474,7 @@ export function TransactionsTable({
           <button
             type="button"
             onClick={clearFilters}
+            aria-label="Clear transaction filters"
             className="h-6 px-2 text-[10px] font-mono uppercase tracking-[0.06em] border border-border rounded-[2px] text-muted-foreground hover:text-foreground hover:border-foreground transition-colors"
           >
             Clear filters

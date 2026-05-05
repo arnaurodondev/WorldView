@@ -211,22 +211,23 @@ describe("buildScreenerFilters — sector restriction", () => {
 
 // ── Fallback filter (empty filter list) ───────────────────────────────────────
 
-describe("buildScreenerFilters — empty filter fallback", () => {
-  it("returns at least one filter (backend rejects empty array)", () => {
-    // WHY: the backend's ScreenerRequest has min_length=1 on filters[].
-    // With all defaults (ALL cap, no ranges, no sector), the function must
-    // still emit a minimum filter so the request doesn't fail with 422.
+describe("buildScreenerFilters — empty filter list (S3 v2 BP-368 fix)", () => {
+  it("returns empty array when all inputs are at defaults (S3 v2 accepts filters:[])", () => {
+    // WHY empty: S3 v2 ScreenerRequest accepts an empty filters[] and responds
+    // with the optimised "no filter" path — returning all instruments. The
+    // old mandatory market_capitalization fallback was removed because it
+    // caused INNER JOIN narrowing and confused the "all instruments" intent.
     const filters = buildScreenerFilters(makeFilters());
-    expect(filters.length).toBeGreaterThan(0);
+    expect(filters.length).toBe(0);
   });
 
-  it("fallback filter uses market_capitalization metric", () => {
-    // WHY market_capitalization: it is the least likely to narrow results
-    // when set to min=0, which is safe as a universal "select everything" filter.
+  it("no mandatory enrichment filters included in empty default state", () => {
+    // daily_return and market_capitalization are not automatically injected —
+    // they were removed as part of BP-368 fix (INNER JOIN exclusion issue).
     const filters = buildScreenerFilters(makeFilters());
-    // At minimum, there should be a market_capitalization or always-include filter.
     const hasMarketCap = filters.some((f) => f.metric === "market_capitalization");
     const hasDailyReturn = filters.some((f) => f.metric === "daily_return");
-    expect(hasMarketCap || hasDailyReturn).toBe(true);
+    expect(hasMarketCap).toBe(false);
+    expect(hasDailyReturn).toBe(false);
   });
 });

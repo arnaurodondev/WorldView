@@ -55,11 +55,12 @@ describe("buildScreenerFilters — no mandatory enrichment defaults (BP-368 fix)
     expect(peFilters[0].max_value).toBe(30);
   });
 
-  it("uses market_capitalization as the only default filter when no user filters set", () => {
+  it("returns empty filters when no user filters set (S3 v2 accepts filters:[])", () => {
+    // WHY empty: S3 v2 accepts an empty filters[] and uses the optimised
+    // "no filter" path. The mandatory market_capitalization fallback was
+    // removed by the BP-368 fix to stop INNER JOIN from narrowing results.
     const filters = buildScreenerFilters(DEFAULT_FILTERS);
-    expect(filters.length).toBe(1);
-    expect(filters[0].metric).toBe("market_capitalization");
-    expect(filters[0].min_value).toBe(0);
+    expect(filters.length).toBe(0);
   });
 
   it("user-specified pe_ratio appears in output at its position in the filter list", () => {
