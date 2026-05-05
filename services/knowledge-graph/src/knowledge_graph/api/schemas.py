@@ -45,6 +45,11 @@ class RelationResponse(BaseModel):
     evidence_count: int
     first_evidence_at: datetime
     latest_evidence_at: datetime
+    evidence_snippets: list[str] = Field(
+        default_factory=list,
+        description="Top evidence text snippets supporting this relation (max evidence_snippets_limit).",
+    )
+    relation_summary: str | None = None
 
 
 # ── GET /api/v1/entities/{entity_id}/graph ──────────────────────────────────

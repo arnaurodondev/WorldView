@@ -28,7 +28,6 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _BATCH_LIMIT = 20
 _EVIDENCE_LIMIT = 10
-_SUMMARY_MODEL_ID = "kg-summary-v1"
 _PROMPT_TEMPLATE_ID = "00000000-0000-0000-0000-000000000001"  # seeded in prompt_templates
 
 
@@ -114,20 +113,24 @@ class SummaryWorker:
                 else:
                     raw_fallback_hits_total += len(evidence_rows)
 
-                evidence_texts = [
-                    str(e.get("evidence_text", "")) or str(e.get("canonicalized_evidence_text", ""))
-                    for e in evidence_rows
-                    if e.get("evidence_text") or e.get("canonicalized_evidence_text")
-                ]
-                null_count = len(evidence_rows) - len(evidence_texts)
-                if null_count > 0:
-                    logger.warning(  # type: ignore[no-any-return]
-                        "summary_worker_null_evidence_text",
-                        relation_id=str(relation_id),
-                        null_evidence_count=null_count,
-                        total_rows=len(evidence_rows),
-                        message="evidence_text NULL on pre-migration rows — consider promoting to immutable",
-                    )
+                evidence_texts = []
+                for e in evidence_rows:
+                    # Prefer evidence_text; fall back to canonicalized_evidence_text (immutable rows only).
+                    # Avoid str(None) = "None" bug from the old list-comprehension approach.
+                    text = e.get("evidence_text") or e.get("canonicalized_evidence_text")
+                    if text:
+                        evidence_texts.append(str(text))
+
+                logger.info(  # type: ignore[no-any-return]
+                    "summary_worker_relation_evidence_audit",
+                    relation_id=str(relation_id),
+                    evidence_rows_fetched=len(evidence_rows),
+                    evidence_text_null_count=sum(1 for e in evidence_rows if not e.get("evidence_text")),
+                    canonicalized_text_null_count=sum(
+                        1 for e in evidence_rows if not e.get("canonicalized_evidence_text")
+                    ),
+                    evidence_texts_available=len(evidence_texts),
+                )
                 if not evidence_texts:
                     skipped_null_evidence_text += 1
                     continue
@@ -158,7 +161,7 @@ class SummaryWorker:
                     summary_text=summary_text,
                     evidence_count=len(evidence_texts),
                     evidence_hash=evidence_hash,
-                    model_id=_SUMMARY_MODEL_ID,
+                    model_id="kg-summary-v1",
                     prompt_template_id=UUID(_PROMPT_TEMPLATE_ID),
                     generation_trigger="worker_13c_scheduled",
                 )
@@ -191,11 +194,18 @@ class SummaryWorker:
             prompt=prompt,
             context=context,
             output_schema={"summary": "string"},
-            model_id=_SUMMARY_MODEL_ID,
+            model_id="kg-summary-v1",
             template_id=_PROMPT_TEMPLATE_ID,
         )
 
         result = await self._llm.extract(inp, entity_id=None)
         if result is None:
             return None
+        raw_resp = getattr(result, "raw_response", None)
+        logger.info(  # type: ignore[no-any-return]
+            "summary_worker_llm_raw_response",
+            relation_id=str(relation_id),
+            raw_response_length=len(raw_resp) if raw_resp else 0,
+            raw_response_preview=(raw_resp or "")[:200],
+        )
         return str(result.result.get("summary", "")) or None

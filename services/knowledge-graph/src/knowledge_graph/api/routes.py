@@ -63,6 +63,8 @@ def _entity_summary(row: dict[str, object]) -> EntitySummary:
 def _relation_response(row: dict[str, object]) -> RelationResponse:
     evidence_count = int(row["evidence_count"])  # type: ignore[call-overload]
     confidence = float(row["confidence"]) if row.get("confidence") is not None else None  # type: ignore[call-overload, arg-type]
+    snippets = row.get("evidence_snippets")
+    summary = row.get("relation_summary")
     return RelationResponse(
         relation_id=row["relation_id"],  # type: ignore[arg-type]
         subject_entity_id=row["subject_entity_id"],  # type: ignore[arg-type]
@@ -76,6 +78,8 @@ def _relation_response(row: dict[str, object]) -> RelationResponse:
         evidence_count=evidence_count,
         first_evidence_at=row["first_evidence_at"],  # type: ignore[arg-type]
         latest_evidence_at=row["latest_evidence_at"],  # type: ignore[arg-type]
+        evidence_snippets=list(snippets) if snippets else [],  # type: ignore[arg-type, call-overload]
+        relation_summary=str(summary) if summary else None,
     )
 
 
@@ -135,19 +139,26 @@ async def get_entity_graph(
     min_confidence: float = Query(default=0.0, ge=0.0, le=1.0),
     semantic_mode: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
+    evidence_snippets_limit: int = Query(default=3, ge=1, le=10),
 ) -> GraphNeighborhoodResponse:
     """Return the egocentric graph neighbourhood for *entity_id*.
 
     Relations are filtered by ``min_confidence`` and optional ``semantic_mode``.
     ``summary_authority`` is computed at query time — NOT a cached column.
+    ``evidence_snippets_limit`` controls how many evidence text snippets are
+    returned per relation (default 3, max 10).  Evidence and summaries are
+    fetched via single batch queries (no N+1).
     """
     entity_row, relation_rows, entities_map_data = await GetEntityGraphUseCase().execute(
         entity_repo=repos.entity_repo,  # type: ignore[arg-type]
         relation_repo=repos.relation_repo,  # type: ignore[arg-type]
+        evidence_repo=repos.evidence_repo,  # type: ignore[arg-type]
+        summary_repo=repos.summary_repo,  # type: ignore[arg-type]
         entity_id=entity_id,
         min_confidence=min_confidence,
         semantic_mode=semantic_mode,
         limit=limit,
+        evidence_limit=evidence_snippets_limit,
     )
 
     if entity_row is None:

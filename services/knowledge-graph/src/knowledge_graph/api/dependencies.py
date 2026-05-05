@@ -77,9 +77,17 @@ class _EntityGraphUseCaseBundle:
             CanonicalEntityRepository,
         )
         from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
+            RelationEvidenceRepository,
+        )
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation_summary import (
+            RelationSummaryRepository,
+        )
 
         self.entity_repo = CanonicalEntityRepository(session)
         self.relation_repo = RelationRepository(session)
+        self.evidence_repo = RelationEvidenceRepository(session)
+        self.summary_repo = RelationSummaryRepository(session)
 
 
 def get_entity_graph_repos(session: ReadOnlyDbSessionDep) -> _EntityGraphUseCaseBundle:
