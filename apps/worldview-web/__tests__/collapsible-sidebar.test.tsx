@@ -3,7 +3,7 @@
  *
  * WHY THIS EXISTS: The sidebar is the primary navigation surface — any regression
  * here breaks navigation for the entire application. Tests verify:
- * 1. All 7 nav items are present (Dashboard, Portfolio, Instruments, Screener, Workspace, Alerts, Chat)
+ * 1. All 8 nav items are present (Dashboard, Portfolio, Instruments, Screener, Workspace, Predictions, Alerts, Chat)
  * 2. The active route gets highlighted (aria-current + active styling)
  * 3. Collapsed state hides nav labels (icon-only mode)
  * 4. Expanded state shows nav labels
@@ -84,7 +84,7 @@ beforeEach(() => {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 describe("CollapsibleSidebar — expanded state", () => {
-  it("renders all 6 nav items", () => {
+  it("renders all 8 nav items", () => {
     render(
       <CollapsibleSidebar expanded onToggle={mockOnToggle} />,
       { wrapper: makeWrapper() },
@@ -96,6 +96,8 @@ describe("CollapsibleSidebar — expanded state", () => {
     expect(screen.getByRole("link", { name: "Dashboard" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Screener" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Portfolio" })).toBeInTheDocument();
+    // PLAN-0068 C-2-03: Predictions nav entry added
+    expect(screen.getByRole("link", { name: "Predictions" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Alerts" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Chat" })).toBeInTheDocument();
   });

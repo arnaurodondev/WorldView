@@ -1,8 +1,8 @@
 # PLAN-0068 — Earnings Calendar Pipeline + Prediction Market Category Fix
 
-> **Status**: in-progress
+> **Status**: completed
 > **Created**: 2026-05-03
-> **Updated**: 2026-05-03
+> **Updated**: 2026-05-05
 > **Owner**: Arnau Rodon
 > **PRD**: N/A (targeted feature completion + bug fix)
 > **Tracking**: `docs/plans/TRACKING.md`
@@ -380,7 +380,9 @@ Sessions 1 and 3 can run in parallel.
 - [x] **Wave B-1** — Live EarningsCalendarWidget + Gateway Method (`done`)
   **Status**: **DONE** — 2026-05-03 · 6 new tests + 31 dashboard tests pass · typecheck clean · lint clean
 
-### Sub-plan C — Prediction Markets (partial)
+### Sub-plan C — Prediction Markets ✅
 - [x] **Wave C-1** — Category Backfill Migration (`done`)
   **Status**: **DONE** — 2026-05-03 · 40 market-data + 56 content-ingestion tests pass · ruff clean
-- [ ] **Wave C-2** — /prediction-markets Frontend Page (`pending`)
+- [x] **Wave C-2** — /prediction-markets Frontend Page ✅
+  **Status**: **DONE** — 2026-05-05 · 9 page tests + 34 utils tests pass · sidebar 12 tests pass · typecheck clean · lint clean
+  Note: page.tsx was created as BP-383 bug fix; C-2 completed the shared lib extraction (lib/prediction-markets.ts), nav entry (BarChart2 in CollapsibleSidebar), and full test coverage.
