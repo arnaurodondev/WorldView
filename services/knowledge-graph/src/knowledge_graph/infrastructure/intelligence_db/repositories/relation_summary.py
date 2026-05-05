@@ -194,3 +194,27 @@ LIMIT :top_k
             )
             for r in rows
         ]
+
+    async def get_current_summaries_batch(
+        self,
+        relation_ids: list[UUID],
+    ) -> dict[UUID, str | None]:
+        """Return current summary_text per relation in a single ANY(:ids) query.
+
+        Only is_current=true rows are returned.  Absent relation_ids are not in the dict.
+        # TODO(PRD-0074): upgrade to denormalized current_summary_text scalar on relations
+        """
+        if not relation_ids:
+            return {}
+
+        result = await self._session.execute(
+            text("""
+SELECT relation_id, summary_text
+FROM   relation_summaries
+WHERE  relation_id = ANY(:relation_ids)
+  AND  is_current  = true
+"""),
+            {"relation_ids": [str(rid) for rid in relation_ids]},
+        )
+        rows = result.fetchall()
+        return {UUID(str(r[0])): str(r[1]) if r[1] else None for r in rows}

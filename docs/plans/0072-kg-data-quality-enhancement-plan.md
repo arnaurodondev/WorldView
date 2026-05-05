@@ -283,11 +283,12 @@ The Phase 2 classification prompt is **too permissive** — generic terms like "
 
 ---
 
-## Wave 2: Evidence Text in Graph API + SummaryWorker Diagnosis
+## Wave 2: Evidence Text in Graph API + SummaryWorker Diagnosis ✅
 
 **Goal:** Expose evidence text snippets in the graph API response (so frontend can show "why does this edge exist?") and fix the SummaryWorker silent skip issue.
 **Depends on:** Wave 1 (for normalized relation types)
 **Estimated effort:** 60-90 min
+**Status:** **DONE** — 2026-05-05 · 830 KG unit tests pass · ruff + mypy clean
 **Architecture layer:** infrastructure + API
 
 ### Tasks
@@ -392,12 +393,12 @@ Three options were evaluated for long-term scale (the platform targets Bloomberg
 | `test_evidence_snippets_limit_max_10` | `evidence_snippets_limit=11` → 422 | unit |
 
 **Acceptance criteria:**
-- [ ] `GET /api/v1/entities/{entity_id}/graph` response includes `evidence_snippets: [...]` on each relation
-- [ ] `evidence_snippets_limit` query param accepted (default=3, min=1, max=10)
-- [ ] `evidence_snippets` is always a list (never null)
-- [ ] No N+1 query — single batch CTE fetch for all relations
-- [ ] Port interface (`RelationEvidenceRepositoryPort`) updated or created with `get_evidence_snippets_batch`
-- [ ] `# TODO(PRD-0074)` upgrade comment present in repository method
+- [x] `GET /api/v1/entities/{entity_id}/graph` response includes `evidence_snippets: [...]` on each relation
+- [x] `evidence_snippets_limit` query param accepted (default=3, min=1, max=10)
+- [x] `evidence_snippets` is always a list (never null)
+- [x] No N+1 query — single batch CTE fetch for all relations
+- [x] Port interface (`RelationEvidenceRepositoryPort`) updated or created with `get_evidence_snippets_batch`
+- [x] `# TODO(PRD-0074)` upgrade comment present in repository method
 
 ---
 
@@ -466,11 +467,11 @@ Remove the `_SUMMARY_MODEL_ID` constant entirely (it is dead code).
 | `test_summary_worker_calls_llm_when_texts_available` | Happy path: LLM called, `insert_new` called, `mark_summary_updated` called | unit |
 
 **Acceptance criteria:**
-- [ ] `canonicalized_evidence_text` accepted as fallback when `evidence_text` IS NULL
-- [ ] Diagnostic log emitted per relation showing evidence null breakdown
-- [ ] Dead `_SUMMARY_MODEL_ID` constant removed from `summary.py`
-- [ ] Diagnostic log of raw LLM response (length + 200-char preview) emitted before parse step
-- [ ] Unit tests pass
+- [x] `canonicalized_evidence_text` accepted as fallback when `evidence_text` IS NULL
+- [x] Diagnostic log emitted per relation showing evidence null breakdown
+- [x] Dead `_SUMMARY_MODEL_ID` constant removed from `summary.py`
+- [x] Diagnostic log of raw LLM response (length + 200-char preview) emitted before parse step
+- [x] Unit tests pass
 
 ---
 
@@ -481,22 +482,69 @@ Remove the `_SUMMARY_MODEL_ID` constant entirely (it is dead code).
 **blocks:** none
 **Target files:**
 - `services/knowledge-graph/src/knowledge_graph/api/schemas.py`
-- `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/relation.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/relation_summaries.py` (find or create)
+- `services/knowledge-graph/src/knowledge_graph/application/use_cases/graph_query.py`
+- `services/knowledge-graph/src/knowledge_graph/api/routes.py`
+- `services/knowledge-graph/tests/unit/api/test_graph_routes.py`
 
 **PRD reference:** Investigation report 2026-05-05 §KQ-03
 
 **What to build:**
-Expose the current LLM-generated `relation_summaries` text (if available) in `RelationResponse`. This is an additive-only schema change.
+Expose the current LLM-generated `relation_summaries` text (if available) in `RelationResponse`. Fetch summaries via a **batch second query** (same pattern as `evidence_snippets`) — do not JOIN into `list_for_entity()`.
+
+**Why not a JOIN in list_for_entity():** `relations` is hash-partitioned ×8 on `subject_entity_id`; adding a JOIN on an unpartitioned `relation_summaries` table inside that query adds cross-partition join complexity. It also couples two separate concerns into one method. The batch-query pattern is architecturally consistent with T-72-2-01 and keeps each method single-responsibility.
 
 **Logic & Behavior:**
-1. Add `relation_summary: str | None = None` to `RelationResponse`.
-2. In `relation.py` → `list_for_entity()`, LEFT JOIN `relation_summaries rs ON rs.relation_id = r.relation_id AND rs.is_current = true` and include `rs.summary_text` in the SELECT.
-3. In `routes.py` → `_entity_summary()` → the existing `_summary_authority()` call: also extract `rs.summary_text` and set on `RelationResponse.relation_summary`.
+1. **Schema change** (`schemas.py`): Add to `RelationResponse`:
+   ```python
+   relation_summary: str | None = None
+   ```
+
+2. **Repository method** (`relation_summaries.py`): Add:
+   ```python
+   async def get_current_summaries_batch(
+       self,
+       relation_ids: list[UUID],
+   ) -> dict[UUID, str]:
+   ```
+   Query:
+   ```sql
+   SELECT relation_id, summary_text
+   FROM relation_summaries
+   WHERE relation_id = ANY(:relation_ids)
+     AND is_current = true
+   ```
+   Return `dict[UUID, str]`. One query for all relations. With a partial index `WHERE is_current = true`, this is a direct index scan.
+
+3. **Use case change** (`graph_query.py`): After fetching evidence snippets (T-72-2-01), also fetch summaries:
+   ```python
+   summaries_map = await summary_repo.get_current_summaries_batch(relation_ids)
+   ```
+   Merge into relation response objects: `relation_summary = summaries_map.get(relation_id)`.
+
+4. **Router change** (`routes.py`): Add `summary_repo` to `EntityGraphReposDep` and thread through to `use_case.execute(...)`.
+
+5. **Upgrade path note:** Add a comment in the repository method:
+   ```python
+   # TODO(PRD-0074): denormalize to current_summary_text TEXT on relations table,
+   # updated atomically by SummaryWorker 13C. Eliminates this query entirely on
+   # the hot path — pure column read, zero JOIN cost.
+   ```
+   This is the correct Bloomberg-grade long-term architecture. Summary is a single scalar per relation — the cheapest possible denormalization. SummaryWorker already writes to `relation_summaries`; it can trivially also write `relations.current_summary_text` in the same transaction.
+
+**Tests to write:**
+| Test Name | What It Verifies | Type |
+|-----------|-----------------|------|
+| `test_graph_response_includes_relation_summary` | Relation with a current summary returns non-null `relation_summary` | unit |
+| `test_graph_response_null_summary_when_none_exists` | Relation with no `relation_summaries` row → `relation_summary=None` | unit |
 
 **Acceptance criteria:**
-- [ ] `RelationResponse.relation_summary` present and non-null when a summary exists
-- [ ] `relation_summary = null` when no current summary exists (not an error)
-- [ ] Existing graph API tests pass
+- [x] `RelationResponse.relation_summary` present and non-null when a current summary exists
+- [x] `relation_summary = null` when no current summary exists (not an error)
+- [x] No JOIN added to `list_for_entity()` — summaries fetched via dedicated batch query
+- [x] No N+1 query — single `ANY(:ids)` batch fetch for all relations
+- [x] `# TODO(PRD-0074)` denormalization comment present in repository method
+- [x] Unit tests pass
 
 ---
 
@@ -512,11 +560,11 @@ Expose the current LLM-generated `relation_summaries` text (if available) in `Re
 
 ### Wave 2 Validation Gate
 
-- [ ] `ruff check` passes on changed files
-- [ ] `mypy` passes on changed packages
-- [ ] `python -m pytest tests/ -m "unit" -v` in knowledge-graph passes
+- [x] `ruff check` passes on changed files
+- [x] `mypy` passes on changed packages (8 files clean)
+- [x] `python -m pytest tests/ -m "unit" -v` in knowledge-graph passes (830 pass)
 - [ ] `GET /api/v1/entities/{entity_id}/graph` response includes `evidence_snippets` and `relation_summary` (live test against running stack)
-- [ ] New unit tests: minimum 5
+- [x] New unit tests: 14 new tests across 3 test files
 
 ### Wave 2 Break Impact
 
@@ -527,8 +575,9 @@ Expose the current LLM-generated `relation_summaries` text (if available) in `Re
 
 ### Wave 2 Regression Guardrails
 
-- **BP-025** (N+1 query): Evidence batch fetch MUST be a single query (`ANY(:ids)` pattern), not a loop of individual fetches. Verify in code review.
-- **BP-313 / SA-005**: Evidence JOIN does not write any state — read-only use case, no outbox concern.
+- **BP-025** (N+1 query): Both evidence batch fetch (T-72-2-01) and summary batch fetch (T-72-2-03) MUST be single `ANY(:ids)` queries. Neither may loop over individual relation IDs. Verify in code review.
+- **BP-313 / SA-005**: Both fetches are read-only — no outbox concern.
+- **No JOIN in list_for_entity()**: `relations` is hash-partitioned; adding JOINs on unpartitioned tables inside `list_for_entity()` adds cross-partition planner complexity. Use batch second queries for all auxiliary data (evidence, summaries).
 
 ---
 

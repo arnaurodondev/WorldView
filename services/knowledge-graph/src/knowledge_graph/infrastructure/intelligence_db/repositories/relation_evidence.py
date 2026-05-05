@@ -301,6 +301,57 @@ LIMIT :limit
             for r in rows
         ]
 
+    async def get_evidence_snippets_batch(
+        self,
+        relation_ids: list[UUID],
+        limit_per_relation: int = 3,
+    ) -> dict[UUID, list[str]]:
+        """Return top-N evidence snippets per relation in a single CTE query (no N+1).
+
+        Reads from relation_evidence_raw (evidence_text column, added in migration 0019).
+        Ordered by extraction_confidence DESC NULLS LAST, evidence_date DESC NULLS LAST.
+        JOINs to relations to resolve relation_id (raw table stores the triple, not relation_id).
+        # TODO(PRD-0074): upgrade to denormalized top_evidence_snippets JSONB on relations
+        """
+        if not relation_ids:
+            return {}
+
+        result = await self._session.execute(
+            text("""
+WITH ranked AS (
+    SELECT r.relation_id,
+           rer.evidence_text AS snip,
+           ROW_NUMBER() OVER (
+               PARTITION BY r.relation_id
+               ORDER BY rer.extraction_confidence DESC NULLS LAST,
+                        rer.evidence_date          DESC NULLS LAST
+           ) AS rn
+    FROM relation_evidence_raw rer
+    JOIN relations r
+      ON  r.subject_entity_id = rer.subject_entity_id
+     AND  r.object_entity_id  = rer.object_entity_id
+     AND  r.canonical_type    = rer.canonical_type
+    WHERE r.relation_id = ANY(:relation_ids)
+      AND rer.entity_provisional = false
+      AND rer.evidence_text      IS NOT NULL
+)
+SELECT relation_id, snip
+FROM   ranked
+WHERE  rn <= :limit
+ORDER  BY relation_id, rn
+"""),
+            {
+                "relation_ids": [str(rid) for rid in relation_ids],
+                "limit": limit_per_relation,
+            },
+        )
+        rows = result.fetchall()
+        out: dict[UUID, list[str]] = {}
+        for row in rows:
+            rid = UUID(str(row[0]))
+            out.setdefault(rid, []).append(str(row[1]))
+        return out
+
     async def mark_processed(self, raw_ids: list[UUID], processed_at: datetime) -> None:
         """Mark a batch of raw evidence rows as processed."""
         if not raw_ids:
