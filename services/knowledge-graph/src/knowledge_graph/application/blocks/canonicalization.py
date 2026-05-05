@@ -116,9 +116,13 @@ async def canonicalize_relation_type(
 
     """
     # ------------------------------------------------------------------
-    # Step 1 — Exact match
+    # Step 1 — Exact match (PLAN-0072 T-72-1-02: normalize before lookup)
     # ------------------------------------------------------------------
-    exact = await registry_repo.find_exact(raw_type)
+    # LLM outputs lowercase ("competes_with") while registry seeds are
+    # lowercase too, but some historical payloads had UPPER or mixed case.
+    # Normalize here so the exact-match is always case-insensitive.
+    normalized_raw_type = raw_type.lower().strip().replace(" ", "_")
+    exact = await registry_repo.find_exact(normalized_raw_type)
     if exact:
         return CanonicalizationResult(
             canonical_type=str(exact["canonical_type"]),

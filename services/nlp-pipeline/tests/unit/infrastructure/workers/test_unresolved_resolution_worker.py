@@ -1241,3 +1241,70 @@ class TestEnqueueKafkaEmit:
             result = await worker._enqueue_for_enrichment(mention)
 
         assert result == queue_id  # still returns the queue_id
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0072 T-72-1-05 — prompt hardening + confidence threshold
+# ---------------------------------------------------------------------------
+
+
+class TestConfidenceThreshold:
+    """Phase 2 confidence < 0.7 → noise, even if is_entity=true."""
+
+    def _make_worker(self) -> UnresolvedResolutionWorker:
+        settings = _make_settings()
+        nlp_sf = MagicMock()
+        return UnresolvedResolutionWorker(nlp_session_factory=nlp_sf, settings=settings)
+
+    async def test_low_confidence_entity_classified_as_noise_ollama(self) -> None:
+        """Ollama path: confidence=0.5 with is_entity=true → outcome NOISE."""
+        import json as _json
+
+        worker = self._make_worker()
+        mention = _make_mention(mention_text="analysts")
+
+        ollama_payload = _json.dumps({"is_entity": True, "confidence": 0.5, "reason": "generic"})
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"response": ollama_payload}
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            outcome, reason = await worker._phase2_llm_classify(mention)
+
+        assert outcome == ResolutionOutcome.NOISE
+
+    async def test_high_confidence_entity_passes_threshold(self) -> None:
+        """Ollama path: confidence=0.95 with is_entity=true → outcome ENTITY_CREATED."""
+        import json as _json
+
+        worker = self._make_worker()
+        mention = _make_mention(mention_text="Apple Inc.")
+
+        ollama_payload = _json.dumps({"is_entity": True, "confidence": 0.95, "reason": "named company"})
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"response": ollama_payload}
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_resp)
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            outcome, reason = await worker._phase2_llm_classify(mention)
+
+        assert outcome == ResolutionOutcome.ENTITY_CREATED
+
+    async def test_noise_terms_in_prompt_negative_examples(self) -> None:
+        """System prompt contains explicit negative examples for known leaking noise classes."""
+        # These terms caused ~30% of KG noise in production (PLAN-0072 investigation).
+        assert "analysts" in _CLASSIFICATION_SYSTEM_PROMPT
+        assert "management" in _CLASSIFICATION_SYSTEM_PROMPT
+        assert "constant currency" in _CLASSIFICATION_SYSTEM_PROMPT
+        # Confidence field must be in the response schema description.
+        assert "confidence" in _CLASSIFICATION_SYSTEM_PROMPT

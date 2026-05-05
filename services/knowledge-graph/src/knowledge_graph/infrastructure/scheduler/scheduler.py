@@ -260,6 +260,11 @@ def build_workers(
                     batch_limit=settings.worker_provisional_enrichment_batch_size,
                     max_retries=settings.worker_provisional_enrichment_max_retries,
                     concurrency=settings.worker_provisional_enrichment_concurrency,
+                    # PLAN-0072 T-72-1-01: Layer 2 noise classifier reuses the
+                    # existing DeepInfra API key; when empty Layer 2 is skipped
+                    # (fail-open) and rows go directly to Layer 3 extraction.
+                    noise_classifier_api_key=settings.deepinfra_api_key,
+                    noise_classifier_api_base_url=settings.deepinfra_extraction_base_url,
                 ),
                 "embedding_refresh": EmbeddingRefreshWorker(
                     session_factory,

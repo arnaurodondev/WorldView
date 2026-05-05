@@ -113,3 +113,15 @@ s7_earnings_calendar_events_ingested_total = Counter(
     "Total earnings calendar events upserted by consumer 13D-9, by ticker.",
     ["ticker"],
 )
+
+# ── PLAN-0072 Wave 1: Noise filtering counters ────────────────────────────────
+
+s7_provisional_noise_filtered_total = Counter(
+    "s7_provisional_noise_filtered_total",
+    "Provisional queue rows rejected by the Layer 1 static blocklist (no LLM call).",
+)
+
+s7_provisional_noise_llm_filtered_total = Counter(
+    "s7_provisional_noise_llm_filtered_total",
+    "Provisional queue rows rejected by the Layer 2 cheap LLM classifier.",
+)
