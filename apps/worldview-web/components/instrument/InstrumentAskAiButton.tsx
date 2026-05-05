@@ -44,9 +44,6 @@ import { useCallback, useRef, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { AskAiPanel } from "@/components/shell/AskAiPanel";
 import type { Fundamentals, OHLCVBar } from "@/types/api";
-// PLAN-0059-C C-5: replaced inline ternary B/M formatter with the canonical
-// formatCompactCurrency. `adaptive: true` matches the previous look (1 dec).
-import { formatCompactCurrency } from "@/lib/format";
 
 interface InstrumentAskAiButtonProps {
   /** Display ticker (e.g. "AAPL") — used in the contextual greeting line. */
@@ -61,58 +58,12 @@ interface InstrumentAskAiButtonProps {
   briefSummary?: string | null;
 }
 
-/**
- * Build a one-line, human-readable context string the user (and the model
- * via copy-paste in the chat history) can reference. Kept short to fit in
- * the AskAiPanel response slot without dominating it.
- *
- * WHY string composition (not a structured payload): the AskAiPanel sends
- * a free-form `message` field to the chat endpoint. Encoding the context
- * as natural language inline with the user's question is the smallest
- * possible change that the existing chat orchestrator already handles.
- */
-function buildContextLine({
-  ticker,
-  currentPrice,
-  recentBars,
-  fundamentals,
-}: Pick<InstrumentAskAiButtonProps, "ticker" | "currentPrice" | "recentBars" | "fundamentals">): string {
-  const bits: string[] = [`Ticker: ${ticker}`];
-  if (currentPrice != null) bits.push(`price $${currentPrice.toFixed(2)}`);
-
-  if (recentBars && recentBars.length >= 2) {
-    const first = recentBars[0]?.close;
-    const last = recentBars[recentBars.length - 1]?.close;
-    if (typeof first === "number" && typeof last === "number" && first > 0) {
-      const pct = ((last - first) / first) * 100;
-      // sign-prefixed two-decimal % is the Bloomberg-standard summary delta
-      const sign = pct >= 0 ? "+" : "";
-      bits.push(`${recentBars.length}d move ${sign}${pct.toFixed(2)}%`);
-    }
-  }
-
-  if (fundamentals?.pe_ratio != null) {
-    bits.push(`P/E ${fundamentals.pe_ratio.toFixed(1)}`);
-  }
-  if (fundamentals?.market_cap != null) {
-    // millions/billions feel cleaner than scientific notation in a one-liner.
-    // PLAN-0059-C C-5: canonical formatter; `adaptive: true` reproduces the
-    // previous look ($1.5B / $850M with one or zero decimals as magnitude grows).
-    bits.push(
-      `mcap ${formatCompactCurrency(fundamentals.market_cap, "USD", {
-        adaptive: true,
-        maxDecimals: 1,
-      })}`,
-    );
-  }
-
-  return bits.join(" · ");
-}
-
 export function InstrumentAskAiButton({
   ticker,
   currentPrice,
-  recentBars,
+  // recentBars kept in props interface for API stability; not used directly here —
+  // PLAN-0071 P2A-4 passes structured context via AskAiPanel's ticker/price/fundamentals props.
+  recentBars: _recentBars,
   fundamentals,
   briefSummary,
 }: InstrumentAskAiButtonProps) {
@@ -127,11 +78,6 @@ export function InstrumentAskAiButton({
     requestAnimationFrame(() => triggerRef.current?.focus());
   }, []);
 
-  // The greeting is what the panel shows the user the moment they open it
-  // — it is NOT a chat message, just a hint that the assistant already
-  // knows what they are looking at. Keeping it visible reduces the "blank
-  // form" anxiety of a chat input.
-  const contextLine = buildContextLine({ ticker, currentPrice, recentBars, fundamentals });
 
   return (
     <>
@@ -167,13 +113,18 @@ export function InstrumentAskAiButton({
       {open && (
         <AskAiPanel
           onClose={handleClose}
-          // The shell AskAiPanel doesn't currently take an initial-prompt
-          // prop. We pass the context as a separate first message via the
-          // contextHint prop — a non-breaking optional addition handled in
-          // the panel itself. If the prop is ignored, behaviour is
-          // identical to the shell-mounted panel (still useful, just
-          // without the contextual seed).
-          contextHint={`Context: ${contextLine}${briefSummary ? `. Brief: ${briefSummary}` : ""}`}
+          // PLAN-0071 P2A-4: pass structured props so AskAiPanel.buildSystemContext()
+          // includes system_context in the POST body. This is what makes the backend
+          // model context-aware without the user re-stating the ticker.
+          // contextHint still surfaces the display strip for UX continuity.
+          ticker={ticker}
+          price={currentPrice ?? undefined}
+          fundamentals={
+            fundamentals
+              ? { pe: fundamentals.pe_ratio ?? null, marketCap: fundamentals.market_cap ?? null }
+              : undefined
+          }
+          contextHint={briefSummary ? `Brief: ${briefSummary}` : undefined}
         />
       )}
     </>

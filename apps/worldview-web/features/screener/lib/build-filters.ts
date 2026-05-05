@@ -63,31 +63,26 @@ export function buildScreenerFilters(f: FilterState): ScreenerFilter[] {
   pushIfRange(filters, "quarterly_revenue_growth_yoy", f.revGrowthMin, f.revGrowthMax);
   pushIfRange(filters, "quarterly_earnings_growth_yoy", f.earningsGrowthMin, f.earningsGrowthMax);
 
-  // Attach sector restriction to the first filter (S3 applies it globally).
-  // WHY exclude "ALL": "ALL" means no sector restriction — attaching it as a
-  // sector value would send a literal "ALL" string to the backend which is not
-  // a valid GICS sector name and would incorrectly filter to zero results.
-  if (f.sector && f.sector !== "ALL" && filters.length > 0) {
-    filters[0] = { ...filters[0], sector: f.sector };
+  // Sector filter: when sector is selected but no other metric filters are active
+  // we still need to communicate the sector restriction. S3's sector field lives on
+  // ScreenFilterRequest, so we attach it to the first filter or add a synthetic one.
+  if (f.sector && f.sector !== "ALL") {
+    if (filters.length > 0) {
+      filters[0] = { ...filters[0], sector: f.sector };
+    } else {
+      // WHY synthetic filter with no numeric range: S3 accepts filters[] with both
+      // min_value and max_value omitted — it just uses the filter for sector restriction
+      // without applying any numeric threshold. Sending {metric, sector} alone tells S3
+      // to restrict the universe to that sector and return key metrics via LEFT JOIN.
+      filters.push({ metric: "market_capitalization", sector: f.sector });
+    }
   }
 
-  // Backend rejects empty filter lists (min_length=1).
-  if (filters.length === 0) {
-    filters.push({
-      metric: "market_capitalization",
-      min_value: 0,
-      ...(f.sector ? { sector: f.sector } : {}),
-    });
-  }
-
-  // WHY NOT always adding pe_ratio + daily_return enrichment filters:
-  // The backend screener uses INNER JOIN per filter metric — instruments missing
-  // ANY metric are excluded. Only 8/31 instruments have daily_return data, so
-  // adding it as a mandatory enrichment filter silently excludes 23 instruments.
-  // The screener table shows "—" for missing metric columns (null-safe formatters),
-  // which is correct and expected. Users who want to filter by pe_ratio or
-  // daily_return should add those as explicit filters, which will intentionally
-  // restrict the result set to instruments that have that data.
+  // WHY no fallback filter when filters is empty: S3 v2 accepts filters:[] and
+  // responds with the optimised "no filter" path — LEFT JOINs across key metrics
+  // (market_cap, pe_ratio, beta, daily_return, revenue_usd) for ALL instruments.
+  // Previously we sent [{market_cap, min: 0}] here, which triggered S3's INNER JOIN
+  // path and only populated the market_cap column, leaving all others "—".
 
   return filters;
 }

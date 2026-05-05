@@ -33,12 +33,14 @@
 "use client";
 // WHY "use client": uses useQuery for CompanyOverview + tab state (useState).
 
-import { useEffect, useMemo, useState } from "react";
-import { ArrowRight } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowRight, ChevronRight } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 // WHY useRouter: used for router.back() in the back nav button so the user returns
 // to their previous page (e.g., screener, dashboard) rather than always going to /dashboard.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+// PLAN-0071 Phase 4: react-resizable-panels v4 API (Group=PanelGroup, Separator=ResizeHandle).
+import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { createGateway } from "@/lib/gateway";
@@ -52,6 +54,7 @@ import { NewsTab } from "@/components/instrument/NewsTab";
 import { CompactInstrumentHeader } from "@/components/instrument/CompactInstrumentHeader";
 import { InstrumentAISubheader } from "@/components/instrument/InstrumentAISubheader";
 import { OverviewLayout } from "@/components/instrument/OverviewLayout";
+import { AnalystRail } from "@/components/instrument/AnalystRail";
 // PLAN-0059 W1 (2026-04-30) — Bloomberg-style mnemonic chords on the instrument
 // page. When focus is NOT inside an input, single-letter keypresses jump to the
 // matching tab: D=DES (Overview), F=FA (Fundamentals), N=CN (News), I=Intel.
@@ -82,6 +85,12 @@ export default function InstrumentDetailPage() {
   // WHY controlled Tabs (not defaultValue): OverviewLayout's "More news" button
   // needs to programmatically switch to the News tab. Controlled Tabs allow this.
   const [activeTab, setActiveTab] = useState("overview");
+
+  // PLAN-0071 Phase 4: Analyst Rail open state.
+  // WHY default false: rail starts closed so the chart gets full width on first load.
+  // Users open it explicitly via the header button.
+  const [railOpen, setRailOpen] = useState(false);
+  const handleRailClose = useCallback(() => setRailOpen(false), []);
 
   // ── Fetch instrument page-bundle (PLAN-0059 I-5) ───────────────────────────
   // The page-bundle endpoint composes overview + fundamentals + technicals +
@@ -122,9 +131,13 @@ export default function InstrumentDetailPage() {
     if (bundle.overview) {
       queryClient.setQueryData(["company-overview", entityId], bundle.overview);
     }
-    if (bundle.fundamentals) {
-      queryClient.setQueryData(["fundamentals", md_id], bundle.fundamentals);
-    }
+    // WHY fundamentals NOT seeded from bundle: bundle.fundamentals is a raw
+    // FundamentalsSectionResponse (section records array) but the ["fundamentals", md_id]
+    // cache key is consumed by FundamentalsTab which expects a flat Fundamentals object
+    // (the shape returned by getFundamentals() transformer). Seeding the wrong shape
+    // causes staleTime=5min to prevent the correct queryFn from running → all "—" in
+    // the Fundamentals tab. FundamentalsTab.initialData={overview?.fundamentals} already
+    // supplies the correct placeholder while the real query fires. (BP-379)
     if (bundle.technicals) {
       queryClient.setQueryData(["technicals", md_id], bundle.technicals);
     }
@@ -228,7 +241,9 @@ export default function InstrumentDetailPage() {
   const fund = overview?.fundamentals;
 
   return (
-    <div className="flex min-h-0 flex-col">
+    // PLAN-0071 Phase 4: outer div holds the shared header elements (CompactHeader,
+    // AISubheader, mnemonic hotkeys). The PanelGroup below splits the tab area.
+    <div className="flex min-h-0 h-full flex-col bg-background">
       {/* ── Compact 56px header (replaces old back-nav + padded header divs) ── */}
       {/* WHY CompactInstrumentHeader (was 2 separate divs): Wave 5 consolidates
           the back button, ticker/price, stats strip, and description into one
@@ -275,66 +290,122 @@ export default function InstrumentDetailPage() {
        * The bindings are scoped `page` and gated to /instruments/ so they only
        * fire on this route. They do not appear in the cheat sheet on other pages.
        */}
-      <InstrumentMnemonicHotkeys onTabChange={setActiveTab} />
+      <InstrumentMnemonicHotkeys onTabChange={setActiveTab} onRailToggle={() => setRailOpen((v) => !v)} />
 
-      {/* ── Tab navigation (controlled) ────────────────────────────────────── */}
-      {/* WHY value + onValueChange (not defaultValue): OverviewLayout's "More news"
-          button programmatically switches to the "news" tab. Uncontrolled Tabs
-          (defaultValue) cannot be changed imperatively from a child component. */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
-        <TabsList className="shrink-0 rounded-none border-b border-border/40 bg-transparent px-2">
-          {/* WHY compact tabs: bloomberg-style — tabs are small, content area is large */}
-          <TabsTrigger value="overview" className="text-[11px]">Overview</TabsTrigger>
-          <TabsTrigger value="fundamentals" className="text-[11px]">Fundamentals</TabsTrigger>
-          {/* WHY no count badge: PLAN-0050 — NewsTab manages its own data fetch.
-              The article count is shown in the NewsTab filter toolbar. */}
-          <TabsTrigger value="news" className="text-[11px]">News</TabsTrigger>
-          <TabsTrigger value="intelligence" className="text-[11px]">Intelligence</TabsTrigger>
-        </TabsList>
+      {/* PLAN-0071 Phase 4: horizontal split — main tabs on the left, AnalystRail on the right.
+          WHY PanelGroup here (below the header): the CompactInstrumentHeader and AISubheader
+          span the full width; only the tab area splits into left+right panels.
+          WHY min-h-0 flex-1: the PanelGroup must fill remaining height after fixed headers. */}
+      <PanelGroup orientation="horizontal" className="min-h-0 flex-1">
+        {/* ── Main content panel ─────────────────────────────────────────── */}
+        <Panel minSize={40} className="flex min-h-0 flex-col">
+          {/* PLAN-0071 Phase 4 + P1-7: ONE Tabs root wraps both the tab strip row and content.
+              The strip row is a flex container with TabsList on the left and the ANALYST
+              toggle on the right. Both live inside the single Tabs context so controlled
+              value/onValueChange work correctly. */}
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
+            {/* ── Tab bar row ───────────────────────────────────────────────── */}
+            <div className="flex shrink-0 items-center justify-between border-b border-border/40">
+              {/* PLAN-0071 P1-7: terminal variant — flat border-b baseline, amber underline on active.
+                  WHY border-b-0 on TabsList: the parent div owns the bottom border so there's
+                  no double line between the list and the ANALYST button. */}
+              <TabsList variant="terminal" className="border-b-0 px-2">
+                <TabsTrigger variant="terminal" value="overview">Overview</TabsTrigger>
+                <TabsTrigger variant="terminal" value="fundamentals">Fundamentals</TabsTrigger>
+                {/* WHY no count badge: PLAN-0050 — NewsTab manages its own data fetch. */}
+                <TabsTrigger variant="terminal" value="news">News</TabsTrigger>
+                <TabsTrigger variant="terminal" value="intelligence">Intelligence</TabsTrigger>
+              </TabsList>
 
-        {/* ── Overview tab ─────────────────────────────────────────────────── */}
-        {/* WHY OverviewLayout (was ad-hoc 2-column grid): Wave 5 introduces the
-            5-zone overview layout: chart + session strip + 3-column lower grid.
-            This is a structured, reusable composition vs the previous one-off grid. */}
-        <TabsContent value="overview" className="mt-0 flex-1 overflow-auto">
-          <OverviewLayout
-            instrumentId={instrument.instrument_id}
-            entityId={kgEntityId}
-            centerLabel={instrument.ticker}
-            initialBars={overview?.ohlcv?.bars}
-            fundamentals={fund ?? null}
-            instrument={instrument}
-            currentPrice={overview?.quote?.price ?? null}
-            onViewAllNews={() => setActiveTab("news")}
-          />
-        </TabsContent>
+              {/* PLAN-0071 Phase 4: ANALYST toggle — opens/closes the docked rail.
+                  WHY in the tab bar (not a FAB): always visible, non-disruptive placement
+                  mirrors Bloomberg's MOSB pane toggle. Pressed state uses accent-ai violet. */}
+              <button
+                onClick={() => setRailOpen((prev) => !prev)}
+                className={`mr-2 flex items-center gap-1 rounded-[2px] border px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] transition-colors ${
+                  railOpen
+                    ? "border-[hsl(var(--accent-ai)/0.50)] bg-[hsl(var(--accent-ai)/0.15)] text-[hsl(var(--accent-ai))]"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                }`}
+                aria-label={railOpen ? "Close analyst panel" : "Open analyst panel"}
+                aria-pressed={railOpen}
+              >
+                <ChevronRight
+                  className={`h-3 w-3 transition-transform ${railOpen ? "rotate-180" : ""}`}
+                />
+                Analyst
+              </button>
+            </div>
 
-        {/* ── Fundamentals tab ─────────────────────────────────────────────── */}
-        <TabsContent value="fundamentals" className="mt-0 flex-1 overflow-auto">
-          <FundamentalsTab
-            instrumentId={instrument.instrument_id}
-            initialData={overview?.fundamentals}
-            currentPrice={overview?.quote?.price ?? null}
-            entityId={kgEntityId}
-            instrument={instrument}
-            onViewAllNews={() => setActiveTab("news")}
-          />
-        </TabsContent>
+            {/* ── Overview tab ─────────────────────────────────────────────── */}
+            {/* WHY OverviewLayout (was ad-hoc 2-column grid): Wave 5 introduces the
+                5-zone overview layout: chart + session strip + 3-column lower grid.
+                This is a structured, reusable composition vs the previous one-off grid. */}
+            <TabsContent value="overview" className="mt-0 flex-1 overflow-auto">
+              <OverviewLayout
+                instrumentId={instrument.instrument_id}
+                entityId={kgEntityId}
+                centerLabel={instrument.ticker}
+                initialBars={overview?.ohlcv?.bars}
+                fundamentals={fund ?? null}
+                instrument={instrument}
+                currentPrice={overview?.quote?.price ?? null}
+                onViewAllNews={() => setActiveTab("news")}
+                hideAskAiButton={railOpen}
+              />
+            </TabsContent>
 
-        {/* ── News tab ─────────────────────────────────────────────────────── */}
-        {/* WHY NewsTab component (was inline JSX): PLAN-0050 Wave E extracts all
-            news tab logic into a dedicated component with sentiment/impact pills,
-            time-grouping, source filter, and sort. The page now only handles
-            tab routing; NewsTab owns data fetching, filtering, and rendering. */}
-        <TabsContent value="news" className="mt-0 flex-1 overflow-auto">
-          <NewsTab entityId={kgEntityId} />
-        </TabsContent>
+            {/* ── Fundamentals tab ─────────────────────────────────────────── */}
+            <TabsContent value="fundamentals" className="mt-0 flex-1 overflow-auto">
+              <FundamentalsTab
+                instrumentId={instrument.instrument_id}
+                initialData={overview?.fundamentals}
+                currentPrice={overview?.quote?.price ?? null}
+                entityId={kgEntityId}
+                instrument={instrument}
+                onViewAllNews={() => setActiveTab("news")}
+              />
+            </TabsContent>
 
-        {/* ── Intelligence tab ─────────────────────────────────────────────── */}
-        <TabsContent value="intelligence" className="mt-0 flex-1 overflow-auto">
-          <IntelligenceTab entityId={kgEntityId} />
-        </TabsContent>
-      </Tabs>
+            {/* ── News tab ─────────────────────────────────────────────────────── */}
+            {/* WHY NewsTab component (was inline JSX): PLAN-0050 Wave E extracts all
+                news tab logic into a dedicated component with sentiment/impact pills,
+                time-grouping, source filter, and sort. */}
+            <TabsContent value="news" className="mt-0 flex-1 overflow-auto">
+              <NewsTab entityId={kgEntityId} />
+            </TabsContent>
+
+            {/* ── Intelligence tab ─────────────────────────────────────────── */}
+            <TabsContent value="intelligence" className="mt-0 flex-1 overflow-auto">
+              <IntelligenceTab entityId={kgEntityId} />
+            </TabsContent>
+          </Tabs>
+        </Panel>
+
+        {/* ── Analyst Rail (conditional) ─────────────────────────────────────── */}
+        {/* PLAN-0071 Phase 4: rail panel. Only rendered when open to keep the SSE
+            connection off the page while closed (same pattern as shell AskAiPanel).
+            defaultSize=22 (~320px at 1440px viewport), min=19 (~280px), max=34 (~480px). */}
+        {railOpen && (
+          <>
+            <PanelResizeHandle
+              className="w-1 cursor-col-resize bg-border hover:bg-primary/40 active:bg-primary/60 transition-colors"
+              aria-label="Resize analyst panel"
+            />
+            <Panel defaultSize={22} minSize={19} maxSize={34} className="min-h-0">
+              <AnalystRail
+                onClose={handleRailClose}
+                ticker={instrument.ticker}
+                price={overview?.quote?.price ?? null}
+                priceChangePct={overview?.quote?.change_pct ?? null}
+                pe={fund?.pe_ratio ?? null}
+                week52High={fund?.week_52_high ?? null}
+                week52Low={fund?.week_52_low ?? null}
+              />
+            </Panel>
+          </>
+        )}
+      </PanelGroup>
     </div>
   );
 }
@@ -349,9 +420,11 @@ export default function InstrumentDetailPage() {
 interface InstrumentMnemonicHotkeysProps {
   /** Tab-change callback — usually `setActiveTab` from the parent's useState. */
   readonly onTabChange: (tab: string) => void;
+  /** Analyst rail toggle — fires on mod+/ (⌘/ on macOS, Ctrl+/ elsewhere). */
+  readonly onRailToggle: () => void;
 }
 
-function InstrumentMnemonicHotkeys({ onTabChange }: InstrumentMnemonicHotkeysProps) {
+function InstrumentMnemonicHotkeys({ onTabChange, onRailToggle }: InstrumentMnemonicHotkeysProps) {
   const bindings = useMemo(
     () => [
       {
@@ -382,8 +455,15 @@ function InstrumentMnemonicHotkeys({ onTabChange }: InstrumentMnemonicHotkeysPro
         label: "Intel — AI Intelligence",
         handler: () => onTabChange("intelligence"),
       },
+      {
+        id: "ins.analyst.toggle",
+        chord: "mod+/",
+        group: "View" as const,
+        label: "Toggle Analyst panel",
+        handler: onRailToggle,
+      },
     ],
-    [onTabChange],
+    [onTabChange, onRailToggle],
   );
 
   return <HotkeyScope scope="page" page="/instruments/" bindings={bindings} />;

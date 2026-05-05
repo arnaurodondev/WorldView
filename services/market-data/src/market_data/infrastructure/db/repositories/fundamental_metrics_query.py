@@ -92,22 +92,67 @@ async def query_screen(
     instr = InstrumentModel
 
     if not filters:
-        # No filters — return ALL instruments sorted by symbol with pagination.
-        # Uses COUNT(*) OVER() for the total so callers can paginate.
-        total_col = func.count().over().label("total_count")
-        stmt = (
-            select(
-                instr.id.label("instrument_id"),
-                instr.symbol.label("ticker"),
-                instr.name.label("name"),
-                instr.exchange.label("exchange"),
-                instr.sector.label("sector"),
-                total_col,
+        # No filters — return ALL instruments sorted by symbol, with the most
+        # common display metrics populated via LEFT JOIN so the screener table
+        # shows real values instead of "—" in the default view.
+        # WHY LEFT JOIN (not INNER): we must not exclude instruments that lack
+        # some metrics (e.g. crypto instruments have no P/E). LEFT JOIN returns
+        # NULL for missing metrics, which the frontend renders as "—".
+        m = FundamentalMetricModel
+
+        key_metrics = [
+            "market_capitalization",
+            "pe_ratio",
+            "daily_return",
+            "beta",
+            "revenue_usd",
+        ]
+
+        def _latest_metric_sq(metric_name: str, alias: str) -> Any:
+            """Subquery: latest value for metric_name per instrument."""
+            latest_sq = (
+                select(
+                    m.instrument_id,
+                    func.max(m.as_of_date).label("max_date"),
+                )
+                .where(m.metric == metric_name)
+                .group_by(m.instrument_id)
+                .subquery(name=f"{alias}_latest")
             )
-            .order_by(instr.symbol.asc())
-            .offset(offset)
-            .limit(limit)
-        )
+            return (
+                select(
+                    m.instrument_id.label("instrument_id"),
+                    m.value_numeric.label("value_numeric"),
+                )
+                .join(
+                    latest_sq,
+                    and_(
+                        m.instrument_id == latest_sq.c.instrument_id,
+                        m.as_of_date == latest_sq.c.max_date,
+                        m.metric == metric_name,
+                    ),
+                )
+                .subquery(name=alias)
+            )
+
+        key_sqs = {name: _latest_metric_sq(name, f"km_{name}") for name in key_metrics}
+
+        total_col = func.count().over().label("total_count")
+        select_cols: list[Any] = [
+            instr.id.label("instrument_id"),
+            instr.symbol.label("ticker"),
+            instr.name.label("name"),
+            instr.exchange.label("exchange"),
+            instr.sector.label("sector"),
+            total_col,
+        ]
+        for metric_name, sq in key_sqs.items():
+            select_cols.append(sq.c.value_numeric.label(metric_name))
+
+        stmt = select(*select_cols).order_by(instr.symbol.asc()).offset(offset).limit(limit)
+        for sq in key_sqs.values():
+            stmt = stmt.outerjoin(sq, instr.id == sq.c.instrument_id)
+
         result: Any = await session.execute(stmt)
         rows = result.all()
         if not rows:
@@ -120,7 +165,9 @@ async def query_screen(
                 name=row.name,
                 exchange=row.exchange,
                 sector=row.sector,
-                metrics={},
+                metrics={
+                    name: getattr(row, name, None) for name in key_metrics if getattr(row, name, None) is not None
+                },
             )
             for row in rows
         ], total
@@ -177,7 +224,7 @@ async def query_screen(
     # ticker/name/exchange/sector and COUNT(*) OVER() for pagination total.
     base = filter_subqueries[0]
 
-    select_cols: list[Any] = [
+    filter_select_cols: list[Any] = [
         base.c.instrument_id,
         instr.symbol.label("ticker"),
         instr.name.label("name"),
@@ -186,9 +233,9 @@ async def query_screen(
         func.count().over().label("total_count"),
     ]
     for metric_name, col in metric_columns:
-        select_cols.append(col.label(metric_name))
+        filter_select_cols.append(col.label(metric_name))
 
-    stmt = select(*select_cols)
+    stmt = select(*filter_select_cols)
 
     for sq in filter_subqueries[1:]:
         stmt = stmt.join(sq, base.c.instrument_id == sq.c.instrument_id)

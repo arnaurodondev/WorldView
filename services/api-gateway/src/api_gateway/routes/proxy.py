@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from api_gateway.clients import (
@@ -40,7 +40,6 @@ from api_gateway.schemas import (
     PredictionMarket,
     PredictionMarketsListResponse,
     QuoteResponse,
-    ScreenerResponse,
     WatchlistResponse,
 )
 from observability.logging import get_logger  # type: ignore[import-untyped]
@@ -377,15 +376,69 @@ async def update_email_preferences(request: Request) -> Any:
 # ── Screener + Timeseries (PRD-0017 Wave C-1) ─────────────────────────────────
 
 
-@router.post("/fundamentals/screen", response_model=ScreenerResponse, response_model_exclude_none=True)
+def _flatten_screener_result(item: dict[str, Any]) -> dict[str, Any]:
+    """Transform S3 ScreenInstrumentResponse → frontend-friendly flat ScreenerResult.
+
+    WHY transform at the BFF layer: S3 stores metrics in a nested dict keyed on
+    metric name (e.g. {"market_capitalization": 4.01e12}).  The frontend TypeScript
+    ScreenerResult expects flat top-level fields (market_cap, pe_ratio, …) with
+    renamed keys.  Applying the mapping once here avoids duplicating the logic in
+    every frontend component that reads screener data.
+
+    Mapping table (S3 metric key → frontend field name):
+      market_capitalization → market_cap
+      pe_ratio              → pe_ratio          (same)
+      daily_return          → daily_return       (same)
+      beta                  → beta               (same)
+      dividend_yield        → dividend_yield     (same)
+      quarterly_revenue_growth_yoy → revenue_growth_yoy
+      roe_ttm               → roe
+      profit_margin         → net_margin (not in ScreenerResult yet; forwarded raw)
+      sector (top-level)    → gics_sector
+
+    Any metric key not listed above is forwarded under its original name so new
+    S3 metrics are surfaced without a gateway schema change.
+    """
+    metrics: dict[str, float | None] = item.get("metrics") or {}
+
+    # Rename specific metric keys to match TypeScript ScreenerResult
+    _renames: dict[str, str] = {
+        "market_capitalization": "market_cap",
+        "quarterly_revenue_growth_yoy": "revenue_growth_yoy",
+        "roe_ttm": "roe",
+    }
+
+    flat: dict[str, Any] = {
+        "instrument_id": item.get("instrument_id", ""),
+        "entity_id": item.get("entity_id", item.get("instrument_id", "")),
+        "ticker": item.get("ticker"),
+        "name": item.get("name"),
+        "exchange": item.get("exchange"),
+        # WHY gics_sector (not sector): TypeScript ScreenerResult uses gics_sector;
+        # S3 returns sector. The rename makes the TS interface the single source of truth.
+        "gics_sector": item.get("sector"),
+    }
+
+    # Flatten all metric keys, applying renames where applicable
+    for key, value in metrics.items():
+        flat_key = _renames.get(key, key)
+        flat[flat_key] = value
+
+    return flat
+
+
+@router.post("/fundamentals/screen")
 async def screen_instruments(request: Request) -> Any:
-    """Proxy POST /api/v1/fundamentals/screen → S3 Market Data.
+    """Proxy POST /api/v1/fundamentals/screen → S3 Market Data with response transform.
 
-    Public endpoint — issues a system JWT so the backend's InternalJWTMiddleware
-    accepts the request.  S3 returns 400 for no filters, 422 for invalid metric/sort_by.
+    WHY transform (not raw proxy): S3 ScreenInstrumentResponse has metrics nested in
+    a dict keyed by metric name.  The frontend TypeScript ScreenerResult expects flat
+    top-level fields (market_cap, pe_ratio, …) with renamed keys.
+    _flatten_screener_result() applies the mapping at the BFF layer so the frontend
+    reads `row.market_cap` rather than `row.metrics?.market_capitalization`.
 
-    WHY response_model=ScreenerResponse: S3 ScreenResponse has {results, count, total}.
-    ScreenerResponse mirrors this shape (extra=allow passes count through).
+    Pass-through on error: S3 400/422/500 are forwarded unchanged so the frontend
+    can display the correct error message (e.g. "invalid metric name").
     """
     body = await request.body()
     clients = _clients(request)
@@ -394,7 +447,18 @@ async def screen_instruments(request: Request) -> Any:
         content=body,
         headers={"Content-Type": "application/json", **_system_headers(request)},
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    if resp.status_code >= 400:
+        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+    raw = json.loads(resp.content)
+    transformed = {
+        "results": [_flatten_screener_result(item) for item in raw.get("results", [])],
+        "total": raw.get("total", 0),
+        "count": raw.get("count", 0),
+        "offset": raw.get("offset", 0),
+        "limit": raw.get("limit", 50),
+    }
+    return JSONResponse(transformed)
 
 
 @router.get("/fundamentals/screen/fields")

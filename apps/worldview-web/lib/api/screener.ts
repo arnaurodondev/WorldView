@@ -38,6 +38,17 @@ export function createScreenerApi(t: string | undefined) {
      * row-click navigation lands on the correct entity page.
      */
     async runScreener(request: ScreenerRequest): Promise<ScreenerResponse> {
+      // WHY GET for no-filter case: the POST screener uses INNER JOIN on each
+      // filter metric, which excludes instruments that lack that metric's data.
+      // The GET /fundamentals/screen endpoint does a plain instruments scan
+      // (no metric join) and returns all instruments — the intended default view.
+      const isDefaultFilter =
+        request.filters.length === 1 &&
+        request.filters[0].metric === "market_capitalization" &&
+        request.filters[0].min_value === 0 &&
+        request.filters[0].max_value === undefined &&
+        !request.filters[0].sector;
+
       const raw = await apiFetch<
         {
           results?: Array<Record<string, unknown>>;
@@ -45,11 +56,14 @@ export function createScreenerApi(t: string | undefined) {
           total?: number;
           count?: number;
         } & Record<string, unknown>
-      >("/v1/fundamentals/screen", {
-        method: "POST",
-        body: request,
-        token: t,
-      });
+      >(
+        isDefaultFilter
+          ? `/v1/fundamentals/screen?limit=${request.limit}&offset=${request.offset ?? 0}`
+          : "/v1/fundamentals/screen",
+        isDefaultFilter
+          ? { method: "GET", token: t }
+          : { method: "POST", body: request, token: t },
+      );
       // Backend response uses either `results` or `items`; tolerate both.
       const rawRows = (raw.results ?? raw.items ?? []) as Array<Record<string, unknown>>;
       const flattened: ScreenerResult[] = rawRows.map((row) => {

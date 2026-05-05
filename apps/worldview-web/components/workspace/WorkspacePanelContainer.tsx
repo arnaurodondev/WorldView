@@ -126,19 +126,20 @@ function PanelContent({
   type,
   linkedSymbol,
   linkedInstrumentId,
+  linkedEntityId,
 }: {
   type: PanelType;
   linkedSymbol: string | null;
   linkedInstrumentId: string | null;
+  /** Real KG entity UUID — propagated via SymbolLinkingContext so the graph panel
+   *  never sends a slug to the backend (BP-new: entity-aapl slug → 422). */
+  linkedEntityId: string | null;
 }) {
-  // WHY graph keeps a demo AAPL fallback: the entity-graph component requires an
-  // entityId to render anything. Without the demo seed it would show a permanently
-  // empty SVG canvas. Until graph gets its own dedicated empty state, we keep the
-  // demo entity so the graph panel always has SOMETHING to display.
-  const entityId = linkedSymbol
-    ? `entity-${linkedSymbol.toLowerCase()}`
-    : "entity-aapl";
-  const centerLabel = linkedSymbol ?? "AAPL";
+  // WHY only real UUIDs: constructing entity-${ticker} slugs is never valid —
+  // S9 graph endpoint requires a proper entity UUID and returns 422 for slugs (BP-357).
+  // When no real entityId is available the graph panel shows its "link a symbol" state.
+  const resolvedEntityId = linkedEntityId ?? null;
+  const centerLabel = linkedSymbol ?? "";
 
   // WHY undefined when not linked: the panel-sized widgets (WorkspaceChartWidget,
   // WorkspaceFundamentalsWidget) render their own "no symbol linked" empty state
@@ -146,20 +147,28 @@ function PanelContent({
   // SymbolLinkColorPicker. Falling back to demo AAPL would mask the un-linked state.
   // (graph keeps the demo fallback below — its empty SVG canvas is a worse UX.)
   const tickerOrUndefined = linkedSymbol ?? undefined;
-  // WHY void linkedInstrumentId: reserved for future widgets that need a precise
-  // instrument_id (currently chart + fundamentals derive ins-<ticker> internally).
-  // The void expression silences the unused-arg lint without removing the prop.
-  void linkedInstrumentId;
+  // WHY instrumentIdOrUndefined: WorkspaceChartWidget uses this to fetch OHLCV with
+  // the real market-data instrument_id instead of deriving the synthetic `ins-{ticker}`
+  // that only works for seeded demo instruments (BP-NNN: 422 on real instrument IDs).
+  const instrumentIdOrUndefined = linkedInstrumentId ?? undefined;
 
   switch (type) {
     case "chart":
-      return <WorkspaceChartWidget ticker={tickerOrUndefined} />;
+      return <WorkspaceChartWidget ticker={tickerOrUndefined} instrumentId={instrumentIdOrUndefined} />;
 
     case "fundamentals":
       return <WorkspaceFundamentalsWidget ticker={tickerOrUndefined} />;
 
     case "graph":
-      return <EntityGraphPanel entityId={entityId} centerLabel={centerLabel} />;
+      // WHY guard: resolvedEntityId is null when no symbol is linked. EntityGraphPanel
+      // requires a non-null UUID; rendering it with null triggers a 422 (BP-357).
+      return resolvedEntityId ? (
+        <EntityGraphPanel entityId={resolvedEntityId} centerLabel={centerLabel} />
+      ) : (
+        <div className="flex h-full items-center justify-center text-[11px] text-muted-foreground">
+          Link a symbol to view the entity graph
+        </div>
+      );
 
     case "alerts":
       return <AlertsList />;
@@ -204,7 +213,7 @@ export function WorkspacePanelContainer({
   // WHY useSymbolLink (not useSymbolLinking): we only need this panel's view of the
   // linked symbol — the convenience hook is narrower and prevents accidentally
   // reading sibling-panel state we shouldn't react to.
-  const { symbol, instrumentId, isLinked } = useSymbolLink(panel.id);
+  const { symbol, instrumentId, entityId, isLinked } = useSymbolLink(panel.id);
 
   const meta = PANEL_META[panel.type];
   const Icon = meta.icon;
@@ -299,6 +308,7 @@ export function WorkspacePanelContainer({
           type={panel.type}
           linkedSymbol={isLinked ? symbol : null}
           linkedInstrumentId={isLinked ? instrumentId : null}
+          linkedEntityId={isLinked ? entityId : null}
         />
       </div>
     </div>

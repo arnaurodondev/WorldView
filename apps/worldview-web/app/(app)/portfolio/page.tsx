@@ -358,7 +358,7 @@ export default function PortfolioPage() {
 
         <TabsContent
           value="holdings"
-          className="flex-1 min-h-0 overflow-y-auto p-0 mt-0"
+          className="flex-1 min-h-0 overflow-y-auto p-0 mt-0 bg-background"
         >
           <HoldingsTab
             activePortfolioId={activePortfolioId}
@@ -377,7 +377,7 @@ export default function PortfolioPage() {
 
         <TabsContent
           value="transactions"
-          className="flex-1 min-h-0 overflow-y-auto p-0 mt-0 flex flex-col"
+          className="flex-1 min-h-0 overflow-y-auto p-0 mt-0 flex flex-col bg-background"
         >
           <TransactionsTab
             activePortfolioId={activePortfolioId}
@@ -390,7 +390,7 @@ export default function PortfolioPage() {
 
         <TabsContent
           value="watchlist"
-          className="flex-1 min-h-0 overflow-y-auto p-0 mt-0"
+          className="flex-1 min-h-0 overflow-y-auto p-0 mt-0 bg-background"
         >
           {/* WHY render the watchlist name in the tab content: the existing
               test checks `screen.getByText("Tech Watch")` after clicking the

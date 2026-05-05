@@ -181,9 +181,13 @@ interface GraphEventsProps {
   centerEntityId: string;
   onNodeHover: (tooltip: NodeTooltip | null) => void;
   onEdgeHover: (tooltip: EdgeTooltip | null) => void;
+  // WHY optional onNodeClick: when provided, clicking a node calls this callback
+  // (for sidebar detail panel in IntelligenceTab). When absent, clicking navigates
+  // to the entity's instrument page (original behavior in OverviewLayout sidebar).
+  onNodeClick?: (nodeId: string, label: string, nodeType: string, degree: number, edges: Array<{label: string; weight: number; neighborId: string; neighborLabel: string}>) => void;
 }
 
-function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover }: GraphEventsProps) {
+function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover, onNodeClick }: GraphEventsProps) {
   const sigma = useSigma();
   const registerEvents = useRegisterEvents();
   const router = useRouter();
@@ -220,15 +224,32 @@ function GraphEvents({ centerEntityId, onNodeHover, onEdgeHover }: GraphEventsPr
       leaveEdge: () => onEdgeHover(null),
 
       clickNode: ({ node }) => {
-        // WHY navigate: each graph node represents an entity. Clicking navigates
-        // to that entity's instrument detail page — same URL pattern as current page.
-        // We skip the center entity (clicking the center is a no-op).
-        if (node !== centerEntityId) {
+        if (node === centerEntityId) return;
+        if (onNodeClick) {
+          // Sidebar detail mode: collect connected edges for the detail panel
+          const graph = sigma.getGraph();
+          const attrs = graph.getNodeAttributes(node);
+          const degree = graph.degree(node);
+          const edges = graph.edges(node).map((edgeKey) => {
+            const ea = graph.getEdgeAttributes(edgeKey);
+            const [src, tgt] = graph.extremities(edgeKey);
+            const neighborId = src === node ? tgt : src;
+            const neighborAttrs = graph.getNodeAttributes(neighborId);
+            return {
+              label: ea.label as string,
+              weight: ea.weight as number,
+              neighborId,
+              neighborLabel: neighborAttrs.label as string,
+            };
+          });
+          onNodeClick(node, attrs.label as string, attrs.nodeType as string, degree, edges);
+        } else {
+          // Navigate mode: original behavior — go to entity instrument page
           router.push(`/instruments/${node}`);
         }
       },
     });
-  }, [registerEvents, sigma, router, centerEntityId, onNodeHover, onEdgeHover]);
+  }, [registerEvents, sigma, router, centerEntityId, onNodeHover, onEdgeHover, onNodeClick]);
 
   // WHY returns null: this component exists only to register side-effect event
   // listeners; it renders nothing to the DOM.
@@ -513,9 +534,19 @@ function GraphLegend({ data }: { data: EntityGraphData }) {
 export interface EntityGraphProps {
   data: EntityGraphData;
   centerEntityId: string;
+  // WHY optional: when omitted the graph navigates to entity pages on click (default
+  // behaviour). When provided (e.g. IntelligenceTab right sidebar) the host component
+  // receives the clicked node's data and renders the detail panel instead.
+  onNodeClick?: (
+    nodeId: string,
+    label: string,
+    nodeType: string,
+    degree: number,
+    edges: Array<{ label: string; weight: number; neighborId: string; neighborLabel: string }>,
+  ) => void;
 }
 
-export function EntityGraph({ data, centerEntityId }: EntityGraphProps) {
+export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphProps) {
   const [nodeTooltip, setNodeTooltip] = useState<NodeTooltip | null>(null);
   const [edgeTooltip, setEdgeTooltip] = useState<EdgeTooltip | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -701,6 +732,7 @@ export function EntityGraph({ data, centerEntityId }: EntityGraphProps) {
             centerEntityId={centerEntityId}
             onNodeHover={handleNodeHover}
             onEdgeHover={handleEdgeHover}
+            onNodeClick={onNodeClick}
           />
 
           {/* FilterController pushes edge/nodeReducer into sigma on every filter

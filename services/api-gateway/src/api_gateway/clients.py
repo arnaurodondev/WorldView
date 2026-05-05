@@ -283,7 +283,7 @@ async def get_company_overview(
         # with a "section" field so we can filter without additional API calls.
         highlights_data: dict[str, Any] = {}
         technicals_data: dict[str, Any] = {}
-        for rec in all_fundamentals_raw.get("records", []):
+        for rec in (all_fundamentals_raw or {}).get("records", []):
             section = rec.get("section", "")
             data = rec.get("data") or {}
             if section == "highlights" and not highlights_data:
@@ -480,13 +480,20 @@ async def get_instrument_page_bundle(
         # needs the resolved entity_id from overview.instrument.entity_id.
         overview_data = await _safe_overview()
 
-        # Read entity_id from overview's already-resolved value. Falls back
-        # to instrument_id when overview failed entirely.
+        # Read entity_id and resolved instrument_id from overview.
+        # instrument_id in the URL may be a KG entity_id; the overview resolves
+        # the authoritative market-data instrument_id via the instruments endpoint.
+        # Phase 2 calls require the market-data instrument_id, not the KG entity_id.
         entity_id = instrument_id
+        resolved_md_id = instrument_id  # market-data instrument UUID
         if overview_data and isinstance(overview_data.get("instrument"), dict):
-            resolved = overview_data["instrument"].get("entity_id")
+            inst = overview_data["instrument"]
+            resolved = inst.get("entity_id")
             if isinstance(resolved, str) and resolved:
                 entity_id = resolved
+            md_id = inst.get("instrument_id")
+            if isinstance(md_id, str) and md_id:
+                resolved_md_id = md_id
 
         # Phase 2: everything else in parallel. None on per-call failure.
         # QA-iter1: insider path corrected to /insider-transactions-snapshot.
@@ -494,9 +501,9 @@ async def get_instrument_page_bundle(
         # 404 silently (the dedicated S9 proxy at routes/proxy.py rewrites
         # the short path before calling S3).
         fundamentals_data, technicals_data, insider_data, news_data = await asyncio.gather(
-            _safe_md(f"/api/v1/fundamentals/{instrument_id}"),
-            _safe_md(f"/api/v1/fundamentals/{instrument_id}/technicals-snapshot"),
-            _safe_md(f"/api/v1/fundamentals/{instrument_id}/insider-transactions-snapshot"),
+            _safe_md(f"/api/v1/fundamentals/{resolved_md_id}"),
+            _safe_md(f"/api/v1/fundamentals/{resolved_md_id}/technicals-snapshot"),
+            _safe_md(f"/api/v1/fundamentals/{resolved_md_id}/insider-transactions-snapshot"),
             _safe_nlp(f"/api/v1/news/entity/{entity_id}", params={"limit": 5}),
         )
 

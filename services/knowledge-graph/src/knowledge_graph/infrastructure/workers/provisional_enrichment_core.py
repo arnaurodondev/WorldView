@@ -189,6 +189,29 @@ async def persist_enrichment(
     }
     avro_payload_bytes = serialize_confluent_avro(_ENTITY_CANONICAL_CREATED_SCHEMA_PATH, avro_record)
 
+    # ── Dedup check (BP-384) ──────────────────────────────────────────────────
+    # Before creating the entity, check whether an exact-alias already maps
+    # this canonical_name to an existing entity.  Without this guard, every
+    # provisional queue row for "Apple Inc." creates a separate canonical_entities
+    # row even though alias_exact match would have found the seeded entity.
+    # The partial unique index on entity_aliases (entity_id, norm, type) prevents
+    # duplicate aliases per entity but ALLOWS different entities to share the
+    # same normalized alias text — so the INSERT never conflicts cross-entity.
+    alias_repo_pre = EntityAliasRepository(session)
+    normalized_name_pre = canonical_name.lower().strip()
+    existing_alias = await alias_repo_pre.find_exact(normalized_name_pre)
+    if existing_alias is not None:
+        existing_entity_id = UUID(str(existing_alias["entity_id"]))
+        logger.info(  # type: ignore[no-any-return]
+            "provisional_enrichment_entity_deduped",
+            canonical_name=canonical_name,
+            existing_entity_id=str(existing_entity_id),
+        )
+        # Return the existing entity_id; the caller (ProvisionalEnrichmentWorker
+        # / ProvisionalQueuedConsumer) will update provisional_entity_queue.
+        # No new outbox event needed — entity already exists and is reachable.
+        return existing_entity_id
+
     entity_repo = CanonicalEntityRepository(session)
     entity_id = await entity_repo.create(  # type: ignore[attr-defined]
         canonical_name=canonical_name,
