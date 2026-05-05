@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlalchemy as sa
 from sqlalchemy import String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -31,3 +32,4 @@ class SecurityModel(TimestampMixin, Base):
     industry: Mapped[str | None] = mapped_column(String(100), nullable=True)
     country: Mapped[str | None] = mapped_column(String(3), nullable=True)
     currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    description: Mapped[str | None] = mapped_column(sa.Text, nullable=True)

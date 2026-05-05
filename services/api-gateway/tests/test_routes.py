@@ -1014,7 +1014,7 @@ async def test_entity_graph_transforms_s7_response(authed_client, authed_mock_cl
     assert edge["id"] == _relation_id
     assert edge["source"] == _center_id
     assert edge["target"] == _neighbor_id
-    assert edge["label"] == "COMPETES_WITH"
+    assert edge["label"] == "competes_with"  # proxy lowercases canonical_type (PLAN-0072 Wave 3)
     assert edge["weight"] == pytest.approx(0.85)
 
 

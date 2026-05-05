@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from market_data.application.ports.repositories import SecurityRepository
@@ -34,6 +34,7 @@ class PgSecurityRepository(SecurityRepository):
             industry=row.industry,
             country=row.country,
             currency=row.currency,
+            description=row.description,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -75,6 +76,7 @@ class PgSecurityRepository(SecurityRepository):
             "industry": security.industry,
             "country": security.country,
             "currency": security.currency,
+            "description": security.description,
         }
         update_values = {
             "figi": security.figi,
@@ -84,6 +86,7 @@ class PgSecurityRepository(SecurityRepository):
             "industry": security.industry,
             "country": security.country,
             "currency": security.currency,
+            "description": security.description,
         }
 
         # Prefer FIGI as the natural identity when present so repeated seeds with
@@ -102,3 +105,16 @@ class PgSecurityRepository(SecurityRepository):
         result = await self._session.execute(stmt)
         row = result.scalar_one()
         return self._to_domain(row)
+
+    async def update_from_enrichment(self, security_id: str, fields: dict[str, str | None]) -> None:
+        """COALESCE-update: only write a column when the current DB value IS NULL."""
+        if not fields:
+            return
+
+        # Build SET clauses using COALESCE so existing values are never overwritten.
+        set_clauses = ", ".join(f"{col} = COALESCE(securities.{col}, :{col})" for col in fields)
+        params: dict[str, object] = {"security_id": security_id, **fields}
+        await self._session.execute(
+            text(f"UPDATE securities SET {set_clauses}, updated_at = NOW() WHERE id = :security_id"),
+            params,
+        )

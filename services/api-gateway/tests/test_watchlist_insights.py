@@ -139,8 +139,11 @@ def _wire_clients(authed_mock_clients, members, news, alerts, *, quotes=None, ov
         if path.startswith("/internal/v1/price/"):
             iid = path.rsplit("/", 1)[-1]
             return _resp(200, (quotes or {}).get(iid, {}))
-        if path.startswith("/api/v1/instruments/"):
-            iid = path.rsplit("/", 1)[-1]
+        if "/api/v1/instruments/lookup" in path:
+            # New URL: /api/v1/instruments/lookup?id={iid}&extra_info=true
+            from urllib.parse import parse_qs, urlsplit
+
+            iid = parse_qs(urlsplit(path).query).get("id", [""])[0]
             return _resp(200, (overviews or {}).get(iid, {}))
         return _resp(404, {"detail": "not-found"})
 
