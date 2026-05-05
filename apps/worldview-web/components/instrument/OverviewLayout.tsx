@@ -156,6 +156,12 @@ interface OverviewLayoutProps {
   /** Current market price — positions the 52W range bar marker in sidebar */
   currentPrice?: number | null;
   onViewAllNews: () => void;   // callback to switch parent to News tab
+  /**
+   * PLAN-0071 Phase 4: When the AnalystRail is docked open on the instrument page,
+   * the floating InstrumentAskAiButton should be hidden to avoid redundancy.
+   * The rail already provides the same functionality, docked and context-aware.
+   */
+  hideAskAiButton?: boolean;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -169,6 +175,7 @@ export function OverviewLayout({
   instrument,
   currentPrice,
   onViewAllNews,
+  hideAskAiButton = false,
 }: OverviewLayoutProps) {
   // ── Sparkline metric selectors ─────────────────────────────────────────────
   // WHY two independent state values: each panel shows a different metric by
@@ -291,18 +298,18 @@ export function OverviewLayout({
         </div>
       </div>
 
-      {/* ── PLAN-0050 T-A-1-04: floating Ask-AI button (instrument-scoped).
-          Renders fixed bottom-right of the viewport. Pinned at the layout
-          edge so it persists across the Overview tab regardless of which
-          panel the user is currently scrolled to. The button receives
-          ticker/price/30d-OHLCV/fundamentals/brief context so the
-          assistant opens already aware of what the user is reading. */}
-      <InstrumentAskAiButton
-        ticker={centerLabel}
-        currentPrice={currentPrice}
-        recentBars={initialBars}
-        fundamentals={fundamentals}
-      />
+      {/* PLAN-0071 Phase 4: hide the floating button when the AnalystRail is docked open.
+          The rail is the preferred surface — docked, persistent, context-aware.
+          WHY still render when hideAskAiButton=false: on mobile or when the rail is
+          closed, the floating button remains the entry point. */}
+      {!hideAskAiButton && (
+        <InstrumentAskAiButton
+          ticker={centerLabel}
+          currentPrice={currentPrice}
+          recentBars={initialBars}
+          fundamentals={fundamentals}
+        />
+      )}
     </div>
   );
 }

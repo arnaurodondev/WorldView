@@ -88,7 +88,10 @@ export function HoldingsTab({
   // page background below the data. Painting bg-background on the wrapper
   // covers that gap without fighting CSS height resolution semantics.
   return (
-    <div className="p-2 bg-background">
+    // WHY min-h-full: the TabsContent above uses flex-1 — without min-h-full this
+    // wrapper doesn't stretch to fill the tab area, leaving the bottom half of the
+    // viewport unpainted (shows as black in the dark theme).
+    <div className="p-2 bg-background min-h-full">
       {/* PLAN-0053 T-B-2-04: Cash management card just below the KPI strip —
           at-a-glance dry-powder + cash drag awareness. */}
       <CashManagementCard portfolioId={activePortfolioId} />

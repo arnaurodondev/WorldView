@@ -5,6 +5,10 @@
  * Alerts/News page (Feed/Top Today), and Workspace panel headers.
  * Radix UI handles keyboard navigation (Arrow keys, focus management) for accessibility.
  *
+ * PLAN-0071 P1-7: Added `terminal` variant — underline indicator, no pill background.
+ * The terminal variant matches the Bloomberg-style tab bar: flat bg, amber bottom-border
+ * on active tab, no rounded corners or elevated background.
+ *
  * "use client" — WHY: Radix Tabs uses internal state for active tab tracking
  * which requires browser-side rendering.
  */
@@ -13,52 +17,94 @@
 
 import * as React from "react";
 import * as TabsPrimitive from "@radix-ui/react-tabs";
+import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const Tabs = TabsPrimitive.Root;
 
+// ── TabsList variants ────────────────────────────────────────────────────────
+
+const tabsListVariants = cva(
+  "inline-flex items-center justify-start text-muted-foreground",
+  {
+    variants: {
+      variant: {
+        // Default: elevated muted background pill row (existing behavior)
+        default: "h-9 rounded-[2px] bg-muted p-1",
+        // Terminal: flat bottom-border line, no background, no padding.
+        // WHY: Bloomberg-grade tab bars use an underline indicator, not pills.
+        // The border-b on the list creates the full-width baseline; each active
+        // trigger overrides its own segment with border-primary.
+        terminal: "h-8 border-b border-border bg-transparent p-0",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  },
+);
+
+interface TabsListProps
+  extends React.ComponentPropsWithoutRef<typeof TabsPrimitive.List>,
+    VariantProps<typeof tabsListVariants> {}
+
 const TabsList = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.List>,
-  React.ComponentPropsWithoutRef<typeof TabsPrimitive.List>
->(({ className, ...props }, ref) => (
+  TabsListProps
+>(({ className, variant, ...props }, ref) => (
   <TabsPrimitive.List
     ref={ref}
-    className={cn(
-      // inline-flex h-9: compact tab bar that doesn't waste vertical space
-      // bg-muted: slightly elevated from page background
-      "inline-flex h-9 items-center justify-start rounded-[2px] bg-muted p-1 text-muted-foreground",
-      className,
-    )}
+    className={cn(tabsListVariants({ variant }), className)}
     {...props}
   />
 ));
 TabsList.displayName = TabsPrimitive.List.displayName;
 
+// ── TabsTrigger variants ─────────────────────────────────────────────────────
+
+const tabsTriggerVariants = cva(
+  // WHY text-[11px] not text-xs (12px): finance mandate — all data text 11px for density.
+  "inline-flex items-center justify-center whitespace-nowrap text-[11px] font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:text-[hsl(var(--disabled-foreground))]",
+  {
+    variants: {
+      variant: {
+        // Default: pill with elevated background on active tab.
+        // WHY data-[state=active]:text-primary: --primary is amber/gold.
+        // Amber creates clear visual hierarchy over near-white inactive tabs.
+        default:
+          "rounded-sm px-3 py-1.5 data-[state=active]:bg-card data-[state=active]:text-primary",
+        // Terminal: underline indicator, no background on active tab.
+        // WHY rounded-none: terminal panels have zero border radius.
+        // WHY -mb-px: pulls the bottom border of the trigger to overlap the
+        // TabsList border-b, creating a seamless "selected underline" effect
+        // without a double border on the inactive baseline.
+        terminal:
+          "rounded-none border-b-2 border-transparent bg-transparent px-3 h-8 -mb-px text-muted-foreground hover:text-foreground data-[state=active]:border-primary data-[state=active]:text-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  },
+);
+
+interface TabsTriggerProps
+  extends React.ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger>,
+    VariantProps<typeof tabsTriggerVariants> {}
+
 const TabsTrigger = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.Trigger>,
-  React.ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger>
->(({ className, ...props }, ref) => (
+  TabsTriggerProps
+>(({ className, variant, ...props }, ref) => (
   <TabsPrimitive.Trigger
     ref={ref}
-    className={cn(
-      // WHY text-[11px] not text-xs (12px): finance mandate — all data text 11px for density.
-      // text-[11px] is an explicit override to bypass Tailwind's font-size scale lookup.
-      "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-[11px] font-medium ring-offset-background transition-all",
-      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-      // PLAN-0059 W0 F-VISUAL-027: explicit tokens (was opacity-50)
-      "disabled:pointer-events-none disabled:text-[hsl(var(--disabled-foreground))]",
-      // Active tab: amber text on elevated muted background.
-      // WHY text-primary not text-foreground: --primary is #E8A317 (amber/gold accent).
-      // Previously active and inactive tabs looked nearly identical (both near-white).
-      // Amber creates clear visual hierarchy — users instantly know which tab is active.
-      // This affects every tab across the app: Portfolio, Instrument Detail, Alerts, Settings.
-      "data-[state=active]:bg-card data-[state=active]:text-primary",
-      className,
-    )}
+    className={cn(tabsTriggerVariants({ variant }), className)}
     {...props}
   />
 ));
 TabsTrigger.displayName = TabsPrimitive.Trigger.displayName;
+
+// ── TabsContent ──────────────────────────────────────────────────────────────
 
 const TabsContent = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.Content>,

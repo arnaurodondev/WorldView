@@ -278,6 +278,11 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   // even if they had scrolled left to review historical bars.
   // Reset to false when instrumentId changes so switching instruments scrolls again.
   const hasScrolledToRealTime = useRef(false);
+  // WHY pendingScrollToRealTime: when initialBars (placeholderData) arrive before
+  // initChart completes, the data effect runs but chartRef.current is null — the
+  // scrollToRealTime call is a no-op and hasScrolledToRealTime is NOT marked done.
+  // This flag tells initChart to call scrollToRealTime as soon as the chart is ready.
+  const pendingScrollToRealTime = useRef(false);
 
   // WHY sync effect: keeps isFullscreenRef.current in step with the state value so
   // the ResizeObserver closure (which is stale by design) can read the current value.
@@ -285,12 +290,16 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     isFullscreenRef.current = isFullscreen;
   }, [isFullscreen]);
 
-  // WHY reset hasScrolledToRealTime on instrumentId change: when the user navigates
-  // to a different instrument, the chart reinitialises with new bars and should
-  // scroll to the right edge (most recent bar) on that first load.
+  // WHY reset on instrumentId OR timeframe change: both actions replace the entire
+  // dataset with setData(), which auto-fits to the oldest bar. Without resetting here,
+  // the hasScrolledToRealTime guard blocks scrollToRealTime() on the new timeframe
+  // because the ref is still true from the previous load — leaving the chart anchored
+  // at the 1985 bar. Resetting allows the data-update effect to call scrollToRealTime()
+  // on the first non-placeholder bars for each new instrument/timeframe pair. (BP-376)
   useEffect(() => {
     hasScrolledToRealTime.current = false;
-  }, [instrumentId]);
+    pendingScrollToRealTime.current = false;
+  }, [instrumentId, timeframe]);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -512,6 +521,16 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
 
         chartRef.current = chart;
         seriesRef.current = series;
+
+        // WHY pendingScrollToRealTime check here: if bars arrived (via placeholderData)
+        // before this async initChart completed, the data effect deferred the scroll.
+        // Execute it now that the chart is ready. scrollToRealTime on a chart with no
+        // data is a silent no-op — safe to call unconditionally.
+        if (pendingScrollToRealTime.current) {
+          pendingScrollToRealTime.current = false;
+          hasScrolledToRealTime.current = true;
+          chart.timeScale().scrollToRealTime();
+        }
 
         // QA iter-1 fix: apply the user's log-scale preference NOW. If the
         // user toggled `log` before the chart resolved, the dependent effect
@@ -859,14 +878,22 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
     // review historical price action. The ref persists across renders without
     // causing re-renders itself, making it the right tool here (not state).
     if (formattedBars.length > 0 && !hasScrolledToRealTime.current) {
-      hasScrolledToRealTime.current = true;
-      // WHY scrollToRealTime (not fitContent): fitContent zooms to ALL historical
-      // data from the first bar (1985 for older tickers), landing the view 35+
-      // years in the past — the "infinite scroll to the left" bug reported in QA.
-      // scrollToRealTime positions the right edge at the most-recent bar, which is
-      // the analyst's primary concern on page load. Traders open a chart to see
-      // NOW, not the 1987 crash.
-      chartRef.current?.timeScale().scrollToRealTime();
+      if (chartRef.current) {
+        hasScrolledToRealTime.current = true;
+        // WHY scrollToRealTime (not fitContent): fitContent zooms to ALL historical
+        // data from the first bar (1985 for older tickers), landing the view 35+
+        // years in the past — the "infinite scroll to the left" bug reported in QA.
+        // scrollToRealTime positions the right edge at the most-recent bar, which is
+        // the analyst's primary concern on page load. Traders open a chart to see
+        // NOW, not the 1987 crash.
+        chartRef.current.timeScale().scrollToRealTime();
+      } else {
+        // WHY pendingScrollToRealTime: when initialBars (placeholderData) arrives
+        // before initChart completes, chartRef.current is null here. We set the
+        // pending flag so initChart executes the scroll as soon as the chart is
+        // created — avoids the chart staying anchored at the oldest bar.
+        pendingScrollToRealTime.current = true;
+      }
     }
   }, [data?.bars]);
 

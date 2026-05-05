@@ -34,7 +34,7 @@
 // WHY "use client": Uses useState for input state, useQuery for search results,
 // useRouter for navigation, useRef for click-outside detection — all browser-side.
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 // WHY no Search icon import here: CommandInput from shadcn/ui already renders its own Search icon
@@ -49,6 +49,27 @@ import {
   CommandGroup,
   CommandItem,
 } from "@/components/ui/command";
+
+// ── Page navigation items (P3-1) ─────────────────────────────────────────────
+// PLAN-0071 P3-1: Static page list for the "Pages" CommandGroup.
+// Hotkey labels mirror the StatusBar shortcuts (G+D, G+P, etc.) so Cmd+K
+// is a discoverable alternative to the two-key chord sequences.
+const PAGE_ITEMS = [
+  { label: "Dashboard",  path: "/dashboard",  hotkey: "G D" },
+  { label: "Screener",   path: "/instruments", hotkey: "G S" },
+  { label: "Portfolio",  path: "/portfolio",   hotkey: "G P" },
+  { label: "Alerts",     path: "/alerts",      hotkey: "G A" },
+  { label: "Chat",       path: "/chat",        hotkey: "" },
+  { label: "Settings",   path: "/settings",    hotkey: "" },
+] as const;
+
+// ── Entity type label mapping (P3-3) ─────────────────────────────────────────
+const ENTITY_TYPE_LABEL: Record<string, string> = {
+  equity: "Company",
+  etf:    "ETF",
+  crypto: "Crypto",
+  index:  "Index",
+};
 
 // ── Recent instruments localStorage helpers ───────────────────────────────────
 // WHY store recent instruments: Bloomberg-style search remembers the last 5
@@ -90,6 +111,10 @@ export function GlobalSearch() {
   // WHY containerRef: used by the click-outside mousedown listener to determine
   // whether the click target is inside the search widget. If outside → close.
   const containerRef = useRef<HTMLDivElement>(null);
+  // WHY inputRef: used to restore focus to the search input on Escape (P3-4).
+  // When the user presses Escape to close the dropdown, we explicitly refocus
+  // the input so keyboard users don't lose context — WCAG 2.4.3.
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // ── Recent instruments (shown when query is empty) ────────────────────────
   // WHY useMemo keyed to recentKey: re-reads localStorage when the key increments
@@ -178,8 +203,15 @@ export function GlobalSearch() {
           WHY border-border/50 (was border-border): full-opacity border in a 36px
           nav bar creates a "box-inside-a-bar" effect. 50% opacity integrates the
           search box into the TopBar chrome without losing affordance. */}
-      <Command className="rounded-[2px] border border-border/50 bg-muted/20 shadow-none" shouldFilter={false}>
+      {/* PLAN-0071 P3-5: aria-label="Command palette" for screen readers (P3-5).
+          shouldFilter=false: we control filtering ourselves via the debounced query. */}
+      <Command
+        aria-label="Command palette"
+        className="rounded-[2px] border border-border/50 bg-muted/20 shadow-none"
+        shouldFilter={false}
+      >
         <CommandInput
+          ref={inputRef}
           placeholder="Search instruments… ⌘K"
           value={query}
           onValueChange={(val) => {
@@ -196,14 +228,27 @@ export function GlobalSearch() {
           // WHY no onBlur here: close is handled by the click-outside mousedown
           // listener above. An onBlur+setTimeout can race against the item's
           // onClick and cause navigation to never fire (SEARCH-001).
-          onKeyDown={(e) => {
+          onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
             if (e.key === "Escape") {
               setOpen(false);
               setQuery("");
+              // PLAN-0071 P3-4: restore focus to the input after Escape so keyboard
+              // users don't lose context — WCAG 2.4.3. The GlobalSearch is an inline
+              // widget (not a dialog), so the right focus target is the input itself.
+              inputRef.current?.focus();
             }
           }}
           className="h-7 text-[11px]"
         />
+
+        {/* PLAN-0071 P3-5: aria-live region announces result count to screen readers.
+            WHY sr-only (not hidden): the element must be in the DOM for live regions
+            to work; display:none silences them. Visually hidden keeps UI clean. */}
+        <span className="sr-only" aria-live="polite" aria-atomic="true">
+          {!showRecent && results.length > 0
+            ? `${results.length} instrument${results.length === 1 ? "" : "s"} found`
+            : ""}
+        </span>
 
         {/* Dropdown — shown on focus or when typing */}
         {open && (
@@ -257,14 +302,83 @@ export function GlobalSearch() {
               )}
 
               {/*
-                ── Global commands (PLAN-0053 Wave G T-G-7-05) ──────────────
-                Always-visible Commands group so power users can hit ⌘K and
-                select "Feedback" without leaving the keyboard. Dispatches
-                a custom event the FeedbackButton mounted in the layout
-                listens for. Custom event keeps GlobalSearch decoupled from
-                the modal's open state.
+                ── Pages (PLAN-0071 P3-1) ──────────────────────────────────
+                Keyboard-navigable page list so analysts can Cmd+K → type
+                "portfolio" → Enter without reaching for the sidebar.
+                Hotkey labels mirror the StatusBar two-key chords (G+D etc.)
+                so the palette teaches the faster shortcut passively.
               */}
-              <CommandGroup heading="Commands">
+              <CommandGroup heading="Pages">
+                {PAGE_ITEMS.map((page) => (
+                  <CommandItem
+                    key={page.path}
+                    value={`page:${page.path}`}
+                    onSelect={() => { setOpen(false); setQuery(""); router.push(page.path); }}
+                    onClick={() => { setOpen(false); setQuery(""); router.push(page.path); }}
+                    className="cursor-pointer"
+                  >
+                    <div className="flex w-full items-center gap-2">
+                      <span className="text-[11px] text-foreground">{page.label}</span>
+                      {page.hotkey && (
+                        <span className="ml-auto text-[10px] text-muted-foreground/60">{page.hotkey}</span>
+                      )}
+                    </div>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+
+              {/*
+                ── Quick Actions (PLAN-0071 P3-2) ──────────────────────────
+                High-frequency workflow triggers. Dispatches CustomEvents so
+                GlobalSearch stays decoupled from modal open-state and the
+                AI panel trigger in the layout.
+              */}
+              <CommandGroup heading="Quick Actions">
+                <CommandItem
+                  value="cmd:new-alert"
+                  onSelect={() => {
+                    setOpen(false);
+                    setQuery("");
+                    if (typeof window !== "undefined") {
+                      window.dispatchEvent(new CustomEvent("worldview:open-alert-create"));
+                    }
+                  }}
+                  onClick={() => {
+                    setOpen(false);
+                    setQuery("");
+                    if (typeof window !== "undefined") {
+                      window.dispatchEvent(new CustomEvent("worldview:open-alert-create"));
+                    }
+                  }}
+                  className="cursor-pointer"
+                >
+                  <div className="flex w-full items-center gap-2">
+                    <span className="text-[11px] text-foreground">New Alert</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground/60">G A</span>
+                  </div>
+                </CommandItem>
+                <CommandItem
+                  value="cmd:open-analyst"
+                  onSelect={() => {
+                    setOpen(false);
+                    setQuery("");
+                    if (typeof window !== "undefined") {
+                      window.dispatchEvent(new CustomEvent("worldview:open-ai-panel"));
+                    }
+                  }}
+                  onClick={() => {
+                    setOpen(false);
+                    setQuery("");
+                    if (typeof window !== "undefined") {
+                      window.dispatchEvent(new CustomEvent("worldview:open-ai-panel"));
+                    }
+                  }}
+                  className="cursor-pointer"
+                >
+                  <div className="flex w-full items-center gap-2">
+                    <span className="text-[11px] text-foreground">Open Analyst Panel</span>
+                  </div>
+                </CommandItem>
                 <CommandItem
                   value="cmd:feedback"
                   onSelect={() => {
@@ -284,10 +398,8 @@ export function GlobalSearch() {
                   className="cursor-pointer"
                 >
                   <div className="flex w-full items-center gap-2">
-                    {/* WHY text-[11px] (was text-xs=12px): command items must match
-                        the search result item density (11px terminal standard) */}
-                    <span className="text-[11px] text-foreground">Send feedback</span>
-                    <span className="ml-auto text-[10px] text-muted-foreground">⌘?</span>
+                    <span className="text-[11px] text-foreground">Send Feedback</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground/60">⌘?</span>
                   </div>
                 </CommandItem>
               </CommandGroup>
@@ -319,21 +431,16 @@ export function GlobalSearch() {
                           className="cursor-pointer"
                         >
                           <div className="flex w-full items-center justify-between gap-2">
-                            {/* WHY text-[11px] (was text-sm=14px): ticker in search results must
-                                match the terminal density standard — 14px reads as consumer-app */}
                             <span className="shrink-0 font-mono text-[11px] font-medium tabular-nums text-foreground">
                               {result.ticker}
                             </span>
-                            {/* WHY text-[10px] (was text-xs=12px): company name is secondary
-                                metadata — 10px muted label per Bloomberg label typography */}
                             <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground">
                               {result.name}
                             </span>
-                            {/* WHY text-[10px] (was text-xs=12px): exchange badge is tertiary
-                                info — 10px matches the company name density */}
-                            {result.exchange && (
-                              <span className="shrink-0 text-[10px] text-muted-foreground">
-                                {result.exchange}
+                            {/* P3-3: entity type badge — "Company" / "ETF" / "Index" / "Crypto" */}
+                            {result.type && (
+                              <span className="shrink-0 text-[9px] uppercase tracking-[0.06em] text-muted-foreground/60">
+                                {ENTITY_TYPE_LABEL[result.type] ?? result.type}
                               </span>
                             )}
                           </div>

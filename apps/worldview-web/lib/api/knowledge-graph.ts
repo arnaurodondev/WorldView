@@ -48,10 +48,16 @@ export function createKnowledgeGraphApi(t: string | undefined) {
       // the response shape. "all" is the default (no param sent).
       timeWindow = "all",
     ): Promise<EntityGraph> {
-      // WHY separate limits: depth=1 sidebar has limited visual space (320×280px
-      // SVG); fetching more than 15 relations causes N+1 lookups in S7 with no
-      // visual benefit. depth=2 uses WebGL sigma.js which handles more nodes.
-      const limit = depth === 1 ? 15 : 40;
+      // WHY separate limits per depth level:
+      // S7 returns 1-hop direct relations only (no true multi-hop traverse). The
+      // depth slider controls how many relations are returned — more relations =
+      // more neighbor nodes visible = feels "deeper". True multi-hop would require
+      // the Cypher traversal endpoint (feature-flagged, not in S9 currently).
+      // depth=1 → limit=15 (compact sidebar SVG, N+1 latency concern)
+      // depth=2 → limit=40 (Intelligence tab default, sigma.js WebGL)
+      // depth=3 → limit=80 (expanded view; S9 cap is 50, so request 50 safely)
+      const limitByDepth: Record<number, number> = { 1: 15, 2: 40, 3: 50 };
+      const limit = limitByDepth[depth] ?? 40;
 
       // WHY min_confidence for depth=1: sidebar SVG should show only high-quality
       // edges (≥0.3 confidence). The full Intelligence tab shows all edges.

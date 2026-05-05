@@ -240,16 +240,16 @@ export default function AlertsPage() {
           Radix UI handles keyboard navigation (Left/Right arrows + Home/End)
           and ARIA roles (role="tablist", role="tab", role="tabpanel"). */}
       <Tabs defaultValue={defaultTab} className="w-full">
-        <TabsList className="mb-1 grid w-full grid-cols-3">
-          <TabsTrigger value="alerts" className="gap-1.5 text-[11px]">
+        <TabsList className="shrink-0 h-9 px-0 border-b border-border rounded-none bg-transparent justify-start gap-0 w-full">
+          <TabsTrigger value="alerts" className="gap-1.5 text-[11px] h-7 px-3 data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none">
             <BellRing className="h-3 w-3" aria-hidden="true" strokeWidth={1.5} />
             Alerts
           </TabsTrigger>
-          <TabsTrigger value="news" className="gap-1.5 text-[11px]">
+          <TabsTrigger value="news" className="gap-1.5 text-[11px] h-7 px-3 data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none">
             <Newspaper className="h-3 w-3" aria-hidden="true" strokeWidth={1.5} />
             News Feed
           </TabsTrigger>
-          <TabsTrigger value="top" className="gap-1.5 text-[11px]">
+          <TabsTrigger value="top" className="gap-1.5 text-[11px] h-7 px-3 data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none">
             <TrendingUp className="h-3 w-3" aria-hidden="true" strokeWidth={1.5} />
             Top Today
           </TabsTrigger>
@@ -262,17 +262,17 @@ export default function AlertsPage() {
             with a fixed status filter via AlertHistoryTab. */}
         <TabsContent value="alerts">
           <Tabs defaultValue="active" className="w-full">
-            <TabsList className="mb-1 grid w-full grid-cols-4">
-              <TabsTrigger value="active" className="text-[11px]">
+            <TabsList className="shrink-0 h-8 px-0 border-b border-border/60 rounded-none bg-transparent justify-start gap-0 w-full">
+              <TabsTrigger value="active" className="text-[11px] h-7 px-3 data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none">
                 Active
               </TabsTrigger>
-              <TabsTrigger value="snoozed" className="text-[11px]">
+              <TabsTrigger value="snoozed" className="text-[11px] h-7 px-3 data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none">
                 Snoozed
               </TabsTrigger>
-              <TabsTrigger value="acknowledged" className="text-[11px]">
+              <TabsTrigger value="acknowledged" className="text-[11px] h-7 px-3 data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none">
                 Acknowledged
               </TabsTrigger>
-              <TabsTrigger value="history" className="text-[11px]">
+              <TabsTrigger value="history" className="text-[11px] h-7 px-3 data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none">
                 History
               </TabsTrigger>
             </TabsList>

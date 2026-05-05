@@ -1177,3 +1177,57 @@ country = iso3_to_iso2.get(_raw_country, _raw_country)
 The `get(x, x)` fallback means valid alpha-2 codes (e.g., "EU") pass through unchanged.
 
 **File**: `services/market-ingestion/src/market_ingestion/application/use_cases/execute_task.py` — `_fetch_provider_data`, `DatasetType.ECONOMIC_EVENTS` branch
+
+---
+
+## BP-386: KG relation type exact-match canonicalization is case-sensitive
+
+**Service**: knowledge-graph (S7)
+**Severity**: HIGH
+**Discovered**: 2026-05-05
+
+**Symptom**: ~30% of LLM-extracted relations have `canonical_type=NULL` in the `relations` table, appearing as untyped edges in the graph. `relation.type.proposed.v1` Kafka events generated for types that should have matched exactly.
+
+**Root cause**: `canonicalize_relation_type()` Step 1 exact-match lookup compares `raw_type` directly to `relation_type_registry.canonical_type`. LLM extraction emits lowercase types (`competes_with`, `has_executive`) but migration 0004 seeded AGE graph labels in UPPERCASE (`COMPETES_WITH`). The string comparison `"competes_with" == "COMPETES_WITH"` fails, Step 1 misses, Step 2 ANN may also miss on close embeddings → `canonical_type=NULL`.
+
+**Fix**:
+```python
+# In canonicalize_relation_type(), before Step 1:
+normalized_raw_type = raw_type.lower().strip().replace(" ", "_")
+# Use normalized_raw_type for exact lookup
+result = await registry_repo.find_by_canonical_type(normalized_raw_type)
+```
+Plus a data migration to normalize all `relation_type_registry.canonical_type` values to lowercase, and all existing `relations.canonical_type` values.
+
+**Prevention**: Always normalize string keys before exact database lookups when the source (LLM) and target (seed data) may use different casing conventions.
+
+**File**: `services/knowledge-graph/src/knowledge_graph/application/blocks/canonicalization.py` — `canonicalize_relation_type()`
+
+---
+
+## BP-387: KG SummaryWorker generates 0 summaries due to NULL evidence_text + unregistered model ID
+
+**Service**: knowledge-graph (S7)
+**Severity**: HIGH
+**Discovered**: 2026-05-05
+
+**Symptom**: `SummaryWorker` logs `summary_worker_complete` with `summaries_created=0, skipped_null_evidence_text=N` for all N stale relations. No relation summaries ever generated.
+
+**Root cause**: Two compounding issues:
+1. `relation_evidence_raw` rows inserted before BP-346 (evidence_text propagation fix) have `evidence_text=NULL` and `canonicalized_evidence_text=NULL`. The worker's list comprehension `[str(e.get("evidence_text", "")) or str(e.get("canonicalized_evidence_text", "")) for e in rows if e.get("evidence_text") or e.get("canonicalized_evidence_text")]` fails because the `if` guard checks the raw value before any string coercion — NULL values fail both guards → all texts filtered → `evidence_texts=[]` → `skipped_null_evidence_text` counter incremented → `continue`.
+2. `_SUMMARY_MODEL_ID = "kg-summary-v1"` may not be registered in `FallbackChainClient` routing table → `extract()` returns `None` silently → `summaries_failed` path even when evidence_text is non-null.
+
+**Fix**:
+```python
+# Normalize to use either column
+evidence_texts = []
+for e in evidence_rows:
+    text = e.get("evidence_text") or e.get("canonicalized_evidence_text")
+    if text:
+        evidence_texts.append(str(text))
+```
+And verify `kg-summary-v1` is mapped to a valid model in `FallbackChainClient` config; add a fallback to the default extraction model if unregistered.
+
+**Prevention**: When writing evidence fallback filters with `or`, test with rows where the PRIMARY column is NULL — the `dict.get(key, "")` pattern evaluates the empty string (`""`) as falsy if converted back to bool, but here the filter checks `.get()` output directly before conversion.
+
+**File**: `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/summary.py` — `SummaryWorker.run()` evidence text filter

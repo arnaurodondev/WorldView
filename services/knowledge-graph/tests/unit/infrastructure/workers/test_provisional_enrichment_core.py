@@ -343,9 +343,14 @@ class TestPersistEnrichment:
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
         session, repos = _make_persist_session()
-        # Configure find_exact: first LLM alias collides with a different entity.
+        # find_exact call sequence (BP-384 dedup check added a leading call for the
+        # canonical name itself before the LLM alias collision checks):
+        #   call 0 — canonical name dedup check ("apple inc.") → None (no existing entity)
+        #   call 1 — LLM alias "apple" → collides with a different entity → skip
+        #   call 2 — LLM alias "aapl inc." → clean → insert
         repos.alias_find_exact = AsyncMock(
             side_effect=[
+                None,  # "apple inc." canonical dedup → no match
                 {"entity_id": _EXISTING_OTHER_ID},  # 'apple' already maps elsewhere → skip
                 None,  # 'aapl inc.' clean → insert
             ]
@@ -369,6 +374,36 @@ class TestPersistEnrichment:
 
         # canonical + 1 surviving LLM alias = 2 inserts
         assert repos.alias_insert.await_count == 2
+
+    async def test_dedup_returns_existing_entity_without_creating(self) -> None:
+        """BP-384: if canonical-name already maps to an existing entity, return it."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        # Canonical dedup check finds Apple Inc. already exists
+        repos.alias_find_exact = AsyncMock(return_value={"entity_id": _EXISTING_OTHER_ID})
+        profile = {
+            "canonical_name": "Apple Inc.",
+            "entity_type": "company",
+            "ticker": "AAPL",
+            "isin": None,
+            "aliases": ["Apple"],
+        }
+
+        with _patch_persist_repos(repos):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Apple Inc.",
+                profile=profile,
+                embedding=None,
+            )
+
+        # Must return the existing entity_id, not a new one
+        assert result == _EXISTING_OTHER_ID
+        # No entity creation, no alias inserts (returned early)
+        repos.canonical_create.assert_not_awaited()
+        repos.alias_insert.assert_not_awaited()
 
     async def test_truncates_llm_aliases_to_first_five(self) -> None:
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core

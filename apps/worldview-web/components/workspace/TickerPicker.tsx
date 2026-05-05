@@ -89,10 +89,14 @@ export function TickerPicker({ panelId, symbol }: TickerPickerProps) {
   // ── Select handler ──────────────────────────────────────────────────────────
   const handleSelect = useCallback(
     (entityId: string, ticker: string, name: string, instrumentId: string) => {
-      // Broadcast to all panels in the same color group
-      setActiveSymbol(panelId, ticker, instrumentId);
-      // Persist to recents so the picker remembers it next time
-      saveRecentInstrument(entityId, ticker, name);
+      // Broadcast to all panels in the same color group — pass entityId so the
+      // graph panel receives the real KG UUID instead of a synthetic slug (BP-new).
+      setActiveSymbol(panelId, ticker, instrumentId, entityId);
+      // WHY pass instrumentId to saveRecentInstrument: workspace chart needs the real
+      // instrument_id to fetch OHLCV — the synthetic `ins-{ticker}` only works for
+      // seeded demo instruments. Storing it here avoids a 422 when the user reopens
+      // the picker and selects from recents (BP-372: recents used synthetic IDs).
+      saveRecentInstrument(entityId, ticker, name, instrumentId);
       // Reset and close
       setQuery("");
       setOpen(false);
@@ -165,7 +169,10 @@ export function TickerPicker({ panelId, symbol }: TickerPickerProps) {
                     key={r.entityId}
                     value={r.ticker}
                     onSelect={() =>
-                      handleSelect(r.entityId, r.ticker, r.name, `ins-${r.ticker.toLowerCase()}`)
+                      // WHY r.instrumentId fallback: recents saved before BP-372 fix
+                      // may lack instrumentId. Fall back to synthetic `ins-{ticker}` so
+                      // demo-seeded instruments still resolve (they use that ID format).
+                      handleSelect(r.entityId, r.ticker, r.name, r.instrumentId ?? `ins-${r.ticker.toLowerCase()}`)
                     }
                     className="cursor-pointer"
                   >

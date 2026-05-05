@@ -150,6 +150,15 @@ export default function AppLayout({ children }: AppLayoutProps) {
   // refocus, focus falls back to <body> and keyboard users lose context.
   const askAiButtonRef = useRef<HTMLButtonElement | null>(null);
   const handleAskAiOpen = useCallback(() => setAskAiOpen(true), []);
+
+  // PLAN-0071 P3-2: GlobalSearch "Open Analyst Panel" quick action dispatches
+  // this event so GlobalSearch stays decoupled from layout state.
+  useEffect(() => {
+    function handleOpenAiPanel() { setAskAiOpen(true); }
+    window.addEventListener("worldview:open-ai-panel", handleOpenAiPanel);
+    return () => window.removeEventListener("worldview:open-ai-panel", handleOpenAiPanel);
+  }, []);
+
   const handleAskAiClose = useCallback(() => {
     setAskAiOpen(false);
     // requestAnimationFrame ensures the trigger is in the DOM and focusable

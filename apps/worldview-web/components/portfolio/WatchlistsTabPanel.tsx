@@ -97,12 +97,12 @@ function WatchlistMemberRow({
     // only on row hover, keeping the table uncluttered during the primary read flow.
     <tr
       className="h-[22px] hover:bg-muted/40 cursor-pointer transition-colors group/row"
-      onClick={() => onRowClick(member.entity_id)}
+      onClick={() => onRowClick(member.instrument_id ?? member.entity_id)}
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onRowClick(member.entity_id);
+          onRowClick(member.instrument_id ?? member.entity_id);
         }
       }}
     >
@@ -414,6 +414,7 @@ function AddSymbolBar({
           className="flex-1 bg-transparent font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground/60"
           aria-label="Search to add instrument"
           role="combobox"
+          autoComplete="off"
           aria-autocomplete="list"
           aria-controls="watchlist-search-listbox"
           aria-expanded={showDropdown && hasResults}
@@ -690,8 +691,8 @@ export function WatchlistsTabPanel({
     },
   });
 
-  function handleRowClick(entityId: string) {
-    router.push(`/instruments/${encodeURIComponent(entityId)}`);
+  function handleRowClick(id: string) {
+    router.push(`/instruments/${encodeURIComponent(id)}`);
   }
 
   function handleDeleteMember(entityId: string) {
@@ -812,7 +813,7 @@ export function WatchlistsTabPanel({
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col bg-background">
       {/* ── Watchlist tab bar ────────────────────────────────────────────── */}
       {/* WHY custom tab bar (not shadcn Tabs): the outer portfolio page already
           uses shadcn Tabs, and nesting Radix Tabs inside Tabs causes keyboard

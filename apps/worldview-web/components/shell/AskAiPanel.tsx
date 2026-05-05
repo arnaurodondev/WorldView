@@ -40,19 +40,32 @@ import { Button } from "@/components/ui/button";
 interface AskAiPanelProps {
   onClose: () => void;
   /**
-   * Optional one-line greeting shown above the input slot — used by the
-   * instrument-page floater (PLAN-0050 T-A-1-04) to surface the page
-   * context ("Context: AAPL · price $193 · 30d move +4.2% · P/E 28.6").
-   * Purely decorative — it is NOT sent to the chat backend automatically;
-   * users still type their question, and may copy/edit the hint into
-   * their first message if they want the model to see it verbatim.
+   * PLAN-0071 P2A-2: Structured instrument context. When provided, the panel:
+   *   1. Displays a context strip ("AAPL · $193.42 · +1.2% · P/E 28.6")
+   *   2. Includes system_context in every POST body so the model is context-aware
+   * Callers on the instrument page pass these from their CompanyOverview query.
+   */
+  ticker?: string;
+  price?: number;
+  priceChangePct?: number;
+  fundamentals?: { pe?: number | null; marketCap?: number | null };
+  /**
+   * Optional raw context hint override. When `ticker` is present, a hint is
+   * derived automatically — this prop only needed for non-instrument contexts.
    */
   contextHint?: string;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
+export function AskAiPanel({
+  onClose,
+  ticker,
+  price,
+  priceChangePct,
+  fundamentals,
+  contextHint,
+}: AskAiPanelProps) {
   const router = useRouter();
   const { accessToken } = useAuth();
 
@@ -60,6 +73,23 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
   const [response, setResponse] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // PLAN-0071 P2A-3: build system_context from structured props when on an instrument page.
+  // Returns undefined (not included in body) when no ticker is available.
+  const buildSystemContext = useCallback((): string | undefined => {
+    if (!ticker) return undefined;
+    const sign = priceChangePct != null && priceChangePct >= 0 ? "+" : "";
+    const pricePart = price != null
+      ? ` at $${price.toFixed(2)}${priceChangePct != null ? ` (${sign}${priceChangePct.toFixed(2)}%)` : ""}`
+      : "";
+    const pePart = fundamentals?.pe != null ? ` P/E: ${fundamentals.pe.toFixed(1)}.` : "";
+    return `User is viewing ${ticker}${pricePart}.${pePart} Answer in the context of this instrument.`;
+  }, [ticker, price, priceChangePct, fundamentals]);
+
+  // Derive the display hint: prefer explicit contextHint, fall back to structured props.
+  const displayHint = contextHint ?? (ticker
+    ? `Context: ${ticker}${price != null ? ` · $${price.toFixed(2)}` : ""}${priceChangePct != null ? ` · ${priceChangePct >= 0 ? "+" : ""}${priceChangePct.toFixed(1)}%` : ""}${fundamentals?.pe != null ? ` · P/E ${fundamentals.pe.toFixed(1)}` : ""}`
+    : undefined);
 
   // WHY useRef for EventSource: the SSE connection is imperative infrastructure,
   // not UI state. Storing it in a ref avoids unnecessary re-renders on connect/disconnect.
@@ -143,6 +173,9 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
         },
         body: JSON.stringify({
           message: query.trim(),
+          // PLAN-0071 P2A-3: include system_context when on an instrument page
+          // so the model answers in context without the user re-stating the ticker.
+          ...(buildSystemContext() ? { system_context: buildSystemContext() } : {}),
           // WHY no thread_id: mini-panel is stateless (no conversation history).
           // Full conversation threads are in the Chat page (/chat).
         }),
@@ -217,7 +250,7 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
       setError(err instanceof Error ? err.message : "Chat failed. Please try again.");
       setIsStreaming(false);
     }
-  }, [query, isStreaming, accessToken]);
+  }, [query, isStreaming, accessToken, buildSystemContext]);
 
   // Send on Enter (Shift+Enter = newline)
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -248,7 +281,7 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
           <div className="flex h-5 w-5 items-center justify-center rounded-[2px] bg-[hsl(var(--accent-ai)/0.20)] ring-1 ring-[hsl(var(--accent-ai)/0.30)]">
             <Bot className="h-3 w-3 text-[hsl(var(--accent-ai))]" />
           </div>
-          <span className="text-xs font-semibold text-foreground">Ask AI</span>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-foreground">Analyst</span>
         </div>
         <div className="flex items-center gap-1">
           {/* Link to full chat page */}
@@ -281,9 +314,9 @@ export function AskAiPanel({ onClose, contextHint }: AskAiPanelProps) {
           We do NOT auto-prepend it to the user's typed message — that
           would be magical and could leak page state into transcripts the
           user might not want shared. */}
-      {contextHint && (
+      {displayHint && (
         <div className="border-t border-border bg-muted/30 px-3 py-1.5 text-[10px] text-muted-foreground">
-          {contextHint}
+          {displayHint}
         </div>
       )}
 
