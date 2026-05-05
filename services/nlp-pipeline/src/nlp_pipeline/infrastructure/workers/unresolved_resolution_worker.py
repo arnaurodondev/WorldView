@@ -125,7 +125,7 @@ _ELIGIBLE_CLASSES: frozenset[str] = frozenset(
 
 _NON_ENTITY_NOISE_REASON = "non_entity_creating_class"
 
-# PLAN-0057 Wave B-3 / F-CRIT-05.
+# PLAN-0057 Wave B-3 / F-CRIT-05 — original fix; PLAN-0072 T-72-1-05 hardening.
 #
 # The previous prompt asked whether a mention "would have its own Wikipedia
 # article", which the LLM interpreted strictly: it rejected legitimate
@@ -138,10 +138,13 @@ _NON_ENTITY_NOISE_REASON = "non_entity_creating_class"
 #     business units, funds/ETFs, indices, vehicles, regulators, central
 #     banks, government bodies, supra-national institutions, named persons,
 #     named financial products);
-#   • spells out *what counts as noise* (generic anaphora, calendar
-#     fragments, common-noun event words, parser fragments);
-#   • shows four worked examples (two positive, two negative) covering
-#     the exact failure modes the audit flagged;
+#   • spells out *what counts as noise* with explicit negative examples for
+#     the classes that leaked through in production (PLAN-0072 audit):
+#     pronouns, generic roles, financial jargon, media-outlet attribution;
+#   • adds a ``confidence`` field (0.0-1.0) to the output schema; callers
+#     treat confidence < 0.7 as noise even when is_entity=true;
+#   • shows five worked examples (two positive, three negative) covering
+#     the exact failure modes the audits flagged;
 #   • takes both ``surface`` (the lexical mention) and ``context`` (the
 #     surrounding domain text — pulled from the document/section title via
 #     ``EntityMentionRepository.get_unresolved_batch_with_context``) so the
@@ -171,28 +174,40 @@ _CLASSIFICATION_SYSTEM_PROMPT = (
     "named option product, etc.)\n"
     "\n"
     "Treat as NOISE (is_entity=false) any of:\n"
-    '  - generic noun phrases ("the company", "shares", "investors")\n'
+    '  - pronouns and generic anaphora ("he", "she", "they", "it", "we", '
+    '"the company", "the firm")\n'
+    "  - generic roles or groups without a specific referent "
+    '("analysts", "management", "investors", "executives", "regulators", '
+    '"shareholders")\n'
+    "  - financial jargon that names a concept, not a trackable entity "
+    '("constant currency", "organic growth", "market share", "guidance")\n'
+    "  - media-outlet names when used as attribution rather than as the "
+    'subject of a relation ("Bloomberg", "Reuters", "Seeking Alpha", '
+    '"The Motley Fool", "CNBC", "MarketWatch")\n'
     "  - pure number, date, or ticker fragments without context "
     '("Q3", "10-K", "FY24")\n'
-    '  - common-noun event words ("merger", "earnings", "guidance")\n'
+    '  - common-noun event words ("merger", "earnings", "IPO")\n'
     "  - misparsed sentence fragments or partial phrases\n"
     "\n"
     "Worked examples:\n"
     '  - surface="iShares Core S&P 500 ETF", '
     'context="The iShares Core S&P 500 ETF (IVV) saw inflows of $1.2B." '
-    '→ {"is_entity": true, "reason": "named investable fund"}\n'
+    '→ {"is_entity": true, "confidence": 0.98, "reason": "named investable fund"}\n'
     '  - surface="MAS", '
     'context="Singapore\'s MAS raised the benchmark rate by 25bps." '
-    '→ {"is_entity": true, "reason": "Monetary Authority of Singapore — regulator"}\n'
-    '  - surface="the company", '
+    '→ {"is_entity": true, "confidence": 0.95, "reason": "Monetary Authority of Singapore — regulator"}\n'
+    '  - surface="analysts", '
     'context="Analysts said the company would miss guidance." '
-    '→ {"is_entity": false, "reason": "generic anaphora, not a named entity"}\n'
+    '→ {"is_entity": false, "confidence": 0.98, "reason": "generic role, not a named entity"}\n'
+    '  - surface="constant currency", '
+    'context="Revenue grew 8% on a constant currency basis." '
+    '→ {"is_entity": false, "confidence": 0.97, "reason": "financial jargon, not a trackable entity"}\n'
     '  - surface="Q3", '
     'context="Q3 revenue rose 8% year-over-year." '
-    '→ {"is_entity": false, "reason": "calendar fragment, not a named entity"}\n'
+    '→ {"is_entity": false, "confidence": 0.99, "reason": "calendar fragment, not a named entity"}\n'
     "\n"
     "Respond with a single JSON object ONLY (no prose, no code fences). "
-    'Schema: {"is_entity": <true|false>, "reason": "<short rationale>"}'
+    'Schema: {"is_entity": <true|false>, "confidence": <0.0-1.0>, "reason": "<short rationale>"}'
 )
 
 # Dynamic suffix template — only the per-mention variable part.
@@ -704,6 +719,12 @@ class UnresolvedResolutionWorker:
                 raw = response.json().get("response", "")
                 parsed = _extract_json_object(raw)
                 is_entity = bool(parsed.get("is_entity", False))
+                # PLAN-0072 T-72-1-05: confidence threshold — low-confidence
+                # "entity" classifications are treated as noise to reduce leakage
+                # of generic terms ("analysts", "management") into the KG.
+                confidence = float(parsed.get("confidence", 1.0))
+                if confidence < 0.7:
+                    is_entity = False
                 reason: str | None = str(parsed.get("reason", "")) or None
             except (json.JSONDecodeError, KeyError, ValueError) as parse_exc:
                 # F-103 fix: log the raw LLM response (truncated) so future
@@ -811,6 +832,10 @@ class UnresolvedResolutionWorker:
             raw = msg.get("content") or msg.get("reasoning_content") or ""
             parsed = _extract_json_object(raw)
             is_entity = bool(parsed.get("is_entity", False))
+            # PLAN-0072 T-72-1-05: same confidence threshold as the Ollama path.
+            confidence = float(parsed.get("confidence", 1.0))
+            if confidence < 0.7:
+                is_entity = False
             reason: str | None = str(parsed.get("reason", "")) or None
         except (json.JSONDecodeError, KeyError, ValueError) as parse_exc:
             # F-103 fix: surface the raw LLM response so failures are diagnosable.

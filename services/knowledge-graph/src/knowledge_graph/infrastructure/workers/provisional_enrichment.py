@@ -5,16 +5,20 @@ ProvisionalQueuedConsumer which reacts to entity.provisional.queued.v1 events
 emitted by S6 UnresolvedResolutionWorker (PLAN-0061 Wave E).
 
 Processes ``provisional_entity_queue`` rows with ``status='pending'``:
-  1. Use ExtractionClient (FallbackChainClient) to generate entity profile
+  1. Two-layer noise pre-filter (PLAN-0072 T-72-1-01):
+     Layer 1: static blocklist (O(1), no LLM cost).
+     Layer 2: cheap meta-llama/8B binary classifier (fail-open on error).
+     Noise rows → status='noise' (new terminal state, migration 0020).
+  2. Use ExtractionClient (FallbackChainClient) to generate entity profile
      (canonical_name, entity_type, ticker, ISIN).
-  2. INSERT into canonical_entities.
-  3. INSERT mechanical aliases (canonical_name, ticker, ISIN if available).
-  4. INSERT 2-3 entity_embedding_state rows (financial_instrument: 3; others: 2).
-  5. UPDATE provisional_entity_queue.status → 'resolved'.
-  6. UPDATE relation_evidence_raw to clear entity_provisional flag.
-  7. EMIT entity.canonical.created.v1 via outbox.
-  8. EMIT entity.dirtied.v1 via direct Kafka produce.
-  9. Log to llm_usage_log.
+  3. INSERT into canonical_entities.
+  4. INSERT mechanical aliases (canonical_name, ticker, ISIN if available).
+  5. INSERT 2-3 entity_embedding_state rows (financial_instrument: 3; others: 2).
+  6. UPDATE provisional_entity_queue.status → 'resolved'.
+  7. UPDATE relation_evidence_raw to clear entity_provisional flag.
+  8. EMIT entity.canonical.created.v1 via outbox.
+  9. EMIT entity.dirtied.v1 via direct Kafka produce.
+  10. Log to llm_usage_log.
 
 LLM alias collision validation: reject an LLM-generated alias if it maps
 to a different entity in entity_aliases.
@@ -26,12 +30,17 @@ hot-path ProvisionalQueuedConsumer can reuse the same LLM + DB steps.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
+
+import httpx
 
 from knowledge_graph.infrastructure.metrics.prometheus import (
     s7_provisional_enrichment_failed_total,
     s7_provisional_enrichment_success_total,
+    s7_provisional_noise_filtered_total,
+    s7_provisional_noise_llm_filtered_total,
     s7_provisional_stuck_recovered_total,
 )
 from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
@@ -44,6 +53,72 @@ if TYPE_CHECKING:
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+# ---------------------------------------------------------------------------
+# PLAN-0072 T-72-1-01 — two-layer noise pre-filter
+# ---------------------------------------------------------------------------
+
+# Layer 1: obvious noise eliminated with O(1) frozenset lookup (no LLM cost).
+_NOISE_BLOCKLIST: frozenset[str] = frozenset(
+    {
+        # Pronouns / generic references
+        "he",
+        "she",
+        "they",
+        "it",
+        "we",
+        "us",
+        "his",
+        "her",
+        "their",
+        "him",
+        "them",
+        "who",
+        "what",
+        # Generic finance jargon that produce useless nodes
+        "constant currency",
+        "organic growth",
+        "analysts",
+        "management",
+        "investors",
+        "shareholders",
+        "executives",
+        "regulators",
+        "the company",
+        "company",
+        "the firm",
+        "firm",
+        "business",
+        # Fake entities from publication names used as subjects
+        "simply wall st",
+        "seeking alpha",
+        "the motley fool",
+        "bloomberg",
+        "reuters",
+        "cnbc",
+        "marketwatch",
+        "barron's",
+        "wsj",
+        # Noise mentions of generic geographic / institutional terms
+        "street",
+        "market",
+        "sector",
+        "industry",
+        "index",
+    }
+)
+
+# Layer 2: cheap binary classifier model (fast, low cost vs. full DeepSeek extraction).
+_NOISE_CLASSIFIER_MODEL_ID = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+
+_NOISE_CLASSIFIER_SYSTEM_PROMPT = (
+    "Is the MENTION a specific named financial entity "
+    "(company, person, financial instrument, index, currency, or commodity)? "
+    "Do NOT classify generic roles, concepts, pronouns, media outlets, "
+    "or financial jargon as entities. "
+    "Respond ONLY with JSON: "
+    '{"is_entity": true/false, "confidence": 0.0-1.0}'
+)
 
 
 class DirectProducerProtocol(Protocol):
@@ -68,6 +143,10 @@ class ProvisionalEnrichmentWorker:
         max_retries:       Rows exceeding this failure count become 'failed' (terminal).
                            PLAN-0061 T-A-3.
         concurrency:       Max concurrent LLM calls in Phase 2. PLAN-0061 T-A-4.
+        noise_classifier_api_key:      DeepInfra API key for Layer 2 cheap classifier.
+                                       When empty, Layer 2 is skipped (fail-open to Layer 3).
+        noise_classifier_api_base_url: Base URL for the Layer 2 classifier endpoint.
+        noise_classifier_timeout_s:    Per-call timeout for the Layer 2 HTTP request.
 
     """
 
@@ -82,6 +161,9 @@ class ProvisionalEnrichmentWorker:
         batch_limit: int = 50,
         max_retries: int = 5,
         concurrency: int = 5,
+        noise_classifier_api_key: str = "",
+        noise_classifier_api_base_url: str = "https://api.deepinfra.com/v1/openai",
+        noise_classifier_timeout_s: float = 10.0,
     ) -> None:
         self._sf = session_factory
         self._embed_model_id = embedding_model_id
@@ -102,12 +184,25 @@ class ProvisionalEnrichmentWorker:
         self._batch_limit = batch_limit
         self._max_retries = max_retries
         self._concurrency = concurrency
+        # Layer 2 noise classifier state (PLAN-0072 T-72-1-01).
+        # A persistent client reuses TCP connections across calls in a batch.
+        self._noise_api_key = noise_classifier_api_key
+        self._noise_api_base = noise_classifier_api_base_url.rstrip("/")
+        self._noise_timeout_s = noise_classifier_timeout_s
+        # Single shared client per worker instance; re-created lazily so tests
+        # that never call run() do not incur connection overhead.
+        self._noise_http_client: httpx.AsyncClient | None = None
 
     async def run(self) -> None:
         """Enrich pending provisional entity queue entries.
 
         ARCH-003 fix: read→release→I/O→acquire→write pattern.
         Session is NOT held open during external LLM / embedding HTTP calls.
+
+        PLAN-0072 T-72-1-01 — noise pre-filter between Phase 1 and Phase 2:
+          Layer 1 (O(1)): static blocklist rejects obvious noise without LLM.
+          Layer 2 (async): cheap meta-llama/8B binary classifier (fail-open).
+          Noise rows → 'noise' (terminal) before the expensive Layer 3 call.
         """
         from sqlalchemy import text
 
@@ -168,6 +263,32 @@ WHERE queue_id = :queue_id
                 )
             await session.commit()
         # Session released — no DB connection held during LLM calls.
+
+        # ── Phase 1.5: Noise pre-filter (no session held) ──────────────────
+        # BP-384: noise filter runs BEFORE dedup/persist — noise rows never
+        # reach persist_enrichment. Layer 1 is O(1); Layer 2 is async HTTP.
+        if pending_rows:
+            layer1_noise_ids, layer2_noise_ids, pending_rows = await self._run_noise_filters(pending_rows)
+            all_noise_ids = layer1_noise_ids + layer2_noise_ids
+            if all_noise_ids:
+                async with self._sf() as session:
+                    for noise_id in all_noise_ids:
+                        await session.execute(
+                            text("""
+UPDATE provisional_entity_queue
+SET status = 'noise', resolved_at = now()
+WHERE queue_id = CAST(:qid AS uuid)
+  AND status = 'processing'
+"""),
+                            {"qid": str(noise_id)},
+                        )
+                    await session.commit()
+                logger.info(  # type: ignore[no-any-return]
+                    "provisional_enrichment_noise_filtered",
+                    layer1_count=len(layer1_noise_ids),
+                    layer2_count=len(layer2_noise_ids),
+                    remaining_for_extraction=len(pending_rows),
+                )
 
         # ── Phase 2: LLM extraction + embedding (no session held) ──
         semaphore = asyncio.Semaphore(self._concurrency)
@@ -351,3 +472,98 @@ WHERE status = 'processing'
     ) -> list[float] | None:
         """Delegate to core.compute_embedding."""
         return await core.compute_embedding(self._llm, entity_id, source_text, self._embed_model_id)
+
+    # -----------------------------------------------------------------------
+    # PLAN-0072 T-72-1-01 — noise pre-filter helpers
+    # -----------------------------------------------------------------------
+
+    async def _run_noise_filters(
+        self,
+        pending_rows: list[tuple[UUID, str, str, str, int]],
+    ) -> tuple[list[UUID], list[UUID], list[tuple[UUID, str, str, str, int]]]:
+        """Apply Layer 1 (blocklist) and Layer 2 (cheap LLM) noise filters.
+
+        Returns (layer1_noise_ids, layer2_noise_ids, remaining_rows).
+        Rows in noise lists have been excluded from remaining_rows.
+        Layer 2 is fail-open: any exception falls through to Layer 3, never
+        silently drops a row (BP-384: noise check before persist_enrichment).
+        """
+        layer1_noise_ids: list[UUID] = []
+        layer2_candidates: list[tuple[UUID, str, str, str, int]] = []
+
+        # Layer 1 — O(1) frozenset lookup
+        for row in pending_rows:
+            queue_id, mention_text, _mc, _ctx, _rc = row
+            if mention_text.lower().strip() in _NOISE_BLOCKLIST:
+                layer1_noise_ids.append(queue_id)
+                s7_provisional_noise_filtered_total.inc()
+            else:
+                layer2_candidates.append(row)
+
+        # Layer 2 — cheap LLM binary classification (fail-open)
+        layer2_noise_ids: list[UUID] = []
+        layer2_pass: list[tuple[UUID, str, str, str, int]] = []
+
+        for row in layer2_candidates:
+            queue_id, mention_text, _mc, _ctx, _rc = row
+            is_noise = await self._layer2_classify(mention_text)
+            if is_noise:
+                layer2_noise_ids.append(queue_id)
+                s7_provisional_noise_llm_filtered_total.inc()
+            else:
+                layer2_pass.append(row)
+
+        return layer1_noise_ids, layer2_noise_ids, layer2_pass
+
+    async def _layer2_classify(self, mention_text: str) -> bool:
+        """Call the cheap LLM classifier to decide if mention_text is noise.
+
+        Returns True if the mention should be treated as noise.
+        Fail-open: any network/parse error returns False (proceed to Layer 3).
+
+        Decision rules:
+          - ``is_entity=false``  → noise
+          - ``confidence < 0.7`` → noise (low-confidence entity = treat as noise)
+          - Layer 2 error        → False (fail-open, warning logged)
+        """
+        if not self._noise_api_key:
+            # No API key → Layer 2 unavailable, fall through to Layer 3.
+            return False
+
+        if self._noise_http_client is None:
+            self._noise_http_client = httpx.AsyncClient(timeout=httpx.Timeout(self._noise_timeout_s))
+
+        user_content = f'MENTION: "{mention_text[:200]}"'
+        try:
+            response = await asyncio.wait_for(
+                self._noise_http_client.post(
+                    f"{self._noise_api_base}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._noise_api_key}"},
+                    json={
+                        "model": _NOISE_CLASSIFIER_MODEL_ID,
+                        "messages": [
+                            {"role": "system", "content": _NOISE_CLASSIFIER_SYSTEM_PROMPT},
+                            {"role": "user", "content": user_content},
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.0,
+                        "max_tokens": 64,
+                    },
+                ),
+                timeout=self._noise_timeout_s,
+            )
+            response.raise_for_status()
+            raw = response.json()["choices"][0]["message"].get("content", "")
+            parsed = json.loads(raw)
+            is_entity = bool(parsed.get("is_entity", True))
+            confidence = float(parsed.get("confidence", 1.0))
+            return not is_entity or confidence < 0.7
+        except Exception as exc:
+            # Fail-open: any error → proceed to Layer 3, never drop the row.
+            logger.warning(  # type: ignore[no-any-return]
+                "provisional_enrichment_noise_classifier_error",
+                mention_text=mention_text[:80],
+                error=str(exc),
+                action="fail_open_to_layer3",
+            )
+            return False

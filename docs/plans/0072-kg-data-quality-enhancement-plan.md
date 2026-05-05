@@ -1,10 +1,13 @@
 # PLAN-0072: Knowledge Graph Data Quality Enhancement
 
-**Status:** draft
+**Status:** in-progress
 **Created:** 2026-05-05
+**Updated:** 2026-05-05
 **Owner:** Knowledge Graph team
 **PRD:** Investigation reports from 2026-05-05 sessions (no formal PRD — fixes derive from confirmed root causes)
-**Waves:** 4 implementation waves (amended 2026-05-05: added Finding-4 items + hybrid depth approach)
+**Waves:** 3 implementation waves (revised 2026-05-05: Wave 4 evidence promotion deferred to PRD-0074; hub node pollution deferred to PRD-0073/0074)
+
+> **Migration ordering constraint (R-005):** PLAN-0072 migrations will occupy revision IDs **0020–0021** (two migrations, after removing data-repair steps not needed on a fresh-start cluster). IDs 0022–0023 are intentionally unused. PLAN-0073 uses **0024–0027**. Do not start PLAN-0073 Wave A until PLAN-0072 is fully applied to `intelligence_db`.
 
 ---
 
@@ -20,7 +23,7 @@ Two /investigate sessions (2026-05-05) identified a cluster of correctness and d
 | KQ-02 | Relation type case mismatch (seeded UPPERCASE vs LLM lowercase) breaks exact canonicalization | HIGH | `canonicalize_relation_type` Step 1 exact match is case-sensitive; LLM emits lowercase; seed has both |
 | KQ-03 | Evidence text stored in DB but never returned in graph API response | MEDIUM | `GraphNeighborhoodResponse` / `RelationResponse` schema missing `evidence_snippets` field; no JOIN added |
 | KQ-04 | SummaryWorker (Worker 13C) generates 0 summaries despite 3,582 stale relations | HIGH | `skipped_null_evidence_text` path hit silently; `evidence_text` column NULL on relation_evidence_raw rows generated before BP-346 fix propagated; also missing LLM model registration for `kg-summary-v1` |
-| KQ-05 | Hub node pollution — generic nodes ("US", "analysts") acquire 60-72 relations | MEDIUM | No confidence threshold applied to hub-to-generic relations; no entity-quality score |
+| ~~KQ-05~~ | ~~Hub node pollution — generic nodes ("US", "analysts") acquire 60-72 relations~~ | ~~MEDIUM~~ | **Deferred to PRD-0073/0074** — entity quality scoring requires structured enrichment data that PRD-0073 will introduce. |
 
 ### Issues deferred to /prd session
 
@@ -29,11 +32,12 @@ Two /investigate sessions (2026-05-05) identified a cluster of correctness and d
 
 ### Amended scope (2026-05-05)
 
-Four items added from Finding 4 investigation:
-- **4a** (T-72-1-04): Retroactive noise entity cleanup migration — delete isolated noise entities already in DB
-- **4b**: Added to T-72-1-03 — mark `confidence_stale=true` on all relations after type normalization so Worker 13A auto-recalculates
+Three items added from Finding 4 investigation:
+- ~~**4a** (T-72-1-04): Retroactive noise entity cleanup migration — delete isolated noise entities already in DB~~ — **removed**: cluster is always relaunched from scratch; no existing data to repair
+- ~~**4b**: Added to T-72-1-03 — mark `confidence_stale=true` on all relations after type normalization~~ — **removed**: T-72-1-03 removed; no UPPERCASE relations exist on a fresh-start cluster
 - **4c** (T-72-1-05): UnresolvedResolutionWorker prompt hardening — reduce noise leakage from S6 side
-- **4d** (Wave 4): Evidence promotion pipeline — batch promote `relation_evidence_raw` to immutable `relation_evidence` partition
+
+**4d (evidence promotion pipeline) has been deferred to PRD-0074.** The `relation_evidence_raw → relation_evidence` promotion requires a new unique index on `relation_evidence (relation_id, doc_id, evidence_date)` — this index is better designed alongside PRD-0074's evidence-analytics and temporal-decay work, which will define the downstream query patterns the index must serve. No current use case reads from `relation_evidence` directly; the SummaryWorker (Wave 2 fix) already reads from `relation_evidence_raw`.
 
 Multi-hop traversal strategy changed from pure relational BFS to **hybrid**:
 - `depth=1` → existing relational `GetEntityGraphUseCase` (full evidence/summary JOIN)
@@ -45,28 +49,29 @@ Multi-hop traversal strategy changed from pure relational BFS to **hybrid**:
 
 | Component | Current State | Required Change | Delta |
 |-----------|--------------|-----------------|-------|
-| `provisional_enrichment.py` | Queries `status='pending'` rows, no text filter | Add mention_text blocklist check before profile extraction | Code change |
-| `provisional_enrichment_core.py` | No blocklist; dedup check added (BP-384) | No additional change | None |
+| `provisional_enrichment.py` | Queries `status='pending'` rows, no text filter | Add two-layer noise filter: Layer 1 static blocklist, Layer 2 cheap LLM classifier (`meta-llama/8B`), Layer 3 full extraction | Code change |
+| `provisional_enrichment_core.py` | No entity_type validation after LLM extraction | Add post-extraction `entity_type` normalization + validation against canonical set; default unrecognized values to `'other'` with warning log | Code change |
 | `canonicalization.py` | Step 1 exact match is case-sensitive | Normalize `raw_type.lower().strip()` before exact lookup | Code change |
-| `relation_type_registry` table | Has both UPPERCASE (migration 0004) and lowercase (migration 0001) canonical_types | Normalize all to lowercase via migration | Schema + seed |
+| `relation_type_registry` table | All seeds are lowercase (migration 0001 + 0004 confirmed) — registry is already correct | No change — T-72-1-02 code fix prevents future case mismatches; no data-repair migration needed on a fresh-start cluster | None |
 | `schemas.py` (`RelationResponse`) | No `evidence_snippets` field | Add `evidence_snippets: list[str]` (max 3) | Schema change |
 | `graph_query.py` | Uses `relation_repo.list_for_entity()` which has no evidence JOIN | Add evidence JOIN or separate batch fetch | Code change |
 | `relation.py` (repo) | `list_for_entity` returns 8 columns, no evidence text | Add optional evidence JOIN | Code change |
 | `summary.py` | `skipped_null_evidence_text` branches on `evidence_text` NULL correctly, but logs silently | Add explicit diagnostic log + separate fix for NULL evidence backfill | Code change |
-| `summary.py` | Calls `_SUMMARY_MODEL_ID = "kg-summary-v1"` — model must be registered in FallbackChainClient | Verify model registration in config; add fallback | Config/code |
+| `summary.py` | Defines `_SUMMARY_MODEL_ID = "kg-summary-v1"` — constant is **dead code**, never passed to `FallbackChainClient.extract()` which has no `model_id` parameter | Remove dead constant; add diagnostic log of raw LLM response before parse | Code |
 
 ---
 
-## Wave 1: Noise Entity Filtering + Relation Type Normalization
+## Wave 1: Noise Entity Filtering + Relation Type Normalization ✅
 
 **Goal:** Stop noise entities from entering the KG and fix the case mismatch that causes ~30% of LLM-extracted relations to emit `canonical_type=None`.
 **Depends on:** none
 **Estimated effort:** 60-90 min
+**Status:** **DONE** — 2026-05-05 · 818 KG unit + 710 nlp-pipeline unit + 100 arch tests pass · ruff + mypy clean
 **Architecture layer:** infrastructure + application
 
 ### Tasks
 
-#### T-72-1-01: Mention-text noise blocklist in ProvisionalEnrichmentWorker
+#### T-72-1-01: Two-layer noise filtering in ProvisionalEnrichmentWorker
 
 **Type:** impl
 **depends_on:** none
@@ -78,47 +83,86 @@ Multi-hop traversal strategy changed from pure relational BFS to **hybrid**:
 **PRD reference:** Investigation report 2026-05-05 §KQ-01
 
 **What to build:**
-Add a pre-filter that checks `mention_text` against a blocklist before any LLM call is made. If a queue row matches the blocklist, update its status to `'noise'` immediately (no LLM extraction, no entity creation, no outbox event). The blocklist is a module-level frozen set for O(1) lookup with case-insensitive normalization.
+Add a two-layer pre-filter that runs before the expensive DeepSeek V4 Flash profile extraction. The three processing stages are:
+
+- **Layer 1 (O(1) — free):** Static `_NOISE_BLOCKLIST` frozenset. Obvious noise eliminated with zero network cost.
+- **Layer 2 (cheap LLM):** `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` via DeepInfra. Binary classification with a tightly constrained prompt. Only mentions that pass Layer 1 reach here.
+- **Layer 3 (expensive LLM):** Existing DeepSeek V4 Flash full-profile extraction via `FallbackChainClient`. Only reached when Layer 2 confirms the mention is a real entity.
+
+The `UnresolvedResolutionWorker` (S6) already has 2-phase noise classification before the queue INSERT — these layers are a complementary S7 guard at consumption time, not a replacement.
 
 **Logic & Behavior:**
-1. Define `_NOISE_BLOCKLIST: frozenset[str]` at the top of `provisional_enrichment.py` containing normalized (lowercase stripped) values:
-   ```python
-   _NOISE_BLOCKLIST: frozenset[str] = frozenset({
-       # Pronouns / generic references
-       "he", "she", "they", "it", "we", "us", "his", "her", "their",
-       "him", "them", "who", "what",
-       # Generic finance jargon that produce useless nodes
-       "constant currency", "organic growth", "analysts", "management",
-       "investors", "shareholders", "executives", "regulators",
-       "the company", "company", "the firm", "firm", "business",
-       # Fake entities from publication names used as subjects
-       "simply wall st", "seeking alpha", "the motley fool", "bloomberg",
-       "reuters", "cnbc", "marketwatch", "barron's", "wsj",
-       # Noise mentions of generic geographic / institutional terms
-       "street", "market", "sector", "industry", "index",
-   })
-   ```
-2. In `ProvisionalEnrichmentWorker.run()`, after loading `pending_rows`, add a pre-filter loop:
-   - For each row, check `mention_text.lower().strip() in _NOISE_BLOCKLIST`
-   - Collect the `queue_id`s that are noise
-   - Batch `UPDATE provisional_entity_queue SET status = 'noise', resolved_at = now() WHERE queue_id = ANY(:ids) AND status = 'pending'`
-   - Log `provisional_enrichment_noise_filtered` with count
-   - Remove filtered rows from `pending_rows` before continuing
-3. A `'noise'` status is a new terminal state — add it to the `CHECK` constraint: `status IN ('pending','processing','resolved','failed','noise')`.
 
-**IMPORTANT:** The `provisional_entity_queue.status` CHECK constraint is defined in the intelligence-migrations Alembic migrations, not in S7. The DDL change goes in `services/intelligence-migrations/alembic/versions/` as a new migration. However, since the status column already uses a text field with a check constraint, also check whether an Alembic migration is already at a point where this can be added cleanly or whether to add it as a separate migration.
+**Layer 1 — static blocklist:**
+```python
+_NOISE_BLOCKLIST: frozenset[str] = frozenset({
+    # Pronouns / generic references
+    "he", "she", "they", "it", "we", "us", "his", "her", "their",
+    "him", "them", "who", "what",
+    # Generic finance jargon that produce useless nodes
+    "constant currency", "organic growth", "analysts", "management",
+    "investors", "shareholders", "executives", "regulators",
+    "the company", "company", "the firm", "firm", "business",
+    # Fake entities from publication names used as subjects
+    "simply wall st", "seeking alpha", "the motley fool", "bloomberg",
+    "reuters", "cnbc", "marketwatch", "barron's", "wsj",
+    # Noise mentions of generic geographic / institutional terms
+    "street", "market", "sector", "industry", "index",
+})
+```
+For each row, check `mention_text.lower().strip() in _NOISE_BLOCKLIST`. If matched → collect into `layer1_noise_ids`. No LLM call made.
+
+**Layer 2 — cheap LLM classifier:**
+For rows not caught by Layer 1, call `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` (DeepInfra) with a tight binary prompt:
+```
+Is "{mention_text}" a specific named financial entity (company, person, financial instrument,
+index, currency, or commodity)?
+Respond ONLY with JSON: {"is_entity": true/false, "confidence": 0.0-1.0}
+Do NOT classify generic roles, concepts, or financial jargon as entities.
+```
+Decision rules:
+- `is_entity=false` OR `confidence < 0.7` → collect into `layer2_noise_ids`
+- `is_entity=true` AND `confidence >= 0.7` → proceed to Layer 3
+- Layer 2 call fails (timeout/error) → **fail-open**: proceed to Layer 3 and log a warning (never silently drop a row)
+
+**Batch noise UPDATE:**
+After both filter layers, execute a single batch UPDATE:
+```sql
+UPDATE provisional_entity_queue
+SET status = 'noise', resolved_at = now()
+WHERE queue_id = ANY(:ids) AND status = 'pending'
+```
+Where `:ids` is `layer1_noise_ids + layer2_noise_ids`. Then remove all noise rows from `pending_rows` before Layer 3.
+
+**Layer 3 — full extraction:**
+Existing `FallbackChainClient` profile extraction. Unchanged.
+
+**New terminal status `'noise'`:**
+The `provisional_entity_queue.status` column is bare `VARCHAR(20) NOT NULL DEFAULT 'pending'` with **no CHECK constraint today** (migration 0001). Add the constraint in a new migration (0020):
+```sql
+ALTER TABLE provisional_entity_queue
+    ADD CONSTRAINT ck_provisional_status
+    CHECK (status IN ('pending', 'processing', 'resolved', 'failed', 'noise'));
+```
 
 **Tests to write:**
 | Test Name | What It Verifies | Type |
 |-----------|-----------------|------|
-| `test_noise_blocklist_skips_llm_and_marks_noise` | Queue row with `mention_text="he"` → status `'noise'`, no LLM extract called | unit |
-| `test_non_noise_mention_proceeds_normally` | Queue row with `mention_text="Apple Inc."` → proceeds to extract | unit |
-| `test_blocklist_case_insensitive` | `mention_text="ANALYSTS"` → filtered | unit |
+| `test_layer1_blocklist_marks_noise_no_llm_calls` | `mention_text="he"` → status `'noise'`, Layer 2 LLM never called | unit |
+| `test_layer2_low_confidence_marks_noise` | Layer 1 passes, Layer 2 returns `confidence=0.5` → `'noise'`, Layer 3 never called | unit |
+| `test_layer2_not_entity_marks_noise` | Layer 1 passes, Layer 2 returns `is_entity=false` → `'noise'`, Layer 3 never called | unit |
+| `test_layer2_failure_falls_through_to_layer3` | Layer 2 call raises exception → Layer 3 called (fail-open), warning logged | unit |
+| `test_confirmed_entity_reaches_layer3` | `mention_text="Apple Inc."`, Layer 2 → `{is_entity: true, confidence: 0.9}` → Layer 3 called | unit |
+| `test_blocklist_case_insensitive` | `mention_text="ANALYSTS"` → Layer 1 filtered | unit |
 
 **Acceptance criteria:**
-- [ ] `mention_text.lower().strip() in _NOISE_BLOCKLIST` applied before any LLM call
-- [ ] `status='noise'` written for matched rows
-- [ ] Prometheus counter incremented: `s7_provisional_noise_filtered_total`
+- [ ] Layer 1 static blocklist applied before any LLM call — O(1) frozenset lookup
+- [ ] Layer 2 `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` called for non-blocklist mentions
+- [ ] `confidence < 0.7` OR `is_entity=false` → status `'noise'`
+- [ ] Layer 2 failure → fail-open (proceed to Layer 3), warning logged — no silent drops
+- [ ] Layer 3 (full extraction) only reached when Layer 2 confirms entity
+- [ ] Single batch UPDATE for all noise rows from both layers combined
+- [ ] Prometheus counters: `s7_provisional_noise_filtered_total` (Layer 1) and `s7_provisional_noise_llm_filtered_total` (Layer 2)
 - [ ] Unit tests pass
 
 ---
@@ -143,7 +187,7 @@ The `canonicalize_relation_type` function's Step 1 exact-match lookup is case-se
    normalized_raw_type = raw_type.lower().strip().replace(" ", "_")
    ```
 2. Pass `normalized_raw_type` to `registry_repo.find_by_canonical_type(normalized_raw_type)` instead of `raw_type`.
-3. The registry's `canonical_type` column values should also be stored lowercase — verify seed data in migration 0001 and 0004. If migration 0004 inserted UPPERCASE values, add a data migration to normalize them (see T-72-1-03).
+3. The registry's `canonical_type` seeds (migrations 0001 and 0004) are **already lowercase** — no registry normalization is needed. The `relations` table data-repair migration originally planned as T-72-1-03 has been removed because the cluster is always relaunched from scratch; no UPPERCASE `canonical_type` rows will exist in `relations` when this code change is deployed.
 4. The ANN embedding step (Step 2) already works on the text embedding so does not need this fix.
 
 **Tests to write:**
@@ -160,85 +204,6 @@ The `canonicalize_relation_type` function's Step 1 exact-match lookup is case-se
 
 ---
 
-#### T-72-1-03: Data migration — normalize relation_type_registry to lowercase
-
-**Type:** schema
-**depends_on:** T-72-1-02
-**blocks:** none
-**Target files:**
-- `services/intelligence-migrations/alembic/versions/<next_head>_normalize_relation_types_lowercase.py`
-
-**PRD reference:** Investigation report 2026-05-05 §KQ-02
-
-**What to build:**
-A new Alembic migration (head of `intelligence-migrations`) that:
-1. `UPDATE relation_type_registry SET canonical_type = LOWER(canonical_type)` for any UPPERCASE entries
-2. `UPDATE relations SET canonical_type = LOWER(canonical_type) WHERE canonical_type IS NOT NULL` — normalizes already-stored relation canonical_type values
-3. `UPDATE relations SET confidence_stale = true WHERE canonical_type IS NOT NULL` — marks all relations for confidence recalculation so Worker 13A (runs every 15 min) auto-refreshes with the correct decay_alpha for the now-normalized type **(Finding 4b fix)**
-4. Down migration: no-op (lowercase is the forward-compatible canonical form)
-
-**Migration metadata:**
-- Current head: check with `alembic -c services/intelligence-migrations/alembic.ini current`
-- New revision: `<auto-generated>`
-- New revision name: `normalize_relation_types_lowercase`
-
-**Downstream test impact:**
-- Any test that asserts `canonical_type == "COMPETES_WITH"` (UPPERCASE) will break — grep for UPPERCASE relation type constants in test files and update to lowercase.
-
-**Acceptance criteria:**
-- [ ] Migration runs without error on a fresh db (test infra)
-- [ ] `SELECT DISTINCT canonical_type FROM relation_type_registry WHERE canonical_type != LOWER(canonical_type)` returns 0 rows after migration
-- [ ] `SELECT DISTINCT canonical_type FROM relations WHERE canonical_type IS NOT NULL AND canonical_type != LOWER(canonical_type)` returns 0 rows
-
----
-
----
-
-#### T-72-1-04: Retroactive noise entity cleanup migration
-
-**Type:** schema
-**depends_on:** T-72-1-01
-**blocks:** none
-**Target files:**
-- `services/intelligence-migrations/alembic/versions/<next_head>_cleanup_noise_entities.py`
-
-**PRD reference:** Investigation report 2026-05-05 §Finding-4a
-
-**What to build:**
-Delete existing noise entities (already in DB before the blocklist was added) that are isolated (zero relations). Hub noise entities (those with existing relations, e.g. "analysts" with 72, "US" with 68) are NOT deleted automatically — their pollution is addressed via entity quality scoring in PRD-0073/0074.
-
-**Logic & Behavior:**
-```sql
--- Step 1: find isolated entities whose canonical_name matches noise patterns
--- Only delete entities with 0 relations in EITHER direction
-WITH noise_candidates AS (
-    SELECT e.entity_id
-    FROM canonical_entities e
-    WHERE LOWER(TRIM(e.canonical_name)) IN (
-        'he','she','they','it','we','us','his','her','their','him','them',
-        'who','what','constant currency','organic growth','analysts',
-        'management','investors','shareholders','executives','regulators',
-        'the company','company','the firm','firm','business',
-        'simply wall st','seeking alpha','the motley fool','bloomberg',
-        'reuters','cnbc','marketwatch','wsj','street','market',
-        'sector','industry','index'
-    )
-    AND NOT EXISTS (
-        SELECT 1 FROM relations r
-        WHERE r.subject_entity_id = e.entity_id
-           OR r.object_entity_id  = e.entity_id
-    )
-)
-DELETE FROM canonical_entities WHERE entity_id IN (SELECT entity_id FROM noise_candidates);
--- CASCADE handles entity_aliases, entity_embedding_state, provisional_entity_queue
-```
-
-**Acceptance criteria:**
-- [ ] Migration runs cleanly against a populated DB snapshot (test infra or staging)
-- [ ] Only zero-relation noise entities are deleted (hub noise entities with relations survive)
-- [ ] `SELECT count(*) FROM canonical_entities WHERE LOWER(canonical_name) IN ('he','analysts',...)` returns 0 (or only hub ones)
-- [ ] Migration is idempotent
-
 ---
 
 #### T-72-1-05: UnresolvedResolutionWorker prompt hardening
@@ -254,7 +219,11 @@ DELETE FROM canonical_entities WHERE entity_id IN (SELECT entity_id FROM noise_c
 **PRD reference:** Investigation report 2026-05-05 §Finding-4c / §KQ-01
 
 **What to build:**
-The UnresolvedResolutionWorker uses an LLM to classify raw GLiNER-detected entity mentions as either "real named entity" (→ enqueue to provisional_entity_queue) or "noise/generic term" (→ discard). The current prompt is too permissive — terms like "analysts", "management", "constant currency" pass through as "real" entities. Harden the prompt with explicit examples of noise vs real entities.
+The UnresolvedResolutionWorker already has a 2-phase noise classification:
+- Phase 1: non-entity-creating mention classes (LOCATION, COMMODITY, etc.) → `noise` immediately, no LLM call
+- Phase 2: LLM classification using a prompt that outputs `{"is_named_entity": true/false, ...}`
+
+The Phase 2 classification prompt is **too permissive** — generic terms like "analysts", "management", "constant currency" pass through as `is_named_entity=true` because the prompt lacks explicit negative examples. The `provisional_entity_queue` INSERT occurs when `is_named_entity=true`. Harden the existing Phase 2 prompt with more specific negative examples and tighten the confidence threshold.
 
 **Logic & Behavior:**
 1. Locate the classification prompt. Add explicit negative examples and a stricter classification rubric:
@@ -286,25 +255,25 @@ The UnresolvedResolutionWorker uses an LLM to classify raw GLiNER-detected entit
 
 - `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/provisional_enrichment.py`
 - `services/knowledge-graph/src/knowledge_graph/application/blocks/canonicalization.py`
-- `services/intelligence-migrations/alembic/versions/0001_create_intelligence_db.py` (relation_type_registry seed)
-- `services/intelligence-migrations/alembic/versions/0004_geopolitical_age_temporal_events.py` (UPPERCASE AGE labels)
+- `services/intelligence-migrations/alembic/versions/0001_create_intelligence_db.py` (relation_type_registry seed + status column definition)
 - `services/knowledge-graph/tests/unit/application/blocks/test_canonicalization.py` (if exists)
 - Find and read `UnresolvedResolutionWorker` in `services/nlp-pipeline/src/` (for T-72-1-05)
 
 ### Wave 1 Validation Gate
 
-- [ ] `ruff check` passes on changed files
-- [ ] `mypy` passes on changed packages
-- [ ] `python -m pytest tests/ -m "unit" -v` passes in knowledge-graph service
-- [ ] Alembic migration head advances cleanly
-- [ ] New unit tests: minimum 6
+- [x] `ruff check` passes on changed files
+- [x] `mypy` passes on changed packages
+- [x] `python -m pytest tests/ -m "unit" -v` passes in knowledge-graph service (818 pass)
+- [x] `python -m pytest tests/ -m "unit" -v` passes in nlp-pipeline service (710 pass)
+- [x] Alembic migration 0020 created (`add_noise_status_to_provisional_queue`)
+- [x] New unit tests: 9 (6 noise filter + 3 case normalization + 3 confidence threshold = 12 total)
 
 ### Wave 1 Break Impact
 
 | Broken File | Why It Breaks | Fix Required |
 |-------------|--------------|-------------|
-| Any test asserting `canonical_type == "COMPETES_WITH"` | Migration normalizes to lowercase | Change assertion to `"competes_with"` |
-| `provisional_entity_queue` CHECK constraint | New `'noise'` status value | Covered by T-72-1-01 migration |
+| `provisional_entity_queue` CHECK constraint | New `'noise'` status value | Covered by T-72-1-01 migration (0020) |
+| Any test asserting exact `status` values on `provisional_entity_queue` | `'noise'` is a new valid terminal state | Add `'noise'` to status assertion sets if needed |
 
 ### Wave 1 Regression Guardrails
 
@@ -338,71 +307,97 @@ The UnresolvedResolutionWorker uses an LLM to classify raw GLiNER-detected entit
 **PRD reference:** Investigation report 2026-05-05 §KQ-03
 
 **What to build:**
-Extend `RelationResponse` with `evidence_snippets: list[str]` (max 3 items) and wire it through the stack. Evidence snippets are the top-3 `evidence_text` values from `relation_evidence_raw` for each relation, ordered by `extraction_confidence DESC NULLS LAST, evidence_date DESC NULLS LAST`.
+Extend `RelationResponse` with `evidence_snippets: list[str]` and wire it through the stack with a configurable per-call limit. Evidence snippets are the top-N `evidence_text` values from `relation_evidence_raw` for each relation, ordered by `extraction_confidence DESC NULLS LAST, evidence_date DESC NULLS LAST`.
 
-**Architecture constraint:** The use case (`GetEntityGraphUseCase`) must not import from infrastructure — it receives data through the repository port. The repository is responsible for the JOIN.
+**Architecture constraint:** The use case (`GetEntityGraphUseCase`) must not import from infrastructure — it receives data through the repository port.
 
 **Logic & Behavior:**
 1. **Schema change** (`schemas.py`): Add to `RelationResponse`:
    ```python
    evidence_snippets: list[str] = Field(
        default_factory=list,
-       description="Up to 3 evidence text snippets supporting this relation.",
+       description="Evidence text snippets supporting this relation.",
    )
    ```
-2. **Repository change** (`relation.py` → `list_for_entity`): Extend the SQL query to LEFT JOIN `relation_evidence_raw` and aggregate top-3 evidence_text values using a lateral subquery or `array_agg` with ORDER BY + LIMIT:
-   ```sql
-   LEFT JOIN LATERAL (
-       SELECT COALESCE(evidence_text, canonicalized_evidence_text) AS snip
-       FROM relation_evidence_raw rer
-       WHERE rer.relation_id = r.relation_id
-         AND (rer.evidence_text IS NOT NULL OR rer.canonicalized_evidence_text IS NOT NULL)
-       ORDER BY rer.extraction_confidence DESC NULLS LAST,
-                rer.evidence_date DESC NULLS LAST
-       LIMIT 3
-   ) ev_snips ON true
+
+2. **Route parameter** (`routes.py`): Add a query parameter to `get_entity_graph`:
+   ```python
+   evidence_snippets_limit: int = Query(default=3, ge=1, le=10)
    ```
-   Then `array_remove(array_agg(ev_snips.snip), NULL)` in the outer SELECT.
+   Thread this value through to the use case and repository.
 
-   Alternatively (simpler): fetch evidence as a second batch query keyed on relation_ids. Batch query is preferred to avoid the lateral JOIN complexity — call `ev_repo.get_evidence_snippets_batch(relation_ids, limit=3)` and merge in Python.
+3. **Repository method** (`relation_evidence.py`): Add:
+   ```python
+   async def get_evidence_snippets_batch(
+       self,
+       relation_ids: list[UUID],
+       limit_per_relation: int = 3,
+   ) -> dict[UUID, list[str]]:
+   ```
+   **Implementation — Option B1 (CTE with `ROW_NUMBER()`):**
+   ```sql
+   WITH ranked AS (
+       SELECT relation_id,
+              COALESCE(evidence_text, canonicalized_evidence_text) AS snip,
+              ROW_NUMBER() OVER (
+                  PARTITION BY relation_id
+                  ORDER BY extraction_confidence DESC NULLS LAST,
+                           evidence_date DESC NULLS LAST
+              ) AS rn
+       FROM relation_evidence_raw
+       WHERE relation_id = ANY(:relation_ids)
+         AND (evidence_text IS NOT NULL OR canonicalized_evidence_text IS NOT NULL)
+   )
+   SELECT relation_id, snip FROM ranked WHERE rn <= :limit
+   ```
+   Single query for all relations. Group by `relation_id` in Python, return `dict[UUID, list[str]]`. Merge into `relation_rows` in `GetEntityGraphUseCase.execute()`.
 
-   **Recommended approach:** batch Python merge (simpler, avoids lateral JOIN):
-   - Add `get_evidence_snippets_batch(relation_ids: list[UUID], limit_per_relation: int) -> dict[UUID, list[str]]` to `RelationEvidenceRepository`
-   - Query: `WHERE relation_id = ANY(:ids) AND evidence_text IS NOT NULL ORDER BY relation_id, extraction_confidence DESC NULLS LAST, evidence_date DESC NULLS LAST`
-   - In Python, group by `relation_id`, take first `limit` per group
-   - Merge into `relation_rows` in `GetEntityGraphUseCase.execute()`
-
-3. **Use case change** (`graph_query.py`): After fetching `relation_rows`, fetch evidence batch. Add `evidence_snippets_map: dict[UUID, list[str]]` parameter pattern via constructor injection or direct repo call.
-
-   Since the use case currently receives only `entity_repo` and `relation_repo` as port objects, extend the use case signature:
+4. **Use case change** (`graph_query.py`): Extend the execute signature:
    ```python
    async def execute(
        self,
        entity_repo: CanonicalEntityRepositoryPort,
        relation_repo: RelationRepositoryPort,
        evidence_repo: RelationEvidenceRepositoryPort,  # NEW
+       evidence_limit: int = 3,                        # NEW
        ...
    ) -> ...:
    ```
-   Then call `evidence_repo.get_evidence_snippets_batch(...)`.
 
-4. **Router change** (`routes.py`): Add `evidence_repo` to `EntityGraphReposDep` dependency and thread through to `use_case.execute(...)`.
+5. **Router change** (`routes.py`): Add `evidence_repo` to `EntityGraphReposDep` and thread `evidence_snippets_limit` through to `use_case.execute(...)`.
 
-5. **Schema validation**: `evidence_snippets` must be empty list `[]` (not null) when no evidence exists — use `default_factory=list`.
+6. **Schema validation**: `evidence_snippets` must always be a list (never null) — use `default_factory=list`.
+
+**Architecture decision — evidence retrieval at Bloomberg scale:**
+
+Three options were evaluated for long-term scale (the platform targets Bloomberg-grade data density with thousands of entities and tens of thousands of relations per graph call):
+
+| Option | Approach | Hot-path cost | Scaling characteristic |
+|--------|----------|--------------|----------------------|
+| **A — LATERAL JOIN** | `LEFT JOIN LATERAL (SELECT ... LIMIT :n) ON true` in the main relation query | One subquery scan per relation row | Degrades linearly with relation count — 200 relations = 200 LATERAL scans |
+| **B1 — Batch CTE** (implemented here) | Single `ROW_NUMBER() OVER (PARTITION BY relation_id)` CTE over `ANY(:ids)` | One query for all relations | O(evidence_rows_for_batch) — scales with evidence volume, not relation count |
+| **C — Denormalized JSONB** | `top_evidence_snippets JSONB` column on `relations`, maintained by ConfidenceWorker 13A | Zero additional queries — pure column read | Constant per graph call regardless of evidence volume; evidence ranking done during low-frequency confidence recalculation |
+
+**Option C is the correct Bloomberg-grade long-term architecture**: graph reads (high-frequency) become pure column reads; the ranking work is amortized into ConfidenceWorker (13A) which already processes all relations on its own schedule. However, it requires a schema migration and ConfidenceWorker coordination that belongs in PRD-0074's evidence-lifecycle design.
+
+**Decision for this plan:** Implement **Option B1** now. Add a `# TODO(PRD-0074): upgrade to denormalized top_evidence_snippets JSONB on relations` comment in the repository method as the documented upgrade path.
 
 **Tests to write:**
 | Test Name | What It Verifies | Type |
 |-----------|-----------------|------|
 | `test_graph_response_includes_evidence_snippets` | Relations with evidence return `evidence_snippets` list | unit |
 | `test_graph_response_empty_snippets_when_no_evidence` | Relations without evidence return `[]` not None | unit |
-| `test_evidence_snippets_capped_at_3` | Even if 10 evidence rows exist, only 3 returned | unit |
+| `test_evidence_snippets_respects_limit_param` | `evidence_snippets_limit=5` → up to 5 returned per relation | unit |
+| `test_evidence_snippets_default_limit_is_3` | No param → defaults to 3 snippets per relation | unit |
+| `test_evidence_snippets_limit_max_10` | `evidence_snippets_limit=11` → 422 | unit |
 
 **Acceptance criteria:**
 - [ ] `GET /api/v1/entities/{entity_id}/graph` response includes `evidence_snippets: [...]` on each relation
-- [ ] At most 3 snippets per relation
+- [ ] `evidence_snippets_limit` query param accepted (default=3, min=1, max=10)
 - [ ] `evidence_snippets` is always a list (never null)
-- [ ] No N+1 query — single batch fetch for all relations
-- [ ] Port interface (`RelationEvidenceRepositoryPort`) updated if it exists, or created if needed
+- [ ] No N+1 query — single batch CTE fetch for all relations
+- [ ] Port interface (`RelationEvidenceRepositoryPort`) updated or created with `get_evidence_snippets_batch`
+- [ ] `# TODO(PRD-0074)` upgrade comment present in repository method
 
 ---
 
@@ -423,7 +418,16 @@ The SummaryWorker generates 0 summaries because most `relation_evidence_raw` row
 
 **Issue A — NULL evidence_text skip:** The worker falls back to `canonicalized_evidence_text` in its filter but may still skip rows if both columns are NULL. Add a backfill path: if `evidence_text` IS NULL but `canonicalized_evidence_text` IS NOT NULL, treat `canonicalized_evidence_text` as the evidence text for summary generation. This is already partially coded (`e.get("evidence_text", "") or e.get("canonicalized_evidence_text", "")`) but only in the list comprehension filter — ensure the `if e.get(...)` guard accepts either field.
 
-**Issue B — `kg-summary-v1` model ID registration:** Verify that `FallbackChainClient` has `kg-summary-v1` registered as a valid model. If the LLM client silently returns `None` for unrecognized model IDs (as documented in BP-337), then every summary attempt returns `None` → `summaries_skipped` or `summaries_failed`. Check `services/knowledge-graph/src/knowledge_graph/infrastructure/llm/fallback_chain.py` for model routing.
+**Issue B — LLM call visibility:** `FallbackChainClient.extract()` takes `(inp: ExtractionInput)` with **no `model_id` parameter** — there is no model routing registry in the client. The `_SUMMARY_MODEL_ID = "kg-summary-v1"` constant in `summary.py` is defined but never passed to the client and has no effect. The chain tries DeepInfra → Ollama → Gemini regardless; it returns `None` only when all three are exhausted. The real risk is that the `ExtractionInput` prompt is constructed incorrectly or too short, causing all providers to return empty/invalid JSON that the worker discards. Fix: add a diagnostic log of the raw LLM response string **before** any parse step so the next debugging session has visibility:
+```python
+logger.info(
+    "summary_worker_llm_raw_response",
+    relation_id=str(relation_id),
+    raw_response_length=len(raw_result) if raw_result else 0,
+    raw_response_preview=(raw_result or "")[:200],
+)
+```
+Remove the `_SUMMARY_MODEL_ID` constant entirely (it is dead code).
 
 **Logic & Behavior:**
 1. In `summary.py`, fix the evidence text filter:
@@ -448,13 +452,11 @@ The SummaryWorker generates 0 summaries because most `relation_evidence_raw` row
    )
    ```
 
-3. In `fallback_chain.py`, verify that `extract()` with `model_id="kg-summary-v1"` routes correctly. If `kg-summary-v1` is not in the model routing table, map it to the default extraction model (same as `_EXTRACT_MODEL_ID` in `provisional_enrichment_core.py`). Add a fallback:
-   ```python
-   # In model routing: if model_id unknown, fall back to default extraction chain
-   effective_model = self._model_registry.get(model_id, self._default_extract_model)
-   ```
+3. Remove the dead `_SUMMARY_MODEL_ID = "kg-summary-v1"` constant from `summary.py` — it is never passed to `FallbackChainClient.extract()` and has no effect. `FallbackChainClient` has no model routing registry; it always runs DeepInfra → Ollama → Gemini regardless.
 
-4. Add `SUMMARY_WORKER_FORCE_REGENERATE_BATCH_SIZE` config env var (default 50) so ops can force-regenerate stale summaries in batches.
+4. Add a diagnostic log of the raw LLM response **before** any parse step (see Issue B above). This is not strictly required for correctness but is essential for future debugging — the SummaryWorker is a silent failure vector.
+
+5. Add `SUMMARY_WORKER_FORCE_REGENERATE_BATCH_SIZE` config env var (default 50) so ops can force-regenerate stale summaries in batches.
 
 **Tests to write:**
 | Test Name | What It Verifies | Type |
@@ -466,7 +468,8 @@ The SummaryWorker generates 0 summaries because most `relation_evidence_raw` row
 **Acceptance criteria:**
 - [ ] `canonicalized_evidence_text` accepted as fallback when `evidence_text` IS NULL
 - [ ] Diagnostic log emitted per relation showing evidence null breakdown
-- [ ] `kg-summary-v1` model ID routes to valid LLM chain (verified by tracing `fallback_chain.py`)
+- [ ] Dead `_SUMMARY_MODEL_ID` constant removed from `summary.py`
+- [ ] Diagnostic log of raw LLM response (length + 200-char preview) emitted before parse step
 - [ ] Unit tests pass
 
 ---
@@ -602,43 +605,91 @@ This avoids reinventing BFS that AGE already provides. The response shape unific
 
 ---
 
-#### T-72-3-02: Entity type consistency — normalize seeded instrument entity types
+#### T-72-3-02: Entity type hardening — validation at source + CHECK constraint enforcement
 
-**Type:** schema + impl
-**depends_on:** T-72-1-03
+**Type:** impl + schema
+**depends_on:** none
 **blocks:** none
 **Target files:**
-- `services/intelligence-migrations/alembic/versions/<next_head>_normalize_entity_types.py`
-- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/fundamentals_refresh.py` (if entity_type used)
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/provisional_enrichment_core.py`
+- LLM extraction prompt template (search for `entity_type` in `services/knowledge-graph/src/` to locate the prompt)
+- `services/intelligence-migrations/alembic/versions/0021_add_entity_type_check_constraint.py`
+- `services/knowledge-graph/tests/unit/infrastructure/workers/test_provisional_enrichment_core.py`
 
 **PRD reference:** Investigation report 2026-05-05 §"entity type correction"
 
 **What to build:**
-The seeded `canonical_entities` rows for instruments use inconsistent `entity_type` values (`"ORGANIZATION"`, `"company"`, `"financial_instrument"`, `"person"` in mixed casing). LLM extraction emits types in different casing than the seeds. Fix by normalizing all entity_type values to the canonical set defined in migration 0001.
+Rather than repairing existing data (the cluster is relaunched from scratch with no stale rows), harden the generation pipeline so invalid `entity_type` values can never be inserted. Three layers: code validation, prompt constraint, database enforcement.
 
 **Canonical entity types (from migration 0001 seed):**
 `company`, `financial_instrument`, `person`, `organization`, `country`, `currency`, `commodity`, `index`, `sector`, `concept`, `event`, `other`
 
 **Logic & Behavior:**
-1. New Alembic migration:
-   ```sql
-   UPDATE canonical_entities
-   SET entity_type = LOWER(TRIM(entity_type))
-   WHERE entity_type != LOWER(TRIM(entity_type));
 
-   -- Map non-standard types to standard ones
-   UPDATE canonical_entities SET entity_type = 'organization'
-   WHERE LOWER(entity_type) IN ('organisation', 'inst', 'institution');
+**Step 1 — Post-extraction normalization in code** (`provisional_enrichment_core.py`):
+After parsing the LLM extraction response, normalize and validate `entity_type` before any DB write:
+```python
+_VALID_ENTITY_TYPES: frozenset[str] = frozenset({
+    "company", "financial_instrument", "person", "organization",
+    "country", "currency", "commodity", "index",
+    "sector", "concept", "event", "other",
+})
+_ENTITY_TYPE_ALIASES: dict[str, str] = {
+    "corp": "company", "corporation": "company", "enterprise": "company",
+    "firm": "company", "business": "company",
+    "organisation": "organization", "inst": "organization", "institution": "organization",
+}
 
-   UPDATE canonical_entities SET entity_type = 'company'
-   WHERE LOWER(entity_type) IN ('corp', 'corporation', 'enterprise', 'firm', 'business');
-   ```
-2. Down migration: no-op (normalization is forward-compatible).
+raw_type = (extracted.entity_type or "").lower().strip().replace(" ", "_")
+normalized = _ENTITY_TYPE_ALIASES.get(raw_type, raw_type)
+if normalized not in _VALID_ENTITY_TYPES:
+    logger.warning(
+        "provisional_enrichment_invalid_entity_type",
+        raw_type=raw_type,
+        mention_text=mention_text,
+        defaulting_to="other",
+    )
+    normalized = "other"
+entity_type = normalized
+```
+Unrecognized types default to `'other'` with a warning log — never silently drop or silently pass invalid values.
+
+**Step 2 — LLM prompt hardening:**
+In the entity profile extraction prompt, add explicit type enumeration:
+```
+entity_type MUST be exactly one of:
+  company, financial_instrument, person, organization, country, currency,
+  commodity, index, sector, concept, event, other
+Do NOT invent new types. Use "other" for anything that does not fit the above list.
+```
+
+**Step 3 — CHECK constraint migration (enforcement, not repair):**
+New Alembic migration `0021_add_entity_type_check_constraint.py`:
+```sql
+ALTER TABLE canonical_entities
+    ADD CONSTRAINT ck_canonical_entity_type
+    CHECK (entity_type IN (
+        'company', 'financial_instrument', 'person', 'organization',
+        'country', 'currency', 'commodity', 'index',
+        'sector', 'concept', 'event', 'other'
+    ));
+```
+This is **enforcement, not repair**. On a fresh-start cluster all existing rows are already valid. If a partial deployment ever created bad rows, the migration will error rather than silently pass — that is the intended behavior. Down migration: `ALTER TABLE canonical_entities DROP CONSTRAINT ck_canonical_entity_type`.
+
+**Tests to write:**
+| Test Name | What It Verifies | Type |
+|-----------|-----------------|------|
+| `test_valid_entity_type_passes_unchanged` | `entity_type="company"` → written as-is | unit |
+| `test_uppercase_entity_type_normalized` | `entity_type="ORGANIZATION"` → normalized to `"organization"` | unit |
+| `test_alias_corp_normalized_to_company` | `entity_type="corp"` → `"company"` | unit |
+| `test_unknown_entity_type_defaults_to_other` | `entity_type="conglomerate"` → `"other"` + warning logged | unit |
 
 **Acceptance criteria:**
-- [ ] `SELECT DISTINCT entity_type FROM canonical_entities WHERE entity_type != LOWER(entity_type)` returns 0 rows
-- [ ] No entity_type values outside the canonical set remain after migration
-- [ ] Migration is idempotent (running twice produces same result)
+- [ ] `provisional_enrichment_core.py` normalizes and validates `entity_type` after extraction
+- [ ] Unrecognized types default to `'other'` with a warning log (never silently dropped or silently passed)
+- [ ] LLM extraction prompt explicitly enumerates all valid entity types
+- [ ] CHECK constraint migration runs cleanly on a fresh DB (migration 0021)
+- [ ] Unit tests pass
 
 ---
 
@@ -673,110 +724,21 @@ The seeded `canonical_entities` rows for instruments use inconsistent `entity_ty
 
 ---
 
-## Wave 4: Evidence Promotion Pipeline
+## Wave 4: Deferred
 
-**Goal:** Promote evidence rows from the staging table `relation_evidence_raw` to the immutable partition table `relation_evidence`, enabling proper evidence lifecycle management and unblocking long-term evidence analytics.
-**Depends on:** Wave 2 (SummaryWorker must be producing summaries before evidence promotion is meaningful)
-**Estimated effort:** 60-90 min
-**Architecture layer:** infrastructure (worker + migration)
+**Wave 4 (evidence promotion pipeline) has been deferred to PRD-0074.**
 
-### Tasks
+Reasons:
+1. `relation_evidence` has no unique constraint on `(relation_id, doc_id, evidence_date)` — the `ON CONFLICT DO NOTHING` idempotency guarantee requires a new unique index, which is better co-designed with PRD-0074's evidence-analytics query patterns.
+2. No current consumer reads from `relation_evidence` directly. The SummaryWorker (Wave 2) reads from `relation_evidence_raw`. Promoting rows to the immutable table solves a future problem, not a current one.
+3. The column names in `relation_evidence_raw` (`doc_id`) differ from what was originally specced in this plan (`source_doc_id`) — PRD-0074 should reconcile the schema before building a promotion pipeline on top of it.
+4. UUIDv7 compliance (R10): the correct `new_uuid7()` call belongs in a future plan with full evidence-lifecycle design, not as a patch here.
 
-#### T-72-4-01: Batch evidence promotion worker (basic path)
-
-**Type:** impl
-**depends_on:** none
-**blocks:** none
-**Target files:**
-- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/evidence_promotion.py` (new)
-- `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py` (register worker)
-- `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/relation_evidence.py` (add `promote_raw_to_immutable` method)
-- `services/knowledge-graph/tests/unit/infrastructure/workers/test_evidence_promotion.py` (new)
-
-**PRD reference:** Investigation report 2026-05-05 §Finding-4d
-
-**What to build:**
-A new scheduled worker (Worker 13I) that promotes `relation_evidence_raw` rows to the current active immutable partition in `relation_evidence`. The promotion is idempotent (keyed on `(relation_id, source_doc_id, evidence_date)`).
-
-The `relation_evidence` table is partitioned by `evidence_date` (month). The promotion logic selects `relation_evidence_raw` rows where:
-1. `entity_provisional = false` (already resolved)
-2. `evidence_text IS NOT NULL OR canonicalized_evidence_text IS NOT NULL`
-3. Not already present in `relation_evidence` (deduplicate by natural key)
-
-**Logic & Behavior:**
-1. New `EvidencePromotionWorker` class following the same APScheduler pattern as existing workers:
-   ```python
-   class EvidencePromotionWorker:
-       _BATCH_LIMIT = 500  # rows per run
-
-       async def run(self) -> None:
-           async with self._sf() as session:
-               ev_repo = RelationEvidenceRepository(session)
-               promoted = await ev_repo.promote_raw_to_immutable(self._BATCH_LIMIT)
-               logger.info("evidence_promotion_complete", promoted=promoted)
-   ```
-2. `promote_raw_to_immutable()` in the repo:
-   ```sql
-   INSERT INTO relation_evidence (
-       evidence_id, relation_id, source_doc_id, evidence_date,
-       evidence_text, canonicalized_evidence_text, extraction_confidence,
-       source_weight, created_at
-   )
-   SELECT
-       gen_random_uuid(), rer.relation_id, rer.source_doc_id,
-       COALESCE(rer.evidence_date, CURRENT_DATE),
-       rer.evidence_text, rer.canonicalized_evidence_text,
-       rer.extraction_confidence, rer.source_weight, rer.created_at
-   FROM relation_evidence_raw rer
-   WHERE rer.entity_provisional = false
-     AND (rer.evidence_text IS NOT NULL OR rer.canonicalized_evidence_text IS NOT NULL)
-   ON CONFLICT (relation_id, source_doc_id, evidence_date) DO NOTHING
-   LIMIT :batch_limit
-   RETURNING evidence_id
-   ```
-3. Schedule: every 4 hours. Not time-critical — SummaryWorker already falls back to `raw` table.
-4. Prometheus counter: `s7_evidence_promoted_total`.
-
-**Tests to write:**
-| Test Name | What It Verifies | Type |
-|-----------|-----------------|------|
-| `test_promotion_inserts_resolved_rows` | Rows with `entity_provisional=false` + non-null text → inserted to relation_evidence | unit |
-| `test_promotion_skips_provisional_rows` | Rows with `entity_provisional=true` → not inserted | unit |
-| `test_promotion_idempotent` | Running twice → ON CONFLICT DO NOTHING, count unchanged | unit |
-
-**Acceptance criteria:**
-- [ ] Worker registered in scheduler.py as `"evidence_promotion"` every 4 hours
-- [ ] `ON CONFLICT DO NOTHING` on `(relation_id, source_doc_id, evidence_date)` — idempotent
-- [ ] Only `entity_provisional=false` rows promoted
-- [ ] Unit tests pass
-
----
-
-### Wave 4 Pre-read (agent must read before starting)
-
-- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/summary.py` (pattern to follow)
-- `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py` (how workers are registered)
-- `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/relation_evidence.py` (existing repo methods for `relation_evidence` and `relation_evidence_raw`)
-- `services/intelligence-migrations/alembic/versions/` — find the migration that created `relation_evidence` table to understand partition schema
-
-### Wave 4 Validation Gate
-
-- [ ] `ruff check` passes on changed files
-- [ ] `mypy` passes on `knowledge_graph` package
-- [ ] Unit tests pass (minimum 3 new tests)
-- [ ] Worker registered in scheduler without disrupting existing workers
-- [ ] `SELECT count(*) FROM relation_evidence` increases after worker runs (live test)
-
-### Wave 4 Break Impact
-
-| Broken File | Why It Breaks | Fix Required |
-|-------------|--------------|-------------|
-| None expected | New worker, new repo method, no existing behavior changed | — |
-
-### Wave 4 Regression Guardrails
-
-- **BP-025** (N+1): Batch INSERT with LIMIT — not a query loop, no N+1 risk
-- **BP-007** (Alembic partition): `relation_evidence` is partitioned by `evidence_date` month. Inserting a row with an `evidence_date` for a month that has no partition yet will fail. The existing partition worker (13G/H) creates partitions on the 1st of each month — ensure rows with `evidence_date` in the current + next month have partitions before promotion runs
+**What PRD-0074 should include for this feature:**
+- `CREATE UNIQUE INDEX CONCURRENTLY uidx_relation_evidence_dedup ON relation_evidence (relation_id, doc_id, evidence_date)` as an explicit migration
+- `EvidencePromotionWorker` (Worker 13I) registered in scheduler
+- `promote_raw_to_immutable()` repo method using `new_uuid7()` for IDs and correct column names
+- Partition existence guard (coordinate with `MonthlyPartitionWorker` 13G)
 
 ---
 
@@ -787,11 +749,15 @@ The `relation_evidence` table is partitioned by `evidence_date` (month). The pro
 - `GET /api/v1/entities/{entity_id}/graph` gains optional `depth: int` param (default 1) — backward-compatible
 
 ### Migration Order
-1. Wave 1, T-72-1-01: `add_noise_status_to_provisional_queue` migration
-2. Wave 1, T-72-1-03: `normalize_relation_types_lowercase` migration (includes confidence_stale reset)
-3. Wave 1, T-72-1-04: `cleanup_noise_entities` migration
-4. Wave 3, T-72-3-02: `normalize_entity_types` migration
-All go into `intelligence-migrations`; they must be applied in the order above.
+
+Two migrations go into `intelligence-migrations` (data-repair migrations removed — fresh-start cluster). IDs 0022–0023 are intentionally skipped.
+
+| Revision | Name | Wave | Key change |
+|----------|------|------|-----------|
+| **0020** | `add_noise_status_to_provisional_queue` | Wave 1, T-72-1-01 | Add `CHECK (status IN ('pending','processing','resolved','failed','noise'))` to `provisional_entity_queue` |
+| **0021** | `add_entity_type_check_constraint` | Wave 3, T-72-3-02 | Add `CHECK (entity_type IN (...))` to `canonical_entities` — enforcement, not repair |
+
+> IDs 0022–0023 are reserved/unused. **PLAN-0073 uses revision IDs 0024–0027** — do not start PLAN-0073 Wave A until migrations 0020–0021 are merged.
 
 ### Documentation Updates
 - `docs/services/knowledge-graph.md` — update graph endpoint spec with `depth` param and new response fields
@@ -801,26 +767,27 @@ All go into `intelligence-migrations`; they must be applied in the order above.
 
 ## Risk Assessment
 
-**Critical path:** Wave 1 (noise filtering + normalization + cleanup) → Wave 2 (evidence + SummaryWorker) → Wave 3 (depth hybrid + entity type) → Wave 4 (evidence promotion)
+**Critical path:** Wave 1 (noise filtering + normalization + cleanup) → Wave 2 (evidence + SummaryWorker) → Wave 3 (depth hybrid + entity type)
 
 **Highest risk tasks:**
-- T-72-3-01 (hybrid depth): Requires reading the existing Cypher neighborhood use case response shape carefully to map to `GraphNeighborhoodResponse`. If the shape is significantly different, mapping is complex.
-- T-72-1-04 (retroactive cleanup): Must verify CASCADE behavior on `canonical_entities` DELETE — aliases, embedding_state, provisional_entity_queue rows all have FKs. Run against DB snapshot first.
-- T-72-2-02 (SummaryWorker): LLM model ID routing may require config changes that affect other workers. Test in isolation first.
+- T-72-3-01 (hybrid depth): Requires reading the existing `GetCypherNeighborhoodUseCase` response shape carefully to map to `GraphNeighborhoodResponse`. The Cypher path returns `CypherNeighborhoodResponse` — the mapping function `_map_cypher_to_graph_response()` must correctly flatten entity vertex data. Read `application/use_cases/graph_query_cypher.py` before implementing.
+- T-72-1-01 (two-layer noise filter): The Layer 2 fail-open path is critical — a timeout in the cheap classifier must never silently drop a queue row. Verify the exception handler falls through to Layer 3 correctly, not to noise marking.
+- T-72-2-02 (SummaryWorker): The NULL evidence_text issue is the root cause, not LLM routing. Verify with the diagnostic log (Issue B) that `FallbackChainClient.extract()` is actually returning a result before concluding the issue is fixed.
 
 **Rollback strategy:**
-- Wave 1 migration: Down migration is no-op; noise entities that were deleted are gone (acceptable — they were noise)
-- Wave 2 schema: `evidence_snippets` field removal is backward-compatible (just remove the JOIN and field)
-- Wave 3 hybrid: Removing hybrid routing → revert to depth=1 always (backward-compatible)
-- Wave 4 promotion: Worker can be disabled in scheduler without data loss
+- Wave 1 migrations: `ck_provisional_status` constraint can be dropped with `ALTER TABLE provisional_entity_queue DROP CONSTRAINT ck_provisional_status`; no data changed by this migration
+- Wave 2 schema: `evidence_snippets` and `relation_summary` field removal is backward-compatible (just remove the JOIN and fields)
+- Wave 3 migrations: `ck_canonical_entity_type` constraint can be dropped with `ALTER TABLE canonical_entities DROP CONSTRAINT ck_canonical_entity_type`; no data changed
+- Wave 3 hybrid: Removing hybrid routing → revert to depth=1 always (backward-compatible, as depth param has default=1)
 
 ---
 
 ## Deferred to PRD Session
 
-The following enhancements require formal PRDs (in progress):
-
-1. **Isolated node enrichment** (68% entities with 0 relations) → **PRD-0073** — synthetic relations from structured data (EODHD), new worker, new confidence sub-profile
-2. **Intelligence layer** (edge opportunity scoring, contradiction visualization, temporal graph view) → **PRD-0074**
-3. **Hub node quality scoring** (entity quality score to down-rank pollution nodes) → subsumed in PRD-0073 or PRD-0074
-4. **Multi-hop depth > 3** — deferred; AGE Cypher path endpoint supports up to 5 hops but needs frontend pagination design
+| Item | Target | Reason |
+|------|--------|--------|
+| **Isolated node enrichment** (68% entities with 0 relations) | **PRD-0073** | Requires structured enrichment from EODHD, new worker, new confidence sub-profile |
+| **Hub node quality scoring** (KQ-05: "US" 68 relations, "analysts" 72 relations) | **PRD-0073 or PRD-0074** | Entity quality scoring requires structured data that PRD-0073 introduces; down-ranking logic fits alongside the enrichment scoring model |
+| **Evidence promotion pipeline** (4d: `relation_evidence_raw → relation_evidence`) | **PRD-0074** | `relation_evidence` lacks the unique index required for idempotent promotion; co-design with PRD-0074 evidence-analytics patterns; no current downstream consumer reads from `relation_evidence` |
+| **Intelligence layer** (edge opportunity scoring, contradiction visualization, temporal graph view) | **PRD-0074** | Formal PRD in progress |
+| **Multi-hop depth > 3** | Future | AGE Cypher supports up to 5 hops but frontend pagination design is needed first |
