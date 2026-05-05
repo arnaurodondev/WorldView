@@ -309,10 +309,30 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 # ── Rate Limiting ─────────────────────────────────────────
 
 
+# Financial-mutation path prefixes that get a tighter per-user sub-tier.
+# These cover write operations on transaction and brokerage resources — actions
+# that can have real financial consequences (creating/deleting transactions,
+# syncing brokerage accounts). We intentionally omit GET paths from this set
+# so read-heavy dashboard loads stay within the generous 300/min default bucket.
+_FINANCIAL_MUTATION_PREFIXES: tuple[str, ...] = (
+    "/v1/transactions",  # POST / PUT / DELETE transactions
+    "/v1/brokerage",  # POST brokerage connections, trigger sync
+    "/v1/portfolios",  # POST rebalance, PUT/DELETE portfolio entries
+)
+# Strict limit for financial mutations (POST/PUT/DELETE on the paths above).
+# 20/min allows ~1 transaction create every 3 seconds — generous for manual
+# entry but tight enough to stop accidental loops or misbehaving clients.
+_FINANCIAL_MUTATION_LIMIT = 20
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Sliding-window rate limiter backed by Valkey.
 
-    Authenticated requests are keyed by user_id (100/min).
+    Authenticated requests are keyed by user_id (300/min default).
+    Financial mutation endpoints (POST/PUT/DELETE on /v1/transactions,
+    /v1/brokerage, /v1/portfolios) use a tighter 20/min sub-tier keyed
+    separately so payment-adjacent writes are strictly controlled while
+    read-heavy dashboard loads stay within the default bucket.
     Unauthenticated requests are keyed by sha256(IP)[:16] (20/min).
     Fail-closed (D-001): returns 503 if Valkey is unavailable.
     """
@@ -353,6 +373,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         user = getattr(request.state, "user", None)
         path = str(request.url.path)
+        method = request.method.upper()
         # PLAN-0052 platform-QA fix (2026-05-01): bucket public-feedback +
         # public-roadmap surfaces under a separate, more generous IP-keyed
         # bucket. The default 20/min/IP cap meant a single noisy NAT (dev
@@ -364,9 +385,27 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # listing, voting, and the docs micro-survey POST all live under
         # /v1/feedback/.
         is_public_feedback = path.startswith("/v1/feedback/")
+
+        # Financial mutation sub-tier: tighter bucket (20/min) for write
+        # operations on transaction and brokerage endpoints so accidental
+        # loops or misbehaving clients cannot blast payment-adjacent APIs.
+        # Only applies to authenticated users; unauthenticated mutations are
+        # already restricted by the strict 20/min IP bucket below.
+        is_financial_mutation = method in {"POST", "PUT", "DELETE", "PATCH"} and any(
+            path.startswith(pfx) for pfx in _FINANCIAL_MUTATION_PREFIXES
+        )
+
         if user and user.get("user_id"):
-            key = f"rl:v1:user:{user['user_id']}"
-            limit = self.max_requests
+            if is_financial_mutation:
+                # Separate Valkey key so the financial-mutation counter does
+                # not eat the general dashboard budget. A user can perform
+                # up to 20 transaction writes per minute while simultaneously
+                # firing 300 read requests for charts / screener / KG data.
+                key = f"rl:v1:fin:{user['user_id']}"
+                limit = _FINANCIAL_MUTATION_LIMIT
+            else:
+                key = f"rl:v1:user:{user['user_id']}"
+                limit = self.max_requests
         else:
             ip = request.client.host if request.client else "unknown"
             ip_hash = hashlib.sha256(ip.encode()).hexdigest()[:16]

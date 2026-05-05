@@ -1889,19 +1889,20 @@ async def get_morning_briefing(request: Request) -> Any:
     """Proxy GET /api/v1/briefings/morning → S8 RAG/Chat service.
 
     Requires authentication. Returns the AI-generated morning market briefing.
-
-    Note: S8 does not yet expose this GET endpoint — the proxy route will return
-    404/503 from S8 until the briefing endpoints are implemented in S8.
-    The proxy is correct and will work automatically once S8 adds the route.
+    The rag-chat client has a 120 s timeout (app.py lifespan). On timeout we
+    return 503 (not 500) so the frontend can show a friendly retry message.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
-    resp = await clients.rag_chat.get(
-        "/api/v1/briefings/morning",
-        headers=headers,
-    )
+    try:
+        resp = await clients.rag_chat.get(
+            "/api/v1/briefings/morning",
+            headers=headers,
+        )
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise HTTPException(status_code=503, detail="Briefing generation timed out") from exc
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
@@ -1910,20 +1911,20 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> Any:
     """Proxy GET /api/v1/briefings/instrument/{entity_id} → S8 RAG/Chat service.
 
     Requires authentication. Returns the AI-generated briefing for a specific
-    instrument/entity.
-
-    Note: S8 does not yet expose this GET endpoint — the proxy route will return
-    404/503 from S8 until the briefing endpoints are implemented in S8.
-    The proxy is correct and will work automatically once S8 adds the route.
+    instrument/entity. Returns 503 (not 500) on httpx.TimeoutException so the
+    frontend IntelligenceTab can show a "try again" message instead of an error.
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
     headers = _auth_headers(request)
     clients = _clients(request)
-    resp = await clients.rag_chat.get(
-        f"/api/v1/briefings/instrument/{entity_id}",
-        headers=headers,
-    )
+    try:
+        resp = await clients.rag_chat.get(
+            f"/api/v1/briefings/instrument/{entity_id}",
+            headers=headers,
+        )
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise HTTPException(status_code=503, detail="Briefing generation timed out") from exc
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
