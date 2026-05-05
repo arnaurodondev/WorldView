@@ -48,6 +48,23 @@ export interface MarkdownContentProps {
   size?: "compact" | "comfortable";
   /** Optional extra Tailwind classes appended to the wrapper. */
   className?: string;
+  /**
+   * P2C-5: When true, pre-processes the source to render `[N]` citation
+   * markers as styled `<sup>` elements rather than plain text.
+   *
+   * WHY opt-in (not default): citation markers appear only in S8 RAG chat
+   * responses. Enabling citation rendering on morning briefs, earnings cards,
+   * or other surfaces could incorrectly style content like "[12]" in financial
+   * notation (e.g. footnote refs in PDF-extracted text). Chat message bubbles
+   * pass `withCitationSups` explicitly; all other callers get plain text.
+   *
+   * WHY pre-process (not a custom remark plugin): react-markdown v9 doesn't
+   * expose a text-node component override. The sentinel-prefix approach
+   * (`__cite__N`) is a deliberate internal encoding: the prefix cannot appear
+   * in real markdown source text, so the `code` component can detect it safely
+   * and short-circuit to a `<sup>` element without risk of collisions.
+   */
+  withCitationSups?: boolean;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -58,11 +75,54 @@ export interface MarkdownContentProps {
  * Usage:
  *   <MarkdownContent size="compact">{briefText}</MarkdownContent>
  */
+// ── Citation sentinel ─────────────────────────────────────────────────────────
+
+/**
+ * CITE_SENTINEL — internal prefix used to encode `[N]` citation markers for
+ * the `withCitationSups` feature. Must be a string that:
+ *   1. Cannot appear in normal markdown source (no `__` in real content).
+ *   2. Produces valid inline code when backtick-wrapped: `__cite__1`
+ *   3. Is detectable in the `code` component override below.
+ *
+ * WHY backtick-wrapped inline code as the transport: react-markdown v9 has no
+ * text-node component override. Wrapping the sentinel in backticks produces an
+ * `<code>` node, which the `code` component can intercept. The alternative
+ * (rehype-raw + HTML passthrough) requires installing `rehype-raw`.
+ */
+const CITE_SENTINEL = "__cite__";
+
+/**
+ * preprocessCitations — replace `[N]` markers with backtick-wrapped sentinels
+ * before passing to ReactMarkdown.
+ *
+ * Input:  "See the analysis [1] and the SEC filing [2]."
+ * Output: "See the analysis `__cite__1` and the SEC filing `__cite__2`."
+ *
+ * WHY only 1-30 range: citation indices beyond 30 are unrealistic for a RAG
+ * response (the retriever returns at most 15-20 chunks). Limiting the range
+ * prevents false matches on "[31]" in financial data (e.g. "P/E [31.5x]").
+ */
+function preprocessCitations(source: string): string {
+  return source.replace(/\[(\d{1,2})\]/g, (_match, num) => {
+    const n = parseInt(num, 10);
+    // Only encode 1–30 to avoid false positives on large numbers.
+    if (n < 1 || n > 30) return _match;
+    return `\`${CITE_SENTINEL}${num}\``;
+  });
+}
+
 export function MarkdownContent({
   children,
   size = "comfortable",
   className,
+  withCitationSups = false,
 }: MarkdownContentProps): ReactNode {
+  // P2C-5: pre-process [N] markers → sentinel inline-code when opt-in.
+  // WHY before the component body (not inside ReactMarkdown children): the
+  // preprocessed string is stable per render — React will not re-run the
+  // replacement unless `children` or `withCitationSups` changes.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- used in JSX at {source} below (ESLint false-positive: variable is referenced inside ReactMarkdown children)
+  const source = withCitationSups ? preprocessCitations(children) : children;
   // WHY size-keyed token bag: keeps every override below readable — it would
   // be unreadable to interleave conditional class strings inside each override.
   const t =
@@ -93,6 +153,8 @@ export function MarkdownContent({
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        // P2C-5: use `source` (pre-processed when withCitationSups=true, else
+        // identical to `children`) so citation markers reach the code override.
         components={{
           // ── Headings ───────────────────────────────────────────────────────
           h2: ({ children: c }) => <h2 className={t.h2}>{c}</h2>,
@@ -155,7 +217,35 @@ export function MarkdownContent({
           // block code (inside <pre>); inline code has no className. We use
           // the presence of className (or the parent <pre>) to tell them apart
           // and apply different padding.
+          //
+          // P2C-5 citation sentinel: when withCitationSups=true the source was
+          // pre-processed to convert [N] → `__cite__N`. The code component
+          // detects that prefix and short-circuits to a styled <sup> element.
+          // WHY early return before isBlock check: sentinels are always inline
+          // (no className), so this check is safe. If somehow a sentinel ends up
+          // inside a fenced code block the isBlock path would have className set
+          // and we'd fall through to normal code rendering — which is correct
+          // (don't double-process).
           code: ({ className: cls, children: c }) => {
+            // P2C-5: detect and render citation superscripts
+            if (withCitationSups && !cls) {
+              const text = typeof c === "string" ? c : "";
+              if (text.startsWith(CITE_SENTINEL)) {
+                const citNum = text.slice(CITE_SENTINEL.length);
+                return (
+                  // WHY these classes match AskAiPanel renderWithCitations:
+                  // consistent citation styling across both the mini-panel and
+                  // the full Chat thread (same primary/10 chip background, same
+                  // font-mono 8px size). Visual vocabulary is unified.
+                  <sup
+                    className="cursor-default rounded-[2px] bg-primary/10 px-0.5 text-[8px] font-mono text-primary"
+                    title={`Citation ${citNum}`}
+                  >
+                    [{citNum}]
+                  </sup>
+                );
+              }
+            }
             const isBlock = !!cls;
             return (
               <code
@@ -181,7 +271,7 @@ export function MarkdownContent({
           ),
         }}
       >
-        {children}
+        {source}
       </ReactMarkdown>
     </div>
   );
