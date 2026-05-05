@@ -35,6 +35,42 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _EXTRACT_MODEL_ID = "kg-entity-profile-v1"
 
+# Canonical entity types seeded in migration 0001. The code-level validation
+# here mirrors the DB CHECK constraint added by migration 0021 (T-72-3-02).
+_VALID_ENTITY_TYPES: frozenset[str] = frozenset(
+    {
+        "company",
+        "financial_instrument",
+        "person",
+        "organization",
+        "country",
+        "currency",
+        "commodity",
+        "index",
+        "sector",
+        "concept",
+        "event",
+        "other",
+    }
+)
+
+# Map legacy or LLM-invented aliases to the canonical type.
+# Includes types emitted by entity_profile.py v1.0 prompt (pre-T-72-3-02).
+_ENTITY_TYPE_ALIASES: dict[str, str] = {
+    "corp": "company",
+    "corporation": "company",
+    "enterprise": "company",
+    "firm": "company",
+    "business": "company",
+    "organisation": "organization",
+    "inst": "organization",
+    "institution": "organization",
+    # Legacy v1.0 prompt types not in the canonical list:
+    "regulator": "organization",
+    "fund": "financial_instrument",
+    "macro_indicator": "concept",
+}
+
 
 def _build_dirtied_event(entity_id: UUID, dirty_reason: str = "profile_updated") -> bytes:
     """Build a fully-populated entity.dirtied.v1 Confluent-Avro payload.
@@ -150,7 +186,17 @@ async def persist_enrichment(
     from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
 
     canonical_name: str = profile.get("canonical_name") or mention_text
-    entity_type: str = profile.get("entity_type") or str(profile.get("mention_class", "unknown"))
+    _raw_type: str = profile.get("entity_type") or str(profile.get("mention_class", "unknown"))
+    _norm_type = _raw_type.lower().strip().replace(" ", "_")
+    entity_type = _ENTITY_TYPE_ALIASES.get(_norm_type, _norm_type)
+    if entity_type not in _VALID_ENTITY_TYPES:
+        logger.warning(  # type: ignore[no-any-return]
+            "provisional_enrichment_invalid_entity_type",
+            raw_type=_raw_type,
+            mention_text=mention_text,
+            defaulting_to="other",
+        )
+        entity_type = "other"
     # Clamp ticker/isin to DB column widths (varchar(20)); discard if malformed.
     # Qwen3.5-0.8B occasionally returns oversized values despite prompt instructions.
     _ticker_raw: str | None = profile.get("ticker")

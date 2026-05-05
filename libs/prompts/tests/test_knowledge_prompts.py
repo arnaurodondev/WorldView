@@ -137,8 +137,9 @@ class TestAliasGeneration:
 
 class TestVersions:
     def test_all_versions_are_semver(self) -> None:
-        # RELATION_SUMMARY + ENTITY_PROFILE remain at v1.0; ALIAS_GENERATION
+        # RELATION_SUMMARY at v1.0; ENTITY_PROFILE bumped to v2.0 in PLAN-0072 Wave 3
+        # (entity_type list corrected to match canonical 12 types); ALIAS_GENERATION
         # bumped to v2.0 in PLAN-0057 Wave C-4.
         assert RELATION_SUMMARY.version == "1.0"
-        assert ENTITY_PROFILE.version == "1.0"
+        assert ENTITY_PROFILE.version == "2.0"
         assert ALIAS_GENERATION.version == "2.0"
