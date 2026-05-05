@@ -2,7 +2,7 @@
 
 > **Category**: frontend
 > **Description**: React hooks, Next.js, WebSocket/SSE, TypeScript, CSS, component lifecycle, API contract mismatches in UI code
-> **Count**: 34 patterns
+> **Count**: 35 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -1122,3 +1122,35 @@ instances project-wide.
 - Code review: flag any `TabsContent className` containing `\bflex\b|\bgrid\b|\bblock\b` without a `data-[state=active]:` guard.
 
 **Regression test**: `apps/worldview-web/__tests__/tabs-hidden-override.test.tsx` (to be added)
+
+---
+
+## BP-389 — AG Grid CSP inline-style block, font-src data: violation, and missing module registration
+
+**Context**: AG Grid v35 Community added to screener + portfolio holdings tables; running under Next.js 15 nonce-based CSP
+
+**Symptom**: AG Grid renders as a black/blank rectangle; browser console shows:
+- `Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline' does not appear in the style-src directive` (×25)
+- `Refused to load data:font/woff2;...` (font-src violation)
+- `AG Grid: error #272 — No AG Grid modules are registered`
+- `ResizeObserver loop completed with undelivered notifications` (×170 — layout thrash from styless grid)
+- Safari: `Failed to load resource: You do not have permission to access the requested resource` (Safari CSP block message)
+
+**Root cause (three distinct issues)**:
+
+1. **CSP nonce kills `'unsafe-inline'` in `style-src`**: `middleware.ts` included `'nonce-${nonce}'` in `style-src`. Per CSP Level 3 §6.8.2, presence of `nonce-*` in a directive causes browsers (Chrome, Firefox) to ignore `'unsafe-inline'` for inline `<style>` elements. AG Grid v35 dynamically injects ~20 `<style>` elements at grid init without nonces — all blocked.
+
+2. **AG Grid icon font loaded via `data:` URI**: The `ag-theme-alpine` CSS includes `@font-face { src: url("data:font/woff2;base64,...") }` for its grid icon font. `font-src` was `'self' https://fonts.gstatic.com` with no `data:` allowed.
+
+3. **`AllCommunityModule` never registered**: `AgGridBase.tsx` uses `<AgGridReact>` without calling `ModuleRegistry.registerModules([AllCommunityModule])`. AG Grid v32+ requires explicit module registration.
+
+**Fix**:
+- `middleware.ts`: remove `'nonce-${nonce}'` from `style-src` (Next.js static stylesheets are covered by `'self'`; inline Tailwind + AG Grid styles covered by `'unsafe-inline'` which is now active again). Add `data:` to `font-src`.
+- `providers.tsx`: add `ModuleRegistry.registerModules([AllCommunityModule])` at module level (runs once before any `AgGridBase` mount, regardless of which page the user lands on).
+
+**Prevention**:
+- When adding a third-party library that injects inline `<style>` elements (AG Grid, some charting libs, styled-components), check whether the CSP `style-src` directive contains any `nonce-*` or `hash-*` source — if so, `'unsafe-inline'` will be silently ignored.
+- Verify CSP compliance with browser devtools Network → Response Headers → Content-Security-Policy BEFORE shipping a new component to staging.
+- For AG Grid specifically: `ModuleRegistry.registerModules(...)` must be called exactly once before any grid renders — put it in the providers/entry file, not inside the component.
+
+**Regression test**: `apps/worldview-web/__tests__/csp-headers.test.ts` (to be added)

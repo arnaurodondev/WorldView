@@ -24,6 +24,16 @@ import { Toaster } from "sonner";
 // Mounted at the very top of the tree so any descendant (sidebar, modal,
 // chart) can adopt URL-backed state without further wiring.
 import { NuqsAdapter } from "nuqs/adapters/next/app";
+// AG Grid module registration — must happen exactly once before any AgGridReact
+// renders. Placing it here (inside the "use client" providers bundle, module-level)
+// guarantees it runs before the first AgGridBase mount regardless of which page
+// the user lands on. AllCommunityModule includes all Community features (sorting,
+// filtering, column groups, etc.) without requiring an Enterprise license.
+// WHY not in AgGridBase.tsx: registerModules is designed to be called once;
+// calling it inside a component render would fire on every mount.
+import { ModuleRegistry, AllCommunityModule } from "ag-grid-community";
+ModuleRegistry.registerModules([AllCommunityModule]);
+
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AlertStreamProvider } from "@/contexts/AlertStreamContext";
 // PLAN-0059-C C-3: ApiClientProvider memoises createGateway(accessToken) so

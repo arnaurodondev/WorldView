@@ -94,15 +94,20 @@ export function middleware(request: NextRequest): NextResponse {
     // payload scripts (which DO have nonce attributes). External-script XSS is still
     // blocked because we have no wildcard hosts and no 'unsafe-inline'.
     `script-src 'self' 'nonce-${nonce}' 'unsafe-eval'`,
-    // Style-src: 'unsafe-inline' for Tailwind JIT <style> injection (can't be
-    // nonced without major refactor). 'nonce-N' added because Next.js 15
-    // automatically attaches a nonce attribute to <link rel="stylesheet">
-    // elements when x-nonce is set. Safari (and strict Chrome) require a
-    // matching nonce-source in style-src when the element carries a nonce —
-    // falling back to 'self' is NOT guaranteed. Without this, ALL stylesheets
-    // are silently blocked and the page renders as plain unstyled HTML.
-    `style-src 'self' 'unsafe-inline' 'nonce-${nonce}' https://fonts.googleapis.com`,
-    "font-src 'self' https://fonts.gstatic.com",
+    // Style-src: 'unsafe-inline' required for Tailwind JIT + AG Grid dynamic
+    // <style> injection (AG Grid v35 injects ~20 inline <style> elements at
+    // grid init without nonces). WHY no 'nonce-N' here: per CSP Level 3 §6.8.2,
+    // the presence of nonce-* in style-src causes browsers to IGNORE
+    // 'unsafe-inline' for inline <style> elements — the nonce override defeats
+    // 'unsafe-inline'. Since Next.js <link rel="stylesheet"> elements are served
+    // from /_next/static/ (covered by 'self'), the nonce on those elements is
+    // not required in style-src. 'self' + 'unsafe-inline' is sufficient.
+    // (BP-389: nonce-in-style-src blocks AG Grid inline styles)
+    `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`,
+    // font-src: 'data:' is required for AG Grid's alpine theme which embeds
+    // its icon font as a base64 data: URI inside the bundled CSS.
+    // (BP-389: AG Grid icon font blocked by font-src without data:)
+    "font-src 'self' https://fonts.gstatic.com data:",
     "img-src 'self' https://*.eodhd.com https://*.clearbit.com data: blob:",
     `connect-src 'self' ws://${wsOrigin} wss://${wsOrigin}`,
     "frame-ancestors 'none'",
