@@ -218,10 +218,10 @@ describe("Chat page — new chat button", () => {
   it("shows welcome state (no thread selected) on initial render", async () => {
     await renderChatPage();
 
-    // WHY check for "Intelligence Chat" heading: confirms the welcome/empty state
+    // WHY check for "Analyst Intelligence" heading: confirms the welcome/empty state
     // is shown when no thread is selected — the right panel defaults to onboarding.
     await waitFor(() => {
-      expect(screen.getByText("Intelligence Chat")).toBeInTheDocument();
+      expect(screen.getByText("Analyst Intelligence")).toBeInTheDocument();
     });
   });
 

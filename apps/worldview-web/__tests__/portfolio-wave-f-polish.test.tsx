@@ -294,8 +294,7 @@ describe("Wave F · F-P-025 · Sort persisted to URL", () => {
       />,
     );
 
-    // The default sort is value/desc — first header click on QTY should
-    // change the URL to sort=qty&dir=desc.
+    // First click on an unsorted column cycles to ascending (AG Grid default).
     const qtyHeader = screen.getByText("QTY");
     fireEvent.click(qtyHeader);
 
@@ -308,7 +307,7 @@ describe("Wave F · F-P-025 · Sort persisted to URL", () => {
     const lastCall = mockReplace.mock.calls[mockReplace.mock.calls.length - 1];
     const [url] = lastCall;
     expect(String(url)).toContain("sort=qty");
-    expect(String(url)).toContain("dir=desc");
+    expect(String(url)).toContain("dir=asc");
   });
 
   it("reads initial sort from URL params when present", async () => {

@@ -60,13 +60,14 @@ vi.mock("@sentry/nextjs", () => {
   const R = require("react") as typeof import("react");
 
   class MockErrorBoundary extends R.Component<
-    { children: R.ReactNode; fallback: R.ReactNode },
+    { children: React.ReactNode; fallback: React.ReactNode },
     { hasError: boolean }
   > {
-    // state shadows React.Component.state — class field, not a method override.
-    state = { hasError: false };
+    // React.Component declares `state` in its type — noImplicitOverride requires `override` here.
+    override state = { hasError: false };
 
-    // getDerivedStateFromError is NOT in React.Component types → no `override`.
+    // getDerivedStateFromError is NOT declared in React.Component types (static lifecycle
+    // looked up by React at runtime, not TypeScript-typed) — no `override` allowed.
     static getDerivedStateFromError() {
       return { hasError: true };
     }

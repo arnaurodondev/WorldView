@@ -160,8 +160,8 @@ describe("TickerPicker", () => {
     // Select the TSLA result
     fireEvent.click(screen.getByText("TSLA"));
 
-    // setActiveSymbol must be called with (panelId, ticker, instrumentId)
-    expect(mockSetActiveSymbol).toHaveBeenCalledWith("p-2", "TSLA", "ins-tsla");
+    // setActiveSymbol must be called with (panelId, ticker, instrumentId, entityId)
+    expect(mockSetActiveSymbol).toHaveBeenCalledWith("p-2", "TSLA", "ins-tsla", "ent-tsla");
   });
 
   it("saves the selected instrument to recent instruments", async () => {
