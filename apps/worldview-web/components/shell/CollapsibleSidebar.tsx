@@ -37,6 +37,7 @@ import { useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  BarChart2,
   Bell,
   Briefcase,
   ChevronLeft,
@@ -55,20 +56,21 @@ import { AlarmsPanel } from "@/components/shell/AlarmsPanel";
 // ── Nav items (PRD §4.2) ──────────────────────────────────────────────────────
 
 /**
- * NAV_ITEMS — 7 primary navigation destinations.
+ * NAV_ITEMS — 8 primary navigation destinations.
  * WHY this order: Dashboard first (morning routine start), then Portfolio
  * (position review), Instruments (research), Screener (discovery), Workspace
- * (active analysis), Alerts (monitoring), Chat (research assistant).
- * Mirrors the institutional trader's daily workflow sequence.
+ * (active analysis), Predictions (market sentiment), Alerts (monitoring),
+ * Chat (research assistant). Mirrors the institutional trader's daily workflow.
  */
 const NAV_ITEMS = [
-  { href: "/dashboard",   icon: LayoutDashboard, label: "Dashboard"   },
-  { href: "/portfolio",   icon: Briefcase,       label: "Portfolio"   },
-  { href: "/instruments", icon: TrendingUp,      label: "Instruments" },
-  { href: "/screener",    icon: Filter,          label: "Screener"    },
-  { href: "/workspace",   icon: LayoutGrid,      label: "Workspace"   },
-  { href: "/alerts",      icon: Bell,            label: "Alerts"      },
-  { href: "/chat",        icon: MessageSquare,   label: "Chat"        },
+  { href: "/dashboard",          icon: LayoutDashboard, label: "Dashboard"   },
+  { href: "/portfolio",          icon: Briefcase,       label: "Portfolio"   },
+  { href: "/instruments",        icon: TrendingUp,      label: "Instruments" },
+  { href: "/screener",           icon: Filter,          label: "Screener"    },
+  { href: "/workspace",          icon: LayoutGrid,      label: "Workspace"   },
+  { href: "/prediction-markets", icon: BarChart2,       label: "Predictions" },
+  { href: "/alerts",             icon: Bell,            label: "Alerts"      },
+  { href: "/chat",               icon: MessageSquare,   label: "Chat"        },
 ] as const;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
