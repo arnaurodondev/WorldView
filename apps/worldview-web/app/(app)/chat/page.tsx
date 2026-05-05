@@ -101,8 +101,10 @@ import { ThreadItem } from "@/features/chat/components/ThreadItem";
 import {
   PLACEHOLDER_THREAD_TITLE,
   STARTER_QUESTIONS,
+  PORTFOLIO_STARTER_QUESTIONS,
   entityStarters,
 } from "@/features/chat/lib/starters";
+import { MarketContextBanner } from "@/components/chat/MarketContextBanner";
 import { useChatStream } from "@/features/chat/hooks/useChatStream";
 
 // ── Main page component ───────────────────────────────────────────────────────
@@ -451,6 +453,76 @@ export default function ChatPage() {
     }
   }
 
+  // ── P2C-3: Entity Quick-Chips — derived from current thread messages ─────
+  //
+  // WHY extract from message content: the thread data has no structured
+  // `context_entities` field today. We scan user messages for capitalized
+  // 1–5 char strings (standard ticker format) as a lightweight proxy.
+  // This gives the analyst one-click pivoting to instruments already
+  // mentioned in the thread without retyping. Bloomberg Terminal convention:
+  // entity chips appear above the command line for entities in context.
+  //
+  // WHY user messages only (not assistant): assistant messages contain tickers
+  // too, but also many false positives (e.g. "The SEC filed an 8-K about GHJ"
+  // where "SEC" and "GHJ" are not investable tickers). User messages are where
+  // the analyst explicitly named the instruments they care about.
+  //
+  // WHY max 5: limited chip rail space in the 320px input footer. 5 chips
+  // fit comfortably without wrapping to a second row or crowding the textarea.
+  const activeEntityChips = useMemo<string[]>(() => {
+    if (!activeThreadId || localMessages.length === 0) return [];
+
+    const TICKER_RE = /\b([A-Z]{1,5})\b/g;
+    // Common English words that match the pattern but aren't tickers.
+    const SKIP = new Set([
+      "I", "A", "AN", "THE", "AND", "OR", "NOT", "FOR", "OF", "IN",
+      "ON", "AT", "TO", "BY", "BE", "DO", "IF", "UP", "NO", "VS",
+      "AI", "US", "UK", "EU", "Q", "S", "W", "E", "N", "M",
+    ]);
+
+    const seen = new Set<string>();
+    for (const entry of localMessages) {
+      // Only scan user messages — assistant messages have too many false positives.
+      if ("kind" in entry) continue; // slash turn
+      const msg = entry as { role: string; content: string };
+      if (msg.role !== "user") continue;
+      let m: RegExpExecArray | null;
+      const re = new RegExp(TICKER_RE.source, "g");
+      while ((m = re.exec(msg.content)) !== null) {
+        const tok = m[1];
+        if (!SKIP.has(tok) && tok.length >= 2) {
+          seen.add(tok);
+        }
+      }
+    }
+
+    // Also surface the entity from the URL param if resolved.
+    if (entityTicker) seen.add(entityTicker);
+
+    return [...seen].slice(0, 5);
+  }, [activeThreadId, localMessages, entityTicker]);
+
+  /**
+   * appendToInput — append a string to the current textarea value.
+   *
+   * WHY a named helper (not inline onClick): the same append logic is
+   * needed both by entity chips and potentially by other future chip types
+   * (e.g. /news slash command shortcut). Naming it makes tests cleaner.
+   *
+   * WHY trim then re-add space: avoids double-spaces when the input already
+   * ends with a space, but also avoids gluing the appended text to the last
+   * word (e.g. "about AAPL$MSFT" instead of "about AAPL $MSFT").
+   */
+  const appendToInput = useCallback((suffix: string) => {
+    setInput((prev) => {
+      const trimmed = prev.trimEnd();
+      return trimmed ? `${trimmed}${suffix}` : suffix.trimStart();
+    });
+    // Re-focus the textarea so the user can keep typing immediately after
+    // clicking a chip — avoids a two-step click-then-click-textarea flow.
+    setTimeout(() => textareaRef.current?.focus(), 0);
+  }, []);
+
   // ── Derived state ──────────────────────────────────────────────────────────
 
   const isSendDisabled = !input.trim() || isStreaming || !accessToken;
@@ -465,6 +537,11 @@ export default function ChatPage() {
         className="flex w-[280px] shrink-0 flex-col border-r border-border bg-background"
         aria-label="Chat thread list"
       >
+        {/* PLAN-0071 P2C-1: market session status strip — grounds the
+            intelligence panel in real market context so analysts know
+            at a glance whether they're in live-session or planning mode. */}
+        <MarketContextBanner />
+
         {/* Header + New Chat button */}
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <div className="flex items-center gap-2">
@@ -593,20 +670,53 @@ export default function ChatPage() {
 
       {/* ════════════════ RIGHT PANEL — Chat Area ════════════════ */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        {/* Welcome / empty state */}
+        {/* Welcome / empty state — PLAN-0071 P2C-4: analyst-specific copy
+            replaces the generic chatbot welcome. The two-line hierarchy
+            (label + description) mirrors Bloomberg COMMAND BAR prompt
+            style — short imperative, then scope clarification. */}
         {!activeThreadId && (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 bg-background p-4 text-center">
-            <p className="text-sm font-semibold text-foreground">Intelligence Chat</p>
-            <p className="max-w-sm text-xs text-muted-foreground">
-              Ask research-grade questions about markets, companies, and news.
-            </p>
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-background p-4 text-center">
+            <div className="space-y-1">
+              <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.10em] text-muted-foreground">
+                Analyst Intelligence
+              </p>
+              <p className="max-w-[280px] text-[11px] leading-relaxed text-muted-foreground">
+                Research-grade Q&A on earnings, SEC filings, macro, and your
+                portfolio — grounded in real source documents, not hallucination.
+              </p>
+            </div>
+
+            {/* PLAN-0071 P2C-2: portfolio-scoped starter questions shown in
+                the no-thread-selected panel. Analysts landing here have no
+                active entity context — portfolio-level questions surface the
+                most immediately useful research directions. */}
+            <div className="mt-1 grid w-full max-w-[440px] grid-cols-2 gap-1.5">
+              {PORTFOLIO_STARTER_QUESTIONS.map((q, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => {
+                    // Pre-fill the input state first — the textarea is not
+                    // mounted yet (activeThreadId is null), but setInput just
+                    // sets React state. When handleNewChat() sets activeThreadId
+                    // and the input area mounts, it will read the already-set value.
+                    setInput(q);
+                    handleNewChat();
+                  }}
+                  className="rounded-[2px] border border-border bg-card p-2.5 text-left text-[10px] leading-relaxed text-foreground hover:border-primary/40 hover:bg-muted/40 transition-colors duration-0"
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+
             <Button
               size="sm"
               onClick={handleNewChat}
-              className="mt-1 gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
+              className="gap-1.5 bg-primary text-primary-foreground hover:bg-primary/90"
             >
               <Plus className="h-3.5 w-3.5" strokeWidth={1.5} />
-              Start a conversation
+              New conversation
             </Button>
           </div>
         )}
@@ -744,6 +854,39 @@ export default function ChatPage() {
                   >
                     Stop generating
                   </Button>
+                </div>
+              )}
+
+              {/* P2C-3: Entity quick-chips — visible in active threads that
+                  have at least one user message mentioning a ticker.
+                  WHY entity chips: quick-pivot to related instruments. Clicking
+                  a chip appends "$TICKER" to the input so analysts can ask
+                  follow-up questions about mentioned entities without retyping.
+                  Bloomberg Terminal convention: quick-select chips for entities
+                  in context appear above the command line. */}
+              {activeEntityChips.length > 0 && !showAutocomplete && (
+                <div className="mb-2 flex flex-wrap items-center gap-1">
+                  {/* WHY "Related:" label: makes the chip rail self-explanatory
+                      to analysts who haven't seen it before. Without a label the
+                      row of mono chips could be mistaken for keyboard shortcuts. */}
+                  <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground/60">
+                    Related:
+                  </span>
+                  {activeEntityChips.map((ticker) => (
+                    <button
+                      key={ticker}
+                      type="button"
+                      onClick={() => appendToInput(` $${ticker}`)}
+                      title={`Add ${ticker} to query`}
+                      // WHY rounded-[2px]: terminal 2px radius rule.
+                      // WHY tabular-nums: ticker characters are numbers/letters at
+                      // a uniform width — tabular-nums prevents layout shift when
+                      // the chip content changes (e.g. on thread switch).
+                      className="rounded-[2px] border border-border/70 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-foreground transition-colors hover:border-primary/50 hover:text-primary"
+                    >
+                      {ticker}
+                    </button>
+                  ))}
                 </div>
               )}
 

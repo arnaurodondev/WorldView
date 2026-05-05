@@ -35,6 +35,25 @@ export const STARTER_QUESTIONS = [
 ] as const;
 
 /**
+ * PORTFOLIO_STARTER_QUESTIONS — research questions scoped to a portfolio
+ * manager's book rather than a single instrument.
+ *
+ * WHY A SEPARATE CONSTANT (not merged with STARTER_QUESTIONS): the target
+ * user shifts from a single-instrument analyst to a PM scanning their whole
+ * book. The question phrasing reflects that — "my positions", "my portfolio",
+ * "my book" — so the AI understands the context immediately without requiring
+ * the user to re-frame. PLAN-0071 P2C-2.
+ */
+export const PORTFOLIO_STARTER_QUESTIONS = [
+  "Which positions are dragging my portfolio's performance this week?",
+  "What is my sector concentration risk right now?",
+  "Identify the highest-beta names in my current book",
+  "Which holdings have upcoming earnings or catalyst events?",
+  "Compare my top 5 positions' recent earnings vs. analyst expectations",
+  "Summarise the key news driving my portfolio's P&L today",
+] as const;
+
+/**
  * entityStarters — context-aware starter questions when ?entity_id= is set.
  *
  * WHY a function (not a constant): we substitute the ticker into the strings

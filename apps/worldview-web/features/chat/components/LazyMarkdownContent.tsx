@@ -37,7 +37,8 @@ import type { MarkdownContentProps } from "@/components/ui/markdown-content";
 // WHY re-export the type: consumers of LazyMarkdownContent (MessageBubble) pass
 // props typed as MarkdownContentProps. Importing the type here keeps the prop
 // contract in sync with the underlying MarkdownContent component automatically —
-// if MarkdownContentProps changes, TypeScript will catch the mismatch here.
+// if MarkdownContentProps changes (e.g. new withCitationSups prop), TypeScript
+// will catch the mismatch here without any manual sync.
 export type { MarkdownContentProps };
 
 /**
