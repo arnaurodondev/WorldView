@@ -6,7 +6,7 @@ from prompts._base import PromptTemplate
 
 ENTITY_PROFILE = PromptTemplate(
     name="entity_profile",
-    version="1.0",
+    version="2.0",
     description=(
         "Extracts a canonical entity profile (name, type, ticker, ISIN, aliases) "
         "from a provisional mention for knowledge-graph enrichment."
@@ -24,8 +24,9 @@ ENTITY_PROFILE = PromptTemplate(
         " An incorrect ISIN is worse than null — return null if uncertain.\n"
         "- aliases: include only well-established alternative names (legal name, common"
         " abbreviation, former name). Maximum 5. Exclude speculative variants.\n"
-        "- entity_type: use exactly one of: financial_instrument | company | person |"
-        " regulator | index | fund | commodity | currency | macro_indicator | other\n\n"
+        "- entity_type MUST be exactly one of: company | financial_instrument | person |"
+        " organization | country | currency | commodity | index | sector | concept | event | other\n"
+        "  Do NOT invent new types. Use 'other' for anything not in this list.\n\n"
         "Respond with JSON only:\n"
         '{{"canonical_name": "...", "entity_type": "...", "ticker": null, "isin": null,'
         ' "aliases": []}}\n'

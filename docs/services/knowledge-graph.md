@@ -29,7 +29,7 @@ and performs read/write operations only.
 | GET | `/healthz` | — | Liveness — always 200 |
 | GET | `/readyz` | — | Readiness — SELECT 1 on intelligence_db; 503 if degraded |
 | GET | `/metrics` | — | Prometheus text format |
-| GET | `/api/v1/entities/{entity_id}/graph` | — | Egocentric graph neighborhood; query params: `min_confidence` (0–1), `semantic_mode`, `limit` (1–200), `evidence_snippets_limit` (1–10, default 3). Response includes `evidence_snippets: list[str]` and `relation_summary: str\|null` on each relation (batch-fetched, no N+1). |
+| GET | `/api/v1/entities/{entity_id}/graph` | — | Egocentric graph neighborhood; query params: `min_confidence` (0–1), `semantic_mode`, `limit` (1–200), `evidence_snippets_limit` (1–10, default 3), `depth` (1–3, default 1). `depth=1`: relational path — full `evidence_snippets` + `relation_summary`. `depth=2/3`: AGE Cypher multi-hop traversal (requires `CYPHER_ENABLED=true`); when `CYPHER_ENABLED=false`, `depth>1` falls back to depth=1 with a warning log. 504 on AGE 5 s timeout. |
 | GET | `/api/v1/entities/{entity_id}/contradictions` | — | Active contradiction links for entity; query params: `claim_type`, `top_k` (1–100, default 20). Returns empty list when none exist (NOT 404) |
 | GET | `/api/v1/relations` | — | Paginated filtered relation list; query params: `subject_entity_id`, `object_entity_id`, `canonical_type`, `semantic_mode`, `min_confidence`, `limit` (1–1000), `offset` |
 | GET | `/api/v1/graph/stats` | — | Aggregate counts: entity, relation, evidence, stale confidence, contradictions, breakdown by semantic_mode |

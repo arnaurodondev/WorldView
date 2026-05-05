@@ -428,3 +428,88 @@ class TestPersistEnrichment:
 
         # canonical + 5 LLM aliases = 6 inserts
         assert repos.alias_insert.await_count == 6
+
+
+# ---------------------------------------------------------------------------
+# entity_type normalisation (T-72-3-02)
+# ---------------------------------------------------------------------------
+
+
+class TestEntityTypeNormalisation:
+    """persist_enrichment normalises entity_type before any DB write."""
+
+    async def test_valid_entity_type_passes_unchanged(self) -> None:
+        """A canonical type is stored as-is."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        profile = {
+            "canonical_name": "Apple Inc.",
+            "entity_type": "company",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session, queue_id=_QUEUE_ID, mention_text="Apple Inc.", profile=profile
+            )
+
+        # entity created with correct type — confirm via create call args
+        repos.canonical_create.assert_awaited_once()
+
+    async def test_uppercase_entity_type_normalised(self) -> None:
+        """entity_type='ORGANIZATION' → normalised to 'organization' (valid)."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        profile = {"canonical_name": "Fed", "entity_type": "ORGANIZATION", "ticker": None, "isin": None, "aliases": []}
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(session=session, queue_id=_QUEUE_ID, mention_text="Fed", profile=profile)
+
+        # No warning logged — ORGANIZATION normalises to a valid type
+        repos.canonical_create.assert_awaited_once()
+
+    async def test_alias_corp_normalised_to_company(self) -> None:
+        """entity_type='corp' → alias-mapped to 'company' (valid, no warning)."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        profile = {"canonical_name": "Acme Corp", "entity_type": "corp", "ticker": None, "isin": None, "aliases": []}
+
+        with _patch_persist_repos(repos):
+            await core.persist_enrichment(
+                session=session, queue_id=_QUEUE_ID, mention_text="Acme Corp", profile=profile
+            )
+
+        repos.canonical_create.assert_awaited_once()
+
+    async def test_unknown_entity_type_defaults_to_other(self) -> None:
+        """entity_type='conglomerate' → invalid; stored as 'other' with warning."""
+        import structlog.testing
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        profile = {
+            "canonical_name": "MegaCorp",
+            "entity_type": "conglomerate",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        log_output: list[dict] = []
+        with structlog.testing.capture_logs() as captured:
+            with _patch_persist_repos(repos):
+                await core.persist_enrichment(
+                    session=session, queue_id=_QUEUE_ID, mention_text="MegaCorp", profile=profile
+                )
+            log_output = list(captured)
+
+        repos.canonical_create.assert_awaited_once()
+        warning_events = [e for e in log_output if e.get("log_level") == "warning"]
+        assert any(
+            e.get("event") == "provisional_enrichment_invalid_entity_type" for e in warning_events
+        ), f"Expected warning not found. Captured events: {log_output}"

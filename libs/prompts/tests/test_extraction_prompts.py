@@ -27,8 +27,8 @@ class TestDeepExtraction:
             DEEP_EXTRACTION.render(entities="AAPL")
 
     def test_version_is_semver(self) -> None:
-        # v1.1: updated in feat(plan-0061-wave-c) for DeepSeek-V4-Flash compatibility
-        assert DEEP_EXTRACTION.version == "1.1"
+        # v1.2: updated after v1.1 (DeepSeek-V4-Flash) — assertion synced with source
+        assert DEEP_EXTRACTION.version == "1.2"
 
     def test_frozen(self) -> None:
         with pytest.raises(AttributeError):
