@@ -234,7 +234,12 @@ async def get_company_overview(
         # an extra round-trip after render. The general fundamentals endpoint
         # returns all sections in one call; we filter by section name below.
         instrument_raw, profile_raw, ohlcv_raw, quote_raw, all_fundamentals_raw = await asyncio.gather(
-            _checked_get(clients.market_data, "market-data", f"/api/v1/instruments/{company_id}", headers=_h()),
+            _checked_get(
+                clients.market_data,
+                "market-data",
+                f"/api/v1/instruments/lookup?id={company_id}&extra_info=true",
+                headers=_h(),
+            ),
             _safe(f"/api/v1/fundamentals/{company_id}/company-profile"),
             _safe(f"/api/v1/ohlcv/{company_id}", params={"timeframe": "1d", "start": start_90d_ago}),
             _safe(f"/api/v1/quotes/{company_id}"),
@@ -1204,7 +1209,11 @@ async def get_watchlist_insights(
             # Just the instrument record gives us GICS sector — the per-member
             # `getCompanyOverview` would also fetch fundamentals + OHLCV which we
             # don't need here. Saves ~3x the per-member load.
-            return await _safe_get(clients.market_data, "market-data", f"/api/v1/instruments/{iid}")
+            return await _safe_get(
+                clients.market_data,
+                "market-data",
+                f"/api/v1/instruments/lookup?id={iid}&extra_info=true",
+            )
 
         quote_results, overview_results = await asyncio.gather(
             asyncio.gather(*[_quote(iid) for iid in capped_ids]),

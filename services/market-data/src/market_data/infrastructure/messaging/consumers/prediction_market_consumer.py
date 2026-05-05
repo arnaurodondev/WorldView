@@ -101,7 +101,7 @@ class PredictionMarketConsumer(BaseKafkaConsumer[dict]):
 
                 with open(schema_path) as f:
                     parsed_schema = fastavro.parse_schema(json.load(f))
-                return cast("dict[str, Any]", deserialize_avro(parsed_schema, raw))
+                return cast("dict[str, Any]", deserialize_avro(cast("dict[str, Any]", parsed_schema), raw))
             except Exception as exc:
                 logger.warning(
                     "avro_schemaless_deserialize_failed",

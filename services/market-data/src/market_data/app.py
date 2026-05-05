@@ -309,7 +309,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.warning("object_storage_init_failed_degrading")
     app.state.object_storage = object_storage
 
-    # 7. Background task: seed screen field metadata to DB + Valkey, then refresh every 6h
+    # 7. EODHD HTTP client (on-demand profile enrichment, PLAN-0073 Worker 13J)
+    from market_data.infrastructure.eodhd.client import EodhHdClient
+
+    app.state.eodhd_client = EodhHdClient(
+        api_key=settings.eodhd_api_key.get_secret_value(),
+        base_url=settings.eodhd_base_url,
+    )
+
+    # 8. Background task: seed screen field metadata to DB + Valkey, then refresh every 6h
     # R22 exemption: screen fields cache-warmer is explicitly exempted from the
     # "no asyncio.create_task in lifespan" rule per PRD-0017 §6.2.
     refresh_task = asyncio.create_task(_screen_fields_refresh_loop(write_factory, valkey_client, log))
@@ -320,6 +328,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     refresh_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await refresh_task
+
+    eodhd_client = getattr(app.state, "eodhd_client", None)
+    if eodhd_client is not None:
+        await eodhd_client.aclose()
 
     await valkey_client.close()
     await write_engine.dispose()

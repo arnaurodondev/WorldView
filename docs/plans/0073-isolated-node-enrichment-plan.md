@@ -262,13 +262,15 @@ def downgrade() -> None:
 
 ## Sub-Plan B — S3 market-data (Endpoint Refactor + Extension)
 
-### Wave B-0: Market-Data `securities.description` Migration
+### Wave B-0: Market-Data `securities.description` Migration ✅
 
 **Goal**: Add `description TEXT NULL` to the S3 `securities` table so EODHD descriptions can be persisted and subsequently returned by `/lookup?extra_info=true`.
 
 **Depends on**: none (can run in parallel with Sub-Plan A)
 
 **Estimated effort**: 15–20 min
+
+**Status**: **DONE** — 2026-05-05 · ruff + mypy clean
 
 **Architecture layer**: infrastructure (DDL only)
 
@@ -296,18 +298,20 @@ def downgrade() -> None:
 ```
 
 **Acceptance criteria**:
-- [ ] Migration applies and downgrades cleanly
-- [ ] `description` column present on `securities` table after upgrade
+- [x] Migration applies and downgrades cleanly
+- [x] `description` column present on `securities` table after upgrade
 
 ---
 
-### Wave B-1: Unified `/lookup` Endpoint + `/on-demand-profile` with DB Persistence
+### Wave B-1: Unified `/lookup` Endpoint + `/on-demand-profile` with DB Persistence ✅
 
 **Goal**: Consolidate `GET /instruments/symbol/{symbol}` and `GET /instruments/{instrument_id}` into a single `GET /instruments/lookup?symbol=&isin=&id=&extra_info=true` endpoint. Add internal `GET /instruments/on-demand-profile` that persists EODHD results to `securities`. Propagate endpoint changes to S9 and frontend.
 
 **Depends on**: Wave B-0
 
 **Estimated effort**: 90–120 min
+
+**Status**: **DONE** — 2026-05-05 · 25 new unit tests (S3) + 2 S9 test fixes · ruff + mypy clean
 
 **Architecture layer**: API + application + infrastructure
 
@@ -546,13 +550,15 @@ async def on_demand_profile(
 
 ---
 
-### Wave B-2: S3 Integration Tests
+### Wave B-2: S3 Integration Tests ✅
 
 **Goal**: Integration tests that verify the two new endpoints against a testcontainer DB with mocked EODHD.
 
 **Depends on**: Wave B-1
 
 **Estimated effort**: 30–45 min
+
+**Status**: **DONE** — 2026-05-05 · 5 integration tests (respx-mocked EODHD) · ruff + mypy clean
 
 **Architecture layer**: integration tests
 
@@ -587,11 +593,11 @@ Integration tests using `pytest-asyncio` and SQLAlchemy against a testcontainer 
 
 #### Validation Gate — Wave B-1 + B-2
 
-- [ ] `python -m pytest tests/ -v` passes in `services/market-data/` — all tests including existing ones
-- [ ] `ruff check` + `mypy` pass on all changed files in S3
-- [ ] New routes visible in OpenAPI `/docs`
-- [ ] Route ordering verified: `/lookup` and `/on-demand-profile` before `/{instrument_id}`
-- [ ] `on-demand-profile` returns 401 without internal JWT header
+- [x] `python -m pytest tests/ -v` passes in `services/market-data/` — all tests including existing ones
+- [x] `ruff check` + `mypy` pass on all changed files in S3
+- [x] New routes visible in OpenAPI `/docs`
+- [x] Route ordering verified: `/lookup` and `/on-demand-profile` before `/{instrument_id}`
+- [x] `on-demand-profile` returns 401 without internal JWT header
 
 #### Break Impact — Waves B-1, B-2
 

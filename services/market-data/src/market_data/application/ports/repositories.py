@@ -93,6 +93,15 @@ class SecurityRepository(ABC):
     async def upsert(self, security: Security) -> Security:
         """Insert or update the security; return the persisted record."""
 
+    @abstractmethod
+    async def update_from_enrichment(self, security_id: str, fields: dict[str, str | None]) -> None:
+        """COALESCE-update security fields from enrichment data.
+
+        Only updates columns whose current DB value IS NULL, preserving any
+        field already populated by a higher-priority source.  This prevents
+        EODHD from overwriting manually-curated or exchange-sourced values.
+        """
+
 
 class InstrumentRepository(ABC):
     """Read/write access to the ``instruments`` table."""
@@ -142,6 +151,14 @@ class InstrumentRepository(ABC):
     @abstractmethod
     async def update_metadata(self, id: str, metadata: dict[str, str | None]) -> None:  # noqa: A002
         """Update instrument metadata fields (name, isin, sector, etc.), ignoring None-valued keys."""
+
+    @abstractmethod
+    async def find_by_isin(self, isin: str) -> Instrument | None:
+        """Return the first active instrument whose ISIN matches, or ``None``."""
+
+    @abstractmethod
+    async def find_by_symbol_icase(self, symbol: str) -> Instrument | None:
+        """Return the first active instrument whose symbol matches case-insensitively, or ``None``."""
 
 
 class OHLCVRepository(ABC):

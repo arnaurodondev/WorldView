@@ -60,3 +60,11 @@ class StaleDataError(MarketDataError):
     lower priority than the stored record, the upsert is skipped and this
     error is raised to signal the caller.
     """
+
+
+class EodhRateLimitError(MarketDataError):
+    """Raised when EODHD returns HTTP 429 (rate-limit exceeded).
+
+    Callers should treat this as a transient error and back off before
+    retrying.  The on-demand-profile use case propagates this as HTTP 429.
+    """

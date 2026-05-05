@@ -55,10 +55,10 @@ def test_routes_registered() -> None:
     assert "/healthz" in routes
     assert "/readyz" in routes
 
-    # Instruments
+    # Instruments (PLAN-0073 Wave B-1: old /symbol/{symbol} and /{id} replaced by /lookup)
     assert "/api/v1/instruments" in routes
-    assert "/api/v1/instruments/{instrument_id}" in routes
-    assert "/api/v1/instruments/symbol/{symbol}" in routes
+    assert "/api/v1/instruments/lookup" in routes
+    assert "/api/v1/instruments/on-demand-profile" in routes
 
     # OHLCV
     assert "/api/v1/ohlcv/{instrument_id}" in routes
