@@ -2,7 +2,7 @@
 
 > **Category**: frontend
 > **Description**: React hooks, Next.js, WebSocket/SSE, TypeScript, CSS, component lifecycle, API contract mismatches in UI code
-> **Count**: 28 patterns
+> **Count**: 34 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -985,3 +985,140 @@ The component called `new Date(event.event_date)` which received `undefined`, th
 - `buildScreenerFilters(DEFAULT_FILTERS)` from `features/screener/lib/build-filters.ts` already handles this correctly — reuse it instead of hardcoding filters.
 
 ---
+
+---
+
+## BP-372 — TickerPicker Recents: Synthetic `ins-${ticker}` instrumentId → 422 on OHLCV Fetch
+
+**Context**: `apps/worldview-web/components/workspace/TickerPicker.tsx`, `lib/recent-instruments.ts`, `WorkspaceChartWidget.tsx`.
+
+**Symptom**: Workspace chart panel shows "No chart data" for recently-viewed instruments. Network tab shows `GET /api/v1/ohlcv/ins-tsla?timeframe=1d → 422: Invalid instrument_id`.
+
+**Root cause**: `saveRecentInstrument()` stored only `{entityId, ticker, name}` — no `instrumentId`. When recents were selected, `WorkspacePanelContainer` synthesized `ins-${ticker.toLowerCase()}` which the backend rejects (must be UUID). The real `instrumentId` was available in `SymbolLinkingContext` but was discarded via `void linkedInstrumentId`.
+
+**Fix**:
+1. Added `instrumentId?: string` to `RecentInstrument` interface and `saveRecentInstrument()` signature
+2. `TickerPicker.handleSelect` now persists the real `instrumentId` to recents
+3. Recents selection uses stored `r.instrumentId ?? \`ins-${r.ticker.toLowerCase()}\`` fallback
+4. `WorkspacePanelContainer` passes `instrumentIdOrUndefined` to `WorkspaceChartWidget`
+5. `WorkspaceChartWidget` accepts `instrumentId?: string` prop and uses it over synthetic fallback
+
+**Prevention**:
+- Any component that synthesizes IDs from display-names (ticker → `ins-${ticker}`) must be flagged. The backend only accepts real UUIDs.
+- TickerPicker selection should always propagate the full ID set from the search result.
+
+---
+
+## BP-373 — Screener Navigation: `row.entity_id` Undefined → `/instruments/undefined`
+
+**Context**: `app/(app)/screener/page.tsx`, portfolio/watchlist navigation.
+
+**Symptom**: Clicking a screener row navigates to `/instruments/undefined` or `/instruments/null`. Instrument detail page immediately shows "not found" or fails to load.
+
+**Root cause**: `onRowClick={(row) => router.push(\`/instruments/${row.entity_id}\`)}` but the screener API returns `entity_id: null` (not populated). The `entity_id` fallback in `runScreener()` maps to `instrument_id` (line 78 of screener.ts), but the navigation code reads the raw `entity_id` field first.
+
+**Fix**: Changed navigation to use `row.instrument_id ?? row.entity_id` in screener, `member.instrument_id ?? member.entity_id` in watchlist, and `row.h.instrument_id ?? row.h.entity_id` in holdings table.
+
+**Prevention**:
+- Navigation to `/instruments/[id]` should always prefer `instrument_id` (market-data UUID) over KG entity_id, since the page-bundle endpoint resolves entity_id from the overview.
+- Never use `row.entity_id` directly for navigation without a fallback — it may be null when the KG entity hasn't been seeded.
+
+---
+
+## BP-374 — Page-Bundle Fundamentals: KG entity_id Passed to Market-Data Endpoints → 404
+
+**Context**: `services/api-gateway/src/api_gateway/clients.py`, `get_instrument_page_bundle`.
+
+**Symptom**: Instrument detail page shows all fundamentals as "—". Bundle returns `fundamentals: null`.
+
+**Root cause**: Phase 2 fundamentals/technicals/insider calls used the raw URL `instrument_id` parameter even after Phase 1 resolved the real market-data `instrument_id` from `overview.instrument.instrument_id`. When navigating with KG entity_id (e.g., `11111111-0001-7000-8000-000000000001`), the market-data `/api/v1/fundamentals/{entity_id}` returns 404 "No fundamentals found".
+
+**Fix**: After Phase 1 overview, resolve `resolved_md_id = overview.instrument.instrument_id`. Use `resolved_md_id` for all Phase 2 market-data calls. Also guard `(all_fundamentals_raw or {}).get("records", [])` against None.
+
+**Prevention**:
+- In composite bundle endpoints, always extract the authoritative service-specific ID from Phase 1 response before using it in Phase 2 calls.
+- ADR-F-12: entity_id ≠ instrument_id. Market-data endpoints require `instrument_id`; KG endpoints require `entity_id`.
+
+---
+
+## BP-379 — FundamentalsTab all "—": Page-Bundle Seeds Wrong Shape into TanStack Cache
+
+**Context**: `apps/worldview-web/app/(app)/instruments/[entityId]/page.tsx` (cache priming effect).
+
+**Symptom**: Instrument detail page Fundamentals tab shows "—" for every metric (Market Cap, P/E, margins, etc.) even though the DB and API have correct data. The issue is silent — no errors in console.
+
+**Root cause**: The cache-priming `useEffect` called `queryClient.setQueryData(["fundamentals", md_id], bundle.fundamentals)` where `bundle.fundamentals` is `FundamentalsSectionResponse` (an object with `security_id` + `records: [...]` — raw section array). But `FundamentalsTab.useQuery` with `queryKey: ["fundamentals", instrumentId]` expects a flat `Fundamentals` object (with `pe_ratio`, `market_cap`, etc.) produced by `getFundamentals()` transformer. TanStack Query's `staleTime: 5min` prevented the correct `queryFn` from running — the component consumed the wrong shape for 5 minutes, every time.
+
+**Fix**: Remove the `bundle.fundamentals` seed from the cache-priming effect. The `FundamentalsTab` already receives `initialData={overview?.fundamentals}` (a flat `Fundamentals` from `CompanyOverview`) as `placeholderData`, so the initial paint shows real data while the `getFundamentals()` query fires.
+
+**Prevention**:
+- `queryClient.setQueryData(key, value)` does NOT validate the shape against TypeScript. Seeding the wrong type silently produces misbehaving components.
+- When a page bundle composes multiple sub-resources, each sub-resource shape must exactly match what the consuming component's `queryFn` would return — not the raw API response if the component uses a client-side transformer.
+- Any cache seed should be paired with a TypeScript cast that confirms the shape matches the query's generic type: `queryClient.setQueryData<Fundamentals>(key, transformedValue)`.
+
+---
+
+## BP-380 — OHLCVChart Timeframe Switch Stays Anchored at Historical Bars
+
+**Context**: `apps/worldview-web/components/instrument/OHLCVChart.tsx`.
+
+**Symptom**: After switching from "1D" to "1H" (or any other timeframe change), the chart auto-scrolls to the oldest available bar (e.g. 1985 for AAPL 1D → shows 40+ years of history). User must manually scroll right to see recent prices.
+
+**Root cause**: `hasScrolledToRealTime` ref was only reset in `useEffect(..., [instrumentId])` — not on `timeframe` changes. After the initial chart load, `hasScrolledToRealTime.current = true`. When the user switches timeframe, a new query fires with new bars; `setData()` auto-fits to show all bars. The scroll guard checks `!hasScrolledToRealTime.current` which is `false` → `scrollToRealTime()` is skipped → chart stays at historical position. This is a variant of BP-376 (same scroll guard mechanism).
+
+**Fix**: Add `timeframe` to the reset effect's dependency array:
+```typescript
+useEffect(() => {
+  hasScrolledToRealTime.current = false;
+  pendingScrollToRealTime.current = false;
+}, [instrumentId, timeframe]); // was: [instrumentId]
+```
+
+**Prevention**:
+- Any `useRef` flag that guards a one-time action on "first load" must be reset when ANY property that triggers a "fresh load" changes — not just the primary entity ID.
+- Lightweight-charts `setData()` always auto-fits when the data range changes significantly; any guard against that behaviour must account for all state changes that result in a full dataset replacement.
+
+---
+
+## BP-381 — Tailwind display class on Radix TabsContent overrides `hidden=""`, renders black block
+
+**Category**: Frontend
+**Severity**: HIGH (visible layout regression — black rectangle occupies ~50% of viewport)
+**First seen**: 2026-05-04
+**Services**: worldview-web (any page with shadcn Tabs + display-class on TabsContent)
+
+**Symptoms**:
+- An empty black rectangle fills approximately half the screen on a page that uses Tabs
+- The culprit element has `data-state="inactive"` and `hidden=""` in DevTools but is visible
+- `aria-labelledby` in DevTools points to an inactive tab trigger (e.g., `...-trigger-transactions`)
+- The element has `bg-background` (dark/opaque) and `flex-1` so it fills its flex parent
+
+**Root cause**:
+Radix UI hides inactive `TabsContent` panels by setting the HTML `hidden` attribute (`hidden=""`).
+Browsers apply `[hidden] { display: none }` from the **UA stylesheet** (low priority).
+Tailwind's display utilities (`flex`, `grid`, `block`, etc.) live in the **author stylesheet** (higher priority).
+When a caller passes `className="... flex flex-col ..."` to `TabsContent`, Tailwind's `display: flex`
+wins the cascade and the inactive panel renders as a visible empty div.
+With `flex-1` and `bg-background`, it expands to fill its flex parent and shows as a black rectangle.
+
+```tsx
+// Bad — flex overrides hidden=""
+<TabsContent value="transactions" className="flex-1 min-h-0 overflow-y-auto flex flex-col bg-background">
+
+// Good — display class is conditional on active state
+<TabsContent value="transactions" className="flex-1 min-h-0 overflow-y-auto bg-background">
+// (TransactionsTab's own root element carries its flex layout)
+```
+
+**Fix applied**:
+Added `data-[state=inactive]:!hidden` to the base `TabsContent` component in
+`components/ui/tabs.tsx`. This re-applies `display: none !important` for inactive panels
+regardless of any display class in the caller's `className`, fixing all current and future
+instances project-wide.
+
+**Prevention**:
+- Never put `flex`, `grid`, `block`, or any display utility directly on `TabsContent` — put it on the child component's root element instead.
+- If a display class is needed at the `TabsContent` level, use `data-[state=active]:flex` so it only applies when the tab is active.
+- Code review: flag any `TabsContent className` containing `\bflex\b|\bgrid\b|\bblock\b` without a `data-[state=active]:` guard.
+
+**Regression test**: `apps/worldview-web/__tests__/tabs-hidden-override.test.tsx` (to be added)

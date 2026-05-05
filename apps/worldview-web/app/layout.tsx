@@ -18,6 +18,7 @@
 
 import type { Metadata } from "next";
 import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
+import { headers } from "next/headers";
 import "./globals.css";
 import { Providers } from "./providers";
 import { CookieConsentBanner } from "@/components/legal/CookieConsentBanner";
@@ -112,11 +113,21 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // WHY headers(): calling this opts the root layout out of Next.js's full-route cache
+  // (makes the route dynamic). Without this, Next.js can serve a cached HTML shell where
+  // <link rel="stylesheet"> elements have a stale nonce="OLD" attribute (embedded at SSR
+  // time), while the middleware generates a fresh nonce="NEW" for the CSP header on each
+  // request. Safari ignores `unsafe-inline` when a nonce attribute is present and only
+  // allows elements whose nonce matches a nonce-N directive — nonce mismatch blocks all
+  // stylesheets. Forcing dynamic rendering ensures the nonce in the HTML always matches
+  // the nonce in the CSP header. (BP-382)
+  await headers();
+
   return (
     // class="dark": permanent dark mode — never changes (ADR-F-04)
     // font variables: injected as CSS custom props so Tailwind font-sans/mono work
