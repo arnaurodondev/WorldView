@@ -14,11 +14,12 @@ It is NOT a cached column in the database.
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from fastapi import APIRouter, Body, HTTPException, Query
 
-from knowledge_graph.api.dependencies import EntityGraphReposDep
+from knowledge_graph.api.dependencies import CypherBundleDep, EntityGraphReposDep
 from knowledge_graph.api.schemas import (
     EntitySummary,
     GraphNeighborhoodResponse,
@@ -26,12 +27,19 @@ from knowledge_graph.api.schemas import (
     RelationResponse,
     RelationsListResponse,
 )
+from knowledge_graph.application.use_cases.cypher_path import (
+    CypherEntityNotFoundError,
+    CypherTimeoutError,
+)
 from knowledge_graph.application.use_cases.graph_query import (
     GetEntityGraphUseCase,
     GetGraphStatsUseCase,
     ListRelationsUseCase,
 )
 from observability import get_logger  # type: ignore[import-untyped]
+
+if TYPE_CHECKING:
+    from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeighborhoodResult
 
 router = APIRouter(prefix="/api/v1", tags=["graph"])
 
@@ -132,16 +140,37 @@ async def get_entity_by_ticker(
 # ── Neighbourhood query ───────────────────────────────────────────────────────
 
 
+def _map_cypher_to_graph_response(result: CypherNeighborhoodResult) -> GraphNeighborhoodResponse:
+    """Map a CypherNeighborhoodResult to the unified GraphNeighborhoodResponse shape.
+
+    evidence_snippets and relation_summary are empty/null for depth>1 — the batch
+    fetch is too expensive across multi-hop results and will be added in a future
+    iteration (TODO PRD-0074).
+    """
+    return GraphNeighborhoodResponse(
+        center=_entity_summary(result.center_row),
+        relations=[_relation_response(r) for r in result.relation_rows],
+        entities={eid: _entity_summary(row) for eid, row in result.neighbor_rows.items()},
+    )
+
+
 @router.get("/entities/{entity_id}/graph", response_model=GraphNeighborhoodResponse)
 async def get_entity_graph(
     entity_id: UUID,
     repos: EntityGraphReposDep,
+    cypher: CypherBundleDep,
     min_confidence: float = Query(default=0.0, ge=0.0, le=1.0),
     semantic_mode: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     evidence_snippets_limit: int = Query(default=3, ge=1, le=10),
+    depth: int = Query(default=1, ge=1, le=3),
 ) -> GraphNeighborhoodResponse:
     """Return the egocentric graph neighbourhood for *entity_id*.
+
+    ``depth=1`` (default): relational path — full evidence_snippets + relation_summary.
+    ``depth=2`` or ``depth=3``: AGE Cypher multi-hop traversal (requires CYPHER_ENABLED).
+    When ``KNOWLEDGE_GRAPH_CYPHER_ENABLED=false``, ``depth>1`` falls back to ``depth=1``
+    with a warning log rather than returning an error.
 
     Relations are filtered by ``min_confidence`` and optional ``semantic_mode``.
     ``summary_authority`` is computed at query time — NOT a cached column.
@@ -149,6 +178,43 @@ async def get_entity_graph(
     returned per relation (default 3, max 10).  Evidence and summaries are
     fetched via single batch queries (no N+1).
     """
+    if depth > 1 and cypher.cypher_enabled:
+        # depth>1: delegate to AGE Cypher neighborhood use case.
+        # Importing here avoids a module-level import of the AGE use case in a
+        # code path that runs on every depth=1 request.
+        from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeighborhoodUseCase
+
+        try:
+            result = await CypherNeighborhoodUseCase().execute(
+                cypher.session,
+                cypher.entity_repo,  # type: ignore[arg-type]
+                cypher.relation_repo,  # type: ignore[arg-type]
+                None,  # no temporal events in GraphNeighborhoodResponse
+                cypher_enabled=cypher.cypher_enabled,
+                entity_id=entity_id,
+                max_hops=depth,
+                min_confidence=min_confidence,
+                include_temporal_events=False,
+                limit=limit,
+            )
+        except CypherEntityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Entity not found") from exc
+        except CypherTimeoutError as exc:
+            _log.warning("graph_depth_cypher_timeout", entity_id=str(entity_id), depth=depth)
+            raise HTTPException(
+                status_code=504,
+                detail={"error": "AGE_TIMEOUT", "message": "AGE Cypher query exceeded the 5 s statement_timeout"},
+            ) from exc
+        return _map_cypher_to_graph_response(result)
+
+    if depth > 1:
+        # CYPHER_ENABLED=false — silently cap depth to 1 rather than returning an error.
+        _log.warning(
+            "graph_depth_cypher_disabled_fallback",
+            requested_depth=depth,
+            entity_id=str(entity_id),
+        )
+
     entity_row, relation_rows, entities_map_data = await GetEntityGraphUseCase().execute(
         entity_repo=repos.entity_repo,  # type: ignore[arg-type]
         relation_repo=repos.relation_repo,  # type: ignore[arg-type]
