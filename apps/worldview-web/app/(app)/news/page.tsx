@@ -232,6 +232,9 @@ function ArticleRow({ article: a }: { article: RankedArticle }) {
   // LIGHT tier: dim per existing convention (PRD-0027 OQ-6 → opacity 0.6).
   const isDim = a.routing_tier === "LIGHT";
 
+  // WHY single-line: Bloomberg terminal news ticker format. Two-line layout was
+  // ~42px/row; single-line is ~26px/row (62% reduction). With 50 articles,
+  // viewport shows all instead of needing 4+ screens of scroll.
   return (
     <a
       href={a.url ?? "#"}
@@ -241,10 +244,13 @@ function ArticleRow({ article: a }: { article: RankedArticle }) {
       // it before activation. Composed with the article title.
       aria-label={`${a.title ?? "(untitled)"}${a.primary_entity_symbol ? `, ${a.primary_entity_symbol}` : ""} (opens in new tab)`}
       className={cn(
-        "block px-3 py-1.5 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
+        // WHY py-1 (was py-1.5): single-line rows need less vertical padding.
+        // 4px top + 4px bottom = 8px total vert padding + 16px line = 24px row.
+        "block px-3 py-1 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
         isDim && "opacity-60",
       )}
     >
+      {/* Single flex row — all metadata inline, Bloomberg ticker format. */}
       <div className="flex items-baseline gap-2">
         {/* Tier pill */}
         <span
@@ -265,34 +271,32 @@ function ArticleRow({ article: a }: { article: RankedArticle }) {
           </span>
         )}
 
-        {/* Title */}
+        {/* Title — fills remaining horizontal space, truncates at right cluster */}
         <span className="flex-1 truncate text-[11px] leading-snug text-foreground">
           {a.title ?? "(untitled)"}
         </span>
 
-        {/* Right-side meta cluster */}
+        {/* Right cluster — source, relevance, timestamp, external icon */}
+
+        {/* Source name — compact label before timestamp */}
+        {(a.source_name || a.source_type) && (
+          <span className="shrink-0 font-mono text-[9px] text-muted-foreground/60 uppercase tracking-wider">
+            {(a.source_name ?? a.source_type ?? "").slice(0, 12)}
+          </span>
+        )}
+
+        {/* Relevance score badge — only when > 0 */}
+        {a.display_relevance_score > 0 && (
+          <span className="shrink-0 rounded-[2px] bg-muted/40 px-1 font-mono text-[9px] tabular-nums text-muted-foreground">
+            {(a.display_relevance_score * 100).toFixed(0)}
+          </span>
+        )}
+
+        {/* Timestamp */}
         <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
           {formatPublishedAt(a.published_at)}
         </span>
         <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground/50" aria-hidden />
-      </div>
-      <div className="ml-12 flex items-center gap-3 text-[10px] text-muted-foreground/70">
-        <span className="font-mono">{a.source_name ?? a.source_type ?? "—"}</span>
-        {a.display_relevance_score > 0 && (
-          <span className="tabular-nums">
-            score {(a.display_relevance_score * 100).toFixed(0)}
-          </span>
-        )}
-        {a.impact_score !== null && (
-          <span
-            className={cn(
-              "tabular-nums",
-              a.impact_score > 0.5 ? "text-warning" : "text-muted-foreground/70",
-            )}
-          >
-            impact {(a.impact_score * 100).toFixed(0)}
-          </span>
-        )}
       </div>
     </a>
   );

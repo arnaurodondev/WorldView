@@ -264,7 +264,10 @@ export function PortfolioSummary() {
         </div>
       </div>
 
-      {/* Inner content — padded to match other widgets */}
+      {/* Inner content — padded to match other widgets.
+          WHY px-2 py-1 (not p-4): Bloomberg-grade terminal density. 16px→8px padding
+          inside data widgets recovers vertical space for more data rows. PortfolioSummary
+          already uses p-2 scale; this confirms and documents the deliberate choice. */}
       <div className="flex-1 overflow-auto px-2 py-1">
 
       {/* Portfolio name sub-header */}

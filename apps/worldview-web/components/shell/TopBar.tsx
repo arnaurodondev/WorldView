@@ -143,9 +143,12 @@ export function TopBar({
   };
 
   return (
-    // WHY h-9 (36px): PRD-0031 §4.1 — v3 reduces TopBar from 44px to 36px to
-    // maximize data-display vertical space. 36px still clears WCAG touch target
-    // minimums for all interactive elements (buttons have h-7 minimum within).
+    // WHY h-8 (32px): PLAN-0071 Phase 6.5 further reduces to 32px following
+    // bloomberg-terminal reference. Minimum feasible: h-7 avatar + 2px top/bottom
+    // margin = 32px. PRD-0031 §4.1 originally reduced from 44px to 36px (h-9);
+    // Phase 6.5 takes the next step to 32px (h-8) for maximum data-display vertical
+    // space recovery while remaining WCAG-compliant (h-7 avatar = 28px touch target +
+    // surrounding 4px padding satisfies the 32px minimum for pointer-based devices).
     // WHY border-b border-border: crisp structural edge separating chrome from content.
     //
     // PLAN-0048 Wave C-1 — Layout was previously [left] [absolute-centered ticker] [right].
@@ -154,7 +157,7 @@ export function TopBar({
     // flow). We now use a single flex row with three siblings where the IndexTicker is
     // the only flex-1 child, so it absorbs slack and truncates first under pressure
     // instead of colliding with the portfolio rail.
-    <header className="flex h-9 w-full shrink-0 items-center gap-3 border-b border-border bg-background px-3">
+    <header className="flex h-8 w-full shrink-0 items-center gap-3 border-b border-border bg-background px-3">
       {/* ── Left: Logo + Search ───────────────────────────────────── */}
       {/* WHY shrink-0: the logo + search must never shrink — they're nav anchors.
           Slack absorbed by the IndexTicker (the only flex-1 sibling). */}
