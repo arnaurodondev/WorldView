@@ -80,6 +80,8 @@ export interface SymbolLink {
   activeSymbol: string | null;
   /** Active instrument ID (e.g. "ins-aapl") — used by widgets that fetch by id */
   activeInstrumentId: string | null;
+  /** Active KG entity UUID — used by the entity graph panel; real UUID, NOT a slug */
+  activeEntityId: string | null;
 }
 
 /**
@@ -133,11 +135,12 @@ interface SymbolLinkingContextValue {
    * Set the active symbol on a panel. If the panel has a color !== "none",
    * the symbol is broadcast to every other panel sharing that color.
    */
-  setActiveSymbol: (panelId: string, symbol: string, instrumentId: string) => void;
-  /** Convenience getter — returns the current symbol/instrumentId for a panel */
+  setActiveSymbol: (panelId: string, symbol: string, instrumentId: string, entityId?: string | null) => void;
+  /** Convenience getter — returns the current symbol/instrumentId/entityId for a panel */
   getSymbolForPanel: (panelId: string) => {
     symbol: string | null;
     instrumentId: string | null;
+    entityId: string | null;
   };
 }
 
@@ -219,6 +222,7 @@ export function SymbolLinkingProvider({ children }: { children: ReactNode }) {
           color,
           activeSymbol: null,
           activeInstrumentId: null,
+          activeEntityId: null,
         };
       }
       return next;
@@ -239,6 +243,7 @@ export function SymbolLinkingProvider({ children }: { children: ReactNode }) {
           // to add it to the blue group — they don't want AAPL to disappear.
           activeSymbol: existing?.activeSymbol ?? null,
           activeInstrumentId: existing?.activeInstrumentId ?? null,
+          activeEntityId: existing?.activeEntityId ?? null,
         },
       };
       // Persist only the color portion. Build the map fresh from the new state.
@@ -253,7 +258,7 @@ export function SymbolLinkingProvider({ children }: { children: ReactNode }) {
 
   // ── setActiveSymbol — broadcast across same-color panels ────────────────────
   const setActiveSymbol = useCallback(
-    (panelId: string, symbol: string, instrumentId: string) => {
+    (panelId: string, symbol: string, instrumentId: string, entityId?: string | null) => {
       setLinks((prev) => {
         const source = prev[panelId];
         const sourceColor = source?.color ?? "none";
@@ -265,6 +270,7 @@ export function SymbolLinkingProvider({ children }: { children: ReactNode }) {
           color: sourceColor,
           activeSymbol: symbol,
           activeInstrumentId: instrumentId,
+          activeEntityId: entityId ?? null,
         };
 
         // WHY broadcast only when color !== "none": "none" means the panel is
@@ -277,6 +283,7 @@ export function SymbolLinkingProvider({ children }: { children: ReactNode }) {
                 ...link,
                 activeSymbol: symbol,
                 activeInstrumentId: instrumentId,
+                activeEntityId: entityId ?? null,
               };
             }
           }
@@ -289,12 +296,13 @@ export function SymbolLinkingProvider({ children }: { children: ReactNode }) {
 
   // ── getSymbolForPanel — convenience getter ──────────────────────────────────
   const getSymbolForPanel = useCallback(
-    (panelId: string): { symbol: string | null; instrumentId: string | null } => {
+    (panelId: string): { symbol: string | null; instrumentId: string | null; entityId: string | null } => {
       const link = links[panelId];
-      if (!link) return { symbol: null, instrumentId: null };
+      if (!link) return { symbol: null, instrumentId: null, entityId: null };
       return {
         symbol: link.activeSymbol,
         instrumentId: link.activeInstrumentId,
+        entityId: link.activeEntityId ?? null,
       };
     },
     [links],
@@ -344,15 +352,18 @@ export function useSymbolLinking(): SymbolLinkingContextValue {
 export function useSymbolLink(panelId: string): {
   symbol: string | null;
   instrumentId: string | null;
+  /** KG entity UUID for this panel's linked instrument (null until a symbol is picked) */
+  entityId: string | null;
   /** True if the panel participates in a color group (and thus may receive broadcasts) */
   isLinked: boolean;
 } {
   const { links, getSymbolForPanel } = useSymbolLinking();
   const link = links[panelId];
-  const { symbol, instrumentId } = getSymbolForPanel(panelId);
+  const { symbol, instrumentId, entityId } = getSymbolForPanel(panelId);
   return {
     symbol,
     instrumentId,
+    entityId,
     isLinked: !!link && link.color !== "none",
   };
 }

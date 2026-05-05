@@ -32,6 +32,39 @@
       "rules": {
         "no-restricted-syntax": "off"
       }
+    },
+    {
+      "files": [
+        "app/**/*.tsx", "app/**/*.ts",
+        "components/**/*.tsx", "components/**/*.ts",
+        "features/**/*.tsx", "features/**/*.ts"
+      ],
+      "excludedFiles": [
+        "components/landing/**",
+        "app/(public)/**",
+        "app/login/**",
+        "components/ui/data-table/*.stories.*",
+        "**/__tests__/**",
+        "**/*.test.ts",
+        "**/*.test.tsx"
+      ],
+      "rules": {
+        "no-restricted-syntax": [
+          "warn",
+          {
+            "selector": "Literal[value=/\\b(text|bg)-(amber|green|red|blue)-\\d/]",
+            "message": "PLAN-0071 P1-4: Raw Tailwind color classes (text-amber-*, text-green-*, text-red-*, text-blue-*, bg-green-*, bg-red-*, bg-amber-*, bg-blue-*) bypass the design token system. Use CSS variable tokens: text-positive, text-negative, text-warning, text-accent-ai, bg-positive/*, bg-negative/*, bg-warning/*, bg-accent-ai/*."
+          },
+          {
+            "selector": "Literal[value=/\\b(rounded-xl|rounded-2xl)\\b/]",
+            "message": "PLAN-0071 P1-4: rounded-xl and rounded-2xl are banned. Terminal UI uses --radius (2px, `rounded-[2px]` or `rounded-sm`). Use rounded-none, rounded-sm, or rounded-[2px]."
+          },
+          {
+            "selector": "Literal[value=/\\bp-6\\b/]",
+            "message": "PLAN-0071 P1-4: p-6 (24px) is banned in terminal panels. Max panel padding is p-3 (12px). Use p-1, p-2, or p-3."
+          }
+        ]
+      }
     }
   ]
 }

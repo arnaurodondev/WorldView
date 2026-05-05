@@ -25,11 +25,13 @@ from knowledge_graph.application.ports.repositories import (
     TOPIC_GRAPH_STATE_CHANGED,
 )
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
+from observability import get_logger  # type: ignore[import-untyped]
 
 # PLAN-0062 audit follow-up F-006: serialize the graph.state.changed.v1 outbox
 # payload to Confluent-Avro wire format instead of JSON.
 _GRAPH_STATE_CHANGED_SCHEMA_PATH = get_schema_path("graph.state.changed.v1.avsc")
 _ENTITY_DIRTIED_SCHEMA_PATH = get_schema_path("entity.dirtied.v1.avsc")
+_log = get_logger(__name__)  # type: ignore[no-any-return]
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -348,6 +350,21 @@ async def materialize_graph(
         canonical_base_confidences,
         strict=True,
     ):
+        # ── Self-loop guard (BP-385) ──────────────────────────────────────
+        # graphology is initialised with allowSelfLoops=false; self-loop
+        # triples also pollute the KG with tautological statements.
+        # Skip both the relation upsert AND the evidence insert so these
+        # are not stored at all. The check runs on fully-resolved UUIDs so
+        # it catches loops introduced by entity merges inside S7, not just
+        # those from S6 extraction.
+        if rel.subject_entity_id == rel.object_entity_id:
+            _log.warning(
+                "relation_self_loop_skipped",
+                entity_id=str(rel.subject_entity_id),
+                raw_type=rel.raw_type,
+            )
+            continue
+
         # Skip provisional entities from the aggregation worker perspective,
         # but still INSERT the raw evidence row (entity_provisional=true rows
         # are held until entity.canonical.created.v1 resolves them).

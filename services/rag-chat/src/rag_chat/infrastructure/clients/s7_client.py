@@ -132,7 +132,11 @@ class S7Client(BaseUpstreamClient):
                 {
                     # Map S7 native field names to keys expected by _map_entity_graph()
                     "relation_type": rel.get("canonical_type", rel.get("relation_type", "")),
-                    "confidence": float(rel.get("confidence", 0.0)),
+                    # WHY `or 0.0` (not default arg): dict.get("confidence", 0.0) returns
+                    # None when the key exists with value null (stale/unscored relations).
+                    # The default only fires for absent keys. `or 0.0` converts both
+                    # None and missing to 0.0 — prevents float(None) TypeError (BP-375).
+                    "confidence": float(rel.get("confidence") or 0.0),
                     "target": target_id,
                     "object": target_id,
                     "target_name": target_name,

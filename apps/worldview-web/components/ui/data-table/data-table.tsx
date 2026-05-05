@@ -582,13 +582,16 @@ export function DataTable<TData>({
             {emptyMessage ?? "No results."}
           </div>
         ) : shouldVirtualize ? (
-          <div ref={scrollRef} className="flex-1 overflow-auto">
+          // WHY [scrollbar-gutter:stable]: reserves scrollbar space even when no
+          // scrollbar is visible so header column widths stay aligned with body
+          // columns when the viewport fills and a scrollbar appears.
+          <div ref={scrollRef} className="flex-1 overflow-auto [scrollbar-gutter:stable]">
             <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
               {rowVirtualizer.getVirtualItems().map((vRow) => renderRow(vRow.start, vRow.index))}
             </div>
           </div>
         ) : (
-          <div className="flex-1 overflow-auto">
+          <div className="flex-1 overflow-auto [scrollbar-gutter:stable]">
             {rows.map((_, idx) => renderRow(undefined, idx))}
           </div>
         )}

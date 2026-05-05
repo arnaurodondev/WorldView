@@ -878,3 +878,42 @@ next_at = (
 - Add a metric/warning log on embedding failure so it's visible in Prometheus/logs.
 
 **Regression test**: `tests/unit/infrastructure/workers/test_fundamentals_refresh_worker.py::TestFundamentalsRefreshWorkerS3Failure::test_embedding_failure_uses_short_retry_interval`
+
+---
+
+## BP-375: dict.get() returns None for present-null keys — crashes float() conversion
+
+**Category**: ML/LLM
+**Severity**: HIGH
+**First seen**: 2026-05-04
+**Services**: rag-chat (S8)
+
+**Symptoms**:
+- `GET /v1/briefings/instrument/{entity_id}` returns 503 "Briefing generation unavailable"
+- rag-chat logs: `"error": "float() argument must be a string or a real number, not 'NoneType'", "event": "briefing_generation_failed"`
+- AI brief subheader on instrument detail page shows "Briefing generation unavailable"
+
+**Root cause**:
+`float(rel.get("confidence", 0.0))` crashes when the S7 knowledge graph API returns relations with `confidence: null` (key present, value is Python `None`). `dict.get(key, default)` only uses the default when the key is **absent** — it returns `None` when the key exists with value `null`. `float(None)` raises `TypeError`.
+
+**Example**:
+```python
+# Bad — default 0.0 is ignored when confidence key exists with null value
+"confidence": float(rel.get("confidence", 0.0)),  # crashes when rel = {"confidence": None, ...}
+
+# Good — `or 0.0` handles both absent key and present-null
+"confidence": float(rel.get("confidence") or 0.0),
+```
+
+**Fix**:
+In `services/rag-chat/src/rag_chat/infrastructure/clients/s7_client.py`, line 135:
+```python
+"confidence": float(rel.get("confidence") or 0.0),
+```
+
+**Prevention**:
+- When converting optional numeric fields from external APIs to `float`, use `float(x or 0.0)` not `float(x or default)` — the `or` operator handles both `None` and `0` (falsy) values consistently.
+- Only use `dict.get(key, default)` when the key is expected to be entirely absent. When the API may return `null` for a key, use `(dict.get(key) or default)` instead.
+- Pay extra attention to S7 graph API endpoints: relations with stale confidence scores return `"confidence": null` (the knowledge-graph route explicitly maps stale rows to `None`).
+
+**Regression test**: Manual curl: `GET /v1/briefings/instrument/{entity_with_null_confidence_relations}` must return 200.

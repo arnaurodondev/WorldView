@@ -1153,6 +1153,10 @@ export interface Thread {
 export interface ChatStreamRequest {
   question: string;
   thread_id: string;
+  /** PLAN-0071 P2A-1: entity-page context injected by AskAiPanel/AnalystRail.
+   *  When present, S8 uses this as a system-level prefix so the model is
+   *  context-aware without the user having to re-state the instrument. */
+  system_context?: string;
 }
 
 // ── Prediction Markets ────────────────────────────────────────────────────

@@ -42,7 +42,13 @@ class ScreenRequest(BaseModel):
     offset max tightened to 5000. Coordinate with API consumers before deploying.
     """
 
-    filters: list[ScreenFilterRequest] = Field(..., min_length=1, max_length=20)
+    # WHY min_length=0 (was 1): empty filters activates the optimised "no filter" path in
+    # query_screen which uses LEFT JOINs to return all key display metrics for every instrument.
+    # The min_length=1 constraint forced callers to send a fallback filter (e.g. market_cap≥0)
+    # which triggered the INNER JOIN path and only returned that one metric — causing all other
+    # screener columns to show "—". Removing the lower bound lets the BFF send [] when the
+    # user has no active filters, surfacing pe_ratio/beta/etc. in the default view.
+    filters: list[ScreenFilterRequest] = Field(default=[], max_length=20)
     limit: int = Field(50, ge=1, le=200)
     offset: int = Field(0, ge=0, le=5000)
     sort_by: str | None = None

@@ -144,7 +144,7 @@ export function HotkeyCheatSheet() {
     <div
       // WHY position fixed + z-[9998]: above the StatusBar (z-default), below
       // FlashOverlay (z-[9999]) so a critical alert can still pre-empt the help.
-      className="fixed inset-0 z-[9998] flex items-start justify-center bg-black/60 p-6 backdrop-blur-sm"
+      className="fixed inset-0 z-[9998] flex items-start justify-center bg-black/60 p-4 backdrop-blur-sm"
       onClick={(e) => {
         // Click outside the dialog closes — but only if the click target IS
         // the backdrop (not a child of the dialog body).

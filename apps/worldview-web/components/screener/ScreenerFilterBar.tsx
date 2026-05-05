@@ -231,6 +231,7 @@ export function ScreenerFilterBar({
               id="screener-search"
               aria-label="Search instruments by name or ticker"
               type="text"
+              autoComplete="off"
               placeholder="Ticker / name…"
               value={form.search}
               onChange={(e) => patch({ search: e.target.value })}

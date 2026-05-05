@@ -322,7 +322,20 @@ export function FundamentalsTab({
   // not tracked, ETF with no fundamentals, etc.). These are different root causes
   // and require different user-facing messages. A trader needs to know "is this a
   // system problem?" vs "does this instrument simply not have fundamentals?"
+  //
+  // WHY exchange === "CC" check: EODHD does not provide financial statements for
+  // crypto assets (no income statement, no balance sheet, no P/E). Crypto instruments
+  // have exchange="CC" in the DB. Showing "Failed to load" for a 404 on crypto is
+  // misleading — show a friendly explanation instead.
   if (isError) {
+    if (instrument?.exchange === "CC") {
+      return (
+        <div className="px-2 py-3 text-[11px] text-muted-foreground">
+          Fundamental financial data (P/E, revenue, margins) is not available for
+          cryptocurrency assets. EODHD does not publish financial statements for digital assets.
+        </div>
+      );
+    }
     return (
       <div className="px-2 py-3 text-[11px] text-destructive/80">
         Failed to load fundamentals — check connection or retry.

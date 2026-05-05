@@ -19,6 +19,9 @@ export interface RecentInstrument {
   entityId: string;
   ticker: string;
   name: string;
+  /** Real market-data instrument_id — stored so workspace chart can fetch OHLCV without
+   *  deriving the synthetic `ins-{ticker}` that only works for seeded demo instruments. */
+  instrumentId?: string;
 }
 
 const STORAGE_KEY = "worldview-recent-instruments";
@@ -39,11 +42,18 @@ export function readRecentInstruments(): RecentInstrument[] {
  * Prepend an instrument to the recent list, deduplicating by entityId and keeping
  * at most MAX_RECENT entries.
  */
-export function saveRecentInstrument(entityId: string, ticker: string, name: string): void {
+export function saveRecentInstrument(
+  entityId: string,
+  ticker: string,
+  name: string,
+  instrumentId?: string,
+): void {
   if (typeof window === "undefined") return;
   try {
     const existing = readRecentInstruments().filter((r) => r.entityId !== entityId);
-    const updated = [{ entityId, ticker, name }, ...existing].slice(0, MAX_RECENT);
+    const entry: RecentInstrument = { entityId, ticker, name };
+    if (instrumentId) entry.instrumentId = instrumentId;
+    const updated = [entry, ...existing].slice(0, MAX_RECENT);
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
   } catch {
     // localStorage may be unavailable (private-browsing quota, etc.) — silently ignore

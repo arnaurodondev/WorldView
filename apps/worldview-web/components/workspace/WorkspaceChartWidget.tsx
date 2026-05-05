@@ -109,22 +109,20 @@ function toUTCTimestamp(t: number): UTCTimestamp {
 // ── Component props ────────────────────────────────────────────────────────────
 
 interface WorkspaceChartWidgetProps {
-  /**
-   * Optional ticker symbol (e.g., "AAPL"). When provided, the widget fetches
-   * OHLCV bars for the corresponding instrument. When omitted, the widget shows
-   * the empty state inviting the user to link a symbol via the color picker.
-   *
-   * WHY ticker (not instrumentId): higher-level callers (WorkspacePanelContainer)
-   * already do the ticker→instrumentId mapping for the demo seed (entity-aapl /
-   * ins-aapl). To stay decoupled from that mapping, this widget receives the
-   * ticker and derives instrumentId itself with the same convention.
-   */
+  /** Optional ticker symbol (e.g., "AAPL"). Used for display and empty-state. */
   ticker?: string;
+  /**
+   * Real instrument_id from the market-data service (e.g. UUID or seed ID).
+   * When provided, used directly for OHLCV fetch instead of deriving `ins-{ticker}`.
+   * WHY optional: callers that only have a ticker (legacy/broadcast path) fall back
+   * to the `ins-{ticker}` convention which works for seeded demo instruments.
+   */
+  instrumentId?: string;
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
-export function WorkspaceChartWidget({ ticker }: WorkspaceChartWidgetProps) {
+export function WorkspaceChartWidget({ ticker, instrumentId: instrumentIdProp }: WorkspaceChartWidgetProps) {
   const { accessToken } = useAuth();
 
   // WHY consume WorkspaceSymbolContext: the workspace-level SymbolBar broadcasts
@@ -147,11 +145,11 @@ export function WorkspaceChartWidget({ ticker }: WorkspaceChartWidgetProps) {
   const [activeTfId, setActiveTfId] = useState<WorkspaceTimeframeId>("3M");
   const activeTf = TIMEFRAMES.find((t) => t.id === activeTfId) ?? TIMEFRAMES[0];
 
-  // WHY this convention: matches WorkspacePanelContainer's demo mapping
-  // (entity-aapl / ins-aapl). The S9 demo seed uses lowercase ticker as suffix.
-  // If effectiveTicker is undefined, we deliberately do NOT issue the OHLCV request —
-  // the empty state renders instead.
-  const instrumentId = effectiveTicker ? `ins-${effectiveTicker.toLowerCase()}` : undefined;
+  // WHY prefer instrumentIdProp: when the panel has a real market-data instrument_id
+  // (from SymbolLinkingContext via WorkspacePanelContainer), use it directly.
+  // Fall back to the `ins-{ticker}` convention only for seeded demo instruments that
+  // happen to use that ID format. If neither is available, skip the OHLCV request.
+  const instrumentId = instrumentIdProp ?? (effectiveTicker ? `ins-${effectiveTicker.toLowerCase()}` : undefined);
 
   // ── Data fetch ───────────────────────────────────────────────────────────
   const { data, isLoading, isError, refetch } = useQuery({
@@ -311,11 +309,12 @@ export function WorkspaceChartWidget({ ticker }: WorkspaceChartWidgetProps) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     seriesRef.current.setData(formatted as any);
 
-    // WHY fitContent: defaults to showing the most recent ~50 bars; without
-    // this, lightweight-charts shows ALL bars cramped into the panel width.
-    // fitContent uses the most-recent visible range that fits comfortably.
+    // WHY scrollToRealTime (not fitContent): fitContent zooms to ALL historical
+    // bars — with years of daily data, the most recent bars shrink to <1px and
+    // the view lands in the past (the "moves to the left" bug). scrollToRealTime
+    // keeps the current zoom level and scrolls to the right edge (most recent bar).
     if (formatted.length > 0) {
-      chartRef.current?.timeScale().fitContent();
+      chartRef.current?.timeScale().scrollToRealTime();
     }
   }, [data?.bars]);
 

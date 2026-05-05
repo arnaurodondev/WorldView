@@ -105,8 +105,8 @@ function severityButtonClass(severity: "low" | "medium" | "high"): string {
       // Default primary button style — no override needed
       return "";
     case "medium":
-      // Amber warning — caution, not emergency
-      return "bg-amber-500 text-white hover:bg-amber-600 focus-visible:ring-amber-500";
+      // Warning token — caution, not emergency. text-background gives dark text on amber.
+      return "bg-warning text-background hover:bg-warning/90 focus-visible:ring-warning";
     case "high":
       // Destructive red — mirrors the --destructive CSS variable (#EF5350)
       return "bg-destructive text-destructive-foreground hover:bg-destructive/90";

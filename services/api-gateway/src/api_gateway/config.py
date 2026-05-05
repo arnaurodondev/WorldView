@@ -54,7 +54,11 @@ class Settings(BaseSettings):
     alert_url: str = "http://localhost:8010"
 
     # Rate limiting
-    rate_limit_requests: int = 100
+    # WHY 300: authenticated users on the instrument detail page fire 4+ simultaneous
+    # OHLCV timeseries calls (one per workspace panel) plus screener + KG graph + news.
+    # 100 req/60s was too tight for multi-panel workspace usage → 429s on timeseries.
+    # Unauthenticated tier stays at 20 req/60s (enforced in RateLimitMiddleware).
+    rate_limit_requests: int = 300
     rate_limit_window_seconds: int = 60
 
     # CORS
