@@ -827,3 +827,136 @@ class TestRecoverStaleProcessingRows:
 
         # _recover_stale_processing_rows must have been called exactly once.
         assert call_order.count("recover") == 1, f"Expected 1 recovery call, got {call_order.count('recover')}"
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0072 T-72-1-01 — two-layer noise pre-filter
+# ---------------------------------------------------------------------------
+
+
+def _make_noise_row(mention_text: str, retry_count: int = 0) -> tuple:
+    return (
+        str(UUID("01234567-89ab-7def-8012-aaaaaaaaaaaa")),
+        mention_text,
+        mention_text.lower(),
+        "financial_instrument",
+        "some context",
+        None,
+        retry_count,
+    )
+
+
+class TestNoiseFilters:
+    """Tests for _run_noise_filters() and _layer2_classify() (PLAN-0072 T-72-1-01)."""
+
+    def _make_worker(self, noise_api_key: str = "") -> ProvisionalEnrichmentWorker:
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([])
+        return ProvisionalEnrichmentWorker(
+            factory,
+            AsyncMock(),
+            noise_classifier_api_key=noise_api_key,
+        )
+
+    async def test_layer1_blocklist_marks_noise_no_llm_calls(self) -> None:
+        """Layer 1 blocklist hit → noise ID returned; _layer2_classify never called."""
+        from uuid import UUID
+
+        worker = self._make_worker(noise_api_key="fake-key")
+        rows = [
+            (UUID("01234567-89ab-7def-8012-000000000001"), "he", "financial_instrument", "", 0),
+        ]
+
+        with patch.object(worker, "_layer2_classify", new=AsyncMock()) as mock_l2:
+            l1, l2, remaining = await worker._run_noise_filters(rows)
+
+        assert len(l1) == 1
+        assert rows[0][0] in l1
+        assert l2 == []
+        assert remaining == []
+        mock_l2.assert_not_called()
+
+    async def test_blocklist_case_insensitive(self) -> None:
+        """Layer 1 check is case-insensitive — 'ANALYSTS' matches the blocklist."""
+        from uuid import UUID
+
+        worker = self._make_worker()
+        rows = [
+            (UUID("01234567-89ab-7def-8012-000000000002"), "ANALYSTS", "financial_instrument", "", 0),
+        ]
+
+        l1, l2, remaining = await worker._run_noise_filters(rows)
+
+        assert len(l1) == 1
+        assert remaining == []
+
+    async def test_layer2_not_entity_marks_noise(self) -> None:
+        """Layer 1 passes; Layer 2 returns is_entity=false → noise, Layer 3 not reached."""
+        from uuid import UUID
+
+        worker = self._make_worker(noise_api_key="fake-key")
+        qid = UUID("01234567-89ab-7def-8012-000000000003")
+        rows = [(qid, "generic phrase", "financial_instrument", "", 0)]
+
+        with patch.object(worker, "_layer2_classify", new=AsyncMock(return_value=True)):
+            l1, l2, remaining = await worker._run_noise_filters(rows)
+
+        assert l1 == []
+        assert qid in l2
+        assert remaining == []
+
+    async def test_layer2_low_confidence_marks_noise(self) -> None:
+        """Confidence < 0.7 → noise even when is_entity field might be true.
+
+        _layer2_classify encapsulates the confidence check and returns True for noise.
+        We test _layer2_classify directly with a mocked HTTP response.
+        """
+        import json as _json
+        from unittest.mock import MagicMock
+
+        worker = self._make_worker(noise_api_key="fake-key")
+
+        # Inject a pre-created http client with a mock post method.
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": _json.dumps({"is_entity": True, "confidence": 0.5})}}]
+        }
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        worker._noise_http_client = mock_client
+
+        result = await worker._layer2_classify("constant currency")
+        assert result is True  # confidence 0.5 < 0.7 → noise
+
+    async def test_confirmed_entity_reaches_layer3(self) -> None:
+        """'Apple Inc.' with high confidence passes both layers → goes to Layer 3."""
+        from uuid import UUID
+
+        worker = self._make_worker(noise_api_key="fake-key")
+        qid = UUID("01234567-89ab-7def-8012-000000000005")
+        rows = [(qid, "Apple Inc.", "financial_instrument", "", 0)]
+
+        # Layer 2 returns False (= not noise)
+        with patch.object(worker, "_layer2_classify", new=AsyncMock(return_value=False)):
+            l1, l2, remaining = await worker._run_noise_filters(rows)
+
+        assert l1 == []
+        assert l2 == []
+        assert len(remaining) == 1 and remaining[0][0] == qid
+
+    async def test_layer2_failure_falls_through_to_layer3(self) -> None:
+        """Layer 2 HTTP exception → fail-open (_layer2_classify returns False, no silent drop)."""
+        import httpx
+
+        worker = self._make_worker(noise_api_key="fake-key")
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=httpx.ConnectError("timeout"))
+        worker._noise_http_client = mock_client
+
+        result = await worker._layer2_classify("valid entity")
+        assert result is False  # fail-open: error → pass to Layer 3

@@ -95,7 +95,7 @@ Returns `0.0` when confidence is `null` (stale/unknown).
 | 13D-1 | `DefinitionRefreshWorker` | 90-day periodic + consumer-triggered | 50 | SHA-256(source_text) change detection; `entity_embedding_state view_type='definition'`. For `financial_instrument`: uses EODHD source_text. For all other entity types: generates description via `EntityDescriptionClient` (gemini-3.1-flash-lite); falls back to deterministic template if API unavailable or cost cap exceeded (PRD-0017 §6.5) |
 | 13D-2 | `NarrativeRefreshWorker` | 7-day periodic | 50 | Deterministic template (canonical_name + claims); truncates to 512 tokens; no LLM |
 | 13D-3 | `FundamentalsRefreshWorker` | 30-day periodic | 50 | Ticker entities only; fetches from market-data service REST API; S3 down = skip (no next_refresh_at update) |
-| 13E | `ProvisionalEnrichmentWorker` | 10 min | 20 | LLM extraction for provisional entities; creates canonical_entity + 3 embedding_state rows; emits entity.canonical.created.v1 |
+| 13E | `ProvisionalEnrichmentWorker` | 10 min | 20 | **PLAN-0072**: Two-layer noise pre-filter before LLM extraction. Layer 1: `_NOISE_BLOCKLIST` frozenset (O(1)). Layer 2: `meta-llama/8B-Instruct-Turbo` binary classifier (confidence < 0.7 → noise, fail-open). Noise rows → `status='noise'` (migration 0020). Remaining rows → DeepSeek V4 Flash full extraction; creates canonical_entity + 3 embedding_state rows; emits entity.canonical.created.v1 |
 | 13F | `EmbeddingRefreshWorker` | 2h | 50 | Embeds relation summaries where `summary_embedding IS NULL` |
 | 13G | `MonthlyPartitionWorker` | 1st of month + startup | — | Idempotent CREATE IF NOT EXISTS + prune >24 months |
 | 13H | `YearlyPartitionWorker` | 1st of year + startup | — | Idempotent CREATE IF NOT EXISTS for yearly partitions |

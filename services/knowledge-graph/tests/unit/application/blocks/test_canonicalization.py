@@ -315,3 +315,89 @@ class TestPropose:
         )
         assert payload["proposed_type"] == "invented_by"
         assert payload["semantic_mode"] == "TEMPORAL_CLAIM"
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0072 T-72-1-02 — case normalization before exact match
+# ---------------------------------------------------------------------------
+
+
+class TestCaseNormalization:
+    """Step 1 exact match is now case-insensitive (PLAN-0072 T-72-1-02)."""
+
+    def test_exact_match_case_insensitive(self) -> None:
+        """UPPERCASE raw_type resolves to lowercase canonical via exact match."""
+        from knowledge_graph.application.blocks.canonicalization import (
+            canonicalize_relation_type,
+        )
+
+        row = dict(_EXACT_ROW, canonical_type="competes_with")
+        # Registry receives the normalized lowercase key and returns the row.
+        registry = _make_registry_repo(exact_return=row)
+
+        result = asyncio.run(
+            canonicalize_relation_type(
+                raw_type="COMPETES_WITH",
+                semantic_mode_hint="RELATION_STATE",
+                subject_entity_id=uuid4(),
+                object_entity_id=uuid4(),
+                source_doc_id=None,
+                registry_repo=registry,
+                outbox_repo=_make_outbox_repo(),
+                embedding_client=_make_embedding_client(),
+            )
+        )
+        assert result.canonical_type == "competes_with"
+        assert result.step == "exact"
+        # find_exact must have been called with the lowercased key, not the original.
+        registry.find_exact.assert_called_once_with("competes_with")
+
+    def test_uppercase_llm_output_canonicalized(self) -> None:
+        """Mixed-case LLM output like 'HAS_EXECUTIVE' resolves via normalized exact match."""
+        from knowledge_graph.application.blocks.canonicalization import (
+            canonicalize_relation_type,
+        )
+
+        row = dict(_EXACT_ROW, canonical_type="has_executive")
+        registry = _make_registry_repo(exact_return=row)
+
+        result = asyncio.run(
+            canonicalize_relation_type(
+                raw_type="HAS_EXECUTIVE",
+                semantic_mode_hint="RELATION_STATE",
+                subject_entity_id=uuid4(),
+                object_entity_id=uuid4(),
+                source_doc_id=None,
+                registry_repo=registry,
+                outbox_repo=_make_outbox_repo(),
+                embedding_client=_make_embedding_client(),
+            )
+        )
+        assert result.step == "exact"
+        registry.find_exact.assert_called_once_with("has_executive")
+
+    def test_unknown_type_still_proposed(self) -> None:
+        """Truly unknown type falls through to Step 3 (proposal) even after normalization."""
+        from knowledge_graph.application.blocks.canonicalization import (
+            canonicalize_relation_type,
+        )
+
+        registry = _make_registry_repo(exact_return=None, ann_return=None)
+        outbox = _make_outbox_repo()
+
+        result = asyncio.run(
+            canonicalize_relation_type(
+                raw_type="INVENTED_BY",
+                semantic_mode_hint="RELATION_STATE",
+                subject_entity_id=uuid4(),
+                object_entity_id=uuid4(),
+                source_doc_id=None,
+                registry_repo=registry,
+                outbox_repo=outbox,
+                embedding_client=_make_embedding_client(),
+            )
+        )
+        assert result.canonical_type is None
+        assert result.step == "proposed"
+        # Registry received normalized key, still found nothing.
+        registry.find_exact.assert_called_once_with("invented_by")
