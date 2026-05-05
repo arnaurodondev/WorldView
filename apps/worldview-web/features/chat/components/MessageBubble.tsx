@@ -114,7 +114,17 @@ export function MessageBubble({ message }: { message: Message }) {
             <pre className="whitespace-pre-wrap font-sans text-[11px]">{message.content}</pre>
           ) : (
             <div id={anchorPrefix}>
-              <LazyMarkdownContent size="compact">{message.content}</LazyMarkdownContent>
+              {/*
+               * P2C-5: withCitationSups enables [N] → <sup> rendering in S8
+               * assistant messages. WHY post-hoc sources: S8 RAG responses include
+               * [N] inline citation markers referencing the retrieved chunks. The
+               * `citations` array on this message is the structured form (used by
+               * CitationBar + CitationList below). Rendering [N] as superscripts
+               * here ties the inline references to the source list visually —
+               * matching the AskAiPanel pattern and letting analysts verify claims
+               * without leaving the thread.
+               */}
+              <LazyMarkdownContent size="compact" withCitationSups>{message.content}</LazyMarkdownContent>
             </div>
           )}
 

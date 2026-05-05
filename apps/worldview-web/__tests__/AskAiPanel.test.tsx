@@ -7,6 +7,7 @@
  * - [DONE] sentinel stops streaming and marks complete
  * - DS-007 regression: final token at stream boundary must not be dropped
  * - Error handling (network failure, non-2xx status)
+ * - P2B-1: post-stream citation parsing ([N] markers + Sources section)
  *
  * WHAT WE TEST:
  * 1. Initial render — textarea auto-focus, placeholder, disabled Send button
@@ -22,6 +23,10 @@
  * 11. External link button navigates to /chat and calls onClose
  * 12. Textarea disabled while streaming
  * 13. No accessToken — Send button disabled / handleSend no-ops
+ * 14. P2B-1: [N] markers render as superscript <sup> elements post-stream
+ * 15. P2B-1: Sources section rendered when response contains Sources block
+ * 16. P2B-1: No Sources section when response has no Sources block
+ * 17. P2B-1: parseCitationResponse and renderWithCitations unit tests
  *
  * WHAT WE DO NOT TEST HERE:
  * - Visual layout (Playwright e2e)
@@ -34,7 +39,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import { AskAiPanel } from "@/components/shell/AskAiPanel";
+import { AskAiPanel, parseCitationResponse, renderWithCitations } from "@/components/shell/AskAiPanel";
 
 // ── Next.js mock ───────────────────────────────────────────────────────────────
 
@@ -114,7 +119,7 @@ describe("AskAiPanel — initial render", () => {
 
   it("renders the Ask AI header", () => {
     renderPanel();
-    expect(screen.getByText("Ask AI")).toBeInTheDocument();
+    expect(screen.getByText("Analyst")).toBeInTheDocument();
   });
 
   it("renders the textarea with placeholder text", () => {
@@ -460,5 +465,155 @@ describe("AskAiPanel — auth guard", () => {
     // Give React time to process any state updates, then assert fetch not called
     await new Promise((r) => setTimeout(r, 50));
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ── P2B-1: parseCitationResponse unit tests ───────────────────────────────────
+
+describe("parseCitationResponse", () => {
+  it("returns full text as body when no Sources section is present", () => {
+    const { body, sources } = parseCitationResponse("Apple earnings beat by 5%.");
+    expect(body).toBe("Apple earnings beat by 5%.");
+    expect(sources).toHaveLength(0);
+  });
+
+  it("splits on plain-text 'Sources:' delimiter", () => {
+    const raw = "The analysis [1] is clear.\n\nSources:\n1. Reuters article — https://reuters.com";
+    const { body, sources } = parseCitationResponse(raw);
+    expect(body).toBe("The analysis [1] is clear.");
+    expect(sources).toHaveLength(1);
+    expect(sources[0].title).toBe("Reuters article");
+  });
+
+  it("splits on markdown '## Sources' delimiter", () => {
+    const raw = "Good data [1].\n## Sources\n1. WSJ — https://wsj.com/article";
+    const { body, sources } = parseCitationResponse(raw);
+    expect(body).toBe("Good data [1].");
+    expect(sources).toHaveLength(1);
+    expect(sources[0].title).toBe("WSJ");
+  });
+
+  it("parses multiple sources", () => {
+    const raw = "Analysis here.\n\nSources:\n1. Reuters — https://reuters.com\n2. Bloomberg — https://bloomberg.com\n3. WSJ — https://wsj.com";
+    const { sources } = parseCitationResponse(raw);
+    expect(sources).toHaveLength(3);
+    expect(sources[0].title).toBe("Reuters");
+    expect(sources[1].title).toBe("Bloomberg");
+    expect(sources[2].title).toBe("WSJ");
+  });
+
+  it("handles sources without URL suffix", () => {
+    const raw = "Text.\n\nSources:\n1. Internal research note";
+    const { sources } = parseCitationResponse(raw);
+    expect(sources[0].title).toBe("Internal research note");
+  });
+
+  it("filters blank source lines", () => {
+    const raw = "Text.\n\nSources:\n1. Reuters\n\n2. Bloomberg";
+    const { sources } = parseCitationResponse(raw);
+    expect(sources).toHaveLength(2);
+  });
+});
+
+// ── P2B-1: renderWithCitations unit tests ────────────────────────────────────
+
+describe("renderWithCitations", () => {
+  it("returns the plain string unchanged when no [N] markers are present", () => {
+    const result = renderWithCitations("No citations here.");
+    // WHY string equality: when there are no [N] markers, renderWithCitations
+    // returns the original string directly (not wrapped in an array). This is
+    // an intentional optimization — no array allocation needed for plain text.
+    expect(result).toBe("No citations here.");
+  });
+
+  it("returns an array when [N] markers are present", () => {
+    const result = renderWithCitations("See [1] and [2] for details.");
+    expect(Array.isArray(result)).toBe(true);
+  });
+
+  it("produces sup elements for each [N] marker", () => {
+    const result = renderWithCitations("See [1] and [2].") as unknown[];
+    // Filter to only the object (ReactElement) entries — strings are the text segments.
+    const supElements = result.filter((r) => typeof r === "object");
+    expect(supElements).toHaveLength(2);
+  });
+});
+
+// ── P2B-1: AskAiPanel citation rendering integration tests ───────────────────
+
+describe("AskAiPanel — P2B-1 citation rendering", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it("renders [N] markers as <sup> elements after stream completes", async () => {
+    // WHY full response with [1] marker: tests that the post-stream parsing
+    // triggers renderWithCitations, which converts [1] into a <sup> element
+    // with className containing 'font-mono'. The streaming blinking cursor
+    // is NOT present, confirming this is the settled (post-stream) state.
+    mockFetch([
+      'data: {"token":"See analysis [1] for details."}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+
+    renderPanel();
+    const textarea = screen.getByPlaceholderText(/ask about markets/i);
+    fireEvent.change(textarea, { target: { value: "Cite test" } });
+    fireEvent.click(screen.getByRole("button", { name: /send message/i }));
+
+    // Wait for stream to complete and citation parsing to fire
+    await waitFor(() => {
+      // WHY query sup: renderWithCitations wraps [1] in a <sup> element.
+      // The text "for details." appears outside the sup as a text node.
+      const sups = document.querySelectorAll("sup");
+      expect(sups.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("renders a Sources section when response contains a Sources block", async () => {
+    const responseWithSources =
+      "The analysis [1] shows growth.\n\nSources:\n1. Reuters — https://reuters.com/article";
+
+    mockFetch([
+      `data: ${JSON.stringify({ token: responseWithSources })}\n\n`,
+      "data: [DONE]\n\n",
+    ]);
+
+    renderPanel();
+    const textarea = screen.getByPlaceholderText(/ask about markets/i);
+    fireEvent.change(textarea, { target: { value: "Source test" } });
+    fireEvent.click(screen.getByRole("button", { name: /send message/i }));
+
+    // Wait for the Sources section header to appear
+    await waitFor(() => {
+      // WHY uppercase "SOURCES": the Sources label uses uppercase tracking-wider
+      // font-mono styling (terminal label convention). The regex is case-insensitive.
+      expect(screen.getByText(/sources/i)).toBeInTheDocument();
+    });
+
+    // The extracted source title should appear in the list
+    await waitFor(() => {
+      expect(screen.getByText("Reuters")).toBeInTheDocument();
+    });
+  });
+
+  it("does not render a Sources section when response has no Sources block", async () => {
+    mockFetch([
+      'data: {"token":"Plain answer with no citations."}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+
+    renderPanel();
+    const textarea = screen.getByPlaceholderText(/ask about markets/i);
+    fireEvent.change(textarea, { target: { value: "No sources test" } });
+    fireEvent.click(screen.getByRole("button", { name: /send message/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Plain answer with no citations.")).toBeInTheDocument();
+    });
+
+    // The "Sources" label must NOT be present — the response has no sources block.
+    expect(document.querySelector(".border-border\\/40.pt-1\\.5")).toBeNull();
   });
 });
