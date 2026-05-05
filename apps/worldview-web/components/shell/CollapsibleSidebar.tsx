@@ -83,13 +83,21 @@ const NAV_ITEMS = [
 const MIN_SIDEBAR_WIDTH = 160;
 const MAX_SIDEBAR_WIDTH = 340;
 
-/** Width of the collapsed icon-only rail — matches TopBar row height rhythm */
-const COLLAPSED_WIDTH = 48;
+/**
+ * Width of the collapsed icon-only rail.
+ *
+ * WHY 40px (was 48px): PLAN-0071 Phase 6.5 terminal density sprint.
+ * h-7 (28px) rows + 14px icons match the bloomberg-terminal reference density
+ * (feremabraz/bloomberg-terminal). The collapsed 40px rail gives 14px icon +
+ * 2×13px padding = minimum usable width. 48px was proportioned for 18px icons
+ * at h-9 (36px) rows; 40px is the correct tight-rail for the new 14px icon size.
+ */
+const COLLAPSED_WIDTH = 40;
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 interface CollapsibleSidebarProps {
-  /** Whether the sidebar is currently in expanded vs collapsed (48px) mode */
+  /** Whether the sidebar is currently in expanded vs collapsed (40px) mode */
   expanded: boolean;
   /** Callback — parent (layout.tsx) flips the expanded boolean and persists it */
   onToggle: () => void;
@@ -159,7 +167,7 @@ export function CollapsibleSidebar({
   }
 
   // Compute the actual CSS width:
-  // - Collapsed: always 48px regardless of the stored `width` value
+  // - Collapsed: always 40px regardless of the stored `width` value
   // - Expanded: use the caller-supplied `width` (which comes from localStorage)
   const currentCssWidth = expanded ? width : COLLAPSED_WIDTH;
 
@@ -221,9 +229,13 @@ export function CollapsibleSidebar({
               aria-current={isActive ? "page" : undefined}
               aria-label={label}
               className={cn(
-                // WHY h-9 (36px): matches TopBar height rhythm — nav rows feel
-                // proportional to the top chrome, not oversized relative to data rows.
-                "flex h-9 items-center gap-2 px-3",
+                // WHY h-7 (28px, was h-9 36px): PLAN-0071 Phase 6.5 terminal density
+                // sprint. bloomberg-terminal reference uses h-6/h-7 nav rows; h-9 was
+                // proportioned for desktop apps with large click targets. 28px is the
+                // minimum for comfortable nav in a terminal context.
+                // WHY px-2.5 gap-1.5 (was px-3 gap-2): tighter padding/gap matches
+                // the reduced icon size (14px vs 18px) for proportional visual rhythm.
+                "flex h-7 items-center gap-1.5 px-2.5",
                 // WHY duration-0: INSTANT color change — Bloomberg convention.
                 // Nav hover states must not lerp/animate — they must be instant.
                 // Even 50ms transition on a nav link feels laggy in a trading terminal.
@@ -237,9 +249,15 @@ export function CollapsibleSidebar({
                   : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
               )}
             >
-              <Icon className="h-[18px] w-[18px] shrink-0" />
+              {/* WHY h-[14px] w-[14px] (was h-[18px] w-[18px]): 14px icons in a 28px
+                * row give proportional padding. 18px icons were right for 36px rows;
+                * at 28px they consumed too much of the row height. */}
+              <Icon className="h-[14px] w-[14px] shrink-0" />
               {expanded && (
-                <span className="text-xs font-medium truncate">{label}</span>
+                // WHY text-[10px] (was text-xs 12px): at 28px row height, 12px text
+                // is too prominent relative to the compact icon. 10px keeps the label
+                // readable while matching the terminal's data-text density standard.
+                <span className="text-[10px] font-medium truncate">{label}</span>
               )}
             </Link>
           );
@@ -279,20 +297,22 @@ export function CollapsibleSidebar({
 
       {/* ── Bottom chrome: Settings + collapse toggle ──────────────────────── */}
       <div className="flex shrink-0 flex-col border-t border-border">
-        {/* Settings link */}
+        {/* Settings link — same h-7/px-2.5/gap-1.5/text-[10px] density as nav items above */}
         <Link
           href="/settings"
           title={!expanded ? "Settings" : undefined}
           aria-current={pathname.startsWith("/settings") ? "page" : undefined}
           className={cn(
-            "flex h-9 items-center gap-2 px-3 transition-colors duration-0",
+            "flex h-7 items-center gap-1.5 px-2.5 transition-colors duration-0",
             pathname.startsWith("/settings")
               ? "bg-primary/10 text-primary border-l-2 border-primary"
               : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
           )}
         >
-          <Settings className="h-[18px] w-[18px] shrink-0" />
-          {expanded && <span className="text-xs font-medium">Settings</span>}
+          {/* WHY h-[14px] w-[14px]: matches nav item icons — bottom chrome must
+              align visually with the nav rail above it. */}
+          <Settings className="h-[14px] w-[14px] shrink-0" />
+          {expanded && <span className="text-[10px] font-medium">Settings</span>}
         </Link>
 
         {/* Collapse / expand toggle button */}
@@ -301,28 +321,29 @@ export function CollapsibleSidebar({
          * top where it might be accidentally clicked. */}
         <button
           onClick={onToggle}
-          className="flex h-9 items-center gap-2 px-3 text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors duration-0"
+          className="flex h-7 items-center gap-1.5 px-2.5 text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors duration-0"
           aria-label={expanded ? "Collapse sidebar" : "Expand sidebar"}
           title={expanded ? "Collapse sidebar" : "Expand sidebar"}
         >
           {expanded ? (
             <>
-              <ChevronLeft className="h-[18px] w-[18px] shrink-0" />
-              <span className="text-xs font-medium">Collapse</span>
+              {/* WHY h-[14px] w-[14px]: matches nav item icons in the same bottom chrome. */}
+              <ChevronLeft className="h-[14px] w-[14px] shrink-0" />
+              <span className="text-[10px] font-medium">Collapse</span>
             </>
           ) : (
             // Centered chevron in collapsed rail
-            <ChevronRight className="h-[18px] w-[18px]" />
+            <ChevronRight className="h-[14px] w-[14px]" />
           )}
         </button>
       </div>
 
       {/* ── Drag-resize handle (expanded only) ──────────────────────────────── */}
       {/*
-       * WHY only show when expanded: the collapsed 48px rail is a fixed-width icon
-       * rail — there is no meaningful range to drag (48px is the smallest usable
-       * width for the icons). Showing the handle on the collapsed rail would confuse
-       * users who just want to expand via the chevron button.
+       * WHY only show when expanded: the collapsed 40px rail is a fixed-width icon
+       * rail — there is no meaningful range to drag (40px is the smallest usable
+       * width for the 14px icons). Showing the handle on the collapsed rail would
+       * confuse users who just want to expand via the chevron button.
        *
        * WHY absolute right-0: the handle sits on the very right edge of the sidebar
        * so it visually "touches" the border between sidebar and main content.

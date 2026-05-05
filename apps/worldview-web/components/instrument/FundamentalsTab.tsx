@@ -1,6 +1,31 @@
 /**
  * components/instrument/FundamentalsTab.tsx — Fundamentals metrics grid (9 sections)
  *
+ * NOTE — PLAN-0071 Phase 6 P6-3 Assessment (2026-05-05):
+ * P6-3 specified "Migrate financial statements table to AG Grid (Income Statement /
+ * Balance Sheet / Cash Flow tabs)". After reading this file in full, P6-3 is NOT
+ * APPLICABLE to this component. Here is why:
+ *
+ * This component contains NO multi-column time-series financial statement grids.
+ * There are no "FY2022 / FY2023 / FY2024" column headers. All financial data
+ * is displayed as single label+value MetricRow pairs (e.g., "Gross Margin: 45.2%").
+ *
+ * The appropriate AG Grid use cases are:
+ *   1. Multi-column tabular data with sortable/filterable columns (screener ✅ done).
+ *   2. Rows of securities/positions with live-updating cells (holdings ✅ done).
+ *
+ * Key-value metric rows are NOT improved by AG Grid:
+ *   - MetricRow is already 22px fixed height (terminal density standard).
+ *   - Section cards (Valuation, Profitability, etc.) group metrics correctly.
+ *   - No benefit from AG Grid column features on a label+single-value layout.
+ *   - Adding AG Grid would increase bundle size and complexity for zero UX benefit.
+ *
+ * Revenue trend and EPS history (time-series data) are handled separately by
+ * RevenueTrendSparklines (sparkline chart) and EarningsHistoryChart (bar chart).
+ * Both are more appropriate than a grid for historical financial trend display.
+ *
+ * Decision: P6-3 is N/A. Current MetricRow display is correct and optimal.
+ *
  * WHY THIS EXISTS: Fundamental analysis is the primary due-diligence step for
  * portfolio managers. They need P/E, margins, debt ratios, and growth metrics
  * before making allocation decisions. Bloomberg users expect dense tabular

@@ -122,7 +122,7 @@ export function ArticleCard({ article }: ArticleCardProps) {
     )}>
 
       {/* ── Top row: source + routing tier pill + timestamp ────────────────── */}
-      <div className="mb-0.5 flex items-center justify-between gap-2">
+      <div className="mb-0 flex items-center justify-between gap-2">
 
         {/* Left cluster: source badge + optional HIGH-tier pill */}
         <div className="flex shrink-0 items-center gap-1.5">
@@ -183,7 +183,7 @@ export function ArticleCard({ article }: ArticleCardProps) {
         href={safeExternalUrl(article.url)}
         target="_blank"
         rel="noopener noreferrer"
-        className="mb-0.5 block text-[11px] font-medium leading-snug text-foreground transition-colors group-hover:text-primary"
+        className="mb-0 block text-[11px] font-medium leading-snug text-foreground transition-colors group-hover:text-primary"
       >
         <span className="flex items-start gap-1">
           <span className="line-clamp-2 flex-1">{article.title}</span>
@@ -200,7 +200,10 @@ export function ArticleCard({ article }: ArticleCardProps) {
           summary field at all; getSummary() returns null for those. The empty string
           check handles both null and "" from the API without layout shift. */}
       {summary && summary.trim() !== "" && (
-        <p className="mb-0 line-clamp-2 text-[10px] leading-relaxed text-muted-foreground">
+        // WHY line-clamp-1 (was line-clamp-2): single summary line reduces card height
+        // by ~14px per card in dashboard feeds (WatchlistNews, PortfolioNewsWidget).
+        // Density over context — analysts who want the full article click the link.
+        <p className="mb-0 line-clamp-1 text-[10px] leading-relaxed text-muted-foreground">
           {summary}
         </p>
       )}

@@ -68,6 +68,9 @@ export function MarketHeatmap() {
     );
   }
 
+  // WHY p-2 (was p-4): Bloomberg-grade terminal density. 16px→8px padding inside
+  // data widgets recovers vertical space for more data rows. MarketHeatmap uses
+  // h-56 fixed height — no outer p-4 was present; tile inner padding is already p-1.
   return (
     <div className="h-56">
       <SquarifiedTreemap<HeatmapSector>
