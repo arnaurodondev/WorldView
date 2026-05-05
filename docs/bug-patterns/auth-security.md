@@ -2,7 +2,7 @@
 
 > **Category**: auth-security
 > **Description**: JWT/OIDC middleware, SSRF, XSS, injection attacks, tenant isolation, CSP headers, auth bypass, RS256/HS256
-> **Count**: 29 patterns
+> **Count**: 30 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -963,3 +963,52 @@ http = self._http or _httpx.AsyncClient(timeout=15.0, headers=_system_jwt_header
 **Regression test**: `tests/unit/infrastructure/workers/test_fundamentals_refresh_worker.py::TestFundamentalsRefreshWorkerS3Failure::test_successful_fetch_calls_upsert`
 
 ---
+
+---
+
+## BP-382 — Next.js full-route cache + per-request nonce = Safari stylesheet block
+
+**Category**: Auth & Security / Frontend
+**Severity**: HIGH (entire app renders unstyled on Safari and strict-CSP Chrome when cache is hit)
+**First seen**: 2026-05-04
+**Services**: worldview-web (middleware.ts + app/layout.tsx)
+
+**Symptoms**:
+- Safari (and Chrome with strict CSP) logs: `Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline' does not appear in the style-src directive`
+- Page text is visible but completely unstyled (Tailwind CSS not applied)
+- Errors appear on dashboard, portfolio, and instrument detail pages
+- The error fires on every page load after the first (cache-warm requests)
+- `curl -I http://localhost:3001/ | grep x-nextjs-cache` shows `HIT`
+
+**Root cause**:
+`middleware.ts` generates a fresh nonce on every HTTP request and:
+1. Sets it in the CSP response header (`nonce-<N>`)
+2. Forwards it via `x-nonce` request header so Next.js embeds `nonce="<N>"` on every `<link rel="stylesheet">` and inline `<script>`
+
+When Next.js's full-route cache serves a cached HTML shell, the `<link>` elements carry the **old nonce** (`nonce="A"`) from when the page was first rendered. But the middleware generates a **new nonce** (`nonce="B"`) for the current request's CSP header.
+
+Per the CSP spec: when a `nonce` attribute is present on a resource, `unsafe-inline` is **silently ignored** — only a matching `nonce-N` in the policy authorises the resource.
+Result: `nonce-B` in the policy, `nonce="A"` on the element → mismatch → stylesheet blocked.
+
+**Fix applied** (`apps/worldview-web/app/layout.tsx`):
+Added `await headers()` (from `next/headers`) at the top of `RootLayout`. Calling `headers()` marks the route as **dynamic** in Next.js, opting it out of the full-route cache. Every request now re-renders the layout Server Component with the current `x-nonce` value, so the embedded nonce always matches the CSP header nonce.
+
+```tsx
+// Bad — layout may be cached; nonce on <link> elements gets stale
+export default function RootLayout({ children }) { ... }
+
+// Good — headers() forces dynamic rendering
+import { headers } from "next/headers";
+export default async function RootLayout({ children }) {
+  await headers(); // opts out of full-route cache
+  ...
+}
+```
+
+**Prevention**:
+- ANY Next.js layout or page that uses nonce-based CSP via middleware MUST call `headers()` or `cookies()` to force dynamic rendering — otherwise the route cache will serve stale nonces.
+- Alternatively: use `export const dynamic = 'force-dynamic'` in the layout file.
+- Never mix per-request CSP nonces with ISR (`revalidate`) or full-route caching without this guard.
+- Note: BP-325 documents the related `strict-dynamic` issue; this BP-382 is the cache-mismatch sibling.
+
+**Related**: BP-324 (upgrade-insecure-requests on localhost), BP-325 (strict-dynamic breaks prerendered pages)
