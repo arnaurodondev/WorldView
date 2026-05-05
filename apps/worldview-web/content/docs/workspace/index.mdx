@@ -1,0 +1,59 @@
+---
+title: Workspace
+description: Multi-panel canvas for side-by-side research — 11 panel types, drag-to-resize, symbol linking.
+section: Workspace
+order: 1
+updated: 2026-05-05
+---
+
+The Workspace (`/workspace`) is a free-form multi-panel canvas. Unlike the structured layout of the dashboard, the workspace lets you compose any combination of panels side-by-side and resize them to suit your research style.
+
+Navigate to the workspace with `G` then `W`.
+
+## Panel types
+
+The workspace supports 11 panel types:
+
+| Panel | Content |
+|-------|---------|
+| Chart | OHLCV chart with technical indicators |
+| News Feed | Article feed for a specific instrument or topic |
+| Fundamentals | Valuation and financial metrics |
+| Intelligence Graph | Knowledge graph for an entity |
+| Portfolio | Holdings and P&L summary |
+| Screener | Mini screener with filters |
+| Watchlist | Watchlist instruments with quotes |
+| Economic Calendar | Upcoming macro events |
+| Prediction Markets | Polymarket events |
+| Chat | AI assistant conversation |
+| Alerts | Recent alert history |
+
+## Adding panels
+
+Click the **+ Add panel** button in the workspace toolbar. A panel picker modal shows all 11 types. Click any type to add it to the canvas. New panels appear at the right side of the canvas.
+
+## Layout
+
+Panels can be arranged in rows and columns using a drag-based grid system. Drag a panel's title bar to move it. Drag the resize handle between panels to change their relative size.
+
+<Callout type="tip" title="Keyboard-first resize">
+With a panel selected (click its title bar), use `Ctrl+Arrow` to resize it by one grid unit in that direction. This is faster than dragging for precise sizing.
+</Callout>
+
+## Symbol linking
+
+Multiple panels can be linked to the same symbol using color-coded broadcast channels. When you change the symbol in one linked panel, all panels on the same channel update simultaneously.
+
+There are 5 color channels: Red, Green, Blue, Yellow, and Purple. Assign a panel to a channel by clicking the colored dot in its title bar.
+
+Example: Link a Chart panel and a News Feed panel to the Blue channel. When you type a new ticker in the Chart, the News Feed automatically updates to show news for that ticker.
+
+## Saving workspaces
+
+Click **Save workspace** (or `⌘S`) to save the current layout as a named workspace. Saved workspaces persist in your account and reload exactly as saved, including panel positions, sizes, and symbol assignments.
+
+## Related pages
+
+- [Panel types](/docs/workspace/panels) — full reference for each panel type
+- [Layouts](/docs/workspace/layouts) — saving, loading, and sharing layouts
+- [Templates](/docs/workspace/templates) — preset layouts for common workflows

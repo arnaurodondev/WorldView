@@ -1,0 +1,132 @@
+---
+title: Quotes & OHLCV
+description: GET /v1/instruments/{id}/overview, /ohlcv, and /live-quote endpoints.
+section: API Reference
+order: 3
+updated: 2026-05-05
+---
+
+The Instruments group provides endpoints for instrument search, price overview, OHLCV time series, and live quotes.
+
+## Search instruments
+
+```
+GET /v1/instruments/search?q={query}&limit={n}
+```
+
+**Query parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `q` | string | yes | Ticker symbol or company name (min 1 char) |
+| `limit` | integer | no | Max results (default: 10, max: 50) |
+| `asset_class` | string | no | Filter: `equity`, `etf`, `index`, `crypto` |
+
+**Response:**
+
+```json
+{
+  "items": [
+    {
+      "entity_id": "01h8...",
+      "ticker": "AAPL",
+      "name": "Apple Inc.",
+      "exchange": "NASDAQ",
+      "asset_class": "equity",
+      "sector": "Technology",
+      "currency": "USD"
+    }
+  ],
+  "total": 1
+}
+```
+
+## Instrument overview
+
+```
+GET /v1/instruments/{entity_id}/overview
+```
+
+Returns summary data combining last price, basic fundamentals, and metadata.
+
+**Response:**
+
+```json
+{
+  "entity_id": "01h8...",
+  "ticker": "AAPL",
+  "name": "Apple Inc.",
+  "last_price": 213.45,
+  "day_change": 2.31,
+  "day_change_pct": 1.09,
+  "market_cap": 3280000000000,
+  "pe_ttm": 31.2,
+  "ev_ebitda": 22.8,
+  "week_52_high": 237.23,
+  "week_52_low": 164.08,
+  "updated_at": "2026-05-05T16:30:00Z"
+}
+```
+
+## OHLCV time series
+
+```
+GET /v1/instruments/{entity_id}/ohlcv?period={period}&from={date}&to={date}
+```
+
+**Query parameters:**
+
+| Parameter | Type | Options | Default |
+|-----------|------|---------|---------|
+| `period` | string | `1d`, `5d`, `1m`, `3m`, `6m`, `1y`, `5y`, `max` | `1y` |
+| `interval` | string | `1min`, `5min`, `1d` | `1d` |
+| `from` | ISO date | | period start |
+| `to` | ISO date | | today |
+
+**Response:**
+
+```json
+{
+  "entity_id": "01h8...",
+  "ticker": "AAPL",
+  "interval": "1d",
+  "bars": [
+    {
+      "date": "2026-05-05",
+      "open": 211.14,
+      "high": 215.22,
+      "low": 210.50,
+      "close": 213.45,
+      "volume": 52341200,
+      "adjusted_close": 213.45
+    }
+  ]
+}
+```
+
+## Live quote
+
+```
+GET /v1/instruments/{entity_id}/live-quote
+```
+
+Returns the most recent tick data from Finnhub. During market hours, this is updated every 1–2 seconds server-side.
+
+```json
+{
+  "entity_id": "01h8...",
+  "ticker": "AAPL",
+  "price": 213.45,
+  "bid": 213.43,
+  "ask": 213.47,
+  "bid_size": 300,
+  "ask_size": 200,
+  "volume": 52341200,
+  "timestamp": "2026-05-05T16:30:00Z",
+  "market_status": "OPEN"
+}
+```
+
+<Callout type="info" title="Live quote vs. OHLCV">
+Use `live-quote` for the latest price during market hours. Use `ohlcv` for historical series and chart data. The `overview` endpoint caches a combination of both with a 60-second TTL.
+</Callout>

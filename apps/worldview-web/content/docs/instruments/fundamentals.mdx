@@ -1,0 +1,73 @@
+---
+title: Fundamentals
+description: P/E, EV/EBITDA, revenue, balance sheet, and cash flow data for equities.
+section: Instruments
+order: 2
+updated: 2026-05-05
+---
+
+The Fundamentals tab on an instrument page shows financial metrics sourced from EODHD and Finnhub. Data is refreshed daily after market close. For international equities, fiscal year timing may differ from calendar year.
+
+## Valuation metrics
+
+| Metric | Description |
+|--------|-------------|
+| Price / Earnings (P/E) | Trailing twelve months (TTM) earnings per share |
+| Price / Sales (P/S) | Market cap divided by TTM revenue |
+| Price / Book (P/B) | Market cap divided by book value of equity |
+| EV / EBITDA | Enterprise value divided by TTM EBITDA |
+| EV / Revenue | Enterprise value divided by TTM revenue |
+| PEG Ratio | P/E divided by 5-year expected EPS growth rate |
+
+<Callout type="info" title="TTM vs. fiscal year">
+Valuation multiples use TTM (trailing twelve months) figures derived from the last four reported quarters, not the most recent fiscal year. This makes comparisons more current for companies with non-December fiscal year ends.
+</Callout>
+
+## Income statement highlights
+
+- **Revenue** — TTM and most recent fiscal year, with YoY growth %
+- **Gross Profit** and **Gross Margin %**
+- **Operating Income (EBIT)** and **Operating Margin %**
+- **Net Income** and **Net Margin %**
+- **Earnings Per Share (EPS)** — diluted, TTM
+
+## Balance sheet
+
+- **Total Assets** and **Total Liabilities**
+- **Total Equity** (book value)
+- **Cash & Equivalents** — most recent quarter
+- **Total Debt** (short-term + long-term)
+- **Net Cash / Net Debt** — Cash minus Total Debt
+- **Debt / Equity** ratio
+
+## Cash flow
+
+- **Operating Cash Flow** — TTM
+- **Capital Expenditures (CapEx)** — TTM
+- **Free Cash Flow (FCF)** — Operating CF minus CapEx
+- **FCF Margin %** — FCF divided by TTM revenue
+- **FCF Yield** — FCF per share divided by current price
+
+## Dividends (if applicable)
+
+- **Dividend Yield %** — annualized forward dividend / current price
+- **Dividend Per Share** — most recent declared annual dividend
+- **Payout Ratio** — dividend / TTM EPS
+
+## Technical metrics
+
+The fundamentals tab also shows a few technical summary statistics:
+
+- **52-week High / Low** and % from each
+- **Average Volume (30-day)**
+- **Market Cap** (current)
+- **Beta** (3-year monthly vs. S&P 500)
+- **Short Interest %** of float (where available)
+
+<Callout type="warn" title="ETF and index limitations">
+For ETFs, income statement and cash flow fields are not applicable. The tab shows only market metrics (market cap, volume, beta) and dividend yield where relevant. For indices, only price history is available.
+</Callout>
+
+## Data freshness
+
+Fundamentals data is sourced from EODHD's fundamentals API and updated once per day after 18:00 ET. Quarterly earnings updates propagate within 24 hours of the company's SEC filing.

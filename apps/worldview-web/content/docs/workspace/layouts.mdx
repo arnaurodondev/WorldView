@@ -1,0 +1,59 @@
+---
+title: Layouts
+description: Save, load, and share workspace layouts across sessions.
+section: Workspace
+order: 3
+updated: 2026-05-05
+---
+
+A workspace layout captures the full state of the workspace canvas: panel types, positions, sizes, symbol assignments, and broadcast channel links. Layouts are stored in your account and restored exactly when you reload.
+
+## Saving a layout
+
+<Steps>
+  <Step title="Arrange your workspace">
+    Add panels, resize them, and configure symbol assignments to your preference.
+  </Step>
+  <Step title="Click Save workspace">
+    Click the **Save workspace** button in the toolbar, or press `⌘S` / `Ctrl+S`.
+  </Step>
+  <Step title="Name the layout">
+    Enter a descriptive name. Examples: "Pre-market scan", "Earnings day", "Macro watch".
+  </Step>
+  <Step title="Save">
+    Click **Save**. The layout appears in your saved layouts list.
+  </Step>
+</Steps>
+
+## Loading a layout
+
+Click the **Layouts** dropdown in the workspace toolbar to see your saved layouts. Click any layout name to load it. The canvas updates to match the saved state.
+
+<Callout type="info" title="Replacing active panels">
+Loading a layout replaces all current panels. If you have unsaved changes, a confirmation prompt appears first. Click **Discard and load** to proceed, or **Cancel** to keep editing.
+</Callout>
+
+## Managing layouts
+
+Click **Manage layouts** in the dropdown to open the layout manager:
+
+- **Rename** — click the name to edit inline
+- **Duplicate** — copy a layout as a starting point for a new one
+- **Delete** — permanently remove a layout
+- **Set as default** — the default layout loads when you first open the workspace
+
+## Sharing layouts
+
+Click the **Share** button in the toolbar to copy a shareable URL. The URL encodes the full layout state as a JSON snapshot in the query string.
+
+<Callout type="warn" title="Shared layouts and private data">
+Shared layout URLs do not include your portfolio data, watchlist contents, or any personal information. The recipient sees the same panel configuration but with their own data (or empty panels if they have no matching data).
+</Callout>
+
+## Auto-save
+
+The workspace auto-saves every 5 minutes to a temporary "Last session" slot. If your browser crashes or you close the tab accidentally, you can restore the last session from the Layouts dropdown by selecting **Last session (auto-saved)**.
+
+## Layout versioning
+
+Each save creates a new version. The layout manager shows the last 5 versions of each layout with timestamps. Click any version to restore it.

@@ -1,0 +1,64 @@
+---
+title: Morning Brief
+description: How the AI-generated morning brief works, what it covers, and how to ask follow-up questions.
+section: Dashboard
+order: 3
+updated: 2026-05-05
+---
+
+The morning brief is Worldview's daily AI-generated intelligence digest. It is produced once per trading day at 06:00 ET and cached until the following generation.
+
+## Generation pipeline
+
+The brief is produced by a multi-step RAG (Retrieval-Augmented Generation) pipeline:
+
+1. **News retrieval** — the top 30 articles from the last 18 hours are fetched, ranked by AI relevance score and news routing tier
+2. **Entity extraction** — named entities (companies, executives, regulators, macro indicators) are identified in each article
+3. **Watchlist matching** — articles mentioning your watchlist instruments are flagged as high-priority
+4. **Economic events** — today's macro calendar events are pulled and formatted
+5. **Generation** — DeepSeek R1 Distill 32B synthesizes all context into a structured brief
+6. **Citations** — every factual claim is attributed to the source article using `[N]` inline citation markers
+
+## Brief structure
+
+A typical morning brief follows this structure:
+
+### Market tone
+A 1-2 sentence overall read on macro conditions (risk-on/risk-off, equity vs. bond behavior, USD direction).
+
+### Top themes
+Three numbered themes dominating the news, each with a 2-3 sentence summary and citations.
+
+### Your watchlist
+Instrument-specific commentary: which holdings are in the news, what catalysts are active, and any earnings/events coming up.
+
+### Today's calendar
+Key economic releases and events happening today, with consensus vs. prior expectations.
+
+### Research question
+One forward-looking question the AI surfaces as worth investigating, based on the day's patterns.
+
+## Interacting with the brief
+
+**Follow-up questions** — Click **Ask a follow-up** below the brief to open the Chat panel with the brief text pre-loaded as context. You can ask "why is AAPL down?" or "what does the CPI print mean for tech?" and the AI answers with the full brief as background.
+
+**Company links** — Company names mentioned in the brief are hyperlinked to their instrument pages. Click to open the chart directly.
+
+**Rating** — Use the thumbs up/down widget at the bottom of the brief to rate its quality. Ratings improve future generations for your account.
+
+<Callout type="tip" title="Portfolio questions">
+To get portfolio-scoped analysis, ask the AI "What should I be watching in my portfolio this week?" in the Chat panel. It reads your current holdings from the Portfolio service and combines them with live news context.
+</Callout>
+
+## Brief freshness
+
+| Time | Brief state |
+|------|-------------|
+| Before 06:00 ET | Previous day's brief shown with a "Yesterday" badge |
+| 06:00–07:00 ET | New brief generating (spinner shown) |
+| After 07:00 ET | Fresh brief for the current trading day |
+| Weekend/holiday | Friday's brief with a "No new brief" notice |
+
+<Callout type="info" title="Model">
+The morning brief uses DeepSeek R1 Distill 32B via DeepInfra. Generation takes 8–20 seconds depending on context length. The result is cached — subsequent page loads are instant.
+</Callout>

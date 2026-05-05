@@ -1,0 +1,63 @@
+---
+title: Finnhub
+description: Finnhub real-time quotes, news, and corporate events data.
+section: Data Sources
+order: 3
+updated: 2026-05-05
+---
+
+Finnhub provides real-time quote data and supplementary fundamentals for US equities and major international markets. It complements EODHD by providing faster quote updates and additional corporate event data.
+
+## Real-time quotes
+
+Finnhub supplies tick-by-tick price updates for US equities via WebSocket during market hours. Worldview uses these to provide:
+
+- **Live price indicator** in instrument page headers (updates every 1–2 seconds during open market)
+- **Bid/ask spread** in watchlist panels
+- **Real-time day change** calculation
+
+<Callout type="info" title="Quote delay">
+Worldview's standard plan uses Finnhub's delayed data (15-second delay for US equities). Real-time (0-delay) quotes require an Enterprise plan. This delay is sufficient for research and monitoring workflows but not for high-frequency trading.
+</Callout>
+
+## News
+
+Finnhub provides a news feed for US and international companies, covering major financial media sources. This feed is one of the inputs to Worldview's content ingestion pipeline alongside other sources.
+
+Finnhub news is tagged with:
+- **Category** — company (specific), market (broad)
+- **Related symbols** — list of mentioned tickers
+- **Headline sentiment** — pre-computed Finnhub sentiment score (supplemented by Worldview's own NLP model)
+
+## Corporate events
+
+Finnhub's earnings calendar provides:
+- **Earnings date** — expected Q and date
+- **EPS estimate** — consensus
+- **Revenue estimate** — consensus
+- **EPS actual** and **Revenue actual** — populated post-release
+
+The Economic Calendar widget on the dashboard uses Finnhub's economic events endpoint for macro data (GDP, CPI, NFP, etc.).
+
+## Coverage
+
+| Data type | Coverage |
+|-----------|---------|
+| Real-time quotes | US exchanges + major global exchanges |
+| Earnings calendar | US + 30+ international markets |
+| News | US + major global markets |
+| Economic events | US, EU, UK, Japan, China major releases |
+
+## Finnhub vs. EODHD
+
+Worldview uses both providers in complementary roles:
+
+| Use | Provider |
+|-----|---------|
+| Historical OHLCV (1D+) | EODHD |
+| Intraday price updates (market hours) | Finnhub (primary) + EODHD |
+| Fundamentals | EODHD (primary) + Finnhub (supplementary) |
+| Analyst estimates | Both (EODHD preferred for depth) |
+| News | Both feeds merged and deduplicated |
+| Earnings calendar | Finnhub (primary) |
+| Economic calendar | Finnhub |

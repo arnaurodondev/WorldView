@@ -1,0 +1,109 @@
+---
+title: Authentication
+description: Zitadel JWT, Bearer token usage, token refresh, and the dev-login endpoint.
+section: API Reference
+order: 2
+updated: 2026-05-05
+---
+
+Worldview uses Zitadel as its identity provider. The S9 API Gateway validates JWTs using Zitadel's JWKS endpoint and issues short-lived internal JWTs for backend-to-backend calls.
+
+## Token types
+
+| Token | Issued by | Lifetime | Used for |
+|-------|----------|----------|---------|
+| Zitadel access token | Zitadel OIDC | 1 hour | All authenticated API calls |
+| Worldview dev token | `POST /v1/auth/dev-login` | 1 hour | Local development only |
+| Refresh token | Zitadel session | 30 days | Silently refresh the access token |
+
+## OIDC PKCE flow (production)
+
+For production applications, use the standard OAuth 2.0 PKCE flow:
+
+<CodeBlock filename="pkce-flow.ts">
+```ts
+// 1. Generate a code verifier and challenge
+const codeVerifier = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+const encoder = new TextEncoder();
+const data = encoder.encode(codeVerifier);
+const digest = await crypto.subtle.digest("SHA-256", data);
+const codeChallenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
+  .replace(/\+/g, "-")
+  .replace(/\//g, "_")
+  .replace(/=/g, "");
+
+// 2. Redirect to Zitadel authorization endpoint
+const authUrl = new URL("https://auth.worldview.app/oauth/v2/authorize");
+authUrl.searchParams.set("client_id", process.env.NEXT_PUBLIC_ZITADEL_CLIENT_ID!);
+authUrl.searchParams.set("redirect_uri", "http://localhost:3000/auth/callback");
+authUrl.searchParams.set("response_type", "code");
+authUrl.searchParams.set("scope", "openid profile email");
+authUrl.searchParams.set("code_challenge", codeChallenge);
+authUrl.searchParams.set("code_challenge_method", "S256");
+window.location.href = authUrl.toString();
+```
+</CodeBlock>
+
+## Dev-login endpoint
+
+For local development and testing, use the convenience endpoint:
+
+<CodeBlock filename="dev-login.ts">
+```ts
+// POST /v1/auth/dev-login
+const response = await fetch("http://localhost:8000/v1/auth/dev-login", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ email: "dev@example.com" }),
+});
+
+const { access_token, expires_in } = await response.json();
+// Store in memory — never in localStorage
+```
+</CodeBlock>
+
+<Callout type="warn" title="Dev-login is not for production">
+The `dev-login` endpoint is disabled in production. It is only available when `DEV_LOGIN_ENABLED=true` is set in the API Gateway environment. Never deploy with this flag enabled.
+</Callout>
+
+## Using the token
+
+Pass the token as a Bearer header on every authenticated request:
+
+<CodeBlock filename="authenticated-request.ts">
+```ts
+const data = await fetch("http://localhost:8000/v1/instruments/search?q=AAPL", {
+  headers: {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+  },
+});
+```
+</CodeBlock>
+
+## Token refresh
+
+Tokens expire after 1 hour. Use the Zitadel refresh token flow to obtain a new access token silently:
+
+```
+POST https://auth.worldview.app/oauth/v2/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token
+&refresh_token=<refresh_token>
+&client_id=<client_id>
+```
+
+The response includes a new `access_token` and optionally a new `refresh_token` (rotated).
+
+## JWT claims
+
+The access token is a RS256-signed JWT. Relevant claims:
+
+| Claim | Description |
+|-------|-------------|
+| `sub` | Zitadel user ID |
+| `email` | User's email address |
+| `tenant_id` | Worldview tenant UUID |
+| `exp` | Expiry timestamp (Unix) |
+| `iat` | Issued-at timestamp (Unix) |

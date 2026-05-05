@@ -1,0 +1,50 @@
+---
+title: Screener
+description: Screen 8,000+ instruments by fundamentals, technicals, and news signals.
+section: Screener
+order: 1
+updated: 2026-05-05
+---
+
+The Screener (`/screener`) is an AG Grid-powered table showing 8,000+ instruments. Every column is sortable; a six-section filter bar lets you combine fundamentals, technical, and news-signal criteria to surface exactly the instruments you are looking for.
+
+## The grid
+
+The grid uses AG Grid with:
+
+- **TICKER column pinned** left — always visible regardless of horizontal scroll
+- **22px row height** — high information density; up to ~50 rows visible at once
+- **Virtual rows** — only visible rows are rendered, enabling fast scrolling over thousands of rows
+- **Column resizing** — drag column headers to resize; double-click to auto-fit
+- **Multi-column sort** — hold Shift and click multiple column headers
+
+## Available columns
+
+| Column group | Columns |
+|-------------|---------|
+| Identity | Ticker, Company Name, Exchange, Sector, Industry |
+| Price | Last, Day %, Week %, Month %, YTD % |
+| Volume | Volume, Avg Vol (30d), Rel. Volume |
+| Valuation | P/E, P/S, P/B, EV/EBITDA, PEG |
+| Growth | Rev Growth YoY, EPS Growth YoY, FCF Growth |
+| Size | Market Cap, Enterprise Value |
+| Technical | RSI (14), Above/Below SMA(50), Above/Below SMA(200) |
+| News | News Velocity (7d), Routing Tier, Relevance Score |
+
+<Callout type="tip" title="Column customization">
+Click the **Columns** button in the toolbar to show/hide individual columns and save your column layout as a named preset. Column visibility is persisted in your browser's local storage.
+</Callout>
+
+## Quick start: popular screens
+
+| Screen | Description |
+|--------|-------------|
+| High FCF Yield | FCF Yield > 5%, Market Cap > $1B |
+| Momentum leaders | RSI > 60, Above SMA(50), Month % > 5% |
+| News velocity spikes | News Velocity 7d > 10, Market Cap > $500M |
+| Large-cap value | P/E < 15, Market Cap > $10B, P/B < 2 |
+
+## Related pages
+
+- [Filters](/docs/screener/filters) — full reference for every filter criterion
+- [Saved screens](/docs/screener/saved-screens) — save and reload your filter presets
