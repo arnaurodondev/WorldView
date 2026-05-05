@@ -1,0 +1,50 @@
+---
+title: Portfolio
+description: Overview of portfolio tracking — holdings, transactions, watchlists, and allocation.
+section: Portfolio
+order: 1
+updated: 2026-05-05
+---
+
+The Portfolio section (`/portfolio`) combines brokerage-synced positions with your manually maintained watchlists. It gives you a single view of what you own, what you are watching, and how your capital is deployed across sectors.
+
+## Portfolio tabs
+
+| Tab | What it shows |
+|-----|--------------|
+| Holdings | Live brokerage positions with unrealized P&L |
+| Transactions | Historical trade log with FIFO realized P&L |
+| Watchlists | Named lists of instruments you follow |
+| Allocation | Sector treemap and exposure breakdown |
+
+## Data sources
+
+Portfolio data comes from two places:
+
+1. **Brokerage sync (SnapTrade)** — real positions, quantities, cost basis, and transaction history imported from your connected broker. Requires a brokerage connection. See [Connect a Brokerage](/docs/getting-started/connect-brokerage).
+2. **Watchlists** — manually managed lists. No brokerage connection required.
+
+<Callout type="info" title="No brokerage connected">
+If you have not connected a brokerage, the Holdings and Transactions tabs show an empty state with a prompt to connect. Watchlists and Allocation (watchlist-based) still work fully.
+</Callout>
+
+## Portfolio metrics
+
+The portfolio header shows aggregate metrics:
+
+- **Total Value** — sum of all position market values at last price
+- **Daily P&L ($)** — unrealized gain/loss for today
+- **Daily P&L (%)** — daily P&L as a percentage of total portfolio value
+- **Total Unrealized P&L** — cumulative open gain/loss across all positions
+- **Day's NAV change** — portfolio-level net asset value change vs. prior close
+
+## Morning brief integration
+
+When you ask the AI assistant a portfolio-scoped question (e.g. "What should I watch in my portfolio this week?"), it queries your current holdings and combines them with live news context. The morning brief also references your holdings in its watchlist commentary section.
+
+## Related pages
+
+- [Holdings](/docs/portfolio/holdings) — live positions, P&L, weight bars
+- [Transactions](/docs/portfolio/transactions) — trade history and realized P&L
+- [Watchlists](/docs/portfolio/watchlists) — create and manage watchlists
+- [Allocation](/docs/portfolio/allocation) — sector treemap and exposure breakdown

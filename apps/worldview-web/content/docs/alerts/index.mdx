@@ -1,0 +1,59 @@
+---
+title: Alerts
+description: Overview of Worldview's rule-based alert system — price, technical, and news triggers.
+section: Alerts
+order: 1
+updated: 2026-05-05
+---
+
+The Alerts section (`/alerts`) lets you define rule-based conditions that fire notifications when market conditions change. Alert rules are evaluated continuously and delivered via WebSocket in real time.
+
+## Alert types
+
+| Type | Trigger | Example |
+|------|---------|---------|
+| Price | Absolute price level | "AAPL crosses above $200" |
+| Percent move | % change from any reference | "NVDA moves more than 5% in a day" |
+| Technical | Indicator level or crossover | "SPY RSI drops below 30" |
+| News | Keyword or entity mention | "Any news about 'Fed rate cut'" |
+| Portfolio | Portfolio-wide P&L threshold | "My portfolio drops 3% in a day" |
+
+## Alert severity
+
+Each rule has a severity you set when creating it:
+
+| Severity | Color | Delivery |
+|----------|-------|----------|
+| LOW | Blue | In-app WebSocket banner (auto-dismisses in 30s) |
+| MEDIUM | Amber | In-app WebSocket banner (auto-dismisses in 2 min) |
+| HIGH | Orange | In-app WebSocket + email digest |
+| CRITICAL | Red | In-app WebSocket (manual dismiss required) + immediate email |
+
+<Callout type="info" title="Email delivery timing">
+HIGH severity alerts are delivered in the next hourly email digest, not immediately. CRITICAL alerts trigger an immediate email. Configure email preferences in **Settings → Notifications**.
+</Callout>
+
+## Alert lifecycle
+
+1. **Draft** — rule created, not yet enabled
+2. **Active** — rule is enabled and being evaluated
+3. **Triggered** — condition was met; the alert fired
+4. **Snoozed** — temporarily paused (resumes after a set time)
+5. **Disabled** — rule exists but is not being evaluated
+
+Triggered alerts remain in your alert history for 90 days.
+
+## Alert limits
+
+| Plan | Active rules | Alert history |
+|------|-------------|---------------|
+| Free | 5 | 30 days |
+| Pro | 50 | 90 days |
+| Enterprise | Unlimited | 1 year |
+
+## Related pages
+
+- [Rule builder](/docs/alerts/rule-builder) — create and edit alert rules
+- [Price alerts](/docs/alerts/price-alerts) — price and % move triggers
+- [News alerts](/docs/alerts/news-alerts) — keyword and entity-based triggers
+- [Channels](/docs/alerts/channels) — delivery channels and email preferences

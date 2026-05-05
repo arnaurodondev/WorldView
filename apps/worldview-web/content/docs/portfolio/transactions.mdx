@@ -1,0 +1,60 @@
+---
+title: Transactions
+description: Transaction history, brokerage sync, and FIFO realized P&L calculations.
+section: Portfolio
+order: 3
+updated: 2026-05-05
+---
+
+The Transactions tab shows the full history of trades imported from your connected brokerage. Realized P&L is calculated using the FIFO (First In, First Out) method.
+
+## Transaction table columns
+
+| Column | Description |
+|--------|-------------|
+| Date | Trade execution date (local timezone) |
+| Ticker | Instrument symbol |
+| Action | BUY, SELL, DIVIDEND, SPLIT, TRANSFER |
+| Quantity | Shares / contracts in the transaction |
+| Price | Execution price per share |
+| Amount | Quantity × Price (gross) |
+| Commission | Broker commission and fees |
+| Net Amount | Amount ± Commission |
+| Realized P&L | For SELL transactions: net proceeds minus FIFO cost basis |
+
+## FIFO P&L methodology
+
+When you sell shares, Worldview allocates the cost basis to the earliest-purchased lot first. Example:
+
+- Lot 1: 10 shares at $100 (earliest)
+- Lot 2: 10 shares at $120
+- Sell 10 shares at $150
+
+FIFO result: Realized P&L = ($150 − $100) × 10 = **$500**
+
+<Callout type="info" title="Tax disclaimer">
+FIFO P&L calculations are for informational purposes only and are not tax advice. Actual tax treatment may differ based on your jurisdiction, wash-sale rules, and broker-reported cost basis. Consult a qualified tax professional for tax reporting.
+</Callout>
+
+## Brokerage sync
+
+Transactions are imported automatically from your connected brokerage via SnapTrade:
+
+- **Initial sync** — imports up to 12 months of history on first connection
+- **Daily sync** — new transactions appear within 24 hours of execution
+- **Real-time sync** — not currently supported (near-real-time via 5-minute polling)
+
+## Filtering transactions
+
+- **Date range** — Last 30d / 90d / 1Y / All time / Custom
+- **Ticker** — filter to a specific instrument
+- **Action type** — filter by BUY, SELL, DIVIDEND, etc.
+- **Search** — full-text search over ticker and company name
+
+## Exporting transactions
+
+Click **Export CSV** in the toolbar to download the filtered transaction set as a comma-separated file. The export includes all visible columns plus the broker account name for multi-account setups.
+
+<Callout type="warn" title="Missing transactions">
+If transactions are missing, check the brokerage sync status in **Settings → Brokerage**. Some brokers limit the history window via their API (typically 12 months). Transactions outside that window are shown as "Position established before sync date" in the Holdings avg-cost calculation.
+</Callout>

@@ -1,0 +1,85 @@
+---
+title: Workspace Tour
+description: A guided tour of the TopBar, navigation rail, and panel layout system.
+section: Getting Started
+order: 3
+updated: 2026-05-05
+---
+
+Worldview's interface follows a terminal-style layout: a narrow left navigation rail, a full-height main content area, and a collapsible right context drawer.
+
+## The navigation rail
+
+The left rail is 48 pixels wide and contains icon-buttons for each primary section:
+
+| Icon | Section | Chord shortcut |
+|------|---------|----------------|
+| Grid | Dashboard | `G` then `D` |
+| Chart | Instruments | *(search-first)* |
+| Briefcase | Portfolio | `G` then `P` |
+| Filter | Screener | `G` then `S` |
+| Bell | Alerts | `G` then `A` |
+| MessageSquare | Chat / AI | `G` then `C` |
+| Layout | Workspace | `G` then `W` |
+
+<Callout type="tip" title="Chord shortcuts">
+Press `G` (Go) and then the section letter to navigate without lifting your hands from the keyboard. Press `⌘K` to open the command palette for fuzzy search across all navigation targets.
+</Callout>
+
+## TopBar
+
+The TopBar spans the full width at the top of every authenticated page:
+
+- **Left** — Worldview logo (click to return to Dashboard)
+- **Center** — Global instrument search (`⌘K` or click the search field)
+- **Right** — Notification bell, settings gear, and user avatar
+
+## Dashboard (`/dashboard`)
+
+The dashboard is divided into five widget areas arranged in a responsive grid:
+
+1. **Morning Brief** — AI-generated daily intelligence digest
+2. **Sector Heatmap** — 11 SPDR sectors color-coded by % daily move
+3. **Watchlist Movers** — your watchlist instruments sorted by absolute % move
+4. **Economic Calendar** — next 5 upcoming macro events with consensus vs. prior
+5. **Prediction Markets** — top Polymarket events by volume
+
+## Instruments (`/instruments/:id`)
+
+Every instrument page has five tabs:
+
+- **Overview** — OHLCV chart with 7 technical indicators and drawing tools
+- **Fundamentals** — P/E, EV/EBITDA, revenue, balance sheet, free cash flow
+- **News** — article feed with AI relevance scores and sentiment icons
+- **Intelligence** — knowledge graph of entity relationships
+- **Filings** — SEC EDGAR 8-K and 10-K summaries
+
+## Portfolio (`/portfolio`)
+
+The portfolio section shows:
+
+- **Holdings** — live positions synced from your brokerage, with unrealized P&L
+- **Transactions** — historical trade log with FIFO realized P&L
+- **Watchlists** — manage and switch between named watchlists
+- **Allocation** — sector treemap and exposure breakdown
+
+## Screener (`/screener`)
+
+The screener contains 8,000+ instruments filterable by:
+
+- Market cap, P/E ratio, revenue growth
+- Technical levels (RSI, MACD, 52-week range)
+- News velocity and AI routing tier
+
+## Workspace (`/workspace`)
+
+The workspace is a free-form multi-panel canvas. Drag panels to resize them, link multiple panels to the same symbol, and save named workspace layouts for different workflows.
+
+## Settings (`/settings`)
+
+Access from the gear icon in the TopBar:
+
+- **Profile** — name, email, avatar
+- **Notifications** — alert channels (in-app, email digest)
+- **Brokerage** — connect or disconnect TastyTrade
+- **Beta Program** — opt in to experimental features

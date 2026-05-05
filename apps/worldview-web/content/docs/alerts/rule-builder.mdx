@@ -1,0 +1,85 @@
+---
+title: Alert Rule Builder
+description: Create price, technical, and news alert rules using conditions and comparators.
+section: Alerts
+order: 2
+updated: 2026-05-05
+---
+
+The rule builder is a form-based editor for creating alert conditions. Open it by clicking **+ New alert** in the Alerts section, or by clicking **Set alert** on any instrument page.
+
+## Rule anatomy
+
+Every alert rule has these fields:
+
+- **Name** — a human-readable label (e.g. "AAPL earnings gap")
+- **Target** — the instrument, watchlist, or portfolio the rule applies to
+- **Condition** — the triggering logic (see below)
+- **Severity** — LOW / MEDIUM / HIGH / CRITICAL
+- **One-time or recurring** — fire once and auto-disable, or keep firing each time the condition is met
+- **Cooldown** — minimum time between re-fires (e.g. 1 hour prevents duplicate alerts in volatile sessions)
+
+## Condition types
+
+### Price condition
+
+```
+[TICKER] price [ABOVE | BELOW | CROSSES ABOVE | CROSSES BELOW] [value]
+```
+
+Examples:
+- `AAPL price CROSSES ABOVE 200`
+- `TSLA price BELOW 150`
+
+"CROSSES" variants fire once when the price transitions through the level. "ABOVE/BELOW" fires continuously while the price is in that zone (subject to cooldown).
+
+### Percent move condition
+
+```
+[TICKER] moves [MORE THAN | LESS THAN] [N]% [TODAY | IN 1H | IN 1D]
+```
+
+Examples:
+- `NVDA moves MORE THAN 5% TODAY`
+- `SPY moves MORE THAN 2% IN 1H`
+
+### Technical condition
+
+```
+[TICKER] [INDICATOR] [ABOVE | BELOW | CROSSES ABOVE | CROSSES BELOW] [value]
+```
+
+Supported indicators:
+- `RSI(14)` — 14-day RSI
+- `SMA(20)`, `SMA(50)`, `SMA(200)` — simple moving averages
+- `EMA(12)`, `EMA(26)` — exponential moving averages
+
+Example:
+- `QQQ RSI(14) CROSSES BELOW 30`
+- `AAPL PRICE CROSSES ABOVE SMA(200)`
+
+### News condition
+
+```
+[TARGET] has news containing [keyword] WITH sentiment [ANY | POSITIVE | NEGATIVE]
+```
+
+Target can be a specific ticker, "any watchlist instrument", or "any S&P 500 company".
+
+Example:
+- `AAPL has news containing "acquisition" WITH sentiment ANY`
+- `Any watchlist instrument has news containing "earnings" WITH sentiment NEGATIVE`
+
+<Callout type="warn" title="News alert latency">
+News alerts fire after the NLP pipeline processes an article — typically 3–5 minutes after publication. For breaking news from primary sources, this is usually fast enough for most use cases.
+</Callout>
+
+## Saving and testing a rule
+
+After configuring the rule:
+
+1. Click **Test** to run the condition against recent data and see how many times it would have fired in the last 7 days
+2. Review the backtest result to tune your thresholds
+3. Click **Save** to activate the rule
+
+Rules activate immediately after saving. You can edit or disable any rule from the Alerts table.

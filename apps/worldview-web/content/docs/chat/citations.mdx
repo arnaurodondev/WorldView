@@ -1,0 +1,55 @@
+---
+title: Citations
+description: How citation markers [N] work, what sources are cited, and how to view the Sources section.
+section: Chat & AI
+order: 3
+updated: 2026-05-05
+---
+
+Every factual claim in an AI answer is attributed to a source document using inline citation markers. This is a core design principle: AI output should always be traceable to real data, not confabulated.
+
+## Inline citation markers
+
+During generation, the model inserts `[N]` markers after claims that reference retrieved content. Example:
+
+> Apple reported $124.3B in revenue for Q1 FY2026 [1], beating the consensus estimate of $121.8B [2]. The strong result was driven by services revenue growth of 23% year-over-year [1].
+
+Citations are numbered sequentially within each message. The same source can be cited multiple times with the same number.
+
+<Callout type="tip" title="Reading citations">
+A high citation density (many [N] markers) is a good sign — it means the answer is well-grounded. Low citation density may indicate the model is reasoning from training knowledge rather than retrieved context.
+</Callout>
+
+## Sources section
+
+Below each AI message, a collapsible **Sources** section lists the cited documents:
+
+| Field | Description |
+|-------|-------------|
+| [N] | Citation number, matches the inline marker |
+| Title | Article headline or filing type (e.g. "Apple Q1 2026 10-K") |
+| Source | Publication name or "SEC EDGAR" |
+| Published | Publication date |
+| Relevance | Retrieval relevance score for this document |
+| Link | Click to open the original article or filing |
+
+## Source types
+
+The RAG system retrieves from four source types:
+
+- **News articles** — from the content pipeline (EODHD, Finnhub feeds, scraped articles)
+- **SEC filings** — 8-K material events, 10-K annual reports, 10-Q quarterly reports, Form 4 insider transactions
+- **Knowledge graph facts** — entity relationships, extracted from the AGE graph store
+- **Portfolio data** — your own holdings (only in portfolio-scoped queries)
+
+## When no sources are available
+
+If the retrieval step finds no relevant documents, the model answers with a disclaimer:
+
+> "I was unable to find relevant documents in the Worldview corpus for this question. The following answer is based on general knowledge and may not reflect current conditions..."
+
+In this case, no citation markers appear and the Sources section shows "No sources retrieved." This is the correct behavior — it is better to surface uncertainty than to silently confabulate.
+
+## Feedback on citations
+
+If a cited source does not actually support the claim it is attached to (a "hallucinated citation"), use the thumbs-down reaction below the message and describe the issue. These reports are reviewed manually and used to improve the retrieval pipeline.

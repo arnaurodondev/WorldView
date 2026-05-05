@@ -100,7 +100,9 @@ Ship three new product surfaces:
 
 ---
 
-## Wave C — Documentation Content Authoring (~20h)
+## Wave C — Documentation Content Authoring (~20h) ✅
+
+**Status**: **DONE** — 2026-05-05 · 1805 frontend tests pass (158 files) · production build clean (50 SSG-prerendered docs routes, `[+47 more paths]` confirmed in Next.js build output)
 
 **Goal**: Write the actual MDX content for ~50 doc pages. Can run in parallel with Wave B once foundations ship.
 
@@ -119,7 +121,40 @@ Ship three new product surfaces:
 - Changelog (1)
 
 **Tasks** (one per major section):
-- **T-C-3-01** through **T-C-3-12** — Author MDX content for each section. Each task: ~2h.
+- **T-C-3-01** ✅ Getting Started (5 pages): index (expanded), sign-up, workspace-tour, connect-brokerage, first-watchlist
+- **T-C-3-02** ✅ Dashboard (5 pages): index, widgets, ai-brief, alerts, keyboard-shortcuts
+- **T-C-3-03** ✅ Instruments (4 pages): index, fundamentals, news, intelligence-graph
+- **T-C-3-04** ✅ Portfolio (5 pages): index, holdings, transactions, watchlists, allocation
+- **T-C-3-05** ✅ Screener (3 pages): index, filters, saved-screens
+- **T-C-3-06** ✅ Alerts (5 pages): index, rule-builder, price-alerts, news-alerts, channels
+- **T-C-3-07** ✅ Chat & AI (4 pages): index, asking-questions, citations, slash-commands
+- **T-C-3-08** ✅ Workspace (4 pages): index, panels, layouts, templates
+- **T-C-3-09** ✅ Data Sources (5 pages): index, eodhd, finnhub, polymarket, sec-edgar
+- **T-C-3-10** ✅ API Reference (7 pages): index (expanded), authentication, quotes, fundamentals, news, chat, error-codes
+- **T-C-3-11** ✅ FAQ (expanded to 10 Q&A pairs)
+- **T-C-3-12** ✅ Changelog (updated with v1.0.0 entry)
+
+**Files added** (45 new + 5 updated seed pages = 50 total):
+- `apps/worldview-web/content/docs/getting-started/{sign-up,workspace-tour,connect-brokerage,first-watchlist}.mdx`
+- `apps/worldview-web/content/docs/dashboard/{index,widgets,ai-brief,alerts,keyboard-shortcuts}.mdx`
+- `apps/worldview-web/content/docs/instruments/{index,fundamentals,news,intelligence-graph}.mdx`
+- `apps/worldview-web/content/docs/portfolio/{index,holdings,transactions,watchlists,allocation}.mdx`
+- `apps/worldview-web/content/docs/screener/{index,filters,saved-screens}.mdx`
+- `apps/worldview-web/content/docs/alerts/{index,rule-builder,price-alerts,news-alerts,channels}.mdx`
+- `apps/worldview-web/content/docs/chat/{index,asking-questions,citations,slash-commands}.mdx`
+- `apps/worldview-web/content/docs/workspace/{index,panels,layouts,templates}.mdx`
+- `apps/worldview-web/content/docs/data-sources/{index,eodhd,finnhub,polymarket,sec-edgar}.mdx`
+- `apps/worldview-web/content/docs/api-reference/{authentication,quotes,fundamentals,news,chat,error-codes}.mdx`
+
+**Files updated** (expanded from seeds):
+- `apps/worldview-web/content/docs/getting-started/index.mdx`
+- `apps/worldview-web/content/docs/api-reference/index.mdx`
+- `apps/worldview-web/content/docs/faq.mdx`
+- `apps/worldview-web/content/docs/changelog.mdx`
+
+**Validation**:
+- [x] pnpm test — 1805/1805 pass (158 files), all existing tests maintained
+- [x] pnpm build — production build green; `/docs/[[...slug]]` SSG-prerendered for 50 routes (`[+47 more paths]` in build output)
 
 **Depends_on**: Wave B (foundations)
 **Effort**: 20h

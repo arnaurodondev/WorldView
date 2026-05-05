@@ -1,0 +1,77 @@
+---
+title: Alert Channels
+description: In-app WebSocket delivery and email digest configuration.
+section: Alerts
+order: 5
+updated: 2026-05-05
+---
+
+Worldview delivers alerts through two channels: real-time in-app WebSocket banners and scheduled email digests. Each channel can be configured independently per severity level.
+
+## In-app WebSocket
+
+The WebSocket channel is the primary delivery mechanism. It connects automatically when you are signed in and delivers alerts as banner overlays at the top of the viewport.
+
+**Features:**
+- Instant delivery (typically under 100ms after the trigger)
+- Stacks multiple simultaneous alerts vertically
+- Per-severity auto-dismiss timing (LOW: 30s, MEDIUM: 2min, HIGH: 2min, CRITICAL: manual)
+- Alert chime sound (respects OS Do Not Disturb)
+- Reconnects automatically with exponential backoff if the connection drops
+
+**Offline behavior:** Alerts that fire while you are offline are queued server-side and delivered when your browser reconnects. The queue holds up to 5 minutes of missed alerts.
+
+<Callout type="info" title="Browser permissions">
+The WebSocket channel does not require any special browser permissions. Alert sounds use the Web Audio API and respect your browser's autoplay policy — you may need to interact with the page once before sound plays.
+</Callout>
+
+## Email digest
+
+The email digest aggregates alerts and sends them on a scheduled basis. This is useful for LOW/MEDIUM severity alerts that you want to review asynchronously.
+
+### Email digest schedules
+
+| Frequency | Send time |
+|-----------|-----------|
+| Hourly | At :00 of each hour during market hours (09:00–18:00 ET) |
+| End-of-day | 18:30 ET on trading days |
+| Weekly | Monday 07:00 ET (covers the previous trading week) |
+
+### Per-severity email configuration
+
+Navigate to **Settings → Notifications → Email alerts** to configure:
+
+- **LOW** — no email (default) / hourly / end-of-day
+- **MEDIUM** — no email / hourly / end-of-day (default: end-of-day)
+- **HIGH** — end-of-day (default) / immediate
+- **CRITICAL** — immediate (fixed, cannot be disabled)
+
+<Callout type="warn" title="CRITICAL email">
+CRITICAL-severity alerts always trigger an immediate email regardless of your digest settings. This cannot be disabled. If a CRITICAL alert is triggering too frequently, consider raising the threshold in your alert rule.
+</Callout>
+
+### Email format
+
+Each email includes:
+- Subject line: "[Worldview Alert] SEVERITY — Ticker: description"
+- Alert condition that triggered
+- Price or context value at trigger time
+- Link to the instrument page or alert details
+- Digest footer with unsubscribe and settings links
+
+## Configuring notification preferences
+
+<Steps>
+  <Step title="Open Settings">
+    Click the gear icon in the TopBar.
+  </Step>
+  <Step title="Select Notifications">
+    Click **Notifications** in the Settings sidebar.
+  </Step>
+  <Step title="Configure each channel">
+    Toggle in-app sounds, adjust per-severity email schedules, and confirm your notification email address.
+  </Step>
+  <Step title="Save">
+    Click **Save preferences**. Changes take effect for all future alert firings.
+  </Step>
+</Steps>
