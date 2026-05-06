@@ -10,13 +10,15 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from knowledge_graph.application.ports.repositories import CanonicalEntityRepositoryPort
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from knowledge_graph.domain.models import CanonicalEntity
 
 
-class CanonicalEntityRepository:
+class CanonicalEntityRepository(CanonicalEntityRepositoryPort):
     """Read-only repository for ``canonical_entities`` in intelligence_db."""
 
     def __init__(self, session: AsyncSession) -> None:

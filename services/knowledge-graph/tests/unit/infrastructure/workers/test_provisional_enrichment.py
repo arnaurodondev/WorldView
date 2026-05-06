@@ -171,7 +171,13 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
         ), "entity.dirtied.v1 must be produced AFTER Phase 3 commit, not before"
 
     async def test_commit_failure_suppresses_produce(self) -> None:
-        """When Phase 3 commit raises, producer.produce_bytes is never called."""
+        """When Phase 3 commit raises, producer.produce_bytes is never called.
+
+        BP-390 (per-row session fix): the RuntimeError is now caught inside the
+        per-row except block and handled gracefully (retry update attempted),
+        so worker.run() no longer raises.  The critical invariant remains:
+        produce_bytes must NOT be called when the commit for a given row failed.
+        """
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
@@ -202,9 +208,12 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
             patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
             patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
         ):
-            with pytest.raises(RuntimeError, match="DB write failed"):
-                await worker.run()
+            # Per-row session isolation: commit failure is caught and suppressed,
+            # worker.run() returns normally instead of propagating the exception.
+            await worker.run()
 
+        # Produce must NOT be called — the entity commit failed so the row is
+        # not in entity_ids_to_dirty.
         producer.produce_bytes.assert_not_called()
 
     async def test_dirty_payload_contains_entity_id(self) -> None:
@@ -1006,3 +1015,107 @@ class TestNoiseFilters:
         assert noise_update_params, "Batch noise UPDATE must pass :ids parameter"
         ids_param = noise_update_params[0].get("ids", [])
         assert len(ids_param) == 1, f"Expected 1 noise ID, got {ids_param}"
+
+
+# ---------------------------------------------------------------------------
+# F-QA-201: aclose() lifecycle
+# ---------------------------------------------------------------------------
+
+
+class TestAcloseLifecycle:
+    """aclose() must be a no-op when no HTTP client was created, and close when present."""
+
+    @pytest.mark.asyncio
+    async def test_aclose_when_no_client_is_noop(self) -> None:
+        """aclose() with no HTTP client created should not raise (noise_api_key='')."""
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([])
+        worker = ProvisionalEnrichmentWorker(
+            session_factory=factory,
+            llm_client=AsyncMock(),
+            # Empty key → _noise_http_client is never lazily created during run()
+            noise_classifier_api_key="",
+        )
+
+        # Must not raise
+        await worker.aclose()
+        assert worker._noise_http_client is None
+
+    @pytest.mark.asyncio
+    async def test_aclose_closes_http_client(self) -> None:
+        """aclose() calls aclose() on the shared httpx client when one exists."""
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([])
+        worker = ProvisionalEnrichmentWorker(
+            session_factory=factory,
+            llm_client=AsyncMock(),
+            noise_classifier_api_key="test-key",
+        )
+
+        # Inject a pre-created mock client (simulates a run() that triggered lazy creation)
+        mock_client = AsyncMock()
+        worker._noise_http_client = mock_client
+
+        await worker.aclose()
+
+        mock_client.aclose.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# F-DS-202 regression guard: per-row session isolation
+# ---------------------------------------------------------------------------
+
+
+class TestPhase3PerRowSessionIsolation:
+    """Per-row session: a failure on one row must not prevent subsequent rows from committing."""
+
+    @pytest.mark.asyncio
+    async def test_second_row_committed_even_if_first_row_persist_fails(self) -> None:
+        """Per-row session: a failure on row 1 does not prevent row 2 from committing.
+
+        The worker processes each row's Phase 3 _persist_enrichment independently.
+        Row 2's entity_id must appear in entity_ids_to_dirty even when row 1 raises.
+        """
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        entity_id_2 = UUID("01234567-89ab-7def-8012-cccccccccccc")
+        rows = [_make_pending_row(), _make_pending_row()]
+        _session, factory = _make_session_with_rows(rows)
+        producer = _make_producer()
+
+        # _persist_enrichment: row 1 raises, row 2 returns a valid UUID.
+        persist_side_effects = [RuntimeError("persist failed on row 1"), entity_id_2]
+
+        produced_ids: list[bytes] = []
+
+        def _track_produce(**kwargs: object) -> None:
+            produced_ids.append(kwargs.get("key", b""))  # type: ignore[arg-type]
+
+        producer.produce_bytes = _track_produce
+
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
+
+        with (
+            patch.object(
+                worker,
+                "_extract_entity_profile",
+                return_value={"canonical_name": "Corp", "entity_type": "financial_instrument"},
+            ),
+            patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
+            patch.object(worker, "_persist_enrichment", side_effect=persist_side_effects),
+        ):
+            # Must not raise — per-row exception is logged and skipped.
+            await worker.run()
+
+        # Row 2's entity_id must have been emitted (committed and dirtied).
+        assert any(
+            str(entity_id_2).encode() == key for key in produced_ids
+        ), f"Row 2 entity_id {entity_id_2} not in produced keys: {produced_ids}"

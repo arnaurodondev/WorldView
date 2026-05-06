@@ -1,4 +1,4 @@
-"""Port interface for relation summary ANN search (Wave C-3).
+"""Port interface for relation summary reads and writes (Wave C-3 + PLAN-0072).
 
 Use cases depend only on this ABC — never on infrastructure classes directly.
 No infrastructure imports are permitted in this module.
@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 from abc import ABC, abstractmethod
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 # ── Value objects ─────────────────────────────────────────────────────────────
@@ -40,7 +41,37 @@ class RelationSummarySearchResult:
 
 
 class RelationSummaryRepositoryPort(ABC):
-    """Read-only ANN search over ``relation_summaries``."""
+    """Read and write access to ``relation_summaries`` (ANN search + SummaryWorker writes)."""
+
+    @abstractmethod
+    async def get_current(self, relation_id: UUID) -> dict[str, Any] | None:
+        """Fetch the current summary for a relation (is_current=true).
+
+        Returns a dict with keys: summary_id, summary_text, evidence_count,
+        evidence_hash, model_id, prompt_template_id, generated_at, generation_trigger.
+        Returns None when no current summary exists.
+        """
+
+    @abstractmethod
+    async def insert_new(
+        self,
+        relation_id: UUID,
+        summary_text: str,
+        evidence_count: int,
+        evidence_hash: str,
+        model_id: str,
+        prompt_template_id: UUID,
+        generation_trigger: str,
+    ) -> UUID:
+        """Insert a new current summary, retiring any previous one.
+
+        Returns the new summary_id.
+        Must run inside a single transaction: set old is_current=false, then insert new.
+        """
+
+    @abstractmethod
+    async def update_embedding(self, summary_id: UUID, embedding: list[float]) -> None:
+        """Persist a computed embedding for an existing summary row (Worker 13F)."""
 
     @abstractmethod
     async def search_by_embedding(

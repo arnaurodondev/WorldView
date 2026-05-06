@@ -145,6 +145,10 @@ WHERE summary_id = :summary_id
         ``summary_authority`` is computed at fetch time:
         ``confidence * log1p(evidence_count)`` — NOT a stored column.
         """
+        # Normalize empty list to None — ANY(ARRAY[]) always evaluates FALSE, not "no filter"
+        if not entity_ids:
+            entity_ids = None
+
         result = await self._session.execute(
             text("""
 SELECT rs.relation_id, r.subject_entity_id, r.object_entity_id,
@@ -170,7 +174,7 @@ LIMIT :top_k
             {
                 "query_embedding": str(query_embedding),
                 "min_confidence": min_confidence,
-                "entity_ids": [str(e) for e in entity_ids] if entity_ids else None,
+                "entity_ids": [str(e) for e in entity_ids] if entity_ids is not None else None,
                 "relation_types": relation_types if relation_types else None,
                 "semantic_mode": semantic_mode,
                 "top_k": top_k,

@@ -422,6 +422,76 @@ class TestListRelationsUseCase:
         )
 
 
+class TestEvidenceBatchDegradation:
+    """F-QA-206: graceful degradation when batch fetch raises."""
+
+    def test_evidence_batch_failure_returns_empty_snippets(self) -> None:
+        """If get_evidence_snippets_batch raises, response still returns relations with empty snippets.
+
+        The use case wraps the batch call in try/except and falls back to an
+        empty map — so every relation gets evidence_snippets=[] rather than a 500.
+        """
+        from knowledge_graph.application.use_cases.graph_query import GetEntityGraphUseCase
+
+        rel = _relation_row()
+        entity_repo = _make_entity_repo(entity=_entity_row(_ENT_ID))
+        entity_repo.get_batch = AsyncMock(return_value=[])
+        relation_repo = _make_relation_repo(rows=[rel])
+
+        evidence_repo = AsyncMock()
+        evidence_repo.get_evidence_snippets_batch = AsyncMock(side_effect=RuntimeError("db error"))
+
+        _, relation_rows, _ = asyncio.run(
+            GetEntityGraphUseCase().execute(
+                entity_repo=entity_repo,
+                relation_repo=relation_repo,
+                evidence_repo=evidence_repo,
+                summary_repo=_make_summary_repo(),
+                entity_id=_ENT_ID,
+                min_confidence=0.0,
+                semantic_mode=None,
+                limit=50,
+            )
+        )
+
+        assert len(relation_rows) == 1, "Relations must still be returned despite evidence failure"
+        assert (
+            relation_rows[0]["evidence_snippets"] == []
+        ), "evidence_snippets must be [] (empty list, not None) when batch fetch fails"
+
+    def test_summary_batch_failure_returns_null_summaries(self) -> None:
+        """If get_current_summaries_batch raises, response still returns relations with null summaries.
+
+        The use case wraps the batch call in try/except and falls back to an
+        empty map — so every relation gets relation_summary=None rather than a 500.
+        """
+        from knowledge_graph.application.use_cases.graph_query import GetEntityGraphUseCase
+
+        rel = _relation_row()
+        entity_repo = _make_entity_repo(entity=_entity_row(_ENT_ID))
+        entity_repo.get_batch = AsyncMock(return_value=[])
+        relation_repo = _make_relation_repo(rows=[rel])
+
+        summary_repo = AsyncMock()
+        summary_repo.get_current_summaries_batch = AsyncMock(side_effect=RuntimeError("db error"))
+
+        _, relation_rows, _ = asyncio.run(
+            GetEntityGraphUseCase().execute(
+                entity_repo=entity_repo,
+                relation_repo=relation_repo,
+                evidence_repo=_make_evidence_repo(),
+                summary_repo=summary_repo,
+                entity_id=_ENT_ID,
+                min_confidence=0.0,
+                semantic_mode=None,
+                limit=50,
+            )
+        )
+
+        assert len(relation_rows) == 1, "Relations must still be returned despite summary failure"
+        assert relation_rows[0]["relation_summary"] is None, "relation_summary must be None when batch fetch fails"
+
+
 class TestGetGraphStatsUseCase:
     def test_returns_stats_from_repo(self) -> None:
         """Passes stats dict from repository through unchanged."""

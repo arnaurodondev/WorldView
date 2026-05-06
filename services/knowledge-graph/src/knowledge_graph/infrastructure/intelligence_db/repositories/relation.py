@@ -17,11 +17,13 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from knowledge_graph.application.ports.repositories import RelationRepositoryPort
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class RelationRepository:
+class RelationRepository(RelationRepositoryPort):
     """Read/write repository for ``relations`` (HASH-partitioned x 8)."""
 
     def __init__(self, session: AsyncSession) -> None:
@@ -220,7 +222,10 @@ FOR UPDATE SKIP LOCKED
         ]
 
     async def fetch_stale_summary(self, limit: int = 50) -> list[dict[str, object]]:
-        """Fetch relations needing a fresh LLM summary (Worker 13C)."""
+        """Fetch relations needing a fresh LLM summary (Worker 13C).
+
+        # max_instances=1 APScheduler coalescing prevents concurrent calls — no row-level lock needed
+        """
         result = await self._session.execute(
             text("""
 SELECT relation_id, semantic_mode, decay_class, decay_alpha, confidence
@@ -229,7 +234,6 @@ WHERE summary_stale = true
   AND confidence IS NOT NULL
 ORDER BY confidence DESC, latest_evidence_at DESC
 LIMIT :limit
-FOR UPDATE SKIP LOCKED
 """),
             {"limit": limit},
         )

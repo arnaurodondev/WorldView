@@ -94,7 +94,10 @@ class KnowledgeGraphScheduler:
         # TCP connection pool is released cleanly at service shutdown.
         prov_worker = self._workers.get("provisional_enrichment")
         if prov_worker is not None and hasattr(prov_worker, "aclose"):
-            await prov_worker.aclose()
+            try:
+                await prov_worker.aclose()
+            except Exception:
+                logger.warning("scheduler_prov_worker_aclose_failed", exc_info=True)  # type: ignore[no-any-return]
 
     # ------------------------------------------------------------------
     # Job registration
@@ -256,7 +259,11 @@ def build_workers(
         )
         workers.update(
             {
-                "summary_generation": SummaryWorker(session_factory, llm_client),
+                "summary_generation": SummaryWorker(
+                    session_factory=session_factory,
+                    llm_client=llm_client,
+                    force_regen_batch_size=settings.summary_worker_force_regen_batch_size,
+                ),
                 "definition_embedding": def_worker,
                 "narrative_embedding": NarrativeRefreshWorker(
                     session_factory,
