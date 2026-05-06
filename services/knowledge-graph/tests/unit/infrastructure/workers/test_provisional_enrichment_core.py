@@ -472,6 +472,17 @@ class TestEntityTypeNormalisation:
         # No warning logged — ORGANIZATION normalises to a valid type
         repos.canonical_create.assert_awaited_once()
 
+        # Verify that the normalised entity_type ('organization') was actually passed to
+        # entity_repo.create(), not the raw uppercased value ('ORGANIZATION').
+        # CanonicalEntityRepository.create(canonical_name, entity_type, *, ...) — entity_type
+        # is passed as a keyword argument (see infrastructure/intelligence_db/repositories/
+        # canonical_entity.py).
+        call_kwargs = repos.canonical_create.call_args.kwargs
+        assert call_kwargs["entity_type"] == "organization", (
+            f"Expected normalised entity_type='organization', got {call_kwargs['entity_type']!r}. "
+            "Check that _norm_type lowercasing is applied before the DB write."
+        )
+
     async def test_alias_corp_normalised_to_company(self) -> None:
         """entity_type='corp' → alias-mapped to 'company' (valid, no warning)."""
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
@@ -485,6 +496,16 @@ class TestEntityTypeNormalisation:
             )
 
         repos.canonical_create.assert_awaited_once()
+
+        # Verify that the alias-mapped entity_type ('company') was actually used in the
+        # DB create call, not the raw LLM-invented value ('corp').
+        # 'corp' is in _ENTITY_TYPE_ALIASES → 'company'; this assertion would catch a
+        # regression where the alias lookup is bypassed or the wrong variable is passed.
+        call_kwargs = repos.canonical_create.call_args.kwargs
+        assert call_kwargs["entity_type"] == "company", (
+            f"Expected alias-mapped entity_type='company', got {call_kwargs['entity_type']!r}. "
+            "Check that _ENTITY_TYPE_ALIASES lookup result is used, not the raw 'corp' value."
+        )
 
     async def test_unknown_entity_type_defaults_to_other(self) -> None:
         """entity_type='conglomerate' → invalid; stored as 'other' with warning."""
