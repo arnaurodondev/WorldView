@@ -362,7 +362,7 @@ ORDER  BY relation_id, rn
             text("""
 UPDATE relation_evidence_raw
 SET processed = true, processed_at = :processed_at
-WHERE raw_id = ANY(:raw_ids)
+WHERE raw_id = ANY(CAST(:raw_ids AS uuid[]))
 """),
             {
                 "raw_ids": [str(rid) for rid in raw_ids],

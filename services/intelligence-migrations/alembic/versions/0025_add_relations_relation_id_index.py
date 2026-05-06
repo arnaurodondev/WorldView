@@ -6,7 +6,7 @@ Create Date: 2026-05-05
 
 Changes:
   relations (partitioned table):
-    - CREATE INDEX CONCURRENTLY idx_relations_relation_id ON relations (relation_id)
+    - CREATE INDEX idx_relations_relation_id ON relations (relation_id)
 
 WHY:
   Supports get_evidence_snippets_batch CTE (PLAN-0072 T-72-2-01) — avoids
@@ -20,18 +20,20 @@ WHY:
   sequential scan across all 8 partitions for every graph API call that
   requests evidence snippets.
 
-  A non-partitioned (global) index on relation_id allows the planner to
-  satisfy the ANY(:relation_ids) predicate with a single index scan,
-  eliminating the 8-partition fanout.
+  This creates a partitioned index hierarchy (one child index per partition,
+  created atomically by Postgres), satisfying the ANY(:relation_ids) predicate
+  efficiently across all 8 partitions.
+
+  NOTE: CREATE INDEX CONCURRENTLY on a partitioned parent table is NOT supported
+  in PostgreSQL 16 (timescale/timescaledb:2.17.2-pg16).  A plain transactional
+  index is used instead; the index is built inside the Alembic migration
+  transaction.
 
 FORWARD-COMPATIBILITY (R5):
   Additive index.  All existing writes remain valid.  No schema changes.
 
-BP-007: CREATE INDEX CONCURRENTLY cannot run inside a transaction —
-  must use autocommit_block().
-
 DOWNGRADE:
-  Drop the index with DROP INDEX IF EXISTS.
+  Drop the index.
 """
 
 from __future__ import annotations
@@ -45,13 +47,13 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # CONCURRENTLY cannot run inside a transaction block (BP-007).
-    # autocommit_block() instructs Alembic to issue a COMMIT before the
-    # statement and re-open a new transaction afterwards.
-    with op.get_context().autocommit_block():
-        op.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_relations_relation_id " "ON relations (relation_id)")
+    op.create_index(
+        "idx_relations_relation_id",
+        "relations",
+        ["relation_id"],
+        unique=False,
+    )
 
 
 def downgrade() -> None:
-    with op.get_context().autocommit_block():
-        op.execute("DROP INDEX IF EXISTS idx_relations_relation_id")
+    op.drop_index("idx_relations_relation_id", table_name="relations")

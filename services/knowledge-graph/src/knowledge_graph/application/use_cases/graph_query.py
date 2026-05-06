@@ -97,6 +97,7 @@ class GetEntityGraphUseCase:
                     "graph_query_evidence_snippets_failed",
                     entity_id=str(entity_id),
                     relation_count=len(relation_ids),
+                    exc_info=True,
                 )
                 evidence_map = {}
 
@@ -107,6 +108,7 @@ class GetEntityGraphUseCase:
                     "graph_query_summaries_failed",
                     entity_id=str(entity_id),
                     relation_count=len(relation_ids),
+                    exc_info=True,
                 )
                 summary_map = {}
 
