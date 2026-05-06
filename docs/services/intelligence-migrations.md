@@ -120,6 +120,17 @@ INTELLIGENCE_DB_URL=postgresql://postgres:postgres@localhost:5432/intelligence_t
 
 ---
 
+## Recent Migrations
+
+| Revision | Description |
+|----------|-------------|
+| `0026` | Add UNIQUE INDEX `idx_canonical_entities_lower_name` on `canonical_entities (lower(canonical_name))` (DEF-014 / BP-384 — case-insensitive functional unique index; closes the find-then-create dedup race in `persist_enrichment` by giving the new repository helper `create_or_get` an atomic `ON CONFLICT (lower(canonical_name)) DO NOTHING` target). Plain (non-CONCURRENTLY) index — `canonical_entities` is not partitioned, so BP-393 does not apply. |
+| `0027` | Add `summary_embedding_model_id TEXT` and `summary_last_embedded_at TIMESTAMPTZ` to `relation_summaries`, plus partial index `idx_relation_summaries_model_id` (DEF-022 — embedding model tracking; both columns nullable, no backfill required). |
+| `0028` | Add UNIQUE INDEX `idx_temporal_events_event_id_unique` on `temporal_events (event_id)` (DEF-025 / BP-316 — replay-safe deterministic event_id; pairs with `graph_write` switching from `new_uuid7()` to `uuid5_from_parts(doc_id, subject_entity_id, event_type)` so Kafka replays land on `ON CONFLICT DO NOTHING` instead of inserting duplicate rows). Plain (non-CONCURRENTLY) index — BP-393 forbids CONCURRENTLY on partitioned parents on PG16; even though `temporal_events` is currently un-partitioned the convention keeps the DDL valid for future partitioning. Operationally a no-op given the existing `pk_temporal_events PRIMARY KEY (event_id)`, but documents the invariant explicitly. |
+| `0029` | Add nullable `next_retry_at TIMESTAMPTZ` column to `provisional_entity_queue` plus partial index `idx_provisional_queue_retry_at` (predicate `status='pending' AND next_retry_at IS NOT NULL`) (DEF-033 — exponential backoff for `ProvisionalEnrichmentWorker` / `ProvisionalQueuedConsumer`).  Pre-existing rows have NULL → immediately eligible (no backfill); the modified `claim_batch` SELECT explicitly handles NULL via `next_retry_at IS NULL OR next_retry_at <= now()`.  Plain (non-CONCURRENTLY) index per the BP-393 partition-safety convention. |
+
+---
+
 ## Related Documentation
 
 - `services/intelligence-migrations/README.md` — detailed operational notes and partition management

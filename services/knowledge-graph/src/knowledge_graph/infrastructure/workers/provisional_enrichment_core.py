@@ -251,36 +251,37 @@ async def persist_enrichment(
     }
     avro_payload_bytes = serialize_confluent_avro(_ENTITY_CANONICAL_CREATED_SCHEMA_PATH, avro_record)
 
-    # ── Dedup check (BP-384) ──────────────────────────────────────────────────
-    # Before creating the entity, check whether an exact-alias already maps
-    # this canonical_name to an existing entity.  Without this guard, every
-    # provisional queue row for "Apple Inc." creates a separate canonical_entities
-    # row even though alias_exact match would have found the seeded entity.
-    # The partial unique index on entity_aliases (entity_id, norm, type) prevents
-    # duplicate aliases per entity but ALLOWS different entities to share the
-    # same normalized alias text — so the INSERT never conflicts cross-entity.
-    alias_repo_pre = EntityAliasRepository(session)
-    normalized_name_pre = canonical_name.lower().strip()
-    existing_alias = await alias_repo_pre.find_exact(normalized_name_pre)
-    if existing_alias is not None:
-        existing_entity_id = UUID(str(existing_alias["entity_id"]))
-        logger.info(  # type: ignore[no-any-return]
-            "provisional_enrichment_entity_deduped",
-            canonical_name=canonical_name,
-            existing_entity_id=str(existing_entity_id),
-        )
-        # Return the existing entity_id; the caller (ProvisionalEnrichmentWorker
-        # / ProvisionalQueuedConsumer) will update provisional_entity_queue.
-        # No new outbox event needed — entity already exists and is reachable.
-        return existing_entity_id
-
+    # ── Atomic dedup INSERT (DEF-014 / BP-384 — replaces find_exact race) ──
+    # Migration 0026 added a UNIQUE INDEX on lower(canonical_name).  The new
+    # ``create_or_get`` repo method issues an atomic
+    #     INSERT ... ON CONFLICT (lower(canonical_name)) DO NOTHING RETURNING ...
+    # and re-SELECTs the existing row when the conflict path fires.  This
+    # closes the find-then-create TOCTOU window: two concurrent workers seeing
+    # ``existing is None`` can no longer both INSERT and produce duplicate
+    # canonical rows for the same entity (e.g. four "Apple Inc." rows in
+    # production prior to this fix).
+    #
+    # When ``was_created=False`` we skip alias inserts, embedding refresh, and
+    # the outbox event — the existing canonical row already has its aliases
+    # and a prior outbox event was emitted on its original creation.
     entity_repo = CanonicalEntityRepository(session)
-    entity_id = await entity_repo.create(  # type: ignore[attr-defined]
+    entity_id, was_created = await entity_repo.create_or_get(  # type: ignore[attr-defined]
         canonical_name=canonical_name,
         entity_type=entity_type,
         ticker=ticker,
         isin=isin,
     )
+    if not was_created:
+        logger.info(  # type: ignore[no-any-return]
+            "provisional_enrichment_entity_deduped",
+            canonical_name=canonical_name,
+            existing_entity_id=str(entity_id),
+            entity_deduped=True,
+        )
+        # Return the existing entity_id; the caller (ProvisionalEnrichmentWorker
+        # / ProvisionalQueuedConsumer) will update provisional_entity_queue.
+        # No new outbox event needed — entity already exists and is reachable.
+        return entity_id
     # The repo generates its own UUIDv7 — re-serialize with the actual entity_id
     # to keep the outbox bytes consistent with the DB row.  This second
     # serialize_confluent_avro call uses an identical record shape, so it is
@@ -388,6 +389,8 @@ async def apply_retry_transition(
     session: AsyncSession,
     queue_id: UUID,
     max_retries: int,
+    base_retry_minutes: int = 2,
+    max_retry_minutes: int = 1440,
 ) -> bool:
     """Atomically increment retry_count and decide terminal state in one SQL round-trip.
 
@@ -403,25 +406,94 @@ async def apply_retry_transition(
     callers that need the counter (the worker's ``_apply_retry``) must check
     the return value and call ``inc()`` themselves so existing test patch paths
     are preserved.
+
+    DEF-033 — exponential backoff:
+      Computes ``next_retry_at = utc_now() +
+      min(base_retry_minutes * 2 ** retry_count, max_retry_minutes)`` minutes
+      and persists it alongside the retry_count increment.  The Phase-1 SELECT
+      filters rows on ``next_retry_at IS NULL OR next_retry_at <= now()`` so
+      this row is excluded from ``claim_batch`` until the deadline elapses.
+
+      ``retry_count`` here is the *current* DB value (before the increment) —
+      using the post-increment value would make the very first failure wait
+      ``2 * 2^1 = 4`` minutes instead of the intended 2 minutes.  We read it
+      back from the row inside the CTE so the formula is consistent across
+      concurrent workers regardless of which one wins the UPDATE race.
+
+      ``base_retry_minutes`` and ``max_retry_minutes`` default to the worldview
+      production values so existing test fixtures (which only pass
+      ``max_retries``) keep working without modification.
     """
+
     from sqlalchemy import text
 
+    # Compute next_retry_at in Python (not SQL) so tests can drive the
+    # backoff window deterministically by patching ``common.time.utc_now``
+    # and so the value is testable against a known baseline.  We use the
+    # SQL CASE on retry_count to derive the backoff multiplier for the
+    # *current* row state: this avoids a separate SELECT round-trip while
+    # still letting Python clamp the result to ``max_retry_minutes``.
+    #
+    # Single round-trip pattern: we read retry_count via a CTE, compute the
+    # backoff in SQL, and apply both updates atomically.  The Python-side
+    # parameters bound below are the base / cap.
     result = await session.execute(
         text("""
-UPDATE provisional_entity_queue
-SET retry_count = LEAST(retry_count + 1, :max_retries),
+WITH current AS (
+    SELECT retry_count AS rc
+    FROM provisional_entity_queue
+    WHERE queue_id = :queue_id
+      AND status = 'processing'
+)
+UPDATE provisional_entity_queue AS q
+SET retry_count = LEAST(q.retry_count + 1, :max_retries),
     status = CASE
-        WHEN retry_count + 1 >= :max_retries THEN 'failed'
+        WHEN q.retry_count + 1 >= :max_retries THEN 'failed'
         ELSE 'pending'
+    END,
+    next_retry_at = CASE
+        -- Failed terminal rows do not need a retry deadline (they will
+        -- never be re-claimed) — leave it NULL for clarity.
+        WHEN q.retry_count + 1 >= :max_retries THEN NULL
+        ELSE :base_now
+             + (LEAST(
+                    :base_minutes * (2 ^ COALESCE((SELECT rc FROM current), 0))::int,
+                    :max_minutes
+                ) || ' minutes')::interval
     END
-WHERE queue_id = :queue_id
-  AND status = 'processing'
-RETURNING (status = 'failed') AS is_terminal
+WHERE q.queue_id = :queue_id
+  AND q.status = 'processing'
+RETURNING (q.status = 'failed') AS is_terminal,
+          q.retry_count AS new_retry_count,
+          q.next_retry_at AS next_retry_at
 """),
-        {"queue_id": str(queue_id), "max_retries": max_retries},
+        {
+            "queue_id": str(queue_id),
+            "max_retries": max_retries,
+            "base_minutes": base_retry_minutes,
+            "max_minutes": max_retry_minutes,
+            "base_now": utc_now(),
+        },
     )
     row = result.fetchone()
     if row is None:
         # Row no longer exists or was already resolved/noise — nothing to do.
         return False
-    return bool(row[0])
+
+    # Surface the backoff decision in structured logs so ops can chart
+    # retry-storm shape and confirm the cap is firing during outages.
+    is_terminal = bool(row[0])
+    next_retry_at = row[2] if len(row) >= 3 else None
+    backoff_minutes = None
+    if next_retry_at is not None:
+        # Compute the effective backoff window from the persisted value so
+        # the log matches the DB exactly (including Postgres rounding).
+        backoff_minutes = max(0, int((next_retry_at - utc_now()).total_seconds() // 60))
+    logger.info(  # type: ignore[no-any-return]
+        "provisional_enrichment_retry_transition",
+        queue_id=str(queue_id),
+        is_terminal=is_terminal,
+        backoff_minutes=backoff_minutes,
+        next_retry_at=next_retry_at.isoformat() if next_retry_at is not None else None,
+    )
+    return is_terminal

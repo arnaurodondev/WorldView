@@ -5,7 +5,14 @@ from __future__ import annotations
 import time
 import uuid
 
-from common.ids import new_ulid, new_uuid, new_uuid7, new_uuid7_str, new_uuid_str
+from common.ids import (
+    new_ulid,
+    new_uuid,
+    new_uuid7,
+    new_uuid7_str,
+    new_uuid_str,
+    uuid5_from_parts,
+)
 
 
 class TestNewUuid:
@@ -103,3 +110,45 @@ class TestNewUlid:
     def test_uppercase(self) -> None:
         result = new_ulid()
         assert result == result.upper()
+
+
+class TestUuid5FromParts:
+    """DEF-025 — deterministic UUID5 used for replay-safe event_id derivation."""
+
+    def test_uuid5_deterministic(self) -> None:
+        # Same parts in the same order MUST yield the same UUID across calls.
+        a = uuid5_from_parts("doc-1", "entity-7", "earnings_release")
+        b = uuid5_from_parts("doc-1", "entity-7", "earnings_release")
+        assert a == b
+
+    def test_uuid5_different_order(self) -> None:
+        # Reordering parts MUST change the UUID — order is part of the identity.
+        a = uuid5_from_parts("doc-1", "entity-7", "earnings_release")
+        b = uuid5_from_parts("entity-7", "doc-1", "earnings_release")
+        assert a != b
+
+    def test_uuid5_different_inputs(self) -> None:
+        # Spot-check collision resistance with 100 distinct triples.
+        # We vary all three positions to cover doc/entity/event-type axes.
+        ids = {uuid5_from_parts(f"doc-{i}", f"entity-{i % 7}", f"event-{i % 3}") for i in range(100)}
+        # All 100 triples are unique by construction (i is unique in part 1),
+        # so the resulting UUID set MUST also have 100 distinct entries.
+        assert len(ids) == 100
+
+    def test_uuid5_return_type(self) -> None:
+        result = uuid5_from_parts("a", "b", "c")
+        # Must be a string (so callers can pass directly to Avro / JSON / SQL
+        # without re-stringifying).
+        assert isinstance(result, str)
+        # Must be parseable as a valid UUID5 — version 5 confirms RFC 4122
+        # name-based hashing was used.
+        parsed = uuid.UUID(result)
+        assert parsed.version == 5
+
+    def test_uuid5_separator_prevents_boundary_collision(self) -> None:
+        # The "|" separator in the implementation guarantees that
+        # ("ab", "c") and ("a", "bc") are distinguishable.  Without the
+        # separator both inputs would concatenate to "abc" and collide.
+        a = uuid5_from_parts("ab", "c")
+        b = uuid5_from_parts("a", "bc")
+        assert a != b

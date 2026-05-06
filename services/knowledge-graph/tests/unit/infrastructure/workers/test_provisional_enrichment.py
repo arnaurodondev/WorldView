@@ -800,6 +800,48 @@ class TestRecoverStaleProcessingRows:
 
         session.commit.assert_awaited_once()
 
+    async def test_recovery_sweep_sets_next_retry_at(self) -> None:
+        """The recovery UPDATE must persist a ``next_retry_at`` deadline so that
+        recovered rows respect the same exponential backoff as rows that fail
+        the regular code path.  Without this, a recovered row would be re-claimed
+        immediately on the next polling tick and bypass the backoff window.
+        """
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([])
+        worker = ProvisionalEnrichmentWorker(
+            factory,
+            AsyncMock(),
+            max_retries=5,
+            base_retry_minutes=7,  # arbitrary non-default
+            max_retry_minutes=42,  # arbitrary non-default
+        )
+
+        session = AsyncMock()
+        session.commit = AsyncMock()
+        result_mock = MagicMock()
+        result_mock.rowcount = 0
+        session.execute = AsyncMock(return_value=result_mock)
+
+        await worker._recover_stale_processing_rows(session)
+
+        # The UPDATE SQL must touch next_retry_at AND bind the configured
+        # backoff window so the recovered row's deadline matches the operator
+        # configuration — not the function defaults.
+        session.execute.assert_awaited_once()
+        call_args = session.execute.call_args
+        sql_text = str(call_args.args[0])
+        assert "next_retry_at" in sql_text, (
+            "Recovery UPDATE must set next_retry_at — recovered rows would "
+            "otherwise bypass the exponential backoff window."
+        )
+        params = call_args.args[1] if len(call_args.args) > 1 else call_args.kwargs.get("parameters", {})
+        assert params["base_minutes"] == 7
+        assert params["max_minutes"] == 42
+        assert "now" in params, "Recovery UPDATE must bind :now from common.time.utc_now()"
+
     async def test_run_calls_recovery_before_processing(self) -> None:
         """run() calls _recover_stale_processing_rows before fetching pending rows.
 

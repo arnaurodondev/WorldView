@@ -96,7 +96,7 @@ Returns `0.0` when confidence is `null` (stale/unknown).
 | 13D-2 | `NarrativeRefreshWorker` | 7-day periodic | 50 | Deterministic template (canonical_name + claims); truncates to 512 tokens; no LLM |
 | 13D-3 | `FundamentalsRefreshWorker` | 30-day periodic | 50 | Ticker entities only; fetches from market-data service REST API; S3 down = skip (no next_refresh_at update) |
 | 13E | `ProvisionalEnrichmentWorker` | 5 min | 500 | **PLAN-0072**: Two-layer noise pre-filter before LLM extraction. Layer 1: `_NOISE_BLOCKLIST` frozenset (O(1)). Layer 2: `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` binary classifier via DeepInfra (confidence < 0.7 → noise, fail-open). **`meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` is confirmed available on the project DeepInfra account.** Noise rows → `status='noise'` (migration 0020). Remaining rows → DeepSeek V4 Flash full extraction; creates canonical_entity + 3 embedding_state rows; emits entity.canonical.created.v1 |
-| 13F | `EmbeddingRefreshWorker` | 2h | 50 | Embeds relation summaries where `summary_embedding IS NULL` |
+| 13F | `EmbeddingRefreshWorker` | 2h | 50 | Embeds relation summaries where `summary_embedding IS NULL`. Records `summary_embedding_model_id` and `summary_last_embedded_at` to support model-aware ANN search and prevent mixed-model index drift (DEF-022). |
 | 13G | `MonthlyPartitionWorker` | 1st of month + startup | — | Idempotent CREATE IF NOT EXISTS + prune >24 months |
 | 13H | `YearlyPartitionWorker` | 1st of year + startup | — | Idempotent CREATE IF NOT EXISTS for yearly partitions |
 
@@ -164,7 +164,8 @@ GET {MARKET_DATA_BASE_URL}/api/v1/fundamentals/{entity_id}
 | `relations` | Aggregate relation state (hash-partitioned ×8 on `subject_entity_id`) |
 | `relation_evidence_raw` | Append-only staging table (hot path; `partition_key` STORED column) |
 | `relation_evidence` | Processed evidence rows (after aggregation) |
-| `relation_summaries` | LLM-generated narrative summaries + 1024-dim embeddings |
+| `relation_summaries` | LLM-generated narrative summaries + 1024-dim embeddings (Wave A-2 / DEF-022 adds `summary_embedding_model_id TEXT` and `summary_last_embedded_at TIMESTAMPTZ` for mixed-model drift auditing) |
+| `provisional_entity_queue` | Unresolved-entity queue consumed by Worker 13E (`ProvisionalEnrichmentWorker`).  Wave A-4 / DEF-033 adds `next_retry_at TIMESTAMPTZ` (nullable) — populated on each retry transition with `now() + min(base * 2^retry_count, max)` minutes so LLM outages self-throttle; partial index `idx_provisional_queue_retry_at` (predicate `status='pending' AND next_retry_at IS NOT NULL`) keeps the deadline filter cheap. |
 | `article_claims` | Temporal claims / point-in-time assertions |
 | `contradictions` | Detected contradictions between claims |
 
@@ -202,6 +203,9 @@ GET {MARKET_DATA_BASE_URL}/api/v1/fundamentals/{entity_id}
 | `KNOWLEDGE_GRAPH_LOG_JSON` | `true` | JSON structured log output |
 | `KNOWLEDGE_GRAPH_OTLP_ENDPOINT` | — | OTel OTLP gRPC endpoint (optional) |
 | `KNOWLEDGE_GRAPH_ADMIN_TOKEN` | — | X-Admin-Token for DLQ admin endpoints (empty = auth disabled) |
+| `KNOWLEDGE_GRAPH_SUMMARY_EMBEDDING_MODEL_ID` | `BAAI/bge-large-en-v1.5` | DEF-022 — value persisted to `relation_summaries.summary_embedding_model_id` on every embedding refresh; enables mixed-model drift auditing in the HNSW index. |
+| `KNOWLEDGE_GRAPH_PROVISIONAL_ENRICHMENT_BASE_RETRY_MINUTES` | `2` | DEF-033 — base of the exponential-backoff formula `next_retry_at = now() + min(base * 2^retry_count, max)` minutes used by Worker 13E. |
+| `KNOWLEDGE_GRAPH_PROVISIONAL_ENRICHMENT_MAX_RETRY_MINUTES` | `1440` | DEF-033 — cap (24h) on the backoff window so a permanently-failing row is eventually marked `'failed'` rather than retried forever. |
 | `DISPATCHER_POLL_INTERVAL_S` | `5.0` | Outbox dispatcher poll cadence |
 | `DISPATCHER_BATCH_SIZE` | `100` | Outbox events per poll cycle |
 
@@ -343,3 +347,103 @@ make run       # port 8007
 make test
 make lint
 ```
+
+---
+
+## Embedding Model Tracking (DEF-022, Wave A-2) {#embedding-model-tracking-def-022}
+
+The HNSW ANN index over `relation_summaries.summary_embedding` is sensitive to
+mixed-model drift: vectors produced by different embedding models do not share
+a comparable cosine geometry, so a query embedded with model B against rows
+embedded with model A returns garbage neighbours.
+
+To make this auditable and recoverable, every successful embedding write now
+records the producing model and timestamp:
+
+| Column | Type | Source |
+|--------|------|--------|
+| `relation_summaries.summary_embedding_model_id` | `TEXT` (nullable) | `KNOWLEDGE_GRAPH_SUMMARY_EMBEDDING_MODEL_ID` |
+| `relation_summaries.summary_last_embedded_at` | `TIMESTAMPTZ` (nullable) | `common.time.utc_now()` at write time |
+
+A partial index `idx_relation_summaries_model_id` (predicate
+`summary_embedding IS NOT NULL`) enables fast `GROUP BY summary_embedding_model_id`
+audits and targeted re-embedding queries.
+
+Pre-existing rows have NULL model_ids until they are naturally refreshed by
+the next `EmbeddingRefreshWorker` cycle (no backfill — see migration `0027`
+docstring for rationale).
+
+**Operator note**: existing rows persisted before Wave A-2 carry
+`summary_embedding_model_id = NULL` indefinitely until their `summary_text`
+changes (the embedding refresh path is gated on `evidence_hash` change).
+Operators wanting a clean `GROUP BY` audit should trigger a one-shot
+full-refresh cycle (set `KNOWLEDGE_GRAPH_SUMMARY_WORKER_FORCE_REGEN_BATCH_SIZE`
+to a positive value for one scheduler tick) before relying on the audit
+counts. After the cascade rolls through, every active row carries a
+non-NULL model_id and `GROUP BY summary_embedding_model_id` reports the
+true model-distribution histogram.
+
+---
+
+## Exponential Retry Backoff (DEF-033, Wave A-4) {#exponential-retry-backoff-def-033}
+
+Worker 13E (`ProvisionalEnrichmentWorker`) and the hot-path
+`ProvisionalQueuedConsumer` both extract entity profiles via the LLM fallback
+chain.  When that chain experiences an outage (DeepInfra 5xx, network
+partition, model rate-limit), every failed attempt previously flipped the row
+back to `status='pending'` so the next 5-minute polling sweep re-claimed it
+and re-hit the upstream API immediately.  With a hot batch of up to 2,500
+permanently-failing rows this hammered the provider at full intensity until
+the retry counter eventually capped out — wasting spend and risking
+provider-side throttling.
+
+Wave A-4 introduces an **exponential backoff** persisted on the queue row:
+
+```text
+next_retry_at = now() + min(base * 2 ** retry_count, max) minutes
+```
+
+| `retry_count` (pre-increment) | Backoff (base=2, max=1440) |
+|------------------------------|----------------------------|
+| 0  | 2 min |
+| 1  | 4 min |
+| 2  | 8 min |
+| 3  | 16 min |
+| 4  | 32 min |
+| 5  | 64 min |
+| 6  | 128 min |
+| 7  | 256 min |
+| 8  | 512 min |
+| 9  | 1024 min |
+| 10+ | 1440 min (cap — 24 h) |
+
+The Phase-1 `claim_batch` SELECT excludes any row with
+`next_retry_at > now()`, so a transient outage now self-throttles.  Pre-Wave-A-4
+rows with `next_retry_at IS NULL` remain immediately eligible (backward
+compatible — no backfill required, see migration `0029`).
+
+Tunable via env vars:
+
+- `KNOWLEDGE_GRAPH_PROVISIONAL_ENRICHMENT_BASE_RETRY_MINUTES` (default `2`)
+- `KNOWLEDGE_GRAPH_PROVISIONAL_ENRICHMENT_MAX_RETRY_MINUTES` (default `1440`)
+
+**Implementation**: the SQL CASE in `core.apply_retry_transition` writes the
+deadline atomically alongside the `retry_count` increment in a single
+`UPDATE ... RETURNING` round-trip; terminal `'failed'` rows persist
+`next_retry_at = NULL` because they will never be re-claimed.
+
+**Both paths honour the env vars** (post-QA fix, BP-399): the polling worker
+(`ProvisionalEnrichmentWorker`) AND the hot-path consumer
+(`ProvisionalQueuedConsumer`) both forward
+`KNOWLEDGE_GRAPH_PROVISIONAL_ENRICHMENT_BASE_RETRY_MINUTES` and
+`KNOWLEDGE_GRAPH_PROVISIONAL_ENRICHMENT_MAX_RETRY_MINUTES` into
+`core.apply_retry_transition`. The original Wave A-4 commit only wired the
+polling worker; the QA fix added the consumer factory call site
+(`provisional_queued_consumer_main.py`) AND the recovery sweep in
+`_recover_stale_processing_rows` so all three retry pathways converge on the
+same operator-visible window.
+
+The Phase-1 SELECT in the hot-path consumer also filters
+`next_retry_at IS NULL OR next_retry_at <= now()`, so a Kafka redelivery
+immediately after a failed attempt cannot bypass the backoff window the
+prior attempt persisted (BP-399).

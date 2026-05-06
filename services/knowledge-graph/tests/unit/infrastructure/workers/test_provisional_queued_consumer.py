@@ -416,3 +416,97 @@ class TestFailSafeRetryStuckCounter:
             await _fail_safe_retry(factory, uuid4(), 0, 5)
 
         mock_counter.inc.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# DEF-033 / BP-396: configured backoff window flows from settings -> consumer
+# -> core.apply_retry_transition.  Without this the hot path silently used the
+# core defaults regardless of operator configuration.
+# ---------------------------------------------------------------------------
+
+
+class TestRetryUsesConfiguredBackoff:
+    async def test_retry_uses_configured_backoff(self) -> None:
+        """When the consumer is constructed with custom base/max retry minutes,
+        ``core.apply_retry_transition`` MUST be called with those exact values.
+        """
+        # Build a consumer with non-default backoff settings — the values are
+        # arbitrary but distinct from the function defaults (2, 1440) so the
+        # assertion below would fail if the consumer fell back to defaults.
+        from knowledge_graph.infrastructure.messaging.consumers.provisional_queued_consumer import (
+            ProvisionalQueuedConsumer,
+        )
+
+        from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+
+        _session, factory = _make_session_factory(pending_row=_make_pending_row(retry_count=0))
+        config = ConsumerConfig(
+            bootstrap_servers="localhost:9092",
+            group_id="kg-provisional-queued-group",
+            topics=["entity.provisional.queued.v1"],
+        )
+        consumer = ProvisionalQueuedConsumer(
+            config=config,
+            session_factory=factory,
+            llm_client=MagicMock(),
+            base_retry_minutes=5,
+            max_retry_minutes=60,
+        )
+
+        # Drive the failure path so ``_retry`` -> ``apply_retry_transition``
+        # is called.  ``extract_entity_profile=None`` triggers the no-profile
+        # branch, which goes through ``_fail_safe_retry``.
+        with (
+            patch(
+                "knowledge_graph.infrastructure.workers.provisional_enrichment_core.extract_entity_profile",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "knowledge_graph.infrastructure.workers.provisional_enrichment_core.apply_retry_transition",
+                new=AsyncMock(return_value=False),
+            ) as mock_retry,
+        ):
+            await consumer.process_message(
+                key="apple inc.",
+                value=_make_event(),
+                headers={},
+            )
+
+        mock_retry.assert_awaited()
+        # The configured backoff settings must have been forwarded as kwargs
+        # to apply_retry_transition.  Pin the exact values so a regression
+        # that drops the kwargs (default fallback) fails this assertion.
+        kwargs = mock_retry.call_args.kwargs
+        assert (
+            kwargs["base_retry_minutes"] == 5
+        ), f"Expected base_retry_minutes=5 (consumer config), got {kwargs.get('base_retry_minutes')}"
+        assert (
+            kwargs["max_retry_minutes"] == 60
+        ), f"Expected max_retry_minutes=60 (consumer config), got {kwargs.get('max_retry_minutes')}"
+
+    async def test_consumer_step1_filters_next_retry_at(self) -> None:
+        """Step 1 SELECT must include the next_retry_at filter so a Kafka
+        redelivery doesn't bypass the backoff window.
+        """
+        _session, factory = _make_session_factory(pending_row=None)
+        consumer = _make_consumer(factory)
+
+        await consumer.process_message(  # type: ignore[union-attr]
+            key="apple inc.",
+            value=_make_event(),
+            headers={},
+        )
+
+        # The first execute() call is the FOR UPDATE SKIP LOCKED SELECT.  Its
+        # SQL text must contain the next_retry_at predicate that excludes rows
+        # whose backoff window has not elapsed.  Without this filter a
+        # redelivery would short-circuit the backoff persisted by the prior
+        # failed attempt.
+        first_call = _session.execute.call_args_list[0]
+        sql_text = str(first_call.args[0])
+        assert (
+            "next_retry_at" in sql_text
+        ), "Step 1 SELECT missing next_retry_at filter — Kafka redelivery would bypass the configured backoff window."
+        # The bound :now param must also be present so tests can stub time.
+        params = first_call.args[1]
+        assert "now" in params, "Step 1 SELECT must bind :now from common.time.utc_now()"
