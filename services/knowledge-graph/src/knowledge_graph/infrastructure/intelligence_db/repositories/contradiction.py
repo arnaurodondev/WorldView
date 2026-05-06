@@ -15,6 +15,8 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from knowledge_graph.application.ports.repositories import ContradictionRepositoryPort
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +24,7 @@ if TYPE_CHECKING:
 _CONTRADICTION_WINDOW_DAYS: int = 90
 
 
-class ContradictionRepository:
+class ContradictionRepository(ContradictionRepositoryPort):
     """Read/write repository for ``relation_contradiction_links``."""
 
     def __init__(self, session: AsyncSession) -> None:

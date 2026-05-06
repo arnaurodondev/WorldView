@@ -13,6 +13,8 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from knowledge_graph.application.ports.repositories import OutboxRepositoryPort
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +25,7 @@ TOPIC_RELATION_PROPOSED = "relation.type.proposed.v1"
 TOPIC_ENTITY_CANONICAL_CREATED = "entity.canonical.created.v1"
 
 
-class OutboxRepository:
+class OutboxRepository(OutboxRepositoryPort):
     """Append/read repository for ``intelligence_db.outbox_events``."""
 
     def __init__(self, session: AsyncSession) -> None:

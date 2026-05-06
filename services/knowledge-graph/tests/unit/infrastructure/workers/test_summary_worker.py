@@ -643,3 +643,103 @@ class TestSummaryWorkerForceRegen:
         assert (
             mock_sum.insert_new.await_count == 1
         ), f"Expected 1 insert_new call, got {mock_sum.insert_new.await_count}"
+
+
+# ---------------------------------------------------------------------------
+# F-QA-205 / F-QA-210 / F-DS-208: LLM returns None or empty-string summary
+# ---------------------------------------------------------------------------
+
+
+class TestSummaryWorkerLlmFailure:
+    """Regression guard for LLM-failure paths in SummaryWorker."""
+
+    def test_llm_returns_none_skips_insert_and_mark(self) -> None:
+        """When LLM returns None, no summary is inserted.
+
+        F-QA-205: _generate_summary returns None → summary_repo.insert_new must NOT
+        be called (only mark_summary_updated is called to clear the stale flag).
+        """
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+
+        evidence_rows = [{"evidence_text": "Apple posted record Q3 profits.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000060"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        llm = AsyncMock()
+        # extract returns None → _generate_summary returns None
+        llm.extract = AsyncMock(return_value=None)
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm)
+            asyncio.run(worker.run())
+
+        # F-QA-205: insert_new must NOT be called when LLM returned None.
+        mock_sum.insert_new.assert_not_awaited()
+
+    def test_empty_string_summary_treated_as_none(self) -> None:
+        """result.result={'summary': ''} is treated the same as None — no insert.
+
+        F-QA-210: ``str(result.result.get("summary", "")) or None`` converts an
+        empty string to None, so insert_new must NOT be called.
+        """
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        evidence_rows = [{"evidence_text": "Apple results.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000061"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        llm = AsyncMock()
+        # extract returns ExtractionOutput whose result["summary"] is "".
+        llm.extract = AsyncMock(
+            return_value=ExtractionOutput(
+                result={"summary": ""},
+                raw_response="",
+                model_id="m",
+            )
+        )
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm)
+            asyncio.run(worker.run())
+
+        # F-QA-210: empty string → treated as None → no insert.
+        mock_sum.insert_new.assert_not_awaited()
+
+    def test_llm_failure_clears_stale_flag(self) -> None:
+        """When LLM fails, mark_summary_updated is still called to prevent indefinite retry.
+
+        F-DS-208 regression guard: the source fix (clears summary_stale flag even
+        on LLM failure) is confirmed present. This test ensures it is never regressed.
+        Without this behaviour, a relation whose LLM always fails would be retried
+        every worker cycle forever (retry storm).
+        """
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+
+        relation_id = "00000000-0000-0000-0000-000000000062"
+        evidence_rows = [{"evidence_text": "Evidence text.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": relation_id}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(return_value=None)
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm)
+            asyncio.run(worker.run())
+
+        # F-DS-208: mark_summary_updated MUST be called even when LLM returns None,
+        # to clear the summary_stale flag and prevent the relation being retried every cycle.
+        mock_rel.mark_summary_updated.assert_awaited_once()
