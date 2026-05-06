@@ -960,3 +960,49 @@ class TestNoiseFilters:
 
         result = await worker._layer2_classify("valid entity")
         assert result is False  # fail-open: error → pass to Layer 3
+
+    async def test_noise_batch_update_issued_for_blocklist_row(self) -> None:
+        """F-QA-001: run() issues a batch UPDATE with ANY(CAST(:ids AS uuid[])) for noise rows.
+
+        Verifies that the DB write path actually executes the single-batch UPDATE
+        SQL (not N individual per-row UPDATEs) when a blocklist mention is processed.
+        """
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        # Row with a blocklist mention — will be caught by Layer 1.
+        noise_row = _make_noise_row("analysts")
+        session, factory = _make_session_with_rows([noise_row])
+
+        worker = ProvisionalEnrichmentWorker(
+            factory,
+            AsyncMock(),
+            noise_classifier_api_key="",  # no Layer 2 key; Layer 1 suffices
+        )
+
+        await worker.run()
+
+        # Collect all SQL strings sent to session.execute across all sessions.
+        execute_calls = session.execute.call_args_list
+        sql_strings = [str(call.args[0]) for call in execute_calls if call.args]
+
+        # The batch noise UPDATE must have been issued.
+        noise_update_calls = [s for s in sql_strings if "status = 'noise'" in s and "ANY(CAST(:ids AS uuid[]))" in s]
+        assert noise_update_calls, (
+            "Expected a batch UPDATE with status='noise' and ANY(CAST(:ids AS uuid[])) "
+            f"but got SQL strings: {sql_strings}"
+        )
+
+        # The params must include the noise queue_id converted to a string list.
+        noise_update_params = [
+            call.args[1]
+            for call in execute_calls
+            if call.args
+            and "status = 'noise'" in str(call.args[0])
+            and "ANY(CAST(:ids AS uuid[]))" in str(call.args[0])
+            and len(call.args) > 1
+        ]
+        assert noise_update_params, "Batch noise UPDATE must pass :ids parameter"
+        ids_param = noise_update_params[0].get("ids", [])
+        assert len(ids_param) == 1, f"Expected 1 noise ID, got {ids_param}"
