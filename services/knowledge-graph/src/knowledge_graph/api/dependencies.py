@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hmac
 from collections.abc import AsyncGenerator
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
+
+if TYPE_CHECKING:
+    from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeighborhoodUseCase
 
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -187,6 +190,18 @@ def get_cypher_bundle(session: DbSessionDep, request: Request) -> _CypherBundle:
 
 
 CypherBundleDep = Annotated[_CypherBundle, Depends(get_cypher_bundle)]
+
+
+def _get_cypher_neighborhood_uc() -> CypherNeighborhoodUseCase:
+    """Lazy factory to avoid module-level import of AGE use case.
+
+    Returns a fresh CypherNeighborhoodUseCase instance.  The lazy import ensures
+    the AGE use case module is only loaded on depth>1 requests, not on every
+    import of the dependencies module.
+    """
+    from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeighborhoodUseCase
+
+    return CypherNeighborhoodUseCase()
 
 
 # ── R25-compliant repo factories for claims / events / search routes ──────────

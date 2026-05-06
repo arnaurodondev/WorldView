@@ -90,6 +90,12 @@ class KnowledgeGraphScheduler:
 
         logger.info("kg_consumer_task_stopped")
 
+        # F-DATA-007: close httpx client on ProvisionalEnrichmentWorker so the
+        # TCP connection pool is released cleanly at service shutdown.
+        prov_worker = self._workers.get("provisional_enrichment")
+        if prov_worker is not None and hasattr(prov_worker, "aclose"):
+            await prov_worker.aclose()
+
     # ------------------------------------------------------------------
     # Job registration
     # ------------------------------------------------------------------

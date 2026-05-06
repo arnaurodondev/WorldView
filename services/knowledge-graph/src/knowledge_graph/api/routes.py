@@ -19,7 +19,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, HTTPException, Query
 
-from knowledge_graph.api.dependencies import CypherBundleDep, EntityGraphReposDep
+from knowledge_graph.api.dependencies import CypherBundleDep, EntityGraphReposDep, _get_cypher_neighborhood_uc
 from knowledge_graph.api.schemas import (
     EntitySummary,
     GraphNeighborhoodResponse,
@@ -179,13 +179,12 @@ async def get_entity_graph(
     fetched via single batch queries (no N+1).
     """
     if depth > 1 and cypher.cypher_enabled:
-        # depth>1: delegate to AGE Cypher neighborhood use case.
-        # Importing here avoids a module-level import of the AGE use case in a
-        # code path that runs on every depth=1 request.
-        from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeighborhoodUseCase
-
+        # depth>1: delegate to AGE Cypher neighborhood use case via the
+        # dependency factory.  _get_cypher_neighborhood_uc() holds the lazy
+        # import so this route file never imports from the infrastructure layer
+        # directly (R25 / IG-LAYER-002 compliance).
         try:
-            result = await CypherNeighborhoodUseCase().execute(
+            result = await _get_cypher_neighborhood_uc().execute(
                 cypher.session,
                 cypher.entity_repo,  # type: ignore[arg-type]
                 cypher.relation_repo,  # type: ignore[arg-type]

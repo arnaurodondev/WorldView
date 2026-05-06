@@ -271,17 +271,17 @@ WHERE queue_id = :queue_id
             layer1_noise_ids, layer2_noise_ids, pending_rows = await self._run_noise_filters(pending_rows)
             all_noise_ids = layer1_noise_ids + layer2_noise_ids
             if all_noise_ids:
+                # BP-392: single batch UPDATE instead of N+1 per-row loop.
                 async with self._sf() as session:
-                    for noise_id in all_noise_ids:
-                        await session.execute(
-                            text("""
+                    await session.execute(
+                        text("""
 UPDATE provisional_entity_queue
 SET status = 'noise', resolved_at = now()
-WHERE queue_id = CAST(:qid AS uuid)
+WHERE queue_id = ANY(CAST(:ids AS uuid[]))
   AND status = 'processing'
 """),
-                            {"qid": str(noise_id)},
-                        )
+                        {"ids": [str(nid) for nid in all_noise_ids]},
+                    )
                     await session.commit()
                 logger.info(  # type: ignore[no-any-return]
                     "provisional_enrichment_noise_filtered",
@@ -319,6 +319,9 @@ WHERE queue_id = CAST(:qid AS uuid)
         )
 
         # ── Phase 3: Write results in a new session ──
+        # BP-390: each row is committed independently so a rollback only
+        # affects the current (uncommitted) row, not all prior rows in the
+        # same session.
         async with self._sf() as session:
             for (
                 queue_id,
@@ -349,14 +352,17 @@ WHERE queue_id = CAST(:qid AS uuid)
 UPDATE provisional_entity_queue
 SET status = 'resolved', assigned_entity_id = :entity_id, resolved_at = now()
 WHERE queue_id = :queue_id
+  AND status = 'processing'
 """),
                             {"entity_id": str(entity_id), "queue_id": str(queue_id)},
                         )
+                        await session.commit()  # BP-390: commit per row
                         entity_ids_to_dirty.append(entity_id)
                         s7_provisional_enrichment_success_total.inc()
                         enriched += 1
                     else:
                         await self._apply_retry(session, queue_id, retry_count)
+                        await session.commit()  # BP-390: commit retry update
                         failed += 1
                 except Exception as exc:
                     logger.error(  # type: ignore[no-any-return]
@@ -366,11 +372,11 @@ WHERE queue_id = :queue_id
                     )
                     # DS-008: rollback aborted transaction before retry UPDATE so
                     # SQLAlchemy does not raise InvalidRequestError on the session.
+                    # BP-390: rollback only affects the current uncommitted row.
                     await session.rollback()
                     await self._apply_retry(session, queue_id, retry_count)
+                    await session.commit()  # BP-390: commit retry update
                     failed += 1
-
-            await session.commit()
 
         # Produce entity.dirtied.v1 AFTER successful DB commit.
         for dirty_id in entity_ids_to_dirty:
@@ -500,15 +506,39 @@ WHERE status = 'processing'
             else:
                 layer2_candidates.append(row)
 
-        # Layer 2 — cheap LLM binary classification (fail-open)
+        # Layer 2 — cheap LLM binary classification (fail-open).
+        # F-DATA-005: parallelized with asyncio.gather + semaphore (same
+        # concurrency cap as Phase 2) so 50 rows x 10s timeout = 500s serial
+        # blocking is avoided.  Fail-open semantics preserved: an exception
+        # in gather wrapper means the row passes to Layer 3, never dropped.
         layer2_noise_ids: list[UUID] = []
         layer2_pass: list[tuple[UUID, str, str, str, int]] = []
 
-        for row in layer2_candidates:
-            queue_id, mention_text, _mc, _ctx, _rc = row
-            is_noise = await self._layer2_classify(mention_text)
+        sem = asyncio.Semaphore(self._concurrency)
+
+        async def _classify_one(
+            row: tuple[UUID, str, str, str, int],
+        ) -> tuple[tuple[UUID, str, str, str, int], bool]:
+            async with sem:
+                is_noise = await self._layer2_classify(row[1])
+                return row, is_noise
+
+        classify_results = await asyncio.gather(
+            *[_classify_one(row) for row in layer2_candidates],
+            return_exceptions=True,
+        )
+        for i, classify_result in enumerate(classify_results):
+            if isinstance(classify_result, Exception):
+                # Fail-open: exception in the gather wrapper → row proceeds to
+                # Layer 3.  Use the index to recover the original row so it is
+                # not silently dropped.  (_layer2_classify already returns False
+                # on any internal error; this branch only fires if the semaphore
+                # wrapper itself raises, which is extremely rare.)
+                layer2_pass.append(layer2_candidates[i])
+                continue
+            row, is_noise = classify_result  # type: ignore[misc]
             if is_noise:
-                layer2_noise_ids.append(queue_id)
+                layer2_noise_ids.append(row[0])
                 s7_provisional_noise_llm_filtered_total.inc()
             else:
                 layer2_pass.append(row)
@@ -531,9 +561,14 @@ WHERE status = 'processing'
             return False
 
         if self._noise_http_client is None:
-            self._noise_http_client = httpx.AsyncClient(timeout=httpx.Timeout(self._noise_timeout_s))
+            # BP-235: set httpx timeout slightly higher than asyncio.wait_for
+            # timeout so the asyncio wall-clock timeout fires first and we get
+            # a clean asyncio.TimeoutError instead of httpx's ReadTimeout.
+            self._noise_http_client = httpx.AsyncClient(timeout=httpx.Timeout(self._noise_timeout_s + 1.0))
 
-        user_content = f'MENTION: "{mention_text[:200]}"'
+        # F-SEC-005: use json.dumps to safely escape any double quotes or
+        # control characters in mention_text before embedding in the prompt.
+        user_content = f"MENTION: {json.dumps(mention_text[:200])}"
         try:
             response = await asyncio.wait_for(
                 self._noise_http_client.post(
@@ -567,3 +602,14 @@ WHERE status = 'processing'
                 action="fail_open_to_layer3",
             )
             return False
+
+    async def aclose(self) -> None:
+        """Close the shared httpx client used by the Layer 2 noise classifier.
+
+        F-DATA-007: the client is created lazily and must be closed at worker
+        shutdown to release the underlying TCP connection pool and avoid
+        ResourceWarning in tests and production teardown.
+        """
+        if self._noise_http_client is not None:
+            await self._noise_http_client.aclose()
+            self._noise_http_client = None
