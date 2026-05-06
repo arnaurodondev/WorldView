@@ -14,6 +14,7 @@ from knowledge_graph.application.ports.event_repository import EventRepositoryPo
 from knowledge_graph.application.ports.relation_summary_repository import RelationSummaryRepositoryPort
 from knowledge_graph.application.ports.temporal_event_repository import TemporalEventRepositoryPort
 from knowledge_graph.application.use_cases.dlq_admin import DLQAdminUseCase
+from knowledge_graph.application.use_cases.get_entity_detail import GetEntityDetailUseCase
 
 # ── Database sessions ─────────────────────────────────────────────────────────
 
@@ -227,3 +228,21 @@ def get_relation_summary_repo(session: ReadOnlyDbSessionDep) -> RelationSummaryR
 
 
 RelationSummaryRepoDep = Annotated[RelationSummaryRepositoryPort, Depends(get_relation_summary_repo)]
+
+
+# ── Entity detail (PRD-0073 §9.6) ────────────────────────────────────────────
+
+
+def get_entity_detail_uc(
+    session: ReadOnlyDbSessionDep,
+) -> GetEntityDetailUseCase:
+    """Build GetEntityDetailUseCase bound to the current read-only session."""
+    from knowledge_graph.application.use_cases.get_entity_detail import GetEntityDetailUseCase
+    from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+        CanonicalEntityRepository,
+    )
+
+    return GetEntityDetailUseCase(CanonicalEntityRepository(session))
+
+
+GetEntityDetailUseCaseDep = Annotated[GetEntityDetailUseCase, Depends(get_entity_detail_uc)]
