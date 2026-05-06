@@ -18,6 +18,7 @@ Key design invariants:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -673,22 +674,24 @@ class UnresolvedResolutionWorker:
         # are truncated with an ellipsis-free hard cut — model only needs the
         # leading domain words to disambiguate.
         context_text = (context_sentence or "").strip()[:400] or "(no surrounding context available)"
-        # _CLASSIFICATION_PROMPT_TEMPLATE is the dynamic suffix only (SURFACE + CONTEXT).
-        # Prepend the static system prompt so the Ollama path gets the full instructions.
-        prompt = (
-            _CLASSIFICATION_SYSTEM_PROMPT
-            + "\n\n"
-            + _CLASSIFICATION_PROMPT_TEMPLATE.format(surface=surface[:200], context=context_text)
-        )
+
+        # F-SEC-006: build the dynamic SURFACE/CONTEXT turn via direct string
+        # concatenation rather than str.format().  This avoids a KeyError if the
+        # surface or context contains a literal '{' or '}' character (e.g. from a
+        # news headline like "Revenue: {Q3 outlook}").  str.format() interprets
+        # such characters as placeholder delimiters and raises KeyError on them.
+        # Direct concatenation is immune to brace content in user-supplied strings.
+        user_turn = 'SURFACE: "' + surface[:200] + '"\nCONTEXT: "' + context_text + '"'
+
+        # _CLASSIFICATION_SYSTEM_PROMPT is the static prefix for the Ollama path.
+        # Prepend it to the dynamic user turn to build the full single-prompt string.
+        prompt = _CLASSIFICATION_SYSTEM_PROMPT + "\n\n" + user_turn
 
         # DeepInfra path: use OpenAI-compatible chat completions when api_key is set.
         # Pass the dynamic user content separately so the method can split system/user
         # messages for prompt_cache optimisation without fragile string-splitting.
         if api_key:
-            user_content = _CLASSIFICATION_PROMPT_TEMPLATE.format(
-                surface=surface[:200],
-                context=context_text,
-            )
+            user_content = user_turn
             return await self._phase2_llm_classify_external(
                 mention, user_content, api_key, api_base_url, api_model_id, timeout_s
             )
@@ -727,15 +730,19 @@ class UnresolvedResolutionWorker:
                     is_entity = False
                 reason: str | None = str(parsed.get("reason", "")) or None
             except (json.JSONDecodeError, KeyError, ValueError) as parse_exc:
-                # F-103 fix: log the raw LLM response (truncated) so future
-                # failures are diagnosable instead of opaque "json_parse_failure".
-                # Prior implementation discarded `raw` entirely — see
-                # docs/audits/2026-04-30-investigation-platform-stability-followups.md.
+                # F-SEC-004: the raw LLM response may contain PII scraped from
+                # news article content.  We no longer log raw[:500] at WARNING.
+                # Instead we log a SHA-256 prefix (first 16 hex chars) so that
+                # failures are still correlatable across log lines without
+                # exposing the underlying text.  raw_response_length gives the
+                # size diagnostic that helped catch truncation bugs previously.
+                raw_hash = hashlib.sha256((raw if isinstance(raw, str) else repr(raw)).encode()).hexdigest()[:16]
                 logger.warning(
                     "unresolved_resolution_json_parse_failure",
                     mention_id=str(mention.mention_id),
                     surface=mention.mention_text[:80] if mention.mention_text else None,
-                    raw=raw[:500] if isinstance(raw, str) else repr(raw)[:500],
+                    raw_hash=raw_hash,
+                    raw_response_length=len(raw) if isinstance(raw, str) else 0,
                     error=str(parse_exc),
                     provider="ollama",
                 )
@@ -838,12 +845,15 @@ class UnresolvedResolutionWorker:
                 is_entity = False
             reason: str | None = str(parsed.get("reason", "")) or None
         except (json.JSONDecodeError, KeyError, ValueError) as parse_exc:
-            # F-103 fix: surface the raw LLM response so failures are diagnosable.
+            # F-SEC-004: same PII-safe logging pattern as the Ollama path.
+            # SHA-256 prefix (16 hex chars) is correlatable without leaking content.
+            raw_hash = hashlib.sha256((raw if isinstance(raw, str) else repr(raw)).encode()).hexdigest()[:16]
             logger.warning(
                 "unresolved_resolution_json_parse_failure",
                 mention_id=str(mention.mention_id),
                 surface=mention.mention_text[:80] if mention.mention_text else None,
-                raw=raw[:500] if isinstance(raw, str) else repr(raw)[:500],
+                raw_hash=raw_hash,
+                raw_response_length=len(raw) if isinstance(raw, str) else 0,
                 error=str(parse_exc),
                 provider="deepinfra",
             )
