@@ -139,10 +139,12 @@ async def test_service_token_happy_path_mints_jwt() -> None:
     assert isinstance(body["access_token"], str) and body["access_token"]
 
     # Decode with the gateway's public key — verifies RS256 signature.
+    # DEF-002: tokens carry aud="worldview-internal".
     claims = jwt.decode(
         body["access_token"],
         app.state.rsa_public_key,
         algorithms=["RS256"],
+        audience="worldview-internal",
         options={"require": ["iss", "sub", "exp"]},
         issuer="worldview-gateway",
     )

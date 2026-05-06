@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import hmac
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Annotated
-
-if TYPE_CHECKING:
-    from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeighborhoodUseCase
+from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +13,7 @@ from knowledge_graph.application.ports.claim_repository import ClaimRepositoryPo
 from knowledge_graph.application.ports.event_repository import EventRepositoryPort
 from knowledge_graph.application.ports.relation_summary_repository import RelationSummaryRepositoryPort
 from knowledge_graph.application.ports.temporal_event_repository import TemporalEventRepositoryPort
+from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeighborhoodUseCase
 from knowledge_graph.application.use_cases.dlq_admin import DLQAdminUseCase
 from knowledge_graph.application.use_cases.get_entity_detail import GetEntityDetailUseCase
 
@@ -192,16 +190,16 @@ def get_cypher_bundle(session: DbSessionDep, request: Request) -> _CypherBundle:
 CypherBundleDep = Annotated[_CypherBundle, Depends(get_cypher_bundle)]
 
 
-def _get_cypher_neighborhood_uc() -> CypherNeighborhoodUseCase:
-    """Lazy factory to avoid module-level import of AGE use case.
+def get_cypher_neighborhood_uc() -> CypherNeighborhoodUseCase:
+    """Depends() factory for CypherNeighborhoodUseCase (R25 / DEF-015 compliance).
 
-    Returns a fresh CypherNeighborhoodUseCase instance.  The lazy import ensures
-    the AGE use case module is only loaded on depth>1 requests, not on every
-    import of the dependencies module.
+    Routes must inject via CypherNeighborhoodUseCaseDep — never instantiate
+    CypherNeighborhoodUseCase directly inside a route handler.
     """
-    from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeighborhoodUseCase
-
     return CypherNeighborhoodUseCase()
+
+
+CypherNeighborhoodUseCaseDep = Annotated[CypherNeighborhoodUseCase, Depends(get_cypher_neighborhood_uc)]
 
 
 # ── R25-compliant repo factories for claims / events / search routes ──────────

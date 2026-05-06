@@ -45,6 +45,21 @@ _DEFAULT_ESTIMATED_OUTPUT_TOKENS = 120
 # Regex to strip Qwen3 / DeepSeek thinking blocks
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
+# PRD-0073 §12 (F-SEC-02 / F-S01 / F-A05): sanitize entity name before prompt insertion.
+# Mirrors ``prompts.knowledge.entity_enrichment.sanitize_entity_name`` (kept inline to
+# avoid adding ``prompts`` as an ml-clients runtime dependency). Strips ASCII control
+# characters (\x00-\x1f), DEL (\x7f), and angle brackets (< >) so a malicious
+# ``canonical_name`` cannot close the surrounding ``<entity>`` delimiter or break out
+# with ``\n\nIgnore previous instructions``-style payloads.
+_NAME_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f<>]")
+_NAME_MAX_LEN = 200  # matches sanitize_entity_name cap
+
+
+def _sanitize_entity_name(name: str) -> str:
+    """Strip control chars + angle brackets and cap at 200 chars (PRD-0073 §12)."""
+    return _NAME_CONTROL_CHAR_RE.sub("", name)[:_NAME_MAX_LEN]
+
+
 # System prompt — static across all calls so DeepInfra can KV-cache it.
 # Structured as: role → output format → anti-hallucination rules → examples.
 # Examples follow the EODHD company-description style (factual, present-tense,
@@ -362,10 +377,20 @@ class DeepInfraDescriptionAdapter:
 
 
 def _build_prompt(canonical_name: str, entity_type: str, context_hints: dict[str, str]) -> str:
-    """Build the user-turn entity request. The system prompt supplies task + examples."""
-    safe_name = canonical_name[:256]
+    """Build the user-turn entity request. The system prompt supplies task + examples.
+
+    PRD-0073 §12 (F-SEC-02 / F-S01 / F-A05): the ``canonical_name`` originates from
+    upstream extraction (EODHD scrapes / NLP pipeline) and is therefore untrusted.
+    We strip control characters + angle brackets via ``_sanitize_entity_name`` and
+    wrap the result in ``<entity>...</entity>`` delimiters so the LLM treats the
+    contents as data rather than instructions. ``entity_type`` is constrained to a
+    fixed enum upstream but is also length-capped defensively. Context-hint values
+    are length-capped per key/value to bound prompt size.
+    """
+    safe_name = _sanitize_entity_name(canonical_name)
     safe_type = entity_type[:64]
     # Append context hints inline so the model has ticker/exchange/ISIN when available.
     hints_str = "; ".join(f"{k[:64]}: {str(v)[:256]}" for k, v in context_hints.items()) if context_hints else ""
     context_part = f"; {hints_str}" if hints_str else ""
-    return f"Write a description for: {safe_name} (entity_type: {safe_type}{context_part})"
+    # Wrap the (untrusted) name in <entity> delimiters per PRD-0073 §12.
+    return f"Write a description for: <entity>{safe_name}</entity> (entity_type: {safe_type}{context_part})"

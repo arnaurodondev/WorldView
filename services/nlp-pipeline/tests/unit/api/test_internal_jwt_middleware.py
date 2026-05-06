@@ -31,12 +31,14 @@ def _make_token(
     role: str = "user",
     iss: str = "worldview-gateway",
     exp_offset: int = 3600,
+    aud: str = "worldview-internal",
 ) -> str:
     payload = {
         "sub": sub,
         "tenant_id": tenant_id,
         "role": role,
         "iss": iss,
+        "aud": aud,  # DEF-002: audience claim required by middleware
         "exp": int(time.time()) + exp_offset,
     }
     return jwt.encode(payload, private_key, algorithm="RS256")
@@ -197,6 +199,7 @@ async def test_jti_first_use_accepted() -> None:
             "tenant_id": "tenant-abc",
             "role": "user",
             "iss": "worldview-gateway",
+            "aud": "worldview-internal",  # DEF-002: required by middleware
             "jti": "nlp-jti-first-use",
             "exp": 9999999999,
         },
@@ -253,6 +256,7 @@ async def test_jti_replay_rejected_when_check_enabled() -> None:
             "tenant_id": "tenant-abc",
             "role": "user",
             "iss": "worldview-gateway",
+            "aud": "worldview-internal",  # DEF-002: required by middleware
             "jti": "nlp-replayed-jti",
             "exp": 9999999999,
         },
@@ -317,6 +321,7 @@ async def test_jti_replay_allowed_when_check_disabled() -> None:
             "tenant_id": "tenant-abc",
             "role": "user",
             "iss": "worldview-gateway",
+            "aud": "worldview-internal",  # DEF-002: required by middleware
             "jti": "nlp-replay-disabled-jti",
             "exp": 9999999999,
         },

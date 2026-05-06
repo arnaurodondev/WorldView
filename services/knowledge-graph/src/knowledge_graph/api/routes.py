@@ -19,7 +19,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, HTTPException, Query
 
-from knowledge_graph.api.dependencies import CypherBundleDep, EntityGraphReposDep, _get_cypher_neighborhood_uc
+from knowledge_graph.api.dependencies import CypherBundleDep, CypherNeighborhoodUseCaseDep, EntityGraphReposDep
 from knowledge_graph.api.schemas import (
     EntitySummary,
     GraphNeighborhoodResponse,
@@ -159,6 +159,7 @@ async def get_entity_graph(
     entity_id: UUID,
     repos: EntityGraphReposDep,
     cypher: CypherBundleDep,
+    cypher_uc: CypherNeighborhoodUseCaseDep,
     min_confidence: float = Query(default=0.0, ge=0.0, le=1.0),
     semantic_mode: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
@@ -177,14 +178,14 @@ async def get_entity_graph(
     ``evidence_snippets_limit`` controls how many evidence text snippets are
     returned per relation (default 3, max 10).  Evidence and summaries are
     fetched via single batch queries (no N+1).
+
+    ``cypher_uc`` is injected via Depends(get_cypher_neighborhood_uc) so this route
+    never imports from the infrastructure layer directly (R25 / DEF-015 compliance).
     """
     if depth > 1 and cypher.cypher_enabled:
-        # depth>1: delegate to AGE Cypher neighborhood use case via the
-        # dependency factory.  _get_cypher_neighborhood_uc() holds the lazy
-        # import so this route file never imports from the infrastructure layer
-        # directly (R25 / IG-LAYER-002 compliance).
+        # depth>1: delegate to AGE Cypher neighborhood use case injected via DI.
         try:
-            result = await _get_cypher_neighborhood_uc().execute(
+            result = await cypher_uc.execute(
                 cypher.session,
                 cypher.entity_repo,  # type: ignore[arg-type]
                 cypher.relation_repo,  # type: ignore[arg-type]

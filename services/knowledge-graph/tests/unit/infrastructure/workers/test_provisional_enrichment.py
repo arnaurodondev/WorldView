@@ -897,7 +897,7 @@ class TestNoiseFilters:
             (UUID("01234567-89ab-7def-8012-000000000002"), "ANALYSTS", "financial_instrument", "", 0),
         ]
 
-        l1, l2, remaining = await worker._run_noise_filters(rows)
+        l1, _l2, remaining = await worker._run_noise_filters(rows)
 
         assert len(l1) == 1
         assert remaining == []

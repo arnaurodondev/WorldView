@@ -12,7 +12,7 @@ import structlog
 from fastapi import APIRouter, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse  # type: ignore[import-not-found]
 
-from rag_chat.api.dependencies import AuthContextDep, UoWDep
+from rag_chat.api.dependencies import AuthContextDep, UoWDep, make_write_uow
 from rag_chat.api.schemas import ChatRequestSchema, ChatResponse
 from rag_chat.domain.errors import (
     InsufficientRetrievalError,
@@ -114,14 +114,14 @@ async def chat_stream(
     emitter = SSEEmitter()
 
     async def event_generator() -> AsyncGenerator[dict[str, str], None]:
-        # WHY local import inside nested function: R25 says routes must not import
-        # from infrastructure/ at module level. A local import inside an async
-        # generator is the established pattern in this codebase (see dependencies.py).
-        from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork as _RagUoW
-
-        # Create a fresh UoW scoped to the generator lifetime — this is the only
-        # place where the UoW is alive at the moment execute_streaming() persists.
-        async with _RagUoW(request.app.state.write_factory) as uow:
+        # WHY make_write_uow() instead of UoWDep: FastAPI closes yield-based
+        # dependencies when the route function returns. EventSourceResponse iterates
+        # the generator AFTER return — the UoW would already be torn down before
+        # execute_streaming() persists ("RagUnitOfWork not entered", AssertionError).
+        # make_write_uow() is a factory from dependencies.py (application layer) that
+        # defers the infrastructure import — R25 compliant; no import from infrastructure/
+        # at module level or inside this route file.  (DEF-026)
+        async with make_write_uow(request) as uow:
             try:
                 async for event in orchestrator.execute_streaming(chat_req, uow):
                     yield event

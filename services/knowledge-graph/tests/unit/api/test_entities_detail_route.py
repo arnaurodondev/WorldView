@@ -17,7 +17,9 @@ from uuid import UUID, uuid4
 
 import pytest
 
-pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
+# asyncio_mode = "auto" is set in services/knowledge-graph/pyproject.toml (F-Q16),
+# so pytest.mark.asyncio is redundant here — only keep the unit marker.
+pytestmark = [pytest.mark.unit]
 
 _NOW = datetime(2026, 5, 1, 2, 0, 0, tzinfo=UTC)
 _ENTITY_ID = UUID("01900000-0000-7000-8000-000000000002")
@@ -135,12 +137,28 @@ class TestEntityDetailEndpoint:
         resp = await api_client.get(f"/api/v1/entities/{_ENTITY_ID}")
 
         assert resp.status_code == 200
-        meta = resp.json()["metadata"]
+        body = resp.json()
+        meta = body["metadata"]
         assert meta["sector"] == "Technology"
         assert meta["industry"] == "Consumer Electronics"
         assert meta["employee_count"] == 164000
         assert meta["founded_year"] == 1976
         assert meta["headquarters_city"] == "Cupertino"
+
+        # F-Q15: enriched_at must serialise as an ISO-8601 string and
+        # data_completeness must be a float.  The previous metadata-fields test only
+        # checked the metadata dict, missing top-level field type contracts.
+        assert isinstance(body["enriched_at"], str)
+        # ISO-8601 UTC must include 'T' between date+time and end with a tz marker.
+        assert "T" in body["enriched_at"]
+        assert (
+            body["enriched_at"].endswith("Z")
+            or "+" in body["enriched_at"]
+            or body["enriched_at"].endswith(
+                "+00:00",
+            )
+        )
+        assert isinstance(body["data_completeness"], float)
 
         api_app.dependency_overrides.pop(get_entity_detail_uc, None)
 

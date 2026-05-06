@@ -35,7 +35,7 @@ async def main() -> None:
         UnresolvedResolutionWorker,
     )
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     configure_logging(
         service_name="nlp-pipeline-unresolved-resolution-worker",
         level=settings.log_level,

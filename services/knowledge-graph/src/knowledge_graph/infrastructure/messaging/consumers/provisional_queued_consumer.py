@@ -36,9 +36,14 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     UnitOfWorkProtocol,
 )
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
+from messaging.topics import (  # type: ignore[import-untyped]
+    ENTITY_DIRTIED as _ENTITY_DIRTIED_TOPIC,
+)
+from messaging.topics import (
+    ENTITY_PROVISIONAL_QUEUED as _PROVISIONAL_QUEUED_TOPIC,
+)
 from observability import get_logger  # type: ignore[import-untyped]
 
-_PROVISIONAL_QUEUED_TOPIC = "entity.provisional.queued.v1"
 _PROVISIONAL_QUEUED_SCHEMA_PATH = get_schema_path("entity.provisional.queued.v1.avsc")
 
 if TYPE_CHECKING:
@@ -94,7 +99,7 @@ class ProvisionalQueuedConsumer(BaseKafkaConsumer[None]):
         *,
         embed_model_id: str = "bge-large:latest",
         max_retries: int = _DEFAULT_MAX_RETRIES,
-        entity_dirtied_topic: str = "entity.dirtied.v1",
+        entity_dirtied_topic: str = _ENTITY_DIRTIED_TOPIC,
         direct_producer: DirectProducerProtocol | None = None,
         dedup_client: Any | None = None,
     ) -> None:

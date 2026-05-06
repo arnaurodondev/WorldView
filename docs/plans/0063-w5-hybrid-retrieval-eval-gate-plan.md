@@ -2,14 +2,19 @@
 id: PLAN-0063
 prd: docs/specs/0034-mvp-launch-readiness-program.md
 prd_section: "§3 Tier 1 — FR-T1-2; §6 Workstream W5; §7 Sprint Calendar Week 3"
-title: "W5 — Hybrid Retrieval (BM25 + ANN + RRF) + Golden Eval CI Gate"
+title: "W5 — Retrieval Substrate + L1 Eval Foundation (Hybrid ANN+BM25+RRF + Adaptive Lexical + Contextual-Retrieval Experiment)"
 status: draft
 created: 2026-05-03
-updated: 2026-05-03
+updated: 2026-05-05
 plans: 1
-waves: 5
-tasks: 16
-critical_path: "W5-1 → W5-2 → W5-3 → W5-4 → W5-5"
+waves: 7
+tasks: 24
+critical_path: "Stage 0 sanity → W5-1 (eval infra, gate disabled) → W5-2 (hybrid schema) → W5-3 (hybrid use-case + baseline captured + gate enabled) → W5-4 → W5-5; W5-6 parallel after W5-2; W5-7 (contextual experiment) gated on W5-3 baseline"
+follow_on_plan: "PLAN-0075 — Layered Answer-Quality Eval (L2 tool-selection + L3 answer-quality + L4 operational + UI feedback loop). Depends on PLAN-0067 W11-3."
+revision_history:
+  - 2026-05-03: initial draft (5 waves, 16 tasks)
+  - 2026-05-05: revision v1 — rebalanced 60-query golden set, added W5-6/W5-7/W5-8, locked Option A sequencing
+  - 2026-05-05: revision v2 (SUPERSEDES v1) — split eval framework into 4 layers (L1 here, L2/L3/L4 → PLAN-0075); 120-query stratified dataset; precomputed query embeddings; setweight + dual english/simple tsvector + canonical tickers boost in W5-2; baseline captured at POST-hybrid (W5-3), not pre-hybrid; CI gate scaffolded W5-1 (run-only) and enabled W5-3; classifier dropped from runtime entirely; ingestion bench gains regression thresholds; Qwen-vs-Llama qualitative spike for W5-7 contextual model selection; old W5-7 (intent observability + UI feedback) moved to PLAN-0075.
 ---
 
 # PLAN-0063 — W5: Hybrid Retrieval + Golden Eval CI Gate
@@ -60,6 +65,344 @@ These decisions resolve audit findings B-3, B-1, B-2, and the W4↔W5 citation-g
    - `document_type` lives in the `DOCUMENT_TYPE_SIGNAL` dict at `services/nlp-pipeline/src/nlp_pipeline/application/blocks/routing.py:43` with per-source-type values.
    - **The originally-drafted T-W5-4-03 (replace "hardcoded 0.5" with new in-code dicts) was based on a stale model and is DROPPED.** Promotion of these in-code values to a config file or DB-driven seeding is deferred to §15 Follow-ups; revisit only if routing-tuning empirical evidence requires it.
 6. **Baseline-first NDCG target** = the +0.05 NDCG@10 absolute-lift target advertised in PRD-0034 §3 FR-T1-2 was set before any baseline existed. **W5-1's first sub-task (T-W5-1-00) establishes the baseline number against the labelled golden set**; the +0.05 lift target is then expressed as **relative to that recorded baseline number** (i.e. `post_hybrid_ndcg ≥ recorded_baseline_ndcg + 0.05`). The CI gate (T-W5-1-04) reads the baseline file and **fails the build if the baseline file is missing or unreadable**. This avoids "+0.05 lift over an empty set" gate semantics.
+
+---
+
+## 0-bis. Revision v2 (2026-05-05) — SUPERSEDES Revision v1; AUTHORITATIVE
+
+**This block is the single source of truth for PLAN-0063.** Where any wave body below conflicts with this block, this block wins. Revision v1 (the now-superseded scope-expansion block) listed below in §0-ter is preserved for traceability only — do not implement against it.
+
+**`/implement` directive**: when starting any wave in this plan, read §0-bis v2 first; treat the wave bodies as supplementary detail where they don't conflict. New tasks introduced in v2 (T-W5-1-spike sanity, T-W5-1-05 precomputed embeddings, T-W5-2-03 dual tsvector, T-W5-2-04 canonical tickers, T-W5-3-05 boost sweep, T-W5-7-01b Qwen spike) are first-class and authoritative.
+
+### 0-bis.0 Locked Decisions (v2)
+
+The following decisions are LOCKED. Any change requires a new revision block; do not re-litigate during `/implement`.
+
+| # | Decision | Rationale |
+|---|---|---|
+| L1 | **Eval is a 4-layer framework**: L1 retrieval (this plan), L2 tool-selection (PLAN-0075), L3 answer-quality (PLAN-0075), L4 operational (PLAN-0075). | Bloomberg-class product needs end-to-end answer eval, not just chunk retrieval. PLAN-0067 tool-calling reshapes what "retrieval" means. |
+| L2 | **Sequencing**: Stage-0 sanity → PLAN-0063 narrow scope → PLAN-0074/0067/omnibus run in parallel → PLAN-0075 once tool-calling is live and users onboard → PLAN-0063 W5-7 contextual experiment last. | Pre-hybrid baseline against an untested pipeline is performative. Anchor baseline to first deliberately-built version (post-hybrid). |
+| L3 | **Baseline anchored at POST-hybrid (W5-3)**, not pre-hybrid. CI gate disabled in W5-1, enabled in W5-3. | The "+0.05 lift over ANN-only" gate as a CI requirement is REMOVED. ANN-only vs hybrid delta is documented once in W5-3 PR for context, then the post-hybrid number becomes the reference. |
+| L4 | **Classifier dropped from runtime entirely**. Code retained in repo for offline batch analytics on `routing_observations` rows. | LLM tool-calling (PLAN-0067) is the source of truth for routing. Hard intent gates introduce brittleness. |
+| L5 | **Query embeddings precomputed** in `tests/eval/golden/query_embeddings.parquet`. CI cost: $0/run. `/v1/internal/retrieve` accepts `query_embedding: list[float]` directly. Drift guard via `query_text_sha256` + `model_revision`. | Deterministic CI; no external-API dependency in the gate path. |
+| L6 | **120-query golden set, stratified per §0-bis.4**. Per-class minimum n=4, gated classes ≥6. Sub-stratification tags per row. | Honors PMF-uncertainty (non_analyst class is 12, not 2). Identifier-class is 12 with sub-strata for prd_id/filing_type/ticker_isin_cik/function_name/error_code/date_quarter. |
+| L7 | **Tsvector design**: GENERATED ALWAYS AS STORED (kept). **W5-2 ships `setweight` immediately** (title=A, section=B, body=D); contextual_description (weight C) added in W5-7. **Dual tsvector**: `tsv_english` (stemmed) + `tsv_simple` (no stem, for identifier exact-match). Both GIN-indexed. | Pay setweight cost now, not later. `english`-only stemming hurts identifier_lookup class. |
+| L8 | **Canonical-tickers boost via DB lookup, not regex**. Cached in Valkey. | Regex `\b[A-Z]{2,5}\b` produces unacceptable false positives (CEO, USA, IPO). DB lookup is precise. |
+| L9 | **Adaptive lexical boost factor TUNED, not hardcoded**. The eval harness has a `--mode hybrid_boost_sweep` that picks the value maximising identifier_lookup NDCG@10 without regressing other classes by ≥0.02. Re-sweep quarterly. | Locking 1.5× without measurement is the kind of arbitrary lock that compounds. |
+| L10 | **Ingestion bench has REGRESSION THRESHOLDS** (W5-6). Triggers a follow-up wave/PR if breached. | Investigation-only without teeth = no change. Thresholds: single-row INSERT p99 > 100ms @ 100 chunks/s, OR retrieval p95 > 200ms during ingest, OR autovacuum > 1/min. |
+| L11 | **W5-3 deletes `_PlanFlags.use_hybrid_chunks` intent flag entirely**. Classical pipeline always-hybrid; tool-call pipeline picks per-tool. | Avoids scaffold-then-rebuild waste when PLAN-0067 W11-3 lands. |
+| L12 | **Contextual retrieval (W5-7) generation model decided by qualitative spike (T-W5-7-01b)**. 50 chunks × 2 models (Qwen3.5-0.8B + Llama-3.1-8B-Instruct-Turbo); blind 2-reviewer rating; lock Qwen iff Qwen mean ≥ 0.9 × Llama mean AND zero `1`-rated generations on numeric/multi-entity strata. | 10× parameter gap; cost difference ($0.40 on 50K corpus) too small to skip quality validation. |
+| L13 | **Selective contextual generation**: only chunks where `len(parent_doc) > 2000 chars OR doc has multiple sections`. Short news articles (≤1 chunk) skip generation entirely. | ~30% cost reduction on news-heavy corpus; short docs gain no signal from rewriting. |
+| L14 | **Stage 0 sanity check** (manual, ≤30 min): 5 representative questions through current rag-chat → confirm coherent answers. If not, that's a blocker before W5-1 starts. | Dev-mode pipeline never tested; can't anchor to it without smoke check. |
+| L15 | **PLAN-0075 owns: L2/L3/L4 eval + UI feedback loop + `routing_observations` table + `chat_feedback` table**. User-facing chips use outcome language (no "tool" jargon). | Internal model triage maps user-language chips to eval layers offline. |
+| L16 | **L4 operational placeholder gates** (locked-in PLAN-0075 from W5-1 onwards as design targets, not enforced yet): p95 first-token < 1.5s, p95 final-token < 8s, $/turn < $0.02. | Refined when L4 actually ships in PLAN-0075; included now so retrieval-side tuning targets the right SLO. |
+
+---
+
+### 0-bis.0a Stage 0 Sanity Check (Pre-flight, mandatory before W5-1)
+
+Before any task in W5-1 starts, the implementing engineer (or `/implement` opening session) runs:
+
+1. Boot the dev stack (`make dev`) and confirm rag-chat is healthy.
+2. Send 5 questions through `POST /v1/chat/completions` (or the equivalent UI path):
+   - "What is Apple's iPhone Q4 guidance?"
+   - "Compare gross margins of NVDA vs AMD over the last 4 quarters."
+   - "What did Microsoft's CEO say about AI in the most recent earnings call?"
+   - "Who are TSMC's top customers?"
+   - "Summarise yesterday's market news."
+3. For each, qualitatively confirm: (a) the response is coherent (parses as English, no obvious LLM brain-fart), (b) at least one citation resolves to a real chunk, (c) the chosen retrieval path returned >0 results.
+4. If any of the five fails: STOP. Open a `fix-bug` workflow on the pipeline before proceeding with W5-1. Document the failure in TRACKING.md as blocking.
+5. If all five pass: append a Stage-0 record to `tests/eval/golden/README.md` with date, dev-stack git SHA, and the five Q+A snippets (≤200 chars each) so we have a "this worked at point X" anchor.
+
+This is **not a wave task** — it's a one-off pre-flight gate, included here so it doesn't get skipped.
+
+---
+
+### 0-bis.0b Wave Map (v2 — authoritative)
+
+| Wave | Title | Status (vs v1) | Baseline behaviour |
+|---|---|---|---|
+| W5-1 | Eval Infrastructure (4-layer framework documented; L1 implemented) | substantially expanded — adds T-W5-1-05 precomputed embeddings, drops baseline-capture from W5-1 | gate scaffolded but DISABLED |
+| W5-2 | Hybrid Schema: setweight + dual tsvector + canonical tickers cache | substantially expanded — adds T-W5-2-03 dual tsvector, T-W5-2-04 tickers Valkey cache; W5-2-01 schema is now `setweight(title=A, section=B, body=D)` immediately | — |
+| W5-3 | Hybrid Use-Case + RRF + Adaptive Lexical + Boost Sweep + **Baseline Capture + Gate Enable** | adds T-W5-3-05 boost sweep; deletes `_PlanFlags.use_hybrid_chunks` rather than wiring it; baseline captured here | **gate ENABLED from this commit forward** |
+| W5-4 | Recency + Routing-Tier Audit | unchanged from v1 | — |
+| W5-5 | Observability + Citation-Accuracy Cron | unchanged from v1 | — |
+| W5-6 | Ingestion Bench (with hard regression thresholds) | gains threshold gates per L10 | — |
+| W5-7 | Contextual Retrieval Experiment (renumbered from v1's W5-8) | adds T-W5-7-01b Qwen-vs-Llama spike; selective generation gate per L13 | gated experiment |
+| ~~W5-7 v1~~ | ~~Intent observability dataset~~ | **MOVED to PLAN-0075** | n/a |
+
+Critical path: **Stage-0 sanity → W5-1 → W5-2 → W5-3** (gate enabled here) **→ W5-4 → W5-5**. W5-6 parallel after W5-2. W5-7 gated on W5-3 baseline + W5-6 guidance.
+
+---
+
+### 0-bis.0c Plan Split: PLAN-0075 (follow-on)
+
+**PLAN-0075 — Layered Answer-Quality Eval (L2 tool-selection + L3 answer-quality + L4 operational + UI feedback loop)**.
+- Depends on: PLAN-0067 W11-2 (tool catalog), W11-3 (orchestrator).
+- Owns: L2/L3/L4 datasets, `routing_observations` table, `chat_feedback` table, UI 👍/👎 chips with outcome-language labels (the v1 W5-7 content lives there now).
+- Does NOT block PLAN-0063. Starts after PLAN-0067 W11-3 lands and user onboarding begins.
+
+Stub plan file: `docs/plans/0075-answer-quality-eval-framework-plan.md`. Tracking row added to `docs/plans/TRACKING.md` on this revision commit.
+
+---
+
+
+
+**Goals (revised — note retrieval QUALITY is now first-class, not just hybrid)**:
+1. **Measurement substrate first**: a labelled, balanced golden set + an HTTP-callable retrieval endpoint + a metrics script + a recorded ANN-only baseline + a CI gate that fails on regressions OR on a missing/unreadable baseline file. (W5-1, unchanged.)
+2. **Hybrid retrieval landed and measured**: tsvector + GIN + RRF, with explicit mode flags so we can evaluate `vector_only` / `lexical_only` / `hybrid` / `hybrid+rerank` independently, not just "ANN vs hybrid". (W5-2, W5-3 + adaptive lexical extension.)
+3. **Adaptive lexical**: a deterministic rare-token analyzer that boosts the lexical RRF score for queries containing identifiers, error codes, function names, dates, doc IDs, etc. (Wave W5-3 extension.)
+4. **Routing and recency hardening**: source-aware decay + routing-tier audit. (W5-4, unchanged.)
+5. **Observability and citation accuracy**: 4 Prometheus metrics + weekly LLM-as-judge cron. (W5-5, unchanged.)
+6. **Ingestion / index scalability investigation** (NEW W5-6): bench batched insert vs single-row vs `COPY`, GIN write amplification, p95/p99 insert and retrieval during sustained ingest. Document — do not yet productionise — backfill / `CREATE INDEX CONCURRENTLY` paths.
+7. **Intent-classifier dataset for ML routing + PLAN-0067 alignment** (NEW W5-7): keep the intent classifier as a soft signal + observability log; emit per-turn `(question, classifier_output, llm_chosen_tool, retrieved_chunks, answer, feedback, corrected_label)` rows so we can later train a smaller routing model. Joins PLAN-0067 W11-3 (tool-use orchestrator) and PLAN-0067 W11-4 (tool-use golden eval).
+8. **Contextual retrieval as a measurable experiment** (NEW W5-8, GATED on W5-3 baseline): generate a short LLM-written context string per chunk during ingestion; store separately; embed and `tsvector`-index the contextualized chunk; A/B against the post-hybrid baseline using the same eval harness. Decision criterion encoded as acceptance criteria — proceed to productionise only on ≥0.05 NDCG@10 lift over post-hybrid baseline AND <2× ingestion cost.
+
+**Non-Goals (revised)**:
+- Production-grade migrations, online backfills, `CREATE INDEX CONCURRENTLY`, zero-downtime rollouts. The repo currently has no persistent prod instance; dev/test recreate-from-scratch is the supported path. We document the future production path in W5-6 §"Future Production Path" but do not implement it.
+- Replacing the existing intent classifier with a learned model. W5-7 produces the dataset only; training is post-MVP.
+- Full reranker. The eval harness supports a `hybrid+rerank` mode flag (W5-3 extension) so that when a reranker lands later it can be measured against the same baseline; the reranker itself is not in this plan.
+- BM25 over articles/filings/transcripts at the search-product surface — that is **PLAN-0064 W6** (full-text search). W5 owns only the chunks lexical substrate. PLAN-0064 reads the same `tsv` column.
+
+### 0-bis.4-v2 Dataset Balance — Authoritative (120 queries, supersedes v1's 60)
+
+**Total: 120 queries.** Per-class minimum n=4; classes we make CI-gate claims on (NDCG@10 regression ≥0.05 fails) are ≥6.
+
+| `query_class` | n | Sub-stratification (in `query_subclass` field) |
+|---|---|---|
+| `factual_lookup` | 14 | `recent` / `historical` / `forward_guidance` |
+| `comparison` | 10 | `pair` / `cohort` (≥3 entities) |
+| `reasoning` | 10 | `causal` / `counterfactual` |
+| `financial_data` | 8 | `point_in_time` / `time_series` / `ratio_derived` |
+| `relationship` | 8 | `direct_1hop` / `indirect_2plus_hop` |
+| `signal_intel` | 7 | `sentiment` / `flow` / `unusual_activity` |
+| `general` | 6 | `daily_brief` / `topical` |
+| `portfolio` | 7 | `holdings` / `events` / `risk` |
+| `identifier_lookup` | **12** | `prd_id` (2) / `filing_type` (2) / `ticker_or_isin_or_cik` (3) / `function_or_class_name` (2) / `error_or_bp_code` (2) / `date_quarter` (1) |
+| `ambiguous` | 6 | `entity_ambiguous` / `time_ambiguous` / `pronoun_no_anchor` |
+| `non_analyst` | **12** | `screener_style` (3) / `geo_filter` (2) / `theme_search` (3) / `casual_browse` (2) / `operator_dev_query` (2) |
+| `adversarial_or_out_of_scope` | 6 | `out_of_scope` (2) / `decision_support_deflection` (2) / `prompt_injection` (1) / `nonsense` (1) |
+| `time_anchored_edge` | 4 | `today` / `last_week` / `last_quarter` / `since_event` |
+| **Total** | **120** | — |
+
+**Schema field additions** (all queries):
+- `query_class` (string, required) — gating axis (replaces v1 `intent` as the gating field; legacy `intent` retained for diagnostic only)
+- `query_subclass` (string, required) — sub-stratum
+- `phrasing_audit` (bool, required) — passed analyst-vs-non-analyst phrasing review
+- `label_review` (object, required) — `{reviewer_id_a, reviewer_id_b, reviewed_at_utc, agreement_notes}`
+- `expected_grade_3_count` (int, required, ≥1) — at least one row in `relevant_doc_ids` must be relevance=3
+
+**Maintenance discipline** (codified in `tests/eval/golden/README.md` per W5-1 acceptance):
+- Every PR modifying `queries.jsonl` requires 2 reviewers from `eval-stewards` group (CODEOWNERS).
+- Quarterly 10% blind re-grade rotation to detect rater drift.
+- Live-traffic backflow (post-PLAN-0075): every quarter, sample 10 thumbs-down + 10 thumbs-up + 10 random from `chat_feedback`, anonymize, label, append. Target: 200 by Q3, 400 by year-end.
+- Adversarial backflow: thumbs-down rows with `wrong_information` reason → faithfulness golden (PLAN-0075 L3); `didnt_answer_my_question` → tool-selection golden (PLAN-0075 L2).
+- Deprecation: queries scoring >0.95 across all metrics for 2 consecutive quarters retire (no longer informative).
+
+---
+
+### 0-bis-legacy. Revision v1 sections (SUPERSEDED 2026-05-05; traceability only)
+
+**The subsections below (§0-bis.2 through §0-bis.14) are REVISION v1 and have been superseded by §0-bis.0..0c and §0-bis.4-v2 above.** Do not implement against them. They remain in the file only so that the revision history is auditable. Where v1 and v2 disagree, v2 wins.
+
+### 0-bis.2 Sequencing Decision — **Option A** (locked)
+
+**Decision**: Build the eval harness first, capture ANN-only baseline, land hybrid + adaptive lexical, measure all four modes (`vector_only` / `lexical_only` / `hybrid` / `hybrid+rerank-stub`), then run contextual retrieval as a gated experiment. **Do not block on PLAN-0067**.
+
+**Rationale**:
+- PLAN-0067 (tool-calling) and PLAN-0063 (retrieval quality) are orthogonal: PLAN-0067 changes *which* tool the LLM picks; PLAN-0063 changes *what each retrieval tool returns*. Better tool-calling on top of poor retrieval still returns poor chunks. Better retrieval helps both the classical pipeline (today) and the tool-call pipeline (PLAN-0067 W11-3) once it lands.
+- Every later change (PLAN-0067 tool routing, contextual retrieval, reranker) needs the same eval substrate. Building the substrate first is irreducible work.
+- The only place the two plans collide is the **eval golden set** and the **observability log** (W5-7). Both are designed in W5 to be reusable by PLAN-0067 W11-4.
+
+**Cross-plan dependency** (PLAN-0067):
+- PLAN-0063 W5-1 produces `tests/eval/golden/queries.jsonl` and `scripts/eval_retrieval.py`. PLAN-0067 W11-4-01 ("Tool-use golden eval, 20 queries") reuses the same JSONL schema and the same script (extended with a `--mode tool-use` flag and a parallel `tests/eval/golden/tool_use_queries.jsonl`).
+- PLAN-0063 W5-7 produces the per-turn observability log table. PLAN-0067 W11-3-02 (tool-use orchestrator) writes into the same table.
+
+### 0-bis.3 Evaluation Framework — Locked Answers
+
+| Question | Answer |
+|---|---|
+| Canonical golden dataset path? | **Yes**, `tests/eval/golden/queries.jsonl`. Schema documented in `tests/eval/golden/README.md` (W5-1-01 acceptance criterion, unchanged). |
+| Schema? | One JSON object per line; fields: `query_id`, `query_text`, `intent`, `entity_ids[]`, `relevant_doc_ids[{doc_id, relevance, rationale}]`, `notes`, plus new revision-2026-05-05 fields: `query_class` (one of `factual_lookup` / `comparison` / `reasoning` / `portfolio` / `financial_data` / `relationship` / `signal_intel` / `general` / `identifier_lookup` / `ambiguous` / `non_analyst`), `phrasing_audit` (bool), `label_review` (`{reviewer, reviewed_at_utc, status}`). The legacy `intent` field is preserved for backward compatibility but `query_class` is the gating axis from W5-1 onward. |
+| Binary or graded labels? | **Graded**, 0/1/2/3 (already specified, kept). Graded is required for NDCG; binary is recoverable from graded by thresholding. |
+| Gating vs diagnostic metrics? | **Gating**: NDCG@10 (global), NDCG@10 per `query_class`. **Diagnostic** (do not gate but report): MRR, P@5, Recall@20, latency p50/p95/p99, source contribution counts. |
+| CI behaviour | (a) Fail on global NDCG@10 regression ≥0.03 absolute; (b) fail on per-class NDCG@10 regression ≥0.05 absolute on any class; (c) fail if `results/baseline_pre_hybrid.json` is missing or unreadable; (d) `[skip-eval]` keyword bypass; (e) every passing run uploads `results/eval_<ts>.json` as a GHA artifact for human review. |
+| How are query embeddings produced for the eval? | **Locked**: the eval calls the live `POST /v1/internal/retrieve` endpoint over HTTP (already in T-W5-1-00). The endpoint runs the production embedding adapter (DeepInfra `BAAI/bge-large-en-v1.5`, falling back to the local Ollama `bge-large` only if `DEEPINFRA_API_KEY=""`). This means **CI runs the real embedding provider**. To control cost and CI stability we cap the eval at 50 queries × 1 call/query = 50 embeddings/run (~$0.001 at DeepInfra rates) and the workflow caches the embedding response keyed by `(model_id, sha256(query_text))` in a GHA cache layer; cache hit means zero $ on most CI runs. **Repository-only unit tests in `tests/scripts/test_eval_retrieval.py` mock the HTTP endpoint** — they do not need real embeddings to test the metric functions. **Local deterministic embedding model** is rejected as adding ML dependency to CI; **precomputed fixtures** are rejected as too brittle to model changes; **mocked embeddings** are used for unit tests only. |
+| Reproducibility | The committed `results/baseline_pre_hybrid.json` records `{git_sha, embedding_model_id, model_revision, captured_at_utc}`. Any change to the embedding model triggers a re-baseline (documented in §0 cross-plan decision #6 and W5-1-03 sanity check). |
+
+### 0-bis.4 Dataset Balance — Revised Distribution (replaces W5-1-01 intent block)
+
+The original distribution (16 FACTUAL_LOOKUP / 10 COMPARISON / 10 REASONING / 6 FINANCIAL_DATA / 4 RELATIONSHIP / 2 SIGNAL_INTEL / 2 PORTFOLIO) was tuned to "Sam the Analyst" persona. We have **not yet found product-market fit**; assuming a single persona biases the dataset and the model. Revised distribution adds explicit space for identifier-style queries (the strongest argument for hybrid), ambiguous queries (a reranker / tool-calling stress test), and non-analyst workflows (PM, recruiter-style discovery, dev/operator workflow).
+
+**Revised distribution — 60 queries total** (golden set grows from 50 → 60 to fit the new classes without starving existing ones):
+
+| `query_class` | n | Examples |
+|---|---|---|
+| `factual_lookup` | 12 | "What is Apple's iPhone Q4 guidance?" |
+| `comparison` | 8 | "Compare gross margins of NVDA vs AMD over the last 4 quarters." |
+| `reasoning` | 8 | "Why did Boeing's bond spreads widen in March?" |
+| `portfolio` | 4 | "Which of my holdings have earnings next week?" |
+| `financial_data` | 6 | "What was MSFT's revenue Q3 2025?" |
+| `relationship` | 4 | "Who are TSMC's top customers?" |
+| `signal_intel` | 4 | "Which sectors had the most negative sentiment last week?" |
+| `general` | 4 | "What's interesting in the market today?", "Summarise yesterday's news." |
+| **NEW** `identifier_lookup` | 6 | "PRD-0034", "FR-T1-2", "BP-235", "8-K", "CIK 0000320193", "AAPL", "ISIN US0378331005" |
+| **NEW** `ambiguous` | 2 | "apple revenue" (ambiguous co. vs fruit; ambiguous quarter), "what about Tesla?" (no anchor) |
+| **NEW** `non_analyst` | 2 | "Show me companies expanding in Vietnam" (PM / discovery), "Find recent earnings beats with rising guidance" (screener-style — non-analyst workflow) |
+
+**Class-vs-intent mapping**: `query_class` is a finer axis than the existing `intent`. The W5-1-02 script reports NDCG@10 broken down by **both** `query_class` (gating) and `intent` (diagnostic) so we keep continuity with the intent classifier in S6.
+
+**Dataset maintenance procedure** (NEW):
+- **Labelling cadence**: bi-weekly review of any new queries added; quarterly re-grading of existing queries (snippets shift as new docs land — graded relevance is anchored to docs not snippets, but verify).
+- **Inter-rater check**: every new query has 2 reviewers; if disagreement on max-grade-row >1 grade, escalate to a third reviewer; record reviewer ids on the row's `label_review` field.
+- **Rotation**: 10% of queries are re-graded blind every quarter to detect rater drift.
+- **Backlog file**: `tests/eval/golden/_backlog.jsonl` holds replacement queries for any dropped from the primary set.
+- **PR rules**: any PR that modifies `queries.jsonl` MUST include a "Label rationale" section in the PR body and tag two reviewers from `.claude/codeowners-eval` (file added in W5-1-01).
+
+### 0-bis.5 Intent Classifier vs Tool-Calling — Locked Decision
+
+**Decision**: Keep the intent classifier as **(a) a soft pre-classifier for cost/latency control + (b) an observability log**, NOT a hard routing gate.
+
+Rationale:
+- PLAN-0067 makes the LLM the source of truth for which tool to call. A hard intent gate before tool-calling would override the LLM's judgement and re-introduce the brittleness PLAN-0067 was built to remove.
+- BUT, the classifier still earns its keep on two axes: (i) cheap fast-path (e.g. trivially route a `general` greeting to a tiny "respond" path without calling tools); (ii) rich observability — every turn we record what the classifier *would* have routed to vs what the LLM tool-call layer actually picked. This produces training data for a future small ML router.
+
+Concretely:
+- W5-3 keeps `_PlanFlags.use_hybrid_chunks` as an intent-aware mapping (FACTUAL_LOOKUP/COMPARISON/REASONING/RELATIONSHIP/FINANCIAL_DATA/GENERAL → hybrid; SIGNAL_INTEL/PORTFOLIO → ANN-only). This is for the classical pipeline (still in use until PLAN-0067 W11-3 ships).
+- W5-7 (NEW) introduces a `routing_observations` table in `intelligence_db` that captures per-turn `(turn_id, user_question, classifier_intent, classifier_confidence, llm_chosen_tool[], retrieved_chunk_ids[], answer_quality, feedback_thumbs, corrected_label)`. PLAN-0067 W11-3-02 (tool-use orchestrator) writes the LLM-chosen-tool side; W5-7 owns the schema and the rag-chat write hook for the classifier side.
+- Evaluating intent quality post-tool-calling: agreement rate between `classifier_intent` and the LLM's chosen tool is reported in the W5-5 weekly observability cron (T-W5-5-01 metrics get a new label).
+
+**Removed from W5-3**: any task that would have made intent a hard gate.
+
+### 0-bis.6 Hybrid Lexical Retrieval — Locked Design
+
+**`tsvector` column type**: **GENERATED ALWAYS AS … STORED** (already in W5-2-01, kept). Reasons: zero application code burden, atomic with row insert, cannot drift from `chunk_text_key`. Trigger-maintained and expression-index alternatives rejected: trigger adds write-time complexity; expression index re-tokenises on every query (slower and confusing in EXPLAIN).
+
+**Indexed fields and weighting** (REVISED — extends W5-2-01):
+The current W5-2-01 design indexes only `chunk_text_key`. Revised design uses `setweight(...) || setweight(...) || ...` to weight by field. Tags are PostgreSQL `'A' | 'B' | 'C' | 'D'`:
+- **A (highest weight)** — document title (`docs.title` joined on chunk's source doc)
+- **B** — section heading (`chunks.section_heading`, currently nullable)
+- **C** — source name (`docs.source_type`) and (later, W5-8) the contextual chunk description
+- **D (lowest weight, body)** — `chunk_text_key`
+
+Because `setweight` requires reading multiple columns at chunk-INSERT time and the current `chunks` row only carries `chunk_text_key`, we cannot keep this in a simple GENERATED expression on `chunks` alone (it would need a JOIN). Two options:
+
+- **Option 1 (locked for W5-2)**: keep the simple `to_tsvector('english', coalesce(chunk_text_key,''))` for now (current W5-2-01 design). All indexed text gets weight `D`. Hybrid still wins on body matches but loses the title/section boost.
+- **Option 2 (deferred to W5-8 with contextual retrieval)**: denormalise — when ingestion writes a chunk, populate a new `chunks.indexable_text` column with `title || ' ' || section_heading || ' ' || chunk_text_key`, then make `tsv` a GENERATED column over `setweight(to_tsvector(title), 'A') || setweight(to_tsvector(section_heading), 'B') || setweight(to_tsvector(chunk_text_key), 'D')`. This co-incidentally aligns with what W5-8 needs for contextual retrieval (a third concatenation of the LLM-written context, weighted `C`).
+
+**Decision**: ship Option 1 in W5-2 (no change to existing wave). Schedule the upgrade to Option 2 inside W5-8 so ingestion-side changes happen once, not twice. **Document this in W5-2-01 acceptance criteria as a known limitation, with a forward link to W5-8.**
+
+**`tsquery` parser**: `websearch_to_tsquery('english', :q)` for both index lookup and `ts_rank_cd` ranking (already in §0 cross-plan decision #2, kept).
+
+### 0-bis.7 Adaptive Lexical Use — Locked Approach
+
+**Always run lexical as part of hybrid** (already W5-3 default), **plus** a deterministic rare-token analyzer that **upweights** the lexical RRF contribution when the query contains identifier-class tokens. This is the simplest behaviour with the best worst-case: cheap, deterministic, no LLM-in-the-loop, no extra DB roundtrip.
+
+**Rare-token detector** (NEW helper, lives in `services/nlp-pipeline/src/nlp_pipeline/application/blocks/rare_token.py`):
+- Regex-based; runs in <1ms; matches:
+  - PRD/plan/spec/bug-pattern IDs: `\b(PRD|PLAN|FR|BP|OQ|ADR|REQ|SEC)-[A-Z]?\d+(-\d+)?\b`
+  - Function/class/identifier-style: `\b[a-z][a-zA-Z0-9_]{2,}\.[a-zA-Z_][a-zA-Z0-9_]+\b` (dotted), `\b[A-Z][a-zA-Z0-9]+[A-Z][a-zA-Z0-9]+\b` (CamelCase ≥2 humps), `\b[A-Z_]{4,}\b` (SCREAMING_SNAKE)
+  - Tickers: `\b[A-Z]{2,5}\b` (subject to NER false positives — gated behind a stop-word list of common English uppercase words: `["I","A","THE","WHY","WHAT","HOW","WHO","WHEN"]`)
+  - ISINs / CIKs: `\b[A-Z]{2}[A-Z0-9]{10}\b`, `\bCIK\s*\d{4,10}\b`
+  - Dates and quarters: `\b(Q[1-4]\s*20\d{2}|20\d{2}-Q[1-4]|FY20\d{2})\b`, ISO dates
+  - Stack-trace fragments: `\b[A-Za-z_][A-Za-z0-9_]*Error\b`, `\bTraceback\b`, `\bFile "`
+  - Filing types: `\b(8-K|10-K|10-Q|13F|13G|13D|S-1)\b`
+- Output: `{has_rare_token: bool, rare_token_count: int, classes_matched: list[str]}`.
+
+**RRF score adjustment**:
+- Default `k=60` (already W5-3-02). When `has_rare_token`, the lexical-side rank contribution is multiplied by `1.5` before fusion: `score += 1.5 / (k + rank_lex)` instead of `1.0 / (k + rank_lex)`. ANN-side unchanged. Tunable env var `LEXICAL_RARE_TOKEN_BOOST=1.5`.
+- Acceptance criterion: on the new `identifier_lookup` class (n=6), `lexical_only` mode achieves NDCG@10 ≥ 0.7; `hybrid` (with boost) ≥ `lexical_only`; `vector_only` < 0.5 (proves the boost is doing work).
+
+**Modes evaluated separately by the harness** (NEW W5-3-04 extension): `vector_only`, `lexical_only`, `hybrid` (boost on), `hybrid_no_boost` (boost off — A/B target for the boost), and reserved future `hybrid_rerank` (stub). Each mode produces its own row in `results/eval_<ts>.json`'s `by_mode` block and a separate per-class breakdown.
+
+### 0-bis.8 Ingestion / Index Scalability — New Wave W5-6 (summary; full body in §10 below)
+
+Investigation-only wave: bench three insert paths (single-row, multi-row 200/500/1000, COPY) under sustained 50/100/200 chunks-per-second ingestion; record p50/p95/p99 insert latency, retrieval p95/p99 during ingest, GIN pending-list size, autovacuum cycles, WAL volume per 1k chunks. Acceptance: a benchmark report at `docs/audits/2026-05-XX-chunks-ingest-bench.md` with a recommended batching policy; if the recommendation is to change ingestion code, that change is its own follow-up wave or PR (not in W5-6 scope).
+
+**Future Production Path** (documented in W5-6, not implemented):
+- Clean dev/test creation: `alembic upgrade head` on empty DB — already supported.
+- Future production migration: when a long-lived prod instance lands, the next migration that adds a GIN-indexed column over a populated table MUST use `CREATE INDEX CONCURRENTLY`. Documented in the W5-6 report as a checklist; not implemented now.
+- Future backfill strategy: same migration MUST add the column with `NOT NULL DEFAULT (...)` only after a backfill batch worker has populated existing rows — checklist, not implemented.
+
+### 0-bis.9 Contextual Retrieval — New Wave W5-8 (summary; full body in §12 below)
+
+**Status**: deferred to a measurable experiment after the post-hybrid baseline lands. Wave W5-8 is the experiment.
+
+**Source**: Anthropic, "Introducing Contextual Retrieval", 2026-09-19 (technical post, not peer-reviewed). The post reports retrieval-failure reduction with contextualized embeddings + BM25 + reranker. We treat it as a hypothesis to verify on **our** golden set, not received truth.
+
+**Experiment design** (full detail in §12):
+- For a sample of 1000 chunks (stratified by source_type), generate a 1–3 sentence context string with a cheap LLM (DeepInfra `meta-llama/Meta-Llama-3.1-8B-Instruct`, the existing externalised model — no new dep).
+- Store contextual description in a NEW column `chunks.contextual_description text` (separate from `chunk_text_key`).
+- Embed the **contextualized** chunk (`context || '\n\n' || chunk_text_key`) via the same DeepInfra `bge-large` adapter; store as a SECOND embedding row in `entity_embedding_state` with a new `model_id`-suffix `+ctx` (so we don't lose the raw embedding — A/B test viable).
+- Extend `tsv` to include `setweight(to_tsvector(contextual_description), 'C')` (the W5-2 Option-2 upgrade).
+- Run `scripts/eval_retrieval.py` in a new mode `hybrid_contextual` against the same golden set.
+- **Acceptance to productionise**: NDCG@10 lift ≥0.05 over post-hybrid baseline AND ingestion-cost increase ≤2× (LLM tokens per chunk fits within budget).
+
+**Open questions resolved up-front**:
+- LLM cost per chunk: ~150 tokens × $0.06/1M output ≈ $0.00001 per chunk. Acceptable for the experiment.
+- Prompt caching: the document-level prefix is shared across all chunks of one doc; the DeepInfra Meta Llama path supports prompt caching where available; W5-8 measures actual cache hit rate.
+- Selective generation: W5-8 stratifies by source_type and chunk length but does not gate generation on document properties — that's a follow-up if the experiment succeeds.
+- Storage strategy: raw chunk and contextual description stored separately (new column). Embeddings stored separately. tsvector includes both at different weights. Decision locked.
+- Order: A/B over raw vs contextualised embeddings, not a swap.
+
+### 0-bis.10 Updated Plan Dependency Graph
+
+```
+W5-1 (Eval Foundation: 60-query rebalanced golden set + endpoint + script + recorded baseline + CI gate)
+   ↓ recorded baseline NDCG@10, by query_class
+W5-2 (Hybrid Schema + Lexical Repo, Option-1 simple tsvector)
+   ↓ tsvector + GIN + lexical_search
+W5-3 (Hybrid Use-Case + RRF + Mode Flag + Adaptive Lexical)
+   ↓ hybrid mode lifts NDCG@10 ≥ baseline + 0.05 (overall) AND identifier_lookup ≥ 0.7 NDCG
+W5-4 (Recency + Routing audit) — parallel-safe with W5-3
+W5-5 (Observability + Citation cron)
+W5-6 (NEW — Ingestion batching + index scalability investigation) — parallel after W5-2
+W5-7 (NEW — Intent observability dataset; routing_observations table) — parallel after W5-3; joins PLAN-0067 W11-3
+W5-8 (NEW — Contextual retrieval experiment) — gated on W5-3 baseline + W5-6 ingestion guidance
+
+Critical path: W5-1 → W5-2 → W5-3 → W5-4 → W5-5
+Non-critical: W5-6 (parallel), W5-7 (parallel + cross-plan), W5-8 (gated experiment)
+```
+
+### 0-bis.11 Acceptance Criteria — Plan-Level (gate the QA pass)
+
+- [ ] Golden set is exactly 60 rows, rebalanced per §0-bis.4; every row has graded labels and `label_review` populated.
+- [ ] `results/baseline_pre_hybrid.json` committed; `git_sha`, `embedding_model_id`, `model_revision`, `captured_at_utc` present.
+- [ ] CI fails on global NDCG@10 regression ≥0.03; per-class regression ≥0.05; missing/unreadable baseline file.
+- [ ] Hybrid post-merge NDCG@10 ≥ baseline + 0.05 absolute (overall); per-class regressions ≤0.05.
+- [ ] `identifier_lookup` class: `lexical_only` ≥ 0.7 NDCG@10; `hybrid` ≥ `lexical_only`; `vector_only` < 0.5 (proves the boost is meaningful).
+- [ ] Eval harness reports `by_mode` with at least `vector_only`, `lexical_only`, `hybrid`, `hybrid_no_boost`.
+- [ ] W5-6 ingestion bench report committed with a recommended batching policy + p50/p95/p99 numbers under sustained 100 chunks/s.
+- [ ] W5-7: `routing_observations` table exists, alembic migration committed, rag-chat writes a row per turn, PLAN-0067 W11-3-02 dependency documented.
+- [ ] W5-8: experiment report committed; either contextual retrieval lifts NDCG@10 ≥0.05 over post-hybrid baseline AND ingestion-cost ≤2× (then schedule productionisation as a follow-up plan), OR the report explicitly recommends NOT productionising with rationale.
+- [ ] Compounding: BUG_PATTERNS.md, BP-NEW1 (tsvector ORM no-declare) and BP-NEW2 (GENERATED column INSERT pitfall) added; STANDARDS.md gains an "Eval gate is mandatory for retrieval-touching PRs" rule.
+
+### 0-bis.12 Risks (additions to §10)
+
+| Risk | Mitigation |
+|---|---|
+| 60-query golden set still too small to see a 0.05 NDCG@10 lift with statistical significance | Report bootstrap CIs in the eval script (1000 resamples); the gate uses point estimate but the human reviewer sees the CI. If CI is wide, expand to 100 queries. |
+| Real-embedding CI cost grows | GHA cache layer (§0-bis.3); typical month <$0.10. |
+| `identifier_lookup` class is only 6 queries — fragile | Move 2 from `factual_lookup` if needed; track agreement on each row with 2 raters. |
+| W5-8 experiment fails | We've budgeted "report explicitly recommends NOT productionising" as a valid outcome. |
+| W5-7 and PLAN-0067 W11-3 ship out of order | Schema is owned in W5-7; PLAN-0067 W11-3-02 picks it up if/when shipped. If PLAN-0067 W11-3 ships first, the LLM-chosen-tool column starts NULL and is backfilled by the W11-3 PR. |
+| Ingestion bench finds a real regression | W5-6 deliberately scoped as investigation-only; remediation is a follow-up plan or PR. The plan does not commit to fixing what it finds — only to surfacing it. |
+
+### 0-bis.13 Open Questions Resolved by This Revision
+
+- **OQ-W5-5 (NEW — resolved)** "Should the eval call real embeddings in CI?" → **Yes, with GHA cache layer + DeepInfra**; mocked only for unit tests. (§0-bis.3.)
+- **OQ-W5-6 (NEW — resolved)** "Hard intent gate or soft signal?" → **Soft + observability log**; PLAN-0067 owns LLM tool-call routing. (§0-bis.5.)
+- **OQ-W5-7 (NEW — resolved)** "Always-on lexical or LLM-decides?" → **Always-on + deterministic rare-token boost**; LLM tool-call layer can later override via PLAN-0067. (§0-bis.7.)
+- **OQ-W5-8 (NEW — resolved)** "Contextual retrieval before or after baseline?" → **After**, as a gated experiment with explicit accept/reject criterion. (§0-bis.9.)
+- **OQ-W5-9 (NEW — resolved)** "Sequence around PLAN-0067?" → **Independent + parallel**; W5-7 is the join point. (§0-bis.2.)
+
+### 0-bis.14 Doc and Plan Updates Required at Each Revised-Wave Commit (in addition to existing §13)
+
+- W5-1 commit: TRACKING.md updated with the 60-query rebalance; `tests/eval/golden/README.md` documents the new schema fields (`query_class`, `label_review`, `phrasing_audit`).
+- W5-3 commit: `docs/services/nlp-pipeline.md` documents the rare-token analyzer + boost; `docs/services/rag-chat.md` documents the new `mode` parameter on `/v1/internal/retrieve` for the eval harness.
+- W5-6 commit: `docs/audits/2026-05-XX-chunks-ingest-bench.md` added; BUG_PATTERNS.md gains BP-NEW2 (Postgres GENERATED column INSERT rejection) if the bench surfaces it.
+- W5-7 commit: `docs/services/rag-chat.md` documents `routing_observations` write hook; PLAN-0067 TRACKING entry cross-links W5-7 as the schema source.
+- W5-8 commit: `docs/audits/2026-05-XX-contextual-retrieval-experiment.md` is the report; if accepted, a new `PLAN-XXXX contextual-retrieval-productionisation` plan is opened and PLAN-0063 marks W5-8 done.
 
 ---
 
@@ -1560,6 +1903,398 @@ Standard doc updates: each `.md` file gets a section (or extension of an existin
 - **BP-127** (pre-commit ruff version mismatch): standard guard.
 - **R3** (must update docs): T-W5-5-03 covers this comprehensively.
 
+
+---
+
+## 8-bis. Wave W5-6: Ingestion Batching + Index Scalability Investigation (NEW — Revision 2026-05-05)
+
+**Goal**: Bench the chunks-ingestion path under sustained load to recommend a batching policy. Investigation-only — surfaces findings, does not fix.
+
+**Depends on**: W5-2 (needs `tsv` GIN index live).
+**Blocks**: W5-8 (the contextual-retrieval experiment generates ~2× chunk-write volume; the bench must finish first so we know whether to batch).
+**Estimated effort**: 4–6 hours (mostly bench runs + report writing).
+**Architecture layer**: investigation / benchmarking + docs.
+
+### T-W5-6-01: Bench three insert paths under sustained load
+
+**Type**: test
+**depends_on**: W5-2 (T-W5-2-01 migration applied)
+**blocks**: T-W5-6-02
+**Target files**:
+- `scripts/bench_chunks_ingest.py` (new — standalone bench harness)
+- `docs/audits/2026-05-XX-chunks-ingest-bench.md` (new — investigation report)
+
+**What to build**: a Python script that drives synthetic chunk inserts at three configured rates (50, 100, 200 chunks/s) for 5 minutes each, across three modes:
+1. **single-row** — one INSERT per chunk
+2. **multi-row** — `INSERT INTO chunks (...) VALUES (...), (...), ...` in batches of `{200, 500, 1000}` chunks, flushed every `{1, 2, 5}` seconds (whichever first)
+3. **COPY** — psql `COPY chunks(...) FROM STDIN` via `asyncpg.connection.copy_records_to_table`
+
+For each combination record:
+- INSERT p50/p95/p99 latency
+- Retrieval p95/p99 during ingest (issue 10 lexical and 10 ANN queries/s in parallel using `scripts/eval_retrieval.py`'s HTTP client)
+- WAL bytes per 1000 chunks (read `pg_current_wal_lsn` before/after)
+- GIN pending list growth (`SELECT * FROM gin_index_stats('ix_chunks_tsv_gin')` requires the `pageinspect` extension; if unavailable, query `pg_stat_user_indexes.idx_scan/idx_tup_read` and report what is observable)
+- Autovacuum cycles (`pg_stat_all_tables.autovacuum_count`)
+
+**Tests**: this is itself a benchmark; no unit tests required, but the script must be `--dry-run`-able (insert 100 rows once and exit) and that dry-run path is unit-tested with a postgres testcontainer (1 unit test, `test_bench_dry_run_inserts_n_rows`).
+
+**Acceptance criteria**:
+- [ ] Bench runs to completion on dev stack without OOM/lock-wait errors
+- [ ] Report `docs/audits/2026-05-XX-chunks-ingest-bench.md` committed with: setup, methodology, raw numbers table, recommended batching policy, "Future Production Path" section per §0-bis.8
+- [ ] If the recommendation is to change ingestion code, the report names the target service file path and proposes a follow-up wave/PR (does not implement)
+- [ ] BUG_PATTERNS.md updated if a new failure mode surfaced (e.g. asyncpg + COPY + tsvector GENERATED interaction)
+
+**Logic & Behavior**:
+- Run on a freshly-seeded dev stack (≤5K existing chunks) so GIN starts cold; record growth over the run.
+- Use the **real** `chunks` table — do not bench against a synthetic table (we want the real GENERATED column + GIN behaviour).
+- The bench must clean up after itself (delete rows with `bench_chunks_ingest_run_id` tag stored in `chunks.metadata`); if the cleanup fails the script exits non-zero.
+
+**Downstream test impact**: none (additive bench script + report).
+
+### T-W5-6-02: Document the future production path
+
+**Type**: docs
+**depends_on**: T-W5-6-01
+**blocks**: nothing
+**Target files**:
+- `docs/audits/2026-05-XX-chunks-ingest-bench.md` (append "Future Production Path" section)
+- `docs/services/nlp-pipeline.md` (add a note pointing at the bench)
+
+**What to build**: a short section in the bench report covering:
+- Clean dev/test recreate path (current).
+- When a long-lived prod instance lands: GIN-indexed columns over populated tables MUST use `CREATE INDEX CONCURRENTLY`; example template code.
+- Backfill: `NOT NULL DEFAULT (...)` on a populated table requires a backfill batch worker before the migration; example template code.
+- Reference: this is documentation, not commitment to implement.
+
+**Acceptance criteria**:
+- [ ] Section exists with copy-paste-ready SQL templates
+- [ ] `docs/services/nlp-pipeline.md` cross-link added
+
+### Pre-read for Wave W5-6
+- `services/nlp-pipeline/src/nlp_pipeline/infrastructure/nlp_db/repositories/chunk_repository.py` (existing single-row insert path — to compare against)
+- `services/nlp-pipeline/alembic/versions/0017_add_chunks_tsv_gin.py` (current GIN migration)
+
+### Validation Gate for Wave W5-6
+- [ ] `scripts/bench_chunks_ingest.py` runs and reports finite numbers
+- [ ] Report committed and reviewed by 1 backend engineer
+- [ ] `[skip-eval]` not used on the W5-6 PR (the report itself is the deliverable)
+
+### Break Impact for Wave W5-6
+| Broken File | Why | Fix |
+|---|---|---|
+| none — investigation-only wave | | |
+
+### Regression Guardrails for Wave W5-6
+- **BP-180** (asyncpg AmbiguousParameterError, CAST IS NULL): if the bench uses `RETURNING *` with nullable params, apply the cast pattern.
+- **BP-235** (httpx asyncio timeout): the parallel retrieval driver uses `httpx.AsyncClient(timeout=httpx.Timeout(30.0))`.
+- **R26** (forward-compatible schemas): bench inserts must roundtrip through the live ORM, not bypass it.
+
+---
+
+## 8-ter. ~~Wave W5-7: Intent-Classifier Observability Dataset~~ (MOVED to PLAN-0075 in v2; do not implement here)
+
+**Status**: this entire wave (introduced in revision v1) has been **moved to PLAN-0075 — Layered Answer-Quality Eval Framework**. The `routing_observations` table, the rag-chat per-turn write hook, the weekly agreement-rate cron, and the related UI feedback loop now live in PLAN-0075 because they are intertwined with the L2/L3/L4 eval layers and the user-facing 👍/👎 chips.
+
+**Slot reassigned**: in v2, the W5-7 slot in PLAN-0063 is now **Contextual Retrieval Experiment** (renumbered from v1's W5-8). See §8-quat below for the wave body — that body remains authoritative under the new W5-7 number, with revision v2 task additions (T-W5-7-01b Qwen-vs-Llama qualitative spike + selective generation gate per L13).
+
+**Implementer note**: do not implement the v1 wave body that previously occupied this section. It is preserved below as `0-bis-legacy-w7v1` for traceability only.
+
+<details>
+<summary>Legacy v1 W5-7 body (SUPERSEDED — do not implement)</summary>
+
+## 8-ter-legacy. Wave W5-7 v1 (SUPERSEDED — moved to PLAN-0075)
+
+**Goal**: Capture per-turn rows so we can later train a small ML routing model and so we can measure agreement between the intent classifier and PLAN-0067 LLM tool-calling.
+
+**Depends on**: W5-3 (intent flag wired) + cross-plan dependency on PLAN-0067 W11-3-02 (which writes the LLM-chosen-tool side; if PLAN-0067 ships later, that field starts NULL and PLAN-0067 W11-3-02's PR backfills the write hook).
+**Blocks**: nothing (a downstream learn-the-router plan, post-MVP, is the consumer).
+**Estimated effort**: 5–7 hours.
+**Architecture layer**: schema + application write hook + cross-plan integration.
+
+### T-W5-7-01: Alembic migration `0018_add_routing_observations.py`
+
+**Type**: schema
+**depends_on**: W5-3 done
+**blocks**: T-W5-7-02
+**Target files**:
+- `services/intelligence-migrations/alembic/versions/0018_add_routing_observations.py` (new — `intelligence_db` since this is cross-service training data)
+
+**What to build**:
+```python
+op.create_table(
+    "routing_observations",
+    sa.Column("turn_id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
+    sa.Column("user_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=False),
+    sa.Column("tenant_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=False),
+    sa.Column("question_text", sa.Text(), nullable=False),
+    sa.Column("classifier_intent", sa.String(64), nullable=True),
+    sa.Column("classifier_confidence", sa.Float(), nullable=True),
+    sa.Column("llm_chosen_tools", sa.dialects.postgresql.JSONB(), nullable=True),  # populated by PLAN-0067 W11-3-02
+    sa.Column("retrieved_chunk_ids", sa.dialects.postgresql.ARRAY(sa.dialects.postgresql.UUID(as_uuid=True)), nullable=True),
+    sa.Column("answer_quality", sa.Float(), nullable=True),  # weekly LLM-judge cron from W5-5 fills this
+    sa.Column("feedback_thumbs", sa.SmallInteger(), nullable=True),  # +1 / -1, NULL = no feedback
+    sa.Column("corrected_intent", sa.String(64), nullable=True),  # human review override
+    sa.Column("created_at_utc", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+)
+op.create_index("ix_routing_observations_created_at", "routing_observations", ["created_at_utc"])
+op.create_index("ix_routing_observations_tenant_created", "routing_observations", ["tenant_id", "created_at_utc"])
+```
+
+**Acceptance criteria**:
+- [ ] Migration applies cleanly on dev intelligence_db
+- [ ] Roundtrip downgrade clean
+- [ ] No collisions with existing `intelligence_db` table names
+- [ ] `tenant_id` indexed for the future PLAN-0008 RLS work
+
+**Downstream test impact**: none (new table).
+
+### T-W5-7-02: rag-chat write hook on every turn
+
+**Type**: impl
+**depends_on**: T-W5-7-01
+**blocks**: nothing
+**Target files**:
+- `services/rag-chat/src/rag_chat/infrastructure/intelligence_db/repositories/routing_observations_repo.py` (new)
+- `services/rag-chat/src/rag_chat/application/use_cases/chat.py` (extend — write a row at end of turn)
+- `services/rag-chat/tests/integration/test_routing_observations_write.py` (new)
+
+**What to build**: a thin repo + a single call from the chat use case after the response is rendered. The hook must NOT block the response stream — write asynchronously after the stream closes (use `asyncio.create_task` then await on cleanup; if the write fails, log + emit a Prometheus counter `rag_routing_observations_write_failed_total` but do NOT raise).
+
+**Tests**:
+| Test | What | Type |
+|---|---|---|
+| `test_observation_row_written_per_turn` | one row per turn | integration |
+| `test_observation_row_carries_classifier_intent` | classifier output captured | integration |
+| `test_observation_row_llm_chosen_tools_null_when_no_tool_use` | classical pipeline → JSONB NULL | integration |
+| `test_observation_write_failure_does_not_break_turn` | mock DB raise → user still gets answer | unit |
+
+**Acceptance criteria**:
+- [ ] 4 tests pass
+- [ ] Write happens after-stream-close, never blocks user response
+- [ ] Failure path increments metric, never raises
+- [ ] Documented in `docs/services/rag-chat.md`
+
+**Downstream test impact**:
+- PLAN-0067 W11-3-02 (tool-use orchestrator) MUST update `llm_chosen_tools` for the same `turn_id` when its path runs. Cross-plan note added to PLAN-0067's TRACKING entry on this commit.
+
+### T-W5-7-03: Weekly metrics cron — agreement rate
+
+**Type**: impl
+**depends_on**: T-W5-7-02 + W5-5 cron infrastructure
+**blocks**: nothing
+**Target files**:
+- `services/rag-chat/src/rag_chat/infrastructure/cron/intent_agreement_cron.py` (new — runs weekly alongside W5-5 citation-accuracy cron)
+
+**What to build**: a weekly job that reads the past 7 days of `routing_observations`, computes:
+- agreement rate (`classifier_intent` matches `llm_chosen_tools[0]`-derived expected intent)
+- per-class confusion matrix
+- emits Prometheus gauge `rag_intent_classifier_agreement` (label: `query_class`)
+
+**Acceptance criteria**:
+- [ ] Cron job runs alongside W5-5
+- [ ] Gauge appears in Grafana retrieval board (W9 will add)
+- [ ] If `llm_chosen_tools` is NULL on >50% of rows (because PLAN-0067 has not shipped), the cron emits `rag_intent_classifier_agreement{state="awaiting_tool_use"}=NaN` instead of erroring
+
+**Downstream test impact**: none.
+
+### Pre-read for Wave W5-7
+- `services/rag-chat/src/rag_chat/application/use_cases/chat.py` (the chat use case to extend)
+- `services/rag-chat/src/rag_chat/application/blocks/intent_routing.py` (intent classifier output)
+- `services/intelligence-migrations/alembic/versions/` (most recent revision id)
+
+### Validation Gate for Wave W5-7
+- [ ] Migration applied; table reachable from rag-chat
+- [ ] Per-turn write hook landed; tests green
+- [ ] Cross-plan note added to PLAN-0067's TRACKING entry
+- [ ] Cron emitting agreement gauge
+
+### Break Impact for Wave W5-7
+| Broken File | Why | Fix |
+|---|---|---|
+| `services/rag-chat/tests/integration/test_chat_full_loop.py` | Adds an after-stream hook | Update to assert one row per turn or use `mock_observation_repo` fixture |
+
+### Regression Guardrails for Wave W5-7
+- **R7 (no cross-service DB)**: rag-chat uses its own `intelligence_db` connection (already wired); the new repo respects R7.
+- **R10 (idempotency)**: the write hook is idempotent — `turn_id` PK; replaying a turn UPDATEs (use `INSERT ... ON CONFLICT (turn_id) DO UPDATE`).
+- **BP-235 (httpx timeout)**: not applicable.
+- **PRD-0025 §6.2 (auth)**: write hook reads `tenant_id` from the JWT context, never the request body.
+
+---
+
+</details>
+
+---
+
+## 8-quat. Wave W5-7 (v2): Contextual Retrieval Experiment — GATED, with Qwen-vs-Llama Spike
+
+**v2 NOTE**: this wave was numbered W5-8 in v1; it is renumbered **W5-7** in v2 because the original v1 W5-7 (intent observability) moved to PLAN-0075. The wave body below is authoritative *with the v2 patches in §0-bis.0..0c applied*: specifically (a) addition of T-W5-7-01b Qwen-vs-Llama qualitative spike (must run BEFORE T-W5-7-02 generation script commits to a model), (b) selective generation gate per L13 (`len(parent_doc) > 2000 chars OR multi-section` — short single-chunk news articles skip generation entirely), (c) prompt-caching cost claim treated as unverified pending the spike's measurement.
+
+**T-W5-7-01b: Qwen3.5-0.8B vs Llama-3.1-8B-Instruct-Turbo qualitative spike** (NEW v2 — must run before T-W5-7-02 model lock)
+
+- **Type**: test (qualitative review)
+- **depends_on**: T-W5-7-01 (schema migration)
+- **blocks**: T-W5-7-02 (generation script)
+- **Target files**: `scripts/spike_contextual_model_compare.py` (new); `docs/audits/2026-XX-XX-contextual-model-spike.md` (new)
+- **What to build**: generate 50 contextual descriptions per model on the same 50 chunks, blind 2-reviewer rating, lock model per L12 decision rule.
+- **Sample stratification (50 chunks)**: 10 SEC filings (10-K/10-Q/13F mix) + 10 earnings transcripts + 10 long news (>1000 tokens) + 10 short news (≤500 tokens) + 10 multi-entity chunks (≥2 canonical entities mentioned).
+- **Rating scale (per generation)**: `1=hallucinated/wrong`, `2=correct but unhelpful`, `3=correct and useful`, `4=excellent`.
+- **Decision rule** (L12, locked): lock Qwen iff `mean(qwen) ≥ 0.9 × mean(llama)` AND `count(rating==1 on qwen ∩ {numeric_chunks ∪ multi_entity_chunks}) == 0`. Otherwise lock Llama.
+- **Cost**: 100 generations × ~$0.00002 = $0.002. Negligible.
+- **Acceptance**: report committed; locked model recorded in `services/nlp-pipeline/.claude-context.md` and in §0-bis.0 L12.
+
+(Original v1 task IDs T-W5-8-01..05 are renumbered T-W5-7-01..05; their content is unchanged except for the Qwen lock per L12 and the selective-generation gate per L13. All references to the v1 numbering in the body below should be read as W5-7 with the same suffix.)
+
+## 8-quat-v1. Wave W5-7: Contextual Retrieval Experiment (legacy v1 W5-8 body; v2-patched per above)
+
+**Goal**: Verify the Anthropic 2026-09-19 contextual-retrieval claim on **our** golden set; productionise only on hard accept criterion.
+
+**Gating preconditions** (all must be true before W5-8 starts):
+1. W5-3 done — post-hybrid baseline NDCG@10 captured.
+2. W5-6 done — ingestion batching guidance in hand (so we don't accidentally OOM on 2× write volume).
+3. PM/founder agree the experiment is worth ~$5–$50 in LLM cost (1000 chunks × 150 tokens × $0.06/1M ≈ $0.01 sample run; full corpus 50K chunks ≈ $5; iteration with 3 prompt variants ≈ $15).
+
+**Depends on**: W5-3 + W5-6.
+**Blocks**: a hypothetical follow-up productionisation plan only if the experiment succeeds.
+**Estimated effort**: 8–12 hours (most is prompt iteration + analysis).
+**Architecture layer**: experiment — schema-light, code-heavy, decision-output.
+
+### T-W5-8-01: Schema additions — separate column + dual-embedding storage
+
+**Type**: schema
+**depends_on**: W5-3 done
+**blocks**: T-W5-8-02
+**Target files**:
+- `services/nlp-pipeline/alembic/versions/0019_add_chunks_contextual_description.py` (new)
+
+**What to build**: add `chunks.contextual_description text NULL`; add a partial index hint for non-null rows; **do NOT** alter the `tsv` GENERATED expression yet (deferred to T-W5-8-04 once we know the experiment is going).
+
+**Acceptance criteria**:
+- [ ] Migration applies + downgrade roundtrips clean.
+- [ ] No effect on existing rows; column starts NULL.
+
+### T-W5-8-02: Generation script — sample 1000 chunks, generate context, store
+
+**Type**: impl
+**depends_on**: T-W5-8-01
+**blocks**: T-W5-8-03
+**Target files**:
+- `scripts/generate_contextual_descriptions.py` (new)
+- `tests/scripts/test_generate_contextual.py` (unit tests with mocked LLM)
+
+**What to build**: a one-shot script that:
+1. Stratified-samples 1000 chunks from `chunks` (proportional to `source_type` distribution).
+2. For each chunk, fetches the parent doc title + section heading + first 500 chars of the doc.
+3. Calls DeepInfra `meta-llama/Meta-Llama-3.1-8B-Instruct` with a prompt asking for 1–3 sentences of context (entity, time period, source, why this chunk matters in the doc).
+4. Writes `chunks.contextual_description`.
+5. Writes a SECOND embedding row in `entity_embedding_state` with model_id `bge-large-en-v1.5+ctx` for the contextualized chunk (`context || '\n\n' || chunk_text_key`). The original embedding stays untouched — A/B viable.
+6. Records LLM token usage in `llm_usage_log` (existing table).
+
+**Prompt** (locked, version 1):
+```
+You are summarising a document chunk with one paragraph of context for a search-and-retrieval index.
+
+Document title: {title}
+Section heading: {section}
+Document opening: {first_500_chars}
+
+Chunk text:
+{chunk_text}
+
+Write 1–3 sentences (≤80 words) describing what entity / time period / source / topic this chunk is about, why a reader would land here from a query, and how it relates to the document. Do NOT repeat the chunk text. Do NOT speculate beyond what the chunk and document state.
+```
+
+Iterate on the prompt up to 3 times if the experiment results are poor — record each iteration's prompt + result in the W5-8 report.
+
+**Tests**: 4 unit tests with the LLM client mocked; 1 integration test on a 10-row sample against the live DeepInfra (gated behind `RUN_DEEPINFRA_TESTS=1`).
+
+**Acceptance criteria**:
+- [ ] 1000 contextual descriptions generated and stored
+- [ ] Token-cost recorded in `llm_usage_log`
+- [ ] Sample of 20 manually inspected — none are obvious hallucinations
+
+### T-W5-8-03: Eval mode `hybrid_contextual` + experiment run
+
+**Type**: impl
+**depends_on**: T-W5-8-02
+**blocks**: T-W5-8-04
+**Target files**:
+- `scripts/eval_retrieval.py` (extend — add `--mode hybrid_contextual`)
+- `services/rag-chat/src/rag_chat/api/routers/internal.py` (extend — accept `mode=hybrid_contextual` on `/v1/internal/retrieve`; route to the +ctx embedding column)
+
+**What to build**: a new mode that retrieves using the contextualized embedding (and the contextualized text in the lexical path, if the W5-8-04 tsvector upgrade lands), runs the same 60-query golden set, and writes `results/eval_contextual_<ts>.json`.
+
+**Acceptance criteria**:
+- [ ] `hybrid_contextual` mode evaluable end-to-end
+- [ ] Result JSON has `by_class` block matching the golden set's `query_class` distribution
+- [ ] Comparison to post-hybrid baseline emitted in stdout
+
+### T-W5-8-04: Tsvector setweight upgrade (CONDITIONAL — only if T-W5-8-03 shows lift)
+
+**Type**: schema
+**depends_on**: T-W5-8-03 with positive lift signal
+**blocks**: T-W5-8-05
+**Target files**:
+- `services/nlp-pipeline/alembic/versions/0020_chunks_tsv_setweight.py` (new — supersedes 0017's simple expression)
+
+**What to build**: rewrite the `chunks.tsv` GENERATED expression to:
+```sql
+setweight(to_tsvector('english', coalesce(title,'')), 'A')
+|| setweight(to_tsvector('english', coalesce(section_heading,'')), 'B')
+|| setweight(to_tsvector('english', coalesce(contextual_description,'')), 'C')
+|| setweight(to_tsvector('english', coalesce(chunk_text_key,'')), 'D')
+```
+Requires `chunks` to carry `title` and `section_heading` directly, or a JOINed view — settle by adding denormalised `title` and `section_heading` columns at insert time (write hook in `chunk_repository.py`).
+
+**Skip this task if T-W5-8-03 shows no lift** — the setweight upgrade has cost (more complex schema, more write-time work) so we only pay it if the experiment proves the contextual signal is doing work.
+
+**Acceptance criteria**:
+- [ ] Migration roundtrips clean
+- [ ] Re-eval of `hybrid_contextual` shows additional lift over T-W5-8-03 result
+
+### T-W5-8-05: Experiment report and decision
+
+**Type**: docs
+**depends_on**: T-W5-8-03 (and T-W5-8-04 if it ran)
+**blocks**: nothing (the followup productionisation plan is downstream)
+**Target files**:
+- `docs/audits/2026-05-XX-contextual-retrieval-experiment.md` (new)
+
+**What to build**: a report with: experimental setup, prompt versions tried, metrics by mode (post-hybrid baseline vs `hybrid_contextual` vs `hybrid_contextual+setweight` if run) per query_class, ingestion-cost numbers, sample of 10 chunks with their generated context (qualitative review), accept/reject decision with rationale.
+
+**Decision criterion (locked)**: ProductionISE if AND ONLY IF:
+- Global NDCG@10 lift over post-hybrid baseline ≥ 0.05 absolute, AND
+- No per-class regression > 0.03, AND
+- Ingestion cost increase ≤ 2× (LLM tokens-per-chunk fits within MVP budget).
+
+If accepted: open a follow-up plan `PLAN-XXXX contextual-retrieval-productionisation` (full corpus generation, online re-embedding strategy, prompt-cache utilisation, monitoring). If rejected: report explicitly says so + names the strongest hypothesis (e.g. "contextual context overlaps with section_heading, redundant signal" or "Llama-3.1-8B not strong enough — retry with Mistral-Small-3.1").
+
+**Acceptance criteria**:
+- [ ] Report committed
+- [ ] Decision recorded in TRACKING.md
+- [ ] If rejected, plan W5-8 closes with status `done (experiment outcome: reject)` so the work is visible
+- [ ] If accepted, follow-up plan opened in TRACKING.md with this report cited
+
+### Pre-read for Wave W5-8
+- `scripts/eval_retrieval.py` (the harness to extend)
+- `services/nlp-pipeline/src/nlp_pipeline/infrastructure/nlp_db/repositories/chunk_repository.py`
+- Anthropic 2026-09-19 "Introducing Contextual Retrieval" post (treat as hypothesis, not received truth)
+
+### Validation Gate for Wave W5-8
+- [ ] T-W5-8-05 report committed; decision recorded in TRACKING.md
+- [ ] If accepted: follow-up plan exists; if rejected: rationale documented
+- [ ] No regression in non-contextual modes (we did not break the baseline path)
+
+### Break Impact for Wave W5-8
+| Broken File | Why | Fix |
+|---|---|---|
+| `services/nlp-pipeline/tests/integration/test_chunk_lexical_search.py` | If T-W5-8-04 lands, the tsvector ranking changes | Re-baseline asserted ranks; document the change in the test docstring |
+| `results/baseline_pre_hybrid.json` | Untouched; hybrid_contextual is a separate mode | None |
+
+### Regression Guardrails for Wave W5-8
+- **BP-NEW1** (tsvector ORM no-declare): the new contextual_description column is a regular column, NOT GENERATED — declared in the ORM normally. Only the `tsv` column stays GENERATED.
+- **BP-235** (httpx timeout): the generation script uses `httpx.AsyncClient(timeout=httpx.Timeout(60.0))` since LLM calls are slower.
+- **R10** (idempotency): generation script is idempotent on `chunk_id` — re-running skips chunks already populated unless `--force` flag.
+- **R5/R28** (forward-compatible schemas): contextual_description added with NULL default; no existing reader breaks.
 
 ---
 

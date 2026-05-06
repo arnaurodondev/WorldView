@@ -113,8 +113,18 @@ async def lookup_instrument(
 
 @router.get("/instruments/on-demand-profile", response_model=OnDemandProfileResponse)
 async def on_demand_profile(
-    ticker: Annotated[str | None, Query(min_length=1, max_length=20)] = None,
-    isin: Annotated[str | None, Query(min_length=12, max_length=12)] = None,
+    # F-S03: route-level SSRF pattern guards.  Belt-and-suspenders alongside
+    # the use-case validation: FastAPI rejects malformed input with 422 before
+    # the use case ever sees it, but the use case still validates as a defence
+    # in depth (e.g. when the use case is called from another worker, not HTTP).
+    ticker: Annotated[
+        str | None,
+        Query(min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$"),
+    ] = None,
+    isin: Annotated[
+        str | None,
+        Query(min_length=12, max_length=12, pattern=r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$"),
+    ] = None,
     _: Annotated[None, Depends(require_internal_jwt)] = None,
     uc: Annotated[OnDemandProfileUseCase, Depends(get_on_demand_profile_uc)] = ...,  # type: ignore[assignment]
 ) -> OnDemandProfileResponse:

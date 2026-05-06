@@ -55,6 +55,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
+# Topic name constant — avoid importing from messaging.topics to sidestep
+# version-skew attr-defined errors when the installed package predates the
+# ENTITY_DIRTIED constant (added in a later revision of libs/messaging).
+_ENTITY_DIRTIED_TOPIC = "entity.dirtied.v1"
+
 # ---------------------------------------------------------------------------
 # PLAN-0072 T-72-1-01 — two-layer noise pre-filter
 # ---------------------------------------------------------------------------
@@ -156,7 +161,7 @@ class ProvisionalEnrichmentWorker:
         session_factory: async_sessionmaker[AsyncSession],
         llm_client: FallbackChainClient,
         direct_producer: DirectProducerProtocol | None = None,
-        entity_dirtied_topic: str = "entity.dirtied.v1",
+        entity_dirtied_topic: str = _ENTITY_DIRTIED_TOPIC,
         embedding_model_id: str = "bge-large:latest",
         usage_logger: LlmUsageLogProtocol | None = None,
         batch_limit: int = 50,

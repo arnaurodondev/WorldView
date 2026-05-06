@@ -168,22 +168,28 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     )
 
     # LLM provider chain
+    # DEF-034: extract raw strings from SecretStr before passing to adapters/constructors.
+    _deepinfra_api_key = settings.deepinfra_api_key.get_secret_value() if settings.deepinfra_api_key else None
+    _openrouter_api_key = settings.openrouter_api_key.get_secret_value() if settings.openrouter_api_key else None
+    _cohere_api_key = settings.cohere_api_key.get_secret_value() if settings.cohere_api_key else None
+    _jina_api_key = settings.jina_api_key.get_secret_value() if settings.jina_api_key else None
+
     providers: list[Any] = []
-    if settings.deepinfra_api_key:
+    if _deepinfra_api_key:
         from rag_chat.infrastructure.llm.deepinfra_adapter import DeepInfraCompletionAdapter
 
         providers.append(
             DeepInfraCompletionAdapter(
-                api_key=settings.deepinfra_api_key,
+                api_key=_deepinfra_api_key,
                 model=settings.completion_model,  # RAG_CHAT_COMPLETION_MODEL
             )
         )
-    if settings.openrouter_api_key:
+    if _openrouter_api_key:
         from rag_chat.infrastructure.llm.openrouter_adapter import OpenRouterCompletionAdapter
 
         providers.append(
             OpenRouterCompletionAdapter(
-                api_key=settings.openrouter_api_key,
+                api_key=_openrouter_api_key,
                 model=settings.openrouter_completion_model,  # RAG_CHAT_OPENROUTER_COMPLETION_MODEL
             )
         )
@@ -211,13 +217,13 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     # WHY separate timeout on S6 path: Ollama bge-large on CPU takes 10-15s; the shared
     # upstream_timeout_seconds (10s) is insufficient (BP-225 class: embed timeout →
     # empty vector → 0 chunks retrieved).  Fix: 60s dedicated timeout for S6 embed.
-    if settings.jina_api_key:
+    if _jina_api_key:
         # Direct Jina embedding — no S6 hop needed.
         # task="retrieval.query" tells Jina to optimise the embedding for ANN search.
         from ml_clients.adapters.jina_embedding import JinaEmbeddingAdapter  # type: ignore[import-not-found]
         from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
 
-        _jina = JinaEmbeddingAdapter(api_key=settings.jina_api_key, task="retrieval.query")
+        _jina = JinaEmbeddingAdapter(api_key=_jina_api_key, task="retrieval.query")
 
         class _JinaEmbeddingAdapter:
             """Thin wrapper around JinaEmbeddingAdapter matching the embed(text) -> list[float] protocol."""
@@ -282,9 +288,9 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     # It uses a 3B model on DeepInfra GPU (~100-200ms) instead of qwen3:0.6b on
     # CPU Ollama (2-20s, causes 100% fallback to keyword heuristic in practice).
     # Both classifiers fall back to KeywordHeuristicClassifier on any error.
-    if settings.deepinfra_api_key:
+    if _deepinfra_api_key:
         classifier: Any = DeepInfraIntentClassifier(
-            api_key=settings.deepinfra_api_key,
+            api_key=_deepinfra_api_key,
             model=settings.deepinfra_classification_model,
             usage_logger=usage_logger,
         )
@@ -307,10 +313,10 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     #   3. BGE Ollama — last-resort local-only path. Documented as "always
     #      falls back" for the bge-reranker-v2-m3 model name; useful only if
     #      an operator manually `ollama pull`s a working reranker model.
-    if settings.deepinfra_api_key:
-        reranker: Any = DeepInfraReranker(api_key=settings.deepinfra_api_key)
-    elif settings.cohere_api_key:
-        reranker = CohereReranker(api_key=settings.cohere_api_key)
+    if _deepinfra_api_key:
+        reranker: Any = DeepInfraReranker(api_key=_deepinfra_api_key)
+    elif _cohere_api_key:
+        reranker = CohereReranker(api_key=_cohere_api_key)
     else:
         reranker = BGEReranker(
             ollama_base_url=settings.ollama_base_url,

@@ -47,6 +47,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     UnitOfWorkProtocol,
 )
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
+from messaging.topics import ENTITY_DIRTIED as _ENTITY_DIRTIED_TOPIC  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -161,7 +162,7 @@ class MacroIndicatorDatasetConsumer(BaseKafkaConsumer[None]):
         session_factory: async_sessionmaker[AsyncSession],
         storage_client: Any | None = None,
         direct_producer: Any | None = None,
-        entity_dirtied_topic: str = "entity.dirtied.v1",
+        entity_dirtied_topic: str = _ENTITY_DIRTIED_TOPIC,
         *,
         dedup_client: Any | None = None,
     ) -> None:

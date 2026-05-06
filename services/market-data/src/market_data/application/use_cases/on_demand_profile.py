@@ -1,4 +1,19 @@
-"""OnDemandProfileUseCase — DB-first enrichment with EODHD fallback and persistence."""
+"""OnDemandProfileUseCase — DB-first enrichment with EODHD fallback and persistence.
+
+R25 3-phase pattern (F-D02 fix):
+  Phase 1 (DB read): open a UoW, resolve instrument + security, snapshot the
+                     fields we need into a plain dataclass, then close the UoW
+                     so the DB session does NOT span the EODHD HTTP call.
+  Phase 2 (HTTP):    NO DB session held while we call EODHD (10 s timeout).
+  Phase 3 (DB write): open a fresh UoW, apply the COALESCE update + commit,
+                     then close.
+
+The use case is constructed with a UoW *factory* (a zero-arg callable that
+returns an unentered UoW) rather than a single open UoW.  This is the only
+way to safely separate read and write phases when the existing UoW context
+manager is single-use (sessions are bound at ``__aenter__`` and closed at
+``__aexit__``).
+"""
 
 from __future__ import annotations
 
@@ -6,11 +21,17 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+import structlog
+
 from market_data.domain.errors import EodhRateLimitError, InstrumentNotFoundError  # noqa: F401
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from market_data.application.ports.uow import UnitOfWork
     from market_data.infrastructure.eodhd.client import EodhHdClient
+
+logger: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 # SSRF validation patterns — only allow safe ticker/ISIN formats before
 # constructing any EODHD URL (guards against path traversal via ticker param).
@@ -35,14 +56,51 @@ class OnDemandProfileData:
     source: Literal["db", "eodhd_persisted"]
 
 
+@dataclass(frozen=True, slots=True)
+class _InstrumentSnapshot:
+    """Plain-data snapshot of instrument + security fields after Phase 1.
+
+    Holds only the values we need across the EODHD HTTP boundary so that no
+    SQLAlchemy-bound objects (Instrument / Security entities) outlive the
+    Phase-1 session.  This makes the R25 boundary explicit and avoids any
+    accidental lazy-load attempts after the session is closed.
+    """
+
+    instrument_id: str
+    security_id: str
+    symbol: str
+    exchange: str
+    isin: str | None
+    sector: str | None
+    industry: str | None
+    country: str | None
+    currency_code: str | None
+    sec_isin: str | None
+    sec_currency: str | None
+    sec_sector: str | None
+    sec_industry: str | None
+    sec_country: str | None
+    sec_description: str | None
+
+
 def _validate_ticker(ticker: str) -> None:
+    """Validate ticker shape (SSRF guard).
+
+    F-S10: error message is intentionally static (no echo of user input)
+    to prevent reflected-XSS-style content in error responses.  The rejected
+    value is logged separately via structlog so internal observability is
+    preserved.
+    """
     if not TICKER_PATTERN.match(ticker):
-        raise ValueError(f"Invalid ticker format: {ticker!r}")
+        logger.warning("on_demand_invalid_ticker", rejected=ticker)
+        raise ValueError("Invalid ticker format")
 
 
 def _validate_isin(isin: str) -> None:
+    """Validate ISIN shape (SSRF guard) — see ``_validate_ticker`` for rationale."""
     if not ISIN_PATTERN.match(isin):
-        raise ValueError(f"Invalid ISIN format: {isin!r}")
+        logger.warning("on_demand_invalid_isin", rejected=isin)
+        raise ValueError("Invalid ISIN format")
 
 
 class OnDemandProfileUseCase:
@@ -56,8 +114,12 @@ class OnDemandProfileUseCase:
        return with ``source="eodhd_persisted"``.
     """
 
-    def __init__(self, uow: UnitOfWork, eodhd_client: EodhHdClient) -> None:
-        self._uow = uow
+    def __init__(
+        self,
+        uow_factory: Callable[[], UnitOfWork],
+        eodhd_client: EodhHdClient,
+    ) -> None:
+        self._uow_factory = uow_factory
         self._eodhd = eodhd_client
 
     async def execute(
@@ -85,38 +147,30 @@ class OnDemandProfileUseCase:
         if upper_isin:
             _validate_isin(upper_isin)
 
-        # --- Phase 1: DB lookup ---
-        inst = None
-        if upper_ticker:
-            inst = await self._uow.instruments_read.find_by_symbol_icase(upper_ticker)
-        if inst is None and upper_isin:
-            inst = await self._uow.instruments_read.find_by_isin(upper_isin)
-        if inst is None:
-            raise InstrumentNotFoundError(f"Instrument not found: ticker={ticker!r} isin={isin!r}")
+        # ── Phase 1: DB lookup (open + close session) ────────────────────────
+        snapshot = await self._phase1_lookup(upper_ticker, upper_isin)
 
-        sec = await self._uow.securities_read.find_by_id(inst.security_id)
-
-        # --- Phase 2: return from DB if description already populated ---
-        if sec is not None and sec.description:
+        # Short-circuit: DB already has the description, no EODHD needed.
+        if snapshot.sec_description:
             return OnDemandProfileData(
-                instrument_id=inst.id,
-                security_id=inst.security_id,
-                ticker=inst.symbol,
-                exchange=inst.exchange,
-                isin=inst.isin or sec.isin,
-                currency_code=inst.currency_code or sec.currency,
-                description=sec.description,
-                sector=inst.sector or sec.sector,
-                industry=inst.industry or sec.industry,
-                country=inst.country or sec.country,
+                instrument_id=snapshot.instrument_id,
+                security_id=snapshot.security_id,
+                ticker=snapshot.symbol,
+                exchange=snapshot.exchange,
+                isin=snapshot.isin or snapshot.sec_isin,
+                currency_code=snapshot.currency_code or snapshot.sec_currency,
+                description=snapshot.sec_description,
+                sector=snapshot.sector or snapshot.sec_sector,
+                industry=snapshot.industry or snapshot.sec_industry,
+                country=snapshot.country or snapshot.sec_country,
                 source="db",
             )
 
-        # --- Phase 3: EODHD on-demand fetch ---
-        eodhd_data = await self._eodhd.get_fundamentals(inst.symbol, inst.exchange)
+        # ── Phase 2: EODHD HTTP call (NO DB session held) ────────────────────
+        eodhd_data = await self._eodhd.get_fundamentals(snapshot.symbol, snapshot.exchange)
 
         if eodhd_data is None:
-            raise InstrumentNotFoundError(f"EODHD returned 404 for {inst.symbol}.{inst.exchange}")
+            raise InstrumentNotFoundError(f"EODHD returned 404 for {snapshot.symbol}.{snapshot.exchange}")
 
         general = eodhd_data.get("General", {})
         description = general.get("Description") or None
@@ -126,47 +180,115 @@ class OnDemandProfileUseCase:
         eodhd_isin = general.get("ISIN") or None
         eodhd_currency = general.get("CurrencyCode") or None
 
-        # --- Phase 4: Persist enrichment results to DB ---
+        # ── Phase 3: Persist enrichment (open fresh session, commit, close) ──
+        await self._phase3_persist(
+            security_id=snapshot.security_id,
+            instrument_id=snapshot.instrument_id,
+            description=description,
+            sector=eodhd_sector,
+            industry=eodhd_industry,
+            country=eodhd_country,
+            isin=eodhd_isin,
+            currency=eodhd_currency,
+        )
+
+        return OnDemandProfileData(
+            instrument_id=snapshot.instrument_id,
+            security_id=snapshot.security_id,
+            ticker=snapshot.symbol,
+            exchange=snapshot.exchange,
+            isin=eodhd_isin or snapshot.isin or snapshot.sec_isin,
+            currency_code=eodhd_currency or snapshot.currency_code or snapshot.sec_currency,
+            description=description,
+            sector=eodhd_sector or snapshot.sector or snapshot.sec_sector,
+            industry=eodhd_industry or snapshot.industry or snapshot.sec_industry,
+            country=eodhd_country or snapshot.country or snapshot.sec_country,
+            source="eodhd_persisted",
+        )
+
+    # ── private phase helpers ────────────────────────────────────────────────
+
+    async def _phase1_lookup(
+        self,
+        upper_ticker: str | None,
+        upper_isin: str | None,
+    ) -> _InstrumentSnapshot:
+        """Phase 1 — open a UoW, resolve instrument + security, return a snapshot.
+
+        The UoW is closed before this returns so the session does NOT span
+        the EODHD HTTP call (R25, F-D02).
+        """
+        async with self._uow_factory() as uow:
+            inst = None
+            if upper_ticker:
+                inst = await uow.instruments_read.find_by_symbol_icase(upper_ticker)
+            if inst is None and upper_isin:
+                inst = await uow.instruments_read.find_by_isin(upper_isin)
+            if inst is None:
+                raise InstrumentNotFoundError(f"Instrument not found: ticker={upper_ticker!r} isin={upper_isin!r}")
+
+            sec = await uow.securities_read.find_by_id(inst.security_id)
+
+            return _InstrumentSnapshot(
+                instrument_id=inst.id,
+                security_id=inst.security_id,
+                symbol=inst.symbol,
+                exchange=inst.exchange,
+                isin=inst.isin,
+                sector=inst.sector,
+                industry=inst.industry,
+                country=inst.country,
+                currency_code=inst.currency_code,
+                sec_isin=sec.isin if sec else None,
+                sec_currency=sec.currency if sec else None,
+                sec_sector=sec.sector if sec else None,
+                sec_industry=sec.industry if sec else None,
+                sec_country=sec.country if sec else None,
+                sec_description=sec.description if sec else None,
+            )
+
+    async def _phase3_persist(
+        self,
+        *,
+        security_id: str,
+        instrument_id: str,
+        description: str | None,
+        sector: str | None,
+        industry: str | None,
+        country: str | None,
+        isin: str | None,
+        currency: str | None,
+    ) -> None:
+        """Phase 3 — open a fresh UoW, COALESCE-update, commit, close."""
         security_fields: dict[str, str | None] = {
             k: v
             for k, v in {
                 "description": description,
-                "sector": eodhd_sector,
-                "industry": eodhd_industry,
-                "country": eodhd_country,
-                "currency": eodhd_currency,
+                "sector": sector,
+                "industry": industry,
+                "country": country,
+                "currency": currency,
             }.items()
             if v is not None
         }
-        if security_fields:
-            await self._uow.securities.update_from_enrichment(inst.security_id, security_fields)
-
         instrument_metadata: dict[str, str | None] = {
             k: v
             for k, v in {
-                "isin": eodhd_isin,
-                "sector": eodhd_sector,
-                "industry": eodhd_industry,
-                "country": eodhd_country,
-                "currency_code": eodhd_currency,
+                "isin": isin,
+                "sector": sector,
+                "industry": industry,
+                "country": country,
+                "currency_code": currency,
             }.items()
             if v is not None
         }
-        if instrument_metadata:
-            await self._uow.instruments.update_metadata(inst.id, instrument_metadata)
 
-        await self._uow.commit()
+        if not security_fields and not instrument_metadata:
+            return
 
-        return OnDemandProfileData(
-            instrument_id=inst.id,
-            security_id=inst.security_id,
-            ticker=inst.symbol,
-            exchange=inst.exchange,
-            isin=eodhd_isin or inst.isin or (sec.isin if sec else None),
-            currency_code=eodhd_currency or inst.currency_code or (sec.currency if sec else None),
-            description=description,
-            sector=eodhd_sector or inst.sector or (sec.sector if sec else None),
-            industry=eodhd_industry or inst.industry or (sec.industry if sec else None),
-            country=eodhd_country or inst.country or (sec.country if sec else None),
-            source="eodhd_persisted",
-        )
+        async with self._uow_factory() as uow:
+            if security_fields:
+                await uow.securities.update_from_enrichment(security_id, security_fields)
+            if instrument_metadata:
+                await uow.instruments.update_metadata(instrument_id, instrument_metadata)
+            await uow.commit()
