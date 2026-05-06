@@ -1,7 +1,8 @@
 # PLAN-0076 — Deferred Issues: Schema Migrations, Architecture Hardening, Test Coverage
 
-> **Status**: DRAFT
+> **Status**: IN-PROGRESS (Sub-Plan A complete)
 > **Created**: 2026-05-05
+> **Updated**: 2026-05-06
 > **Owner**: Arnau Rodon
 > **Depends on**: PLAN-0072 (KG data quality) — migrations must be at head before Sub-Plan A starts; PLAN-0062 (Avro enforcement) — Avro wire format migration in Sub-Plan B, Wave B-3 depends on PLAN-0062 contract infra.
 
@@ -16,10 +17,10 @@ Nine deferred items from the 2026-05-05 PLAN-0072 pass-2 QA investigation cannot
 | Sub-Plan | Title | DEF items | Services | Waves | Effort |
 |----------|-------|-----------|----------|-------|--------|
 | A | Schema Migrations | DEF-014, DEF-022, DEF-025, DEF-033 | intelligence-migrations, S7 knowledge-graph | A-1, A-2, A-3, A-4 | 2.5d |
-| B | Architecture Hardening | DEF-018, DEF-023, DEF-031, DEF-032 | S7 knowledge-graph, S6 nlp-pipeline, libs/messaging | B-1, B-2, B-3, B-4 | 3.5d |
+| B | Architecture Hardening | DEF-018, DEF-023, DEF-031, DEF-032, DEF-034 | S7 knowledge-graph, S6 nlp-pipeline, libs/messaging | B-1, B-2, B-3, B-4, B-5 | 5.5d |
 | C | Test Coverage | DEF-016 | S7 knowledge-graph, S6 nlp-pipeline | C-1, C-2 | 1.5d |
 
-**Total**: 10 waves, ~7.5 days, ~40 tasks.
+**Total**: 11 waves, ~9.5 days, ~50 tasks.
 
 ### 0.2 DEF Item Index
 
@@ -33,11 +34,12 @@ Nine deferred items from the 2026-05-05 PLAN-0072 pass-2 QA investigation cannot
 | DEF-023 | EntityCreatedConsumer uses JSON not Avro wire format | B | B-3 |
 | DEF-031 | Circuit breaker record_failure() TOCTOU race condition | B | B-2 |
 | DEF-032 | No backpressure/pause-resume on BaseKafkaConsumer | B | B-4 |
+| DEF-034 | R23 violation: all scheduler workers use write_factory for reads (read replica never used) | B | B-5 |
 | DEF-016 | 21 test coverage gaps in KG worker layer | C | C-1, C-2 |
 
 ### 0.3 Critical Path
 
-Sub-Plan A migrations are a soft prerequisite for Sub-Plan B Wave B-1 (SummaryWorker refactor reads `summary_embedding_model_id`). Sub-Plan B waves are independent of each other. Sub-Plan C is independent of A and B. Parallelism: `A-1 → A-2 → A-3 → A-4` (sequential within A, each migration chains the next); `B-1 ∥ B-2 ∥ B-3 ∥ B-4` (all independent after A is merged); `C-1 ∥ C-2` (fully independent).
+Sub-Plan A migrations are a soft prerequisite for Sub-Plan B Wave B-1 (SummaryWorker refactor reads `summary_embedding_model_id`). Within Sub-Plan B, Wave B-5 (read/write factory wiring) is a hard prerequisite for Wave B-1 (SummaryWorker's Phase 1 uses `read_session_factory` from B-5). Waves B-2, B-3, B-4 are independent of B-5 and of each other. Sub-Plan C Wave C-1 depends on B-1 (SummaryWorker refactor must land first). Sub-Plan C Wave C-2 is fully independent. Parallelism: `A-1 → A-2 → A-3 → A-4` (sequential within A); `B-5 → B-1; B-2 ∥ B-3 ∥ B-4` (B-2/B-3/B-4 independent of B-5); `C-1` (after B-1), `C-2` (independent).
 
 ### 0.4 Migration Numbering
 
@@ -76,8 +78,9 @@ Sub-Plan A adds 4 migrations to `intelligence-migrations`. At plan-write time th
 
 ---
 
-## Wave A-1 — DEF-014: UNIQUE INDEX on canonical_entities for Dedup Race Prevention
+## Wave A-1 — DEF-014: UNIQUE INDEX on canonical_entities for Dedup Race Prevention ✅
 
+**Status**: **DONE** — 2026-05-06 · 65 KG canonical/provisional tests pass · ruff + mypy clean · migration 0026 applied + dedup pre-step added (BP-400) · partial index excludes financial_instrument (avoids dual-listing breakage)
 **Goal**: Make the `persist_enrichment()` "find-then-create" pattern atomic by adding a UNIQUE INDEX and ON CONFLICT clause that prevents two concurrent workers from inserting duplicate canonical entities.
 **Depends on**: PLAN-0072 migration head (`0025`).
 **Estimated effort**: 4 hours.
@@ -184,8 +187,9 @@ Sub-Plan A adds 4 migrations to `intelligence-migrations`. At plan-write time th
 
 ---
 
-## Wave A-2 — DEF-022: EmbeddingRefreshWorker model_id Tracking
+## Wave A-2 — DEF-022: EmbeddingRefreshWorker model_id Tracking ✅
 
+**Status**: **DONE** — 2026-05-06 · 17 embedding/relation_summary tests pass · migration 0027 applied · `KNOWLEDGE_GRAPH_SUMMARY_EMBEDDING_MODEL_ID` env var live, scheduler threads it into worker
 **Goal**: Add a `summary_embedding_model_id TEXT` column to `relation_summaries` and wire the `EmbeddingRefreshWorker` to persist the model ID alongside the embedding vector, preventing mixed-model ANN results.
 **Depends on**: Wave A-1 (migration chain continuity).
 **Estimated effort**: 4 hours.
@@ -259,8 +263,9 @@ Sub-Plan A adds 4 migrations to `intelligence-migrations`. At plan-write time th
 
 ---
 
-## Wave A-3 — DEF-025: Deterministic event_id for temporal events (replay-safe)
+## Wave A-3 — DEF-025: Deterministic event_id for temporal events (replay-safe) ✅
 
+**Status**: **DONE** — 2026-05-06 · 60 graph_write/temporal_events tests pass · `uuid5_from_parts()` added to libs/common · migration 0028 converted to no-op invariant assertion · partition-key idempotency closed (deterministic `created_at`, BP-397)
 **Goal**: Replace non-deterministic `new_uuid7()` event IDs in `graph_write.py` with UUID5 derived from `(doc_id, subject_entity_id, event_type)` so that Kafka replays hit the existing ON CONFLICT clause instead of creating duplicate rows.
 **Depends on**: Wave A-2 (migration chain continuity).
 **Estimated effort**: 4 hours.
@@ -370,8 +375,9 @@ def uuid5_from_parts(*parts: str) -> str:
 
 ---
 
-## Wave A-4 — DEF-033: Exponential Backoff in ProvisionalEnrichmentWorker
+## Wave A-4 — DEF-033: Exponential Backoff in ProvisionalEnrichmentWorker ✅
 
+**Status**: **DONE** — 2026-05-06 · 82 provisional tests pass · migration 0029 applied · backoff threaded into BOTH polling worker AND hot-path consumer (BP-399 fix) · recovery sweep also writes `next_retry_at`
 **Goal**: Add `next_retry_at TIMESTAMPTZ` to `provisional_entity_queue` so LLM API outages cause exponential backoff instead of hammering the API every 5 minutes with up to 2,500 permanently-failed rows.
 **Depends on**: Wave A-3 (migration chain continuity).
 **Estimated effort**: 5 hours.
@@ -479,16 +485,16 @@ def uuid5_from_parts(*parts: str) -> str:
 
 # Sub-Plan B — Architecture Hardening
 
-> **Goal**: Fix four architectural correctness issues: the ARCH-003 session-spanning-I/O violation in SummaryWorker, the TOCTOU race in the circuit breaker, the missing Avro wire format on EntityCreatedConsumer, and the missing Kafka consumer backpressure mechanism.
+> **Goal**: Fix five architectural correctness issues: (B-5) R23 violation — all scheduler workers use write_factory for reads; (B-1) ARCH-003 session-spanning-I/O violation in SummaryWorker; (B-2) TOCTOU race in the circuit breaker; (B-3) missing Avro wire format on EntityCreatedConsumer; (B-4) missing Kafka consumer backpressure mechanism.
 > **Depends on**: Sub-Plan A migrations merged (soft — Sub-Plan B code uses new columns from A-2).
-> **Estimated total effort**: 3.5 days across 4 independent waves.
+> **Estimated total effort**: 5.5 days across 5 waves (B-5 → B-1 sequential; B-2 ∥ B-3 ∥ B-4 independent).
 
 ---
 
 ## Wave B-1 — DEF-018: SummaryWorker ARCH-003 Refactor (3-Phase Session Pattern)
 
-**Goal**: Eliminate the ARCH-003 violation in `SummaryWorker` where a single DB session spans 20 LLM calls (up to 600s of I/O). Refactor to 3-phase: fetch-and-close → LLM batch → write-per-relation.
-**Depends on**: Wave A-2 (new `summary_embedding_model_id` column).
+**Goal**: Eliminate the ARCH-003 violation in `SummaryWorker` where a single DB session spans 20 LLM calls (up to 600s of I/O). Refactor to 3-phase: fetch-and-close → LLM batch → write-per-relation. Phase 1 uses the read replica session factory wired by Wave B-5.
+**Depends on**: Wave A-2 (new `summary_embedding_model_id` column); **Wave B-5** (read_session_factory must be threaded into `SummaryWorker` before Phase 1 can use the read replica).
 **Estimated effort**: 6 hours.
 **Architecture layer**: application (worker refactor).
 
@@ -510,23 +516,25 @@ def uuid5_from_parts(*parts: str) -> str:
 - `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/relation.py`
 
 **What to build**: Split the monolithic `run_once()` into three phases that each use a short-lived session:
-- **Phase 1** (fetch): Open session → call `fetch_stale_summary(limit=N)` → collect `[(relation_id, evidence_bundle)]` → close session.
+- **Phase 1** (fetch): Open **read** session (via `self._read_session_factory` from Wave B-5) → call `fetch_stale_summary(limit=N)` → collect `[(relation_id, evidence_bundle)]` → close session. The read factory targets the read replica when `DATABASE_URL_READ` is configured; falls back to the write pool when the replica URL is absent.
 - **Phase 2** (LLM): No session — call LLM for each `(relation_id, evidence_bundle)` → collect `[(relation_id, summary_text)]`.
-- **Phase 3** (write): For each `(relation_id, summary_text)`, open a fresh session → `upsert_summary(relation_id, summary_text, model_id=...)` → commit → close session.
+- **Phase 3** (write): For each `(relation_id, summary_text)`, open a fresh **write** session (via `self._write_session_factory`) → `upsert_summary(relation_id, summary_text, model_id=...)` → commit → close session.
 
 **Logic & Behavior**:
+- `SummaryWorker.__init__` now accepts `write_session_factory` and `read_session_factory` (both `async_sessionmaker`). Store as `self._write_session_factory` and `self._read_session_factory`. Both are threaded from `build_workers()` by Wave B-5 T-B5-01.
 - Rename existing method `_fetch_stale_with_evidence(session, limit) -> list[tuple[UUID, dict]]` — private helper.
 - New `_call_llm_batch(evidence_bundles) -> dict[UUID, str | None]` — no session, pure I/O.
 - New `_write_summary(session, relation_id, summary_text, model_id)` — single row write + commit.
 - Remove `FOR UPDATE SKIP LOCKED` from `fetch_stale_summary` in the repository (per F-DS-201 decision — `max_instances=1` APScheduler prevents concurrency).
 - Add log metrics: `summary_worker.phase1_fetched_count`, `summary_worker.phase2_llm_calls`, `summary_worker.phase3_written_count`.
-- The total behavior (fetch → LLM → write) is identical; only session lifetime changes.
+- The total behavior (fetch → LLM → write) is identical; only session lifetime and factory assignment changes.
 - On LLM failure (returns `None`): per F-DS-208 decision, call `mark_summary_updated(relation_id)` to clear the stale flag; add `summary_last_failed_at` structlog metric. The flag will re-set to `true` when new evidence arrives.
 
 **Acceptance criteria**:
-- [ ] `test_summary_worker_phase_isolation` — mock the session factory to track when sessions are opened/closed; verify no session is open during Phase 2 LLM calls.
+- [ ] `test_summary_worker_phase1_uses_read_factory` — mock both factories; verify Phase 1 fetch opens a session from `read_session_factory`, not `write_session_factory`.
+- [ ] `test_summary_worker_phase_isolation` — mock the session factories to track when sessions are opened/closed; verify no session is open during Phase 2 LLM calls.
 - [ ] `test_summary_worker_llm_failure_clears_stale` — mock LLM to return `None`; verify `mark_summary_updated` called with correct relation_id; verify no exception raised.
-- [ ] `test_summary_worker_phase3_write_per_relation` — 3 relations; one write failure; verify other 2 are written (independent sessions).
+- [ ] `test_summary_worker_phase3_write_per_relation` — 3 relations; one write failure; verify other 2 are written (independent write sessions).
 - [ ] `test_summary_worker_for_update_removed` — `fetch_stale_summary` SQL no longer contains `FOR UPDATE` (assert in SQL capture).
 - [ ] Existing `test_summary_worker_*` tests pass unchanged.
 - [ ] ruff clean, mypy clean.
@@ -900,6 +908,224 @@ class LagCalculator:
 
 ---
 
+## Wave B-5 — DEF-034: R23 Read/Write Replica Split for All Scheduler Workers
+
+**Goal**: Wire `read_session_factory` (from `_build_factories()`) into every scheduler worker so that read-only fetch phases target the read replica connection pool, and only writes use the write pool. Currently `_read_factory` is built but discarded — every worker reads and writes via the write pool, violating R23.
+**Depends on**: none (independent infrastructure wiring wave; must land before B-1).
+**Estimated effort**: 8 hours.
+**Architecture layer**: infrastructure (scheduler wiring + all worker constructors).
+
+### Pre-read
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py` — `build_workers()` signature (current single `session_factory` param)
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler_main.py` — lines 50-60 (`_build_factories()` return, `_read_factory` discarded) and lines 150-160 (`build_workers()` call site) and the `finally:` teardown block
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/session.py` — `_build_factories()` returns `(write_engine, read_engine, write_factory, read_factory)`; read_factory uses `postgresql_readonly=True` when `DATABASE_URL_READ` is configured
+- All 8 worker files listed in T-B5-02 through T-B5-08
+
+### Tasks
+
+#### T-B5-01: Thread read_session_factory through scheduler_main.py → build_workers()
+
+**Type**: impl (infrastructure wiring)
+**depends_on**: none
+**blocks**: T-B5-02, T-B5-03, T-B5-04, T-B5-05, T-B5-06, T-B5-07, T-B5-08, Wave B-1
+**Target files**:
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler_main.py`
+
+**What to build**: Add `read_session_factory` as a new parameter to `build_workers()`. Update `scheduler_main.py` to pass `_read_factory` (currently discarded with underscore prefix) and to call `_read_engine.dispose()` in the teardown block.
+
+**Logic & Behavior**:
+- `build_workers(settings, write_session_factory, read_session_factory, ...)` — add `read_session_factory: Any` as the third positional parameter (after `session_factory`, renamed to `write_session_factory`). Keep backwards-compatible default `read_session_factory = None`; when `None`, fall back to `write_session_factory` for all workers so existing tests require no change.
+- `scheduler_main.py` line ~54: change `engine, _read_engine, write_factory, _read_factory = ...` → `engine, read_engine, write_factory, read_factory = ...` (drop underscores).
+- `scheduler_main.py` line ~152: change `build_workers(settings, write_factory, ...)` → `build_workers(settings, write_factory, read_factory, ...)`.
+- `scheduler_main.py` teardown `finally:` block: add `await read_engine.dispose()` after `await engine.dispose()`.
+- Pass `read_session_factory` through to each worker constructor in `build_workers()` (individual workers updated in T-B5-02 through T-B5-08).
+- Workers that must NOT split (ConfidenceWorker, ContradictionBatchWorker, MonthlyPartitionWorker): continue to receive only `write_session_factory`. Document in a `# R23-EXEMPT` comment why each is exempt (atomicity requirement or DDL-only).
+
+**Acceptance criteria**:
+- [ ] `test_build_workers_passes_read_factory` — call `build_workers(settings, write_sf, read_sf)`; assert `SummaryWorker._read_session_factory is read_sf` (spot-check).
+- [ ] `test_build_workers_falls_back_when_read_factory_none` — call `build_workers(settings, write_sf, None)`; assert workers fall back to write_sf for their read factory (no AttributeError).
+- [ ] `test_scheduler_main_disposes_read_engine` — mock `_build_factories()`; assert `read_engine.dispose()` called in teardown.
+- [ ] mypy clean (no `Any` gaps introduced by renaming the parameter), ruff clean.
+
+#### T-B5-02: DefinitionRefreshWorker — read factory for entity fetch phase
+
+**Type**: impl
+**depends_on**: T-B5-01
+**blocks**: none
+**Target files**:
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/definition_refresh.py`
+- `services/knowledge-graph/tests/unit/infrastructure/workers/test_definition_refresh_worker.py`
+
+**What to build**: Update `DefinitionRefreshWorker` to accept `read_session_factory` and use it for the initial entity-batch fetch.
+
+**Logic & Behavior**:
+- `__init__` gains `read_session_factory: async_sessionmaker`. Store as `self._read_session_factory`.
+- The method that fetches entities needing definition refresh (typically a `SELECT ... WHERE definition IS NULL LIMIT N`) is called inside `async with self._read_session_factory() as session:` and its results collected in a list.
+- The session is closed before any LLM calls.
+- Subsequent writes (persisting the LLM-generated definition) use a fresh `self._session_factory` (write factory) session per row, matching the 3-phase pattern.
+- Where the worker previously performed read+write in a single session, split into fetch phase (read factory) and write phase (write factory).
+
+**Acceptance criteria**:
+- [ ] `test_definition_refresh_fetch_uses_read_factory` — mock both factories; assert fetch opens session from `read_session_factory`.
+- [ ] `test_definition_refresh_write_uses_write_factory` — assert definition persist opens session from `write_session_factory`.
+- [ ] All existing `test_definition_refresh_worker_*` tests pass unchanged.
+- [ ] mypy clean, ruff clean.
+
+#### T-B5-03: NarrativeRefreshWorker — read factory for entity fetch phase
+
+**Type**: impl
+**depends_on**: T-B5-01
+**blocks**: none
+**Target files**:
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/narrative_refresh.py`
+- `services/knowledge-graph/tests/unit/infrastructure/workers/test_narrative_refresh_worker.py`
+
+**What to build**: Same pattern as T-B5-02 — split the entity fetch (read factory) from the narrative embedding write (write factory).
+
+**Logic & Behavior**:
+- `__init__` gains `read_session_factory: async_sessionmaker`. Fetch phase uses read factory; write phase uses write factory.
+- Pattern: `async with self._read_session_factory() as s: entities = await repo.fetch_batch(s)` → embedding compute (no session) → `async with self._session_factory() as s: await repo.update(s, entity_id, vector); await s.commit()` per entity.
+
+**Acceptance criteria**:
+- [ ] `test_narrative_refresh_fetch_uses_read_factory` — assert fetch opens read factory session.
+- [ ] `test_narrative_refresh_write_uses_write_factory` — assert write opens write factory session.
+- [ ] All existing tests pass unchanged.
+- [ ] mypy clean, ruff clean.
+
+#### T-B5-04: EmbeddingRefreshWorker — read factory for relation fetch phase
+
+**Type**: impl
+**depends_on**: T-B5-01
+**blocks**: none
+**Target files**:
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/embedding_refresh.py`
+- `services/knowledge-graph/tests/unit/infrastructure/workers/test_embedding_refresh_worker.py`
+
+**What to build**: Split relation-summary fetch (read factory) from embedding vector write (write factory).
+
+**Logic & Behavior**:
+- `__init__` gains `read_session_factory`. Relation-batch SELECT uses read factory; `update_embedding()` writes use write factory per row.
+- This wave adds the `read_session_factory` constructor param; the `summary_embedding_model_id` write added in Wave A-2 already uses `update_embedding()` with the write session — no conflict.
+
+**Acceptance criteria**:
+- [ ] `test_embedding_refresh_fetch_uses_read_factory` — assert fetch opens read factory session.
+- [ ] `test_embedding_refresh_write_uses_write_factory` — assert embedding write opens write factory session.
+- [ ] All existing tests pass unchanged.
+- [ ] mypy clean, ruff clean.
+
+#### T-B5-05: ProvisionalEnrichmentWorker — read factory for queue fetch phase
+
+**Type**: impl
+**depends_on**: T-B5-01
+**blocks**: none
+**Target files**:
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/provisional_enrichment.py`
+- `services/knowledge-graph/tests/unit/infrastructure/workers/test_provisional_enrichment_worker.py`
+
+**What to build**: Split provisional queue row fetch (read factory) from enrichment result write (write factory).
+
+**Logic & Behavior**:
+- `__init__` gains `read_session_factory`. The `claim_batch()` SELECT (which reads `provisional_entity_queue`) uses the read factory session. Note: `claim_batch()` does both a SELECT and an UPDATE (to set `status='processing'`). The status update is a write — use the write factory for the claim step. The initial "how many rows are pending" check can use read factory; the actual claim UPDATE must use write factory.
+- Concretely: read factory for any pure-read diagnostic queries; write factory for the `claim_batch()` claim UPDATE and all downstream writes.
+
+**Acceptance criteria**:
+- [ ] `test_provisional_enrichment_claim_uses_write_factory` — `claim_batch()` (which does the status UPDATE) opens a session from write factory.
+- [ ] `test_provisional_enrichment_read_queries_use_read_factory` — any pure-SELECT diagnostic queries use read factory.
+- [ ] All existing `test_provisional_enrichment_*` tests pass unchanged.
+- [ ] mypy clean, ruff clean.
+
+#### T-B5-06: FundamentalsRefreshWorker — read factory for instrument fetch phase
+
+**Type**: impl
+**depends_on**: T-B5-01
+**blocks**: none
+**Target files**:
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/fundamentals_refresh.py`
+- `services/knowledge-graph/tests/unit/infrastructure/workers/test_fundamentals_refresh_worker.py`
+
+**What to build**: Split instrument-batch fetch (read factory) from fundamentals write (write factory).
+
+**Logic & Behavior**:
+- `__init__` gains `read_session_factory`. The `SELECT canonical_entities WHERE entity_type='financial_instrument' AND fundamentals_stale=true LIMIT N` uses read factory. Market-data API call uses no session. Result write uses write factory per instrument row.
+
+**Acceptance criteria**:
+- [ ] `test_fundamentals_refresh_fetch_uses_read_factory` — assert instrument fetch opens read factory session.
+- [ ] `test_fundamentals_refresh_write_uses_write_factory` — assert fundamentals persist opens write factory session.
+- [ ] All existing tests pass unchanged.
+- [ ] mypy clean, ruff clean.
+
+#### T-B5-07: AgeSyncWorker — read factory for intelligence_db entity/relation fetch
+
+**Type**: impl
+**depends_on**: T-B5-01
+**blocks**: none
+**Target files**:
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/age_sync_worker.py`
+- `services/knowledge-graph/tests/unit/infrastructure/workers/test_age_sync_worker.py`
+
+**What to build**: `AgeSyncWorker` reads `canonical_entities` and `canonical_relations` from `intelligence_db` and writes them to the AGE graph. The intelligence_db reads should use the read replica; AGE writes go to a separate connection (AGE is not intelligence_db) so there is no atomicity concern.
+
+**Logic & Behavior**:
+- `__init__` gains `read_session_factory`. All `SELECT` queries against `intelligence_db` use `self._read_session_factory`. AGE writes use their own connection (the AGE sync already uses a separate Postgres connection — confirm in pre-read). `write_session_factory` is still stored for any intelligence_db writes (watermark updates etc.).
+
+**Acceptance criteria**:
+- [ ] `test_age_sync_reads_use_read_factory` — assert entity/relation SELECT opens session from read factory.
+- [ ] `test_age_sync_watermark_writes_use_write_factory` — assert watermark or status updates use write factory.
+- [ ] All existing `test_age_sync_worker_*` tests pass unchanged.
+- [ ] mypy clean, ruff clean.
+
+#### T-B5-08: EntityEnrichmentAdapter (StructuredEnrichmentWorker) — read factory for entity fetch
+
+**Type**: impl
+**depends_on**: T-B5-01
+**blocks**: none
+**Target files**:
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/adapters/entity_enrichment_adapter.py`
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/structured_enrichment_worker.py`
+- `services/knowledge-graph/tests/unit/infrastructure/adapters/test_entity_enrichment_adapter.py`
+
+**What to build**: `EntityEnrichmentAdapter` currently takes a single `session_factory`. Its `fetch_pending_entities()` method (read-only) should use the read factory; its write methods (`mark_enriched()`, `save_enrichment_result()`, etc.) should use the write factory.
+
+**Logic & Behavior**:
+- `EntityEnrichmentAdapter.__init__` gains `read_session_factory`. `fetch_pending_entities()` uses read factory; all mutation methods use write factory.
+- `_add_structured_enrichment_worker()` in `scheduler.py` now receives both factories from `build_workers()` (via T-B5-01) and passes them to `EntityEnrichmentAdapter`.
+
+**Acceptance criteria**:
+- [ ] `test_entity_enrichment_adapter_fetch_uses_read_factory` — assert `fetch_pending_entities()` opens read factory session.
+- [ ] `test_entity_enrichment_adapter_write_uses_write_factory` — assert `mark_enriched()` and similar mutations open write factory session.
+- [ ] All existing adapter tests pass unchanged.
+- [ ] mypy clean, ruff clean.
+
+### Workers Explicitly Exempt from R23 Split
+
+The following workers are intentionally left on `write_session_factory` for both reads and writes. Each is annotated with `# R23-EXEMPT` in `build_workers()`:
+
+| Worker | Reason |
+|--------|--------|
+| `ConfidenceWorker` | Reads relation evidence and immediately writes updated confidence scores in the same transaction — splitting would break atomicity guarantees |
+| `ContradictionBatchWorker` | Reads evidence pairs and marks contradiction flags in the same atomic batch — splitting creates a window where a contradiction is read but not yet flagged |
+| `MonthlyPartitionWorker` | DDL-only (CREATE TABLE IF NOT EXISTS for monthly partitions) — no meaningful read phase; partition existence check and creation must be in the same transaction |
+
+### Validation Gate
+
+- [ ] `python -m pytest services/knowledge-graph/tests/ -v -k "session_factory or read_factory or write_factory or age_sync or definition_refresh or narrative_refresh or embedding_refresh or provisional_enrichment or fundamentals_refresh or entity_enrichment" --no-header` — all pass.
+- [ ] `python -m pytest services/knowledge-graph/tests/ -v --no-header` — zero regression (all existing tests pass).
+- [ ] `ruff check services/knowledge-graph/` — clean.
+- [ ] `mypy services/knowledge-graph/` — 0 new errors.
+- [ ] Manual smoke check: with `DATABASE_URL_READ` set to a different value than `DATABASE_URL`, `scheduler_main.py` startup log shows two distinct connection pool hostnames.
+- [ ] `docs/services/knowledge-graph.md` updated: note R23 compliance, `DATABASE_URL_READ` env var documented.
+
+### Break Impact
+
+| File | Why It Breaks | Fix |
+|------|--------------|-----|
+| Any test that calls `build_workers(settings, session_factory)` with positional args | Third positional param now `read_session_factory` | Pass `read_session_factory=None` or update to keyword args |
+| Any test that constructs a worker with a single `session_factory` | Constructor now has `write_session_factory` and `read_session_factory` | Update to keyword args; `read_session_factory=write_session_factory` is safe as fallback |
+| `_add_structured_enrichment_worker()` internal call | Now must pass `read_session_factory` to `EntityEnrichmentAdapter` | Updated in T-B5-08 |
+
+---
+
 # Sub-Plan C — Test Coverage
 
 > **Goal**: Close the 21 test coverage gaps identified in the PLAN-0072 pass-2 QA report (F-QA-201 through F-QA-212 and related gaps in NLP). Split into two waves by service.
@@ -1088,5 +1314,6 @@ The following documentation must be updated during the wave that introduces the 
 | B-2 | `docs/BUG_PATTERNS.md` | New BP entry for circuit breaker TOCTOU |
 | B-3 | `docs/BUG_PATTERNS.md`, `infra/kafka/schemas/README.md` | BP-313 update, schema inventory |
 | B-4 | `docs/libs/messaging.md`, `dev.local.env.example` | Backpressure section, env var documentation |
+| B-5 | `docs/services/knowledge-graph.md`, `dev.local.env.example` | R23 read/write replica compliance note, `DATABASE_URL_READ` env var, R23-EXEMPT worker table |
 | C-1 | — | No docs needed (test-only wave) |
 | C-2 | — | No docs needed (test-only wave) |

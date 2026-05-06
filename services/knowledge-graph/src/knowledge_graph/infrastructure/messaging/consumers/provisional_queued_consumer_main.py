@@ -154,6 +154,12 @@ async def main() -> None:
         max_retries=settings.worker_provisional_enrichment_max_retries,
         dedup_client=valkey,
         direct_producer=direct_producer,
+        # DEF-033 / BP-396 — thread the env-var-driven backoff window through
+        # so the hot-path consumer honours the same exponential backoff as the
+        # polling worker.  Without this kwarg the consumer silently used the
+        # function defaults (2 / 1440) regardless of ops configuration.
+        base_retry_minutes=settings.provisional_enrichment_base_retry_minutes,
+        max_retry_minutes=settings.provisional_enrichment_max_retry_minutes,
     )
 
     try:

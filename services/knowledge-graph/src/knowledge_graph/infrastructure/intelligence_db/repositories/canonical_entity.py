@@ -161,6 +161,118 @@ LIMIT 1
             "metadata": row[6],
         }
 
+    async def create_or_get(
+        self,
+        canonical_name: str,
+        entity_type: str,
+        *,
+        entity_id: UUID | None = None,
+        isin: str | None = None,
+        ticker: str | None = None,
+        exchange: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> tuple[UUID, bool]:
+        """Atomic idempotent INSERT — DEF-014 / BP-384 dedup race fix.
+
+        Behaviour:
+            1. Attempt ``INSERT ... ON CONFLICT (lower(canonical_name)) DO NOTHING
+               RETURNING entity_id``.
+            2. If the conflict fired (no RETURNING row), re-SELECT the existing
+               row by ``WHERE lower(canonical_name) = lower(:canonical_name)``.
+               This makes the operation fully atomic — no TOCTOU window between
+               read and write.
+            3. Returns ``(entity_id, was_created)``: ``was_created=True`` when
+               this call inserted the row, ``False`` when a conflict path found
+               an existing row.
+
+        Conflict target ``lower(canonical_name)`` matches the functional UNIQUE
+        INDEX added by migration 0026 (``idx_canonical_entities_lower_name``);
+        the index MUST exist in the target database for the ON CONFLICT clause
+        to bind.
+
+        IMPORTANT: this method is intentionally a "thin" idempotent insert and
+        does NOT co-insert the EXACT self-alias that the legacy ``create()``
+        method writes.  Call sites that previously relied on the side-effecting
+        ``create()`` (e.g. ``CreateCanonicalEntityUseCase``) MUST keep using
+        ``create()``; ``create_or_get`` is intended for high-concurrency
+        ingestion paths (``persist_enrichment``) where the caller writes its
+        own alias rows and dedup is the dominant concern.
+        """
+        import json
+
+        params: dict[str, object | None] = {
+            "canonical_name": canonical_name,
+            "entity_type": entity_type,
+            "isin": isin,
+            "ticker": ticker,
+            "exchange": exchange,
+            "metadata": json.dumps(metadata) if metadata else None,
+        }
+        # PLAN-0076 QA fix — the partial unique index added by migration 0026
+        # excludes ``entity_type='financial_instrument''`` rows (legitimate
+        # dual-listed instruments).  Postgres requires the ON CONFLICT
+        # specifier to repeat the index predicate verbatim for partial
+        # indexes; without it the planner refuses inference and the INSERT
+        # raises ``ERROR: there is no unique or exclusion constraint matching
+        # the ON CONFLICT specification`` on every call.  See migration 0026
+        # docstring (STEP 2 / "ON CONFLICT BINDING") for the contract.
+        if entity_id is not None:
+            sql = """
+INSERT INTO canonical_entities
+    (entity_id, canonical_name, entity_type, isin, ticker, exchange, metadata)
+VALUES (:entity_id, :canonical_name, :entity_type, :isin, :ticker, :exchange, :metadata)
+ON CONFLICT (lower(canonical_name)) WHERE entity_type != 'financial_instrument'
+DO NOTHING
+RETURNING entity_id
+"""
+            params["entity_id"] = str(entity_id)
+        else:
+            sql = """
+INSERT INTO canonical_entities
+    (canonical_name, entity_type, isin, ticker, exchange, metadata)
+VALUES (:canonical_name, :entity_type, :isin, :ticker, :exchange, :metadata)
+ON CONFLICT (lower(canonical_name)) WHERE entity_type != 'financial_instrument'
+DO NOTHING
+RETURNING entity_id
+"""
+        result = await self._session.execute(text(sql), params)
+        row = result.fetchone()
+        if row is not None:
+            # Happy path — INSERT succeeded.
+            return UUID(str(row[0])), True
+
+        # Conflict path — fetch the existing row by lower(canonical_name).
+        # Single round-trip, fully atomic relative to the failed INSERT.
+        #
+        # PLAN-0076 QA fix: the partial unique index excludes
+        # ``entity_type='financial_instrument'`` rows, so a duplicate-name
+        # ``company`` row + an unrelated ``financial_instrument`` row may
+        # legitimately co-exist (e.g. "Apple Inc." as both a tracked equity
+        # instrument and as a parent company entity).  We mirror the index
+        # predicate in the recovery SELECT so we always re-fetch the same row
+        # the conflict would have hit — never silently picking a financial
+        # instrument when the caller's INSERT was for a non-instrument type.
+        select_result = await self._session.execute(
+            text(
+                "SELECT entity_id FROM canonical_entities "
+                "WHERE lower(canonical_name) = lower(:canonical_name) "
+                "AND entity_type != 'financial_instrument'",
+            ),
+            {"canonical_name": canonical_name},
+        )
+        existing = select_result.fetchone()
+        if existing is None:
+            # Should never happen — the ON CONFLICT fired but the row vanished.
+            # Most plausible cause is a concurrent DELETE in between, which is
+            # not part of any production flow.  Raise so the caller fails loudly
+            # rather than silently returning a wrong ID.
+            msg = (
+                f"create_or_get: ON CONFLICT fired for canonical_name={canonical_name!r} "
+                "but no existing row was found on re-SELECT — possible concurrent DELETE."
+            )
+            raise RuntimeError(msg)
+        return UUID(str(existing[0])), False
+
     async def create(
         self,
         canonical_name: str,

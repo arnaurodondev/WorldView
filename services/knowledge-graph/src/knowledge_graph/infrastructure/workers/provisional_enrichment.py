@@ -170,6 +170,12 @@ class ProvisionalEnrichmentWorker:
         noise_classifier_api_key: str = "",
         noise_classifier_api_base_url: str = "https://api.deepinfra.com/v1/openai",
         noise_classifier_timeout_s: float = 10.0,
+        # DEF-033 (Wave A-4) — exponential backoff parameters threaded through
+        # to ``core.apply_retry_transition`` on every retry transition.  Defaults
+        # match the canonical worldview values; the scheduler overrides them
+        # from ``Settings.provisional_enrichment_{base,max}_retry_minutes``.
+        base_retry_minutes: int = 2,
+        max_retry_minutes: int = 1440,
     ) -> None:
         self._sf = session_factory
         self._embed_model_id = embedding_model_id
@@ -190,6 +196,12 @@ class ProvisionalEnrichmentWorker:
         self._batch_limit = batch_limit
         self._max_retries = max_retries
         self._concurrency = concurrency
+        # DEF-033: passed straight into ``core.apply_retry_transition`` from
+        # ``_apply_retry`` so the same SQL CASE produces backoff windows that
+        # match operator expectations in production while staying overridable
+        # in tests via constructor kwargs.
+        self._base_retry_minutes = base_retry_minutes
+        self._max_retry_minutes = max_retry_minutes
         # Layer 2 noise classifier state (PLAN-0072 T-72-1-01).
         # A persistent client reuses TCP connections across calls in a batch.
         self._noise_api_key = noise_classifier_api_key
@@ -229,6 +241,14 @@ class ProvisionalEnrichmentWorker:
         entity_ids_to_dirty: list[UUID] = []
 
         # ── Phase 1: Read pending rows, then release the session ──
+        # DEF-033 (Wave A-4): exclude rows whose exponential-backoff deadline
+        # has not yet elapsed.  Existing rows (pre-migration 0029) have
+        # ``next_retry_at IS NULL`` and are treated as immediately eligible
+        # for backward compatibility — no backfill required.  ``:now`` is
+        # bound from ``common.time.utc_now()`` rather than SQL ``now()`` so
+        # tests can drive the comparison deterministically.
+        from common.time import utc_now as _utc_now  # type: ignore[import-untyped]
+
         pending_rows: list[tuple[UUID, str, str, str, int]] = []
         async with self._sf() as session:
             result = await session.execute(
@@ -238,11 +258,16 @@ SELECT queue_id, mention_text, normalized_surface, mention_class,
 FROM provisional_entity_queue
 WHERE status = 'pending'
   AND retry_count < :max_retries
+  AND (next_retry_at IS NULL OR next_retry_at <= CAST(:now AS TIMESTAMPTZ))
 ORDER BY created_at
 LIMIT :limit
 FOR UPDATE SKIP LOCKED
 """),
-                {"limit": self._batch_limit, "max_retries": self._max_retries},
+                {
+                    "limit": self._batch_limit,
+                    "max_retries": self._max_retries,
+                    "now": _utc_now(),
+                },
             )
             rows = result.fetchall()
 
@@ -426,18 +451,44 @@ WHERE queue_id = :queue_id
         Rows that were legitimately created recently and are still processing
         will not be reset (they are younger than 30 minutes).
 
+        DEF-033 / Wave A-4 QA fix: also set ``next_retry_at`` on the recovered
+        rows using the same exponential-backoff formula as
+        ``core.apply_retry_transition``.  Without this, recovered rows would
+        bypass the backoff window — the next scheduler tick would re-claim them
+        immediately and hammer the upstream LLM during an outage.  The Python-
+        side LEAST clamp mirrors the SQL ``LEAST(base * 2^rc, max)`` used by
+        the regular retry path so both code paths converge on the same window.
+
         Returns the number of rows recovered.
         """
         from sqlalchemy import text
 
+        # The DB UPDATE uses a SQL CASE on the *post-increment* retry_count to
+        # compute the exponential window; we clamp at ``max_retry_minutes`` so
+        # an old stuck row with retry_count=10 doesn't end up scheduled
+        # months in the future.  The :now bind makes the result deterministic
+        # in tests that patch ``common.time.utc_now``.
+        from common.time import utc_now as _utc_now  # type: ignore[import-untyped]
+
         result = await session.execute(
             text("""
 UPDATE provisional_entity_queue
-SET status = 'pending', retry_count = LEAST(retry_count + 1, :max_retries)
+SET status = 'pending',
+    retry_count = LEAST(retry_count + 1, :max_retries),
+    next_retry_at = CAST(:now AS TIMESTAMPTZ)
+        + (LEAST(
+                :base_minutes * (2 ^ LEAST(retry_count + 1, 30))::int,
+                :max_minutes
+            ) || ' minutes')::interval
 WHERE status = 'processing'
   AND created_at < now() - interval '30 minutes'
 """),
-            {"max_retries": self._max_retries},
+            {
+                "max_retries": self._max_retries,
+                "now": _utc_now(),
+                "base_minutes": self._base_retry_minutes,
+                "max_minutes": self._max_retry_minutes,
+            },
         )
         await session.commit()
         return int(result.rowcount or 0)
@@ -458,7 +509,16 @@ WHERE status = 'processing'
         # with the worker's existing call sites; core.apply_retry_transition reads
         # the count atomically from the DB.
         del retry_count
-        transitioned_to_failed = await core.apply_retry_transition(session, queue_id, self._max_retries)
+        # DEF-033: pass the configured backoff window so the SQL CASE in
+        # core.apply_retry_transition writes ``next_retry_at`` consistent with
+        # the operator-visible env vars.
+        transitioned_to_failed = await core.apply_retry_transition(
+            session,
+            queue_id,
+            self._max_retries,
+            base_retry_minutes=self._base_retry_minutes,
+            max_retry_minutes=self._max_retry_minutes,
+        )
         if transitioned_to_failed:
             s7_provisional_enrichment_failed_total.inc()
 

@@ -35,6 +35,7 @@ Coverage:
 
 from __future__ import annotations
 
+from datetime import UTC
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
@@ -181,6 +182,228 @@ class TestApplyRetryTransition:
 
 
 # ---------------------------------------------------------------------------
+# apply_retry_transition — Wave A-4 / DEF-033 exponential backoff
+# ---------------------------------------------------------------------------
+
+
+def _make_retry_session_with_backoff(
+    is_terminal: bool,
+    next_retry_at: object | None,
+    new_retry_count: int = 1,
+) -> AsyncMock:
+    """Build a session whose RETURNING row mimics the post-Wave-A-4 schema.
+
+    The new SQL RETURNING projects three columns:
+    ``(is_terminal, new_retry_count, next_retry_at)``.  Tests inject the
+    desired ``next_retry_at`` here so we can assert the worker reads the
+    correct value back from the DB and surfaces it in the structured log.
+    """
+    session = AsyncMock()
+    session.commit = AsyncMock()
+    result_mock = MagicMock()
+    result_mock.fetchone.return_value = (is_terminal, new_retry_count, next_retry_at)
+    session.execute = AsyncMock(return_value=result_mock)
+    return session
+
+
+class TestRetryTransitionExponentialBackoff:
+    """DEF-033: ``apply_retry_transition`` writes ``next_retry_at`` per the
+    exponential-backoff formula ``base * 2^retry_count`` capped at ``max``."""
+
+    async def test_passes_backoff_params_to_sql(self) -> None:
+        """``base_retry_minutes`` and ``max_retry_minutes`` must reach the SQL.
+
+        The worker passes them through from settings; this test confirms the
+        ``apply_retry_transition`` signature wires them into the bound params
+        dict so the SQL CASE can compute the correct backoff.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session = _make_session_with_returning(is_terminal=False)
+
+        await core.apply_retry_transition(
+            session,
+            _QUEUE_ID,
+            max_retries=5,
+            base_retry_minutes=3,
+            max_retry_minutes=120,
+        )
+
+        call = session.execute.call_args
+        params = call.args[1] if len(call.args) > 1 else call.kwargs
+        assert params["base_minutes"] == 3
+        assert params["max_minutes"] == 120
+        # ``base_now`` is bound from utc_now() so the SQL CASE can add the
+        # configured interval to a known wall-clock baseline.
+        from datetime import datetime
+
+        assert isinstance(params["base_now"], datetime)
+        assert params["base_now"].tzinfo is not None
+        delta_s = abs((datetime.now(tz=UTC) - params["base_now"]).total_seconds())
+        assert delta_s < 5.0, "base_now must be derived from utc_now()"
+
+    async def test_sql_contains_next_retry_at_case(self) -> None:
+        """SQL must SET ``next_retry_at`` based on the backoff formula.
+
+        Confirms the UPDATE includes a ``next_retry_at`` write so a successful
+        retry actually persists the deadline (otherwise the Phase-1 SELECT
+        would still see NULL → eligible immediately, defeating the backoff).
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session = _make_session_with_returning(is_terminal=False)
+        await core.apply_retry_transition(session, _QUEUE_ID, max_retries=5)
+
+        sql_str = str(session.execute.call_args.args[0])
+        assert "next_retry_at" in sql_str, "UPDATE must SET next_retry_at"
+        assert ":base_minutes" in sql_str, "SQL must bind :base_minutes"
+        assert ":max_minutes" in sql_str, "SQL must bind :max_minutes"
+        # The CASE must skip the deadline write on terminal 'failed' rows
+        # (they are never re-claimed, so a deadline would just be noise).
+        assert "WHEN q.retry_count + 1 >= :max_retries THEN NULL" in sql_str
+
+    async def test_retry_transition_retry0_backoff(self) -> None:
+        """retry_count=0 → backoff = base * 2^0 = base minutes.
+
+        With base=2, the first failure should set next_retry_at ≈ now + 2 min.
+        We model the DB by returning a next_retry_at consistent with the
+        in-DB CASE evaluation and confirm the function logs the right
+        backoff_minutes value (within a 5-second tolerance).
+        """
+        from datetime import datetime, timedelta
+
+        import structlog.testing
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        baseline = datetime.now(tz=UTC)
+        # DB-side: retry_count was 0 before increment → backoff = 2*2^0 = 2 min.
+        next_retry = baseline + timedelta(minutes=2)
+        session = _make_retry_session_with_backoff(
+            is_terminal=False,
+            next_retry_at=next_retry,
+            new_retry_count=1,
+        )
+
+        with structlog.testing.capture_logs() as captured:
+            out = await core.apply_retry_transition(
+                session, _QUEUE_ID, max_retries=5, base_retry_minutes=2, max_retry_minutes=1440
+            )
+
+        assert out is False  # not terminal
+        log_events = [e for e in captured if e.get("event") == "provisional_enrichment_retry_transition"]
+        assert log_events, f"expected retry-transition log, got {captured}"
+        # backoff_minutes ≈ 2 (within tolerance — utc_now is sampled twice).
+        assert log_events[0]["backoff_minutes"] in {
+            1,
+            2,
+        }, f"expected ~2 min backoff, got {log_events[0]['backoff_minutes']}"
+        assert log_events[0]["next_retry_at"] == next_retry.isoformat()
+
+    async def test_retry_transition_retry3_backoff(self) -> None:
+        """retry_count=3 → backoff = base * 2^3 = 16 minutes (with base=2)."""
+        from datetime import datetime, timedelta
+
+        import structlog.testing
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        baseline = datetime.now(tz=UTC)
+        # DB CASE: retry_count was 3 before increment → 2 * 2^3 = 16 min.
+        next_retry = baseline + timedelta(minutes=16)
+        session = _make_retry_session_with_backoff(
+            is_terminal=False,
+            next_retry_at=next_retry,
+            new_retry_count=4,
+        )
+
+        with structlog.testing.capture_logs() as captured:
+            await core.apply_retry_transition(
+                session, _QUEUE_ID, max_retries=10, base_retry_minutes=2, max_retry_minutes=1440
+            )
+
+        log_events = [e for e in captured if e.get("event") == "provisional_enrichment_retry_transition"]
+        assert log_events
+        assert log_events[0]["backoff_minutes"] in {
+            15,
+            16,
+        }, f"expected ~16 min backoff for retry_count=3, got {log_events[0]['backoff_minutes']}"
+
+    async def test_retry_transition_max_cap(self) -> None:
+        """retry_count=20 with base=2 would compute 2^21 min — must clamp to max."""
+        from datetime import datetime, timedelta
+
+        import structlog.testing
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        baseline = datetime.now(tz=UTC)
+        # The DB CASE clamps to max_retry_minutes=1440, so the persisted
+        # next_retry_at = baseline + 1440 min (24h).
+        next_retry = baseline + timedelta(minutes=1440)
+        session = _make_retry_session_with_backoff(
+            is_terminal=False,
+            next_retry_at=next_retry,
+            new_retry_count=21,
+        )
+
+        with structlog.testing.capture_logs() as captured:
+            await core.apply_retry_transition(
+                session, _QUEUE_ID, max_retries=999, base_retry_minutes=2, max_retry_minutes=1440
+            )
+
+        log_events = [e for e in captured if e.get("event") == "provisional_enrichment_retry_transition"]
+        assert log_events
+        # Backoff_minutes is computed from the persisted next_retry_at - utc_now()
+        # so it should equal the cap (within tolerance).
+        assert log_events[0]["backoff_minutes"] in {
+            1439,
+            1440,
+        }, f"expected ~1440 min cap, got {log_events[0]['backoff_minutes']}"
+
+    async def test_retry_transition_settings_override(self) -> None:
+        """Custom base=5, max=60 produces correct values when wired through.
+
+        Confirms the params dict reflects the per-call configuration so the
+        scheduler can override the defaults via env vars without modifying
+        the core function.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session = _make_session_with_returning(is_terminal=False)
+
+        await core.apply_retry_transition(
+            session,
+            _QUEUE_ID,
+            max_retries=5,
+            base_retry_minutes=5,
+            max_retry_minutes=60,
+        )
+
+        params = session.execute.call_args.args[1]
+        assert params["base_minutes"] == 5
+        assert params["max_minutes"] == 60
+
+    async def test_terminal_failed_persists_null_next_retry_at(self) -> None:
+        """Terminal 'failed' rows persist NULL next_retry_at (no retry deadline).
+
+        The SQL CASE writes NULL when ``retry_count + 1 >= max_retries`` so
+        terminal rows do not pollute the partial index ``idx_provisional_queue
+        _retry_at`` (the index predicate excludes them anyway via the
+        ``status='pending'`` clause, but NULL is the cleanest signal).
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        # DB returns is_terminal=True, next_retry_at=None (per the CASE).
+        session = _make_retry_session_with_backoff(
+            is_terminal=True,
+            next_retry_at=None,
+            new_retry_count=5,
+        )
+
+        out = await core.apply_retry_transition(session, _QUEUE_ID, max_retries=5)
+
+        assert out is True
+
+
+# ---------------------------------------------------------------------------
 # persist_enrichment
 # ---------------------------------------------------------------------------
 
@@ -189,13 +412,20 @@ def _make_persist_session() -> tuple[AsyncMock, MagicMock]:
     """Return a (session, repos_mock) pair primed for persist_enrichment.
 
     repos_mock exposes the per-repository AsyncMock instances so individual
-    tests can configure return values (e.g. alias collision via find_exact).
+    tests can configure return values (e.g. alias collision via find_exact,
+    or dedup by overriding ``canonical_create_or_get`` return value).
     """
     session = AsyncMock()
     session.commit = AsyncMock()
     session.execute = AsyncMock(return_value=MagicMock())
 
     repos = MagicMock()
+    # DEF-014 / Wave A-1: persist_enrichment now uses ``create_or_get`` (atomic
+    # ON CONFLICT INSERT) instead of the legacy find_exact → create pattern.
+    # Default mock simulates a fresh INSERT (was_created=True).
+    repos.canonical_create_or_get = AsyncMock(return_value=(_ENTITY_ID, True))
+    # ``canonical_create`` retained for any tests that still want to assert on
+    # the legacy direct-create path was NOT awaited.
     repos.canonical_create = AsyncMock(return_value=_ENTITY_ID)
     repos.alias_insert = AsyncMock()
     repos.alias_find_exact = AsyncMock(return_value=None)  # default: no collision
@@ -217,6 +447,8 @@ class _PersistRepoPatches:
     def __init__(self, repos: MagicMock) -> None:
         canonical_repo = MagicMock()
         canonical_repo.create = repos.canonical_create
+        # DEF-014 / Wave A-1: expose the new atomic dedup INSERT helper.
+        canonical_repo.create_or_get = repos.canonical_create_or_get
 
         alias_repo = MagicMock()
         alias_repo.insert = repos.alias_insert
@@ -343,14 +575,15 @@ class TestPersistEnrichment:
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
         session, repos = _make_persist_session()
-        # find_exact call sequence (BP-384 dedup check added a leading call for the
-        # canonical name itself before the LLM alias collision checks):
-        #   call 0 — canonical name dedup check ("apple inc.") → None (no existing entity)
-        #   call 1 — LLM alias "apple" → collides with a different entity → skip
-        #   call 2 — LLM alias "aapl inc." → clean → insert
+        # DEF-014 / Wave A-1: persist_enrichment no longer issues a pre-INSERT
+        # alias_find_exact call for the canonical name itself — dedup now lives
+        # inside ``CanonicalEntityRepository.create_or_get`` via ON CONFLICT.
+        # ``alias_find_exact`` is now invoked ONLY for LLM-supplied aliases.
+        # Sequence:
+        #   call 0 — LLM alias "apple"     → collides with another entity → skip
+        #   call 1 — LLM alias "aapl inc." → clean → insert
         repos.alias_find_exact = AsyncMock(
             side_effect=[
-                None,  # "apple inc." canonical dedup → no match
                 {"entity_id": _EXISTING_OTHER_ID},  # 'apple' already maps elsewhere → skip
                 None,  # 'aapl inc.' clean → insert
             ]
@@ -376,12 +609,17 @@ class TestPersistEnrichment:
         assert repos.alias_insert.await_count == 2
 
     async def test_dedup_returns_existing_entity_without_creating(self) -> None:
-        """BP-384: if canonical-name already maps to an existing entity, return it."""
+        """DEF-014 / BP-384: ``create_or_get`` returns ``(existing_id, False)`` on conflict.
+
+        ``persist_enrichment`` MUST detect the dedup outcome via the
+        ``was_created`` flag and short-circuit — no alias inserts, no outbox
+        event, no embedding write — returning the existing entity_id.
+        """
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
         session, repos = _make_persist_session()
-        # Canonical dedup check finds Apple Inc. already exists
-        repos.alias_find_exact = AsyncMock(return_value={"entity_id": _EXISTING_OTHER_ID})
+        # Atomic INSERT hit ON CONFLICT — Apple Inc. already exists.
+        repos.canonical_create_or_get = AsyncMock(return_value=(_EXISTING_OTHER_ID, False))
         profile = {
             "canonical_name": "Apple Inc.",
             "entity_type": "company",
@@ -401,9 +639,59 @@ class TestPersistEnrichment:
 
         # Must return the existing entity_id, not a new one
         assert result == _EXISTING_OTHER_ID
-        # No entity creation, no alias inserts (returned early)
-        repos.canonical_create.assert_not_awaited()
+        # No alias inserts, no outbox emission — dedup short-circuit fired.
         repos.alias_insert.assert_not_awaited()
+        repos.outbox_append.assert_not_awaited()
+        # ``create`` (legacy direct path) must never have been awaited.
+        repos.canonical_create.assert_not_awaited()
+
+    async def test_persist_enrichment_dedup_returns_existing(self) -> None:
+        """Wave A-1 regression test — dedup path logs ``entity_deduped=True``.
+
+        DEF-014 / BP-384: when ``create_or_get`` returns ``was_created=False``
+        (atomic ON CONFLICT hit), persist_enrichment must:
+          - Return the existing entity_id (not crash).
+          - Emit a structlog event with ``entity_deduped=True`` so downstream
+            ops dashboards can chart the dedup rate.
+          - Skip every side effect (no alias inserts, no embedding write,
+            no outbox event).
+        """
+        import structlog.testing
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+        repos.canonical_create_or_get = AsyncMock(return_value=(_EXISTING_OTHER_ID, False))
+        profile = {
+            "canonical_name": "Apple Inc.",
+            "entity_type": "company",
+            "ticker": "AAPL",
+            "isin": None,
+            "aliases": ["Apple"],
+        }
+
+        with structlog.testing.capture_logs() as captured:
+            with _patch_persist_repos(repos):
+                result = await core.persist_enrichment(
+                    session=session,
+                    queue_id=_QUEUE_ID,
+                    mention_text="Apple Inc.",
+                    profile=profile,
+                    embedding=None,
+                )
+            log_events = list(captured)
+
+        # Returned the existing entity_id — caller will write it to
+        # provisional_entity_queue.assigned_entity_id without re-creating.
+        assert result == _EXISTING_OTHER_ID
+        # Structured log captures the dedup outcome.
+        dedup_events = [e for e in log_events if e.get("event") == "provisional_enrichment_entity_deduped"]
+        assert dedup_events, f"Expected provisional_enrichment_entity_deduped event in {log_events}"
+        assert dedup_events[0].get("entity_deduped") is True, f"entity_deduped flag missing or False: {dedup_events[0]}"
+        assert dedup_events[0].get("existing_entity_id") == str(_EXISTING_OTHER_ID)
+        # No side effects on the dedup short-circuit path.
+        repos.alias_insert.assert_not_awaited()
+        repos.outbox_append.assert_not_awaited()
+        repos.embedding_ensure.assert_not_awaited()
 
     async def test_truncates_llm_aliases_to_first_five(self) -> None:
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
@@ -456,8 +744,10 @@ class TestEntityTypeNormalisation:
                 session=session, queue_id=_QUEUE_ID, mention_text="Apple Inc.", profile=profile
             )
 
-        # entity created with correct type — confirm via create call args
-        repos.canonical_create.assert_awaited_once()
+        # DEF-014 / Wave A-1: persist_enrichment uses create_or_get (atomic
+        # ON CONFLICT INSERT), not the legacy direct create().  Verify the new
+        # call site fired exactly once.
+        repos.canonical_create_or_get.assert_awaited_once()
 
     async def test_uppercase_entity_type_normalised(self) -> None:
         """entity_type='ORGANIZATION' → normalised to 'organization' (valid)."""
@@ -470,14 +760,15 @@ class TestEntityTypeNormalisation:
             await core.persist_enrichment(session=session, queue_id=_QUEUE_ID, mention_text="Fed", profile=profile)
 
         # No warning logged — ORGANIZATION normalises to a valid type
-        repos.canonical_create.assert_awaited_once()
+        # DEF-014 / Wave A-1: assert against the new create_or_get call site.
+        repos.canonical_create_or_get.assert_awaited_once()
 
         # Verify that the normalised entity_type ('organization') was actually passed to
-        # entity_repo.create(), not the raw uppercased value ('ORGANIZATION').
-        # CanonicalEntityRepository.create(canonical_name, entity_type, *, ...) — entity_type
-        # is passed as a keyword argument (see infrastructure/intelligence_db/repositories/
-        # canonical_entity.py).
-        call_kwargs = repos.canonical_create.call_args.kwargs
+        # entity_repo.create_or_get(), not the raw uppercased value ('ORGANIZATION').
+        # CanonicalEntityRepository.create_or_get(canonical_name, entity_type, *, ...) —
+        # entity_type is passed as a keyword argument (see infrastructure/intelligence_db/
+        # repositories/canonical_entity.py).
+        call_kwargs = repos.canonical_create_or_get.call_args.kwargs
         assert call_kwargs["entity_type"] == "organization", (
             f"Expected normalised entity_type='organization', got {call_kwargs['entity_type']!r}. "
             "Check that _norm_type lowercasing is applied before the DB write."
@@ -495,13 +786,14 @@ class TestEntityTypeNormalisation:
                 session=session, queue_id=_QUEUE_ID, mention_text="Acme Corp", profile=profile
             )
 
-        repos.canonical_create.assert_awaited_once()
+        # DEF-014 / Wave A-1: assert against the new create_or_get call site.
+        repos.canonical_create_or_get.assert_awaited_once()
 
         # Verify that the alias-mapped entity_type ('company') was actually used in the
-        # DB create call, not the raw LLM-invented value ('corp').
+        # DB create_or_get call, not the raw LLM-invented value ('corp').
         # 'corp' is in _ENTITY_TYPE_ALIASES → 'company'; this assertion would catch a
         # regression where the alias lookup is bypassed or the wrong variable is passed.
-        call_kwargs = repos.canonical_create.call_args.kwargs
+        call_kwargs = repos.canonical_create_or_get.call_args.kwargs
         assert call_kwargs["entity_type"] == "company", (
             f"Expected alias-mapped entity_type='company', got {call_kwargs['entity_type']!r}. "
             "Check that _ENTITY_TYPE_ALIASES lookup result is used, not the raw 'corp' value."
@@ -529,7 +821,8 @@ class TestEntityTypeNormalisation:
                 )
             log_output = list(captured)
 
-        repos.canonical_create.assert_awaited_once()
+        # DEF-014 / Wave A-1: assert against the new create_or_get call site.
+        repos.canonical_create_or_get.assert_awaited_once()
         warning_events = [e for e in log_output if e.get("log_level") == "warning"]
         assert any(
             e.get("event") == "provisional_enrichment_invalid_entity_type" for e in warning_events
@@ -696,10 +989,9 @@ class TestPersistEnrichmentUnblocksSubjectAndObject:
 
         # The WHERE clause must cover both provisional slot columns so rows
         # where the provisional entity is the OBJECT are also matched.
-        assert "subject_provisional_id" in sql_str or "object_provisional_id" in sql_str, (
-            "SQL WHERE clause must reference provisional slot columns "
-            "(subject_provisional_id / object_provisional_id)"
-        )
+        assert (
+            "subject_provisional_id" in sql_str or "object_provisional_id" in sql_str
+        ), "SQL WHERE clause must reference provisional slot columns (subject_provisional_id / object_provisional_id)"
 
     async def test_evidence_update_params_include_queue_id_and_entity_id(self) -> None:
         """The UPDATE params must pass both :queue_id and :entity_id."""

@@ -102,6 +102,16 @@ class ProvisionalQueuedConsumer(BaseKafkaConsumer[None]):
         entity_dirtied_topic: str = _ENTITY_DIRTIED_TOPIC,
         direct_producer: DirectProducerProtocol | None = None,
         dedup_client: Any | None = None,
+        # DEF-033 / BP-396 — exponential backoff parameters.  Defaults match
+        # the canonical ``core.apply_retry_transition`` defaults so existing
+        # call sites that did not pass these are backward-compatible.  In
+        # production the factory in ``provisional_queued_consumer_main.py``
+        # threads ``settings.provisional_enrichment_{base,max}_retry_minutes``
+        # through so the hot-path consumer honours the same env-var-driven
+        # window as the polling worker — without this fix the hot path would
+        # silently use the defaults regardless of ops configuration.
+        base_retry_minutes: int = 2,
+        max_retry_minutes: int = 1440,
     ) -> None:
         super().__init__(config)
         self._sf = session_factory
@@ -112,6 +122,11 @@ class ProvisionalQueuedConsumer(BaseKafkaConsumer[None]):
         self._producer = direct_producer
         self._dedup_client = dedup_client
         self._dedup_prefix = f"kg:dedup:{config.group_id}"
+        # Stored as private attrs so the ``_retry`` / ``_fail_safe_retry``
+        # helpers can read them without re-plumbing every call site.  These
+        # become arguments to ``core.apply_retry_transition``.
+        self._base_retry_minutes = base_retry_minutes
+        self._max_retry_minutes = max_retry_minutes
         if direct_producer is None:
             logger.warning(  # type: ignore[no-any-return]
                 "provisional_queued_consumer_no_producer",
@@ -147,6 +162,16 @@ class ProvisionalQueuedConsumer(BaseKafkaConsumer[None]):
         context_snippet: str = ""
         retry_count: int = 0
 
+        # DEF-033 / Wave A-4 QA fix: filter out rows whose exponential-backoff
+        # window has not yet elapsed.  Without this guard a Kafka redelivery
+        # immediately after a failed attempt would pull the same row and
+        # short-circuit the backoff that we just persisted.  Pre-Wave-A-4 rows
+        # have ``next_retry_at IS NULL`` and remain immediately eligible for
+        # backward compatibility (no backfill required).  ``:now`` is bound
+        # from ``common.time.utc_now()`` so tests can drive the comparison
+        # deterministically by patching ``common.time``.
+        from common.time import utc_now as _utc_now  # type: ignore[import-untyped]
+
         async with self._sf() as session:
             result = await session.execute(
                 text("""
@@ -154,9 +179,10 @@ SELECT mention_text, mention_class, context_snippet, retry_count
 FROM provisional_entity_queue
 WHERE queue_id = :queue_id
   AND status = 'pending'
+  AND (next_retry_at IS NULL OR next_retry_at <= CAST(:now AS TIMESTAMPTZ))
 FOR UPDATE SKIP LOCKED
 """),
-                {"queue_id": str(queue_id)},
+                {"queue_id": str(queue_id), "now": _utc_now()},
             )
             row = result.fetchone()
 
@@ -226,7 +252,17 @@ WHERE queue_id = :queue_id
                             {"entity_id": str(entity_id), "queue_id": str(queue_id)},
                         )
                     else:
-                        await _retry(session, queue_id, retry_count, self._max_retries)
+                        # DEF-033 / BP-396: forward the configured backoff window
+                        # from the consumer instance so the SQL CASE writes a
+                        # ``next_retry_at`` consistent with operator config.
+                        await _retry(
+                            session,
+                            queue_id,
+                            retry_count,
+                            self._max_retries,
+                            base_retry_minutes=self._base_retry_minutes,
+                            max_retry_minutes=self._max_retry_minutes,
+                        )
                     await session.commit()
             except Exception as exc:
                 logger.error(  # type: ignore[no-any-return]
@@ -235,9 +271,23 @@ WHERE queue_id = :queue_id
                     error=str(exc),
                 )
                 entity_id = None
-                await _fail_safe_retry(self._sf, queue_id, retry_count, self._max_retries)
+                await _fail_safe_retry(
+                    self._sf,
+                    queue_id,
+                    retry_count,
+                    self._max_retries,
+                    base_retry_minutes=self._base_retry_minutes,
+                    max_retry_minutes=self._max_retry_minutes,
+                )
         else:
-            await _fail_safe_retry(self._sf, queue_id, retry_count, self._max_retries)
+            await _fail_safe_retry(
+                self._sf,
+                queue_id,
+                retry_count,
+                self._max_retries,
+                base_retry_minutes=self._base_retry_minutes,
+                max_retry_minutes=self._max_retry_minutes,
+            )
 
         # ── Step 5: emit entity.dirtied.v1 after successful commit ──────────
         if entity_id and self._producer:
@@ -362,14 +412,28 @@ async def _retry(
     queue_id: UUID,
     retry_count: int,
     max_retries: int,
+    *,
+    base_retry_minutes: int = 2,
+    max_retry_minutes: int = 1440,
 ) -> None:
     """Apply retry transition within an already-open session.
 
     ``retry_count`` is retained in the signature for source-compatibility with
     earlier call sites; the SQL now reads the count atomically from the DB.
+
+    DEF-033 (Wave A-4 QA fix): forward the configured backoff window through
+    to ``core.apply_retry_transition`` so the SQL CASE writes ``next_retry_at``
+    consistent with the consumer's settings.  Without this, the hot path
+    silently used the function defaults regardless of ops configuration.
     """
     del retry_count
-    await core.apply_retry_transition(session, queue_id, max_retries)
+    await core.apply_retry_transition(
+        session,
+        queue_id,
+        max_retries,
+        base_retry_minutes=base_retry_minutes,
+        max_retry_minutes=max_retry_minutes,
+    )
 
 
 async def _fail_safe_retry(
@@ -377,15 +441,27 @@ async def _fail_safe_retry(
     queue_id: UUID,
     retry_count: int,
     max_retries: int,
+    *,
+    base_retry_minutes: int = 2,
+    max_retry_minutes: int = 1440,
 ) -> None:
     """Apply retry transition in a fresh session (used on persist failure).
 
     ``retry_count`` is retained for source-compatibility — see ``_retry``.
+
+    DEF-033 (Wave A-4 QA fix): forward the backoff window — see ``_retry``
+    docstring for the full rationale.
     """
     del retry_count
     try:
         async with session_factory() as session:
-            await core.apply_retry_transition(session, queue_id, max_retries)
+            await core.apply_retry_transition(
+                session,
+                queue_id,
+                max_retries,
+                base_retry_minutes=base_retry_minutes,
+                max_retry_minutes=max_retry_minutes,
+            )
             await session.commit()
     except Exception:
         s7_provisional_queue_stuck_total.inc()

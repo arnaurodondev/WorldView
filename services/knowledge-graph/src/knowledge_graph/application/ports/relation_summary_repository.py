@@ -70,8 +70,20 @@ class RelationSummaryRepositoryPort(ABC):
         """
 
     @abstractmethod
-    async def update_embedding(self, summary_id: UUID, embedding: list[float]) -> None:
-        """Persist a computed embedding for an existing summary row (Worker 13F)."""
+    async def update_embedding(
+        self,
+        summary_id: UUID,
+        embedding: list[float],
+        model_id: str,
+        embedded_at: datetime,
+    ) -> None:
+        """Persist a computed embedding for an existing summary row (Worker 13F).
+
+        Wave A-2 / DEF-022: ``model_id`` and ``embedded_at`` are persisted to
+        ``summary_embedding_model_id`` and ``summary_last_embedded_at`` so the
+        ANN index can be audited for mixed-model drift and re-embedded
+        selectively.
+        """
 
     @abstractmethod
     async def search_by_embedding(

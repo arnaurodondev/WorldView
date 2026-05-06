@@ -25,6 +25,8 @@ from knowledge_graph.application.ports.relation_summary_repository import (
 )
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -115,15 +117,29 @@ RETURNING summary_id
         self,
         summary_id: UUID,
         embedding: list[float],
+        model_id: str,
+        embedded_at: datetime,
     ) -> None:
-        """Persist a computed embedding for an existing summary row (Worker 13F)."""
+        """Persist a computed embedding for an existing summary row (Worker 13F).
+
+        Wave A-2 / DEF-022: also records ``summary_embedding_model_id`` and
+        ``summary_last_embedded_at`` (migration 0027) so the ANN index can be
+        audited for mixed-model drift and re-embedded selectively.
+        """
         await self._session.execute(
             text("""
 UPDATE relation_summaries
-SET summary_embedding = :embedding
+SET summary_embedding             = :embedding,
+    summary_embedding_model_id    = :model_id,
+    summary_last_embedded_at      = :embedded_at
 WHERE summary_id = :summary_id
 """),
-            {"summary_id": str(summary_id), "embedding": embedding},
+            {
+                "summary_id": str(summary_id),
+                "embedding": embedding,
+                "model_id": model_id,
+                "embedded_at": embedded_at,
+            },
         )
 
     async def search_by_embedding(

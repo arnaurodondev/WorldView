@@ -320,12 +320,21 @@ def build_workers(
                     # (fail-open) and rows go directly to Layer 3 extraction.
                     noise_classifier_api_key=settings.deepinfra_api_key.get_secret_value(),  # DEF-005
                     noise_classifier_api_base_url=settings.deepinfra_extraction_base_url,
+                    # Wave A-4 / DEF-033: exponential backoff so a transient LLM
+                    # outage does not cause every retry sweep to re-hit the API.
+                    base_retry_minutes=settings.provisional_enrichment_base_retry_minutes,
+                    max_retry_minutes=settings.provisional_enrichment_max_retry_minutes,
                 ),
                 "embedding_refresh": EmbeddingRefreshWorker(
                     session_factory,
                     llm_client,
                     embedding_model_id=embed_model,
                     batch_limit=embed_batch_limit,
+                    # Wave A-2 / DEF-022: persist a stable, configurable model
+                    # id alongside each embedding so the HNSW index is auditable
+                    # for mixed-model drift even when ``embed_model`` differs
+                    # by environment (Ollama tag vs. DeepInfra slug).
+                    summary_embedding_model_id=settings.summary_embedding_model_id,
                 ),
             },
         )

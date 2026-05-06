@@ -15,11 +15,11 @@ Aggregation worker (Wave D-3) skips rows where ``entity_provisional = true``.
 from __future__ import annotations
 
 import dataclasses
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from common.ids import new_uuid7  # type: ignore[import-untyped]
+from common.ids import new_uuid7, uuid5_from_parts  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.application.ports.repositories import (
     TOPIC_GRAPH_STATE_CHANGED,
@@ -141,23 +141,85 @@ class MaterializationSummary:
 # ---------------------------------------------------------------------------
 
 
+_DETERMINISTIC_CREATED_AT_FALLBACK = datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
+"""Stable ``created_at`` baseline for events whose ``event_date`` is None.
+
+The events table is partitioned monthly starting at 2024-01 (see migration
+0001), so a literal 2024-01-01 timestamp ALWAYS lands inside a pre-seeded
+partition — no risk of ``no partition of relation \"events\" found for row``.
+
+Using a constant here (rather than e.g. epoch=0 which would be 1970-01-01 and
+fall outside the partition window) makes replays both idempotent AND insertable
+when the upstream extraction omits an explicit event_date.
+"""
+
+
 async def _insert_event_and_entities(
     session: AsyncSession,
     doc_id: UUID,
     event: RawEvent,
 ) -> UUID:
-    """INSERT into ``events`` (ON CONFLICT DO NOTHING) and ``event_entities``."""
+    """INSERT into ``events`` (ON CONFLICT DO NOTHING) and ``event_entities``.
+
+    DEF-025 (PLAN-0076 Wave A-3 + QA fix): the event_id is now derived
+    deterministically from ``(doc_id, subject_entity_id, event_type)`` AND we
+    bind a deterministic ``created_at`` so the ``ON CONFLICT (event_id,
+    created_at)`` clause actually matches on replay.
+
+    Why we MUST bind ``created_at`` explicitly:
+      * ``events`` is RANGE-partitioned by ``created_at`` and the unique
+        constraint is (event_id, created_at) — a partitioned-table unique
+        constraint MUST include all partition-key columns.
+      * If we let ``created_at`` default to ``now()`` server-side, every Kafka
+        replay produces a different ``created_at``, so ON CONFLICT NEVER
+        matches and we INSERT a duplicate row with the same event_id but a
+        fresh ``created_at``.  The deterministic event_id buys us nothing in
+        that case (BP-397).
+      * Binding ``created_at`` to a stable function of the input message
+        (event.event_date, falling back to the migration-aligned 2024-01-01
+        baseline when the event has no date) closes the loop: the same Kafka
+        message produces the same (event_id, created_at) tuple on every
+        attempt and the ON CONFLICT clause matches as intended.
+
+    The ``event_entities`` INSERT does NOT need a deterministic created_at —
+    its unique key is (event_id, entity_id) which is already stable.
+    """
     from sqlalchemy import text
 
-    event_id = new_uuid7()
+    # Deterministic UUID5 — same (doc_id, subject_entity_id, event_type)
+    # always yields the same event_id (BP-316 fix).  The fields are passed
+    # as strings (uuid5_from_parts accepts *str), so we stringify the UUID
+    # inputs explicitly.
+    event_id_str = uuid5_from_parts(
+        str(doc_id),
+        str(event.subject_entity_id),
+        event.event_type,
+    )
+    # Deterministic created_at — see docstring above (BP-397).  Prefer the
+    # extracted event_date when present (it is the most semantically meaningful
+    # timestamp for this event); fall back to a stable migration-aligned
+    # baseline so a missing date does not break partition routing.
+    created_at_value: datetime = (
+        event.event_date if event.event_date is not None else _DETERMINISTIC_CREATED_AT_FALLBACK
+    )
     await session.execute(
         text("""
-INSERT INTO events (event_id, doc_id, subject_entity_id, event_type, event_date, event_text, extraction_confidence)
-VALUES (:event_id, :doc_id, :subject_entity_id, :event_type, :event_date, :event_text, :extraction_confidence)
+INSERT INTO events
+    (event_id, created_at, doc_id, subject_entity_id, event_type,
+     event_date, event_text, extraction_confidence)
+VALUES
+    (:event_id, :created_at, :doc_id, :subject_entity_id, :event_type,
+     :event_date, :event_text, :extraction_confidence)
 ON CONFLICT (event_id, created_at) DO NOTHING
 """),
         {
-            "event_id": str(event_id),
+            "event_id": event_id_str,
+            # Bind ``created_at`` from a deterministic source so replays of
+            # the same enriched-article message produce the same partition-key
+            # value AND the same conflict-target tuple.  Without this bind the
+            # column defaults to server-side ``now()`` and every replay creates
+            # a fresh duplicate row.
+            "created_at": created_at_value,
             "doc_id": str(doc_id),
             "subject_entity_id": str(event.subject_entity_id),
             "event_type": event.event_type,
@@ -165,6 +227,19 @@ ON CONFLICT (event_id, created_at) DO NOTHING
             "event_text": event.event_text,
             "extraction_confidence": event.extraction_confidence,
         },
+    )
+    # Observability: log every event insert so replays are traceable in logs.
+    # ``event_id_deterministic=True`` flags this row as derived via
+    # uuid5_from_parts — useful when grepping logs to confirm the DEF-025
+    # rollout reached production code paths.
+    _log.debug(
+        "event_inserted",
+        event_id=event_id_str,
+        doc_id=str(doc_id),
+        subject_entity_id=str(event.subject_entity_id),
+        event_type=event.event_type,
+        event_id_deterministic=True,
+        created_at=created_at_value.isoformat(),
     )
     # event_entities — subject with role "subject", participants with role "participant"
     all_pairs = [(event.subject_entity_id, "subject")] + [
@@ -177,9 +252,16 @@ INSERT INTO event_entities (event_id, entity_id, role)
 VALUES (:event_id, :entity_id, :role)
 ON CONFLICT (event_id, entity_id) DO NOTHING
 """),
-            {"event_id": str(event_id), "entity_id": str(entity_id), "role": role},
+            # Reuse the deterministic event_id_str from the events INSERT above —
+            # this keeps the FK target identical and lets event_entities also
+            # benefit from idempotent replay (the ON CONFLICT (event_id, entity_id)
+            # path matches because event_id is now stable across replays).
+            {"event_id": event_id_str, "entity_id": str(entity_id), "role": role},
         )
-    return event_id  # type: ignore[return-value]
+    # Caller treats the return as a UUID (signature: ``-> UUID``).  Parse the
+    # deterministic string back to UUID exactly once here so the rest of the
+    # codebase keeps the existing typed-UUID contract.
+    return UUID(event_id_str)
 
 
 async def _insert_claim(
