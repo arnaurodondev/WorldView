@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 import structlog
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -129,6 +129,18 @@ class Settings(BaseSettings):
     # 0 = all due entities per cycle (recommended — lets workers drain the full queue).
     # Set to a positive integer to cap the batch size for rate-limited environments.
     worker_embedding_batch_limit: int = 0  # KNOWLEDGE_GRAPH_WORKER_EMBEDDING_BATCH_LIMIT
+
+    # SummaryWorker force-regeneration (ARCH-008).
+    # When > 0, force-regenerate this many stale summaries per cycle regardless of evidence
+    # hash match.  0 (default) disables force-regen so only hash-changed relations are sent
+    # to the LLM.  Useful during prompt-template upgrades to refresh cached summaries.
+    summary_worker_force_regen_batch_size: int = Field(
+        default=0,
+        description=(
+            "If > 0, force-regenerate this many stale summaries per cycle regardless of hash match. "
+            "0 disables force-regen."
+        ),
+    )  # KNOWLEDGE_GRAPH_SUMMARY_WORKER_FORCE_REGEN_BATCH_SIZE
     # Parallel HTTP concurrency for FundamentalsRefreshWorker Phase 2.
     worker_fundamentals_concurrency: int = 5  # KNOWLEDGE_GRAPH_WORKER_FUNDAMENTALS_CONCURRENCY
 

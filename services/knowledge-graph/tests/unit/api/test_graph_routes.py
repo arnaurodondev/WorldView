@@ -172,6 +172,47 @@ class TestGraphRouteEvidenceSnippets:
 
         assert resp.status_code == 200
 
+    async def test_evidence_snippets_respects_limit_param(self) -> None:
+        """evidence_snippets_limit=2 is forwarded as evidence_limit=2 to GetEntityGraphUseCase.execute().
+
+        The route converts the query param name (evidence_snippets_limit) to the
+        use case kwarg name (evidence_limit).  This test verifies that forwarding
+        so that changing the default in the route layer does not silently break the
+        contract.
+        """
+        from unittest.mock import patch
+
+        from httpx import ASGITransport, AsyncClient
+
+        # We need to intercept the call args passed to GetEntityGraphUseCase.execute,
+        # so we build the app normally and then patch GetEntityGraphUseCase at the
+        # routes module level with a spy class that records kwargs.
+        captured_kwargs: dict = {}
+
+        app = _make_app(entity_row=_entity_row(), relation_rows=[_relation_row()])
+
+        import knowledge_graph.api.routes as _routes_mod
+
+        # Build the spy after _make_app already replaced the class with _FakeUseCase.
+        # We need to intercept the REAL execute path so patch at the routes module.
+        class _SpyUseCase:
+            async def execute(self, **kwargs):  # type: ignore[override]
+                captured_kwargs.update(kwargs)
+                return _entity_row(), [_relation_row()], {}
+
+        with patch.object(_routes_mod, "GetEntityGraphUseCase", _SpyUseCase):
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test", headers=_HEADERS
+            ) as client:
+                resp = await client.get(f"/api/v1/entities/{_ENTITY_ID}/graph?evidence_snippets_limit=2")
+
+        assert resp.status_code == 200
+        # Route must forward evidence_snippets_limit as the evidence_limit kwarg
+        assert captured_kwargs.get("evidence_limit") == 2, (
+            f"Expected evidence_limit=2, got {captured_kwargs.get('evidence_limit')!r}. "
+            "Check that get_entity_graph passes evidence_limit=evidence_snippets_limit."
+        )
+
     async def test_graph_response_includes_relation_summary(self) -> None:
         """Relations with a current summary expose relation_summary in API response."""
         from httpx import ASGITransport, AsyncClient

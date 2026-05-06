@@ -322,6 +322,49 @@ class TestGetEntityGraphUseCase:
         evidence_repo.get_evidence_snippets_batch.assert_not_called()
         summary_repo.get_current_summaries_batch.assert_not_called()
 
+    def test_evidence_snippets_default_limit_is_3(self) -> None:
+        """Calling execute() without evidence_limit uses the default of 3.
+
+        T-72-2-01: the use case signature declares evidence_limit=3 as the default.
+        This test verifies that the default is honoured so that callers who omit
+        the parameter do not silently receive an empty evidence window.
+        """
+        from uuid import uuid4
+
+        from knowledge_graph.application.use_cases.graph_query import GetEntityGraphUseCase
+
+        rel_id = uuid4()
+        rel = {
+            "relation_id": rel_id,
+            "subject_entity_id": _ENT_ID,
+            "object_entity_id": _OBJ_ID,
+            "canonical_type": "competes_with",
+            "confidence": 0.80,
+        }
+
+        entity_repo = _make_entity_repo(entity=_entity_row(_ENT_ID))
+        entity_repo.get_batch = AsyncMock(return_value=[])
+        relation_repo = _make_relation_repo(rows=[rel])
+        evidence_repo = _make_evidence_repo(snippets={})
+
+        # Deliberately omit evidence_limit so the parameter default (3) takes effect.
+        asyncio.run(
+            GetEntityGraphUseCase().execute(
+                entity_repo=entity_repo,
+                relation_repo=relation_repo,
+                evidence_repo=evidence_repo,
+                summary_repo=_make_summary_repo(),
+                entity_id=_ENT_ID,
+                min_confidence=0.0,
+                semantic_mode=None,
+                limit=50,
+                # evidence_limit NOT passed — default of 3 must be used
+            )
+        )
+
+        # The evidence repo must have been called with limit_per_relation=3 (the default).
+        evidence_repo.get_evidence_snippets_batch.assert_called_once_with([rel_id], limit_per_relation=3)
+
 
 class TestListRelationsUseCase:
     def test_returns_paginated_results(self) -> None:
