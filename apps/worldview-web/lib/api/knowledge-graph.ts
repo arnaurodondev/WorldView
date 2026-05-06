@@ -5,7 +5,7 @@
  * contradictions panel.
  */
 
-import type { EntityGraph, ContradictionsResponse } from "@/types/api";
+import type { EntityGraph, ContradictionsResponse, EntityPublic } from "@/types/api";
 import { apiFetch } from "./_client";
 
 export function createKnowledgeGraphApi(t: string | undefined) {
@@ -90,6 +90,32 @@ export function createKnowledgeGraphApi(t: string | undefined) {
         `/v1/entities/${encodeURIComponent(entityId)}/contradictions`,
         { token: t },
       );
+    },
+
+    /**
+     * getEntityDetail — enrichment fields for a single entity (PRD-0073 Worker 13J).
+     *
+     * WHY separate from getEntityGraph: getEntityGraph returns the relational graph
+     * structure (nodes + edges) while getEntityDetail returns the entity's own
+     * enrichment fields (description, metadata, data_completeness).  Two separate
+     * endpoints let the Intelligence tab load both independently with different
+     * staleTime values — descriptions are stable for hours; graph edges refresh
+     * every 10 minutes.
+     *
+     * Returns null when the entity has not been enriched yet (404 from S7).
+     */
+    async getEntityDetail(entityId: string): Promise<EntityPublic | null> {
+      try {
+        return await apiFetch<EntityPublic>(
+          `/v1/entities/${encodeURIComponent(entityId)}`,
+          { token: t },
+        );
+      } catch (err) {
+        // WHY catch here: 404 means enrichment has not run yet — not an error the
+        // caller needs to handle.  All other errors propagate normally.
+        if (err instanceof Error && err.message.includes("404")) return null;
+        throw err;
+      }
     },
   };
 }

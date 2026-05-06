@@ -32,6 +32,7 @@
 
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
+import { EntityDescriptionPanel } from "@/components/instrument/EntityDescriptionPanel";
 import { EntityGraphErrorBoundary } from "@/components/instrument/EntityGraphErrorBoundary";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, RefreshCw, ChevronRight, ChevronDown, Clock, Network, ArrowUpRight, X } from "lucide-react";
@@ -736,8 +737,14 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
     // is a fixed 270px. Grid would require a named template; flex is simpler here.
     <div className="flex min-h-0">
 
-      {/* ── Left column: graph + brief + contradictions ──────────────────────── */}
+      {/* ── Left column: description + graph + brief + contradictions ─────────── */}
       <div className="flex-1 min-w-0 flex flex-col divide-y divide-border/40">
+
+        {/* Entity description panel (PRD-0073 Worker 13J enrichment).
+            WHY above the graph: analysts see the description first — it gives
+            context before exploring the relationship graph below.
+            The panel renders nothing when description is null (enrichment pending). */}
+        <EntityDescriptionPanel entityId={entityId} />
 
         {/* Entity Knowledge Graph section */}
         <section className="p-3">

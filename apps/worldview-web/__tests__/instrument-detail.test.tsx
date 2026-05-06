@@ -252,6 +252,9 @@ vi.mock("@/lib/gateway", () => ({
       offset: 0,
       limit: 4,
     }),
+    // WHY getEntityDetail: EntityDescriptionPanel (PRD-0073 Wave D-1) calls this.
+    // Returns null by default — entity not yet enriched — so the panel renders nothing.
+    getEntityDetail: vi.fn().mockResolvedValue(null),
     refreshToken: vi.fn().mockResolvedValue({
       access_token: "tok",
       user: { user_id: "u1", tenant_id: "t1", email: "a@b.com", name: "A", avatar_url: null },
@@ -501,14 +504,18 @@ describe("IntelligenceTab", () => {
         narrative: "", entity_mentions: [], citations: [], generated_at: new Date().toISOString(),
         risk_summary: null, cached: false, entity_id: "ent-001",
       }),
+      // WHY getEntityDetail: EntityDescriptionPanel (PRD-0073 Wave D-1) adds a 4th
+      // createGateway call. Returns null = entity not enriched yet → panel renders nothing.
+      getEntityDetail: vi.fn().mockResolvedValue(null),
       refreshToken: vi.fn().mockResolvedValue({ access_token: "tok", user: {}, expires_in: 900 }),
       logout: vi.fn(),
     } as unknown as ReturnType<typeof createGateway>;
 
-    // WHY three mockReturnValueOnce: IntelligenceTab creates gateway instances for
-    // getEntityGraph (depth=2), getInstrumentBrief, and getContradictions queries.
-    // All three must return the empty mock to avoid TypeError on missing methods.
+    // WHY four mockReturnValueOnce (was three): EntityDescriptionPanel (PRD-0073 Wave D-1)
+    // adds a 4th createGateway call for getEntityDetail.  Order: getEntityDetail,
+    // getEntityGraph, getInstrumentBrief, getContradictions.
     vi.mocked(createGateway)
+      .mockReturnValueOnce(emptyGateway)
       .mockReturnValueOnce(emptyGateway)
       .mockReturnValueOnce(emptyGateway)
       .mockReturnValueOnce(emptyGateway);

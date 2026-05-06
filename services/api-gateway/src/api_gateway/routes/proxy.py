@@ -512,6 +512,63 @@ async def find_similar_entities(request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# ── Entity detail (PRD-0073 Wave D-1) ────────────────────────────────────────
+
+
+@router.get("/entities/{entity_id}")
+async def get_entity_detail(entity_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/entities/{entity_id} → S7 Knowledge Graph.
+
+    Returns enrichment fields (description, metadata, data_completeness, enriched_at)
+    populated by Worker 13J (PRD-0073).  Returns 404 when the entity does not exist
+    or enrichment has not yet run.
+
+    Requires authentication — enrichment data is behind the user JWT boundary.
+
+    WHY registered before /entities/{entity_id}/graph and /entities/{entity_id}/contradictions:
+    The bare /{entity_id} path will NOT shadow the sub-resource paths because those have
+    an extra path segment.  FastAPI matches the most specific (longest) path first when
+    both are registered; `/entities/UUID/graph` always wins over `/entities/UUID`.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.knowledge_graph.get(
+        f"/api/v1/entities/{entity_id}",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Instrument lookup (PRD-0073 Wave D-1) ────────────────────────────────────
+
+
+@router.get("/instruments/lookup")
+async def instruments_lookup(request: Request) -> Any:
+    """Proxy GET /api/v1/instruments/lookup → S3 Market Data.
+
+    Unified instrument lookup by symbol, ISIN, or UUID.  Forwards `symbol`, `isin`,
+    `id`, and `extra_info` query params to S3 unchanged.
+
+    Requires authentication.  Returns 404 when no instrument matches.
+
+    WHY registered as a separate route (not pass-through via /{instrument_id}/...):
+    S3's /instruments/lookup uses query params for lookup, not path params.  Registering
+    it explicitly before any path-param route prevents `lookup` being misread as a UUID.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        "/api/v1/instruments/lookup",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 # ── Alert endpoints (PRD-0025 T-D-1-10) ──────────────────────────────────────
 
 
