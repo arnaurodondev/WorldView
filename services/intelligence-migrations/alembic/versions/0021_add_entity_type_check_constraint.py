@@ -45,6 +45,33 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Pre-flight normalization: map any legacy entity_type values that may exist
+    # from partial deployments before PLAN-0072 code normalization was applied.
+    # On a fresh cluster this UPDATE matches zero rows and is a no-op.
+    # On a partially-migrated cluster it ensures the subsequent ADD CONSTRAINT
+    # does not fail due to pre-normalization values like 'corp', 'fund', etc.
+    # Normalize any pre-normalization entity_type values from before PLAN-0072 code fix
+    op.execute("""
+UPDATE canonical_entities
+SET entity_type = CASE entity_type
+    WHEN 'corp'         THEN 'company'
+    WHEN 'corporation'  THEN 'company'
+    WHEN 'firm'         THEN 'company'
+    WHEN 'enterprise'   THEN 'company'
+    WHEN 'business'     THEN 'company'
+    WHEN 'fund'         THEN 'financial_instrument'
+    WHEN 'organisation' THEN 'organization'
+    WHEN 'institution'  THEN 'organization'
+    WHEN 'inst'         THEN 'organization'
+    ELSE 'other'
+END
+WHERE entity_type NOT IN (
+    'company', 'financial_instrument', 'person', 'organization',
+    'country', 'currency', 'commodity', 'index',
+    'sector', 'concept', 'event', 'other'
+)
+""")
+
     op.execute("""
 ALTER TABLE canonical_entities
     ADD CONSTRAINT ck_canonical_entity_type
