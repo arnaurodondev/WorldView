@@ -202,6 +202,12 @@ class SummaryWorker:
                     "summary_worker_llm_failed",
                     relation_id=str(relation_id),
                 )
+                # Clear stale flag to prevent indefinite retry on permanent LLM
+                # failures; the flag is re-set when new evidence arrives via upsert.
+                async with self._sf() as session:
+                    rel_repo = RelationRepository(session)
+                    await rel_repo.mark_summary_updated(relation_id)  # type: ignore[arg-type, attr-defined]
+                    await session.commit()
                 continue
 
             # ── Phase 4: write summary (short-lived session) ─────────────────
@@ -256,10 +262,12 @@ class SummaryWorker:
         raw_resp = getattr(result, "raw_response", None)
         # Fix SEC-003: downgrade from INFO to DEBUG — raw LLM responses may
         # contain financial data excerpted from news articles.
+        # Fix SEC-204: raw_response_preview removed — even truncated text may
+        # contain PII or proprietary financial data; length alone is sufficient
+        # for debugging truncation/empty-response issues.
         logger.debug(  # type: ignore[no-any-return]
             "summary_worker_llm_raw_response",
             relation_id=str(relation_id),
             raw_response_length=len(raw_resp) if raw_resp else 0,
-            raw_response_preview=(raw_resp or "")[:200],
         )
         return str(result.result.get("summary", "")) or None

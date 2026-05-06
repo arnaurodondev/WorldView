@@ -382,12 +382,13 @@ SET retry_count = LEAST(retry_count + 1, :max_retries),
         ELSE 'pending'
     END
 WHERE queue_id = :queue_id
+  AND status = 'processing'
 RETURNING (status = 'failed') AS is_terminal
 """),
         {"queue_id": str(queue_id), "max_retries": max_retries},
     )
     row = result.fetchone()
     if row is None:
-        # Row no longer exists (very rare — would imply concurrent delete).
+        # Row no longer exists or was already resolved/noise — nothing to do.
         return False
     return bool(row[0])

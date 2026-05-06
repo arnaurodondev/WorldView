@@ -675,13 +675,13 @@ class UnresolvedResolutionWorker:
         # leading domain words to disambiguate.
         context_text = (context_sentence or "").strip()[:400] or "(no surrounding context available)"
 
-        # F-SEC-006: build the dynamic SURFACE/CONTEXT turn via direct string
-        # concatenation rather than str.format().  This avoids a KeyError if the
-        # surface or context contains a literal '{' or '}' character (e.g. from a
-        # news headline like "Revenue: {Q3 outlook}").  str.format() interprets
-        # such characters as placeholder delimiters and raises KeyError on them.
-        # Direct concatenation is immune to brace content in user-supplied strings.
-        user_turn = 'SURFACE: "' + surface[:200] + '"\nCONTEXT: "' + context_text + '"'
+        # F-SEC-006: build the dynamic SURFACE/CONTEXT turn using json.dumps so
+        # that any double-quotes, backslashes, or control characters in user-
+        # supplied text are safely escaped.  This also completes F-SEC-205:
+        # previously bare double-quotes in surface or context could break the
+        # prompt structure (e.g. surface='say "hello"' would yield an
+        # un-terminated string literal inside the turn text).
+        user_turn = "SURFACE: " + json.dumps(surface[:200]) + "\nCONTEXT: " + json.dumps(context_text)
 
         # _CLASSIFICATION_SYSTEM_PROMPT is the static prefix for the Ollama path.
         # Prepend it to the dynamic user turn to build the full single-prompt string.
@@ -740,7 +740,7 @@ class UnresolvedResolutionWorker:
                 logger.warning(
                     "unresolved_resolution_json_parse_failure",
                     mention_id=str(mention.mention_id),
-                    surface=mention.mention_text[:80] if mention.mention_text else None,
+                    surface_hash=hashlib.sha256((mention.mention_text or "").encode()).hexdigest()[:16],
                     raw_hash=raw_hash,
                     raw_response_length=len(raw) if isinstance(raw, str) else 0,
                     error=str(parse_exc),
@@ -806,6 +806,10 @@ class UnresolvedResolutionWorker:
         Returns (ResolutionOutcome, noise_reason | None).
         """
         client = self._http_client
+        # Initialize raw before the try block so the except handler's
+        # hashlib.sha256(raw...) reference is always bound even if the
+        # exception fires before the `raw = msg.get(...)` assignment.
+        raw: str = ""
         try:
             response = await asyncio.wait_for(
                 client.post(
@@ -851,7 +855,7 @@ class UnresolvedResolutionWorker:
             logger.warning(
                 "unresolved_resolution_json_parse_failure",
                 mention_id=str(mention.mention_id),
-                surface=mention.mention_text[:80] if mention.mention_text else None,
+                surface_hash=hashlib.sha256((mention.mention_text or "").encode()).hexdigest()[:16],
                 raw_hash=raw_hash,
                 raw_response_length=len(raw) if isinstance(raw, str) else 0,
                 error=str(parse_exc),
