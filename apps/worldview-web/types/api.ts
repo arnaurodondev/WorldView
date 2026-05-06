@@ -457,6 +457,40 @@ export interface ContradictionsResponse {
   contradictions: Contradiction[];
 }
 
+// ── Entity enrichment (PRD-0073 Worker 13J) ───────────────────────────────
+
+/** Structured enrichment metadata fields sourced from S3/EODHD. */
+export interface EntityMetadata {
+  sector?: string | null;
+  industry?: string | null;
+  country?: string | null;
+  exchange?: string | null;
+  isin?: string | null;
+  ticker?: string | null;
+  currency_code?: string | null;
+  employee_count?: number | null;
+  founded_year?: number | null;
+  headquarters_city?: string | null;
+  headquarters_country?: string | null;
+}
+
+/**
+ * EntityPublic — response shape for GET /api/v1/entities/{entity_id}.
+ * Populated by Worker 13J (StructuredEnrichmentWorker).
+ */
+export interface EntityPublic {
+  entity_id: string;
+  canonical_name: string;
+  entity_type: string;
+  ticker?: string | null;
+  isin?: string | null;
+  exchange?: string | null;
+  description?: string | null;
+  data_completeness?: number | null;
+  enriched_at?: string | null;
+  metadata: EntityMetadata;
+}
+
 // ── News ───────────────────────────────────────────────────────────────────
 
 export interface Article {

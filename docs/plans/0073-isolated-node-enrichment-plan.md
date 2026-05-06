@@ -2,9 +2,9 @@
 
 > **PRD**: `docs/specs/0073-isolated-node-enrichment.md`
 > **Created**: 2026-05-05
-> **Status**: in-progress
+> **Status**: completed
 > **Updated**: 2026-05-05
-> **Total Waves**: 9 (A-1 ✅, B-0, B-1, B-2, C-1 ✅, C-2 ✅, C-3 ✅, D-1)
+> **Total Waves**: 9 (A-1 ✅, B-0 ✅, B-1 ✅, B-2 ✅, C-1 ✅, C-2 ✅, C-3 ✅, D-1 ✅)
 
 ---
 
@@ -1424,13 +1424,15 @@ async def get_entity(
 
 ## Sub-Plan D — S9 api-gateway + worldview-web
 
-### Wave D-1: S9 Proxy Route + Frontend Description Panel
+### Wave D-1: S9 Proxy Route + Frontend Description Panel ✅
 
 **Goal**: Add S9 proxy routes for `GET /api/v1/entities/{entity_id}` and `GET /api/v1/instruments/lookup`, and add the entity description panel to the intelligence tab in worldview-web.
 
 **Depends on**: Wave C-3 (S7 endpoint must exist), Wave B-1 (S3 lookup endpoint must exist)
 
 **Estimated effort**: 60–90 min
+
+**Status**: **DONE** — 2026-05-05 · 7 new S9 unit tests + 1805 frontend tests pass · ruff + mypy + tsc clean
 
 **Architecture layer**: API proxy + frontend UI
 
@@ -1519,11 +1521,11 @@ interface EntityDescriptionPanelProps {
 
 #### Validation Gate — Wave D-1
 
-- [ ] S9 integration: `curl -H "Authorization: Bearer ..." http://localhost:8000/api/v1/entities/<uuid>` → 200 + enrichment fields
-- [ ] S9 integration: `curl -H "Authorization: Bearer ..." "http://localhost:8000/api/v1/instruments/lookup?ticker=AAPL"` → 200
-- [ ] Frontend: `EntityDescriptionPanel` renders in intelligence tab (manual browser check with enriched entity)
-- [ ] `pnpm run type-check` passes in `apps/worldview-web/`
-- [ ] `python -m pytest tests/ -v` passes in `services/api-gateway/`
+- [x] S9 integration: `curl -H "Authorization: Bearer ..." http://localhost:8000/api/v1/entities/<uuid>` → 200 + enrichment fields
+- [x] S9 integration: `curl -H "Authorization: Bearer ..." "http://localhost:8000/api/v1/instruments/lookup?ticker=AAPL"` → 200
+- [x] Frontend: `EntityDescriptionPanel` renders in intelligence tab (manual browser check with enriched entity)
+- [x] `pnpm run typecheck` passes in `apps/worldview-web/` — tsc --noEmit clean
+- [x] `python -m pytest tests/ -v` passes in `services/api-gateway/` — 335 passed
 
 #### Break Impact — Wave D-1
 
