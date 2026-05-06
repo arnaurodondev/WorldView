@@ -65,3 +65,27 @@ async def get_auth_context(request: Request) -> tuple[UUID, UUID]:
 UoWDep = Annotated[Any, Depends(get_uow)]
 ReadUoWDep = Annotated[Any, Depends(get_read_uow)]
 AuthContextDep = Annotated[tuple[UUID, UUID], Depends(get_auth_context)]
+
+
+def make_write_uow(request: Request) -> Any:
+    """Return a context-manager that yields a write-capable RagUnitOfWork.
+
+    DEF-026: SSE streaming routes cannot use Depends() for UoW because FastAPI
+    closes yield-based dependencies when the route function *returns*, which is
+    before the EventSourceResponse generator starts iterating.  Streaming routes
+    must instead obtain a *factory* here and call it inside the generator so the
+    UoW lifetime is bound to the generator, not the route function.
+
+    Usage in a streaming route::
+
+        async def event_generator() -> AsyncGenerator[dict, None]:
+            async with make_write_uow(request) as uow:
+                async for event in orchestrator.execute_streaming(chat_req, uow):
+                    yield event
+
+    The infrastructure import is deferred inside the factory to maintain
+    R25 compliance — the route file only imports from the application layer.
+    """
+    from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork as _RagUoW
+
+    return _RagUoW(request.app.state.write_factory)

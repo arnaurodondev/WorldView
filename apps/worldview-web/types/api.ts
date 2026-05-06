@@ -459,8 +459,15 @@ export interface ContradictionsResponse {
 
 // ── Entity enrichment (PRD-0073 Worker 13J) ───────────────────────────────
 
-/** Structured enrichment metadata fields sourced from S3/EODHD. */
+/** Structured enrichment metadata fields sourced from S3/EODHD or LLM.
+ *
+ * F-A14 / F-P2-04: keep this in sync with the backend Pydantic model
+ * `EntityMetadata` in services/knowledge-graph/.../api/schemas.py — the 5
+ * non-financial fields below are needed for `person`, `concept`, `location`,
+ * and `event` entity types whose data_completeness formula references them.
+ */
 export interface EntityMetadata {
+  // Financial-instrument / company fields
   sector?: string | null;
   industry?: string | null;
   country?: string | null;
@@ -472,6 +479,14 @@ export interface EntityMetadata {
   founded_year?: number | null;
   headquarters_city?: string | null;
   headquarters_country?: string | null;
+  // Person fields
+  role?: string | null;
+  organization?: string | null;
+  nationality?: string | null;
+  // Concept / location fields
+  category?: string | null;
+  // Macro indicator entity fields
+  macro_indicators?: Record<string, unknown> | null;
 }
 
 /**

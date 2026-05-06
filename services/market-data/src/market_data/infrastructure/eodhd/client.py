@@ -27,7 +27,14 @@ class EodhHdClient:
         self._base_url = base_url.rstrip("/")
         # BP-235: explicit timeout prevents httpx 5 s default from firing before
         # any asyncio.wait_for wrapper and producing an uncaught ReadTimeout.
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(10.0))
+        # F-D10: cap the connection pool to 5 concurrent / 2 keep-alive so that
+        # bursty traffic (e.g. KG enrichment Worker 13J fan-out) cannot
+        # accidentally exceed EODHD's per-IP concurrency tier.  Anything beyond
+        # that queues inside httpx instead of being rejected by EODHD's edge.
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0),
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=2),
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()

@@ -57,11 +57,12 @@ async def main() -> None:
     # Build LLM client (same construction as scheduler_main) so this consumer
     # has access to the full DeepInfra → Ollama → Gemini extraction chain.
     _embedding_provider = settings.embedding_provider.lower()
-    if _embedding_provider == "deepinfra" and settings.embedding_api_key:
+    _embedding_api_key = settings.embedding_api_key.get_secret_value()  # DEF-005
+    if _embedding_provider == "deepinfra" and _embedding_api_key:
         from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter  # type: ignore[import-not-found]
 
         embed_client: Any = DeepInfraEmbeddingAdapter(
-            api_key=settings.embedding_api_key,
+            api_key=_embedding_api_key,
             model_id=settings.embedding_api_model_id,
             base_url=settings.embedding_api_base_url,
         )
@@ -86,12 +87,13 @@ async def main() -> None:
 
     kg_usage_logger = SessionScopedKgUsageLogger(write_factory)
 
+    _deepinfra_api_key = settings.deepinfra_api_key.get_secret_value()  # DEF-005
     deepinfra_ext: Any = None
-    if settings.deepinfra_api_key:
+    if _deepinfra_api_key:
         from ml_clients.adapters.deepseek_extraction import DeepSeekExtractionAdapter  # type: ignore[import-not-found]
 
         deepinfra_ext = DeepSeekExtractionAdapter(
-            api_key=settings.deepinfra_api_key,
+            api_key=_deepinfra_api_key,
             model_id=settings.deepinfra_extraction_model_id,
             base_url=settings.deepinfra_extraction_base_url,
             semaphore=asyncio.Semaphore(settings.deepinfra_extraction_concurrency),
@@ -105,7 +107,7 @@ async def main() -> None:
 
     # Only wire Ollama extraction when DeepInfra key is absent (same rule as scheduler_main).
     ollama_ext: Any = None
-    if not settings.deepinfra_api_key:
+    if not _deepinfra_api_key:
         from ml_clients.adapters.ollama_extraction import OllamaExtractionAdapter  # type: ignore[import-not-found]
 
         _ollama_ext_model = "qwen3:0.6b"

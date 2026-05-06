@@ -1,11 +1,45 @@
 """Prometheus metrics for the Knowledge Graph service (S7).
 
 Custom counters track the volume of each background worker's main operation.
+
+PLAN-0073 F-A07 / F-P2-02 — Worker 13J (StructuredEnrichment) counters defined
+below and wired at these sites:
+  - ``application/use_cases/structured_enrichment.py`` increments
+    ``entities_total``, ``source``, ``market_data_miss``, ``llm_latency_seconds``,
+    ``data_completeness``, ``relations_seeded_total``.
+  - ``infrastructure/workers/structured_enrichment_worker.py`` increments
+    ``sweep_entities_processed_total`` and ``entities_total{outcome="retryable"|"fatal"}``
+    on the sweep error paths.
 """
 
 from __future__ import annotations
 
 from prometheus_client import Counter, Histogram
+
+# Worker 13J metrics: defined in application/metrics.py and re-exported here so
+# infrastructure/workers/structured_enrichment_worker.py can import without a
+# cross-layer jump.  Listed in __all__ to prevent ruff F401 removal.
+from knowledge_graph.application.metrics import (
+    s7_enrichment_data_completeness as s7_enrichment_data_completeness,
+)
+from knowledge_graph.application.metrics import (
+    s7_enrichment_entities_total as s7_enrichment_entities_total,
+)
+from knowledge_graph.application.metrics import (
+    s7_enrichment_llm_latency_seconds as s7_enrichment_llm_latency_seconds,
+)
+from knowledge_graph.application.metrics import (
+    s7_enrichment_market_data_miss_total as s7_enrichment_market_data_miss_total,
+)
+from knowledge_graph.application.metrics import (
+    s7_enrichment_relations_seeded_total as s7_enrichment_relations_seeded_total,
+)
+from knowledge_graph.application.metrics import (
+    s7_enrichment_source_total as s7_enrichment_source_total,
+)
+from knowledge_graph.application.metrics import (
+    s7_enrichment_sweep_entities_processed_total as s7_enrichment_sweep_entities_processed_total,
+)
 
 # ── Counters ─────────────────────────────────────────────────────────────────
 

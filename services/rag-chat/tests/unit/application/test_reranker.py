@@ -143,3 +143,172 @@ async def test_cohere_reranker_empty_input() -> None:
     result = await reranker.rerank("query", [])
     assert result == []
     mock_client.post.assert_not_awaited()
+
+
+# ── DeepInfraReranker tests ───────────────────────────────────────────────────
+
+
+def _make_deepinfra_reranker(http_client: MagicMock | None = None) -> DeepInfraReranker:
+    from rag_chat.application.pipeline.reranker import DeepInfraReranker
+
+    return DeepInfraReranker(api_key="test-deepinfra-key", http_client=http_client)
+
+
+@pytest.mark.unit
+async def test_deepinfra_reranker_happy_path_returns_top_k() -> None:
+    """Successful DeepInfra response → items reordered by cross-encoder score, max _TOP_K returned.
+
+    The adapter pre-sorts items by fusion_score DESC before sending to the API, then
+    applies the returned scores to that pre-sorted head. Items created with score=i/10
+    (item-0 lowest, item-4 highest) are pre-sorted as [item-4, item-3, item-2, item-1, item-0].
+    Scores [0.1, 0.2, 0.3, 0.4, 0.9] map to: item-4→0.1, item-3→0.2, ..., item-0→0.9.
+    So the reranked order is: item-0 (0.9) > item-1 (0.4) > item-2 (0.3) > item-3 (0.2) > item-4 (0.1).
+    """
+    from rag_chat.application.pipeline.reranker import DeepInfraReranker
+
+    items = [_item(f"item-{i}", score=float(i) / 10) for i in range(5)]
+    # Scores applied to the fusion_score-sorted head [item-4, item-3, item-2, item-1, item-0]
+    # item-0 ends up first because it gets score=0.9 (the last element of scores)
+    scores = [0.1, 0.2, 0.3, 0.4, 0.9]
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"scores": scores}
+    mock_resp.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_resp
+
+    reranker = DeepInfraReranker(api_key="test-key", http_client=mock_client)
+    result = await reranker.rerank("What is Apple's revenue?", items)
+
+    # Should return at most _TOP_K=12 items
+    assert len(result) <= 12
+    assert len(result) == 5  # fewer than TOP_K so all returned
+    # item-0 gets score=0.9 (highest) because it lands last in the pre-sorted head
+    assert result[0].item_id == "item-0"
+    mock_client.post.assert_awaited_once()
+
+
+@pytest.mark.unit
+async def test_deepinfra_reranker_posts_to_correct_url() -> None:
+    """Request is POSTed to the DeepInfra inference endpoint with Bearer auth."""
+    from rag_chat.application.pipeline.reranker import (
+        _DEEPINFRA_DEFAULT_MODEL,
+        _DEEPINFRA_RERANK_BASE,
+        DeepInfraReranker,
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"scores": [0.9]}
+    mock_resp.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_resp
+
+    reranker = DeepInfraReranker(api_key="my-secret-key", http_client=mock_client)
+    await reranker.rerank("query", [_item("x")])
+
+    call_args = mock_client.post.call_args
+    url = call_args.args[0] if call_args.args else call_args.kwargs.get("url", "")
+    assert _DEEPINFRA_RERANK_BASE in url
+    assert _DEEPINFRA_DEFAULT_MODEL in url
+    headers = call_args.kwargs["headers"]
+    assert "Bearer my-secret-key" in headers["Authorization"]
+
+
+@pytest.mark.unit
+async def test_deepinfra_reranker_falls_back_on_api_error() -> None:
+    """DeepInfra API raises an exception → fallback to top-12 by fusion_score."""
+    items = [_item(f"item-{i}", score=float(i) / 10) for i in range(20)]
+
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = Exception("connection refused")
+
+    reranker = _make_deepinfra_reranker(mock_client)
+    result = await reranker.rerank("query", items)
+
+    assert len(result) == 12
+    scores = [r.fusion_score for r in result]
+    assert scores == sorted(scores, reverse=True)
+
+
+@pytest.mark.unit
+async def test_deepinfra_reranker_falls_back_on_5xx() -> None:
+    """DeepInfra 5xx response → raise_for_status fires → fallback to fusion_score sort."""
+    import httpx
+
+    items = [_item(f"item-{i}", score=float(i) / 10) for i in range(15)]
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        message="503 Service Unavailable",
+        request=MagicMock(),
+        response=MagicMock(status_code=503),
+    )
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_resp
+
+    reranker = _make_deepinfra_reranker(mock_client)
+    result = await reranker.rerank("query", items)
+
+    # Graceful fallback: sorted by fusion_score, at most 12
+    assert len(result) == 12
+    scores = [r.fusion_score for r in result]
+    assert scores == sorted(scores, reverse=True)
+
+
+@pytest.mark.unit
+async def test_deepinfra_reranker_empty_input() -> None:
+    """0 items → empty list without calling the API."""
+    mock_client = AsyncMock()
+    reranker = _make_deepinfra_reranker(mock_client)
+    result = await reranker.rerank("query", [])
+    assert result == []
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.unit
+async def test_deepinfra_reranker_score_length_mismatch_falls_back() -> None:
+    """API returns wrong number of scores → ValueError → fallback to fusion_score sort."""
+    items = [_item(f"item-{i}") for i in range(5)]
+    # Return only 3 scores for 5 documents — a server-side bug
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"scores": [0.9, 0.8, 0.7]}  # missing 2 scores
+    mock_resp.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_resp
+
+    reranker = _make_deepinfra_reranker(mock_client)
+    result = await reranker.rerank("query", items)
+
+    # Score mismatch triggers ValueError → caught → fallback to fusion_score
+    assert len(result) <= 12
+    assert len(result) > 0  # should still return something via fallback
+
+
+@pytest.mark.unit
+async def test_deepinfra_reranker_max_docs_cap_limits_payload() -> None:
+    """Input exceeds max_docs → only top-N by fusion_score are sent to the API."""
+    from rag_chat.application.pipeline.reranker import DeepInfraReranker
+
+    # Create 30 items but set max_docs=5 — only 5 should be sent to the API
+    items = [_item(f"item-{i}", score=float(i) / 30) for i in range(30)]
+    captured_payloads: list[dict] = []
+
+    async def _capture_post(url: str, **kwargs: object) -> MagicMock:
+        captured_payloads.append(kwargs.get("json", {}))  # type: ignore[arg-type]
+        mock_resp = MagicMock()
+        # Return 5 scores (matching the 5-doc cap)
+        mock_resp.json.return_value = {"scores": [0.5, 0.6, 0.7, 0.8, 0.9]}
+        mock_resp.raise_for_status = MagicMock()
+        return mock_resp
+
+    mock_client = AsyncMock()
+    mock_client.post = _capture_post
+
+    reranker = DeepInfraReranker(api_key="key", http_client=mock_client, max_docs=5)
+    await reranker.rerank("query", items)
+
+    assert len(captured_payloads) == 1
+    assert len(captured_payloads[0]["documents"]) == 5

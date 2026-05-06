@@ -47,6 +47,7 @@ def issue_user_jwt(
     iat = int(utc_now().timestamp())
     payload = {
         "iss": _ISSUER,
+        "aud": "worldview-internal",  # DEF-002: audience claim prevents cross-service token reuse
         "sub": user_id,
         "tenant_id": tenant_id,
         "oidc_sub": oidc_sub,
@@ -68,6 +69,7 @@ def issue_system_jwt(
     iat = int(utc_now().timestamp())
     payload = {
         "iss": _ISSUER,
+        "aud": "worldview-internal",  # DEF-002: audience claim prevents cross-service token reuse
         "sub": "system",
         "tenant_id": "",
         "oidc_sub": oidc_sub,
@@ -106,6 +108,7 @@ def issue_service_jwt(
     sub_value = f"service:{service_name}"
     payload = {
         "iss": _ISSUER,
+        "aud": "worldview-internal",  # DEF-002: audience claim prevents cross-service token reuse
         "sub": sub_value,
         "tenant_id": "system",
         "oidc_sub": sub_value,
@@ -133,6 +136,7 @@ def issue_public_jwt(
     iat = int(utc_now().timestamp())
     payload = {
         "iss": _ISSUER,
+        "aud": "worldview-internal",  # DEF-002: audience claim prevents cross-service token reuse
         "sub": "system:api-gateway",
         "user_id": _NIL_UUID,
         "tenant_id": _NIL_UUID,
@@ -161,6 +165,7 @@ def issue_ws_jwt(
     iat = int(utc_now().timestamp())
     payload = {
         "iss": _ISSUER,
+        "aud": "worldview-internal",  # DEF-002: audience claim prevents cross-service token reuse
         "sub": user_id,
         "tenant_id": tenant_id,
         "role": "user",
@@ -182,6 +187,9 @@ def decode_internal_jwt(token: str, public_key: RSAPublicKey) -> dict[str, Any]:
         token,
         public_key,
         algorithms=["RS256"],
-        options={"require": ["iss", "sub", "exp", "iat", "jti"]},
+        # DEF-002: require aud claim and validate it matches the internal audience.
+        # This prevents a valid JWT intended for one service from being replayed at another.
+        options={"require": ["iss", "sub", "exp", "iat", "jti", "aud"]},
         issuer=_ISSUER,
+        audience="worldview-internal",
     )

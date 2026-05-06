@@ -90,14 +90,37 @@ class KnowledgeGraphScheduler:
 
         logger.info("kg_consumer_task_stopped")
 
-        # F-DATA-007: close httpx client on ProvisionalEnrichmentWorker so the
-        # TCP connection pool is released cleanly at service shutdown.
-        prov_worker = self._workers.get("provisional_enrichment")
-        if prov_worker is not None and hasattr(prov_worker, "aclose"):
+        # F-X15 (PLAN-0073 fix): iterate ALL workers and close any that expose
+        # ``aclose()`` so httpx pools, MarketDataClient, and description LLM
+        # clients release sockets cleanly at service shutdown.  Previously only
+        # the provisional worker was closed, which leaked Worker 13J's
+        # MarketDataClient TCP pool on every restart.
+        for worker_name, worker in self._workers.items():
+            if worker is None:
+                continue
+            if hasattr(worker, "aclose"):
+                try:
+                    await worker.aclose()
+                except Exception:
+                    logger.warning(  # type: ignore[no-any-return]
+                        "scheduler_worker_aclose_failed",
+                        worker=worker_name,
+                        exc_info=True,
+                    )
+
+        # F-X15 (PLAN-0073 fix): explicitly close auxiliary clients owned by
+        # Worker 13J that are not exposed through the worker's ``aclose`` (the
+        # description LLM client + MarketDataClient).  Stored on
+        # ``self._aux_aclose`` by ``_add_structured_enrichment_worker``.
+        for label, closer in getattr(self, "_aux_aclose", []):
             try:
-                await prov_worker.aclose()
+                await closer()
             except Exception:
-                logger.warning("scheduler_prov_worker_aclose_failed", exc_info=True)  # type: ignore[no-any-return]
+                logger.warning(  # type: ignore[no-any-return]
+                    "scheduler_aux_aclose_failed",
+                    component=label,
+                    exc_info=True,
+                )
 
     # ------------------------------------------------------------------
     # Job registration
@@ -295,7 +318,7 @@ def build_workers(
                     # PLAN-0072 T-72-1-01: Layer 2 noise classifier reuses the
                     # existing DeepInfra API key; when empty Layer 2 is skipped
                     # (fail-open) and rows go directly to Layer 3 extraction.
-                    noise_classifier_api_key=settings.deepinfra_api_key,
+                    noise_classifier_api_key=settings.deepinfra_api_key.get_secret_value(),  # DEF-005
                     noise_classifier_api_base_url=settings.deepinfra_extraction_base_url,
                 ),
                 "embedding_refresh": EmbeddingRefreshWorker(
@@ -310,13 +333,156 @@ def build_workers(
     return workers
 
 
+def build_market_data_signer(settings: Settings) -> Any:
+    """Return a zero-arg callable that signs a fresh internal JWT per call.
+
+    F-A02 / F-X06 / F-S02 (PLAN-0073 fix): every call to
+    ``MarketDataClient.lookup`` / ``on_demand_profile`` needs an
+    ``X-Internal-JWT`` because S3 enforces ``require_internal_jwt`` on the
+    enrichment endpoints.  Mirrors :func:`fundamentals_refresh._system_jwt_headers`
+    but returns the raw token (the ``MarketDataClient`` builds the header).
+
+    Falls back to an HS256 dev token when ``internal_jwt_private_key`` is
+    empty — this is only accepted by S3 when
+    ``MARKET_DATA_INTERNAL_JWT_SKIP_VERIFICATION=true`` (dev/test only).
+    """
+    import time
+
+    import jwt
+
+    # Same dev-only HS256 secret as ``fundamentals_refresh`` so behaviour is
+    # consistent across all worker → market-data calls in dev.
+    _internal_jwt_dev_key = "dev-skip-verification-key-for-kg-structured-enrichment"
+
+    private_key_pem = settings.internal_jwt_private_key.get_secret_value()
+
+    # F-P2-06 (PLAN-0073): startup-time warning so the dev-key fallback shows
+    # up in the bootstrap log even if no requests are made.  The per-call
+    # warning below catches the prod case where the bootstrap log has rolled.
+    if not private_key_pem:
+        logger.warning(  # type: ignore[no-any-return]
+            "structured_enrichment_no_rs256_key",
+            message="KNOWLEDGE_GRAPH_INTERNAL_JWT_PRIVATE_KEY is empty; "
+            "MarketDataClient will sign HS256 dev tokens — production "
+            "S3 will return 401 unless MARKET_DATA_INTERNAL_JWT_SKIP_VERIFICATION=true",
+        )
+
+    # Closure-local counter so we can rate-limit the per-call warning to one
+    # log per N tokens — full burst-firing would drown out other logs.
+    _dev_key_warn_state = {"count": 0}
+    _dev_key_warn_every = 100
+
+    def _sign() -> str:
+        now = int(time.time())
+        payload = {
+            "iss": "worldview-gateway",
+            "sub": "system:kg-structured-enrichment",
+            "user_id": "00000000-0000-0000-0000-000000000000",
+            "tenant_id": "00000000-0000-0000-0000-000000000000",
+            "role": "system",
+            "iat": now,
+            # Short TTL keeps the blast radius small if a token is somehow
+            # leaked.  The signer issues a fresh token on every request so the
+            # 5-minute window is more than enough for one HTTP call.
+            "exp": now + 300,
+        }
+        if private_key_pem:
+            from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+            private_key = load_pem_private_key(private_key_pem.encode(), password=None)
+            return jwt.encode(payload, private_key, algorithm="RS256")  # type: ignore[no-any-return]
+
+        # F-P2-06: warn periodically (not once) so a long-running consumer
+        # whose bootstrap log has rolled away still surfaces the dev-key
+        # state.  Every Nth token avoids drowning the rest of the logs.
+        _dev_key_warn_state["count"] += 1
+        if _dev_key_warn_state["count"] % _dev_key_warn_every == 1:
+            logger.warning(  # type: ignore[no-any-return]
+                "structured_enrichment_signing_with_dev_key",
+                message="MarketDataClient is signing with the HS256 dev key; "
+                "set KNOWLEDGE_GRAPH_INTERNAL_JWT_PRIVATE_KEY for production.",
+                tokens_signed_with_dev_key=_dev_key_warn_state["count"],
+            )
+        return jwt.encode(payload, _internal_jwt_dev_key, algorithm="HS256")  # type: ignore[no-any-return]
+
+    return _sign
+
+
+class _EntityDirtiedProducerAdapter:
+    """Adapter: bridges DirectProducerProtocol → ConfluentDirectProducer.
+
+    F-A01 / F-X02 (PLAN-0073 fix): the structured-enrichment use case calls
+    ``produce_entity_dirtied(entity_id, reason)`` on a high-level port.  The
+    only Kafka producer in this service is the lower-level
+    :class:`ConfluentDirectProducer` which exposes ``produce_bytes(topic, key,
+    value)``.  This adapter glues the two together by serialising the event
+    via the same helper used elsewhere in S7
+    (``provisional_enrichment_core._build_dirtied_event``) so the wire format
+    matches every other producer (Confluent Avro magic byte + framing).
+    """
+
+    def __init__(self, direct_producer: Any, topic: str) -> None:
+        self._dp = direct_producer
+        self._topic = topic
+
+    def produce_entity_dirtied(self, *, entity_id: Any, reason: str) -> None:
+        # Lazy import keeps ``messaging.*`` and the heavy serializer cost out
+        # of the application/domain import paths; this code path runs only at
+        # most once per entity so the import overhead is irrelevant.
+        from knowledge_graph.infrastructure.workers.provisional_enrichment_core import (
+            _build_dirtied_event,
+        )
+
+        value = _build_dirtied_event(entity_id, dirty_reason=reason)
+        self._dp.produce_bytes(
+            topic=self._topic,
+            key=str(entity_id).encode(),
+            value=value,
+        )
+
+
+def _build_entity_dirtied_producer(settings: Settings) -> tuple[Any | None, Any | None]:
+    """Construct a DirectProducerProtocol adapter for entity.dirtied.v1.
+
+    Returns ``(adapter, raw_producer)`` where ``raw_producer`` is the
+    confluent-kafka ``Producer`` instance — exposed so the caller can flush
+    it on shutdown.  ``(None, None)`` if confluent_kafka is not importable
+    (we still log a warning so operators see why entity.dirtied.v1 is silent).
+    """
+    try:
+        from confluent_kafka import Producer  # type: ignore[import-untyped]
+
+        from knowledge_graph.infrastructure.messaging.direct_producer import ConfluentDirectProducer
+    except Exception:
+        logger.warning(  # type: ignore[no-any-return]
+            "structured_enrichment_direct_producer_unavailable",
+            message="confluent_kafka not importable; entity.dirtied.v1 will be silently skipped",
+            exc_info=True,
+        )
+        return None, None
+
+    raw = Producer({"bootstrap.servers": settings.kafka_bootstrap_servers})
+    adapter = _EntityDirtiedProducerAdapter(
+        ConfluentDirectProducer(raw),
+        topic=settings.kafka_topic_entity_dirtied,
+    )
+    return adapter, raw
+
+
 def _add_structured_enrichment_worker(
     workers: dict[str, Any],
     settings: Settings,
     session_factory: Any,
     valkey_client: Any | None,
 ) -> None:
-    """Instantiate StructuredEnrichmentWorker (Worker 13J) and add to workers dict."""
+    """Instantiate StructuredEnrichmentWorker (Worker 13J) and add to workers dict.
+
+    Wires the cascade dependencies: per-request JWT signer (F-A02), the
+    entity.dirtied.v1 producer adapter (F-A01), and the description LLM
+    client.  Each non-Worker resource that owns a network handle is also
+    registered on ``self._aux_aclose`` so :meth:`KnowledgeGraphScheduler.stop`
+    closes it cleanly (F-X15).
+    """
     from knowledge_graph.application.use_cases.structured_enrichment import (
         StructuredEnrichmentUseCase,
     )
@@ -329,23 +495,53 @@ def _add_structured_enrichment_worker(
     )
 
     enrichment_adapter = EntityEnrichmentAdapter(session_factory)
+
+    # F-A02 / F-X06 / F-S02: per-request RS256 signer (HS256 fallback in dev).
+    signer = build_market_data_signer(settings)
     market_data_client = MarketDataClient(
         base_url=settings.market_data_internal_url,
-        internal_jwt="",  # RS256 key injection handled by future F-015 extension
+        internal_jwt=signer,
     )
     description_client = _build_description_client(settings, valkey_client)
+
+    # F-A01 / F-X02: wire the entity.dirtied.v1 producer adapter.
+    direct_producer, raw_producer = _build_entity_dirtied_producer(settings)
+    if direct_producer is None:
+        logger.warning(  # type: ignore[no-any-return]
+            "structured_enrichment_no_producer",
+            message="entity.dirtied.v1 producer unavailable; embedding refresh chain "
+            "for Worker 13J will rely solely on the watermark-based fallback (PRD §13.7)",
+        )
 
     use_case = StructuredEnrichmentUseCase(
         enrichment_adapter=enrichment_adapter,
         market_data_client=market_data_client,
         description_client=description_client,
         session_factory=session_factory,
+        direct_producer=direct_producer,
     )
     workers["structured_enrichment"] = StructuredEnrichmentWorker(
         enrichment_adapter=enrichment_adapter,
         use_case=use_case,
         session_factory=session_factory,
     )
+
+    # F-X15 (PLAN-0073 fix): register cleanup hooks for the resources owned
+    # outside the worker proper (the worker itself has no aclose).  These run
+    # in :meth:`KnowledgeGraphScheduler.stop` after the consumer task is gone.
+    aux: list[tuple[str, Any]] = []
+    aux.append(("structured_enrichment_market_data_client", market_data_client.aclose))
+    if hasattr(description_client, "aclose"):
+        aux.append(("structured_enrichment_description_client", description_client.aclose))
+    if raw_producer is not None:
+
+        async def _flush_producer() -> None:
+            # ``flush`` is sync on confluent_kafka.Producer; run in a thread so
+            # it does not block the asyncio loop on shutdown.
+            await asyncio.get_event_loop().run_in_executor(None, raw_producer.flush, 5.0)
+
+        aux.append(("structured_enrichment_direct_producer", _flush_producer))
+    workers.setdefault("_aux_aclose", []).extend(aux)
 
 
 def _build_description_client(settings: Settings, valkey_client: Any | None = None) -> Any:
@@ -368,7 +564,7 @@ def _build_description_client(settings: Settings, valkey_client: Any | None = No
     provider = settings.description_provider.lower()
 
     if provider == "deepinfra":
-        api_key = settings.deepinfra_api_key
+        api_key = settings.deepinfra_api_key.get_secret_value()  # DEF-005
         if not api_key:
             logger.warning(  # type: ignore[no-any-return]
                 "description_client_deepinfra_key_missing",

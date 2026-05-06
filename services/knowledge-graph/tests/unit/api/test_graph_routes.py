@@ -73,11 +73,11 @@ def _make_app(
 ):
     """Build a test app with GetEntityGraphUseCase patched to avoid real repos.
 
-    Also overrides get_cypher_bundle (needed since T-72-3-01 added CypherBundleDep
-    to get_entity_graph). By default cypher_enabled=False so existing depth=1
-    tests are unaffected.
+    Also overrides get_cypher_bundle and get_cypher_neighborhood_uc (DEF-015:
+    CypherNeighborhoodUseCase is now injected via Depends rather than called inline).
+    By default cypher_enabled=False so existing depth=1 tests are unaffected.
     """
-    from knowledge_graph.api.dependencies import get_cypher_bundle, get_entity_graph_repos
+    from knowledge_graph.api.dependencies import get_cypher_bundle, get_cypher_neighborhood_uc, get_entity_graph_repos
     from knowledge_graph.app import create_app
     from knowledge_graph.config import Settings
 
@@ -100,8 +100,19 @@ def _make_app(
         bundle.temporal_event_repo = AsyncMock()
         return bundle
 
+    def _cypher_uc_override():
+        # Return a simple mock; tests that exercise the cypher path patch the execute
+        # method directly (see test_depth_2_delegates_to_cypher_use_case).
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        uc = MagicMock()
+        uc.execute = _AsyncMock(return_value=None)
+        return uc
+
     app.dependency_overrides[get_entity_graph_repos] = _repos_override
     app.dependency_overrides[get_cypher_bundle] = _cypher_override
+    # Override the DI-injected CypherNeighborhoodUseCase (DEF-015 fix).
+    app.dependency_overrides[get_cypher_neighborhood_uc] = _cypher_uc_override
 
     # Patch the use case at class level so it returns our fixtures regardless of repos
     import knowledge_graph.api.routes as _routes_mod
@@ -298,9 +309,13 @@ class TestGraphRouteDepthParameter:
         assert data["center"]["entity_id"] == str(_ENTITY_ID)
 
     async def test_depth_2_delegates_to_cypher_use_case(self) -> None:
-        """depth=2 + cypher_enabled=True → CypherNeighborhoodUseCase called, 200 returned."""
+        """depth=2 + cypher_enabled=True → CypherNeighborhoodUseCase called, 200 returned.
+
+        DEF-015: CypherNeighborhoodUseCase is now DI-injected via Depends().  We
+        override get_cypher_neighborhood_uc in the test app to return a mock whose
+        execute() yields fake_result, rather than patching the class method directly.
+        """
         from datetime import datetime
-        from unittest.mock import patch
 
         from httpx import ASGITransport, AsyncClient
 
@@ -344,19 +359,25 @@ class TestGraphRouteDepthParameter:
             },
         )
 
+        # Build app with cypher_enabled=True; _make_app already overrides
+        # get_cypher_neighborhood_uc with a generic MagicMock — we replace it with
+        # a mock whose execute() returns fake_result so the route can map the result.
+        from knowledge_graph.api.dependencies import get_cypher_neighborhood_uc
+
         app = _make_app(entity_row=_entity_row(), cypher_enabled=True)
 
-        async def _fake_cypher_execute(self, *args, **kwargs):
+        async def _fake_execute(*args, **kwargs):
             return fake_result
 
-        with patch(
-            "knowledge_graph.application.use_cases.cypher_neighborhood.CypherNeighborhoodUseCase.execute",
-            new=_fake_cypher_execute,
-        ):
-            async with AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test", headers=_HEADERS
-            ) as client:
-                resp = await client.get(f"/api/v1/entities/{_ENTITY_ID}/graph?depth=2")
+        def _fake_uc_override():
+            uc = MagicMock()
+            uc.execute = AsyncMock(side_effect=_fake_execute)
+            return uc
+
+        app.dependency_overrides[get_cypher_neighborhood_uc] = _fake_uc_override
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_HEADERS) as client:
+            resp = await client.get(f"/api/v1/entities/{_ENTITY_ID}/graph?depth=2")
 
         assert resp.status_code == 200
         data = resp.json()

@@ -53,7 +53,7 @@ async def main() -> None:
         EmbeddingRetryWorker,
     )
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     configure_logging(
         service_name="nlp-pipeline-embedding-retry-worker",
         level=settings.log_level,

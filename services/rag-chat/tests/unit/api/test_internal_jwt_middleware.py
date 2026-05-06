@@ -169,6 +169,7 @@ async def test_jti_first_use_accepted() -> None:
             "tenant_id": "tenant-1",
             "role": "user",
             "iss": "worldview-gateway",
+            "aud": "worldview-internal",  # DEF-002: required by middleware
             "jti": "rag-jti-first-use",
             "exp": 9999999999,
         },
@@ -225,6 +226,7 @@ async def test_jti_replay_rejected() -> None:
             "tenant_id": "tenant-1",
             "role": "user",
             "iss": "worldview-gateway",
+            "aud": "worldview-internal",  # DEF-002: required by middleware
             "jti": "rag-replayed-jti",
             "exp": 9999999999,
         },

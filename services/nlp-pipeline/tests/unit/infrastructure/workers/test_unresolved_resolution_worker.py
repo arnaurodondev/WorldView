@@ -29,6 +29,7 @@ from nlp_pipeline.infrastructure.workers.unresolved_resolution_worker import (
     UnresolvedResolutionWorker,
     WorkerStats,
 )
+from pydantic import SecretStr
 
 
 def _wrap(mentions: list[Any], context: str | None = None) -> list[UnresolvedMentionWithContext]:
@@ -71,7 +72,7 @@ def _make_settings(
     s.unresolved_resolution_classification_model = model_id
     s.unresolved_resolution_llm_timeout_s = llm_timeout_s
     # DeepInfra provider fields — default to empty (Ollama path active)
-    s.unresolved_resolution_api_key = ""
+    s.unresolved_resolution_api_key = SecretStr("")
     s.unresolved_resolution_api_base_url = "https://api.deepinfra.com/v1/openai"
     s.unresolved_resolution_api_model_id = "Qwen/Qwen2.5-0.5B-Instruct"
     return s
@@ -526,7 +527,7 @@ class TestDeepInfraProviderPath:
     def _make_settings_with_api(self) -> MagicMock:
         s = _make_settings()
         # Enable the DeepInfra path
-        s.unresolved_resolution_api_key = "test-key"
+        s.unresolved_resolution_api_key = SecretStr("test-key")
         s.unresolved_resolution_api_base_url = "https://api.deepinfra.com/v1/openai"
         s.unresolved_resolution_api_model_id = "Qwen/Qwen2.5-0.5B-Instruct"
         return s
@@ -706,7 +707,7 @@ async def test_phase2_llm_classify_passes_context_to_external_provider() -> None
     carries contains the per-mention ``context_sentence``.
     """
     s = _make_settings()
-    s.unresolved_resolution_api_key = "test-key"
+    s.unresolved_resolution_api_key = SecretStr("test-key")
     s.unresolved_resolution_api_base_url = "https://api.deepinfra.com/v1/openai"
     s.unresolved_resolution_api_model_id = "Qwen/Qwen2.5-0.5B-Instruct"
     mention = _make_mention(mention_class=MentionClass.ORGANIZATION, mention_text="MAS")

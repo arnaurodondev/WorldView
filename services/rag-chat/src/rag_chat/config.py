@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import os
 
-import structlog
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -53,8 +52,8 @@ class Settings(BaseSettings):
     ollama_reranker_model: str = "bge-reranker-v2-m3"
 
     # ── LLM API providers (primary + fallback chain) ──────────────────────────
-    deepinfra_api_key: str | None = None  # primary: configurable via completion_model
-    openrouter_api_key: str | None = None  # fallback: configurable via openrouter_completion_model
+    deepinfra_api_key: SecretStr | None = None  # primary: configurable via completion_model (DEF-034)
+    openrouter_api_key: SecretStr | None = None  # fallback: configurable via openrouter_completion_model (DEF-034)
 
     # ── Intent classification (DeepInfra GPU) ─────────────────────────────────
     # PLAN-0061 Wave D (2026-05-02): Llama-3.2-1B/3B are not available on this
@@ -67,13 +66,13 @@ class Settings(BaseSettings):
     # WHY: bge-reranker-v2-m3 is not in the Ollama registry (ollama pull fails),
     # causing 100% reranker failure (permanent fusion_score sort fallback).
     # Cohere Rerank v2 provides ~300ms cross-encoder quality via REST API.
-    cohere_api_key: str | None = None  # optional; fusion_score fallback when absent
+    cohere_api_key: SecretStr | None = None  # optional; fusion_score fallback when absent (DEF-034)
 
     # ── External embeddings (Jina AI — replaces S6/Ollama for query embedding) ─
     # When set, rag-chat embeds queries directly via Jina AI (1024-dim, ~100-300ms)
     # instead of proxying through S6 → Ollama bge-large (7-13s on CPU).
     # Jina embeddings-v3 is 1024-dim (same pgvector schema as bge-large).
-    jina_api_key: str | None = None  # optional; S6/Ollama fallback when absent
+    jina_api_key: SecretStr | None = None  # optional; S6/Ollama fallback when absent (DEF-034)
 
     # ── Completion model config (PRD-0016 §6.2, T-B-2-01) ────────────────────
     completion_provider: str = "deepinfra"  # RAG_CHAT_COMPLETION_PROVIDER
@@ -121,10 +120,15 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_startup(self) -> Settings:
-        """Validate startup invariants: F-007 (skip_verification) + F-014 (whitespace coercion) + credential warning."""
+        """Validate startup invariants: F-007 (skip_verification) + F-014 (whitespace coercion).
+
+        DEF-028: Use case-insensitive APP_ENV comparison so "Production", "PRODUCTION",
+        and "prod" all trigger the guard — prevents bypassing the check via env var casing.
+        """
         # F-007: internal_jwt_skip_verification=True MUST NOT be used in production.
         # Prevents accidentally deploying with signature verification disabled.
-        if self.internal_jwt_skip_verification and os.environ.get("APP_ENV") == "production":
+        _app_env = os.environ.get("APP_ENV", "").strip().lower()
+        if self.internal_jwt_skip_verification and _app_env in {"production", "prod"}:
             raise ValueError("internal_jwt_skip_verification MUST NOT be enabled in production")
 
         # F-014: Coerce whitespace-only database_url_read to None — functionally empty
@@ -134,14 +138,6 @@ class Settings(BaseSettings):
             if not raw or not raw.strip():
                 object.__setattr__(self, "database_url_read", None)
 
-        if "postgres:postgres" in self.database_url.get_secret_value():
-            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
-                "default_db_credentials_detected",
-                message=(
-                    "RAG_CHAT_DATABASE_URL still uses the default 'postgres:postgres' credentials. "
-                    "Set this env var to a secure database URL before deploying to production."
-                ),
-            )
         return self
 
 

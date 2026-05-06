@@ -64,11 +64,12 @@ async def main() -> None:
     # are activated. Without llm_client these all become no-op stubs and no entity
     # embeddings or relation evidence gets materialised.
     _embedding_provider = settings.embedding_provider.lower()
-    if _embedding_provider == "deepinfra" and settings.embedding_api_key:
+    _embedding_api_key = settings.embedding_api_key.get_secret_value()  # DEF-005
+    if _embedding_provider == "deepinfra" and _embedding_api_key:
         from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter  # type: ignore[import-not-found]
 
         embed_client: Any = DeepInfraEmbeddingAdapter(
-            api_key=settings.embedding_api_key,
+            api_key=_embedding_api_key,
             model_id=settings.embedding_api_model_id,
             base_url=settings.embedding_api_base_url,
         )
@@ -78,7 +79,7 @@ async def main() -> None:
             base_url=settings.embedding_api_base_url,
         )
     else:
-        if _embedding_provider == "deepinfra" and not settings.embedding_api_key:
+        if _embedding_provider == "deepinfra" and not _embedding_api_key:
             log.warning(
                 "kg_embedding_deepinfra_key_missing_fallback_to_ollama",
                 provider=_embedding_provider,
@@ -103,12 +104,13 @@ async def main() -> None:
 
     # Build DeepInfra extraction adapter when API key is configured (PLAN-0061 T-C-2).
     # When present this becomes slot-0 in the extraction chain (DeepInfra → Ollama → Gemini).
+    _deepinfra_api_key = settings.deepinfra_api_key.get_secret_value()  # DEF-005
     deepinfra_ext: Any = None
-    if settings.deepinfra_api_key:
+    if _deepinfra_api_key:
         from ml_clients.adapters.deepseek_extraction import DeepSeekExtractionAdapter  # type: ignore[import-not-found]
 
         deepinfra_ext = DeepSeekExtractionAdapter(
-            api_key=settings.deepinfra_api_key,
+            api_key=_deepinfra_api_key,
             model_id=settings.deepinfra_extraction_model_id,
             base_url=settings.deepinfra_extraction_base_url,
             semaphore=asyncio.Semaphore(settings.deepinfra_extraction_concurrency),
@@ -124,7 +126,7 @@ async def main() -> None:
     # When deepinfra_api_key is set, GLiNER is the only local model; qwen3:0.6b
     # must NOT load because DeepInfra Qwen3.5-0.8B serves the extraction role.
     ollama_ext: Any = None
-    if not settings.deepinfra_api_key:
+    if not _deepinfra_api_key:
         from ml_clients.adapters.ollama_extraction import OllamaExtractionAdapter  # type: ignore[import-not-found]
 
         _ollama_extraction_model = "qwen3:0.6b"

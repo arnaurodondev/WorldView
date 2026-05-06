@@ -23,8 +23,6 @@ if TYPE_CHECKING:
     )
     from market_data.application.use_cases.query_fundamentals import GetFundamentalsSectionUseCase
     from market_data.application.use_cases.query_instruments import (
-        GetInstrumentByIdUseCase,
-        GetInstrumentBySymbolUseCase,
         SearchInstrumentsUseCase,
     )
     from market_data.application.use_cases.query_ohlcv import (
@@ -119,24 +117,26 @@ def get_lookup_instrument_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) ->
 
 
 def get_on_demand_profile_uc(
-    uow: UnitOfWork = Depends(get_uow),
+    request: Request,
     eodhd_client: EodhHdClient = Depends(get_eodhd_client),
 ) -> OnDemandProfileUseCase:
+    """Inject a UoW factory (not a single open UoW) so the use case can run
+    a 3-phase R25 pattern: read (UoW #1) → HTTP (no UoW) → write (UoW #2).
+
+    F-D02: holding one UoW across the EODHD call would keep a DB session
+    open for ~10 s under EODHD's worst-case latency, exhausting the pool.
+    """
     from market_data.application.use_cases.on_demand_profile import OnDemandProfileUseCase
+    from market_data.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
-    return OnDemandProfileUseCase(uow, eodhd_client)
+    write_factory = request.app.state.write_session_factory
+    read_factory = request.app.state.read_session_factory
 
+    def uow_factory() -> UnitOfWork:
+        # Build a brand-new UoW each call; caller is responsible for entering it.
+        return SqlAlchemyUnitOfWork(write_factory, read_factory)
 
-def get_instrument_by_id_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetInstrumentByIdUseCase:
-    from market_data.application.use_cases.query_instruments import GetInstrumentByIdUseCase
-
-    return GetInstrumentByIdUseCase(uow)
-
-
-def get_instrument_by_symbol_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetInstrumentBySymbolUseCase:
-    from market_data.application.use_cases.query_instruments import GetInstrumentBySymbolUseCase
-
-    return GetInstrumentBySymbolUseCase(uow)
+    return OnDemandProfileUseCase(uow_factory, eodhd_client)
 
 
 def get_search_instruments_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> SearchInstrumentsUseCase:

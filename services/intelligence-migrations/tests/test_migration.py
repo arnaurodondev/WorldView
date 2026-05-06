@@ -955,7 +955,7 @@ def test_canonical_entities_enrichment_columns_exist(conn: sa.engine.Connection)
 def test_enrichment_sweep_index_exists(conn: sa.engine.Connection) -> None:
     """Migration 0022 creates ix_canonical_entities_enrichment_sweep partial index."""
     result = conn.execute(
-        text("SELECT indexdef FROM pg_indexes " "WHERE indexname = 'ix_canonical_entities_enrichment_sweep'")
+        text("SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_canonical_entities_enrichment_sweep'")
     )
     row = result.scalar_one_or_none()
     assert row is not None, "ix_canonical_entities_enrichment_sweep index missing"
@@ -1002,8 +1002,16 @@ def test_relation_type_registry_source_columns_exist(conn: sa.engine.Connection)
     assert rows["source_field"] == "YES", "source_field must be nullable"
 
 
-def test_relation_type_registry_eodhd_mappings_seeded(conn: sa.engine.Connection) -> None:
-    """Migration 0023 seeds 6 EODHD/market-data relation type mappings."""
+def test_relation_type_registry_market_data_mappings_seeded(conn: sa.engine.Connection) -> None:
+    """Migration 0023 seeds 4 market-data relation type mappings.
+
+    QA report 2026-05-05 (F-D01/F-D03/F-A06): consolidated from the original
+    six-row EODHD+market_data seed to four lowercase market_data rows. The
+    canonical_type values MUST match the lowercase forms seeded by migrations
+    0001/0002 (else the UPDATE matches zero rows). The source_field values MUST
+    match the normalized metadata keys (sector / industry / country / exchange)
+    used by S2/S5 enrichment payloads, NOT the EODHD-prefixed dotted paths.
+    """
     result = conn.execute(
         text(
             "SELECT canonical_type, data_source, source_field "
@@ -1014,12 +1022,10 @@ def test_relation_type_registry_eodhd_mappings_seeded(conn: sa.engine.Connection
     )
     rows = [(r[0], r[1], r[2]) for r in result]
     expected = {
-        ("OPERATES_IN_SECTOR", "eodhd", "General.Sector"),
-        ("OPERATES_IN_INDUSTRY", "eodhd", "General.Industry"),
-        ("HEADQUARTERED_IN", "eodhd", "General.Country"),
-        ("LISTED_ON", "eodhd", "General.Exchange"),
-        ("OPERATES_IN_SECTOR", "market_data", "sector"),
-        ("HEADQUARTERED_IN", "market_data", "country"),
+        ("is_in_sector", "market_data", "sector"),
+        ("is_in_industry", "market_data", "industry"),
+        ("headquartered_in", "market_data", "country"),
+        ("listed_on", "market_data", "exchange"),
     }
     assert set(rows) == expected, f"Unexpected seed data: {rows}"
 
@@ -1032,12 +1038,12 @@ def test_relation_type_registry_seed_idempotent(conn: sa.engine.Connection) -> N
             "UPDATE relation_type_registry "
             "SET data_source = :src, source_field = :field "
             "WHERE canonical_type = :type AND data_source IS NULL"
-        ).bindparams(src="eodhd", field="General.Sector", type="OPERATES_IN_SECTOR")
+        ).bindparams(src="market_data", field="sector", type="is_in_sector")
     )
     result = conn.execute(
         text(
             "SELECT COUNT(*) FROM relation_type_registry "
-            "WHERE canonical_type = 'OPERATES_IN_SECTOR' AND data_source = 'eodhd'"
+            "WHERE canonical_type = 'is_in_sector' AND data_source = 'market_data'"
         )
     ).scalar_one()
     # Still exactly 1 row — the second UPDATE was a no-op (data_source IS NULL condition)

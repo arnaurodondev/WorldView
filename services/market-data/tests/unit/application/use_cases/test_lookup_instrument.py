@@ -163,3 +163,43 @@ async def test_lookup_not_found_raises_instrument_not_found_error() -> None:
 
     with pytest.raises(InstrumentNotFoundError):
         await uc.execute(symbol="UNKNOWN")
+
+
+async def test_lookup_extra_info_security_not_found_returns_none() -> None:
+    """F-Q11: when the linked security row is missing, ``security`` is None.
+
+    Models the dangling-FK case (instrument exists, security row was deleted).
+    The use case must NOT raise — it should return the instrument with
+    ``security=None`` and let the caller decide whether to surface a partial
+    response or upgrade to a hard error at the API layer.
+    """
+    inst = _make_instrument()
+    # security_repo returns None even though instrument resolved.
+    uow = _make_uow(instrument=inst, security=None)
+    uc = InstrumentLookupUseCase(uow)
+
+    result = await uc.execute(id=_INSTRUMENT_ID, extra_info=True)
+
+    assert result.instrument.id == _INSTRUMENT_ID
+    assert result.security is None
+    uow.securities_read.find_by_id.assert_called_once_with(_SECURITY_ID)
+
+
+async def test_lookup_priority_isin_over_symbol() -> None:
+    """F-Q11: when both isin and symbol are provided, isin wins.
+
+    Priority is id > isin > symbol — confirmed by the use case checking
+    ``find_by_isin`` before ``find_by_symbol_icase`` and short-circuiting on
+    the first non-None match.
+    """
+    inst = _make_instrument()
+    uow = _make_uow(instrument=inst)
+    # find_by_id returns None so isin path is exercised.
+    uow.instruments_read.find_by_id = AsyncMock(return_value=None)
+    uc = InstrumentLookupUseCase(uow)
+
+    result = await uc.execute(isin=_ISIN, symbol="aapl")
+
+    assert result.instrument.symbol == "AAPL"
+    uow.instruments_read.find_by_isin.assert_called_once_with(_ISIN)
+    uow.instruments_read.find_by_symbol_icase.assert_not_called()

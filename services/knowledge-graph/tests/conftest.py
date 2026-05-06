@@ -15,6 +15,12 @@ import time
 # before Settings() is instantiated in create_app() or any test fixture.
 os.environ.setdefault("KNOWLEDGE_GRAPH_STORAGE_ACCESS_KEY", "minioadmin-test")
 os.environ.setdefault("KNOWLEDGE_GRAPH_STORAGE_SECRET_KEY", "minioadmin-test")
+# DEF-001: database_url no longer has a default (fail-fast hardening).
+# Unit tests provide a fake DSN — no real DB connection is made in unit tests.
+os.environ.setdefault(
+    "KNOWLEDGE_GRAPH_DATABASE_URL",
+    "postgresql+asyncpg://postgres:test@localhost:5432/intelligence_db_test",
+)
 
 import jwt as _jwt
 import pytest

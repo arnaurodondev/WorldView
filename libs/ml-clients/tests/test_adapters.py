@@ -1037,3 +1037,220 @@ class TestDeepInfraDescriptionAdapter:
         assert len(captured_prompts) == 1
         assert "sector" in captured_prompts[0]
         assert "Technology" in captured_prompts[0]
+
+
+# ── DeepInfraEmbeddingAdapter ─────────────────────────────────────────────────
+
+
+def _make_deepinfra_embedding_response(embeddings: list[list[float]], *, status_code: int = 200) -> MagicMock:
+    """Build a mock httpx response shaped like the DeepInfra OpenAI embeddings API."""
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "data": [{"embedding": emb, "index": i} for i, emb in enumerate(embeddings)],
+        "model": "BAAI/bge-large-en-v1.5",
+        "object": "list",
+    }
+    return mock_resp
+
+
+class TestDeepInfraEmbeddingAdapter:
+    """Unit tests for DeepInfraEmbeddingAdapter (DEF-029)."""
+
+    async def test_happy_path_returns_1024_dim_outputs(self) -> None:
+        """Successful API call returns EmbeddingOutput with 1024-dim vector per input."""
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+        from ml_clients.dataclasses import EmbeddingInput
+
+        inputs = [EmbeddingInput(text="Apple Inc. revenue Q3.", model_id="BAAI/bge-large-en-v1.5")]
+        embedding = [0.1] * 1024
+
+        mock_resp = _make_deepinfra_embedding_response([embedding])
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=mock_resp)
+
+            adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
+            results = await adapter.embed(inputs)
+
+        assert len(results) == 1
+        assert results[0].dimension == 1024
+        assert len(results[0].embedding) == 1024
+        assert results[0].model_id == "BAAI/bge-large-en-v1.5"
+
+    async def test_empty_input_returns_empty_list(self) -> None:
+        """embed([]) → [] without making any HTTP request."""
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+
+        adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
+        results = await adapter.embed([])
+        assert results == []
+
+    async def test_wrong_dimension_raises_fatal_error(self) -> None:
+        """API returns wrong-dimension vector → FatalError with 'dimension' in message."""
+
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+        from ml_clients.dataclasses import EmbeddingInput
+        from ml_clients.errors import FatalError
+
+        inputs = [EmbeddingInput(text="test text", model_id="BAAI/bge-large-en-v1.5")]
+        wrong_dim_embedding = [0.1] * 512  # 512 instead of expected 1024
+
+        mock_resp = _make_deepinfra_embedding_response([wrong_dim_embedding])
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=mock_resp)
+
+            adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
+            with pytest.raises(FatalError, match="dimension"):
+                await adapter.embed(inputs)
+
+    async def test_5xx_raises_retryable_error(self) -> None:
+        """HTTP 5xx response → RetryableError (safe to retry)."""
+        import httpx
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+        from ml_clients.dataclasses import EmbeddingInput
+        from ml_clients.errors import RetryableError
+
+        inputs = [EmbeddingInput(text="test text", model_id="BAAI/bge-large-en-v1.5")]
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            err_resp = MagicMock(status_code=503)
+            mock_client.post.side_effect = httpx.HTTPStatusError(
+                message="503 Service Unavailable", request=MagicMock(), response=err_resp
+            )
+
+            adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
+            with pytest.raises(RetryableError, match="5xx"):
+                await adapter.embed(inputs)
+
+    async def test_4xx_raises_fatal_error(self) -> None:
+        """HTTP 4xx response → FatalError (bad request, do not retry)."""
+        import httpx
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+        from ml_clients.dataclasses import EmbeddingInput
+        from ml_clients.errors import FatalError
+
+        inputs = [EmbeddingInput(text="test text", model_id="BAAI/bge-large-en-v1.5")]
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            err_resp = MagicMock(status_code=401)
+            mock_client.post.side_effect = httpx.HTTPStatusError(
+                message="401 Unauthorized", request=MagicMock(), response=err_resp
+            )
+
+            adapter = DeepInfraEmbeddingAdapter(api_key="bad-key")
+            with pytest.raises(FatalError, match="4xx"):
+                await adapter.embed(inputs)
+
+    async def test_timeout_raises_retryable_error(self) -> None:
+        """Network timeout → RetryableError."""
+        import httpx
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+        from ml_clients.dataclasses import EmbeddingInput
+        from ml_clients.errors import RetryableError
+
+        inputs = [EmbeddingInput(text="test", model_id="BAAI/bge-large-en-v1.5")]
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post.side_effect = httpx.TimeoutException("read timeout")
+
+            adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
+            with pytest.raises(RetryableError, match="timeout"):
+                await adapter.embed(inputs)
+
+    async def test_instruction_prefix_prepended_and_truncated(self) -> None:
+        """Instruction prefix is prepended to the text and result is truncated to 1500 chars."""
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+        from ml_clients.dataclasses import EmbeddingInput
+
+        long_text = "A" * 2000  # deliberately over 1500 chars
+        inputs = [
+            EmbeddingInput(
+                text=long_text,
+                model_id="BAAI/bge-large-en-v1.5",
+                instruction_prefix="Represent this text:",
+            )
+        ]
+        captured_json: list[dict] = []
+
+        async def _fake_post(url: str, *, headers: dict, json: dict, **kwargs: object) -> MagicMock:
+            captured_json.append(json)
+            return _make_deepinfra_embedding_response([[0.1] * 1024])
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = _fake_post
+
+            adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
+            await adapter.embed(inputs)
+
+        assert len(captured_json) == 1
+        sent_text = captured_json[0]["input"][0]
+        # Prefix should be present, total length should not exceed 1500 chars
+        assert sent_text.startswith("Represent this text:")
+        assert len(sent_text) <= 1500
+
+    async def test_result_count_mismatch_raises_fatal(self) -> None:
+        """API returns fewer items than inputs → FatalError."""
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+        from ml_clients.dataclasses import EmbeddingInput
+        from ml_clients.errors import FatalError
+
+        # 2 inputs but mock only returns 1 embedding
+        inputs = [
+            EmbeddingInput(text="text 1", model_id="BAAI/bge-large-en-v1.5"),
+            EmbeddingInput(text="text 2", model_id="BAAI/bge-large-en-v1.5"),
+        ]
+        mock_resp = _make_deepinfra_embedding_response([[0.1] * 1024])  # only 1 result
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = AsyncMock(return_value=mock_resp)
+
+            adapter = DeepInfraEmbeddingAdapter(api_key="test-key")
+            with pytest.raises(FatalError):
+                await adapter.embed(inputs)
+
+    async def test_bearer_auth_header_sent(self) -> None:
+        """Authorization: Bearer <api_key> header is present in the request."""
+        from ml_clients.adapters.deepinfra_embedding import DeepInfraEmbeddingAdapter
+        from ml_clients.dataclasses import EmbeddingInput
+
+        inputs = [EmbeddingInput(text="hello", model_id="BAAI/bge-large-en-v1.5")]
+        captured_headers: list[dict] = []
+
+        async def _capture(url: str, *, headers: dict, json: dict, **kwargs: object) -> MagicMock:
+            captured_headers.append(headers)
+            return _make_deepinfra_embedding_response([[0.1] * 1024])
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.post = _capture
+
+            adapter = DeepInfraEmbeddingAdapter(api_key="my-secret-deepinfra-key")
+            await adapter.embed(inputs)
+
+        assert len(captured_headers) == 1
+        assert "Bearer my-secret-deepinfra-key" in captured_headers[0]["Authorization"]

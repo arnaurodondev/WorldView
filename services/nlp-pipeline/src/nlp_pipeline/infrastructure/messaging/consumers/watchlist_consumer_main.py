@@ -29,7 +29,7 @@ async def main() -> None:
     )
     from nlp_pipeline.infrastructure.valkey.watchlist_cache import WatchlistCache
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     configure_logging(
         service_name="nlp-pipeline-watchlist-consumer",
         level=settings.log_level,

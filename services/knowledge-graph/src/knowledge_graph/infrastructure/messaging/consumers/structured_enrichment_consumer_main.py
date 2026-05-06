@@ -60,20 +60,43 @@ async def main() -> None:
     from knowledge_graph.infrastructure.intelligence_db.adapters.entity_enrichment_adapter import (
         EntityEnrichmentAdapter,
     )
-    from knowledge_graph.infrastructure.scheduler.scheduler import _build_description_client
+    from knowledge_graph.infrastructure.scheduler.scheduler import (
+        _build_description_client,
+        _build_entity_dirtied_producer,
+        build_market_data_signer,
+    )
 
     enrichment_adapter = EntityEnrichmentAdapter(write_factory)
+
+    # F-A02 / F-X06 / F-S02 (PLAN-0073): use the same per-request RS256 signer
+    # as the APScheduler bootstrap so calls to S3 ``/on-demand-profile`` carry
+    # a verifiable ``X-Internal-JWT`` header.  Falls back to an HS256 dev token
+    # only when ``KNOWLEDGE_GRAPH_INTERNAL_JWT_PRIVATE_KEY`` is empty.
+    signer = build_market_data_signer(settings)
     market_data_client = MarketDataClient(
         base_url=settings.market_data_internal_url,
-        internal_jwt="",  # dev: no JWT required when skip_verification=true
+        internal_jwt=signer,
     )
     description_client = _build_description_client(settings, valkey)
+
+    # F-A01 / F-X02 (PLAN-0073): wire the entity.dirtied.v1 producer so the
+    # consumer hot-path emits the post-commit signal that drives the
+    # downstream embedding refresh chain (PRD §13.7).  ``raw_producer`` is
+    # held so we can flush + close it on shutdown.
+    direct_producer, raw_producer = _build_entity_dirtied_producer(settings)
+    if direct_producer is None:
+        log.warning(
+            "structured_enrichment_consumer_no_producer",
+            message="entity.dirtied.v1 producer unavailable; downstream "
+            "embedding refresh will rely on watermark fallback only",
+        )
 
     use_case = StructuredEnrichmentUseCase(
         enrichment_adapter=enrichment_adapter,
         market_data_client=market_data_client,
         description_client=description_client,
         session_factory=write_factory,
+        direct_producer=direct_producer,
     )
 
     config = ConsumerConfig(
@@ -106,6 +129,13 @@ async def main() -> None:
     finally:
         await valkey.close()
         await market_data_client.aclose()
+        # F-X15: flush + close the entity.dirtied.v1 producer cleanly so we
+        # don't drop in-flight messages on container shutdown.
+        if raw_producer is not None:
+            try:
+                raw_producer.flush(timeout=5.0)
+            except Exception:
+                log.warning("structured_enrichment_consumer_producer_flush_failed", exc_info=True)
         await engine.dispose()
 
 

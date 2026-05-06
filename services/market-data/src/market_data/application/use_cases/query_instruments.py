@@ -9,26 +9,6 @@ if TYPE_CHECKING:
     from market_data.domain.entities import Instrument
 
 
-class GetInstrumentByIdUseCase:
-    """Return the instrument with the given UUID, or ``None``."""
-
-    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
-        self._uow = uow
-
-    async def execute(self, instrument_id: str) -> Instrument | None:
-        return await self._uow.instruments_read.find_by_id(instrument_id)
-
-
-class GetInstrumentBySymbolUseCase:
-    """Return the instrument for the given symbol/exchange pair, or ``None``."""
-
-    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
-        self._uow = uow
-
-    async def execute(self, symbol: str, exchange: str = "") -> Instrument | None:
-        return await self._uow.instruments_read.find_by_symbol_exchange(symbol, exchange)
-
-
 class SearchInstrumentsUseCase:
     """Search instruments with pagination and optional DB-side filters.
 

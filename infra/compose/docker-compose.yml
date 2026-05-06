@@ -1455,6 +1455,36 @@ services:
       retries: 3
       start_period: 30s
 
+  # PLAN-0061 Wave E / PLAN-0062 Wave C — hot-path provisional-entity enrichment.
+  # Reacts to entity.provisional.queued.v1 events emitted by S6
+  # UnresolvedResolutionWorker so newly-discovered provisional entities are
+  # enriched without waiting for the 5-min ProvisionalEnrichmentWorker sweep.
+  # DEF-037: container was missing from docker-compose.yml (present in test compose).
+  knowledge-graph-provisional-queued-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.provisional_queued_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   knowledge-graph-entity-consumer:
     build:
       context: ../..

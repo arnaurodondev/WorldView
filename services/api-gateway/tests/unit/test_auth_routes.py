@@ -522,10 +522,12 @@ async def test_dev_login_token_is_valid_jwt() -> None:
     token = resp.json()["access_token"]
 
     # Decode with the app's public key — should not raise
+    # DEF-002: tokens carry aud="worldview-internal".
     claims = jwt.decode(
         token,
         app.state.rsa_public_key,
         algorithms=["RS256"],
+        audience="worldview-internal",
         options={"require": ["iss", "sub", "exp"]},
         issuer="worldview-gateway",
     )

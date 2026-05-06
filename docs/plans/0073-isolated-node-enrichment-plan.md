@@ -66,7 +66,7 @@ Sub-Plan B Wave B-0 (securities.description migration)
 | `EntityEnrichmentPort` | App port | knowledge-graph | Does NOT exist | New Protocol | Create in C-1 |
 | `StructuredEnrichmentUseCase` | Use case | knowledge-graph | Does NOT exist | New use case | Create in C-2 |
 | `StructuredEnrichmentWorker` | Worker | knowledge-graph | Does NOT exist | New APScheduler + consumer | Create in C-2 |
-| `enrichment_llm_model_id` | Config | knowledge-graph | Does NOT exist | New pydantic-settings field | Create in C-1 |
+| `enrichment_llm_model_id` | Config | knowledge-graph | Reuses existing `description_deepinfra_model_id` | (consolidated in QA pass-1, F-A04) | No new field — Worker 13J shares the description model with Worker 13E |
 | `EntityPublic` schema | Schema | knowledge-graph | Does NOT exist | New Pydantic model | Create in C-3 |
 | `GET /api/v1/entities/{entity_id}` | S9 proxy | api-gateway | Does NOT exist | New proxy to S7 | Create in D-1 |
 
