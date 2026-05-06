@@ -30,6 +30,7 @@ from observability.tracing import add_otel_middleware, configure_tracing  # type
 from rag_chat.api import health as health_router
 from rag_chat.api.routes import briefings as briefings_router
 from rag_chat.api.routes import chat as chat_router
+from rag_chat.api.routes import internal as internal_router
 from rag_chat.api.routes import internal_costs as internal_costs_router
 from rag_chat.api.routes import public_briefings as public_briefings_router
 from rag_chat.api.routes import threads as threads_router
@@ -323,49 +324,58 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
             model=settings.ollama_reranker_model,
         )
 
+    # PLAN-0063 W5-1-00: extract shared components so RetrieveOnlyUseCase can
+    # reuse the same validator/classifier/plan-builder/HyDE/embedder/retrieval
+    # graph the chat orchestrator uses. This guarantees the eval harness measures
+    # exactly the same retrieval path that production chat uses.
+    _validator = InputValidator()
+    _plan_builder = RetrievalPlanBuilder(cypher_enabled=settings.cypher_enabled)
+    _hyde = HydeExpander(
+        llm_provider=providers[0],
+        embedding_client=embedding_client,
+        valkey=valkey_client,
+    )
+    _retrieval = ParallelRetrievalOrchestrator(
+        s6_client=s6,
+        s7_client=s7,
+        s3_client=s3,
+        s1_client=s1,
+        timeout=settings.upstream_timeout_seconds,
+        s1_internal_token=settings.s1_internal_token,
+        circuit_breakers={
+            name: SourceCircuitBreaker(
+                valkey_client,
+                name,
+                failure_threshold=settings.cb_failure_threshold,
+                failure_window_seconds=settings.cb_failure_window_seconds,
+                cool_down_seconds=settings.cb_cool_down_seconds,
+            )
+            for name in [
+                "chunk",
+                "relations",
+                "graph",
+                "claims",
+                "events",
+                "contradictions",
+                "financial",
+                "portfolio",
+            ]
+        }
+        if settings.cb_enabled
+        else {},
+    )
+
     orchestrator = ChatOrchestrator(
-        validator=InputValidator(),
+        validator=_validator,
         rate_limiter=RateLimiter(valkey=valkey_client, limit=settings.rate_limit_per_tenant),
         cache=CompletionCache(valkey=valkey_client),
         get_thread_uc=GetThreadUseCase(),
         s6_client=s6,
         classifier=classifier,
-        plan_builder=RetrievalPlanBuilder(cypher_enabled=settings.cypher_enabled),
-        hyde=HydeExpander(
-            llm_provider=providers[0],  # use primary provider (DeepInfra when key set)
-            embedding_client=embedding_client,
-            valkey=valkey_client,
-        ),
+        plan_builder=_plan_builder,
+        hyde=_hyde,
         embedding_client=embedding_client,
-        retrieval=ParallelRetrievalOrchestrator(
-            s6_client=s6,
-            s7_client=s7,
-            s3_client=s3,
-            s1_client=s1,
-            timeout=settings.upstream_timeout_seconds,
-            s1_internal_token=settings.s1_internal_token,
-            circuit_breakers={
-                name: SourceCircuitBreaker(
-                    valkey_client,
-                    name,
-                    failure_threshold=settings.cb_failure_threshold,
-                    failure_window_seconds=settings.cb_failure_window_seconds,
-                    cool_down_seconds=settings.cb_cool_down_seconds,
-                )
-                for name in [
-                    "chunk",
-                    "relations",
-                    "graph",
-                    "claims",
-                    "events",
-                    "contradictions",
-                    "financial",
-                    "portfolio",
-                ]
-            }
-            if settings.cb_enabled
-            else {},
-        ),
+        retrieval=_retrieval,
         graph_enricher=GraphEnricher(),
         fusion=FusionPipeline(),
         reranker=reranker,
@@ -374,6 +384,18 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     )
     app.state.chat_orchestrator = orchestrator
     app.state.llm_chain = llm_chain
+
+    from rag_chat.application.use_cases.retrieve_only import RetrieveOnlyUseCase
+
+    app.state.retrieve_only_uc = RetrieveOnlyUseCase(
+        validator=_validator,
+        s6_client=s6,
+        classifier=classifier,
+        plan_builder=_plan_builder,
+        hyde=_hyde,
+        embedder=embedding_client,
+        retrieval=_retrieval,
+    )
 
 
 def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: ValkeyClient) -> None:
@@ -450,5 +472,6 @@ def create_app(settings: RagChatSettings | None = None) -> FastAPI:
     app.include_router(briefings_router.router)
     app.include_router(public_briefings_router.router)
     app.include_router(internal_costs_router.router)
+    app.include_router(internal_router.router)
 
     return app
