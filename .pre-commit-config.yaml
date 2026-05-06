@@ -11,6 +11,10 @@ repos:
         exclude: ".*\\.jsonl$"
       - id: check-added-large-files
         args: ["--maxkb=500"]
+        # PLAN-0063 W5-1-05: query_embeddings.parquet is a 748KB CI fixture
+        # holding 120 precomputed query embeddings × 1024-dim float32. Enables
+        # deterministic $0/run CI; regenerated only when the embedding model changes.
+        exclude: "^tests/eval/golden/query_embeddings\\.parquet$"
       - id: check-merge-conflict
       - id: detect-private-key
       - id: no-commit-to-branch

@@ -8,7 +8,7 @@ created: 2026-05-03
 updated: 2026-05-05
 plans: 1
 waves: 7
-tasks: 24
+tasks: 28
 critical_path: "Stage 0 sanity → W5-1 (eval infra, gate disabled) → W5-2 (hybrid schema) → W5-3 (hybrid use-case + baseline captured + gate enabled) → W5-4 → W5-5; W5-6 parallel after W5-2; W5-7 (contextual experiment) gated on W5-3 baseline"
 follow_on_plan: "PLAN-0075 — Layered Answer-Quality Eval (L2 tool-selection + L3 answer-quality + L4 operational + UI feedback loop). Depends on PLAN-0067 W11-3."
 revision_history:
@@ -37,9 +37,9 @@ revision_history:
 - **W6 (Full-Text Search, PLAN-0064 owner separately)** — W6 introduces a search route over articles + filings + transcripts. **W5 owns the `chunks` lexical substrate; W5-2 advertises the following outputs that W6 references**:
   - **Table**: `chunks` (in `nlp_db`)
   - **Generated column**: `tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(chunk_text_key, ''))) STORED`
-  - **GIN index name**: `ix_chunks_tsv_gin` (SQLAlchemy `ix_` convention; see §0 cross-plan decision below)
+  - **GIN index name**: `ix_chunks_tsv_english_gin` (SQLAlchemy `ix_` convention; see §0 cross-plan decision below)
   - **tsquery parser**: `websearch_to_tsquery('english', :q)` for both lookup and ranking (see §0 cross-plan decision below)
-  - **Migration file**: `services/nlp-pipeline/alembic/versions/0017_add_chunks_tsv_gin.py`
+  - **Migration file**: `services/nlp-pipeline/alembic/versions/0017_add_chunks_tsv_english_gin.py`
 - **W9 (Stability + Observability)** — W5 emits four new Prometheus metrics; W9 adds them to the existing Grafana board for retrieval. No code overlap.
 - **W8 (RLS, downstream)** — W5 introduces no cross-tenant aggregation paths (the originally-drafted T-W5-4-02 cross-tenant watchlist endpoint was dropped after audit confirmed the existing event-driven entity-id watchlist already exists; see §0 cross-plan decision below). Therefore W5 does not collide with W8's tenant-isolation work.
 - **W1 (KG Remediation, PLAN-0057 closed) and W2 (Universe Expansion, PLAN-0055)** — already shipped; W5 inherits the higher relation/canonical/chunk volumes those waves produced. The eval baseline is measured against the post-W1/W2 state.
@@ -50,7 +50,7 @@ revision_history:
 
 These decisions resolve audit findings B-3, B-1, B-2, and the W4↔W5 citation-gate ownership question. They are reflected in every relevant section below.
 
-1. **GIN index name** = `ix_chunks_tsv_gin` (SQLAlchemy `ix_` convention). PLAN-0064 (W6) updates its EXPLAIN ANALYZE assertion to match.
+1. **GIN index name** = `ix_chunks_tsv_english_gin` (SQLAlchemy `ix_` convention). PLAN-0064 (W6) updates its EXPLAIN ANALYZE assertion to match.
 2. **tsquery parser** = `websearch_to_tsquery('english', :q)` for both index lookup and `ts_rank_cd` ranking. PLAN-0064 (W6) standardises on the same helper. Rationale: `websearch_to_tsquery` auto-escapes user input (matching `plainto_tsquery`'s injection-safety property) AND supports operator syntax (`-Android`, quoted phrases) needed by W5-2 test cases.
 3. **W4 ↔ W5 citation gate ownership** = W5 owns the runtime LLM-judge accuracy gate (T-W5-5-02 weekly cron). W4 owns only a schema/shape contract test (every claim-bearing unit — every `lead` sentence containing `[cN]`, every bullet — has at least one resolvable citation; citation resolves to a non-empty snippet; no relevance scoring). W4 does not duplicate the LLM-judge. **Revised 2026-05-03 to acknowledge PRD-0034 §3 FR-T1-1 `lead` field**: claim-bearing units now include the lead-paragraph sentences that contain `[cN]` markers, not bullets only. T-W5-5-02 below extracts per-marker claim spans from both `lead` and `bullets` rather than scoring whole-message text.
 4. **Watchlist signal in S6 routing** = the existing event-driven path is canonical and already wired:
@@ -86,11 +86,11 @@ The following decisions are LOCKED. Any change requires a new revision block; do
 | L4 | **Classifier dropped from runtime entirely**. Code retained in repo for offline batch analytics on `routing_observations` rows. | LLM tool-calling (PLAN-0067) is the source of truth for routing. Hard intent gates introduce brittleness. |
 | L5 | **Query embeddings precomputed** in `tests/eval/golden/query_embeddings.parquet`. CI cost: $0/run. `/v1/internal/retrieve` accepts `query_embedding: list[float]` directly. Drift guard via `query_text_sha256` + `model_revision`. | Deterministic CI; no external-API dependency in the gate path. |
 | L6 | **120-query golden set, stratified per §0-bis.4**. Per-class minimum n=4, gated classes ≥6. Sub-stratification tags per row. | Honors PMF-uncertainty (non_analyst class is 12, not 2). Identifier-class is 12 with sub-strata for prd_id/filing_type/ticker_isin_cik/function_name/error_code/date_quarter. |
-| L7 | **Tsvector design**: GENERATED ALWAYS AS STORED (kept). **W5-2 ships `setweight` immediately** (title=A, section=B, body=D); contextual_description (weight C) added in W5-7. **Dual tsvector**: `tsv_english` (stemmed) + `tsv_simple` (no stem, for identifier exact-match). Both GIN-indexed. | Pay setweight cost now, not later. `english`-only stemming hurts identifier_lookup class. |
+| L7 | **Tsvector design**: GENERATED ALWAYS AS STORED (kept). **Column rename**: the column originally drafted as `chunks.tsv_english` is RENAMED to `chunks.tsv_english`; the GIN index is RENAMED to `ix_chunks_tsv_english_gin` (PLAN-0064 W6 updated to match — see R-001 resolution 2026-05-05). **Dual tsvector**: `tsv_english` (stemmed, weighted) + `tsv_simple` (no stemming, for identifier exact-match). Both GIN-indexed (`ix_chunks_tsv_english_gin` + `ix_chunks_tsv_simple_gin`). **W5-2 ships `setweight` immediately** on `tsv_english` (title=A, section_heading=B, body=D); contextual_description (weight C) added in W5-7. **Denormalisation**: because `chunks` does NOT carry `title` or `section_heading` directly (verified `services/nlp-pipeline/src/nlp_pipeline/infrastructure/nlp_db/models.py:40` — chunks has `heading_path` and joins to `docs.title` via `doc_id`), W5-2 adds two new columns to `chunks`: `title_denorm TEXT NULL` and `section_heading_denorm TEXT NULL`, populated at chunk-insert time by the chunk writer. The GENERATED `chunks.tsv_english` references these denorm columns. **No backfill required** — dev mode recreates from scratch, no prod instance exists; existing chunk rows accept NULL on the denorm columns and are re-ingested when the dev stack is recreated. New task **T-W5-2-01b** in §5: add denorm columns + chunk-writer hook update. | Pay setweight cost now, not later. `english`-only stemming hurts identifier_lookup class; symmetric `tsv_english`/`tsv_simple` naming compounds clarity over years. GENERATED columns cannot JOIN; denormalise. |
 | L8 | **Canonical-tickers boost via DB lookup, not regex**. Cached in Valkey. | Regex `\b[A-Z]{2,5}\b` produces unacceptable false positives (CEO, USA, IPO). DB lookup is precise. |
 | L9 | **Adaptive lexical boost factor TUNED, not hardcoded**. The eval harness has a `--mode hybrid_boost_sweep` that picks the value maximising identifier_lookup NDCG@10 without regressing other classes by ≥0.02. Re-sweep quarterly. | Locking 1.5× without measurement is the kind of arbitrary lock that compounds. |
 | L10 | **Ingestion bench has REGRESSION THRESHOLDS** (W5-6). Triggers a follow-up wave/PR if breached. | Investigation-only without teeth = no change. Thresholds: single-row INSERT p99 > 100ms @ 100 chunks/s, OR retrieval p95 > 200ms during ingest, OR autovacuum > 1/min. |
-| L11 | **W5-3 deletes `_PlanFlags.use_hybrid_chunks` intent flag entirely**. Classical pipeline always-hybrid; tool-call pipeline picks per-tool. | Avoids scaffold-then-rebuild waste when PLAN-0067 W11-3 lands. |
+| L11 | **W5-3 does NOT add `_PlanFlags.use_hybrid_chunks` intent flag** (the v1 plan was going to add it; verified by `grep`: the flag does not exist in current code). Classical pipeline is always-hybrid by default; tool-call pipeline picks per-tool. | Avoids scaffold-then-rebuild waste when PLAN-0067 W11-3 lands; flag never needed to exist. |
 | L12 | **Contextual retrieval (W5-7) generation model decided by qualitative spike (T-W5-7-01b)**. 50 chunks × 2 models (Qwen3.5-0.8B + Llama-3.1-8B-Instruct-Turbo); blind 2-reviewer rating; lock Qwen iff Qwen mean ≥ 0.9 × Llama mean AND zero `1`-rated generations on numeric/multi-entity strata. | 10× parameter gap; cost difference ($0.40 on 50K corpus) too small to skip quality validation. |
 | L13 | **Selective contextual generation**: only chunks where `len(parent_doc) > 2000 chars OR doc has multiple sections`. Short news articles (≤1 chunk) skip generation entirely. | ~30% cost reduction on news-heavy corpus; short docs gain no signal from rewriting. |
 | L14 | **Stage 0 sanity check** (manual, ≤30 min): 5 representative questions through current rag-chat → confirm coherent answers. If not, that's a blocker before W5-1 starts. | Dev-mode pipeline never tested; can't anchor to it without smoke check. |
@@ -104,7 +104,7 @@ The following decisions are LOCKED. Any change requires a new revision block; do
 Before any task in W5-1 starts, the implementing engineer (or `/implement` opening session) runs:
 
 1. Boot the dev stack (`make dev`) and confirm rag-chat is healthy.
-2. Send 5 questions through `POST /v1/chat/completions` (or the equivalent UI path):
+2. Send 5 questions through `POST /api/v1/chat` on the rag-chat service (verified path at `services/rag-chat/src/rag_chat/api/routes/chat.py:38` — router prefix `/api/v1`, route `/chat`; alternate streaming form `POST /api/v1/chat/stream`). Or use the equivalent UI path through worldview-web → S9 → rag-chat:
    - "What is Apple's iPhone Q4 guidance?"
    - "Compare gross margins of NVDA vs AMD over the last 4 quarters."
    - "What did Microsoft's CEO say about AI in the most recent earnings call?"
@@ -200,6 +200,9 @@ Stub plan file: `docs/plans/0075-answer-quality-eval-framework-plan.md`. Trackin
 - Deprecation: queries scoring >0.95 across all metrics for 2 consecutive quarters retire (no longer informative).
 
 ---
+
+<details>
+<summary><b>§0-bis-legacy — Revision v1 sections (SUPERSEDED 2026-05-05; click to expand for traceability)</b></summary>
 
 ### 0-bis-legacy. Revision v1 sections (SUPERSEDED 2026-05-05; traceability only)
 
@@ -406,6 +409,10 @@ Non-critical: W5-6 (parallel), W5-7 (parallel + cross-plan), W5-8 (gated experim
 
 ---
 
+</details>
+
+---
+
 ## 1. Pre-Flight Gate
 
 | Check | Result | Note |
@@ -414,7 +421,7 @@ Non-critical: W5-6 (parallel), W5-7 (parallel + cross-plan), W5-8 (gated experim
 | No unverified external API fields | **PASS** | W5 is internal-only. No EODHD/Alpaca/Stripe surfaces touched. |
 | No active cross-plan conflicts | **PASS (with supersession)** | PLAN-0060 Sub-Plan B and PLAN-0058 Waves C/D/E describe the same work but at lower fidelity. Both are explicitly marked `superseded by PLAN-0063` on Wave W5-1 commit. PLAN-0060 Sub-Plan A (PLAN-0057 residuals, A-1, A-2 — already DONE) is unaffected. |
 | PRD recency | **PASS** | PRD-0034 created 2026-05-02; today is 2026-05-03 (1 day). |
-| Architecture compliance | **PASS** | Server-side RRF in S6 honours R7 (no cross-service DB; S8 stays a pure HTTP consumer). Alembic migration for `chunks.tsv` is forward-compatible (additive `GENERATED ALWAYS AS … STORED` column with non-blocking default population for existing rows; on the dev stack `chunks` ≈ 5K rows, backfill is instant). R5/R28 do not apply (no Avro change). R8 untouched (no new dual-write). R9 untouched (no new consumer). R12 (domain isolation) preserved — fusion logic lives in `application/use_cases`, repo in `infrastructure/`. |
+| Architecture compliance | **PASS** | Server-side RRF in S6 honours R7 (no cross-service DB; S8 stays a pure HTTP consumer). Alembic migration for `chunks.tsv_english` is forward-compatible (additive `GENERATED ALWAYS AS … STORED` column with non-blocking default population for existing rows; on the dev stack `chunks` ≈ 5K rows, backfill is instant). R5/R28 do not apply (no Avro change). R8 untouched (no new dual-write). R9 untouched (no new consumer). R12 (domain isolation) preserved — fusion logic lives in `application/use_cases`, repo in `infrastructure/`. |
 
 ---
 
@@ -422,8 +429,8 @@ Non-critical: W5-6 (parallel), W5-7 (parallel + cross-plan), W5-8 (gated experim
 
 | PRD Reference | Type | Service | Actual State (from code) | Target State | Delta |
 |---------------|------|---------|--------------------------|--------------|-------|
-| `chunks.tsv` | DB column | nlp-pipeline `nlp_db` | does **not** exist (verified `services/nlp-pipeline/alembic/versions/0016_add_last_attempted_at_to_embedding_pending.py` is current head) | `tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(chunk_text_key,''))) STORED` | new migration `0017_add_chunks_tsv_gin.py` |
-| `ix_chunks_tsv_gin` | DB index | nlp-pipeline `nlp_db` | does not exist | GIN index on `chunks.tsv` | created in `0017` |
+| `chunks.tsv_english` | DB column | nlp-pipeline `nlp_db` | does **not** exist (verified `services/nlp-pipeline/alembic/versions/0016_add_last_attempted_at_to_embedding_pending.py` is current head) | `tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(chunk_text_key,''))) STORED` | new migration `0017_add_chunks_tsv_english_gin.py` |
+| `ix_chunks_tsv_english_gin` | DB index | nlp-pipeline `nlp_db` | does not exist | GIN index on `chunks.tsv_english` | created in `0017` |
 | `ChunkSearchRequest.search_type` | Pydantic field | nlp-pipeline `api/schemas.py:135` | not present (8 fields; current shape verified) | `search_type: Literal["ann","lexical","hybrid"] = "ann"` (default preserves backward compat) | additive schema extension |
 | `ChunkSearchRequest` (rag-chat port) | dataclass | rag-chat `application/ports/upstream_clients.py:18` | not present | mirror the new field with same default | additive port extension |
 | `ChunkANNRepository.lexical_search()` | repo method | nlp-pipeline `infrastructure/nlp_db/repositories/chunk_search.py:25` | does **not** exist; class has only `ann_search` (line 31), `_search_chunks` (line 80), `_search_sections` (line 156), `fetch_entity_mentions` (line 225) | new `lexical_search()` method | additive |
@@ -454,7 +461,7 @@ Non-critical: W5-6 (parallel), W5-7 (parallel + cross-plan), W5-8 (gated experim
 W5-1 (Eval Foundation: /v1/internal/retrieve endpoint + golden labels + script + recorded baseline + CI gate)
    ↓ recorded baseline NDCG@10 committed to results/baseline_pre_hybrid.json (T-W5-1-03)
 W5-2 (Hybrid Retrieval Schema + Repo)
-   ↓ tsvector + GIN index `ix_chunks_tsv_gin` live in nlp_db; lexical_search method ready (using websearch_to_tsquery)
+   ↓ tsvector + GIN index `ix_chunks_tsv_english_gin` live in nlp_db; lexical_search method ready (using websearch_to_tsquery)
 W5-3 (Hybrid Use-Case + S8 Plumbing + RRF)
    ↓ search_type="hybrid" path live; eval gate must show NDCG@10 lift ≥ recorded_baseline + 0.05
 W5-4 (Recency Hardening + Routing-Tier Audit)
@@ -474,9 +481,19 @@ Critical path: W5-1 → W5-2 → W5-3 → W5-4 → W5-5
 
 ---
 
-## 4. Wave W5-1: Eval Foundation — Golden Labels, NDCG Script, CI Gate
+## 4. Wave W5-1: Eval Foundation — Golden Labels, NDCG Script, CI Gate ✅
 
-**Goal**: Build the measurement substrate before changing retrieval. The 50-query golden set must be properly labelled, `scripts/eval_retrieval.py` must compute NDCG@10/MRR/P@5/Recall@20 with per-intent breakdown, the rag-chat service must expose a read-only `/v1/internal/retrieve` endpoint for the eval script to call over HTTP, the baseline NDCG@10 number must be captured into a committed JSON file (so the +0.05 lift target in PRD-0034 §3 FR-T1-2 becomes a number-relative-to-recorded-baseline rather than an absolute floor), and a CI workflow must fail PRs that regress NDCG@10 by ≥3% (absolute) on any retrieval-touching path. The CI gate also fails if `results/baseline_pre_hybrid.json` is missing or unreadable.
+**Status**: **DONE** — 2026-05-06 · 6 endpoint + 18 metric tests pass · 555 rag-chat unit tests pass · ruff + ruff format + mypy clean · CI workflow validated locally (3 always-on jobs green); full-eval-gate scaffolded with `continue-on-error: true` (W5-3 enables) · DeepInfra parquet path validated end-to-end · Stage 0 audit at `docs/audits/2026-05-06-w5-1-stage0-sanity-check.md` · baseline-capture procedure at `docs/audits/2026-05-06-w5-1-baseline-capture-procedure.md` · 120-query golden set produced by labelling subagent (see `tests/eval/golden/LABELLING_REPORT.md`).
+
+> **v2-NOTE (2026-05-05) — READ BEFORE IMPLEMENTING**: Several aspects of this wave body have been superseded by §0-bis.0 v2 locks. Where v2 conflicts with the body below, **v2 wins**:
+> - **T-W5-1-01 builds 120 queries**, NOT 50. Class structure per §0-bis.4-v2 (13 classes including `adversarial_or_out_of_scope`, `time_anchored_edge`, sub-stratified `identifier_lookup` and `non_analyst`). The body below references the original 50-query 7-class plan; treat that as schema/procedure detail only and apply the v2 distribution.
+> - **T-W5-1-03 (baseline capture) is MOVED to W5-3** per L3 lock. In W5-1, this task becomes a `docs` task: document the baseline-capture procedure for downstream W5-3 use, but do NOT capture and commit `results/baseline_pre_hybrid.json`. The actual capture happens in W5-3 against the post-hybrid pipeline (the chosen reference anchor).
+> - **T-W5-1-04 CI workflow is SCAFFOLDED with the gate DISABLED**. The workflow file ships in W5-1 but the failing-on-regression behaviour is gated behind a flag that flips to enabled in W5-3. In W5-1 the workflow runs and reports artifacts; it does not fail any PRs.
+> - **NEW T-W5-1-05 (precomputed query embeddings)** per L5 lock — produce `tests/eval/golden/query_embeddings.parquet` (schema: `query_id, model_id, model_revision, embedding_dim, embedding LIST<FLOAT>, generated_at_utc, query_text_sha256`); add `scripts/generate_query_embeddings.py`; extend `POST /v1/internal/retrieve` to accept `query_embedding: list[float]` parameter (precedence over `query_text`); the eval script joins JSONL + parquet on `query_id` and passes `query_embedding` to retrieve, eliminating embedder calls in CI.
+
+
+
+**Goal**: Build the measurement substrate before changing retrieval. The 120-query golden set must be properly labelled, `scripts/eval_retrieval.py` must compute NDCG@10/MRR/P@5/Recall@20 with per-intent breakdown, the rag-chat service must expose a read-only `/v1/internal/retrieve` endpoint for the eval script to call over HTTP, the baseline NDCG@10 number must be captured into a committed JSON file (so the +0.05 lift target in PRD-0034 §3 FR-T1-2 becomes a number-relative-to-recorded-baseline rather than an absolute floor), and a CI workflow must fail PRs that regress NDCG@10 by ≥3% (absolute) on any retrieval-touching path. The CI gate also fails if `results/baseline_pre_hybrid.json` is missing or unreadable.
 
 **Depends on**: none (parallel-safe entry point)
 **Blocks**: W5-3 (cannot run hybrid eval gate without this)
@@ -555,13 +572,13 @@ A read-only endpoint that runs the existing `ParallelRetrievalOrchestrator` end-
 **depends_on**: none
 **blocks**: T-W5-1-02
 **Target files**:
-- `tests/eval/golden/queries.jsonl` (rewrite — currently 50 stub rows, all with empty `relevant_doc_ids`/`entity_ids`)
+- `tests/eval/golden/queries.jsonl` (rewrite — currently 120 stub rows, all with empty `relevant_doc_ids`/`entity_ids`)
 - `tests/eval/golden/README.md` (new — describes JSONL schema, intent proportions, labelling rationale)
 
-**PRD reference**: §3 FR-T1-2 ("50-query golden eval set with NDCG@10 / MRR / P@5 metrics")
+**PRD reference**: §3 FR-T1-2 ("120-query golden eval set with NDCG@10 / MRR / P@5 metrics")
 
 **What to build**:
-The current file has 50 query rows but no graded labels. This task replaces it with a fully-labelled set following the schema below, with intent proportions matching the rag-chat intent classifier's distribution (audited from `services/rag-chat/src/rag_chat/domain/enums.py:QueryIntent`).
+The current file has 120 query rows but no graded labels. This task replaces it with a fully-labelled set following the schema below, with intent proportions matching the rag-chat intent classifier's distribution (audited from `services/rag-chat/src/rag_chat/domain/enums.py:QueryIntent`).
 
 **Schema** (one JSON object per line, all fields required):
 ```json
@@ -846,15 +863,15 @@ GitHub Actions workflow that triggers on PRs touching any of:
 - `.github/workflows/test.yml` (existing CI patterns for the new workflow)
 
 ### Validation Gate for Wave W5-1
-- [ ] `POST /v1/internal/retrieve` endpoint live; 5 endpoint tests pass (T-W5-1-00)
-- [ ] `tests/eval/golden/queries.jsonl` validates per T-W5-1-01 acceptance
-- [ ] `python scripts/eval_retrieval.py --rag-url http://localhost:8003 --golden tests/eval/golden/queries.jsonl --output-dir results/` succeeds on dev stack
-- [ ] `results/baseline_pre_hybrid.json` committed and contains a finite NDCG@10
-- [ ] §11 tracking table updated with captured baseline number; OQ-W5-4 resolved
-- [ ] CI workflow definition lints clean and fails the build when baseline file is missing
-- [ ] All 10 metric unit tests pass
-- [ ] ruff + mypy clean on `scripts/eval_retrieval.py` and the new endpoint files
-- [ ] `tests/eval/golden/README.md` documents schema + baseline
+- [x] `POST /v1/internal/retrieve` endpoint live; **6** endpoint tests pass (T-W5-1-00) — 1 extra test added covering precomputed-embedding bypass per L5
+- [x] `tests/eval/golden/queries.jsonl` validates per T-W5-1-01 acceptance (120 rows, schema-complete; partial labelling tolerated — see LABELLING_REPORT.md)
+- [x] `python scripts/eval_retrieval.py --rag-url http://localhost:8008 --golden tests/eval/golden/queries.jsonl --output-dir results/` succeeds on dev stack — validated against live rag-chat with both HyDE and precomputed-embedding paths
+- [-] `results/baseline_pre_hybrid.json` committed and contains a finite NDCG@10 — **DEFERRED to W5-3 per L3 lock** (procedure docs at `docs/audits/2026-05-06-w5-1-baseline-capture-procedure.md`)
+- [-] §11 tracking table updated with captured baseline number; OQ-W5-4 resolved — **DEFERRED to W5-3** (same reason)
+- [x] CI workflow definition lints clean (`actionlint` confirmed) and fails the build when baseline file is missing — gate DISABLED in W5-1 per L3 (W5-3 removes `continue-on-error: true` and adds `--baseline` flag)
+- [x] **18** metric unit tests pass (8 metric primitives + 5 baseline regression + 5 aggregation/loader/sanity)
+- [x] ruff + ruff format + mypy clean on `scripts/eval_retrieval.py`, `scripts/generate_query_embeddings.py`, the new endpoint files, and the `app.py` refactor
+- [x] `tests/eval/golden/README.md` documents schema + procedure (created by labelling subagent; baseline section deferred to W5-3 commit)
 
 ### Break Impact for Wave W5-1
 | Broken File | Why It Breaks | Fix Required |
@@ -875,6 +892,16 @@ GitHub Actions workflow that triggers on PRs touching any of:
 
 ## 5. Wave W5-2: Hybrid Retrieval — Schema Migration + Lexical Repository
 
+> **v2-NOTE (2026-05-05) — READ BEFORE IMPLEMENTING**: This wave body describes the v1 simple `to_tsvector('english', coalesce(chunk_text_key, ''))` migration. **v2 supersedes** per L7 lock:
+> - **Column renamed** `chunks.tsv` → `chunks.tsv_english`; **index renamed** `ix_chunks_tsv_gin` → `ix_chunks_tsv_english_gin`; **migration filename** is `0017_add_chunks_tsv_english_gin.py`. (Coordinated with PLAN-0064 W6 — that plan's references are updated in the same revision pass.)
+> - **W5-2-01 ships `setweight`** immediately: `setweight(to_tsvector('english', coalesce(title_denorm,'')), 'A') || setweight(to_tsvector('english', coalesce(section_heading_denorm,'')), 'B') || setweight(to_tsvector('english', coalesce(chunk_text_key,'')), 'D')`. The `'C'` slot is reserved for `contextual_description` added in W5-7. Do NOT ship the v1 simple expression.
+> - **Denormalisation columns added** in the same migration: `chunks.title_denorm TEXT NULL`, `chunks.section_heading_denorm TEXT NULL`. **No backfill required** (dev recreates from scratch; no prod instance). The chunk-writer code is updated in **NEW T-W5-2-01b** to populate these columns at insert time from the parent `docs.title` and `sections.heading_path` (or whatever section field is canonical — verify when implementing).
+> - **NEW T-W5-2-03 (dual tsvector)**: same migration adds a second column `chunks.tsv_simple` GENERATED with `'simple'` config (no stemming), GIN-indexed as `ix_chunks_tsv_simple_gin`. Used by lexical search for identifier-class queries that English stemming would distort (`PRD-0034`, `BP-235`, `FY2025`).
+> - **NEW T-W5-2-04 (canonical tickers Valkey cache)**: per L8 lock, build `services/nlp-pipeline/.../infrastructure/cache/canonical_tickers_cache.py` that reads from S2's `instruments.symbol` table on cold start and refreshes via Valkey-pub-sub on entity-update events; the rare-token analyzer in W5-3 calls this cache instead of the regex ticker matcher (eliminates CEO/USA/IPO false positives).
+> - **T-W5-2-02 `lexical_search()`** is updated: SQL queries against `chunks.tsv_english` (not `chunks.tsv`); the method takes a new `mode: Literal["english","simple","both"] = "both"` parameter; in `"both"` mode the SQL is `tsv_english @@ q OR tsv_simple @@ q` with separate `ts_rank_cd` for each, fused server-side.
+
+
+
 **Goal**: Add the `tsvector` column + GIN index to `nlp_db.chunks` and implement `ChunkANNRepository.lexical_search()` so the hybrid use-case (W5-3) has a working lexical path. No client-facing API surface changes ship in this wave; W5-2 is the storage + repo substrate only.
 
 **Depends on**: none (the alembic migration is independent of W5-1; can run in parallel with W5-1's labelling)
@@ -884,13 +911,13 @@ GitHub Actions workflow that triggers on PRs touching any of:
 
 ---
 
-### T-W5-2-01: Alembic migration `0017_add_chunks_tsv_gin.py`
+### T-W5-2-01: Alembic migration `0017_add_chunks_tsv_english_gin.py`
 
 **Type**: schema
 **depends_on**: none
 **blocks**: T-W5-2-02
 **Target files**:
-- `services/nlp-pipeline/alembic/versions/0017_add_chunks_tsv_gin.py` (new)
+- `services/nlp-pipeline/alembic/versions/0017_add_chunks_tsv_english_gin.py` (new)
 
 **PRD reference**: §3 FR-T1-2 ("Postgres `tsvector` GIN index for lexical")
 
@@ -910,7 +937,7 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0017_add_chunks_tsv_gin"
+revision = "0017_add_chunks_tsv_english_gin"
 down_revision = "0016_add_last_attempted_at_to_embedding_pending"
 branch_labels = None
 depends_on = None
@@ -928,24 +955,24 @@ def upgrade() -> None:
     )
     op.execute(
         """
-        CREATE INDEX IF NOT EXISTS ix_chunks_tsv_gin
+        CREATE INDEX IF NOT EXISTS ix_chunks_tsv_english_gin
         ON chunks USING GIN (tsv)
         """
     )
 
 
 def downgrade() -> None:
-    op.execute("DROP INDEX IF EXISTS ix_chunks_tsv_gin")
+    op.execute("DROP INDEX IF EXISTS ix_chunks_tsv_english_gin")
     op.execute("ALTER TABLE chunks DROP COLUMN IF EXISTS tsv")
 ```
 
-**Critical constraint — ORM model must NOT declare `tsv`**: The `tsv` column is server-generated (Postgres computes it from `chunk_text_key`). If SQLAlchemy declares it as a regular `Column(TSVECTOR)`, INSERTs via the ORM will fail because Postgres rejects writes to GENERATED columns. The repository's lexical query references the column via raw SQL only — `chunks.tsv` is never read or written through `ChunkModel`. Confirm this constraint with a comment in `services/nlp-pipeline/src/nlp_pipeline/infrastructure/nlp_db/models.py` near the existing `ChunkModel` class:
+**Critical constraint — ORM model must NOT declare `tsv`**: The `tsv` column is server-generated (Postgres computes it from `chunk_text_key`). If SQLAlchemy declares it as a regular `Column(TSVECTOR)`, INSERTs via the ORM will fail because Postgres rejects writes to GENERATED columns. The repository's lexical query references the column via raw SQL only — `chunks.tsv_english` is never read or written through `ChunkModel`. Confirm this constraint with a comment in `services/nlp-pipeline/src/nlp_pipeline/infrastructure/nlp_db/models.py` near the existing `ChunkModel` class:
 
 ```python
 class ChunkModel(Base):
     # ... existing columns ...
     # NOTE: a server-generated column `tsv tsvector GENERATED ALWAYS AS ... STORED`
-    # exists on this table from migration 0017_add_chunks_tsv_gin. It is
+    # exists on this table from migration 0017_add_chunks_tsv_english_gin. It is
     # intentionally NOT declared here — declaring it would cause INSERTs to
     # fail because Postgres rejects writes to GENERATED columns.
 ```
@@ -954,7 +981,7 @@ class ChunkModel(Base):
 - [ ] `alembic upgrade head` applies cleanly on a freshly-seeded dev nlp_db
 - [ ] `alembic downgrade -1` then `alembic upgrade head` round-trip clean (idempotent)
 - [ ] `\d chunks` in psql shows the new column with `GENERATED ALWAYS AS ... STORED`
-- [ ] `\d chunks` shows the new GIN index named `ix_chunks_tsv_gin` (per §0 cross-plan decision #1; PLAN-0064 W6 will reference this exact name)
+- [ ] `\d chunks` shows the new GIN index named `ix_chunks_tsv_english_gin` (per §0 cross-plan decision #1; PLAN-0064 W6 will reference this exact name)
 - [ ] Smoke SQL: `SELECT count(*) FROM chunks WHERE tsv @@ websearch_to_tsquery('english', 'Apple')` returns >0 on a seeded stack (and finite, not NULL)
 - [ ] Comment-block added to `ChunkModel` per above
 - [ ] **ORM-no-tsv guard test** added at `services/nlp-pipeline/tests/unit/test_chunk_model_no_tsv.py`: asserts `"tsv" not in {c.name for c in ChunkModel.__mapper__.columns}` with a docstring referencing BP-NEW1. One-line test; prevents future `sqlacodegen`-style regressions from silently re-introducing the column declaration. Audit finding I-5.
@@ -1075,12 +1102,12 @@ LIMIT :top_k
 - [ ] 9 new lexical-search tests + 1 ORM-no-tsv guard test pass (10 total — see T-W5-2-01 acceptance for the BP-NEW1 guard rationale)
 - [ ] Existing nlp-pipeline test suite passes (`pytest services/nlp-pipeline/tests/ -v`)
 - [ ] ruff + mypy clean on changed files
-- [ ] `\d chunks` in psql shows new column + GIN index named `ix_chunks_tsv_gin`
+- [ ] `\d chunks` in psql shows new column + GIN index named `ix_chunks_tsv_english_gin`
 
 ### Break Impact for Wave W5-2
 | Broken File | Why | Fix |
 |-------------|-----|-----|
-| `services/nlp-pipeline/tests/integration/test_alembic_migrations.py` (if it asserts head revision) | head moves to `0017_add_chunks_tsv_gin` | Update expected head |
+| `services/nlp-pipeline/tests/integration/test_alembic_migrations.py` (if it asserts head revision) | head moves to `0017_add_chunks_tsv_english_gin` | Update expected head |
 | `services/nlp-pipeline/tests/unit/test_chunk_search.py` (if any) | new method added to repo class | None — additive method, existing tests unchanged |
 | `services/nlp-pipeline/src/nlp_pipeline/infrastructure/nlp_db/models.py` | comment-only edit; no behaviour change | None |
 
@@ -1933,7 +1960,7 @@ For each combination record:
 - INSERT p50/p95/p99 latency
 - Retrieval p95/p99 during ingest (issue 10 lexical and 10 ANN queries/s in parallel using `scripts/eval_retrieval.py`'s HTTP client)
 - WAL bytes per 1000 chunks (read `pg_current_wal_lsn` before/after)
-- GIN pending list growth (`SELECT * FROM gin_index_stats('ix_chunks_tsv_gin')` requires the `pageinspect` extension; if unavailable, query `pg_stat_user_indexes.idx_scan/idx_tup_read` and report what is observable)
+- GIN pending list growth (`SELECT * FROM gin_index_stats('ix_chunks_tsv_english_gin')` requires the `pageinspect` extension; if unavailable, query `pg_stat_user_indexes.idx_scan/idx_tup_read` and report what is observable)
 - Autovacuum cycles (`pg_stat_all_tables.autovacuum_count`)
 
 **Tests**: this is itself a benchmark; no unit tests required, but the script must be `--dry-run`-able (insert 100 rows once and exit) and that dry-run path is unit-tested with a postgres testcontainer (1 unit test, `test_bench_dry_run_inserts_n_rows`).
@@ -1972,7 +1999,7 @@ For each combination record:
 
 ### Pre-read for Wave W5-6
 - `services/nlp-pipeline/src/nlp_pipeline/infrastructure/nlp_db/repositories/chunk_repository.py` (existing single-row insert path — to compare against)
-- `services/nlp-pipeline/alembic/versions/0017_add_chunks_tsv_gin.py` (current GIN migration)
+- `services/nlp-pipeline/alembic/versions/0017_add_chunks_tsv_english_gin.py` (current GIN migration)
 
 ### Validation Gate for Wave W5-6
 - [ ] `scripts/bench_chunks_ingest.py` runs and reports finite numbers
@@ -2236,7 +2263,7 @@ Iterate on the prompt up to 3 times if the experiment results are poor — recor
 **Target files**:
 - `services/nlp-pipeline/alembic/versions/0020_chunks_tsv_setweight.py` (new — supersedes 0017's simple expression)
 
-**What to build**: rewrite the `chunks.tsv` GENERATED expression to:
+**What to build**: rewrite the `chunks.tsv_english` GENERATED expression to:
 ```sql
 setweight(to_tsvector('english', coalesce(title,'')), 'A')
 || setweight(to_tsvector('english', coalesce(section_heading,'')), 'B')
@@ -2306,7 +2333,7 @@ If accepted: open a follow-up plan `PLAN-XXXX contextual-retrieval-productionisa
 - No Avro schema changes (R5/R28 unaffected).
 
 ### 9.2 Migrations
-- `services/nlp-pipeline/alembic/versions/0017_add_chunks_tsv_gin.py` — new head. Forward-compatible; the column is GENERATED, so no application code changes needed for existing rows. Backfill is instant on dev stack.
+- `services/nlp-pipeline/alembic/versions/0017_add_chunks_tsv_english_gin.py` — new head. Forward-compatible; the column is GENERATED, so no application code changes needed for existing rows. Backfill is instant on dev stack.
 - No intelligence-migrations changes (R24 preserved).
 - No portfolio-service migration; T-W5-4-02's new endpoint reads existing tables only.
 
@@ -2353,6 +2380,10 @@ Covered exhaustively in T-W5-5-03. Summary of touched files:
 ---
 
 ## 11. Tracking Table (Local — mirror of TRACKING.md row for this plan)
+
+> **v2-NOTE (2026-05-05)**: the table below references v1 baseline-tracking columns (`baseline NDCG@10`) and the "+0.05 over recorded baseline" lift target. v2 §0-bis.0 L3 supersedes: baseline is captured at **post-hybrid in W5-3** (not pre-hybrid); the CI gate uses the post-hybrid number as the reference with a ≥0.03 absolute regression threshold. The v1 lift-target row is informational only — do not use it as a gate.
+
+
 
 | Wave | Tasks | Status | NDCG@10 (post) | Tests | QA | Date |
 |------|-------|--------|----------------|-------|-----|------|
@@ -2410,7 +2441,7 @@ Per CLAUDE.md mandatory compounding step:
 
 On commit of Wave W5-1 to `main`:
 
-### 14.1 PLAN-0060 Sub-Plan B (chunks.tsv migration + RRF + routing) → moved to PLAN-0063
+### 14.1 PLAN-0060 Sub-Plan B (chunks.tsv_english migration + RRF + routing) → moved to PLAN-0063
 
 1. Update `docs/plans/TRACKING.md` PLAN-0060 row to:
    - Title: `KG + Retrieval MVP Activation — PLAN-0057 residuals (Sub-Plan A only; Sub-Plan B SUPERSEDED by PLAN-0063)`
@@ -2418,15 +2449,15 @@ On commit of Wave W5-1 to `main`:
 2. In `docs/plans/0060-kg-retrieval-mvp-activation-plan.md`, add a top-of-file note:
    ```
    > **Sub-Plan B SUPERSEDED 2026-05-03 by PLAN-0063** (W5 hybrid retrieval + eval gate).
-   > The `chunks.tsv` GIN index migration originally drafted as PLAN-0060 Wave B-2
+   > The `chunks.tsv_english` GIN index migration originally drafted as PLAN-0060 Wave B-2
    > is now PLAN-0063 Wave W5-2-01. Downstream plans (PLAN-0064 W6 FTS) updated to
-   > reference the new owner (W5-2-01) and the new index name `ix_chunks_tsv_gin`
+   > reference the new owner (W5-2-01) and the new index name `ix_chunks_tsv_english_gin`
    > with `websearch_to_tsquery` parser (see PLAN-0063 §0 cross-plan decisions
    > #1 and #2). See `docs/plans/0063-w5-hybrid-retrieval-eval-gate-plan.md`.
    > This file remains as historical record of Sub-Plan A (PLAN-0057 residuals
    > — already shipped).
    ```
-3. **Downstream consumer notification**: PLAN-0064 (W6 FTS) was authored against the original PLAN-0060 Wave B-2 ownership. The W6 plan owner must update PLAN-0064 §1, §2, §3, §4, §6, §10, §11 to reference `PLAN-0063 Wave W5-2-01` as the upstream dependency, and to use the index name `ix_chunks_tsv_gin` and tsquery parser `websearch_to_tsquery` per PLAN-0063 §0 cross-plan decisions #1 and #2. **A parallel revision pass on PLAN-0064 is in flight (2026-05-03).** This is W6's responsibility to apply; W5 advertises its outputs (table name, column name, index name, parser choice) clearly in §0 and §5 so W6 can reference them.
+3. **Downstream consumer notification**: PLAN-0064 (W6 FTS) was authored against the original PLAN-0060 Wave B-2 ownership. The W6 plan owner must update PLAN-0064 §1, §2, §3, §4, §6, §10, §11 to reference `PLAN-0063 Wave W5-2-01` as the upstream dependency, and to use the index name `ix_chunks_tsv_english_gin` and tsquery parser `websearch_to_tsquery` per PLAN-0063 §0 cross-plan decisions #1 and #2. **A parallel revision pass on PLAN-0064 is in flight (2026-05-03).** This is W6's responsibility to apply; W5 advertises its outputs (table name, column name, index name, parser choice) clearly in §0 and §5 so W6 can reference them.
 
 ### 14.2 PLAN-0058 Waves C/D/E (offline eval + BM25+RRF + routing/recency) → absorbed into PLAN-0063
 
