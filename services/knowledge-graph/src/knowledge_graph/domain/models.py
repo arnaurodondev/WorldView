@@ -6,7 +6,7 @@ All models are frozen dataclasses — pure domain layer, no infrastructure impor
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, ClassVar
 from uuid import UUID
@@ -265,3 +265,30 @@ class ConfidenceComponents:
             raise ConfidenceBoundsViolation(
                 f"contradiction {self.contradiction:.4f} exceeds cap {self.CONTRADICTION_CAP}",
             )
+
+
+# ---------------------------------------------------------------------------
+# Canonical entity (PRD-0073 — enrichment pipeline)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CanonicalEntity:
+    """Represents a row from ``canonical_entities`` with enrichment fields.
+
+    Used by Worker 13J (StructuredEnrichmentWorker) and related use cases.
+    Fields that were added in migration 0024 default to None/0 for rows created
+    before that migration ran.
+    """
+
+    entity_id: UUID
+    canonical_name: str
+    entity_type: str
+    ticker: str | None = None
+    isin: str | None = None
+    exchange: str | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
+    enrichment_attempts: int = 0
+    description: str | None = None
+    data_completeness: float | None = None
+    enriched_at: datetime | None = None

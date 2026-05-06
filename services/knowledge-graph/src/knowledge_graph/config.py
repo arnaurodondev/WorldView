@@ -145,8 +145,19 @@ class Settings(BaseSettings):
     description_deepinfra_fallback_model_id: str = "Qwen/Qwen3-32B"
     description_deepinfra_concurrency: int = 4
 
-    # Market data service (used by Worker 13D-3)
+    # Market data service (used by Worker 13D-3 and Worker 13J)
     market_data_base_url: str = "http://market-data:8003"
+    # Internal JWT-authenticated URL for Worker 13J on-demand-profile calls.
+    # Defaults to same host as market_data_base_url (no separate internal port).
+    market_data_internal_url: str = "http://market-data:8003"
+
+    # Worker 13J — Structured Enrichment (PRD-0073)
+    # Primary: Qwen3-235B for high-quality finance descriptions.
+    # Fallback: Meta-Llama-3.1-8B-Instruct-Turbo (confirmed available 2026-05-01 to 2026-06-01).
+    # NEVER use Qwen2.5-0.5B or Qwen2.5-1.5B — both return 404 on this DeepInfra account.
+    enrichment_llm_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+    enrichment_llm_fallback_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+    kafka_consumer_group_structured_enrichment: str = "kg-structured-enrichment-group"
 
     # AGE Cypher shadow sync (Worker 13F — PRD-0018)
     # Feature flag: set to true after AGE backfill is verified.

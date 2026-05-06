@@ -111,16 +111,16 @@ class TestProvisionalEnrichmentInterval:
 
         captured: list[dict] = []
 
-        def _capture_add_job(fn, trigger, *, seconds, id, max_instances, coalesce):  # noqa: A002
-            captured.append({"seconds": seconds, "id": id})
+        def _capture_add_job(fn, trigger, *args, id, max_instances, coalesce, **kwargs):  # noqa: A002
+            captured.append({"trigger": trigger, "id": id, **kwargs})
 
         with patch.object(scheduler._scheduler, "add_job", side_effect=_capture_add_job):
             scheduler._register_jobs()
 
         prov = next((c for c in captured if c["id"] == "worker_13e_provisional"), None)
         assert prov is not None, "worker_13e_provisional job must be registered"
-        assert prov["seconds"] == 600, (
-            f"Expected 600s interval for worker_13e_provisional, got {prov['seconds']}. "
+        assert prov.get("seconds") == 600, (
+            f"Expected 600s interval for worker_13e_provisional, got {prov.get('seconds')}. "
             "The job must use worker_provisional_enrichment_interval_s, not "
             "worker_embedding_refresh_interval_s."
         )
@@ -144,8 +144,8 @@ class TestEmbeddingRefreshRegistration:
 
         captured: list[dict] = []
 
-        def _capture_add_job(fn, trigger, *, seconds, id, max_instances, coalesce):  # noqa: A002
-            captured.append({"seconds": seconds, "id": id})
+        def _capture_add_job(fn, trigger, *args, id, max_instances, coalesce, **kwargs):  # noqa: A002
+            captured.append({"trigger": trigger, "id": id, **kwargs})
 
         with patch.object(scheduler._scheduler, "add_job", side_effect=_capture_add_job):
             scheduler._register_jobs()
@@ -156,13 +156,16 @@ class TestEmbeddingRefreshRegistration:
             "Without it, relation_summaries.summary_embedding stays NULL and "
             "HNSW ANN search on relations returns empty results (BP-092)."
         )
-        assert job["seconds"] == 10800, (
-            f"Expected 10800s interval for worker_13f_embedding, got {job['seconds']}. "
+        assert job.get("seconds") == 10800, (
+            f"Expected 10800s interval for worker_13f_embedding, got {job.get('seconds')}. "
             "Must use worker_embedding_refresh_interval_s."
         )
 
-    def test_all_ten_jobs_registered(self) -> None:
-        """_register_jobs() must register exactly 10 jobs — no worker left unscheduled."""
+    def test_all_eleven_jobs_registered(self) -> None:
+        """_register_jobs() must register exactly 11 jobs — no worker left unscheduled.
+
+        11 = 10 interval jobs + 1 cron job (worker_13j_enrichment_sweep, PRD-0073).
+        """
         expected_ids = {
             "worker_13a_confidence",
             "worker_13b_contradiction",
@@ -174,13 +177,14 @@ class TestEmbeddingRefreshRegistration:
             "worker_13f_embedding",
             "worker_13f_partition",
             "worker_13f_age_sync",
+            "worker_13j_enrichment_sweep",  # PRD-0073 daily cron at 02:00 UTC
         }
 
         scheduler = _make_scheduler(workers={})
 
         captured_ids: set[str] = set()
 
-        def _capture_add_job(fn, trigger, *, seconds, id, max_instances, coalesce):  # noqa: A002
+        def _capture_add_job(fn, trigger, *args, id, max_instances, coalesce, **kwargs):  # noqa: A002
             captured_ids.add(id)
 
         with patch.object(scheduler._scheduler, "add_job", side_effect=_capture_add_job):
@@ -188,7 +192,8 @@ class TestEmbeddingRefreshRegistration:
 
         missing = expected_ids - captured_ids
         assert not missing, (
-            f"The following jobs were NOT registered: {missing}. " "All 10 workers must be scheduled (BP-092)."
+            f"The following jobs were NOT registered: {missing}. "
+            "All 11 workers must be scheduled (BP-092, PRD-0073)."
         )
 
     def test_embedding_refresh_uses_dedicated_interval_not_provisional(self) -> None:
@@ -202,16 +207,36 @@ class TestEmbeddingRefreshRegistration:
 
         captured: list[dict] = []
 
-        def _capture_add_job(fn, trigger, *, seconds, id, max_instances, coalesce):  # noqa: A002
-            captured.append({"seconds": seconds, "id": id})
+        def _capture_add_job(fn, trigger, *args, id, max_instances, coalesce, **kwargs):  # noqa: A002
+            captured.append({"trigger": trigger, "id": id, **kwargs})
 
         with patch.object(scheduler._scheduler, "add_job", side_effect=_capture_add_job):
             scheduler._register_jobs()
 
         emb = next((c for c in captured if c["id"] == "worker_13f_embedding"), None)
         assert emb is not None
-        assert emb["seconds"] == 10800, (
-            f"worker_13f_embedding uses wrong interval {emb['seconds']}; "
+        assert emb.get("seconds") == 10800, (
+            f"worker_13f_embedding uses wrong interval {emb.get('seconds')}; "
             "must be worker_embedding_refresh_interval_s=10800, not "
             "worker_provisional_enrichment_interval_s=300."
         )
+
+    def test_worker_13j_registered_as_cron_at_0200(self) -> None:
+        """worker_13j_enrichment_sweep must be registered as a cron job at 02:00 UTC (PRD-0073)."""
+        scheduler = _make_scheduler(workers={})
+
+        captured: list[dict] = []
+
+        def _capture_add_job(fn, trigger, *args, id, max_instances, coalesce, **kwargs):  # noqa: A002
+            captured.append({"trigger": trigger, "id": id, **kwargs})
+
+        with patch.object(scheduler._scheduler, "add_job", side_effect=_capture_add_job):
+            scheduler._register_jobs()
+
+        job = next((c for c in captured if c["id"] == "worker_13j_enrichment_sweep"), None)
+        assert job is not None, "worker_13j_enrichment_sweep must be registered in _register_jobs()"
+        assert (
+            job["trigger"] == "cron"
+        ), f"worker_13j must use 'cron' trigger (got '{job['trigger']}') — daily sweep at 02:00 UTC."
+        assert job.get("hour") == 2, f"cron hour must be 2 (got {job.get('hour')})"
+        assert job.get("minute") == 0, f"cron minute must be 0 (got {job.get('minute')})"

@@ -4,7 +4,7 @@
 > **Created**: 2026-05-05
 > **Status**: in-progress
 > **Updated**: 2026-05-05
-> **Total Waves**: 9 (A-1, B-0, B-1, B-2, C-1, C-2, C-3, D-1)
+> **Total Waves**: 9 (A-1 ✅, B-0, B-1, B-2, C-1 ✅, C-2 ✅, C-3 ✅, D-1)
 
 ---
 
@@ -617,13 +617,15 @@ Integration tests using `pytest-asyncio` and SQLAlchemy against a testcontainer 
 
 ## Sub-Plan C — S7 knowledge-graph (Worker 13J)
 
-### Wave C-1: Domain Entities, Config, Port, LLM Prompt
+### Wave C-1: Domain Entities, Config, Port, LLM Prompt ✅
 
 **Goal**: Add `EnrichmentResult`, `EnrichmentSource`, `data_completeness` computation, `EntityEnrichmentPort`, `MarketDataClient`, config field `enrichment_llm_model_id`, and the enrichment LLM prompt to `libs/prompts`.
 
 **Depends on**: none (can be written before migrations are applied — no DB calls)
 
 **Estimated effort**: 45–60 min
+
+**Status**: **DONE** — 2026-05-05 · 26 new tests (15 enrichment_result + 11 entity_enrichment_prompt) · ruff + mypy clean
 
 **Architecture layer**: domain + application ports + config
 
@@ -957,10 +959,10 @@ def build_entity_enrichment_prompt(
 
 #### Validation Gate — Wave C-1
 
-- [ ] `ruff check` + `mypy` pass on all new files
-- [ ] No imports from `infrastructure/` in domain or application layer files
-- [ ] Unit tests: minimum 21 new tests (8 + 0 + 0 + 5 = but count all tests above) pass
-- [ ] `KNOWLEDGE_GRAPH_ENRICHMENT_LLM_MODEL_ID` env var reads correctly into `settings.enrichment_llm_model_id`
+- [x] `ruff check` + `mypy` pass on all new files
+- [x] No imports from `infrastructure/` in domain or application layer files
+- [x] Unit tests: minimum 21 new tests (8 + 0 + 0 + 5 = but count all tests above) pass
+- [x] `KNOWLEDGE_GRAPH_ENRICHMENT_LLM_MODEL_ID` env var reads correctly into `settings.enrichment_llm_model_id`
 
 #### Break Impact — Wave C-1
 
@@ -976,13 +978,15 @@ def build_entity_enrichment_prompt(
 
 ---
 
-### Wave C-2: `StructuredEnrichmentUseCase` + `EntityEnrichmentAdapter` + `StructuredEnrichmentWorker`
+### Wave C-2: `StructuredEnrichmentUseCase` + `EntityEnrichmentAdapter` + `StructuredEnrichmentWorker` ✅
 
 **Goal**: Implement the enrichment orchestration use case, the DB adapter (port implementation), and the worker (APScheduler job + Kafka consumer).
 
 **Depends on**: Wave C-1, Sub-Plan A Wave A-1, Sub-Plan B Wave B-1
 
 **Estimated effort**: 90–120 min
+
+**Status**: **DONE** — 2026-05-05 · 15 new use case unit tests + 4 scheduler tests updated · ruff + mypy clean · architecture tests pass
 
 **Architecture layer**: application + infrastructure
 
@@ -1201,11 +1205,11 @@ kafka_consumer_group_structured_enrichment: str = "kg-structured-enrichment-grou
 
 #### Validation Gate — Wave C-2
 
-- [ ] `python -m pytest tests/ -v` passes in `services/knowledge-graph/`
-- [ ] Minimum 15 new unit tests from T-C-2-02 pass
-- [ ] `ruff check` + `mypy` pass on all changed files
-- [ ] R25 compliance verified: grep for `session` usage in `structured_enrichment.py` — no session object held during `await market_data_client.*` or `await llm_client.*` calls
-- [ ] No imports from `infrastructure/` in `application/use_cases/structured_enrichment.py`
+- [x] `python -m pytest tests/ -v` passes in `services/knowledge-graph/`
+- [x] Minimum 15 new unit tests from T-C-2-02 pass
+- [x] `ruff check` + `mypy` pass on all changed files
+- [x] R25 compliance verified: grep for `session` usage in `structured_enrichment.py` — no session object held during `await market_data_client.*` or `await llm_client.*` calls
+- [x] No imports from `infrastructure/` in `application/use_cases/structured_enrichment.py`
 
 #### Break Impact — Wave C-2
 
@@ -1223,13 +1227,15 @@ kafka_consumer_group_structured_enrichment: str = "kg-structured-enrichment-grou
 
 ---
 
-### Wave C-3: `EntityPublic` Schema + `GET /api/v1/entities/{entity_id}` Route
+### Wave C-3: `EntityPublic` Schema + `GET /api/v1/entities/{entity_id}` Route ✅
 
 **Goal**: Add the S7 API endpoint `GET /api/v1/entities/{entity_id}` with the new `EntityPublic` response schema, and add `CanonicalEntityRepository.get_by_id()` DB query.
 
 **Depends on**: Wave C-2 (migrations must be applied; enrichment columns must exist)
 
 **Estimated effort**: 45–60 min
+
+**Status**: **DONE** — 2026-05-05 · 5 new API route tests · ruff + mypy clean · architecture tests pass (877 unit + 100 arch)
 
 **Architecture layer**: API + repository
 
@@ -1398,10 +1404,10 @@ async def get_entity(
 
 #### Validation Gate — Wave C-3
 
-- [ ] `python -m pytest tests/ -v` passes in `services/knowledge-graph/` — all tests including waves C-1 and C-2
-- [ ] `curl localhost:8007/api/v1/entities/<known-uuid>` returns 200 with enrichment fields (or nulls)
-- [ ] `ruff check` + `mypy` pass
-- [ ] Architecture test `TestLayerIsolation` still passes (existing guard)
+- [x] `python -m pytest tests/ -v` passes in `services/knowledge-graph/` — all tests including waves C-1 and C-2
+- [x] `curl localhost:8007/api/v1/entities/<known-uuid>` returns 200 with enrichment fields (or nulls)
+- [x] `ruff check` + `mypy` pass
+- [x] Architecture test `TestLayerIsolation` still passes (existing guard)
 
 #### Break Impact — Wave C-3
 

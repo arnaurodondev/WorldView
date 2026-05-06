@@ -1,5 +1,6 @@
 """Entity-specific query endpoints.
 
+  GET /api/v1/entities/{entity_id}
   GET /api/v1/entities/{entity_id}/contradictions
   POST /api/v1/entities/similar
 
@@ -12,11 +13,16 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 
-from knowledge_graph.api.dependencies import EntityContradictionsRepoDep, FindSimilarEntitiesReposDep
+from knowledge_graph.api.dependencies import (
+    EntityContradictionsRepoDep,
+    FindSimilarEntitiesReposDep,
+    GetEntityDetailUseCaseDep,
+)
 from knowledge_graph.api.schemas import (
     ContradictionDetailResponse,
     ContradictionSideResponse,
     ContradictionsListResponse,
+    EntityPublic,
     SimilarEntitiesRequest,
     SimilarEntitiesResponse,
     SimilarEntityResultItem,
@@ -29,6 +35,40 @@ from observability import get_logger  # type: ignore[import-untyped]
 router = APIRouter(prefix="/api/v1", tags=["entities"])
 
 _log = get_logger(__name__)  # type: ignore[no-any-return]
+
+
+@router.get(
+    "/entities/{entity_id}",
+    response_model=EntityPublic,
+    summary="Get canonical entity detail with enrichment",
+)
+async def get_entity_detail(
+    entity_id: UUID,
+    uc: GetEntityDetailUseCaseDep,
+) -> EntityPublic:
+    """Return the canonical entity with enrichment fields (description, metadata, completeness).
+
+    - 200: entity found (enrichment fields may be null if not yet enriched)
+    - 404: entity does not exist
+    """
+    entity = await uc.execute(entity_id)
+    if entity is None:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    from knowledge_graph.api.schemas import EntityMetadata
+
+    return EntityPublic(
+        entity_id=entity.entity_id,
+        canonical_name=entity.canonical_name,
+        entity_type=entity.entity_type,
+        ticker=entity.ticker,
+        isin=entity.isin,
+        exchange=entity.exchange,
+        description=entity.description,
+        data_completeness=entity.data_completeness,
+        enriched_at=entity.enriched_at,
+        metadata=EntityMetadata.model_validate(entity.metadata),
+    )
 
 
 @router.get(
