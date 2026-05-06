@@ -215,6 +215,24 @@ class Settings(BaseSettings):
     # Admin token for DLQ endpoints (empty = no auth configured)
     admin_token: str = ""
 
+    # Wave A-2 / DEF-022: embedding model tracking
+    # Recorded alongside every relation_summaries.summary_embedding write so we
+    # can detect mixed-model drift in the HNSW index and target re-embedding.
+    # Default matches the canonical 1024-dim model used by both Ollama
+    # (bge-large:latest) and DeepInfra (BAAI/bge-large-en-v1.5) — same vector
+    # space, drop-in compatible.
+    summary_embedding_model_id: str = "BAAI/bge-large-en-v1.5"
+
+    # Wave A-4 / DEF-033: exponential backoff for ProvisionalEnrichmentWorker
+    # On every failed attempt we set ``next_retry_at = utc_now() +
+    # min(base * 2^retry_count, max)`` minutes so an LLM outage self-throttles
+    # instead of hammering the upstream API on every 5-minute sweep.
+    #   base=2:   retry_count=0 → 2 min, =1 → 4, =2 → 8, …, =10 → 2048 → cap.
+    #   max=1440: 24 hours — beyond this it is cheaper to mark 'failed' than
+    #             keep the row in the queue.
+    provisional_enrichment_base_retry_minutes: int = 2
+    provisional_enrichment_max_retry_minutes: int = 1440
+
     @model_validator(mode="after")
     def _validate_startup(self) -> Settings:
         """Validate startup invariants.

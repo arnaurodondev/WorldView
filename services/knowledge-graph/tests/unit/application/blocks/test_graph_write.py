@@ -668,3 +668,429 @@ class TestClaimMaterialization:
                 break
         else:
             pytest.fail("No claims INSERT call found")
+
+
+# ---------------------------------------------------------------------------
+# DEF-025 — Deterministic event_id (PLAN-0076 Wave A-3)
+# ---------------------------------------------------------------------------
+
+
+def _make_raw_event(
+    *,
+    subject_entity_id: UUID | None = None,
+    event_type: str = "earnings_release",
+    event_text: str = "Apple reports Q4 earnings",
+) -> object:
+    """Helper to build a RawEvent with stable defaults so DEF-025 tests
+    can vary one input axis at a time and check the resulting event_id.
+    """
+    from knowledge_graph.application.blocks.graph_write import RawEvent
+
+    return RawEvent(
+        subject_entity_id=subject_entity_id or uuid4(),
+        event_type=event_type,
+        event_text=event_text,
+        extraction_confidence=0.9,
+        event_date=_NOW,
+        participant_entity_ids=(),
+    )
+
+
+class TestDeterministicEventId:
+    """Replays of the same enriched-article message must produce the same event_id.
+
+    These tests pin the DEF-025 fix in place: any future code change that
+    re-introduces ``new_uuid7()`` for the events INSERT will fail
+    ``test_deterministic_event_id_same_inputs`` immediately.
+    """
+
+    def test_deterministic_event_id_same_inputs(self) -> None:
+        # Two materialize_graph calls with the SAME (doc_id, subject_entity_id,
+        # event_type) MUST produce the same event_id at the SQL parameter level.
+        from knowledge_graph.application.blocks.graph_write import materialize_graph
+
+        doc_id = uuid4()
+        subject_id = uuid4()
+        event = _make_raw_event(subject_entity_id=subject_id, event_type="earnings_release")
+
+        # First call — capture the event_id used for the events INSERT.
+        session_a = _make_session()
+        asyncio.run(
+            materialize_graph(
+                doc_id=doc_id,
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[event],  # type: ignore[list-item]
+                claims=[],
+                session=session_a,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        event_id_a = _extract_events_insert_event_id(session_a)
+
+        # Second call — same inputs, fresh session.  Must reuse the same UUID.
+        session_b = _make_session()
+        asyncio.run(
+            materialize_graph(
+                doc_id=doc_id,
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[event],  # type: ignore[list-item]
+                claims=[],
+                session=session_b,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        event_id_b = _extract_events_insert_event_id(session_b)
+
+        assert event_id_a == event_id_b, (
+            "DEF-025 regression: same (doc_id, subject_entity_id, event_type) "
+            "produced different event_ids — replay idempotency broken."
+        )
+
+    def test_event_id_contains_all_parts(self) -> None:
+        # Flipping any single input axis MUST change the resulting event_id.
+        # This pins the function's "all 3 parts contribute" guarantee.
+        from knowledge_graph.application.blocks.graph_write import materialize_graph
+
+        doc_id_1 = uuid4()
+        doc_id_2 = uuid4()
+        subject_1 = uuid4()
+        subject_2 = uuid4()
+
+        # Baseline — (doc_id_1, subject_1, "earnings_release")
+        event_baseline = _make_raw_event(subject_entity_id=subject_1, event_type="earnings_release")
+        # Variant 1: change doc_id only.
+        event_v_doc = _make_raw_event(subject_entity_id=subject_1, event_type="earnings_release")
+        # Variant 2: change subject only.
+        event_v_subject = _make_raw_event(subject_entity_id=subject_2, event_type="earnings_release")
+        # Variant 3: change event_type only.
+        event_v_type = _make_raw_event(subject_entity_id=subject_1, event_type="acquisition")
+
+        ids: dict[str, str] = {}
+        for label, doc, ev in [
+            ("baseline", doc_id_1, event_baseline),
+            ("flip_doc", doc_id_2, event_v_doc),
+            ("flip_subject", doc_id_1, event_v_subject),
+            ("flip_type", doc_id_1, event_v_type),
+        ]:
+            session = _make_session()
+            asyncio.run(
+                materialize_graph(
+                    doc_id=doc,
+                    source_type="news",
+                    is_backfill=False,
+                    relations=[],
+                    canonical_types=[],
+                    canonical_semantic_modes=[],
+                    canonical_decay_classes=[],
+                    canonical_decay_alphas=[],
+                    canonical_base_confidences=[],
+                    events=[ev],  # type: ignore[list-item]
+                    claims=[],
+                    session=session,
+                    relation_repo=_make_relation_repo(),
+                    evidence_repo=_make_evidence_repo(),
+                    outbox_repo=_make_outbox_repo(),
+                )
+            )
+            ids[label] = _extract_events_insert_event_id(session)
+
+        # All four event_ids must be distinct — confirms doc_id, subject and
+        # event_type all participate in the UUID5 derivation.
+        assert len(set(ids.values())) == 4, f"Expected 4 distinct event_ids, got {ids}"
+
+    def test_deterministic_event_id_on_conflict(self) -> None:
+        # When the events INSERT raises UniqueViolation (simulating a replay
+        # that hits the existing row), the worker must NOT crash — the
+        # ON CONFLICT (event_id, created_at) DO NOTHING clause means the DB
+        # silently drops the duplicate.  We simulate the post-ON-CONFLICT
+        # behaviour by having execute() return rowcount=0 on the second call:
+        # the function must complete without raising.
+        from knowledge_graph.application.blocks.graph_write import materialize_graph
+
+        # Build a session where every execute() succeeds (rowcount=0 mimics
+        # the ON CONFLICT DO NOTHING outcome on a replay).
+        session = _make_session()
+        result = MagicMock()
+        result.fetchone.return_value = None  # no row returned (post-conflict)
+        result.rowcount = 0
+        session.execute = AsyncMock(return_value=result)
+
+        event = _make_raw_event(event_type="earnings_release")
+
+        # Must not raise — function tolerates the no-op outcome.
+        asyncio.run(
+            materialize_graph(
+                doc_id=uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[event],  # type: ignore[list-item]
+                claims=[],
+                session=session,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+
+        # BP-397: the events INSERT SQL must explicitly contain the
+        # ``ON CONFLICT (event_id, created_at) DO NOTHING`` clause AND must
+        # bind a ``created_at`` parameter — without both halves the partitioned
+        # unique constraint cannot fire on replay.
+        for call in session.execute.call_args_list:
+            sql_text = str(call.args[0])
+            if "INSERT INTO events" in sql_text and "event_entities" not in sql_text:
+                assert (
+                    "ON CONFLICT (event_id, created_at) DO NOTHING" in sql_text
+                ), "events INSERT must use the partition-aware ON CONFLICT clause"
+                assert "created_at" in dict(call.args[1]), "events INSERT must bind ``created_at`` explicitly (BP-397)"
+                break
+        else:
+            pytest.fail("events INSERT call not found on session mock")
+
+    def test_event_id_matches_uuid5_from_parts_helper(self) -> None:
+        # Direct contract test: the event_id passed to the events INSERT
+        # MUST equal uuid5_from_parts(doc_id, subject_entity_id, event_type).
+        # If a future refactor swaps the part order or drops a part this
+        # assertion will fire immediately.
+        from knowledge_graph.application.blocks.graph_write import materialize_graph
+
+        from common.ids import uuid5_from_parts  # type: ignore[import-untyped]
+
+        doc_id = uuid4()
+        subject_id = uuid4()
+        event_type = "earnings_release"
+        event = _make_raw_event(subject_entity_id=subject_id, event_type=event_type)
+
+        session = _make_session()
+        asyncio.run(
+            materialize_graph(
+                doc_id=doc_id,
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[event],  # type: ignore[list-item]
+                claims=[],
+                session=session,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        actual = _extract_events_insert_event_id(session)
+        expected = uuid5_from_parts(str(doc_id), str(subject_id), event_type)
+        assert actual == expected
+
+
+def _extract_events_insert_event_id(session: AsyncMock) -> str:
+    """Pull the event_id parameter out of the events INSERT call on the
+    mock session.  Walks every execute() call until it finds one whose SQL
+    text contains an ``INSERT INTO events`` statement (NOT
+    ``INTO event_entities`` — those are filtered out).
+    """
+    for call in session.execute.call_args_list:
+        sql_text = str(call.args[0])
+        # Match the events INSERT specifically; exclude event_entities
+        # (which also contains the substring "events" otherwise).
+        if "INSERT INTO events" in sql_text and "event_entities" not in sql_text:
+            params = call.args[1]
+            return str(params["event_id"])
+    raise AssertionError("events INSERT call not found on session mock")
+
+
+def _extract_events_insert_params(session: AsyncMock) -> dict:
+    """Same as ``_extract_events_insert_event_id`` but returns the entire bound
+    parameter dict for the events INSERT call — used by the ``created_at``
+    determinism tests so they can compare every piece of the conflict-target
+    tuple in one assertion.
+    """
+    for call in session.execute.call_args_list:
+        sql_text = str(call.args[0])
+        if "INSERT INTO events" in sql_text and "event_entities" not in sql_text:
+            return dict(call.args[1])
+    raise AssertionError("events INSERT call not found on session mock")
+
+
+# ---------------------------------------------------------------------------
+# QA fix — deterministic created_at on events INSERT (BP-397)
+# ---------------------------------------------------------------------------
+
+
+class TestDeterministicCreatedAt:
+    """The events table is partitioned by created_at and the unique key is
+    (event_id, created_at).  A deterministic event_id alone is NOT enough — we
+    must also bind a deterministic created_at, otherwise every replay produces
+    a different conflict-target tuple and ON CONFLICT NEVER matches.
+
+    These tests pin down the QA fix that closes BP-397.
+    """
+
+    def test_event_id_idempotent_with_created_at(self) -> None:
+        # Two calls with identical inputs must produce identical (event_id,
+        # created_at) tuples — the conflict target on the events INSERT.
+        from knowledge_graph.application.blocks.graph_write import materialize_graph
+
+        doc_id = uuid4()
+        subject_id = uuid4()
+        event = _make_raw_event(subject_entity_id=subject_id, event_type="earnings_release")
+
+        session_a = _make_session()
+        asyncio.run(
+            materialize_graph(
+                doc_id=doc_id,
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[event],  # type: ignore[list-item]
+                claims=[],
+                session=session_a,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        params_a = _extract_events_insert_params(session_a)
+
+        session_b = _make_session()
+        asyncio.run(
+            materialize_graph(
+                doc_id=doc_id,
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[event],  # type: ignore[list-item]
+                claims=[],
+                session=session_b,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        params_b = _extract_events_insert_params(session_b)
+
+        # The full conflict-target tuple must be stable across replays.  Both
+        # halves are checked: previous tests only pinned event_id, but BP-397
+        # is about created_at being equally deterministic.
+        assert params_a["event_id"] == params_b["event_id"], "DEF-025 regression: event_id changed between replays"
+        assert params_a["created_at"] == params_b["created_at"], (
+            "BP-397 regression: created_at differed between replays — "
+            "ON CONFLICT (event_id, created_at) will never match and replays "
+            "will INSERT duplicate rows."
+        )
+
+    def test_created_at_uses_event_date_when_present(self) -> None:
+        # When the RawEvent carries an event_date, the bound created_at MUST
+        # match it exactly — that is the most semantically meaningful stable
+        # timestamp available for the row.
+        from knowledge_graph.application.blocks.graph_write import materialize_graph
+
+        explicit_date = datetime(2025, 6, 15, 9, 30, 0, tzinfo=UTC)
+        event = _make_raw_event(event_type="earnings_release")
+        # Replace event_date on the frozen dataclass via dataclasses.replace.
+        import dataclasses as _dc
+
+        event = _dc.replace(event, event_date=explicit_date)  # type: ignore[arg-type]
+
+        session = _make_session()
+        asyncio.run(
+            materialize_graph(
+                doc_id=uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[event],  # type: ignore[list-item]
+                claims=[],
+                session=session,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        params = _extract_events_insert_params(session)
+        assert params["created_at"] == explicit_date
+
+    def test_created_at_falls_back_when_event_date_none(self) -> None:
+        # When event_date is None, created_at must fall back to the stable
+        # 2024-01-01 baseline so partition routing still works AND replays
+        # still match the ON CONFLICT clause.
+        # Build a RawEvent explicitly with event_date=None.
+        from knowledge_graph.application.blocks.graph_write import (
+            _DETERMINISTIC_CREATED_AT_FALLBACK,
+            RawEvent,
+            materialize_graph,
+        )
+
+        event = RawEvent(
+            subject_entity_id=uuid4(),
+            event_type="earnings_release",
+            event_text="x",
+            extraction_confidence=0.9,
+            event_date=None,
+            participant_entity_ids=(),
+        )
+
+        session = _make_session()
+        asyncio.run(
+            materialize_graph(
+                doc_id=uuid4(),
+                source_type="news",
+                is_backfill=False,
+                relations=[],
+                canonical_types=[],
+                canonical_semantic_modes=[],
+                canonical_decay_classes=[],
+                canonical_decay_alphas=[],
+                canonical_base_confidences=[],
+                events=[event],  # type: ignore[list-item]
+                claims=[],
+                session=session,
+                relation_repo=_make_relation_repo(),
+                evidence_repo=_make_evidence_repo(),
+                outbox_repo=_make_outbox_repo(),
+            )
+        )
+        params = _extract_events_insert_params(session)
+        assert params["created_at"] == _DETERMINISTIC_CREATED_AT_FALLBACK

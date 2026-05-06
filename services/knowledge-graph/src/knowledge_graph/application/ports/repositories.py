@@ -243,6 +243,38 @@ class CanonicalEntityRepositoryPort(ABC):
     async def find_by_ticker(self, ticker: str) -> dict[str, object] | None:
         """Find entity by ticker symbol (case-insensitive). Returns None if not found."""
 
+    @abstractmethod
+    async def create_or_get(
+        self,
+        canonical_name: str,
+        entity_type: str,
+        *,
+        entity_id: UUID | None = None,
+        isin: str | None = None,
+        ticker: str | None = None,
+        exchange: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> tuple[UUID, bool]:
+        """Insert a canonical entity idempotently; return (entity_id, was_created).
+
+        DEF-014 / BP-384: closes the find-then-create dedup race in
+        ``persist_enrichment``.  Implementations MUST issue an atomic
+        ``INSERT ... ON CONFLICT (lower(canonical_name)) DO NOTHING RETURNING ...``
+        and, if the conflict path fired, re-SELECT the existing row.
+
+        Returns:
+        -------
+            tuple[UUID, bool]:
+              - First element is the canonical ``entity_id`` (the new row's
+                generated UUID, OR the existing row's UUID on conflict).
+              - Second element is ``True`` when this call inserted the row
+                and ``False`` when an existing row was returned.
+
+        The boolean lets callers log dedup outcomes (``entity_deduped=True``)
+        and skip downstream side effects (alias inserts, outbox events) that
+        only make sense for genuinely new canonical rows.
+        """
+
 
 # ── Entity embedding ANN port (PRD-0017 §6.5) ────────────────────────────────
 
