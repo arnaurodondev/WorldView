@@ -8,6 +8,40 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+# ── Entity detail (PRD-0073 §9.6) ─────────────────────────────────────────
+
+
+class EntityMetadata(BaseModel):
+    """Structured enrichment metadata fields for a canonical entity."""
+
+    sector: str | None = None
+    industry: str | None = None
+    country: str | None = None
+    exchange: str | None = None
+    isin: str | None = None
+    ticker: str | None = None
+    currency_code: str | None = None
+    employee_count: int | None = None
+    founded_year: int | None = None
+    headquarters_city: str | None = None
+    headquarters_country: str | None = None
+
+
+class EntityPublic(BaseModel):
+    """Full canonical entity with enrichment fields for GET /entities/{entity_id}."""
+
+    entity_id: UUID
+    canonical_name: str
+    entity_type: str
+    ticker: str | None = None
+    isin: str | None = None
+    exchange: str | None = None
+    description: str | None = None
+    data_completeness: float | None = None
+    enriched_at: datetime | None = None
+    metadata: EntityMetadata = Field(default_factory=EntityMetadata)
+
+
 # ── Entity summary ─────────────────────────────────────────────────────────
 
 

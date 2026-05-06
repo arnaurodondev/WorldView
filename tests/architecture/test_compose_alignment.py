@@ -50,6 +50,9 @@ COMPOSE_BASELINE: dict[tuple[str, str], str] = {
     ("market-data", "intraday_resampling_consumer_main"): (
         "Add market-data intraday resampling consumer container — follow-up plan"
     ),
+    ("knowledge-graph", "structured_enrichment_consumer_main"): (
+        "Add KG structured-enrichment consumer container — follow-up plan (PRD-0073)"
+    ),
 }
 
 

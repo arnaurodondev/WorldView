@@ -13,6 +13,8 @@ from sqlalchemy import text
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from knowledge_graph.domain.models import CanonicalEntity
+
 
 class CanonicalEntityRepository:
     """Read-only repository for ``canonical_entities`` in intelligence_db."""
@@ -78,6 +80,40 @@ WHERE entity_id = ANY(:ids)
             }
             for row in result.fetchall()
         ]
+
+    async def get_by_id(self, entity_id: UUID) -> CanonicalEntity | None:
+        """Fetch a canonical entity with enrichment columns for the detail endpoint.
+
+        Selects all columns needed by GetEntityDetailUseCase (PRD-0073 §9.6).
+        Returns None when the entity does not exist.
+        """
+        from knowledge_graph.domain.models import CanonicalEntity
+
+        result = await self._session.execute(
+            text("""
+SELECT entity_id, canonical_name, entity_type, ticker, isin, exchange,
+       metadata, enrichment_attempts, description, data_completeness, enriched_at
+FROM canonical_entities
+WHERE entity_id = :entity_id
+"""),
+            {"entity_id": str(entity_id)},
+        )
+        row = result.fetchone()
+        if row is None:
+            return None
+        return CanonicalEntity(
+            entity_id=UUID(str(row[0])),
+            canonical_name=str(row[1]),
+            entity_type=str(row[2]),
+            ticker=row[3],
+            isin=row[4],
+            exchange=row[5],
+            metadata=dict(row[6]) if row[6] else {},
+            enrichment_attempts=int(row[7]),
+            description=row[8],
+            data_completeness=float(row[9]) if row[9] is not None else None,
+            enriched_at=row[10],
+        )
 
     async def find_by_name_and_type(self, canonical_name: str, entity_type: str) -> UUID | None:
         """Find entity_id by exact canonical_name + entity_type match.

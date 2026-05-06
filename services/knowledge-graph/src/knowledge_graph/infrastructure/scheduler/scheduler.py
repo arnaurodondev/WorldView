@@ -41,6 +41,9 @@ class KnowledgeGraphScheduler:
         settings: Service configuration (worker interval settings).
         workers:  Optional dict of worker instances; if None, stubs are used.
 
+    Workers registered:
+      - worker_13j_enrichment_sweep: daily at 02:00 UTC (CronTrigger)
+      - All others: interval-based (seconds)
     """
 
     def __init__(
@@ -119,6 +122,18 @@ class KnowledgeGraphScheduler:
 
         # Workers 13D-6, 13D-7, 13D-8 have been migrated to Kafka consumers.
         # They no longer run as cron-scheduled APScheduler jobs.
+
+        # Worker 13J: nightly structured enrichment sweep at 02:00 UTC (PRD-0073).
+        fn_13j = self._resolve_job("structured_enrichment")
+        self._scheduler.add_job(
+            fn_13j,
+            "cron",
+            hour=2,
+            minute=0,
+            id="worker_13j_enrichment_sweep",
+            max_instances=1,
+            coalesce=True,
+        )
 
     def _resolve_job(self, name: str) -> Any:
         """Return the real worker.run if available, otherwise a no-op stub."""
@@ -212,6 +227,10 @@ def build_workers(
 
         workers["age_sync"] = AgeSyncWorker(session_factory, valkey_client, settings)
 
+    # Worker 13J: structured enrichment (PRD-0073). Built unconditionally —
+    # uses NullDescriptionAdapter when no LLM is configured.
+    _add_structured_enrichment_worker(workers, settings, session_factory, valkey_client)
+
     if llm_client is not None:
         description_client = _build_description_client(settings, valkey_client)
         embed_model = settings.embedding_model_id
@@ -276,6 +295,44 @@ def build_workers(
         )
 
     return workers
+
+
+def _add_structured_enrichment_worker(
+    workers: dict[str, Any],
+    settings: Settings,
+    session_factory: Any,
+    valkey_client: Any | None,
+) -> None:
+    """Instantiate StructuredEnrichmentWorker (Worker 13J) and add to workers dict."""
+    from knowledge_graph.application.use_cases.structured_enrichment import (
+        StructuredEnrichmentUseCase,
+    )
+    from knowledge_graph.infrastructure.http.market_data_client import MarketDataClient
+    from knowledge_graph.infrastructure.intelligence_db.adapters.entity_enrichment_adapter import (
+        EntityEnrichmentAdapter,
+    )
+    from knowledge_graph.infrastructure.workers.structured_enrichment_worker import (
+        StructuredEnrichmentWorker,
+    )
+
+    enrichment_adapter = EntityEnrichmentAdapter(session_factory)
+    market_data_client = MarketDataClient(
+        base_url=settings.market_data_internal_url,
+        internal_jwt="",  # RS256 key injection handled by future F-015 extension
+    )
+    description_client = _build_description_client(settings, valkey_client)
+
+    use_case = StructuredEnrichmentUseCase(
+        enrichment_adapter=enrichment_adapter,
+        market_data_client=market_data_client,
+        description_client=description_client,
+        session_factory=session_factory,
+    )
+    workers["structured_enrichment"] = StructuredEnrichmentWorker(
+        enrichment_adapter=enrichment_adapter,
+        use_case=use_case,
+        session_factory=session_factory,
+    )
 
 
 def _build_description_client(settings: Settings, valkey_client: Any | None = None) -> Any:
