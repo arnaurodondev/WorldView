@@ -337,10 +337,12 @@ async def test_proxy_request_includes_internal_jwt() -> None:
     ), "Expected X-Internal-JWT in downstream headers — check InternalJWTIssuerMiddleware and _auth_headers()"
     # Verify it's a valid RS256 JWT signed by S9
     internal_jwt = captured_headers["X-Internal-JWT"]
+    # DEF-002: internal tokens carry aud="worldview-internal".
     decoded = jwt.decode(
         internal_jwt,
         _S9_PUBLIC,
         algorithms=["RS256"],
+        audience="worldview-internal",
         options={"require": ["iss", "sub", "exp", "iat"]},
         issuer="worldview-gateway",
     )

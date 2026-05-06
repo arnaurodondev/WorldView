@@ -164,7 +164,16 @@ async def uow(_migrated_db: str) -> AsyncIterator:
 
     engine = create_async_engine(_migrated_db, echo=False)
     factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    # Stash the factory on the UoW instance so tests that need a UoW *factory*
+    # (e.g. OnDemandProfileUseCase, which now follows a 3-phase pattern with
+    # multiple ``async with uow_factory()`` blocks) can build fresh UoWs from
+    # the same engine/sessionmaker without reaching into private attributes.
+    def _uow_factory() -> SqlAlchemyUnitOfWork:
+        return SqlAlchemyUnitOfWork(factory, factory)
+
     async with SqlAlchemyUnitOfWork(factory, factory) as unit:
+        unit.test_uow_factory = _uow_factory  # type: ignore[attr-defined]
         yield unit
     # Truncate all user tables so the next test starts with a clean slate
     async with AsyncSession(engine) as session:

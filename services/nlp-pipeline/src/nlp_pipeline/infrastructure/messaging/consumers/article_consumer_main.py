@@ -34,7 +34,7 @@ async def main() -> None:
     from nlp_pipeline.infrastructure.nlp_db.session import _build_nlp_factories
     from nlp_pipeline.infrastructure.valkey.watchlist_cache import WatchlistCache
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     configure_logging(
         service_name="nlp-pipeline-article-consumer",
         level=settings.log_level,
@@ -95,13 +95,15 @@ async def main() -> None:
     # All providers produce 1024-dim vectors compatible with the pgvector schema.
     # WARNING: switching providers requires re-embedding all stored chunks.
     _embedding_provider = settings.embedding_provider.lower()
-    if _embedding_provider == "deepinfra" and settings.embedding_api_key:
+    _embedding_api_key = settings.embedding_api_key.get_secret_value()  # DEF-019
+    _jina_api_key = settings.jina_api_key.get_secret_value()  # DEF-019
+    if _embedding_provider == "deepinfra" and _embedding_api_key:
         from ml_clients.adapters.deepinfra_embedding import (  # type: ignore[import-not-found]
             DeepInfraEmbeddingAdapter,
         )
 
         embedding_client: Any = DeepInfraEmbeddingAdapter(
-            api_key=settings.embedding_api_key,
+            api_key=_embedding_api_key,
             model_id=settings.embedding_api_model_id,
             base_url=settings.embedding_api_base_url,
         )
@@ -110,13 +112,13 @@ async def main() -> None:
             model_id=settings.embedding_api_model_id,
             base_url=settings.embedding_api_base_url,
         )
-    elif _embedding_provider == "jina" and settings.jina_api_key:
+    elif _embedding_provider == "jina" and _jina_api_key:
         from ml_clients.adapters.jina_embedding import (  # type: ignore[import-not-found]
             JinaEmbeddingAdapter,
         )
 
         embedding_client = JinaEmbeddingAdapter(  # type: ignore[assignment]
-            api_key=settings.jina_api_key,
+            api_key=_jina_api_key,
         )
         log.info("embedding_jina_adapter_selected")
     else:
@@ -138,13 +140,14 @@ async def main() -> None:
     # Deep extraction: use DeepInfra (external API) when extraction_api_key is configured.
     # qwen2.5:7b-instruct is too large for CPU self-hosting (7B model); DeepInfra hosts it on GPUs.
     # Falls back to OllamaExtractionAdapter (which will fail gracefully) if no API key.
-    if settings.extraction_api_key:
+    _extraction_api_key = settings.extraction_api_key.get_secret_value()  # DEF-019
+    if _extraction_api_key:
         from ml_clients.adapters.deepseek_extraction import (  # type: ignore[import-not-found]
             DeepSeekExtractionAdapter,
         )
 
         extraction_client = DeepSeekExtractionAdapter(  # type: ignore[assignment]
-            api_key=settings.extraction_api_key,
+            api_key=_extraction_api_key,
             model_id=settings.extraction_api_model_id,
             base_url=settings.extraction_api_base_url,
             semaphore=ml_sem,

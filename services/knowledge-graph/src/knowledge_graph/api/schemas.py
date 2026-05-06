@@ -12,8 +12,13 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class EntityMetadata(BaseModel):
-    """Structured enrichment metadata fields for a canonical entity."""
+    """Structured enrichment metadata fields for a canonical entity.
 
+    PRD-0073 §6.1 — fields cover the canonical entity types: financial_instrument,
+    company, person, location, concept, event.  Non-applicable fields are null.
+    """
+
+    # ── financial_instrument / company fields ──────────────────────────────
     sector: str | None = None
     industry: str | None = None
     country: str | None = None
@@ -25,6 +30,14 @@ class EntityMetadata(BaseModel):
     founded_year: int | None = None
     headquarters_city: str | None = None
     headquarters_country: str | None = None
+    # ── person fields (PRD-0073 §6.1) ──────────────────────────────────────
+    role: str | None = None
+    organization: str | None = None
+    nationality: str | None = None
+    # ── concept / location / event fields ──────────────────────────────────
+    category: str | None = None
+    # ── macro indicators (country entities, Worker 13D-7) ─────────────────
+    macro_indicators: dict[str, object] | None = None
 
 
 class EntityPublic(BaseModel):

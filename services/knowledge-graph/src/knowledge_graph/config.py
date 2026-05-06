@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 
-import structlog
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -26,8 +25,8 @@ class Settings(BaseSettings):
     port: int = 8007
     debug: bool = False
 
-    # Database
-    database_url: SecretStr = SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db")
+    # Database — no default; service fails fast at startup if env var is missing (DEF-001)
+    database_url: SecretStr  # KNOWLEDGE_GRAPH_DATABASE_URL — required
     database_url_read: SecretStr = SecretStr("")
     db_pool_size: int = 10
     db_max_overflow: int = 20
@@ -78,7 +77,7 @@ class Settings(BaseSettings):
     # Recommended models on DeepInfra:
     #   BAAI/bge-large-en-v1.5  (1024-dim, same as bge-large:latest — drop-in compatible)
     embedding_provider: str = "ollama"  # KNOWLEDGE_GRAPH_EMBEDDING_PROVIDER
-    embedding_api_key: str = ""  # KNOWLEDGE_GRAPH_EMBEDDING_API_KEY
+    embedding_api_key: SecretStr = SecretStr("")  # KNOWLEDGE_GRAPH_EMBEDDING_API_KEY (DEF-005)
     embedding_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # KNOWLEDGE_GRAPH_EMBEDDING_API_BASE_URL
     embedding_api_model_id: str = "BAAI/bge-large-en-v1.5"  # KNOWLEDGE_GRAPH_EMBEDDING_API_MODEL_ID
 
@@ -86,7 +85,7 @@ class Settings(BaseSettings):
     # When deepinfra_api_key is set, a DeepSeekExtractionAdapter is instantiated and placed
     # at position 0 in the extraction chain (before Ollama and Gemini).
     # KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY — set via secret; empty = extraction chain skips DeepInfra
-    deepinfra_api_key: str = ""
+    deepinfra_api_key: SecretStr = SecretStr("")  # DEF-005: SecretStr prevents key leakage in tracebacks
     # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_MODEL_ID
     deepinfra_extraction_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"
     # KNOWLEDGE_GRAPH_DEEPINFRA_EXTRACTION_BASE_URL
@@ -153,8 +152,15 @@ class Settings(BaseSettings):
     description_max_monthly_usd: float = 10.0
     description_gemini_concurrency: int = 4
     # DeepInfra description model IDs (used when description_provider="deepinfra")
+    # NOTE (PRD-0073 / ADR-0073-006): Worker 13J (StructuredEnrichmentWorker) shares the
+    # description model with DefinitionRefreshWorker.  The previous standalone fields
+    # ``enrichment_llm_model_id`` / ``enrichment_llm_fallback_model_id`` were dead code
+    # (defined in Settings but never read by any adapter).  Consolidated here to a single
+    # source of truth so that env-var changes actually take effect.
+    # Fallback aligned to Meta-Llama-3.1-8B-Instruct-Turbo per ADR-0073-006 (Qwen/Qwen3-32B
+    # was the previous default but is not on the project's DeepInfra account allow-list).
     description_deepinfra_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"
-    description_deepinfra_fallback_model_id: str = "Qwen/Qwen3-32B"
+    description_deepinfra_fallback_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
     description_deepinfra_concurrency: int = 4
 
     # Market data service (used by Worker 13D-3 and Worker 13J)
@@ -164,11 +170,13 @@ class Settings(BaseSettings):
     market_data_internal_url: str = "http://market-data:8003"
 
     # Worker 13J — Structured Enrichment (PRD-0073)
-    # Primary: Qwen3-235B for high-quality finance descriptions.
-    # Fallback: Meta-Llama-3.1-8B-Instruct-Turbo (confirmed available 2026-05-01 to 2026-06-01).
-    # NEVER use Qwen2.5-0.5B or Qwen2.5-1.5B — both return 404 on this DeepInfra account.
-    enrichment_llm_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"
-    enrichment_llm_fallback_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+    #
+    # DEPRECATED FIELDS REMOVED (PLAN-0073 cleanup, F-A04 / F-S08):
+    #   ``enrichment_llm_model_id`` and ``enrichment_llm_fallback_model_id`` were defined
+    #   in Settings but never read by any adapter — setting the env vars had no effect.
+    #   Worker 13J shares the description model with DefinitionRefreshWorker via
+    #   ``description_deepinfra_model_id`` / ``description_deepinfra_fallback_model_id``
+    #   (see ADR-0073-006).  Use those fields instead.
     kafka_consumer_group_structured_enrichment: str = "kg-structured-enrichment-group"
 
     # AGE Cypher shadow sync (Worker 13F — PRD-0018)
@@ -208,20 +216,16 @@ class Settings(BaseSettings):
     admin_token: str = ""
 
     @model_validator(mode="after")
-    def _warn_default_db_credentials(self) -> Settings:
-        """Warn at startup if database_url still contains default superuser credentials (D-7)."""
-        # F-007: Production guard — reject skip_verification in production.
-        if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").lower() == "production":
+    def _validate_startup(self) -> Settings:
+        """Validate startup invariants.
+
+        F-007: Production guard — reject skip_verification in production.
+        DEF-001: database_url has no default so Pydantic already fails fast at startup
+        if KNOWLEDGE_GRAPH_DATABASE_URL is unset; no runtime credential check needed.
+        """
+        if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").strip().lower() in {"production", "prod"}:
             raise ValueError(
                 "internal_jwt_skip_verification MUST NOT be enabled in production. "
                 "Set APP_ENV != 'production' or remove the flag.",
-            )
-        if "postgres:postgres" in self.database_url.get_secret_value():
-            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
-                "default_db_credentials_detected",
-                message=(
-                    "KNOWLEDGE_GRAPH_DATABASE_URL still uses the default 'postgres:postgres' credentials. "
-                    "Set this env var to a secure database URL before deploying to production."
-                ),
             )
         return self

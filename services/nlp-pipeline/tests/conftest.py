@@ -8,8 +8,22 @@ The default ``client`` fixture injects a system JWT via X-Internal-JWT header (B
 
 from __future__ import annotations
 
+import os
 import time
 from unittest.mock import AsyncMock, MagicMock
+
+# Required fields with no defaults (security hardening) — must be set
+# before Settings() is instantiated in create_app() or any test fixture.
+# DEF-027: database_url and intelligence_database_url no longer have defaults.
+# Unit tests provide fake DSNs — no real DB connection is made in unit tests.
+os.environ.setdefault(
+    "NLP_PIPELINE_DATABASE_URL",
+    "postgresql+asyncpg://postgres:test@localhost:5432/nlp_db_test",
+)
+os.environ.setdefault(
+    "NLP_PIPELINE_INTELLIGENCE_DATABASE_URL",
+    "postgresql+asyncpg://postgres:test@localhost:5432/intelligence_db_test",
+)
 
 import jwt as _jwt
 import pytest

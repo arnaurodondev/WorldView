@@ -76,7 +76,14 @@ async def test_ws_token_returns_jwt_30s(authed_app) -> None:
 
     # Decode the returned JWT and verify claims (disable exp check — mocked iat is in the past)
     public_key = private_key.public_key()
-    claims = pyjwt.decode(body["token"], public_key, algorithms=["RS256"], options={"verify_exp": False})
+    # DEF-002: tokens carry aud="worldview-internal"; tests must pass it to decode().
+    claims = pyjwt.decode(
+        body["token"],
+        public_key,
+        algorithms=["RS256"],
+        audience="worldview-internal",
+        options={"verify_exp": False},
+    )
     assert claims["sub"] == "user-1"
     assert claims["tenant_id"] == "t-1"
     assert claims["scope"] == "alerts:stream"

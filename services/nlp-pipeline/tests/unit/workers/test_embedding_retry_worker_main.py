@@ -23,6 +23,7 @@ from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import SecretStr
 
 pytestmark = pytest.mark.unit
 
@@ -41,10 +42,10 @@ def _make_settings(
     s.log_level = "INFO"
     s.log_json = False
     s.embedding_provider = provider
-    s.embedding_api_key = embedding_api_key
+    s.embedding_api_key = SecretStr(embedding_api_key)
     s.embedding_api_base_url = "https://api.deepinfra.com/v1/openai"
     s.embedding_api_model_id = "BAAI/bge-large-en-v1.5"
-    s.jina_api_key = jina_api_key
+    s.jina_api_key = SecretStr(jina_api_key)
     s.ollama_base_url = "http://ollama:11434"
     s.embedding_model_id = "bge-large"
     s.embedding_instruction_prefix = "Represent this passage: "

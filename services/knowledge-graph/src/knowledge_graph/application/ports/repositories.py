@@ -14,9 +14,13 @@ from uuid import UUID
 
 # ── Outbox topic constants ───────────────────────────────────────────────────
 # Defined at the application layer so blocks and use cases can reference them
-# without importing from infrastructure.
+# without importing from infrastructure.  Canonical KG topics re-exported from
+# messaging.topics so callers can import from a single application-layer source.
+from messaging.topics import (  # type: ignore[import-untyped]
+    GRAPH_STATE_CHANGED,
+)
 
-TOPIC_GRAPH_STATE_CHANGED = "graph.state.changed.v1"
+TOPIC_GRAPH_STATE_CHANGED = GRAPH_STATE_CHANGED
 TOPIC_CONTRADICTION = "intelligence.contradiction.v1"
 TOPIC_RELATION_PROPOSED = "relation.type.proposed.v1"
 

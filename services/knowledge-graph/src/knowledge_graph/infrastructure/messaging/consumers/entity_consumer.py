@@ -26,6 +26,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     UnitOfWorkProtocol,
 )
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
+from messaging.topics import ENTITY_CANONICAL_CREATED as _ENTITY_CANONICAL_CREATED_TOPIC  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -33,8 +34,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
-
-_ENTITY_CANONICAL_CREATED_TOPIC = "entity.canonical.created.v1"
 _ENTITY_CANONICAL_CREATED_SCHEMA_PATH = get_schema_path("entity.canonical.created.v1.avsc")
 
 # PLAN-0062 F-018: defence-in-depth bound on the unbounded ``json.loads`` read.

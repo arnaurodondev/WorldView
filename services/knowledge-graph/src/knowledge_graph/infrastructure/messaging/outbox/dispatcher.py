@@ -25,6 +25,7 @@ from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
     TOPIC_RELATION_PROPOSED,
     OutboxRepository,
 )
+from messaging.topics import ENTITY_DIRTIED as _ENTITY_DIRTIED_TOPIC  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -42,7 +43,6 @@ _ALLOWED_TOPICS = frozenset(
         TOPIC_ENTITY_CANONICAL_CREATED,
     },
 )
-_ENTITY_DIRTIED_TOPIC = "entity.dirtied.v1"
 
 
 class KafkaProducerProtocol(Protocol):

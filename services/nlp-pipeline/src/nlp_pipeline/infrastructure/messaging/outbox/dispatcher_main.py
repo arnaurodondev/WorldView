@@ -51,7 +51,7 @@ async def main() -> None:
     )
     from nlp_pipeline.infrastructure.nlp_db.session import _build_nlp_factories
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     configure_logging(
         service_name="nlp-pipeline-dispatcher",
         level=settings.log_level,

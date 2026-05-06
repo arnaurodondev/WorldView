@@ -56,7 +56,7 @@ async def _seed_instrument(uow) -> tuple[Security, Instrument]:
 
 async def test_lookup_by_ticker_live_db(uow) -> None:
     """symbol lookup finds seeded instrument in real DB."""
-    sec, inst = await _seed_instrument(uow)
+    _sec, inst = await _seed_instrument(uow)
     uc = InstrumentLookupUseCase(uow)
 
     result = await uc.execute(symbol=_SYMBOL)
@@ -68,7 +68,7 @@ async def test_lookup_by_ticker_live_db(uow) -> None:
 
 async def test_lookup_by_isin_live_db(uow) -> None:
     """ISIN lookup resolves instrument from real DB."""
-    sec, inst = await _seed_instrument(uow)
+    _sec, inst = await _seed_instrument(uow)
     uc = InstrumentLookupUseCase(uow)
 
     result = await uc.execute(isin=_ISIN)
@@ -103,7 +103,8 @@ async def test_on_demand_db_hit_live_db(uow) -> None:
     await uow.commit()
 
     eodhd_client = EodhHdClient(api_key="", base_url="https://eodhd.com")
-    uc = OnDemandProfileUseCase(uow, eodhd_client)
+    # F-D02: use case now takes a UoW factory (3-phase R25 pattern).
+    uc = OnDemandProfileUseCase(uow.test_uow_factory, eodhd_client)
 
     result = await uc.execute(ticker=_SYMBOL)
 
@@ -114,7 +115,7 @@ async def test_on_demand_db_hit_live_db(uow) -> None:
 @respx.mock
 async def test_on_demand_eodhd_fallback_mocked(uow) -> None:
     """DB row exists but no description → EODHD called (mocked); source='eodhd_persisted'."""
-    sec, inst = await _seed_instrument(uow)
+    _sec, inst = await _seed_instrument(uow)
 
     respx.get("https://eodhd.com/api/fundamentals/AAPL.US").mock(
         return_value=Response(
@@ -133,7 +134,7 @@ async def test_on_demand_eodhd_fallback_mocked(uow) -> None:
     )
 
     eodhd_client = EodhHdClient(api_key="test-key", base_url="https://eodhd.com")
-    uc = OnDemandProfileUseCase(uow, eodhd_client)
+    uc = OnDemandProfileUseCase(uow.test_uow_factory, eodhd_client)
 
     result = await uc.execute(ticker=_SYMBOL)
 
@@ -141,3 +142,26 @@ async def test_on_demand_eodhd_fallback_mocked(uow) -> None:
     assert result.description == "Apple Inc. designs consumer electronics."
     assert result.sector == "Technology"
     assert result.instrument_id == inst.id
+
+
+@respx.mock
+async def test_on_demand_eodhd_429_propagates_rate_limit_live_db(uow) -> None:
+    """F-Q17: EODHD 429 → EodhRateLimitError propagates to caller (no DB write).
+
+    Seeds an instrument with no description so the EODHD path is forced, then
+    asserts that the rate-limit error from the mocked respx response surfaces
+    out of the use case unchanged — no partial-state commit, no swallowed error.
+    """
+    from market_data.domain.errors import EodhRateLimitError
+
+    _sec, _inst = await _seed_instrument(uow)
+
+    respx.get("https://eodhd.com/api/fundamentals/AAPL.US").mock(
+        return_value=Response(429, text="Rate limit exceeded"),
+    )
+
+    eodhd_client = EodhHdClient(api_key="test-key", base_url="https://eodhd.com")
+    uc = OnDemandProfileUseCase(uow.test_uow_factory, eodhd_client)
+
+    with pytest.raises(EodhRateLimitError):
+        await uc.execute(ticker=_SYMBOL)

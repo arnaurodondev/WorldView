@@ -136,6 +136,7 @@ def test_decode_jwt_wrong_issuer(rsa_keypair, kid) -> None:
     # Manually encode with wrong issuer
     payload = {
         "iss": "wrong-issuer",
+        "aud": "worldview-internal",  # DEF-002: include aud so only issuer fails
         "sub": "user-1",
         "tenant_id": "t1",
         "oidc_sub": "s",
@@ -159,6 +160,7 @@ def test_decode_jwt_expired(rsa_keypair, kid) -> None:
     now = int(time.time())
     payload = {
         "iss": "worldview-gateway",
+        "aud": "worldview-internal",  # DEF-002: required by decode_internal_jwt
         "sub": "user-1",
         "tenant_id": "t1",
         "oidc_sub": "s",

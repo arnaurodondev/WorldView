@@ -29,13 +29,24 @@ if TYPE_CHECKING:
     from knowledge_graph.domain.models import CanonicalEntity
 
 # Maps relation canonical_type to the expected entity_type of the object entity.
-# Driven by the relation_type_registry seed data in migration 0025.
+# Must match the LOWERCASE canonical_type values seeded by:
+#   - migration 0001 (listed_on, headquartered_in)
+#   - migration 0002 (is_in_sector, is_in_industry)
+# Migration 0023 attaches data_source='market_data' + source_field metadata to
+# these four rows so this adapter can drive structured-enrichment relation upserts.
 _CANONICAL_TYPE_OBJECT_ENTITY_TYPES: dict[str, str] = {
-    "operates_in_sector": "sector",
-    "operates_in_industry": "sector",
+    "is_in_sector": "sector",
+    "is_in_industry": "industry",
     "headquartered_in": "country",
-    "listed_on": "organization",
+    "listed_on": "exchange",
 }
+
+# Defense-in-depth allow-list (QA F-S05). Any future registry row whose
+# source_field is outside this set is skipped, preventing accidental upserts
+# driven by attacker-controlled metadata keys or careless future seeds.
+_ALLOWED_SOURCE_FIELDS: frozenset[str] = frozenset(
+    {"sector", "industry", "country", "exchange", "ticker", "currency_code"}
+)
 
 
 class EntityEnrichmentAdapter:
@@ -56,8 +67,18 @@ class EntityEnrichmentAdapter:
         """Merge enrichment result into canonical_entities; caller commits.
 
         Uses ``jsonb_strip_nulls(metadata || :new_meta::jsonb)`` to preserve
-        existing keys not in the new result.  Resets ``enrichment_attempts=0``
-        on success (PRD-0073 §10.1 Step 6).
+        existing keys not in the new result.
+
+        QA F-X13: Only reset ``enrichment_attempts=0`` when the result actually
+        carries a description. An "empty" enrichment (no description) means the
+        external source had nothing useful — preserving the prior attempt count
+        keeps the entity on the back-off / dead-letter path rather than letting
+        a worthless write forgive prior failures.
+
+        QA F-D05: Idempotency guard against redelivery. The WHERE clause refuses
+        to overwrite a row whose ``enriched_at`` is already newer than the
+        incoming result; redelivered Kafka events therefore can't stomp a fresher
+        result with stale data.
         """
         await session.execute(
             text("""
@@ -67,8 +88,12 @@ SET
     metadata           = jsonb_strip_nulls(metadata || :new_meta::jsonb),
     data_completeness  = :data_completeness,
     enriched_at        = :enriched_at,
-    enrichment_attempts = 0
+    enrichment_attempts = CASE
+        WHEN :description IS NULL THEN enrichment_attempts
+        ELSE 0
+    END
 WHERE entity_id = :entity_id
+  AND (enriched_at IS NULL OR enriched_at < :enriched_at)
 """),
             {
                 "entity_id": str(result.entity_id),
@@ -99,6 +124,15 @@ WHERE entity_id = :entity_id
 
         Opens and closes its own session (Phase 1 of 3-phase R25 pattern).
         Caller must NOT hold a session open when calling this method.
+
+        QA F-D04 / F-P2-01: ORDER BY aligned to the partial index
+        ``ix_canonical_entities_enrichment_sweep (enrichment_attempts, enriched_at)``
+        WHERE enrichment_attempts < 3. Postgres can only walk an index for
+        ORDER BY when the leading sort key matches the leading index column —
+        so we sort by ``enrichment_attempts ASC`` first (low-attempt entities
+        before exhausted ones), then ``enriched_at ASC NULLS FIRST`` (oldest
+        stale rows + never-enriched rows first within an attempt bucket). This
+        keeps the sweep both index-friendly and FIFO-ish.
         """
         from knowledge_graph.domain.models import CanonicalEntity
 
@@ -110,7 +144,7 @@ SELECT entity_id, canonical_name, entity_type, ticker, isin, exchange,
 FROM canonical_entities
 WHERE (enriched_at IS NULL OR data_completeness < 0.5)
   AND enrichment_attempts < 3
-ORDER BY created_at ASC
+ORDER BY enrichment_attempts ASC, enriched_at ASC NULLS FIRST
 LIMIT :batch_size
 """),
                 {"batch_size": batch_size},
@@ -147,9 +181,18 @@ LIMIT :batch_size
         ``metadata``, looks up the object canonical entity and upserts a relation
         row with ``relation_source = 'structured_enrichment'``.
 
+        QA F-S05: source_field is checked against an allow-list before being used,
+        so a future registry insert with an unexpected field name won't silently
+        drive a relation upsert.
+
+        QA F-D06: ON CONFLICT preserves an existing ``relation_source`` (e.g. an
+        nlp_extraction provenance) instead of stomping it with
+        ``structured_enrichment``. We use COALESCE so that NULL provenance is
+        promoted to ``structured_enrichment`` but a real provenance is kept.
+
         Returns the list of canonical_type values actually seeded.
         """
-        # Fetch applicable registry rows (data added by migration 0025)
+        # Fetch applicable registry rows (data added by migration 0023)
         reg_result = await session.execute(
             text("""
 SELECT canonical_type, source_field
@@ -161,6 +204,12 @@ WHERE data_source = 'market_data' AND source_field IS NOT NULL
 
         seeded: list[str] = []
         for canonical_type, source_field in registry_rows:
+            # F-S05 defense-in-depth: skip unknown source_field values even if
+            # the registry somehow contains them. This prevents future seed bugs
+            # from triggering unexpected DB writes here.
+            if source_field not in _ALLOWED_SOURCE_FIELDS:
+                continue
+
             value = metadata.get(source_field)
             if not value:
                 continue
@@ -204,7 +253,7 @@ VALUES (
 )
 ON CONFLICT (subject_entity_id, object_entity_id, canonical_type)
 DO UPDATE SET
-    relation_source = 'structured_enrichment',
+    relation_source = COALESCE(relations.relation_source, 'structured_enrichment'),
     latest_evidence_at = EXCLUDED.latest_evidence_at
 """),
                 {

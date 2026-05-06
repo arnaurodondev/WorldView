@@ -15,6 +15,16 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
+# F-S09: explicit allowlist for ``update_from_enrichment`` columns.  The SET
+# clause is built by string interpolation on ``fields`` keys, so any caller
+# that managed to pass a hostile column name (e.g. via a misconfigured
+# upstream port) could write to an arbitrary column.  This guard rejects the
+# call before any SQL is constructed.
+_ALLOWED_ENRICHMENT_COLUMNS: frozenset[str] = frozenset(
+    {"description", "sector", "industry", "country", "currency", "figi", "isin", "name"}
+)
+
+
 class PgSecurityRepository(SecurityRepository):
     """SQLAlchemy-backed implementation of SecurityRepository."""
 
@@ -110,6 +120,14 @@ class PgSecurityRepository(SecurityRepository):
         """COALESCE-update: only write a column when the current DB value IS NULL."""
         if not fields:
             return
+
+        # F-S09: reject any column outside the allowlist before string-formatting
+        # it into SQL.  Belt-and-suspenders against a bad caller passing a
+        # column name like ``"id"`` or anything injection-shaped — the SET
+        # clause is built by f-string interpolation on these keys.
+        disallowed = set(fields) - _ALLOWED_ENRICHMENT_COLUMNS
+        if disallowed:
+            raise ValueError(f"Disallowed column in enrichment update: {disallowed}")
 
         # Build SET clauses using COALESCE so existing values are never overwritten.
         set_clauses = ", ".join(f"{col} = COALESCE(securities.{col}, :{col})" for col in fields)

@@ -35,20 +35,22 @@ def build_embedding_client(settings: Settings) -> Any:
     :class:`asyncio.Semaphore` of size 1 to serialise local inference.
     """
     provider = settings.embedding_provider.lower()
-    if provider == "deepinfra" and settings.embedding_api_key:
+    _embedding_api_key = settings.embedding_api_key.get_secret_value()  # DEF-019
+    if provider == "deepinfra" and _embedding_api_key:
         from ml_clients.adapters.deepinfra_embedding import (  # type: ignore[import-not-found]
             DeepInfraEmbeddingAdapter,
         )
 
         return DeepInfraEmbeddingAdapter(
-            api_key=settings.embedding_api_key,
+            api_key=_embedding_api_key,
             model_id=settings.embedding_api_model_id,
             base_url=settings.embedding_api_base_url,
         )
-    if provider == "jina" and settings.jina_api_key:
+    _jina_api_key = settings.jina_api_key.get_secret_value()  # DEF-019
+    if provider == "jina" and _jina_api_key:
         from ml_clients.adapters.jina_embedding import JinaEmbeddingAdapter  # type: ignore[import-not-found]
 
-        return JinaEmbeddingAdapter(api_key=settings.jina_api_key)
+        return JinaEmbeddingAdapter(api_key=_jina_api_key)
 
     from ml_clients.adapters.ollama_embedding import OllamaEmbeddingAdapter  # type: ignore[import-not-found]
 

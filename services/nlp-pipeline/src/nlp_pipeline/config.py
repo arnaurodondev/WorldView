@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 
-import structlog
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,8 +26,8 @@ class Settings(BaseSettings):
     port: int = 8006
     debug: bool = False
 
-    # nlp_db — owned, Alembic enabled
-    database_url: SecretStr = SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/nlp_db")
+    # nlp_db — owned, Alembic enabled; no default: fails fast if env var missing (DEF-027)
+    database_url: SecretStr  # NLP_PIPELINE_DATABASE_URL — required
     database_url_read: SecretStr = SecretStr("")
     db_pool_size: int = 10
     db_max_overflow: int = 20
@@ -36,9 +35,8 @@ class Settings(BaseSettings):
     db_max_overflow_read: int = 30
 
     # intelligence_db — read/write adapter, ALEMBIC_ENABLED MUST stay false
-    intelligence_database_url: SecretStr = SecretStr(
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/intelligence_db",
-    )
+    # no default: fails fast if env var missing (DEF-027)
+    intelligence_database_url: SecretStr  # NLP_PIPELINE_INTELLIGENCE_DATABASE_URL — required
     intelligence_database_url_read: SecretStr = SecretStr("")
     intelligence_db_pool_size: int = 10
     intelligence_db_max_overflow: int = 20
@@ -87,11 +85,11 @@ class Settings(BaseSettings):
     # after switching, or use the admin /api/v1/admin/expire-embeddings endpoint to queue them.
     embedding_provider: str = "ollama"  # NLP_PIPELINE_EMBEDDING_PROVIDER
     # DeepInfra embedding API config (used when embedding_provider="deepinfra")
-    embedding_api_key: str = ""  # NLP_PIPELINE_EMBEDDING_API_KEY (same DeepInfra key as extraction_api_key is fine)
+    embedding_api_key: SecretStr = SecretStr("")  # NLP_PIPELINE_EMBEDDING_API_KEY (DEF-019)
     embedding_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # NLP_PIPELINE_EMBEDDING_API_BASE_URL
     embedding_api_model_id: str = "BAAI/bge-large-en-v1.5"  # NLP_PIPELINE_EMBEDDING_API_MODEL_ID
     # Jina AI config (used when embedding_provider="jina")
-    jina_api_key: str = ""  # NLP_PIPELINE_JINA_API_KEY
+    jina_api_key: SecretStr = SecretStr("")  # NLP_PIPELINE_JINA_API_KEY (DEF-019)
 
     # PLAN-0057 QA A-005: tunable retry ceiling for the embedding-retry worker.
     # Was hard-coded to 5 in three places (worker module, repo defaults). Now
@@ -102,7 +100,7 @@ class Settings(BaseSettings):
     # Deep extraction via external API (DeepInfra / OpenAI-compatible)
     # When extraction_api_key is set, DeepSeekExtractionAdapter is used instead of OllamaExtractionAdapter.
     # Qwen3-235B-A22B-Instruct-2507: $0.071/$0.10 per 1M tokens; 250k context >> 24k max extraction window.
-    extraction_api_key: str = ""  # NLP_PIPELINE_EXTRACTION_API_KEY
+    extraction_api_key: SecretStr = SecretStr("")  # NLP_PIPELINE_EXTRACTION_API_KEY (DEF-019)
     extraction_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # NLP_PIPELINE_EXTRACTION_API_BASE_URL
     extraction_api_model_id: str = "Qwen/Qwen3-235B-A22B-Instruct-2507"  # NLP_PIPELINE_EXTRACTION_API_MODEL_ID
 
@@ -184,7 +182,7 @@ class Settings(BaseSettings):
     #   meta-llama/Meta-Llama-3.1-8B-Instruct  (confirmed available, ~100-200ms)
     #   Qwen/Qwen2.5-0.5B-Instruct             (smaller, faster — upgrade account to unlock)
     #   Qwen/Qwen2.5-1.5B-Instruct             (medium — upgrade account to unlock)
-    relevance_scoring_api_key: str = ""  # NLP_PIPELINE_RELEVANCE_SCORING_API_KEY
+    relevance_scoring_api_key: SecretStr = SecretStr("")  # NLP_PIPELINE_RELEVANCE_SCORING_API_KEY (DEF-019)
     relevance_scoring_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # RELEVANCE_SCORING_API_BASE_URL
     # PLAN-0061 Wave D (2026-05-02): Llama-3.2-1B/3B not available on this account.
     # Confirmed available: Meta-Llama-3.1-8B-Instruct-Turbo (~100-200ms GPU,
@@ -211,7 +209,7 @@ class Settings(BaseSettings):
     # UnresolvedResolutionWorker — DeepInfra provider (optional override)
     # When set, worker uses OpenAI-compatible chat completions instead of Ollama.
     # Same model options as relevance_scoring (see above).
-    unresolved_resolution_api_key: str = ""  # NLP_PIPELINE_UNRESOLVED_RESOLUTION_API_KEY
+    unresolved_resolution_api_key: SecretStr = SecretStr("")  # NLP_PIPELINE_UNRESOLVED_RESOLUTION_API_KEY (DEF-019)
     unresolved_resolution_api_base_url: str = "https://api.deepinfra.com/v1/openai"  # UNRESOLVED_RESOLUTION_API_BASE
     # PLAN-0061 Wave D (2026-05-02): Llama-3.2-1B/3B not available on this account.
     # Confirmed available: Meta-Llama-3.1-8B-Instruct-Turbo — sufficient for
@@ -255,26 +253,16 @@ class Settings(BaseSettings):
     otlp_endpoint: str = ""
 
     @model_validator(mode="after")
-    def _warn_default_db_credentials(self) -> Settings:
-        """Warn at startup if any database_url still contains default superuser credentials (D-7)."""
-        # F-007: Production guard — reject skip_verification in production.
-        if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").lower() == "production":
+    def _validate_startup(self) -> Settings:
+        """Validate startup invariants.
+
+        F-007: Production guard — reject skip_verification in production.
+        DEF-027: database_url and intelligence_database_url have no defaults so Pydantic
+        already fails fast at startup if the env vars are unset; no runtime check needed.
+        """
+        if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").strip().lower() in {"production", "prod"}:
             raise ValueError(
                 "internal_jwt_skip_verification MUST NOT be enabled in production. "
                 "Set APP_ENV != 'production' or remove the flag."
             )
-        for field_name, env_var in (
-            ("database_url", "NLP_PIPELINE_DATABASE_URL"),
-            ("intelligence_database_url", "NLP_PIPELINE_INTELLIGENCE_DATABASE_URL"),
-        ):
-            url_val: SecretStr = getattr(self, field_name)
-            if "postgres:postgres" in url_val.get_secret_value():
-                structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
-                    "default_db_credentials_detected",
-                    field=field_name,
-                    message=(
-                        f"{env_var} still uses the default 'postgres:postgres' credentials. "
-                        "Set this env var to a secure database URL before deploying to production."
-                    ),
-                )
         return self

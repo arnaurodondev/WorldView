@@ -7,6 +7,7 @@ import json
 import uuid as _uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -516,7 +517,7 @@ async def find_similar_entities(request: Request) -> Any:
 
 
 @router.get("/entities/{entity_id}")
-async def get_entity_detail(entity_id: str, request: Request) -> Any:
+async def get_entity_detail(entity_id: UUID, request: Request) -> Any:
     """Proxy GET /api/v1/entities/{entity_id} → S7 Knowledge Graph.
 
     Returns enrichment fields (description, metadata, data_completeness, enriched_at)
@@ -524,6 +525,11 @@ async def get_entity_detail(entity_id: str, request: Request) -> Any:
     or enrichment has not yet run.
 
     Requires authentication — enrichment data is behind the user JWT boundary.
+
+    F-S04 (PLAN-0073 cleanup): ``entity_id`` is typed as ``UUID`` so FastAPI validates
+    the path param at the gateway boundary before we issue any downstream request.
+    This blocks path-traversal probes (e.g. ``../../admin``) and arbitrary string
+    payloads from reaching S7 — defence-in-depth even though S7 also validates.
 
     WHY registered before /entities/{entity_id}/graph and /entities/{entity_id}/contradictions:
     The bare /{entity_id} path will NOT shadow the sub-resource paths because those have

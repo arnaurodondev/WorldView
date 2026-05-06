@@ -51,7 +51,8 @@ class TestSchedulerMainEmbeddingProviderSelection:
             storage_secret_key="test",
         )
         assert s.embedding_provider == "ollama"
-        assert s.embedding_api_key == ""
+        # SecretStr migration: compare unwrapped value, not the SecretStr wrapper.
+        assert s.embedding_api_key.get_secret_value() == ""
 
     @pytest.mark.unit
     def test_deepinfra_api_base_url_default(self) -> None:
@@ -96,7 +97,7 @@ class TestSchedulerMainExtractionProviderConfig:
             storage_access_key="test",
             storage_secret_key="test",
         )
-        assert s.deepinfra_api_key == ""
+        assert s.deepinfra_api_key.get_secret_value() == ""  # SecretStr migration
         assert s.deepinfra_extraction_model_id == "Qwen/Qwen3-235B-A22B-Instruct-2507"
         assert s.deepinfra_extraction_base_url == "https://api.deepinfra.com/v1/openai"
         assert s.deepinfra_extraction_concurrency == 5
@@ -115,7 +116,7 @@ class TestSchedulerMainExtractionProviderConfig:
             deepinfra_extraction_model_id="deepseek-ai/DeepSeek-V4-Flash",
             deepinfra_extraction_concurrency=3,
         )
-        assert s.deepinfra_api_key == "test-extraction-key"
+        assert s.deepinfra_api_key.get_secret_value() == "test-extraction-key"  # SecretStr migration
         assert s.deepinfra_extraction_model_id == "deepseek-ai/DeepSeek-V4-Flash"
         assert s.deepinfra_extraction_concurrency == 3
 
@@ -208,5 +209,7 @@ class TestBuildDescriptionClientDeepInfra:
         )
         assert s.description_provider == "none"
         assert s.description_deepinfra_model_id == "Qwen/Qwen3-235B-A22B-Instruct-2507"
-        assert s.description_deepinfra_fallback_model_id == "Qwen/Qwen3-32B"
+        # F-A04: fallback aligned to Meta-Llama-3.1-8B-Instruct-Turbo per ADR-0073-006.
+        # Qwen/Qwen3-32B is not on the project's DeepInfra account allow-list.
+        assert s.description_deepinfra_fallback_model_id == "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
         assert s.description_deepinfra_concurrency == 4

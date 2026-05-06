@@ -34,7 +34,7 @@ async def main() -> None:
         PriceImpactLabellingWorker,
     )
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     configure_logging(
         service_name="nlp-pipeline-price-impact-worker",
         level=settings.log_level,

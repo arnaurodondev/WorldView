@@ -32,7 +32,7 @@ async def main() -> None:
         ArticleRelevanceScoringWorker,
     )
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     configure_logging(
         service_name="nlp-pipeline-relevance-scoring-worker",
         level=settings.log_level,
@@ -68,13 +68,13 @@ async def main() -> None:
         batch_size=settings.relevance_scoring_batch_size,
         timeout_seconds=settings.relevance_scoring_timeout_seconds,
         cycle_seconds=settings.relevance_scoring_cycle_seconds,
-        api_key=settings.relevance_scoring_api_key,
+        api_key=settings.relevance_scoring_api_key.get_secret_value(),  # DEF-019
         api_base_url=settings.relevance_scoring_api_base_url,
         api_model_id=settings.relevance_scoring_api_model_id,
         usage_logger=SessionScopedNlpUsageLogger(nlp_sf),
     )
 
-    _using_external = bool(settings.relevance_scoring_api_key)
+    _using_external = bool(settings.relevance_scoring_api_key.get_secret_value())  # DEF-019
     log.info(
         "relevance_scoring_worker_ready",
         provider="deepinfra" if _using_external else "ollama",

@@ -236,7 +236,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="2025.6.0",
         lifespan=lifespan,
     )
-    settings = settings or Settings()
+    settings = settings or Settings()  # type: ignore[call-arg]
     app.state.settings = settings
 
     # Exception handlers — must be registered before middleware so that handler

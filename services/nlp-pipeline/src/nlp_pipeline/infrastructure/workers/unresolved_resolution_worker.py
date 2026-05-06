@@ -663,7 +663,7 @@ class UnresolvedResolutionWorker:
         """
         ollama_url = self._settings.unresolved_resolution_ollama_base_url
         model_id = self._settings.unresolved_resolution_classification_model
-        api_key = self._settings.unresolved_resolution_api_key
+        api_key = self._settings.unresolved_resolution_api_key.get_secret_value()  # DEF-019
         api_base_url = self._settings.unresolved_resolution_api_base_url
         api_model_id = self._settings.unresolved_resolution_api_model_id
         timeout_s = self._settings.unresolved_resolution_llm_timeout_s

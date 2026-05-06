@@ -5,11 +5,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID
 
 
-class EnrichmentSource(str, Enum):
+class EnrichmentSource(StrEnum):
     """Origin of the enrichment description (PRD-0073 §9.2)."""
 
     MARKET_DATA = "market_data"
@@ -59,6 +59,11 @@ def compute_data_completeness(
     Empty strings are treated as absent (same as None).
     """
     if entity_type in ("financial_instrument", "company"):
+        # NOTE (F-Q14): ``headquarters_city`` is intentionally excluded from the score even
+        # though _extract_metadata extracts it.  Reason: it is highly correlated with
+        # ``headquarters_country`` (a city implies a country) so counting both would
+        # double-weight a single fact.  The city is still surfaced in the response payload
+        # (EntityMetadata.headquarters_city) for UI display.
         expected = [
             description,
             metadata.get("sector"),

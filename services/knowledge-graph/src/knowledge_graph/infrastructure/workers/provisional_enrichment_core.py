@@ -23,6 +23,11 @@ from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embeddin
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
+# Topic name constant — avoid importing from messaging.topics to sidestep
+# version-skew attr-defined errors when the installed package predates the
+# ENTITY_CANONICAL_CREATED constant (added in later revision).
+_ENTITY_CANONICAL_CREATED_TOPIC = "entity.canonical.created.v1"
+
 _ENTITY_CANONICAL_CREATED_SCHEMA_PATH = get_schema_path("entity.canonical.created.v1.avsc")
 _ENTITY_DIRTIED_SCHEMA_PATH = get_schema_path("entity.dirtied.v1.avsc")
 
@@ -113,13 +118,24 @@ async def extract_entity_profile(
 
     Returns a dict with keys: canonical_name, entity_type, ticker, isin, aliases.
     Returns None if the LLM chain fails or returns an empty result.
+
+    DEF-003/020 (BP-398): context_snippet originates from external article content
+    and must be truncated and XML-delimited before reaching the LLM prompt
+    constructor.  Without this guard an adversarial headline can inject LLM
+    instructions and corrupt entity profiles (indirect prompt injection).
     """
     from ml_clients.dataclasses import ExtractionInput  # type: ignore[import-untyped]
     from prompts.knowledge.entity_profile import ENTITY_PROFILE  # type: ignore[import-untyped]
 
+    # Truncate to 500 chars then wrap in an XML delimiter so the LLM treats
+    # this block as data, not as instructions.  The XML tag creates a structural
+    # boundary that prevents the external content from "bleeding" into the
+    # surrounding prompt text even if it contains injection payloads.
+    _safe_context = f"<article_context>{context_snippet[:500]}</article_context>"
+
     inp = ExtractionInput(
         prompt=ENTITY_PROFILE.render(name=mention_text, entity_class=mention_class),
-        context=context_snippet,
+        context=_safe_context,
         output_schema={
             "canonical_name": "string",
             "entity_type": "string",
@@ -301,13 +317,30 @@ async def persist_enrichment(
     if canonical_name and embedding is not None:
         await _write_embedding(entity_id, canonical_name, embedding, emb_repo, embed_model_id)
 
+    # DEF-021 fix: the provisional entity may be either the SUBJECT or the
+    # OBJECT of a relation, not always the subject.  Using a plain assignment
+    # `subject_entity_id = :entity_id` would silently leave ~50 % of blocked
+    # relations with a null object_entity_id permanently.
+    #
+    # The CASE pattern mirrors entity_consumer._unblock_provisional_evidence()
+    # which already had the correct dual-column logic:
+    #   subject_provisional_id / object_provisional_id columns record which
+    #   "slot" the provisional entity fills for each evidence row.  We update
+    #   only the matching slot; the other slot is left unchanged.
     await session.execute(
         text("""
 UPDATE relation_evidence_raw
 SET entity_provisional = false,
-    subject_entity_id  = :entity_id
-WHERE provisional_queue_id = :queue_id
-  AND entity_provisional   = true
+    subject_entity_id  = CASE
+        WHEN subject_provisional_id = :queue_id THEN :entity_id
+        ELSE subject_entity_id
+    END,
+    object_entity_id   = CASE
+        WHEN object_provisional_id  = :queue_id THEN :entity_id
+        ELSE object_entity_id
+    END
+WHERE (subject_provisional_id = :queue_id OR object_provisional_id = :queue_id)
+  AND entity_provisional = true
 """),
         {"entity_id": str(entity_id), "queue_id": str(queue_id)},
     )
@@ -317,7 +350,7 @@ WHERE provisional_queue_id = :queue_id
     # this function — the call there fails-fast if the record dict is invalid,
     # preventing partial DB state without an outbox row (BP-313 / SA-005).
     await outbox_repo.append(
-        topic="entity.canonical.created.v1",
+        topic=_ENTITY_CANONICAL_CREATED_TOPIC,
         partition_key=str(entity_id),
         payload_avro=avro_payload_bytes,
     )

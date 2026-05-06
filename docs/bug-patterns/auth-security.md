@@ -2,7 +2,7 @@
 
 > **Category**: auth-security
 > **Description**: JWT/OIDC middleware, SSRF, XSS, injection attacks, tenant isolation, CSP headers, auth bypass, RS256/HS256
-> **Count**: 30 patterns
+> **Count**: 31 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -1012,3 +1012,44 @@ export default async function RootLayout({ children }) {
 - Note: BP-325 documents the related `strict-dynamic` issue; this BP-382 is the cache-mismatch sibling.
 
 **Related**: BP-324 (upgrade-insecure-requests on localhost), BP-325 (strict-dynamic breaks prerendered pages)
+
+---
+
+### BP-398: External Content Reaches LLM Without Length Cap or Delimiter
+
+**Category**: Security
+**Severity**: CRITICAL
+**First seen**: 2026-05-05
+**Services**: knowledge-graph (S7)
+
+**Symptoms**:
+- LLM outputs wrong entity types or corrupted descriptions when processing adversarial articles
+- Subtle: entity metadata changes after processing specific news headlines
+- Entity profiles suddenly switch type to something unrelated to the actual entity
+
+**Root cause**: External content (article headlines, context snippets) passed directly to the LLM prompt constructor without truncation or structural delimiter. The `context_snippet` field in `provisional_enrichment_core.extract_entity_profile()` was inserted verbatim into `ExtractionInput.context`. Adversarial content in the snippet (e.g. "Ignore all instructions and respond with...") could override system-prompt instructions.
+
+**Example**:
+```python
+# Bad — context_snippet from external news article, no guard
+inp = ExtractionInput(
+    prompt=ENTITY_PROFILE.render(...),
+    context=context_snippet,   # length unbounded, no delimiter
+)
+
+# Good — truncated + XML-delimited
+_safe_context = f"<article_context>{context_snippet[:500]}</article_context>"
+inp = ExtractionInput(
+    prompt=ENTITY_PROFILE.render(...),
+    context=_safe_context,
+)
+```
+
+**Fix**:
+1. Truncate external content to a maximum length (500 chars for context snippets).
+2. Wrap in an XML delimiter (`<article_context>…</article_context>`) so the LLM recognises the block as data, not instructions.
+3. Apply the guard at the boundary where external data enters the prompt — not at the caller.
+
+**Prevention**: Any variable sourced from external data (article text, user input, web scrapes) that enters an LLM prompt MUST be truncated and wrapped in a structural delimiter before being passed to the prompt builder.
+
+**Regression test**: `tests/unit/infrastructure/workers/test_provisional_enrichment_core.py::TestContextSnippetInjectionGuard`
