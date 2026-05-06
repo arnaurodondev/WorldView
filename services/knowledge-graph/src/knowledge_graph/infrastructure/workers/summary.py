@@ -9,6 +9,11 @@ Runs every 60 minutes.  Processes relations with ``summary_stale=true``:
   6. Mark summary_stale=false on the relation.
 
 All LLM calls are logged to llm_usage_log.
+
+Session discipline (DS-001):
+  DB connections are held only for the duration of each DB operation.  The LLM
+  call (which can take 5-30 s) is always issued with NO open session to prevent
+  connection-pool starvation under a 20-relation batch.
 """
 
 from __future__ import annotations
@@ -38,6 +43,10 @@ class SummaryWorker:
     ----
         session_factory: Read/write sessionmaker for intelligence_db.
         llm_client:      FallbackChainClient for extraction.
+        force_regen_batch_size:
+            When > 0, skip the evidence-hash equality check for up to this many
+            relations per cycle.  Allows forced refresh after prompt-template
+            upgrades.  0 (default) uses normal hash-based skip logic.
 
     """
 
@@ -45,12 +54,24 @@ class SummaryWorker:
         self,
         session_factory: async_sessionmaker[AsyncSession],
         llm_client: FallbackChainClient,
+        force_regen_batch_size: int = 0,
     ) -> None:
         self._sf = session_factory
         self._llm = llm_client
+        self._force_regen_batch_size = force_regen_batch_size
 
     async def run(self) -> None:
-        """Generate summaries for stale relations."""
+        """Generate summaries for stale relations.
+
+        Session discipline — three phases per relation, each with its own
+        short-lived ``async with self._sf() as session:`` block:
+
+          Phase 1  Fetch the stale-relation list (list query only).
+          Phase 2  Fetch evidence rows + existing summary (read-only).
+          Phase 3a Hash unchanged → mark updated (single UPDATE + commit).
+          Phase 3b Hash changed  → LLM call (NO session open), then write
+                   summary + mark updated in one final session.
+        """
         from knowledge_graph.infrastructure.intelligence_db.repositories.relation import RelationRepository
         from knowledge_graph.infrastructure.intelligence_db.repositories.relation_evidence import (
             RelationEvidenceRepository,
@@ -61,27 +82,34 @@ class SummaryWorker:
 
         summaries_created = 0
         summaries_skipped = 0
+        immutable_hits_total = 0
+        raw_fallback_hits_total = 0
+        skipped_no_evidence = 0
+        skipped_null_evidence_text = 0
 
+        # ── Phase 1: fetch stale list (short-lived session) ──────────────────
         async with self._sf() as session:
             rel_repo = RelationRepository(session)
-            ev_repo = RelationEvidenceRepository(session)
-            summary_repo = RelationSummaryRepository(session)
-
             stale_relations = await rel_repo.fetch_stale_summary(_BATCH_LIMIT)  # type: ignore[attr-defined]
-            batch_size = len(stale_relations)
 
-            logger.info(  # type: ignore[no-any-return]
-                "summary_worker_batch_start",
-                stale_relations=batch_size,
-            )
+        batch_size = len(stale_relations)
 
-            immutable_hits_total = 0
-            raw_fallback_hits_total = 0
-            skipped_no_evidence = 0
-            skipped_null_evidence_text = 0
+        logger.info(  # type: ignore[no-any-return]
+            "summary_worker_batch_start",
+            stale_relations=batch_size,
+        )
 
-            for rel in stale_relations:
-                relation_id = rel["relation_id"]  # type: ignore[assignment]
+        # Track how many relations in this cycle have been force-regenerated so
+        # we can stop once _force_regen_batch_size is reached.
+        force_regen_used = 0
+
+        for rel in stale_relations:
+            relation_id = rel["relation_id"]  # type: ignore[assignment]
+
+            # ── Phase 2: fetch evidence + existing summary (short-lived session)
+            async with self._sf() as session:
+                ev_repo = RelationEvidenceRepository(session)
+                summary_repo = RelationSummaryRepository(session)
 
                 evidence_rows = await ev_repo.get_all_for_relation(  # type: ignore[attr-defined]
                     relation_id,  # type: ignore[arg-type]
@@ -103,59 +131,83 @@ class SummaryWorker:
                             evidence_source=evidence_source,
                             row_count=len(evidence_rows),
                         )
-                if not evidence_rows:
-                    skipped_no_evidence += 1
-                    continue
 
-                # Track which evidence source contributed
-                if evidence_source == "immutable":
-                    immutable_hits_total += len(evidence_rows)
-                else:
-                    raw_fallback_hits_total += len(evidence_rows)
-
-                evidence_texts = []
-                for e in evidence_rows:
-                    # Prefer evidence_text; fall back to canonicalized_evidence_text (immutable rows only).
-                    # Avoid str(None) = "None" bug from the old list-comprehension approach.
-                    text = e.get("evidence_text") or e.get("canonicalized_evidence_text")
-                    if text:
-                        evidence_texts.append(str(text))
-
-                logger.info(  # type: ignore[no-any-return]
-                    "summary_worker_relation_evidence_audit",
-                    relation_id=str(relation_id),
-                    evidence_rows_fetched=len(evidence_rows),
-                    evidence_text_null_count=sum(1 for e in evidence_rows if not e.get("evidence_text")),
-                    canonicalized_text_null_count=sum(
-                        1 for e in evidence_rows if not e.get("canonicalized_evidence_text")
-                    ),
-                    evidence_texts_available=len(evidence_texts),
-                )
-                if not evidence_texts:
-                    skipped_null_evidence_text += 1
-                    continue
-
-                # SHA-256 of combined evidence for change detection
-                combined = "\n".join(sorted(evidence_texts))
-                evidence_hash = hashlib.sha256(combined.encode()).hexdigest()
-
+                # Get existing summary for hash check — read while session is still open.
                 existing = await summary_repo.get_current(relation_id)  # type: ignore[arg-type]
-                if existing and existing.get("evidence_hash") == evidence_hash:
-                    # No change — skip expensive LLM call
+
+            # ── Outside any session: process evidence texts ──────────────────
+
+            if not evidence_rows:
+                skipped_no_evidence += 1
+                continue
+
+            # Track which evidence source contributed
+            if evidence_source == "immutable":
+                immutable_hits_total += len(evidence_rows)
+            else:
+                raw_fallback_hits_total += len(evidence_rows)
+
+            evidence_texts = []
+            for e in evidence_rows:
+                # Prefer evidence_text; fall back to canonicalized_evidence_text (immutable rows only).
+                # Avoid str(None) = "None" bug from the old list-comprehension approach.
+                text = e.get("evidence_text") or e.get("canonicalized_evidence_text")
+                if text:
+                    evidence_texts.append(str(text))
+
+            logger.info(  # type: ignore[no-any-return]
+                "summary_worker_relation_evidence_audit",
+                relation_id=str(relation_id),
+                evidence_rows_fetched=len(evidence_rows),
+                evidence_text_null_count=sum(1 for e in evidence_rows if not e.get("evidence_text")),
+                # Fix DATA-008: only count nulls when the key is present in the dict.
+                # relation_evidence_raw has NO canonicalized_evidence_text column, so
+                # counting absent keys as nulls would inflate the metric for raw-path rows.
+                canonicalized_text_null_count=sum(
+                    1
+                    for e in evidence_rows
+                    if "canonicalized_evidence_text" in e and not e.get("canonicalized_evidence_text")
+                ),
+                evidence_texts_available=len(evidence_texts),
+            )
+            if not evidence_texts:
+                skipped_null_evidence_text += 1
+                continue
+
+            # SHA-256 of combined evidence for change detection
+            combined = "\n".join(sorted(evidence_texts))
+            evidence_hash = hashlib.sha256(combined.encode()).hexdigest()
+
+            # ── Determine whether the LLM call is needed ─────────────────────
+            # Force-regen mode: skip the hash check for the first
+            # _force_regen_batch_size relations in this cycle.
+            force_regen_active = self._force_regen_batch_size > 0 and force_regen_used < self._force_regen_batch_size
+
+            if not force_regen_active and existing and existing.get("evidence_hash") == evidence_hash:
+                # Hash unchanged — skip expensive LLM call; just clear the stale flag.
+                async with self._sf() as session:
+                    rel_repo = RelationRepository(session)
                     await rel_repo.mark_summary_updated(relation_id)  # type: ignore[arg-type, attr-defined]
                     await session.commit()
-                    summaries_skipped += 1
-                    continue
+                summaries_skipped += 1
+                continue
 
-                # Build prompt and call LLM
-                summary_text = await self._generate_summary(evidence_texts, relation_id)  # type: ignore[arg-type]
-                if summary_text is None:
-                    logger.warning(  # type: ignore[no-any-return]
-                        "summary_worker_llm_failed",
-                        relation_id=str(relation_id),
-                    )
-                    continue
+            if force_regen_active:
+                force_regen_used += 1
 
+            # ── Phase 3: LLM call — NO session is open here ─────────────────
+            summary_text = await self._generate_summary(evidence_texts, relation_id)  # type: ignore[arg-type]
+            if summary_text is None:
+                logger.warning(  # type: ignore[no-any-return]
+                    "summary_worker_llm_failed",
+                    relation_id=str(relation_id),
+                )
+                continue
+
+            # ── Phase 4: write summary (short-lived session) ─────────────────
+            async with self._sf() as session:
+                summary_repo = RelationSummaryRepository(session)
+                rel_repo = RelationRepository(session)
                 await summary_repo.insert_new(
                     relation_id=relation_id,  # type: ignore[arg-type]
                     summary_text=summary_text,
@@ -167,7 +219,7 @@ class SummaryWorker:
                 )
                 await rel_repo.mark_summary_updated(relation_id)  # type: ignore[arg-type, attr-defined]
                 await session.commit()
-                summaries_created += 1
+            summaries_created += 1
 
         logger.info(  # type: ignore[no-any-return]
             "summary_worker_complete",
@@ -202,7 +254,9 @@ class SummaryWorker:
         if result is None:
             return None
         raw_resp = getattr(result, "raw_response", None)
-        logger.info(  # type: ignore[no-any-return]
+        # Fix SEC-003: downgrade from INFO to DEBUG — raw LLM responses may
+        # contain financial data excerpted from news articles.
+        logger.debug(  # type: ignore[no-any-return]
             "summary_worker_llm_raw_response",
             relation_id=str(relation_id),
             raw_response_length=len(raw_resp) if raw_resp else 0,
