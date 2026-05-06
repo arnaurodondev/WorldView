@@ -30,6 +30,7 @@ hot-path ProvisionalQueuedConsumer can reuse the same LLM + DB steps.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
@@ -318,21 +319,24 @@ WHERE queue_id = ANY(CAST(:ids AS uuid[]))
             await asyncio.gather(*[_enrich_one(r) for r in pending_rows])
         )
 
-        # ── Phase 3: Write results in a new session ──
-        # BP-390: each row is committed independently so a rollback only
-        # affects the current (uncommitted) row, not all prior rows in the
-        # same session.
-        async with self._sf() as session:
-            for (
-                queue_id,
-                mention_text,
-                _mention_class,
-                _context_snippet,
-                retry_count,
-                profile,
-                embedding,
-            ) in enrichment_results:
-                try:
+        # ── Phase 3: Write results — one fresh session PER ROW ──────────────
+        # BP-390 (full fix): opening a single session for the entire loop meant
+        # that after session.rollback() the remaining rows in the loop could
+        # silently escape their except blocks if _apply_retry raised, leaving
+        # those rows permanently stuck in 'processing'.  Per-row sessions
+        # guarantee that a failure on one row never taints the session used by
+        # any subsequent row.
+        for (
+            queue_id,
+            mention_text,
+            _mention_class,
+            _context_snippet,
+            retry_count,
+            profile,
+            embedding,
+        ) in enrichment_results:
+            try:
+                async with self._sf() as session:
                     if profile is not None:
                         entity_id = await self._persist_enrichment(
                             session=session,
@@ -356,27 +360,36 @@ WHERE queue_id = :queue_id
 """),
                             {"entity_id": str(entity_id), "queue_id": str(queue_id)},
                         )
-                        await session.commit()  # BP-390: commit per row
-                        entity_ids_to_dirty.append(entity_id)
-                        s7_provisional_enrichment_success_total.inc()
-                        enriched += 1
+                        await session.commit()
                     else:
                         await self._apply_retry(session, queue_id, retry_count)
-                        await session.commit()  # BP-390: commit retry update
-                        failed += 1
-                except Exception as exc:
-                    logger.error(  # type: ignore[no-any-return]
-                        "provisional_enrichment_error",
-                        queue_id=str(queue_id),
-                        error=str(exc),
-                    )
-                    # DS-008: rollback aborted transaction before retry UPDATE so
-                    # SQLAlchemy does not raise InvalidRequestError on the session.
-                    # BP-390: rollback only affects the current uncommitted row.
-                    await session.rollback()
-                    await self._apply_retry(session, queue_id, retry_count)
-                    await session.commit()  # BP-390: commit retry update
+                        await session.commit()
+
+                if entity_id:
+                    entity_ids_to_dirty.append(entity_id)
+                    s7_provisional_enrichment_success_total.inc()
+                    enriched += 1
+                else:
                     failed += 1
+            except Exception as exc:
+                logger.error(  # type: ignore[no-any-return]
+                    "provisional_enrichment_error",
+                    queue_id=str(queue_id),
+                    error=str(exc),
+                )
+                # DS-008: open a fresh session for the retry UPDATE so no
+                # aborted-transaction state bleeds from the failed session.
+                try:
+                    async with self._sf() as session:
+                        await self._apply_retry(session, queue_id, retry_count)
+                        await session.commit()
+                except Exception:
+                    logger.warning(  # type: ignore[no-any-return]
+                        "provisional_enrichment_retry_update_failed",
+                        queue_id=str(queue_id),
+                        exc_info=True,
+                    )
+                failed += 1
 
         # Produce entity.dirtied.v1 AFTER successful DB commit.
         for dirty_id in entity_ids_to_dirty:
@@ -597,7 +610,7 @@ WHERE status = 'processing'
             # Fail-open: any error → proceed to Layer 3, never drop the row.
             logger.warning(  # type: ignore[no-any-return]
                 "provisional_enrichment_noise_classifier_error",
-                mention_text=mention_text[:80],
+                mention_text_hash=hashlib.sha256(mention_text.encode()).hexdigest()[:16],
                 error=str(exc),
                 action="fail_open_to_layer3",
             )
