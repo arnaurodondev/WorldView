@@ -14,11 +14,13 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import text
 
+from knowledge_graph.application.ports.repositories import RelationTypeRegistryRepositoryPort
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class RelationTypeRegistryRepository:
+class RelationTypeRegistryRepository(RelationTypeRegistryRepositoryPort):
     """Read repository for ``relation_type_registry``."""
 
     def __init__(self, session: AsyncSession) -> None:

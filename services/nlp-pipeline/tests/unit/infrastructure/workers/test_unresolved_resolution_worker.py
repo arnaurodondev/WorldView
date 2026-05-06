@@ -941,6 +941,57 @@ class TestPhase1CascadeStage3:
         nlp_session.commit.assert_awaited_once()
 
 
+class TestPhase1CascadeEdgeCases:
+    """Edge-case guards for _phase1_cascade() input validation (F-QA-217)."""
+
+    async def test_phase1_cascade_empty_mention_text_returns_false(self) -> None:
+        """_phase1_cascade() with empty mention_text returns False without touching any repo.
+
+        F-QA-217: surface = (mention.mention_text or "").strip() produces an empty
+        string which triggers an early return False before any alias repo call.
+        This ensures we don't attempt a DB lookup for degenerate inputs.
+        """
+        settings = _make_settings()
+        mention = _make_mention(mention_text="")  # empty surface
+
+        intel_sf, _ = _make_intel_sf()
+        nlp_sf, nlp_session = _make_nlp_sf()
+
+        alias_repo = AsyncMock()
+        alias_repo.exact_match = AsyncMock(return_value=None)
+        alias_repo.ticker_isin_match = AsyncMock(return_value=None)
+        alias_repo.fuzzy_trigram = AsyncMock(return_value=[])
+
+        em_repo = AsyncMock()
+        em_repo.resolve = AsyncMock()
+
+        worker = UnresolvedResolutionWorker(
+            nlp_session_factory=nlp_sf,
+            settings=settings,
+            intel_session_factory=intel_sf,
+        )
+
+        with (
+            patch(
+                "nlp_pipeline.infrastructure.intelligence_db.repositories.entity_alias.EntityAliasRepository",
+                return_value=alias_repo,
+            ),
+            patch(
+                "nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention.EntityMentionRepository",
+                return_value=em_repo,
+            ),
+        ):
+            resolved = await worker._phase1_cascade(mention)
+
+        assert resolved is False
+        # No alias repo calls should have been made for an empty surface.
+        alias_repo.exact_match.assert_not_awaited()
+        alias_repo.ticker_isin_match.assert_not_awaited()
+        alias_repo.fuzzy_trigram.assert_not_awaited()
+        em_repo.resolve.assert_not_awaited()
+        nlp_session.commit.assert_not_awaited()
+
+
 class TestPhase1CascadeNoHit:
     """All stages miss -> returns False, no resolve() called."""
 
