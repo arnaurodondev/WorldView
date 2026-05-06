@@ -199,6 +199,7 @@ class RelationEvidenceRepositoryPort(ABC):
         is_backfill: bool = False,
         entity_provisional: bool = False,
         provisional_queue_id: UUID | None = None,
+        evidence_text: str | None = None,
     ) -> UUID: ...
 
     @abstractmethod

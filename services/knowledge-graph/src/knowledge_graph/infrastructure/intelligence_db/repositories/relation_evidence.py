@@ -16,11 +16,13 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from knowledge_graph.application.ports.repositories import RelationEvidenceRepositoryPort
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class RelationEvidenceRepository:
+class RelationEvidenceRepository(RelationEvidenceRepositoryPort):
     """Append-only repository for evidence tables.
 
     Writes to ``relation_evidence_raw`` (staging) during the hot path.
@@ -331,7 +333,7 @@ WITH ranked AS (
       ON  r.subject_entity_id = rer.subject_entity_id
      AND  r.object_entity_id  = rer.object_entity_id
      AND  r.canonical_type    = rer.canonical_type
-    WHERE r.relation_id = ANY(:relation_ids)
+    WHERE r.relation_id = ANY(CAST(:relation_ids AS uuid[]))
       AND rer.entity_provisional = false
       AND rer.evidence_text      IS NOT NULL
 )

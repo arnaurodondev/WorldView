@@ -211,7 +211,7 @@ LIMIT :top_k
             text("""
 SELECT relation_id, summary_text
 FROM   relation_summaries
-WHERE  relation_id = ANY(:relation_ids)
+WHERE  relation_id = ANY(CAST(:relation_ids AS uuid[]))
   AND  is_current  = true
 """),
             {"relation_ids": [str(rid) for rid in relation_ids]},

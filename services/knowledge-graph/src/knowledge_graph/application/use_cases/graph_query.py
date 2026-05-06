@@ -9,6 +9,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from observability import get_logger  # type: ignore[import-untyped]
+
 if TYPE_CHECKING:
     from knowledge_graph.application.ports.relation_summary_repository import RelationSummaryRepositoryPort
     from knowledge_graph.application.ports.repositories import (
@@ -16,6 +18,8 @@ if TYPE_CHECKING:
         RelationEvidenceRepositoryPort,
         RelationRepositoryPort,
     )
+
+_log = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 class GetEntityGraphUseCase:
@@ -81,10 +85,31 @@ class GetEntityGraphUseCase:
                 rid = r.get("relation_id")
                 if isinstance(rid, UUID):
                     relation_ids.append(rid)
-            evidence_map = await evidence_repo.get_evidence_snippets_batch(
-                relation_ids, limit_per_relation=evidence_limit
-            )
-            summary_map = await summary_repo.get_current_summaries_batch(relation_ids)
+            # Graceful degradation: if evidence or summary batch queries fail
+            # (transient DB error, timeout), return empty maps rather than
+            # propagating a 500 — the entity and relation data is still valid.
+            try:
+                evidence_map = await evidence_repo.get_evidence_snippets_batch(
+                    relation_ids, limit_per_relation=evidence_limit
+                )
+            except Exception:
+                _log.warning(
+                    "graph_query_evidence_snippets_failed",
+                    entity_id=str(entity_id),
+                    relation_count=len(relation_ids),
+                )
+                evidence_map = {}
+
+            try:
+                summary_map = await summary_repo.get_current_summaries_batch(relation_ids)
+            except Exception:
+                _log.warning(
+                    "graph_query_summaries_failed",
+                    entity_id=str(entity_id),
+                    relation_count=len(relation_ids),
+                )
+                summary_map = {}
+
             for r in relation_rows:
                 rid = r.get("relation_id")
                 r["evidence_snippets"] = evidence_map.get(rid, []) if isinstance(rid, UUID) else []  # type: ignore[index]
