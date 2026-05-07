@@ -49,6 +49,9 @@
 - [ ] Rollback is wrapped in try/except; session close is in the `finally` block (prevents session leak when rollback raises)
 - [ ] Post-commit hooks run INSIDE `commit()` via `_drain_post_commit_hooks()` — NOT in `__aexit__()` (see STANDARDS.md §17.3)
 - [ ] Post-commit hook failures are caught and logged — never propagated (a cache-flush failure must not dead-letter a successfully-committed message)
+- [ ] Dual-session consumers: does each session's commit failure trigger a re-raise (nack) or is it swallowed? Swallowed failures + early-skip = permanent data loss (BP-419, HR-048)
+- [ ] After-commit Kafka produce: is it inside an outbox transaction or fire-and-forget? For one-time lifecycle events (entity promotion, entity deletion, first-established relation), outbox is required (BP-418, HR-049)
+- [ ] No nested `async with session_factory()` inside a method called within an already-open session — creates two independent transactions (BP-417)
 
 ## 5. Data Integrity
 
@@ -74,6 +77,8 @@
 - [ ] **Middleware reads `app.state` inside `dispatch()`, not at `__init__` time** — constructors run before lifespan, capturing `None` permanently disables features (BP-144, HR-028)
 - [ ] **Repository `save()` methods do NOT call `session.rollback()`** — repo-level rollback poisons the shared session; only the use-case `async with session_factory()` context owns rollback (BP-141, HR-029)
 - [ ] **`InternalJWTMiddleware` is mounted on all services that accept internal requests** — adding a new service without it bypasses auth entirely (PLAN-0025 pattern)
+- [ ] JWT/token values NOT passed as CLI arguments or environment variable substitutions in shell command strings (`--header "X-JWT: ${TOKEN}"`) — process-list visible; use httpx in Python or curl `--config` file instead (BP-419, HR-048 context, S-012)
+- [ ] CB `record_failure()`: does it distinguish 4xx (client error) from 5xx/network (service fault)? Counting 4xx inflates CB failure count causing false-positive circuit opens (S-003)
 
 ## 6b. Schema & Data Pipeline Integrity
 
