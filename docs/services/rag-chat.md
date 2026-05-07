@@ -429,14 +429,18 @@ Canonical per-source authority scores live in
 
 | Source type | Authority |
 |---|---|
-| `sec_10k`, `sec_10q` | 1.0 |
-| `earnings_data` | 0.95 |
-| `financial` | 0.90 |
-| `analyst_report` | 0.80 |
-| `eodhd_news` | 0.70 |
-| `claim`, `relation` | 0.65 |
+| `sec_10k`, `sec_10q` | 1.00 |
+| `sec_8k` | 0.95 |
+| `sec_10k_a`, `sec_10q_a` | 0.92 |
+| `earnings_data`, `earnings_transcript` | 0.92 |
+| `corporate_action` | 0.88 |
+| `press_release`, `financial` | 0.85 |
+| `research`, `relation` | 0.80 |
+| `claim` | 0.75 |
+| `eodhd_news`, `finnhub_news`, `newsapi` | 0.65 |
 | `default` | 0.50 |
-| `social_media` | 0.30 |
+| `social` | 0.30 |
+| `user_generated` | 0.20 |
 
 ### Recency
 
@@ -452,8 +456,7 @@ multiplied into the final `fusion_score` downstream.
 | `RAG_CHAT_TRUST_W_CORROBORATION` | `0.1` | Weight for corroboration factor (MVP: 0.5 when evidence_count=0) |
 | `RAG_CHAT_TRUST_W_EXTRACTION` | `0.1` | Weight for extraction confidence (defaults to 0.5 when unavailable) |
 
-Weights can be tuned without redeploying code. The remaining `0.4` budget is
-reserved for the recency signal applied via `fusion_score`.
+Weights can be tuned without redeploying code. Note: the weights do not need to sum to 1.0. Recency is handled separately as a multiplicative factor via `item.recency_score` (PLAN-0063 W5-4), independent of these additive trust components.
 
 ### Eval Gate
 
