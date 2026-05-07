@@ -64,6 +64,10 @@ class S6Client(BaseUpstreamClient):
             "granularity": request.granularity,
             "include_entities": request.include_entities,
             "source_types": request.source_types,
+            # PLAN-0063 W5-3: forward the orchestrator's search_type choice
+            # over the wire. S6 validates the literal set; the port stayed
+            # loose so older callers (set to "ann") keep working unchanged.
+            "search_type": request.search_type,
         }
         if request.query_text is not None:
             payload["query_text"] = request.query_text

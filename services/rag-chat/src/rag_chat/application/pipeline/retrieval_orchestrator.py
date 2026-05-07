@@ -15,7 +15,16 @@ from uuid import UUID
 import structlog
 
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
-from rag_chat.domain.enums import ItemType
+from rag_chat.domain.enums import ItemType, QueryIntent
+
+# PLAN-0063 W5-3 (L11): the orchestrator decides whether to use hybrid
+# retrieval inline. The classical pipeline is hybrid-by-default for chunk
+# searches that have a query_text; SIGNAL_INTEL and PORTFOLIO opt out
+# because (a) signal-intel runs on news titles where BM25 + sentiment cues
+# overlap poorly with the embedding signal, and (b) portfolio retrieval is
+# dominated by the portfolio_client path so the chunk-leg signal is small
+# and adding lexical noise costs more than it saves.
+_ANN_ONLY_INTENTS: frozenset[QueryIntent] = frozenset({QueryIntent.SIGNAL_INTEL, QueryIntent.PORTFOLIO})
 
 if TYPE_CHECKING:
     from rag_chat.application.pipeline.circuit_breaker import SourceCircuitBreaker
@@ -204,13 +213,32 @@ class ParallelRetrievalOrchestrator:
     ) -> list[RetrievedItem]:
         from rag_chat.application.ports.upstream_clients import ChunkSearchRequest
 
+        # PLAN-0063 W5-3 (L11): pick search_type inline. We need query_text
+        # for the hybrid path (the FTS leg has no use for an embedding), so
+        # we ALWAYS pass the rephrased query through — the hybrid use case
+        # uses the embedding for the ANN leg and the text for the FTS leg
+        # in parallel. SIGNAL_INTEL / PORTFOLIO stay on pure ANN.
+        _has_query_text = bool(resolved_query.rephrased_query)
+        _search_type = "hybrid" if _has_query_text and resolved_query.intent not in _ANN_ONLY_INTENTS else "ann"
+
+        # When search_type is "ann" S6 enforces exactly-one-of, so drop the
+        # query_text if we already have an embedding. For "hybrid" / "lexical"
+        # we always send the text — the FTS leg requires it.
+        if _search_type == "ann" and query_embedding:
+            _query_text_to_send: str | None = None
+        elif _has_query_text:
+            _query_text_to_send = resolved_query.rephrased_query
+        else:
+            _query_text_to_send = None
+
         req = ChunkSearchRequest(
             query_embedding=query_embedding,
-            query_text=resolved_query.rephrased_query if not query_embedding else None,
+            query_text=_query_text_to_send,
             top_k=20,
             include_entities=True,
             date_from=_date_to_dt(plan.date_filter.start) if plan.date_filter else None,
             date_to=_date_to_dt(plan.date_filter.end) if plan.date_filter else None,
+            search_type=_search_type,
         )
         results = await asyncio.wait_for(self._s6.search_chunks(req), timeout=self._timeout)
         if not results:
