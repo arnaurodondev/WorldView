@@ -65,3 +65,28 @@ def record_article_processed(routing_tier: str) -> None:
 def record_entity_resolved(method: str) -> None:
     """Increment per-method entity resolution counter."""
     s6_entity_resolved_total.labels(method=method).inc()
+
+
+# ── Display relevance score path tracking (PLAN-0063 W5-5 T-W5-5-01) ─────────
+
+news_display_score_path_total = prometheus_client.Counter(
+    "news_display_score_path_total",
+    "Tracks which display_relevance_score formula path was used per article row",
+    ["path"],  # full_formula | no_price_impact | no_llm_score | routing_only
+)
+
+
+def record_display_score_path(
+    market_impact_score: float | None,
+    llm_relevance_score: float | None,
+) -> None:
+    """Classify and increment the display-score path counter."""
+    if market_impact_score is not None and market_impact_score > 0 and llm_relevance_score is not None:
+        path = "full_formula"
+    elif market_impact_score is not None and market_impact_score > 0:
+        path = "no_llm_score"
+    elif llm_relevance_score is not None:
+        path = "no_price_impact"
+    else:
+        path = "routing_only"
+    news_display_score_path_total.labels(path=path).inc()

@@ -14,6 +14,10 @@ from uuid import UUID
 
 import structlog
 
+from rag_chat.application.metrics.prometheus import (
+    rag_retrieval_score_distribution,
+    rag_source_contribution_total,
+)
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType, QueryIntent
 
@@ -248,6 +252,7 @@ class ParallelRetrievalOrchestrator:
                 message="chunk search returned 0 results — S6 index may be empty or query has no match",
             )
         items: list[RetrievedItem] = []
+        _seen_sources: set[str] = set()
         for r in results:
             trust = DEFAULT_TRUST_WEIGHTS.get(r.source_type, DEFAULT_TRUST_WEIGHTS["default"])
             items.append(
@@ -269,6 +274,10 @@ class ParallelRetrievalOrchestrator:
                     source_type=r.source_type,
                 )
             )
+            rag_retrieval_score_distribution.labels(source=r.source_type).observe(r.score)
+            if r.source_type not in _seen_sources:
+                _seen_sources.add(r.source_type)
+                rag_source_contribution_total.labels(source=r.source_type).inc()
         return items
 
     async def _fetch_relations(

@@ -18,6 +18,7 @@ from uuid import UUID
 from sqlalchemy import text
 
 from nlp_pipeline.application.ports.repositories import NewsQueryPort, RankedArticleData
+from nlp_pipeline.infrastructure.metrics.prometheus import record_display_score_path
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -184,6 +185,9 @@ LIMIT :limit OFFSET :offset
 
 def _row_to_ranked_article(row: Any, *, include_primary_entity: bool = True) -> RankedArticleData:
     """Map a SQLAlchemy Row to a RankedArticleData DTO."""
+    _market = float(row.market_impact_score) if row.market_impact_score is not None else None
+    _llm = float(row.llm_relevance_score) if row.llm_relevance_score is not None else None
+    record_display_score_path(_market, _llm)
     return RankedArticleData(
         article_id=row.doc_id,
         title=row.title,
@@ -193,8 +197,8 @@ def _row_to_ranked_article(row: Any, *, include_primary_entity: bool = True) -> 
         source_name=row.source_name,
         routing_tier=row.routing_tier,
         routing_score=float(row.routing_score) if row.routing_score is not None else None,
-        market_impact_score=float(row.market_impact_score) if row.market_impact_score is not None else None,
-        llm_relevance_score=float(row.llm_relevance_score) if row.llm_relevance_score is not None else None,
+        market_impact_score=_market,
+        llm_relevance_score=_llm,
         display_relevance_score=float(row.display_relevance_score),
         day_t0_score=float(row.day_t0_score) if row.day_t0_score is not None else None,
         day_t1_score=float(row.day_t1_score) if row.day_t1_score is not None else None,

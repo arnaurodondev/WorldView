@@ -118,7 +118,7 @@ S1 ──portfolio.watchlist.updated.v1──► S10
 | S5 | **Content Store** | 8005 | `content_store_db` | ✅ Mature | HTML cleaning, 3-stage dedup, canonical IDs, MinIO silver |
 | S6 | **NLP Pipeline** | 8006 | `nlp_db` + `intelligence_db` | ✅ Mature | 8-block enrichment: NER, routing, embedding, entity resolution, LLM extraction |
 | S7 | **Knowledge Graph** | 8007 | `intelligence_db` | 🔄 In-progress | Relation canonicalization, graph materialization, async workers |
-| S8 | **RAG / Chat** | 8008 | `rag_db` | ⏳ PRD-0015 draft | Hybrid retrieval (vector+KG+SQL), HyDE, graph-enriched context, contradiction detection, LLM fallback chain, streaming SSE, citations |
+| S8 | **RAG / Chat** | 8008 | `rag_db` | 🔄 In-progress | Hybrid retrieval (ANN+BM25+KG+SQL via RRF; hybrid default for entity-anchored intents — PLAN-0063 W5-3), HyDE, graph-enriched context, contradiction detection, LLM fallback chain, streaming SSE, citations, retrieval quality metrics + weekly citation-accuracy cron (W5-5) |
 | S9 | **API Gateway** | 8000 | None (stateless) | 🔄 In-progress | BFF entry point, auth, rate limiting, caching, CORS |
 | S10 | **Alert Service** | 8010 | `alert_db` | ✅ Mature | Fan-out alerts via WebSocket, watchlist resolution, dedup, REST API, health, metrics |
 | -- | **intelligence-migrations** | -- | `intelligence_db` (DDL owner) | 🔄 In-progress | Init container: DDL, seeds, exits after completion |

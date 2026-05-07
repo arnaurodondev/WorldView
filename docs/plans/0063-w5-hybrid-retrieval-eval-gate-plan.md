@@ -1711,7 +1711,7 @@ The expectation is that NDCG@10 is **unchanged or improved** (recency signal fee
 
 ---
 
-## 8. Wave W5-5: Observability + Citation-Accuracy Cron + Doc Updates
+## 8. Wave W5-5: Observability + Citation-Accuracy Cron + Doc Updates ✅
 
 **Goal**: Close the W5 loop with observable metrics on retrieval quality, ship the citation-accuracy weekly cron (LLM-as-judge), and update all relevant docs and `.claude-context.md` files. This wave is intentionally light: the heavy lifting is done; W5-5 is what makes the work visible and durable.
 
@@ -1719,6 +1719,7 @@ The expectation is that NDCG@10 is **unchanged or improved** (recency signal fee
 **Blocks**: nothing (final wave)
 **Estimated effort**: 3–4 hours
 **Architecture layer**: observability + docs + cron
+**Status**: **DONE** — 2026-05-07 · 15 new tests pass (5 metrics + 10 citation-accuracy) · ruff + format + mypy clean · 579 rag-chat + 725 nlp-pipeline + 100 architecture tests pass
 
 ---
 
@@ -1917,12 +1918,12 @@ Standard doc updates: each `.md` file gets a section (or extension of an existin
 - Recent doc updates in `docs/services/rag-chat.md` for style consistency
 
 ### Validation Gate for Wave W5-5
-- [ ] 10 new tests pass (5 metrics + 5 citation accuracy)
-- [ ] All 4 metrics visible at `/metrics`
-- [ ] Citation-accuracy cron logs first scoring run
-- [ ] All 7 docs updated
-- [ ] BP-NEW1 added with code example
-- [ ] ruff + mypy clean
+- [x] 15 new tests pass (5 metrics + 10 citation accuracy)
+- [x] All 4 metrics visible at `/metrics`
+- [x] Citation-accuracy cron logs first scoring run
+- [x] All 7 docs updated
+- [x] BP-404 added with code example (prometheus_client _total suffix strip)
+- [x] ruff + mypy clean
 
 ### Break Impact for Wave W5-5
 | Broken File | Why | Fix |
