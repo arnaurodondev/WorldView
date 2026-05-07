@@ -13,8 +13,9 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-# PLAN-0084 D-1: ChunkSearchPort moved to its own module.
+# PLAN-0084 D-1/D-2: ChunkSearchPort and CanonicalEntityPort moved to their own modules.
 # Re-exported here so that existing imports continue to work.
+from nlp_pipeline.application.ports.canonical_entity import CanonicalEntityPort as CanonicalEntityPort
 from nlp_pipeline.application.ports.chunk_search import ChunkSearchPort as ChunkSearchPort
 
 if TYPE_CHECKING:
