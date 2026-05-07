@@ -18,7 +18,9 @@ from uuid import UUID
 class ChunkSearchRequest:
     """Request body for S6 POST /api/v1/search/chunks."""
 
-    # Exactly one of query_text or query_embedding must be set.
+    # Exactly one of query_text or query_embedding must be set when
+    # search_type="ann"; hybrid/lexical may set both (embedding for the ANN
+    # leg, text for the FTS leg).
     query_text: str | None = None
     query_embedding: list[float] | None = None
     top_k: int = 20
@@ -28,6 +30,13 @@ class ChunkSearchRequest:
     date_from: datetime | None = None
     date_to: datetime | None = None
     source_types: list[str] = field(default_factory=list)
+    # PLAN-0063 W5-3: hybrid retrieval mode selector. The port stays loose —
+    # we only carry the value across the wire as a string. S6's pydantic
+    # ChunkSearchRequest schema is the boundary that validates the literal
+    # set {"ann", "lexical", "hybrid"} and rejects unknown values with 422.
+    # The orchestrator at retrieval_orchestrator.py picks the mode inline
+    # based on intent + query_text presence (per L11 — no plan flag).
+    search_type: str = "ann"
 
 
 @dataclass

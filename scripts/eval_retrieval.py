@@ -56,7 +56,31 @@ DEFAULT_OUTPUT_DIR = "results"
 DEFAULT_TOP_K = 20
 DEFAULT_TIMEOUT_SECONDS = 30.0  # BP-235: explicit, not the 5s default
 
-VALID_MODES = ("default", "vector_only", "lexical_only", "hybrid", "hybrid_no_boost")
+VALID_MODES = (
+    "default",
+    "vector_only",
+    "lexical_only",
+    "hybrid",
+    "hybrid_no_boost",
+    # PLAN-0063 W5-3 §0-bis.7 / L9: boost-sweep mode loops over candidate
+    # NLP_PIPELINE_HYBRID_LEXICAL_BOOST values and reports the optimum that
+    # maximises identifier_lookup NDCG@10 without regressing other classes
+    # by ≥0.02. See `run_boost_sweep` below.
+    "hybrid_boost_sweep",
+)
+
+# Candidate boost factors swept by --mode hybrid_boost_sweep. The 1.0 anchor
+# is the no-boost baseline; 1.5 is the spec default; the others give us a
+# cheap empirical curve.
+BOOST_SWEEP_CANDIDATES: tuple[float, ...] = (1.0, 1.2, 1.5, 1.8, 2.0)
+# Per-class regression tolerance for the sweep — a candidate that hurts any
+# non-target class by more than this is rejected even if identifier_lookup
+# improves.
+BOOST_SWEEP_REGRESSION_TOLERANCE: float = 0.02
+# Target class the sweep optimises for. The hybrid retriever's main payoff
+# is on identifier-style queries (PRD IDs, tickers, filing types) — that's
+# the bucket the rare-token analyzer adds the lexical boost on.
+BOOST_SWEEP_TARGET_CLASS: str = "identifier_lookup"
 
 
 # ─── Metric primitives ────────────────────────────────────────────────────────
@@ -539,6 +563,208 @@ async def run_eval(args: argparse.Namespace) -> int:
     return 0
 
 
+# ─── Boost-sweep mode (PLAN-0063 W5-3 §0-bis.7 / L9) ──────────────────────────
+
+
+def select_optimal_boost(
+    per_boost_results: dict[float, dict[str, Any]],
+    *,
+    target_class: str = BOOST_SWEEP_TARGET_CLASS,
+    regression_tolerance: float = BOOST_SWEEP_REGRESSION_TOLERANCE,
+    baseline_boost: float = 1.0,
+) -> tuple[float, dict[str, Any]]:
+    """Pick the boost that maximises target_class NDCG@10 without regressing
+    any other class by ``regression_tolerance`` or more.
+
+    Args:
+        per_boost_results: ``{boost_value: aggregate_dict}`` where each
+            aggregate is in the same shape as ``aggregate()``'s return —
+            i.e. has a ``by_class`` dict with per-class NDCG@10 means.
+        target_class: The query class we're optimising for. Default is
+            ``identifier_lookup``.
+        regression_tolerance: Max acceptable drop on any *other* class
+            relative to the no-boost baseline. Default 0.02.
+        baseline_boost: The "no-boost" anchor used to define what counts as
+            a regression. Default 1.0.
+
+    Returns:
+        ``(picked_boost, decision)`` where decision contains:
+          * ``picked_boost`` — chosen boost
+          * ``target_class``
+          * ``rejected`` — list of {boost, reason} for skipped candidates
+          * ``per_boost_target_ndcg``
+          * ``per_boost_other_class_min_ndcg``
+    """
+    if baseline_boost not in per_boost_results:
+        raise ValueError(f"baseline_boost={baseline_boost} not present in per_boost_results — sweep MUST include it")
+
+    baseline_by_class = per_boost_results[baseline_boost].get("by_class", {})
+
+    # Build the per-boost diagnostics as we go.
+    per_boost_target: dict[float, float] = {}
+    per_boost_other_min: dict[float, float] = {}
+    rejected: list[dict[str, Any]] = []
+
+    candidates: list[tuple[float, float]] = []
+    for boost, agg in per_boost_results.items():
+        by_class = agg.get("by_class", {})
+        target_ndcg = float(by_class.get(target_class, {}).get("ndcg_at_10", 0.0))
+        per_boost_target[boost] = target_ndcg
+
+        # Compute the worst per-class drop relative to baseline (excluding
+        # the target class itself — the target's lift is the upside we
+        # accept the trade-off for).
+        worst_drop = 0.0
+        worst_class = None
+        for cls, vals in by_class.items():
+            if cls == target_class:
+                continue
+            base_val = float(baseline_by_class.get(cls, {}).get("ndcg_at_10", 0.0))
+            cur_val = float(vals.get("ndcg_at_10", 0.0))
+            drop = base_val - cur_val
+            if drop > worst_drop:
+                worst_drop = drop
+                worst_class = cls
+        per_boost_other_min[boost] = worst_drop
+
+        if worst_drop >= regression_tolerance:
+            rejected.append(
+                {
+                    "boost": boost,
+                    "reason": (
+                        f"regresses {worst_class!r} by {worst_drop:.4f} (>= tolerance {regression_tolerance:.4f})"
+                    ),
+                }
+            )
+        else:
+            candidates.append((boost, target_ndcg))
+
+    if not candidates:
+        # No candidate is acceptable; fall back to the baseline.
+        picked = baseline_boost
+    else:
+        # Pick the candidate with the highest target NDCG; tie-break by
+        # smaller boost to favour lower variance.
+        candidates.sort(key=lambda kv: (-kv[1], kv[0]))
+        picked = candidates[0][0]
+
+    decision: dict[str, Any] = {
+        "picked_boost": picked,
+        "target_class": target_class,
+        "regression_tolerance": regression_tolerance,
+        "rejected": rejected,
+        "per_boost_target_ndcg": per_boost_target,
+        "per_boost_other_class_max_drop": per_boost_other_min,
+    }
+    return picked, decision
+
+
+async def run_boost_sweep(args: argparse.Namespace) -> int:
+    """Sweep the lexical boost factor and pick the optimum.
+
+    Limitation
+    ----------
+    The script can't restart the rag-chat container — env vars are read at
+    process start, so simply ``os.environ[...]`` here will NOT change the
+    behaviour of the rag-chat service we're calling. The supported
+    workflows are:
+
+      1. Operator restarts rag-chat between sweep runs with a different
+         ``NLP_PIPELINE_HYBRID_LEXICAL_BOOST`` env value, and re-runs the
+         sweep loop **once per boost** (manual). The script writes one
+         per-boost result file, then ``select_optimal_boost`` aggregates
+         them at the end.
+      2. CI harness uses the per-boost JSONs that already live under
+         ``results/`` (e.g. one per pipeline run) and feeds them in via
+         ``--boost-sweep-inputs``.
+
+    A future ``--boost-override`` body field on
+    ``POST /v1/internal/retrieve`` would let this loop run end-to-end in
+    one process; that's deferred (see follow-up notes in the wave commit).
+
+    Output: ``results/boost_sweep_<UTC-ts>.json`` containing
+    ``{per_boost: {boost: aggregate}, decision: <select_optimal_boost output>}``.
+    """
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resolve the per-boost inputs. If --boost-sweep-inputs was provided we
+    # use those JSON files directly (CI workflow); otherwise we run one
+    # eval per boost in-process (single-container workflow that requires
+    # a running rag-chat with the *current* boost — tests should patch
+    # this loop, not call into HTTP).
+    per_boost: dict[float, dict[str, Any]] = {}
+    if args.boost_sweep_inputs:
+        for spec in args.boost_sweep_inputs:
+            boost_str, _, path_str = spec.partition(":")
+            try:
+                boost = float(boost_str)
+            except ValueError:
+                print(f"ERROR: bad --boost-sweep-inputs spec {spec!r}", file=sys.stderr)
+                return 1
+            agg = json.loads(Path(path_str).read_text())
+            # The reused file may be a full eval payload — we need just the
+            # ``by_class`` + ``summary`` slice.
+            slim = {"summary": agg.get("summary", {}), "by_class": agg.get("by_class", {})}
+            per_boost[boost] = slim
+    else:
+        for boost in BOOST_SWEEP_CANDIDATES:
+            os.environ["NLP_PIPELINE_HYBRID_LEXICAL_BOOST"] = str(boost)
+            print(
+                f"INFO: running eval with boost={boost} (NB: rag-chat must be restarted to pick this up)",
+                file=sys.stderr,
+            )
+            rc = await run_eval(args)
+            if rc != 0:
+                print(f"WARN: run_eval returned {rc} for boost={boost} — skipping", file=sys.stderr)
+                continue
+            # The latest written eval file under output_dir is ours; pick
+            # it up by mtime and slim it down. We do not recompute here —
+            # the values already live in the JSON.
+            files = sorted(output_dir.glob("eval_*.json"), key=lambda p: p.stat().st_mtime)
+            if not files:
+                continue
+            agg = json.loads(files[-1].read_text())
+            per_boost[boost] = {
+                "summary": agg.get("summary", {}),
+                "by_class": agg.get("by_class", {}),
+            }
+
+    if 1.0 not in per_boost:
+        print(
+            "ERROR: boost-sweep needs the 1.0 baseline result; rerun with --boost-sweep-inputs including it.",
+            file=sys.stderr,
+        )
+        return 1
+
+    picked, decision = select_optimal_boost(per_boost)
+
+    out_path = output_dir / f"boost_sweep_{datetime.now(tz=UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
+    out_path.write_text(
+        json.dumps(
+            {
+                "candidates": list(per_boost.keys()),
+                "per_boost": {str(k): v for k, v in per_boost.items()},
+                "decision": decision,
+            },
+            indent=2,
+            default=str,
+        )
+    )
+    print(f"wrote {out_path}", file=sys.stderr)
+
+    # Print a one-line summary table for the operator.
+    print()
+    print(f"{'boost':>6} {'target_ndcg':>14} {'worst_other_drop':>18}")
+    for b in sorted(per_boost.keys()):
+        target = decision["per_boost_target_ndcg"].get(b, 0.0)
+        drop = decision["per_boost_other_class_max_drop"].get(b, 0.0)
+        marker = "  <-- picked" if b == picked else ""
+        print(f"{b:>6.2f} {target:>14.4f} {drop:>18.4f}{marker}")
+
+    return 0
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--rag-url", default=os.getenv("RAG_CHAT_URL", DEFAULT_RAG_URL))
@@ -563,6 +789,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Recorded in the report header; not used at runtime.",
     )
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--boost-sweep-inputs",
+        action="append",
+        default=None,
+        help=(
+            "PLAN-0063 W5-3 boost-sweep input. Format: '<boost>:<path-to-eval-json>'. "
+            "Repeatable. When set, --mode hybrid_boost_sweep aggregates these files "
+            "instead of running eval_retrieval per-boost. The 1.0 baseline MUST be present."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -572,6 +808,8 @@ def main() -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    if args.mode == "hybrid_boost_sweep":
+        return asyncio.run(run_boost_sweep(args))
     return asyncio.run(run_eval(args))
 
 

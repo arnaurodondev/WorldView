@@ -268,3 +268,85 @@ def test_dcg_decreases_with_lower_rank_for_same_total_gain() -> None:
     assert b > 0
     # Sanity: log2-discounted gain at rank 3 is gain / log2(4) = (2^3 - 1) / 2 = 3.5
     assert b == pytest.approx(7.0 / math.log2(4))
+
+
+# ─── Boost-sweep mode tests (PLAN-0063 W5-3 §0-bis.7 / L9) ────────────────────
+
+
+def _agg(*, identifier: float, comparison: float = 0.5, factual: float = 0.5) -> dict:
+    """Minimal aggregate dict shaped like aggregate()'s return."""
+    return {
+        "summary": {"ndcg_at_10": {"mean": (identifier + comparison + factual) / 3}},
+        "by_class": {
+            "identifier_lookup": {"ndcg_at_10": identifier},
+            "comparison": {"ndcg_at_10": comparison},
+            "factual_lookup": {"ndcg_at_10": factual},
+        },
+    }
+
+
+def test_boost_sweep_picks_max_identifier_lookup_without_regression() -> None:
+    """When 1.5 lifts target without regressing others → picked."""
+    per_boost = {
+        1.0: _agg(identifier=0.40, comparison=0.50, factual=0.50),  # baseline
+        1.2: _agg(identifier=0.45, comparison=0.50, factual=0.50),
+        1.5: _agg(identifier=0.55, comparison=0.495, factual=0.498),  # tiny drop ok
+        1.8: _agg(identifier=0.52, comparison=0.49, factual=0.49),
+    }
+    picked, decision = eval_retrieval.select_optimal_boost(per_boost)
+    assert picked == 1.5
+    assert decision["target_class"] == "identifier_lookup"
+
+
+def test_boost_sweep_rejects_boost_that_regresses_other_class() -> None:
+    """boost=2.0 has best target but tanks comparison → rejected."""
+    per_boost = {
+        1.0: _agg(identifier=0.40, comparison=0.60, factual=0.50),  # baseline
+        1.5: _agg(identifier=0.50, comparison=0.59, factual=0.49),
+        2.0: _agg(identifier=0.65, comparison=0.55, factual=0.50),  # 0.05 drop on comparison
+    }
+    picked, decision = eval_retrieval.select_optimal_boost(per_boost)
+    assert picked != 2.0
+    assert any(r["boost"] == 2.0 for r in decision["rejected"])
+    assert any("comparison" in r["reason"] for r in decision["rejected"] if r["boost"] == 2.0)
+
+
+def test_boost_sweep_writes_output(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """run_boost_sweep with --boost-sweep-inputs writes the expected JSON shape."""
+    import asyncio
+
+    base_path = tmp_path / "agg_1_0.json"
+    boost15_path = tmp_path / "agg_1_5.json"
+    base_path.write_text(json.dumps(_agg(identifier=0.40, comparison=0.50, factual=0.50)))
+    boost15_path.write_text(json.dumps(_agg(identifier=0.55, comparison=0.50, factual=0.50)))
+
+    args = eval_retrieval.parse_args(
+        [
+            "--mode",
+            "hybrid_boost_sweep",
+            "--output-dir",
+            str(tmp_path),
+            "--boost-sweep-inputs",
+            f"1.0:{base_path}",
+            "--boost-sweep-inputs",
+            f"1.5:{boost15_path}",
+        ]
+    )
+    rc = asyncio.run(eval_retrieval.run_boost_sweep(args))
+    assert rc == 0
+
+    # Expect a boost_sweep_*.json file with the right top-level keys.
+    sweep_files = list(tmp_path.glob("boost_sweep_*.json"))
+    assert len(sweep_files) == 1
+    payload = json.loads(sweep_files[0].read_text())
+    assert "candidates" in payload
+    assert "per_boost" in payload
+    assert "decision" in payload
+    assert payload["decision"]["picked_boost"] == 1.5
+
+
+def test_boost_sweep_baseline_required() -> None:
+    """select_optimal_boost without baseline_boost in inputs → ValueError."""
+    per_boost = {1.5: _agg(identifier=0.55)}
+    with pytest.raises(ValueError):
+        eval_retrieval.select_optimal_boost(per_boost)

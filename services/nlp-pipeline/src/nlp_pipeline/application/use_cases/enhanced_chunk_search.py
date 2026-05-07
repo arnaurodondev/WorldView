@@ -15,12 +15,16 @@ stored as MinIO objects.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import hashlib
 from datetime import date
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from nlp_pipeline.application.blocks.rare_token import analyze as _analyze_rare_tokens
+from nlp_pipeline.application.use_cases._rrf import DEFAULT_K as _RRF_K
+from nlp_pipeline.application.use_cases._rrf import reciprocal_rank_fuse
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -37,6 +41,12 @@ _log = get_logger(__name__)  # type: ignore[no-any-return]
 
 _EMBED_CACHE_TTL = 3600  # 1 hour
 _ENTITY_MIN_CONFIDENCE = 0.45
+
+# PLAN-0063 W5-3 §0-bis.7 — when the query is too short the lexical leg has
+# almost no signal (one-token FTS queries return everything that contains
+# the token, which is noise). Below this threshold we silently fall back to
+# pure ANN.
+_HYBRID_MIN_TOKENS = 3
 
 # ── Domain types ──────────────────────────────────────────────────────────────
 
@@ -112,6 +122,7 @@ class EnhancedChunkSearchUseCase:
         valkey: Any | None = None,  # redis.asyncio.Redis
         embedding_client: EmbeddingClient | None = None,
         chunk_text_store: ChunkTextStorePort | None = None,
+        lexical_boost: float = 1.5,
     ) -> None:
         self._ann = chunk_ann_repo
         self._meta = source_metadata_repo
@@ -119,6 +130,10 @@ class EnhancedChunkSearchUseCase:
         self._valkey = valkey
         self._emb = embedding_client
         self._chunk_text_store = chunk_text_store
+        # PLAN-0063 W5-3 L9: tunable adaptive lexical boost factor. Default
+        # 1.5 from §0-bis.7; the eval harness's --mode hybrid_boost_sweep
+        # picks the optimum value per dataset.
+        self._lexical_boost = lexical_boost
 
     async def execute(
         self,
@@ -132,13 +147,81 @@ class EnhancedChunkSearchUseCase:
         date_from: date | None = None,
         date_to: date | None = None,
         source_types: list[str] | None = None,
+        search_type: str = "ann",
     ) -> tuple[list[EnrichedChunkResult], int, str]:
         """Execute enriched chunk search.
 
         Returns ``(results, total_searched, embedding_model)``.
 
-        Exactly one of *query_text* or *query_embedding* must be provided.
+        ``search_type`` selects the retrieval strategy (PLAN-0063 W5-3):
+
+        * ``"ann"`` (default): vector ANN over HNSW indexes — needs exactly
+          one of ``query_text`` / ``query_embedding``. Backwards-compatible
+          path; the wave is a strict superset.
+        * ``"lexical"``: Postgres FTS via tsv_english + tsv_simple GREATEST.
+          Needs ``query_text``. Used by the eval harness and the boost-sweep
+          mode for diagnostic purposes.
+        * ``"hybrid"``: runs both legs in parallel and fuses with RRF (L9
+          adaptive boost when the query has rare tokens). Needs
+          ``query_text``; ``query_embedding`` is optional but recommended
+          (skips the embed round-trip).
+
+        Embedding model is reported as ``"hybrid+lexical"`` /
+        ``"lexical-only"`` for the non-ANN paths so the response header is
+        truthful — the lexical leg never runs an embedder.
         """
+        if search_type == "ann":
+            return await self._execute_ann(
+                query_text=query_text,
+                query_embedding=query_embedding,
+                granularity=granularity,
+                top_k=top_k,
+                min_score=min_score,
+                include_entities=include_entities,
+                date_from=date_from,
+                date_to=date_to,
+                source_types=source_types,
+            )
+        if search_type == "lexical":
+            return await self._execute_lexical(
+                query_text=query_text or "",
+                top_k=top_k,
+                min_score=min_score,
+                include_entities=include_entities,
+                date_from=date_from,
+                date_to=date_to,
+                source_types=source_types,
+            )
+        if search_type == "hybrid":
+            return await self._execute_hybrid(
+                query_text=query_text or "",
+                query_embedding=query_embedding,
+                granularity=granularity,
+                top_k=top_k,
+                min_score=min_score,
+                include_entities=include_entities,
+                date_from=date_from,
+                date_to=date_to,
+                source_types=source_types,
+            )
+        raise ValueError(f"unknown search_type: {search_type!r}")
+
+    # ── Strategy implementations ─────────────────────────────────────────────
+
+    async def _execute_ann(
+        self,
+        *,
+        query_text: str | None,
+        query_embedding: list[float] | None,
+        granularity: str,
+        top_k: int,
+        min_score: float,
+        include_entities: bool,
+        date_from: date | None,
+        date_to: date | None,
+        source_types: list[str] | None,
+    ) -> tuple[list[EnrichedChunkResult], int, str]:
+        """Vector ANN path — original B-3 behaviour."""
         vec, embedding_model = await self._resolve_embedding(query_text, query_embedding)
 
         raw_results, total_searched = await self._ann.ann_search(
@@ -154,6 +237,148 @@ class EnhancedChunkSearchUseCase:
         if not raw_results:
             return [], total_searched, embedding_model
 
+        results = await self._enrich_raw_results(raw_results, include_entities=include_entities)
+        return results, total_searched, embedding_model
+
+    async def _execute_lexical(
+        self,
+        *,
+        query_text: str,
+        top_k: int,
+        min_score: float,
+        include_entities: bool,
+        date_from: date | None,
+        date_to: date | None,
+        source_types: list[str] | None,
+    ) -> tuple[list[EnrichedChunkResult], int, str]:
+        """Postgres FTS path — used by the eval harness and lexical-only debug.
+
+        Calls into ``ChunkANNRepository.lexical_search`` (W5-2). The
+        BP-180 CAST guards live inside the repo — nothing to do here.
+        """
+        raw_rows, total = await self._ann.lexical_search(
+            query_text=query_text,
+            mode="both",
+            top_k=top_k,
+            min_score=min_score,
+            date_from=date_from,
+            date_to=date_to,
+            source_types=source_types or None,
+        )
+        if not raw_rows:
+            return [], total, "lexical-only"
+
+        # The lexical_search rows come back without ``granularity`` set
+        # (chunk-only in W5); inject it so _enrich_raw_results doesn't KeyError.
+        for r in raw_rows:
+            r.setdefault("granularity", "chunk")
+
+        results = await self._enrich_raw_results(raw_rows, include_entities=include_entities)
+        return results, total, "lexical-only"
+
+    async def _execute_hybrid(
+        self,
+        *,
+        query_text: str,
+        query_embedding: list[float] | None,
+        granularity: str,
+        top_k: int,
+        min_score: float,
+        include_entities: bool,
+        date_from: date | None,
+        date_to: date | None,
+        source_types: list[str] | None,
+    ) -> tuple[list[EnrichedChunkResult], int, str]:
+        """Hybrid ANN + lexical path with RRF + adaptive boost (L9)."""
+        # Short-query fallback: 1-2 token FTS queries are too noisy.
+        if len(query_text.split()) < _HYBRID_MIN_TOKENS:
+            _log.info(  # type: ignore[no-any-return]
+                "hybrid_short_query_fallback_to_ann",
+                token_count=len(query_text.split()),
+            )
+            return await self._execute_ann(
+                query_text=query_text,
+                query_embedding=query_embedding,
+                granularity=granularity,
+                top_k=top_k,
+                min_score=min_score,
+                include_entities=include_entities,
+                date_from=date_from,
+                date_to=date_to,
+                source_types=source_types,
+            )
+
+        # Run both legs concurrently so total latency = max(ann, lex), not
+        # sum. Each repo call already enforces its own timeout via the
+        # session — no explicit asyncio.wait_for at this layer (BP-235 only
+        # bites on httpx clients).
+        ann_task = asyncio.create_task(
+            self._execute_ann(
+                query_text=query_text,
+                query_embedding=query_embedding,
+                granularity=granularity,
+                top_k=top_k,
+                min_score=min_score,
+                include_entities=include_entities,
+                date_from=date_from,
+                date_to=date_to,
+                source_types=source_types,
+            )
+        )
+        lex_task = asyncio.create_task(
+            self._execute_lexical(
+                query_text=query_text,
+                top_k=top_k,
+                min_score=min_score,
+                include_entities=include_entities,
+                date_from=date_from,
+                date_to=date_to,
+                source_types=source_types,
+            )
+        )
+        # gather() with default return_exceptions=False → either failure
+        # propagates and aborts the request. The orchestrator at S8 already
+        # wraps this with a circuit breaker, so a hard fail is the right
+        # signal upward.
+        (ann_results, ann_total, ann_model), (lex_results, lex_total, _lex_model) = await asyncio.gather(
+            ann_task,
+            lex_task,
+        )
+
+        # Adaptive boost: when the query has identifier-style rare tokens,
+        # weight the lexical ranking up. The boost is tunable (L9).
+        analysis = _analyze_rare_tokens(query_text)
+        lex_weight = self._lexical_boost if analysis.has_rare_token else 1.0
+        weights = (1.0, lex_weight)
+
+        fused = reciprocal_rank_fuse(
+            [ann_results, lex_results],
+            k=_RRF_K,
+            key=lambda r: r.chunk_id,
+            weights=weights,
+        )
+
+        # Truncate to top_k and drop the score (callers re-rank downstream).
+        # `total_searched` reports the union — this is approximate but
+        # matches what the response field is intended to convey.
+        results = [item for item, _score in fused[:top_k]]
+        union_total = ann_total + lex_total
+        return results, union_total, "hybrid+lexical:" + ann_model
+
+    # ── Result assembly (shared by all paths) ────────────────────────────────
+
+    async def _enrich_raw_results(
+        self,
+        raw_results: list[dict[str, Any]],
+        *,
+        include_entities: bool,
+    ) -> list[EnrichedChunkResult]:
+        """Hydrate raw repo rows with metadata, entities and chunk text.
+
+        Factored out of ``_execute_ann`` so the lexical and hybrid paths
+        share the same enrichment logic and produce identical
+        EnrichedChunkResult shapes — that's what makes RRF dedup safe.
+        """
         # ── Citation metadata ────────────────────────────────────────────────
         doc_ids = list({r["doc_id"] for r in raw_results})
         meta_map = await self._meta.batch_get(doc_ids)
@@ -202,14 +427,13 @@ class EnhancedChunkSearchUseCase:
                 if doc_meta
                 else SourceMetadata()
             )
-            # text_map wins; fall back to heading_path (sections) or ""
             text = text_map.get(r["chunk_id"]) or r.get("text") or ""
             results.append(
                 EnrichedChunkResult(
                     chunk_id=r["chunk_id"],
                     doc_id=r["doc_id"],
                     section_id=r.get("section_id"),
-                    granularity=r["granularity"],
+                    granularity=r.get("granularity", "chunk"),
                     text=text,
                     score=float(r["score"]),
                     source_metadata=src,
@@ -218,8 +442,7 @@ class EnhancedChunkSearchUseCase:
                     heading_path=r.get("heading_path"),
                 )
             )
-
-        return results, total_searched, embedding_model
+        return results
 
     async def _fetch_chunk_texts(self, raw_results: list[dict[str, Any]]) -> dict[UUID, str]:
         """Fetch chunk text for results that have a ``chunk_text_key``.
