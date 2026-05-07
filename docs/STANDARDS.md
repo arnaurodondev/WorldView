@@ -1535,6 +1535,7 @@ The following patterns are **explicitly forbidden** and constitute review blocke
 | Per-request auth (`user_id`, `tenant_id`, `internal_jwt`, `entity_context`) in singleton `__init__` | Singleton holds `None` forever after first request → silent auth strip / cross-tenant leak risk (R30, BP-406) | Split into `<Class>Factory` (singleton) + `<Class>` (per-request); factory exposes `for_request(*, user_id, tenant_id, jwt, entity_context, ...) -> Class` |
 | Per-tool `trust_weight` field in `capability_manifest.yaml` (or any other duplicate ranking-weight table) | Two sources of truth drift over time → ranking quality differs between tool-use path and classical path; tied to BP-* drift class | Reference `source_type` only in manifests; let `TrustScorer` (libs/contracts `SOURCE_AUTHORITY` × recency_decay × corroboration × extraction_confidence) compute final weight at retrieval time |
 | Pydantic `BaseModel` for domain entities | Convention drift (worldview domain layer = frozen dataclasses); 5–10× slower construction; pydantic stays in API layer | `@dataclass(frozen=True, kw_only=True)` for domain; `BaseModel` only in `api/schemas.py` |
+| Hand-rolled `is_duplicate` / `mark_processed` per consumer (returns `False` / `pass` or ad-hoc Valkey logic) | Divergent dedup behaviour; missing at-least-once fallback; inconsistent TTL policies; dialect drift across services (R9, BP-415) | `ValkeyDedupMixin` from `libs/messaging.kafka.consumer.dedup`; enforced by `tests/architecture/test_consumer_dedup_mixin_enforcement.py` (CONSUMER-DEDUP-001) |
 
 ---
 
