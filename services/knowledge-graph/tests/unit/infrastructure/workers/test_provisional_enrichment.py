@@ -1,7 +1,12 @@
 """Unit tests for ProvisionalEnrichmentWorker (Worker 13E).
 
-Key invariant under test: entity.dirtied.v1 is produced AFTER session.commit(),
-not before — so no orphaned Kafka messages if the transaction rolls back.
+Key invariant under test: entity.dirtied.v1 is enqueued to the outbox AFTER
+session.commit(), not before — so no orphaned events if the transaction rolls back.
+
+D-014 (PLAN-0084 QA fix): entity.dirtied.v1 now uses the durable outbox pattern
+(OutboxRepository.append) instead of fire-and-forget direct Kafka produce.  Tests
+that previously asserted on producer.produce_bytes now assert on
+OutboxRepository.append (patched via the module import path).
 
 ARCH-003 fix: run() now uses read→release→I/O→acquire→write pattern.
 Phase 1 reads pending rows + marks 'processing' + commits (releases session).
@@ -65,6 +70,8 @@ def _make_session_with_rows(rows: list) -> tuple[AsyncMock, MagicMock]:
 
 
 def _make_producer() -> MagicMock:
+    # D-014: direct_producer is deprecated; kept for constructor backward-compat.
+    # Tests that formerly tracked produce_bytes now patch OutboxRepository.append.
     producer = MagicMock()
     producer.produce_bytes = MagicMock()
     return producer
@@ -89,19 +96,24 @@ def _make_pending_row(retry_count: int = 0) -> tuple:
 
 
 class TestProvisionalEnrichmentWorkerNoPendingRows:
-    async def test_no_pending_rows_no_produce(self) -> None:
-        """When no pending rows, producer.produce_bytes is never called."""
+    async def test_no_pending_rows_no_outbox_append(self) -> None:
+        """When no pending rows, OutboxRepository.append is never called.
+
+        D-014: outbox replaces direct produce; with an empty batch the outbox
+        transaction block is skipped entirely.
+        """
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
 
         _session, factory = _make_session_with_rows([])
-        producer = _make_producer()
 
-        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
-        await worker.run()
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock())
+        with patch("knowledge_graph.infrastructure.workers.provisional_enrichment.OutboxRepository") as mock_outbox_cls:
+            mock_outbox_cls.return_value.append = AsyncMock()
+            await worker.run()
 
-        producer.produce_bytes.assert_not_called()
+        mock_outbox_cls.return_value.append.assert_not_called()
 
     async def test_no_pending_rows_still_commits(self) -> None:
         """run() commits in Phase 1 (read) even with no rows to process."""
@@ -110,9 +122,8 @@ class TestProvisionalEnrichmentWorkerNoPendingRows:
         )
 
         session, factory = _make_session_with_rows([])
-        producer = _make_producer()
 
-        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock())
         await worker.run()
 
         # Phase 1 commits even when there are no rows (releases FOR UPDATE lock)
@@ -120,18 +131,29 @@ class TestProvisionalEnrichmentWorkerNoPendingRows:
 
 
 class TestProvisionalEnrichmentWorkerPostCommitOrdering:
-    async def test_dirtied_produced_after_commit(self) -> None:
-        """entity.dirtied.v1 is produced AFTER Phase 3 session.commit(), never before."""
+    async def test_dirtied_enqueued_after_commit(self) -> None:
+        """entity.dirtied.v1 outbox row is written AFTER Phase 3 session.commit().
+
+        D-014: the outbox INSERT for entity.dirtied.v1 now happens in a separate
+        outbox session opened after all per-row Phase 3 commits complete.
+
+        Call order:
+          recovery-commit (1), Phase1-commit (2), Phase3-commit (3),
+          outbox-append (4), outbox-commit (5).
+
+        We verify that outbox-append (4) comes after Phase3-commit (3).
+        The shared session mock means all commits (including the outbox session
+        commit) are tracked together; we therefore assert append > 3rd commit.
+        """
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
 
         commit_called_at: list[int] = []
-        produce_called_at: list[int] = []
+        outbox_called_at: list[int] = []
         call_counter: list[int] = [0]
 
         session, factory = _make_session_with_rows([_make_pending_row()])
-        producer = _make_producer()
 
         original_commit = session.commit
 
@@ -142,13 +164,12 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
 
         session.commit = _tracked_commit
 
-        def _tracked_produce(**kwargs: object) -> None:
+        # Patch OutboxRepository.append to track call ordering.
+        async def _tracked_append(*_args: object, **_kwargs: object) -> None:
             call_counter[0] += 1
-            produce_called_at.append(call_counter[0])
+            outbox_called_at.append(call_counter[0])
 
-        producer.produce_bytes = _tracked_produce
-
-        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock())
 
         # Patch Phase 2 (LLM) and Phase 3 (DB persist) methods
         with (
@@ -159,31 +180,35 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
             ),
             patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
             patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
+            patch("knowledge_graph.infrastructure.workers.provisional_enrichment.OutboxRepository") as mock_outbox_cls,
         ):
+            mock_outbox_cls.return_value.append = AsyncMock(side_effect=_tracked_append)
             await worker.run()
 
-        # Recovery sweep commit + Phase 1 commit + Phase 3 commit = 3 commits
-        assert len(commit_called_at) == 3
-        assert len(produce_called_at) == 1
-        # Produce must happen after the LAST commit (Phase 3)
-        assert (
-            commit_called_at[-1] < produce_called_at[0]
-        ), "entity.dirtied.v1 must be produced AFTER Phase 3 commit, not before"
+        # recovery-commit + Phase1-commit + Phase3-commit = 3 commits before outbox append
+        assert len(outbox_called_at) == 1
+        assert len(commit_called_at) >= 3
+        # The 3rd commit is Phase 3; outbox append must come after it.
+        phase3_commit_pos = commit_called_at[2]  # index 2 = 3rd commit
+        assert phase3_commit_pos < outbox_called_at[0], (
+            "entity.dirtied.v1 outbox row must be written AFTER Phase 3 commit, not before. "
+            f"Phase3-commit at {phase3_commit_pos}, outbox-append at {outbox_called_at[0]}"
+        )
 
-    async def test_commit_failure_suppresses_produce(self) -> None:
-        """When Phase 3 commit raises, producer.produce_bytes is never called.
+    async def test_commit_failure_suppresses_outbox(self) -> None:
+        """When Phase 3 commit raises, OutboxRepository.append is never called.
 
         BP-390 (per-row session fix): the RuntimeError is now caught inside the
         per-row except block and handled gracefully (retry update attempted),
         so worker.run() no longer raises.  The critical invariant remains:
-        produce_bytes must NOT be called when the commit for a given row failed.
+        the outbox INSERT must NOT happen when the entity commit failed (the
+        entity_id is not added to entity_ids_to_dirty).
         """
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
 
         session, factory = _make_session_with_rows([_make_pending_row()])
-        producer = _make_producer()
 
         # Recovery sweep commit (1) + Phase 1 commit (2) succeed; Phase 3 (3) fails.
         commit_count = [0]
@@ -197,7 +222,7 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
 
         session.commit = _fail_on_phase3
 
-        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock())
 
         with (
             patch.object(
@@ -207,20 +232,20 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
             ),
             patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
             patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
+            patch("knowledge_graph.infrastructure.workers.provisional_enrichment.OutboxRepository") as mock_outbox_cls,
         ):
-            # Per-row session isolation: commit failure is caught and suppressed,
-            # worker.run() returns normally instead of propagating the exception.
+            mock_outbox_cls.return_value.append = AsyncMock()
+            # Per-row session isolation: commit failure is caught and suppressed.
             await worker.run()
 
-        # Produce must NOT be called — the entity commit failed so the row is
-        # not in entity_ids_to_dirty.
-        producer.produce_bytes.assert_not_called()
+        # Outbox INSERT must NOT be called — entity commit failed, no dirty ID.
+        mock_outbox_cls.return_value.append.assert_not_called()
 
-    async def test_dirty_payload_contains_entity_id(self) -> None:
-        """Produced entity.dirtied.v1 payload includes the entity_id in Confluent-Avro format.
+    async def test_dirty_outbox_payload_contains_entity_id(self) -> None:
+        """Outbox row for entity.dirtied.v1 contains valid Confluent-Avro payload.
 
-        PLAN-0062 R28 update: the emitted bytes are now Confluent-Avro
-        wire-format (5-byte header + Avro body), not JSON.
+        D-014: the outbox append receives (topic, partition_key, payload_avro).
+        Verify the payload is valid Confluent-Avro with the correct entity_id.
         """
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
@@ -232,11 +257,13 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
         from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 
         _session, factory = _make_session_with_rows([_make_pending_row()])
-        producer = _make_producer()
 
-        worker = ProvisionalEnrichmentWorker(
-            factory, AsyncMock(), direct_producer=producer, entity_dirtied_topic="entity.dirtied.v1"
-        )
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), entity_dirtied_topic="entity.dirtied.v1")
+
+        captured_calls: list[dict] = []
+
+        async def _capture_append(topic: str, partition_key: str, payload_avro: bytes) -> None:
+            captured_calls.append({"topic": topic, "partition_key": partition_key, "payload_avro": payload_avro})
 
         with (
             patch.object(
@@ -246,19 +273,27 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
             ),
             patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
             patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
+            patch("knowledge_graph.infrastructure.workers.provisional_enrichment.OutboxRepository") as mock_outbox_cls,
         ):
+            mock_outbox_cls.return_value.append = AsyncMock(side_effect=_capture_append)
             await worker.run()
 
-        producer.produce_bytes.assert_called_once()
-        kwargs = producer.produce_bytes.call_args.kwargs
-        assert kwargs["topic"] == "entity.dirtied.v1"
-        assert kwargs["key"] == str(_ENTITY_ID).encode()
-        assert kwargs["value"][:1] == b"\x00", "Expected Confluent-Avro wire format (magic byte 0x00)"
-        payload = deserialize_confluent_avro(_ENTITY_DIRTIED_SCHEMA_PATH, kwargs["value"])
+        assert len(captured_calls) == 1, f"Expected 1 outbox append, got {len(captured_calls)}"
+        call = captured_calls[0]
+        assert call["topic"] == "entity.dirtied.v1"
+        assert call["partition_key"] == str(_ENTITY_ID)
+        raw = call["payload_avro"]
+        assert raw[:1] == b"\x00", "Expected Confluent-Avro wire format (magic byte 0x00)"
+        payload = deserialize_confluent_avro(_ENTITY_DIRTIED_SCHEMA_PATH, raw)
         assert payload["entity_id"] == str(_ENTITY_ID)
 
-    async def test_multiple_entities_all_produced_after_commit(self) -> None:
-        """All dirty IDs accumulated before commit — then produced in batch after."""
+    async def test_multiple_entities_all_enqueued_after_commits(self) -> None:
+        """All dirty IDs are accumulated across per-row Phase 3 commits, then
+        written to the outbox in one batch after all rows are processed.
+
+        D-014: one outbox session is opened for the entire batch of dirty IDs
+        (not one session per entity).
+        """
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
@@ -267,24 +302,14 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
         entity_id_2 = UUID("01234567-89ab-7def-8012-bbbbbbbbbbbb")
         rows = [_make_pending_row(), _make_pending_row()]
 
-        session, factory = _make_session_with_rows(rows)
-        producer = _make_producer()
+        _session, factory = _make_session_with_rows(rows)
 
-        call_order: list[str] = []
-        original_commit = session.commit
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock())
 
-        async def _track_commit():
-            call_order.append("commit")
-            await original_commit()
+        partition_keys_appended: list[str] = []
 
-        session.commit = _track_commit
-
-        def _track_produce(**kwargs: object) -> None:
-            call_order.append("produce")
-
-        producer.produce_bytes = _track_produce
-
-        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
+        async def _capture_append(topic: str, partition_key: str, payload_avro: bytes) -> None:
+            partition_keys_appended.append(partition_key)
 
         # Phase 2: extract returns profiles for both rows
         extract_profiles = [
@@ -298,54 +323,72 @@ class TestProvisionalEnrichmentWorkerPostCommitOrdering:
             patch.object(worker, "_extract_entity_profile", side_effect=extract_profiles),
             patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
             patch.object(worker, "_persist_enrichment", side_effect=persist_ids),
+            patch("knowledge_graph.infrastructure.workers.provisional_enrichment.OutboxRepository") as mock_outbox_cls,
         ):
+            mock_outbox_cls.return_value.append = AsyncMock(side_effect=_capture_append)
             await worker.run()
 
-        # Last commit (Phase 3) appears before both produces
-        last_commit_idx = len(call_order) - 1 - call_order[::-1].index("commit")
-        produce_indices = [i for i, v in enumerate(call_order) if v == "produce"]
-        assert len(produce_indices) == 2
-        assert all(last_commit_idx < idx for idx in produce_indices)
+        # Both entity IDs must have been enqueued to the outbox.
+        assert str(entity_id_1) in partition_keys_appended
+        assert str(entity_id_2) in partition_keys_appended
+        assert len(partition_keys_appended) == 2
 
 
 class TestProvisionalEnrichmentWorkerFailedEnrichment:
-    async def test_llm_failure_skips_dirty_produce(self) -> None:
-        """When _extract_entity_profile returns None (LLM failed), no dirty event is produced."""
+    async def test_llm_failure_skips_dirty_outbox(self) -> None:
+        """When _extract_entity_profile returns None (LLM failed), no outbox row is written.
+
+        D-014: no entity_id is added to entity_ids_to_dirty, so the outbox
+        transaction block is skipped entirely.
+        """
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
 
         _session, factory = _make_session_with_rows([_make_pending_row()])
-        producer = _make_producer()
 
-        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock())
 
-        with patch.object(worker, "_extract_entity_profile", return_value=None):
+        with (
+            patch.object(worker, "_extract_entity_profile", return_value=None),
+            patch("knowledge_graph.infrastructure.workers.provisional_enrichment.OutboxRepository") as mock_outbox_cls,
+        ):
+            mock_outbox_cls.return_value.append = AsyncMock()
             await worker.run()
 
-        producer.produce_bytes.assert_not_called()
+        mock_outbox_cls.return_value.append.assert_not_called()
 
-    async def test_enrichment_exception_skips_dirty_produce(self) -> None:
-        """When _extract_entity_profile raises, the row is logged as failed, not dirtied."""
+    async def test_enrichment_exception_skips_dirty_outbox(self) -> None:
+        """When _extract_entity_profile raises, the row is logged as failed, not dirtied.
+
+        D-014: no entity_id is added to entity_ids_to_dirty on exception path.
+        """
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
 
         _session, factory = _make_session_with_rows([_make_pending_row()])
-        producer = _make_producer()
 
-        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock())
 
-        with patch.object(worker, "_extract_entity_profile", side_effect=RuntimeError("LLM timeout")):
+        with (
+            patch.object(worker, "_extract_entity_profile", side_effect=RuntimeError("LLM timeout")),
+            patch("knowledge_graph.infrastructure.workers.provisional_enrichment.OutboxRepository") as mock_outbox_cls,
+        ):
+            mock_outbox_cls.return_value.append = AsyncMock()
             # run() should NOT re-raise — it logs and continues
             await worker.run()
 
-        producer.produce_bytes.assert_not_called()
+        mock_outbox_cls.return_value.append.assert_not_called()
 
 
 class TestProvisionalEnrichmentWorkerNoProducer:
     async def test_none_producer_completes_without_error(self) -> None:
-        """When direct_producer=None, run() completes without AttributeError."""
+        """When direct_producer=None, run() completes without AttributeError.
+
+        D-014: direct_producer is deprecated and no longer used in run().
+        Passing None is always safe — entity.dirtied.v1 goes through the outbox.
+        """
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
@@ -362,7 +405,9 @@ class TestProvisionalEnrichmentWorkerNoProducer:
             ),
             patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
             patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
+            patch("knowledge_graph.infrastructure.workers.provisional_enrichment.OutboxRepository") as mock_outbox_cls,
         ):
+            mock_outbox_cls.return_value.append = AsyncMock()
             # Should not raise even though producer is None
             await worker.run()
 
@@ -522,18 +567,19 @@ class TestBatchLimitAndConcurrency:
 # ---------------------------------------------------------------------------
 
 
-class TestProvisionalEnrichmentWorkerKafkaResilience:
-    async def test_kafka_error_does_not_crash(self) -> None:
-        """produce_bytes raising must not propagate out of run() (P-3)."""
+class TestProvisionalEnrichmentWorkerOutboxResilience:
+    """D-014: outbox append failure must not crash the worker (same resilience as
+    the former fire-and-forget path)."""
+
+    async def test_outbox_error_does_not_crash(self) -> None:
+        """OutboxRepository.append raising must not propagate out of run() (P-3)."""
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
 
         _session, factory = _make_session_with_rows([_make_pending_row()])
-        producer = _make_producer()
-        producer.produce_bytes = MagicMock(side_effect=RuntimeError("kafka down"))
 
-        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock())
 
         with (
             patch.object(
@@ -543,21 +589,21 @@ class TestProvisionalEnrichmentWorkerKafkaResilience:
             ),
             patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
             patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
+            patch("knowledge_graph.infrastructure.workers.provisional_enrichment.OutboxRepository") as mock_outbox_cls,
         ):
-            # Must not raise even though produce_bytes raises
+            mock_outbox_cls.return_value.append = AsyncMock(side_effect=RuntimeError("outbox DB error"))
+            # Must not raise even though outbox append raises
             await worker.run()
 
-    async def test_kafka_error_logs_warning(self) -> None:
-        """produce_bytes raising emits provisional_enrichment_dirtied_emit_failed warning (P-3)."""
+    async def test_outbox_error_logs_warning(self) -> None:
+        """OutboxRepository.append raising emits provisional_enrichment_dirtied_outbox_failed warning."""
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
 
         _session, factory = _make_session_with_rows([_make_pending_row()])
-        producer = _make_producer()
-        producer.produce_bytes = MagicMock(side_effect=RuntimeError("kafka down"))
 
-        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock())
 
         with (
             patch.object(
@@ -567,12 +613,14 @@ class TestProvisionalEnrichmentWorkerKafkaResilience:
             ),
             patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
             patch.object(worker, "_persist_enrichment", return_value=_ENTITY_ID),
+            patch("knowledge_graph.infrastructure.workers.provisional_enrichment.OutboxRepository") as mock_outbox_cls,
             patch("knowledge_graph.infrastructure.workers.provisional_enrichment.logger") as mock_logger,
         ):
+            mock_outbox_cls.return_value.append = AsyncMock(side_effect=RuntimeError("outbox DB error"))
             await worker.run()
 
         warning_events = [c.args[0] for c in mock_logger.warning.call_args_list]
-        assert "provisional_enrichment_dirtied_emit_failed" in warning_events
+        assert "provisional_enrichment_dirtied_outbox_failed" in warning_events
 
 
 # ---------------------------------------------------------------------------
@@ -588,9 +636,8 @@ class TestProvisionalEnrichmentSuccessCounter:
         )
 
         _session, factory = _make_session_with_rows([_make_pending_row()])
-        producer = _make_producer()
 
-        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock())
 
         with (
             patch.object(
@@ -603,7 +650,9 @@ class TestProvisionalEnrichmentSuccessCounter:
             patch(
                 "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_enrichment_success_total"
             ) as mock_counter,
+            patch("knowledge_graph.infrastructure.workers.provisional_enrichment.OutboxRepository") as mock_outbox_cls,
         ):
+            mock_outbox_cls.return_value.append = AsyncMock()
             await worker.run()
 
         mock_counter.inc.assert_called_once()
@@ -630,13 +679,21 @@ class TestProvisionalEnrichmentSuccessCounter:
 
 
 # ---------------------------------------------------------------------------
-# P-1: init warning when direct_producer is None (ProvisionalEnrichmentWorker)
+# P-1: direct_producer is deprecated (D-014) — no init warning any more
 # ---------------------------------------------------------------------------
 
 
-class TestInitWarningNoProducerEnrichmentWorker:
-    def test_provisional_enrichment_worker_warns_when_no_producer(self) -> None:
-        """When direct_producer=None, a WARNING is logged at init time."""
+class TestDirectProducerBackwardCompat:
+    """D-014: direct_producer is accepted for backward-compat but is no longer
+    used in run().  No init-time warning is emitted; the entity.dirtied.v1 event
+    goes through the outbox regardless of whether direct_producer is provided."""
+
+    def test_none_producer_no_warning_at_init(self) -> None:
+        """direct_producer=None must NOT log a warning at init time (D-014).
+
+        Previously a warning was logged; now the parameter is silently accepted
+        because it is deprecated and the outbox handles delivery.
+        """
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
@@ -650,13 +707,12 @@ class TestInitWarningNoProducerEnrichmentWorker:
                 direct_producer=None,
             )
 
-        assert any(
-            e.get("event") == "provisional_enrichment_worker_no_producer" and e.get("log_level") == "warning"
-            for e in cap
-        ), f"Expected warning log not found in: {cap}"
+        assert not any(
+            e.get("event") == "provisional_enrichment_worker_no_producer" for e in cap
+        ), f"Unexpected no_producer warning found: {cap}"
 
-    def test_provisional_enrichment_worker_no_warning_when_producer_present(self) -> None:
-        """When direct_producer is provided, no 'no_producer' warning is logged."""
+    def test_producer_present_no_warning_at_init(self) -> None:
+        """direct_producer provided must also produce no 'no_producer' warning."""
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
         )
@@ -799,6 +855,36 @@ class TestRecoverStaleProcessingRows:
         assert params["max_retries"] == 5
 
         session.commit.assert_awaited_once()
+
+    async def test_recovery_uses_processing_started_at_coalesce(self) -> None:
+        """D-016: recovery WHERE clause must use COALESCE(processing_started_at, created_at).
+
+        Using ``created_at`` alone causes false recovery of recently-started rows
+        that have been in the queue for a long time (BP-417).  The COALESCE falls
+        back to ``created_at`` for rows that pre-date the migration (NULL column).
+        """
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([])
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), max_retries=5)
+
+        session = AsyncMock()
+        session.commit = AsyncMock()
+        result_mock = MagicMock()
+        result_mock.rowcount = 0
+        session.execute = AsyncMock(return_value=result_mock)
+
+        await worker._recover_stale_processing_rows(session)
+
+        call_args = session.execute.call_args
+        sql_text = str(call_args.args[0])
+        assert "COALESCE(processing_started_at, created_at)" in sql_text, (
+            "Recovery WHERE clause must use COALESCE(processing_started_at, created_at) "
+            "to avoid false recovery of recently-started rows (D-016 / BP-417). "
+            f"Actual SQL: {sql_text}"
+        )
 
     async def test_recovery_sweep_sets_next_retry_at(self) -> None:
         """The recovery UPDATE must persist a ``next_retry_at`` deadline so that
@@ -1122,7 +1208,11 @@ class TestPhase3PerRowSessionIsolation:
         """Per-row session: a failure on row 1 does not prevent row 2 from committing.
 
         The worker processes each row's Phase 3 _persist_enrichment independently.
-        Row 2's entity_id must appear in entity_ids_to_dirty even when row 1 raises.
+        Row 2's entity_id must appear in entity_ids_to_dirty and be written to the
+        outbox even when row 1 raises.
+
+        D-014: we track via OutboxRepository.append (outbox) instead of
+        produce_bytes (deprecated direct produce).
         """
         from knowledge_graph.infrastructure.workers.provisional_enrichment import (
             ProvisionalEnrichmentWorker,
@@ -1131,19 +1221,16 @@ class TestPhase3PerRowSessionIsolation:
         entity_id_2 = UUID("01234567-89ab-7def-8012-cccccccccccc")
         rows = [_make_pending_row(), _make_pending_row()]
         _session, factory = _make_session_with_rows(rows)
-        producer = _make_producer()
 
         # _persist_enrichment: row 1 raises, row 2 returns a valid UUID.
         persist_side_effects = [RuntimeError("persist failed on row 1"), entity_id_2]
 
-        produced_ids: list[bytes] = []
+        outbox_partition_keys: list[str] = []
 
-        def _track_produce(**kwargs: object) -> None:
-            produced_ids.append(kwargs.get("key", b""))  # type: ignore[arg-type]
+        async def _capture_append(topic: str, partition_key: str, payload_avro: bytes) -> None:
+            outbox_partition_keys.append(partition_key)
 
-        producer.produce_bytes = _track_produce
-
-        worker = ProvisionalEnrichmentWorker(factory, AsyncMock(), direct_producer=producer)
+        worker = ProvisionalEnrichmentWorker(factory, AsyncMock())
 
         with (
             patch.object(
@@ -1153,14 +1240,16 @@ class TestPhase3PerRowSessionIsolation:
             ),
             patch.object(worker, "_compute_embedding", return_value=[0.1, 0.2]),
             patch.object(worker, "_persist_enrichment", side_effect=persist_side_effects),
+            patch("knowledge_graph.infrastructure.workers.provisional_enrichment.OutboxRepository") as mock_outbox_cls,
         ):
+            mock_outbox_cls.return_value.append = AsyncMock(side_effect=_capture_append)
             # Must not raise — per-row exception is logged and skipped.
             await worker.run()
 
-        # Row 2's entity_id must have been emitted (committed and dirtied).
-        assert any(
-            str(entity_id_2).encode() == key for key in produced_ids
-        ), f"Row 2 entity_id {entity_id_2} not in produced keys: {produced_ids}"
+        # Row 2's entity_id must have been written to the outbox.
+        assert (
+            str(entity_id_2) in outbox_partition_keys
+        ), f"Row 2 entity_id {entity_id_2} not in outbox partition keys: {outbox_partition_keys}"
 
 
 # ---------------------------------------------------------------------------
