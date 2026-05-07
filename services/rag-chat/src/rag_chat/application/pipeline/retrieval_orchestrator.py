@@ -266,6 +266,7 @@ class ParallelRetrievalOrchestrator:
                     ),
                     doc_id=_try_uuid(r.doc_id),
                     published_at=r.published_at,
+                    source_type=r.source_type,
                 )
             )
         return items

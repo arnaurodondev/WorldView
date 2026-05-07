@@ -3,9 +3,9 @@ id: PLAN-0063
 prd: docs/specs/0034-mvp-launch-readiness-program.md
 prd_section: "§3 Tier 1 — FR-T1-2; §6 Workstream W5; §7 Sprint Calendar Week 3"
 title: "W5 — Retrieval Substrate + L1 Eval Foundation (Hybrid ANN+BM25+RRF + Adaptive Lexical + Contextual-Retrieval Experiment)"
-status: draft
+status: in-progress
 created: 2026-05-03
-updated: 2026-05-05
+updated: 2026-05-07
 plans: 1
 waves: 7
 tasks: 28
@@ -1516,7 +1516,9 @@ If none of the four reach ≥0.05 lift on the global metric, the wave is **block
 
 ---
 
-## 7. Wave W5-4: Recency Hardening + Routing-Tier Audit
+## 7. Wave W5-4: Recency Hardening + Routing-Tier Audit ✅
+
+**Status**: **DONE** — 2026-05-07 · 8 recency unit tests + 2 routing persistence tests = 10 new tests pass · 564 rag-chat + 725 nlp-pipeline + 100 architecture tests pass · ruff + format + mypy clean. **Audit result**: `routing_decisions.final_routing_tier` and `processing_path` ARE written correctly — no code fix needed, only test coverage added. `eval_post_hybrid.json` created as properly-named W5-3 result artifact. Gate enablement deferred (pre-conditions: 2nd-reviewer audit of 41 grade-3 rows + re-capture baseline — documented in `docs/audits/2026-05-07-w5-3-baseline-capture.md`).
 
 **Goal**: Replace uniform recency decay with source-specific rates (the only routing/recency signal not already externalised), audit `routing_decisions.final_routing_tier` write path post-novelty, and re-run the eval to confirm no NDCG@10 regression. The originally-drafted "5 Stuck Signals" framing was based on a stale codebase model — the audit (2026-05-03) confirmed that:
 
@@ -1690,11 +1692,11 @@ The expectation is that NDCG@10 is **unchanged or improved** (recency signal fee
 - `services/nlp-pipeline/src/nlp_pipeline/application/blocks/routing.py` (verify which signals are externalised — for §0 cross-plan decision #5 sanity check)
 
 ### Validation Gate for Wave W5-4
-- [ ] All 10 new tests pass (8 recency + 2 routing decision)
-- [ ] Existing test suites pass
-- [ ] ruff + mypy clean across rag-chat + nlp-pipeline
-- [ ] `results/eval_post_routing.json` shows no regression
-- [ ] CI workflow from T-W5-1-04 passes on this wave's PR
+- [x] All 10 new tests pass (8 recency + 2 routing decision)
+- [x] Existing test suites pass
+- [x] ruff + mypy clean across rag-chat + nlp-pipeline
+- [ ] `results/eval_post_routing.json` shows no regression — **DEFERRED**: `retrieve_only` sorts by `item.score` (raw retrieval), not `fusion_score`, so recency changes don't affect NDCG@10; eval re-run requires live stack and will be run post-deploy
+- [x] CI workflow from T-W5-1-04 passes on this wave's PR (always-on jobs: validate-golden-set, unit-tests, lint)
 
 ### Break Impact for Wave W5-4
 | Broken File | Why | Fix |
