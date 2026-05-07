@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from rag_chat.application.metrics.prometheus import rag_circuit_breaker_open
+
 if TYPE_CHECKING:
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
@@ -62,6 +64,10 @@ class SourceCircuitBreaker:
         failure_threshold: Failures within the window required to trip OPEN.
         failure_window_seconds: Rolling window for counting failures.
         cool_down_seconds: How long the breaker stays OPEN before allowing a probe.
+            PLAN-0084 A-2: default lowered from 3600 → 120s (F-X04 fix).
+        probe_ttl_seconds: TTL for the SETNX probe key that prevents stampede
+            on cooldown expiry (F-X01 fix).  Only one caller wins the probe slot;
+            others see the breaker still OPEN until the probe TTL expires.
     """
 
     def __init__(
@@ -71,42 +77,63 @@ class SourceCircuitBreaker:
         *,
         failure_threshold: int = 3,
         failure_window_seconds: int = 120,
-        cool_down_seconds: int = 3600,
+        cool_down_seconds: int = 120,
+        probe_ttl_seconds: int = 5,
     ) -> None:
         self._valkey = valkey
         self._source = source_name
         self._threshold = failure_threshold
         self._window = failure_window_seconds
         self._cooldown = cool_down_seconds
+        self._probe_ttl = probe_ttl_seconds
 
         self._failures_key = f"rag:cb:{source_name}:failures"
         self._state_key = f"rag:cb:{source_name}:state"
+        # F-X01 probe key: exactly one caller wins SETNX after cooldown expiry.
+        self._probe_key = f"rag:cb:{source_name}:probe"
 
     async def is_open(self) -> bool:
         """Return ``True`` if the source should be skipped.
 
-        - ``state`` key present with value ``"open"`` -> True (skip source).
-        - ``state`` key absent -> False (CLOSED or HALF_OPEN; allow probe).
-        - Valkey unreachable -> False (fail-open, never block on cache outage).
+        State machine:
+        - ``state`` key present ("open") → True; breaker is tripped.
+        - ``state`` key absent AND probe SETNX wins → False; this caller is
+          the probe.  Others that lose the SETNX still see True until the
+          probe TTL expires, preventing stampede on cooldown expiry (F-X01).
+        - Valkey unreachable → False (fail-open; never block on cache outage).
         """
         try:
             state = await self._valkey.get(self._state_key)
+            if state == "open":
+                return True
+            # Cooldown expired (state key absent) — attempt to claim probe slot
+            # via SETNX.  Only one concurrent caller wins; the rest return True
+            # (backed off) until the probe TTL expires naturally.
+            won = await self._valkey.set_nx(self._probe_key, "1", ex=self._probe_ttl)
+            if won:
+                log.info("circuit_breaker_probe_admitted", source=self._source)  # type: ignore[no-any-return]
+                return False
+            return True
         except Exception:
             log.warning("cb_valkey_unavailable", source=self._source, op="is_open")
             return False
-        return state == "open"
 
     async def record_success(self) -> None:
         """Reset failure state — transition HALF_OPEN/CLOSED -> CLOSED.
 
-        Clears both the state key and the failures ZSET so the breaker
-        starts fresh.  Best-effort — Valkey errors are swallowed.
+        F-X05 fix (Option A): Only the state key and probe key are deleted.
+        The failures ZSET is NOT deleted — it expires naturally via its TTL
+        (set equal to the failure_window_seconds on each ``record_failure`` call).
+        Deleting the ZSET here would race with a concurrent failure writer
+        that already did ZADD but hasn't called ZCARD yet, causing the failure
+        count to start from scratch instead of the correct value.
+
+        Best-effort — Valkey errors are swallowed.
         """
         try:
-            async with self._valkey.pipeline(transaction=False) as pipe:
-                pipe.delete(self._state_key)
-                pipe.delete(self._failures_key)
-                await pipe.execute()
+            await self._valkey.delete(self._state_key)
+            await self._valkey.delete(self._probe_key)
+            rag_circuit_breaker_open.labels(source=self._source).set(0)
         except Exception:
             log.warning("cb_valkey_unavailable", source=self._source, op="record_success")
 
@@ -134,6 +161,8 @@ class SourceCircuitBreaker:
                 # TTL expires the key vanishes — is_open() returns False and
                 # one probe request is allowed through (implicit HALF_OPEN).
                 await self._valkey.set(self._state_key, "open", ttl=self._cooldown)
+                # PLAN-0084 A-2 T-A-2-04: expose breaker state as a Prometheus gauge.
+                rag_circuit_breaker_open.labels(source=self._source).set(1)
                 log.warning(
                     "cb_tripped_open",
                     source=self._source,
