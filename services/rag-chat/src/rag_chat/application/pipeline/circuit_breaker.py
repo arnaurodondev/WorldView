@@ -118,6 +118,25 @@ class SourceCircuitBreaker:
             log.warning("cb_valkey_unavailable", source=self._source, op="is_open")
             return False
 
+    async def reconcile_gauge(self) -> None:
+        """Sync the Prometheus gauge with the actual Valkey CB state on startup.
+
+        D-006: On service restart the Prometheus gauge is re-initialised to 0
+        (healthy) even if the CB was ``open`` in Valkey before restart.  The
+        state key persists across restarts (TTL = cool_down_seconds), so the
+        gauge shows a false-healthy state until the first ``record_failure`` or
+        ``record_success`` call.  Calling this method once during the lifespan
+        startup corrects the gauge immediately.
+
+        Best-effort — errors are swallowed and logged at WARNING.
+        """
+        try:
+            state = await self._valkey.get(self._state_key)
+            rag_circuit_breaker_open.labels(source=self._source).set(1 if state == "open" else 0)
+            log.debug("cb_gauge_reconciled", source=self._source, state=state or "closed")  # type: ignore[no-any-return]
+        except Exception:
+            log.warning("cb_gauge_reconcile_failed", source=self._source)  # type: ignore[no-any-return]
+
     async def record_success(self) -> None:
         """Reset failure state — transition HALF_OPEN/CLOSED -> CLOSED.
 
@@ -145,14 +164,30 @@ class SourceCircuitBreaker:
         except Exception:
             log.warning("cb_valkey_unavailable", source=self._source, op="record_success")
 
-    async def record_failure(self) -> None:
+    async def record_failure(self, error: Exception | None = None) -> None:
         """Add a failure timestamp; trip to OPEN if threshold is reached.
+
+        S-003: 4xx client errors (``ProviderClientError`` with ``status_code < 500``)
+        do NOT count toward the failure threshold.  A bad prompt or quota error is a
+        caller fault, not an indication that the upstream service is unhealthy.
+        Only 5xx / network failures should trip the circuit breaker.
 
         The ZADD → ZREMRANGEBYSCORE → ZCARD → EXPIRE sequence runs inside a
         single Lua script (BP-403) so two concurrent failures cannot both
         observe count below the threshold. Best-effort — Valkey errors are
         swallowed (fail-open).
         """
+        # Lazy import to avoid circular dependency: domain.errors ← application.pipeline
+        from rag_chat.domain.errors import ProviderClientError
+
+        if isinstance(error, ProviderClientError) and error.status_code < 500:
+            log.debug(
+                "cb_skip_4xx_client_error",
+                source=self._source,
+                status_code=error.status_code,
+            )
+            return
+
         try:
             now = time.time()
             cutoff = now - self._window

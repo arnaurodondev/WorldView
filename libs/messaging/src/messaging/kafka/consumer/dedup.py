@@ -32,6 +32,21 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# D-001: Prometheus counter for Valkey-error fail-open events.
+# Incremented every time is_duplicate() catches a Valkey error and returns
+# False (at-least-once fallback).  Silent fallbacks are invisible without this
+# counter; dashboards should alert when this value spikes.
+try:
+    import prometheus_client as _prom
+
+    _dedup_valkey_fallback_total = _prom.Counter(
+        "messaging_dedup_valkey_fallback_total",
+        "Number of times dedup check failed open due to Valkey error",
+        ["consumer_prefix"],
+    )
+except ImportError:
+    _dedup_valkey_fallback_total = None  # type: ignore[assignment]
+
 
 class ValkeyDedupMixin:
     """Standard idempotency mixin for BaseKafkaConsumer subclasses.
@@ -69,6 +84,13 @@ class ValkeyDedupMixin:
     R9 (RULES.md / STANDARDS.md §12): no cross-service DB access — Valkey is
     the correct shared-state store for dedup keys, NOT a PostgreSQL table.
     STANDARDS.md §3.11: all consumers MUST use this mixin.
+
+    WARNING (multi-tenant): dedup keys are global per consumer group, not per tenant.
+    For tenant-isolated deployments, subclasses should override is_duplicate() /
+    mark_processed() to incorporate tenant_id into the key:
+    ``f"{prefix}:{tenant_id}:{event_id}"``.
+    This is NOT a current concern (single-tenant deployment) but IS a future footgun
+    if the platform migrates to multi-tenant without updating these keys.  (S-002)
     """
 
     # Subclasses inject this in __init__.  None ⟹ at-least-once fallback.
@@ -79,7 +101,15 @@ class ValkeyDedupMixin:
     # attribute so that key collisions between consumer classes are impossible.
     _dedup_prefix: str
 
-    # TTL in seconds applied to every dedup key (default: 24 hours).
+    # D-003: TTL in seconds applied to every dedup key (default: 24 hours).
+    # Must exceed the maximum expected consumer pause duration.
+    #
+    # WARNING (D-003): If consumers are paused longer than this TTL (e.g. a 25h
+    # maintenance window), Kafka re-delivery of the same event_id will NOT be
+    # detected as a duplicate — the key will have expired.  The Kafka topic
+    # retention for ``nlp.article.enriched.v1`` is 7 days (604800s).  If consumers
+    # are expected to be paused for more than 24h, increase this value to match
+    # the topic retention.  Increase to 604800 for parity with the 7-day retention.
     _dedup_ttl_seconds: ClassVar[int] = 86400
 
     async def is_duplicate(self, event_id: str) -> bool:
@@ -107,6 +137,10 @@ class ValkeyDedupMixin:
         try:
             return bool(await self._dedup_client.exists(key))
         except Exception:
+            # D-001: increment fallback counter before logging so the metric is
+            # always recorded even if the logger call raises (defensive ordering).
+            if _dedup_valkey_fallback_total is not None:
+                _dedup_valkey_fallback_total.labels(consumer_prefix=self._dedup_prefix).inc()
             logger.warning(  # type: ignore[no-any-return]
                 "dedup.valkey_check_failed",
                 event_id=event_id,
