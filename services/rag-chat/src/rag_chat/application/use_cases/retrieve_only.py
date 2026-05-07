@@ -5,7 +5,7 @@ candidates are produced (Steps 0/3/4/5/5A-5I) and stops — no fusion, no
 reranking, no LLM, no persistence. Used by `scripts/eval_retrieval.py` to
 measure retrieval quality (NDCG@10, MRR, P@5, Recall@20) over the golden set.
 
-Why a separate use case instead of reusing ChatOrchestrator: the chat path
+Why a separate use case instead of reusing ChatOrchestratorUseCase: the chat path
 depends on a write UoW, persistence, rate limiter, completion cache, and the
 LLM provider chain — all irrelevant for retrieval-only eval and most expensive
 to set up. This use case takes only the deps strictly required to produce

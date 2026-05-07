@@ -100,7 +100,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 5. Provider negative cache
     app.state.provider_cache = {}  # type: ignore[assignment]
 
-    # 6. Build and wire the ChatOrchestrator
+    # 6. Build and wire the ChatOrchestratorUseCase
     _wire_orchestrator(app, settings, valkey_client)
 
     # 7. Build and wire the GenerateBriefingUseCase
@@ -129,7 +129,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: ValkeyClient) -> None:
-    """Build and attach the ChatOrchestrator to app.state."""
+    """Build and attach the ChatOrchestratorUseCase to app.state."""
 
     from rag_chat.application.caching.completion_cache import CompletionCache
     from rag_chat.application.caching.rate_limiter import RateLimiter
@@ -148,7 +148,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     from rag_chat.application.pipeline.retrieval_orchestrator import ParallelRetrievalOrchestrator
     from rag_chat.application.pipeline.retrieval_plan_builder import RetrievalPlanBuilder
     from rag_chat.application.security.input_validator import InputValidator
-    from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestrator
+    from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
     from rag_chat.application.use_cases.get_thread import GetThreadUseCase
     from rag_chat.application.use_cases.persist_chat import ChatPersistenceUseCase
     from rag_chat.infrastructure.clients.s1_client import S1Client
@@ -365,7 +365,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         else {},
     )
 
-    orchestrator = ChatOrchestrator(
+    orchestrator = ChatOrchestratorUseCase(
         validator=_validator,
         rate_limiter=RateLimiter(valkey=valkey_client, limit=settings.rate_limit_per_tenant),
         cache=CompletionCache(valkey=valkey_client),
@@ -402,7 +402,7 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
     """Build and attach GenerateBriefingUseCase (with BriefingContextGatherer) to app.state.
 
     Creates separate client instances for the BriefingContextGatherer rather than
-    re-using the ChatOrchestrator's clients.  WHY separate: the orchestrator clients
+    re-using the ChatOrchestratorUseCase's clients.  WHY separate: the orchestrator clients
     were created inside _wire_orchestrator() without being stored on app.state, so
     they are not accessible here.  Creating new instances is lightweight (no persistent
     connections — httpx clients open connections lazily per-request).
@@ -430,7 +430,7 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
     context_gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
 
     app.state.briefing_uc = GenerateBriefingUseCase(
-        llm_chain=app.state.llm_chain,  # same chain as ChatOrchestrator
+        llm_chain=app.state.llm_chain,  # same chain as ChatOrchestratorUseCase
         valkey=valkey_client,
         context_gatherer=context_gatherer,
     )

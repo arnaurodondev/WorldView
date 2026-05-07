@@ -1,6 +1,7 @@
-"""Chat orchestrator - top-level pipeline coordinator (T-F-4-02).
+"""Chat orchestrator use case - top-level pipeline coordinator (T-F-4-02).
 
 Chains all 13 pipeline steps for streaming (/chat/stream) and sync (/chat) paths.
+The class is named ChatOrchestratorUseCase for consistency with other use cases in this layer.
 """
 
 from __future__ import annotations
@@ -137,7 +138,7 @@ class _ThinkBlockFilter:
         return result
 
 
-class ChatOrchestrator:
+class ChatOrchestratorUseCase:
     """Coordinate all pipeline steps for a single chat request.
 
     Steps (PRD §6.7):
