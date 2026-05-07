@@ -8,7 +8,7 @@ query_class. Writes a structured JSON + CSV report under results/.
 
 Usage:
     python scripts/eval_retrieval.py \\
-        --rag-url http://localhost:8003 \\
+        --rag-url http://localhost:8008 \\
         --golden tests/eval/golden/queries.jsonl \\
         [--baseline results/baseline_pre_hybrid.json] \\
         [--query-embeddings tests/eval/golden/query_embeddings.parquet] \\
@@ -57,7 +57,7 @@ import structlog
 logger = logging.getLogger("eval_retrieval")
 _log = structlog.get_logger(__name__)
 
-DEFAULT_RAG_URL = "http://localhost:8003"
+DEFAULT_RAG_URL = "http://localhost:8008"  # rag-chat port (market-data is :8003)
 DEFAULT_GOLDEN = "tests/eval/golden/queries.jsonl"
 DEFAULT_OUTPUT_DIR = "results"
 DEFAULT_TOP_K = 20
