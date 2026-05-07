@@ -31,7 +31,7 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 
 def _get_orchestrator(request: Request) -> Any:
-    """Retrieve ChatOrchestrator from app state."""
+    """Retrieve ChatOrchestratorUseCase from app state."""
     return request.app.state.chat_orchestrator
 
 
