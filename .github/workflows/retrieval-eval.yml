@@ -152,6 +152,35 @@ jobs:
       # The full-eval path needs a live rag-chat at $RAG_CHAT_URL.
       # In W5-3 the gate enables; in W5-1 we scaffold the call so the
       # workflow shape is reviewable.
+
+      # PLAN-0084 E-1: Smoke probe — fast-fail before the expensive eval run.
+      # Sends a single retrieve request and checks that at least one candidate
+      # is returned.  If the endpoint is down or the index is empty the probe
+      # exits 1 with a diagnostic message, preventing a misleading "all queries
+      # failed" eval result.
+      - name: Smoke probe — verify endpoint before eval
+        env:
+          RAG_CHAT_URL: ${{ vars.RAG_CHAT_URL || 'http://localhost:8003' }}
+          EVAL_INTERNAL_JWT: ${{ secrets.EVAL_INTERNAL_JWT }}
+        run: |
+          # Build the curl command; include the internal JWT header when set.
+          PROBE_RESPONSE=$(curl --silent --fail-with-body \
+            --max-time 15 \
+            --header "Content-Type: application/json" \
+            ${EVAL_INTERNAL_JWT:+--header "X-Internal-JWT: ${EVAL_INTERNAL_JWT}"} \
+            --data '{"query_text":"Apple Q4 earnings","top_k":5}' \
+            "${RAG_CHAT_URL}/v1/internal/retrieve" 2>&1) || {
+              echo "SMOKE PROBE FAILED: could not reach ${RAG_CHAT_URL}. Check service health before running eval."
+              exit 1
+            }
+
+          N_CANDIDATES=$(echo "${PROBE_RESPONSE}" | jq -r '.n_candidates // 0')
+          if [ "${N_CANDIDATES}" -lt 1 ]; then
+            echo "SMOKE PROBE FAILED: endpoint returned 0 candidates. Check that rag-chat is running and indexed. Aborting eval."
+            exit 1
+          fi
+          echo "Smoke probe OK — ${N_CANDIDATES} candidates returned."
+
       - name: Run eval (gate informational — W5-3 wired baseline; W5-4 enables enforcement)
         env:
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
