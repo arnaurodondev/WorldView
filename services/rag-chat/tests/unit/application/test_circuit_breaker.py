@@ -388,3 +388,65 @@ async def test_concurrent_failure_after_success_does_not_corrupt() -> None:
 
     # Below threshold — state key should NOT be set
     valkey.set.assert_not_awaited()
+
+
+# ── PLAN-0084 QA Wave 6: F-003 / F-004 ───────────────────────────────────────
+
+
+@pytest.mark.unit
+async def test_cb_probe_re_admitted_after_probe_ttl_expiry() -> None:
+    """After probe_ttl_seconds elapses, the next is_open() must admit a second probe.
+
+    F-003: verifies that probe re-admission works when set_nx returns True again
+    (simulating that the probe key TTL has elapsed and the slot is available).
+    """
+    # State key absent → HALF_OPEN; set_nx returns True (probe slot won)
+    valkey = _make_valkey(get_return=None, set_nx_return=True)
+    cb = SourceCircuitBreaker(valkey, "f003_probe_reentry", probe_ttl_seconds=5)
+
+    # First probe: admitted (set_nx wins)
+    result1 = await cb.is_open()
+    assert result1 is False, "First probe in HALF_OPEN must be admitted (is_open=False)"
+
+    # Simulate probe TTL elapsed: set_nx wins again
+    valkey.set_nx.reset_mock()
+    valkey.set_nx.return_value = True
+
+    result2 = await cb.is_open()
+    assert result2 is False, "Re-admission after probe TTL expiry must work (is_open=False)"
+    valkey.set_nx.assert_awaited_once()
+
+
+@pytest.mark.unit
+async def test_cb_half_open_reopens_after_failed_probe() -> None:
+    """A record_failure() call while the probe is active must be counted.
+
+    F-004: verifies that a probe failure (record_failure after HALF_OPEN probe
+    admission) increments the counter via the Lua script. The CB re-opens if
+    the counter reaches the threshold.
+    """
+    lua_call_count = 0
+
+    async def _track_lua(script: object, keys: list, args: list) -> int:
+        nonlocal lua_call_count
+        lua_call_count += 1
+        return 3  # at threshold → circuit opens
+
+    valkey = _make_valkey(lua_return=3)
+    valkey.execute_lua_script.side_effect = _track_lua
+    valkey.script_load = AsyncMock(return_value="sha-mock")
+
+    cb = SourceCircuitBreaker(valkey, "f004_probe_fail", failure_threshold=3, cool_down_seconds=120)
+
+    # Probe admitted (HALF_OPEN)
+    await cb.is_open()
+
+    # Probe fails
+    await cb.record_failure()
+
+    assert lua_call_count >= 1, "record_failure must invoke the Lua script"
+
+    # Now simulate the next is_open with state still present → circuit is OPEN
+    valkey_open = _make_valkey(get_return="open", set_nx_return=False)
+    cb2 = SourceCircuitBreaker(valkey_open, "f004_probe_fail_check", failure_threshold=3)
+    assert await cb2.is_open() is True, "CB must remain OPEN after failed probe"
