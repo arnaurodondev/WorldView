@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from rag_chat.application.ports.message_repository import MessageRepository
 from rag_chat.domain.entities.conversation import Message
@@ -64,6 +64,24 @@ class SqlAlchemyMessageRepository(MessageRepository):
         # Re-sort ascending (chronological) after fetching latest N
         rows.sort(key=lambda r: r.created_at)
         return [_row_to_entity(row) for row in rows]
+
+    async def sample_recent_with_citations(self, n: int) -> list[Message]:
+        """Return up to *n* recent assistant messages that have citations, sampled randomly from last 7 days."""
+        from datetime import UTC, datetime, timedelta
+
+        cutoff = datetime.now(tz=UTC) - timedelta(days=7)
+        result = await self._session.execute(
+            select(MessageModel)
+            .where(
+                MessageModel.role == "assistant",
+                MessageModel.created_at >= cutoff,
+                MessageModel.citations.isnot(None),
+                func.jsonb_array_length(MessageModel.citations) > 0,
+            )
+            .order_by(func.random())
+            .limit(n)
+        )
+        return [_row_to_entity(row) for row in result.scalars()]
 
 
 def _row_to_entity(row: MessageModel) -> Message:

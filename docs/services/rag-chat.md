@@ -323,6 +323,35 @@ services/rag-chat/src/rag_chat/
 | `rag_thread_count` | gauge | `tenant_id` |
 | `rag_contradiction_surfaced_total` | counter | — |
 | `rag_injection_blocked_total` | counter | — |
+| `rag_retrieval_score_distribution` | histogram | `source` |
+| `rag_source_contribution_total` | counter | `source` |
+| `rag_reranker_position_change` | gauge | — |
+| `rag_citation_accuracy` | gauge | — |
+
+#### Retrieval Quality Metrics (PLAN-0063 W5-5)
+
+`rag_retrieval_score_distribution` — histogram of per-chunk fusion scores (buckets `[0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9, 1.0]`), labelled by `source_type`. Emitted in `retrieval_orchestrator._fetch_chunks`.
+
+`rag_source_contribution_total` — counter incremented once per query per source that contributed ≥1 chunk to fusion. Together with the histogram, reveals whether lexical / KG / SQL sources are pulling weight.
+
+`rag_reranker_position_change` — rolling gauge (window=100 queries) of the fraction of queries where the reranker's top-1 differs from the fusion top-1. Updated via `record_reranker_position_change()` after step 8 in `ChatOrchestrator`. A gauge near 0 means the reranker is redundant; near 1 means fusion ordering is unreliable.
+
+`rag_citation_accuracy` — gauge set by the weekly citation-accuracy cron (`ScoreCitationAccuracyUseCase`). Values: 0 = irrelevant snippets, 1 = direct verbatim support.
+
+### Citation-Accuracy Cron
+
+`infrastructure/jobs/citation_accuracy_cron.py` — `start_citation_accuracy_cron(use_case) → asyncio.Task` schedules a background asyncio task:
+- **First run**: immediately on startup (gauge populated within minutes of first deployment)
+- **Recurring**: weekly, Sunday 03:00 UTC
+
+`application/use_cases/score_citation_accuracy.py` — `ScoreCitationAccuracyUseCase`:
+1. Calls `MessageRepository.sample_recent_with_citations(n=50)` — random sample from last 7 days, assistant-role messages, non-empty `citations` JSONB
+2. For each message, `iter_cited_claims(msg)` extracts `(sentence, "c{N}")` pairs from `[cN]` inline markers, or `(full_content, "c{ref}")` for plain-chat messages
+3. For each pair, calls `LLMJudgePort.score_citation(claim=, snippet=)` where `snippet = cite.title or ""`
+4. Normalises raw 0–3 scores to [0, 1] (÷3), drops invalid responses
+5. Sets `rag_citation_accuracy` gauge; returns 0.0 if fewer than 10 samples
+
+Wire-up: add `start_citation_accuracy_cron(use_case)` to the FastAPI lifespan startup; store the returned `asyncio.Task` on `app.state` and cancel it on shutdown.
 
 ---
 

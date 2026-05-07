@@ -934,4 +934,35 @@ a sync `Result`-like mock, which matches SQLAlchemy's actual behavior.
 
 ---
 
+## BP-404 — `prometheus_client` `MetricFamily.name` Strips `_total` Suffix in ≥0.16
+
+### Symptom
+
+Tests asserting `m.name == "foo_total"` always fail after calling `counter.labels(...).inc()` even though the counter is registered and incremented correctly. `REGISTRY.collect()` returns samples but none match the filter.
+
+### Root Cause
+
+`prometheus_client` ≥0.16 changed the `MetricFamily.name` for Counters: the `_total` suffix is stripped from the MetricFamily name (`m.name == "foo"`) but preserved on individual `Sample.name` values (`s.name == "foo_total"`). Code that filters on `m.name == "foo_total"` never matches.
+
+### Fix
+
+Query `Sample.name` rather than `MetricFamily.name`:
+
+```python
+# WRONG — m.name strips _total in newer prometheus_client
+for m in REGISTRY.collect():
+    if m.name == "my_counter_total":  # never matches
+        ...
+
+# CORRECT — s.name retains _total
+for m in REGISTRY.collect():
+    for s in m.samples:
+        if s.name == "my_counter_total" and s.labels.get("source") == "x":
+            return s.value
+```
+
+### Additional Pitfall: Counter Accumulation Across Test Session
+
+The Prometheus `REGISTRY` is a process-wide singleton. Counter values accumulate across all tests in a session. Tests using `assert count == 1` will fail on the second run if the counter was already incremented earlier in the session. **Fix**: use unique label values per test (e.g. `source="unit_test_w55"`) and compare relative changes (`after > before`) rather than absolute values.
+
 ---

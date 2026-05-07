@@ -20,3 +20,11 @@ class MessageRepository(ABC):
     @abstractmethod
     async def list_by_thread(self, thread_id: UUID, limit: int) -> list[Message]:
         """Return the most recent *limit* messages for a thread, oldest-first."""
+
+    async def sample_recent_with_citations(self, n: int) -> list[Message]:
+        """Return up to *n* recent assistant messages that have at least one citation.
+
+        Default implementation returns [] (safe no-op for services that do not need this).
+        Override in infrastructure when the citation-accuracy cron is active.
+        """
+        return []
