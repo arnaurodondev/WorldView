@@ -86,3 +86,16 @@ class TestBuildEntityMentionFilter:
 
         assert "CAST(:entity_id_strs AS TEXT[])" in sql
         assert "CAST(:entity_type_strs AS TEXT[])" in sql
+
+    @pytest.mark.unit
+    def test_raises_on_both_empty(self) -> None:
+        """Calling with both args falsy raises ValueError (MAJOR-01 guard)."""
+        import pytest
+
+        params: dict = {}
+
+        with pytest.raises(ValueError, match="at least one non-empty filter"):
+            _build_entity_mention_filter(params, entity_ids=None, entity_types=None)
+
+        with pytest.raises(ValueError):
+            _build_entity_mention_filter(params, entity_ids=[], entity_types=[])
