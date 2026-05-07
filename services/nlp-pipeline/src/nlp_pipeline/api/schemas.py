@@ -152,6 +152,15 @@ class ChunkSearchRequest(BaseModel):
     # below enforces this). The orchestrator at S8 decides which mode to use
     # inline (per L11 — no plan flag).
     search_type: Literal["ann", "lexical", "hybrid"] = "ann"
+    # PLAN-0078 Wave C: optional entity filter via GIN-indexed chunks.entity_mentions JSONB.
+    # Filter semantics (§3): OR within each field, AND across fields.
+    #   entity_ids=[A, B]             → chunks mentioning A OR B
+    #   entity_types=["company"]      → chunks with any company mention
+    #   entity_ids=[A] + entity_types=["company"] → chunks where a SINGLE mention
+    #                                  has entity_id=A AND entity_type=company
+    # Both fields default to None → no entity filter (full unfiltered results).
+    entity_ids: list[UUID] | None = Field(default=None, max_length=50)
+    entity_types: list[str] | None = Field(default=None, max_length=20)
 
     @model_validator(mode="after")
     def exactly_one_query(self) -> ChunkSearchRequest:

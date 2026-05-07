@@ -85,6 +85,14 @@ class ChunkModel(Base):
     # so the GENERATED tsvector tokenizes actual content rather than the
     # MinIO object path. The chunk-writer populates from `Chunk.text` at insert.
     chunk_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PLAN-0078 Wave A: denormalised GLiNER mention metadata for GIN-indexed
+    # query-time entity filtering via @> containment queries.
+    # Shape: [{"entity_id": str|null, "entity_type": str, "char_start": int,
+    #          "char_end": int, "gliner_score": float, "raw_text": str}]
+    # Naming note: there is a table called ``entity_mentions`` — this is a
+    # column on ``chunks``, not that table.  Always empty ([]) until the
+    # article consumer or backfill script populates it.
+    entity_mentions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 

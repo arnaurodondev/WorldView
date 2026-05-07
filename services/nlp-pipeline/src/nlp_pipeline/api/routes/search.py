@@ -49,6 +49,9 @@ async def search_chunks(
         date_to=body.date_to,
         source_types=body.source_types,
         search_type=body.search_type,
+        # PLAN-0078 Wave C: entity filter params from the Pydantic schema.
+        entity_ids=body.entity_ids,
+        entity_types=body.entity_types,
     )
 
     _log.info(  # type: ignore[no-any-return]

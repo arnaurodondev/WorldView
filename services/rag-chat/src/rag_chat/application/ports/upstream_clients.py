@@ -37,6 +37,12 @@ class ChunkSearchRequest:
     # The orchestrator at retrieval_orchestrator.py picks the mode inline
     # based on intent + query_text presence (per L11 — no plan flag).
     search_type: str = "ann"
+    # PLAN-0078 Wave D: entity filter — passed through to S6 for GIN-indexed
+    # chunks.entity_mentions filtering.  None = no entity filter.
+    # entity_ids: OR logic within list; entity_types: OR within list;
+    # AND across the two fields (per PLAN-0078 §3).
+    entity_ids: list[UUID] | None = None
+    entity_types: list[str] | None = None
 
 
 @dataclass

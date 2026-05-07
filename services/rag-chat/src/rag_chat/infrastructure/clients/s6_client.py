@@ -80,6 +80,11 @@ class S6Client(BaseUpstreamClient):
             payload["date_from"] = request.date_from.date().isoformat()
         if request.date_to is not None:
             payload["date_to"] = request.date_to.date().isoformat()
+        # PLAN-0078 Wave D: forward entity filter fields when present.
+        if request.entity_ids:
+            payload["entity_ids"] = [str(eid) for eid in request.entity_ids]
+        if request.entity_types:
+            payload["entity_types"] = request.entity_types
 
         raw = await self._post("/api/v1/search/chunks", payload)
         results_raw: list[dict] = raw.get("results", [])
