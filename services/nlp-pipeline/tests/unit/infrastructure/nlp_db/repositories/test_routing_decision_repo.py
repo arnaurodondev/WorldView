@@ -6,15 +6,17 @@ Covers persistence of:
 - ``processing_path`` (NEW Block 6 suppression-gate output, F-CRIT-06)
 - ``composite_score`` + ``feature_scores_json``
 
-Mocks the AsyncSession to assert the row populated from the dataclass carries
-all fields (we already have an integration round-trip test in
-test_consumer_pipeline.py; here we're proving the field plumbing).
+PLAN-0084 B-3 switched the repo from ``session.add(model)`` to
+``session.execute(pg_insert(model).on_conflict_do_nothing(...))``, so
+these tests now capture the values dict from the pg_insert statement via
+SQLAlchemy's ``_values`` internal (stable in 2.x) rather than intercepting
+``session.add``.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any
+from unittest.mock import MagicMock
 from uuid import UUID
 
 import pytest
@@ -24,25 +26,37 @@ from nlp_pipeline.infrastructure.nlp_db.repositories.routing_decision import (
     RoutingDecisionRepository,
 )
 
-if TYPE_CHECKING:
-    from nlp_pipeline.infrastructure.nlp_db.models import RoutingDecisionModel
-
 pytestmark = pytest.mark.unit
 
 
-def _capture_session_add() -> tuple[MagicMock, list[Any]]:
-    """Build an AsyncSession mock that records every ``.add(...)`` call."""
-    captured: list[Any] = []
+def _make_session() -> tuple[MagicMock, list[dict[str, Any]]]:
+    """Return (session mock, captured_params_list).
+
+    Each ``repo.add()`` call appends a dict of {column_key: value} to the list,
+    extracted from the pg_insert statement passed to ``session.execute``.
+    B-3 changed add() to use pg_insert + on_conflict_do_nothing — the session
+    no longer receives a ``session.add(model)`` call; values are bound in the
+    INSERT statement itself.
+    """
+    captured: list[dict[str, Any]] = []
+
+    async def _fake_execute(stmt: Any, *args: Any, **kwargs: Any) -> MagicMock:
+        vals: dict[str, Any] = {}
+        for col, bindparam in stmt._values.items():
+            vals[col.key] = bindparam.value
+        captured.append(vals)
+        return MagicMock()
+
     session = MagicMock()
-    session.add = MagicMock(side_effect=lambda obj: captured.append(obj))
-    session.execute = AsyncMock()
+    session.add = MagicMock()
+    session.execute = _fake_execute
     return session, captured
 
 
 @pytest.mark.asyncio
 async def test_add_persists_processing_path_full_pipeline() -> None:
     """The new processing_path field round-trips through repo.add()."""
-    session, captured = _capture_session_add()
+    session, captured = _make_session()
     repo = RoutingDecisionRepository(session)
 
     decision = RoutingDecision(
@@ -58,16 +72,16 @@ async def test_add_persists_processing_path_full_pipeline() -> None:
     await repo.add(decision)
 
     assert len(captured) == 1
-    row: RoutingDecisionModel = captured[0]
-    assert row.processing_path == "full_pipeline"
-    assert row.routing_tier == "deep"
-    assert row.final_routing_tier is None
+    params = captured[0]
+    assert params["processing_path"] == "full_pipeline"
+    assert params["routing_tier"] == "deep"
+    assert params["final_routing_tier"] is None
 
 
 @pytest.mark.asyncio
 async def test_add_handles_novelty_downgrade_full_set_of_fields() -> None:
     """Block 8 novelty path: tier=DEEP, final_tier=LIGHT, path=SECTION_EMBEDDINGS_ONLY."""
-    session, captured = _capture_session_add()
+    session, captured = _make_session()
     repo = RoutingDecisionRepository(session)
 
     decision = RoutingDecision(
@@ -82,16 +96,16 @@ async def test_add_handles_novelty_downgrade_full_set_of_fields() -> None:
 
     await repo.add(decision)
 
-    row: RoutingDecisionModel = captured[0]
-    assert row.routing_tier == "deep"
-    assert row.final_routing_tier == "light"
-    assert row.processing_path == "section_embeddings_only"
+    params = captured[0]
+    assert params["routing_tier"] == "deep"
+    assert params["final_routing_tier"] == "light"
+    assert params["processing_path"] == "section_embeddings_only"
 
 
 @pytest.mark.asyncio
 async def test_add_legacy_decision_without_processing_path() -> None:
     """Legacy callers that don't set processing_path get None — backward compatible."""
-    session, captured = _capture_session_add()
+    session, captured = _make_session()
     repo = RoutingDecisionRepository(session)
 
     decision = RoutingDecision(
@@ -104,14 +118,14 @@ async def test_add_legacy_decision_without_processing_path() -> None:
 
     await repo.add(decision)
 
-    row: RoutingDecisionModel = captured[0]
-    assert row.processing_path is None
+    params = captured[0]
+    assert params["processing_path"] is None
 
 
 @pytest.mark.asyncio
 async def test_add_halt_path_for_suppress_tier() -> None:
     """SUPPRESS routing tier yields HALT processing path."""
-    session, captured = _capture_session_add()
+    session, captured = _make_session()
     repo = RoutingDecisionRepository(session)
 
     decision = RoutingDecision(
@@ -125,9 +139,9 @@ async def test_add_halt_path_for_suppress_tier() -> None:
 
     await repo.add(decision)
 
-    row: RoutingDecisionModel = captured[0]
-    assert row.routing_tier == "suppress"
-    assert row.processing_path == "halt"
+    params = captured[0]
+    assert params["routing_tier"] == "suppress"
+    assert params["processing_path"] == "halt"
 
 
 # ── T-W5-4-02: routing-tier write-path audit tests ────────────────────────────
@@ -139,11 +153,11 @@ async def test_add_halt_path_for_suppress_tier() -> None:
 
 @pytest.mark.asyncio
 async def test_routing_decision_writes_final_routing_tier() -> None:
-    """add() with a non-None final_routing_tier → row.final_routing_tier is non-NULL.
+    """add() with a non-None final_routing_tier → value is non-NULL in the INSERT.
 
     Verifies the PLAN-0057 A-1 Block 8 novelty-downgrade path is persisted.
     """
-    session, captured = _capture_session_add()
+    session, captured = _make_session()
     repo = RoutingDecisionRepository(session)
 
     decision = RoutingDecision(
@@ -158,18 +172,18 @@ async def test_routing_decision_writes_final_routing_tier() -> None:
 
     await repo.add(decision)
 
-    row: RoutingDecisionModel = captured[0]
-    assert row.final_routing_tier is not None, "final_routing_tier must be written for post-novelty rows"
-    assert row.final_routing_tier == "light"
+    params = captured[0]
+    assert params["final_routing_tier"] is not None, "final_routing_tier must be written for post-novelty rows"
+    assert params["final_routing_tier"] == "light"
 
 
 @pytest.mark.asyncio
 async def test_routing_decision_writes_processing_path() -> None:
-    """add() with a non-None processing_path → row.processing_path is non-NULL.
+    """add() with a non-None processing_path → value is non-NULL in the INSERT.
 
     Verifies the PLAN-0057 A-1 Block 6 suppression-gate output (F-CRIT-06) is persisted.
     """
-    session, captured = _capture_session_add()
+    session, captured = _make_session()
     repo = RoutingDecisionRepository(session)
 
     decision = RoutingDecision(
@@ -183,6 +197,6 @@ async def test_routing_decision_writes_processing_path() -> None:
 
     await repo.add(decision)
 
-    row: RoutingDecisionModel = captured[0]
-    assert row.processing_path is not None, "processing_path must be written for all post-W5-4 rows"
-    assert row.processing_path == "full_pipeline"
+    params = captured[0]
+    assert params["processing_path"] is not None, "processing_path must be written for all post-W5-4 rows"
+    assert params["processing_path"] == "full_pipeline"
