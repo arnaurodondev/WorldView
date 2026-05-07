@@ -890,7 +890,9 @@ GitHub Actions workflow that triggers on PRs touching any of:
 
 ---
 
-## 5. Wave W5-2: Hybrid Retrieval — Schema Migration + Lexical Repository
+## 5. Wave W5-2: Hybrid Retrieval — Schema Migration + Lexical Repository ✅
+
+**Status**: **DONE** — 2026-05-06 · 11 lexical-search integration tests + 2 ORM-no-tsv guards + 2 ValueError unit tests + 6 canonical-tickers cache unit tests pass · 782 nlp-pipeline tests total green · ruff + format + mypy clean (112 source files) · 100 architecture tests pass · live-DB alembic 0017 round-trip clean · live-DB FTS sanity confirmed (synthetic insert + websearch_to_tsquery match returns 1 row). **Mid-wave QA caught a critical bug** (BP-401, see audit `docs/audits/2026-05-06-w5-2-qa-pass.md`): the original migration generated tsvectors from `chunk_text_key` (a MinIO object path, not chunk body); fix added denormalised `chunk_text TEXT` column populated from `Chunk.text` at insert. **Wave outputs ready for W5-3**: `tsv_english` (setweight A/B/D over title_denorm/section_heading_denorm/chunk_text), `tsv_simple` (no stemming, identifier exact-match), `ix_chunks_tsv_english_gin` + `ix_chunks_tsv_simple_gin`, `ChunkANNRepository.lexical_search(mode='english'|'simple'|'both')`, `CanonicalTickersCache` ready for W5-3 rare-token analyzer wiring.
 
 > **v2-NOTE (2026-05-05) — READ BEFORE IMPLEMENTING**: This wave body describes the v1 simple `to_tsvector('english', coalesce(chunk_text_key, ''))` migration. **v2 supersedes** per L7 lock:
 > - **Column renamed** `chunks.tsv` → `chunks.tsv_english`; **index renamed** `ix_chunks_tsv_gin` → `ix_chunks_tsv_english_gin`; **migration filename** is `0017_add_chunks_tsv_english_gin.py`. (Coordinated with PLAN-0064 W6 — that plan's references are updated in the same revision pass.)

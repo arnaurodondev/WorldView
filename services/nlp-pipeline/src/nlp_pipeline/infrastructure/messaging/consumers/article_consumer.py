@@ -21,6 +21,7 @@ the CONFLICT guard at DB level).
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import re
 import uuid
@@ -248,6 +249,13 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 )
                 return
 
+        # PLAN-0063 W5-2: pull the doc title from the inbound event so the
+        # chunk-creation block can populate ``title_denorm`` (weight A) on every
+        # chunk it builds. ``str(...)`` only when present; the consumer must
+        # tolerate absent titles (older sources) without raising.
+        raw_title = value.get("title")
+        doc_title: str | None = str(raw_title) if raw_title is not None else None
+
         async with self._bp:
             await self._run_pipeline(
                 doc_id=doc_id,
@@ -258,6 +266,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 is_backfill=is_backfill,
                 correlation_id=correlation_id,
                 tenant_id=tenant_id,
+                doc_title=doc_title,
             )
 
         # Best-effort: cache citation metadata for S8 RAG inline citations.
@@ -286,6 +295,7 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
         is_backfill: bool,
         correlation_id: str | None,
         tenant_id: uuid.UUID | None = None,
+        doc_title: str | None = None,
     ) -> None:
         """Download text and run Blocks 3-10 with D-004 dual-DB commit ordering.
 
@@ -380,6 +390,28 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             generate_chunk_embeddings=generate_chunks,
             chunk_text_store=self._chunk_text_store,
         )
+
+        # PLAN-0063 W5-2 / FR-T1-2: populate denorm fields (title + section
+        # heading) on every chunk so the GENERATED ``tsv_english`` tsvector
+        # column gets weight A (title) and weight B (section heading) when the
+        # row is INSERTed. ``Chunk`` is a frozen dataclass — we use
+        # ``dataclasses.replace`` to swap the two extra fields in. We resolve
+        # ``section_heading_denorm`` per-chunk by indexing on ``section_id`` so
+        # each chunk inherits the heading of its parent section. We pick
+        # ``section.title`` (the heading) over ``heading_path`` because the
+        # heading alone is the cleanest analyst-relevant signal — it is the
+        # text users actually search for ("Risk Factors", "MD&A", etc.) — while
+        # heading_path includes structural path noise.
+        if chunks:
+            section_heading_by_id = {s.section_id: s.title for s in sections}
+            chunks = [
+                dataclasses.replace(
+                    chunk,
+                    title_denorm=doc_title,
+                    section_heading_denorm=section_heading_by_id.get(chunk.section_id),
+                )
+                for chunk in chunks
+            ]
 
         s6_embeddings_created_total.inc(len(chunk_embs) + len(section_embs))
 

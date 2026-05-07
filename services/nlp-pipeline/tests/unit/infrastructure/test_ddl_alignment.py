@@ -106,13 +106,22 @@ def _read_all_migrations() -> str:
     return "\n".join(texts)
 
 
-def _assert_aligned(table_name: str, model: type) -> None:
+def _assert_aligned(table_name: str, model: type, *, expected_ddl_only: set[str] | None = None) -> None:
+    """Assert ORM and DDL agree on the column set.
+
+    ``expected_ddl_only`` lists columns that exist in DDL but are intentionally
+    NOT declared on the ORM. PLAN-0063 W5-2 introduced two such columns on
+    ``chunks`` (``tsv_english`` and ``tsv_simple``) — they are GENERATED
+    tsvector columns and Postgres rejects any INSERT/UPDATE that targets a
+    GENERATED column, so adding them to the ORM would break every chunk write
+    (BP-NEW1). Other tables MUST stay strictly aligned (default behaviour).
+    """
     migration_text = _read_all_migrations()
     ddl_cols = _extract_ddl_columns(migration_text, table_name)
     orm_cols = _get_orm_columns(model)
 
     missing_in_ddl = orm_cols - ddl_cols
-    extra_in_ddl = ddl_cols - orm_cols
+    extra_in_ddl = ddl_cols - orm_cols - (expected_ddl_only or set())
 
     assert not missing_in_ddl, f"[{table_name}] ORM columns missing from DDL: {missing_in_ddl}"
     assert not extra_in_ddl, f"[{table_name}] DDL columns not in ORM: {extra_in_ddl}"
@@ -125,7 +134,10 @@ class TestSectionsDDLAlignment:
 
 class TestChunksDDLAlignment:
     def test_chunks_ddl_matches_orm(self) -> None:
-        _assert_aligned("chunks", ChunkModel)
+        # PLAN-0063 W5-2 / BP-NEW1: ``tsv_english`` and ``tsv_simple`` are
+        # GENERATED columns; they must NOT be on the ORM. Whitelist them so
+        # this guard test still catches accidental drift on other columns.
+        _assert_aligned("chunks", ChunkModel, expected_ddl_only={"tsv_english", "tsv_simple"})
 
 
 class TestChunkEmbeddingsDDLAlignment:
