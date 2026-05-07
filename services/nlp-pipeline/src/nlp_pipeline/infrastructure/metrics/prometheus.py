@@ -51,6 +51,13 @@ nlp_sectioning_fallback_total = prometheus_client.Counter(
 
 # ── Backpressure gauge (polled from BackpressureController) ──────────────────
 
+s6_intel_commit_failures_total = prometheus_client.Counter(
+    "s6_intel_commit_failures_total",
+    "Total times the intel_session.commit() failed after nlp_session.commit() succeeded "
+    "(D-004 dual-commit path). Non-zero values indicate intelligence-db write failures "
+    "that require message re-delivery for provisional-entity-queue recovery.",
+)
+
 s6_ollama_queue_depth_current = prometheus_client.Gauge(
     "s6_ollama_queue_depth_current",
     "Current number of in-flight Ollama inference requests (backpressure depth)",

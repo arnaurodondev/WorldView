@@ -19,12 +19,13 @@ from typing import Any
 
 import structlog
 
+from rag_chat.application.ports.llm_judge import LLMJudgePort  # A-001: import port from canonical location
 from rag_chat.domain.errors import LLMJudgeTimeoutError
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 
-class CitationJudgeAdapter:
+class CitationJudgeAdapter(LLMJudgePort):
     """Implements ``LLMJudgePort`` by delegating to an existing provider client.
 
     Args:
@@ -41,28 +42,22 @@ class CitationJudgeAdapter:
         self._provider = provider_client
         self._timeout_s = timeout_s
 
-    async def score_citation(self, *, claim: str, snippet: str) -> str:
-        """Return the raw LLM response string for the claim/snippet pair.
+    async def score_citation(self, *, claim: str) -> str:
+        """Return the raw LLM response string for the pre-assembled rubric prompt.
 
-        Formats and sends the prompt constructed in ``ScoreCitationAccuracyUseCase``
-        with ``temperature=0.0`` and ``max_tokens=2`` (single digit + possible \\n).
+        The use case pre-assembles the full fenced prompt (rubric + claim + snippet)
+        and passes it as ``claim``.  This adapter's job is purely transport +
+        timeout enforcement — no prompt construction logic lives here.
+
+        A-002: ``snippet`` parameter removed.  The full prompt is in ``claim``.
 
         Raises:
             LLMJudgeTimeoutError: When the provider call exceeds ``timeout_s``.
             Any provider-specific exception: propagated unchanged for the caller
                 to classify.
-
-        Note: This adapter does NOT format the prompt itself — the prompt is
-        passed verbatim as ``claim`` and ``snippet`` are already embedded in it
-        by ``ScoreCitationAccuracyUseCase.execute`` before calling here.
-        The adapter's job is purely transport + timeout enforcement.
         """
-        # The use case builds the full prompt text and passes it as `claim`;
-        # `snippet` is unused here because the full prompt (rubric + fenced
-        # claim + fenced snippet) arrives pre-assembled as `claim`.
-        # This design keeps the prompt construction logic in the use case (domain)
-        # rather than leaking it into infrastructure.
-        prompt = claim  # pre-assembled rubric prompt from use case
+        # claim is the complete ready-to-send rubric prompt built by the use case.
+        prompt = claim
 
         async def _call() -> str:
             chunks: list[str] = []

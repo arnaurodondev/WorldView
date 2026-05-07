@@ -89,10 +89,20 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 self._refresh_task = asyncio.ensure_future(self._background_refresh())
                 return
             except Exception as exc:
+                # S-010: do not log str(exc) directly when exc is an
+                # httpx.HTTPStatusError — str() includes the response body
+                # which may contain sensitive data.  Log only the status code.
+                import httpx as _httpx
+
+                _err_detail = (
+                    f"HTTP {exc.response.status_code}"
+                    if isinstance(exc, _httpx.HTTPStatusError)
+                    else type(exc).__name__
+                )
                 logger.warning(  # type: ignore[no-any-return]
                     "internal_jwt_startup_fetch_failed",
                     attempt=attempt + 1,
-                    error=str(exc),
+                    error=_err_detail,
                 )
                 if attempt < 2:
                     await asyncio.sleep(3)
@@ -116,7 +126,15 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                     self.app.state._internal_jwt_public_key = new_key
                 logger.info("internal_jwt_public_key_refreshed")  # type: ignore[no-any-return]
             except Exception as exc:
-                logger.warning("internal_jwt_public_key_refresh_failed", error=str(exc))  # type: ignore[no-any-return]
+                # S-010: avoid str(exc) for HTTPStatusError — response body may be sensitive.
+                import httpx as _httpx
+
+                _ref_err = (
+                    f"HTTP {exc.response.status_code}"
+                    if isinstance(exc, _httpx.HTTPStatusError)
+                    else type(exc).__name__
+                )
+                logger.warning("internal_jwt_public_key_refresh_failed", error=_ref_err)  # type: ignore[no-any-return]
 
     async def _fetch_public_key(self) -> RSAPublicKey:
         """Fetch JWKS from S9 and extract the first RSA public key."""

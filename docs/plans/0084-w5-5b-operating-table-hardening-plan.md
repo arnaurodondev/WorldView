@@ -848,7 +848,8 @@ For each, ensure the corresponding INSERT statement uses `ON CONFLICT (id) DO NO
 **Target files**:
 - `tests/architecture/test_consumer_dedup_mixin_enforcement.py`
 
-Remove the xfail; the test should now pass for all 8 consumers. The allowlist remains empty.
+Remove the xfail; the test should now pass for all 8 consumers.
+A-005: 14 grandfathered entries were allowlisted in PLAN-0084 B-2; future consumers must use ValkeyDedupMixin.
 
 ##### T-B-3-04: Update STANDARDS.md §11 anti-pattern
 **Type**: docs

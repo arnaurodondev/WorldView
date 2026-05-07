@@ -29,7 +29,7 @@ async def test_score_citation_happy_path() -> None:
 
     provider = _make_provider(["2"])
     adapter = CitationJudgeAdapter(provider, timeout_s=10.0)
-    result = await adapter.score_citation(claim="test prompt", snippet="unused")
+    result = await adapter.score_citation(claim="test prompt")
     assert result == "2"
 
 
@@ -48,7 +48,7 @@ async def test_score_citation_timeout_raises_LLMJudgeTimeoutError() -> None:
 
     adapter = CitationJudgeAdapter(provider, timeout_s=0.001)
     with pytest.raises(LLMJudgeTimeoutError):
-        await adapter.score_citation(claim="claim", snippet="snippet")
+        await adapter.score_citation(claim="claim")
 
 
 @pytest.mark.asyncio
@@ -65,7 +65,7 @@ async def test_score_citation_propagates_provider_errors() -> None:
 
     adapter = CitationJudgeAdapter(provider, timeout_s=10.0)
     with pytest.raises(RuntimeError, match="provider down"):
-        await adapter.score_citation(claim="claim", snippet="snippet")
+        await adapter.score_citation(claim="claim")
 
 
 @pytest.mark.asyncio
@@ -83,7 +83,7 @@ async def test_score_citation_uses_temperature_zero() -> None:
     provider.stream = MagicMock(side_effect=_recording_stream)
 
     adapter = CitationJudgeAdapter(provider, timeout_s=10.0)
-    await adapter.score_citation(claim="prompt text", snippet="unused")
+    await adapter.score_citation(claim="prompt text")
 
     assert captured_kwargs.get("temperature") == 0.0
     assert captured_kwargs.get("max_tokens") == 2
@@ -96,6 +96,6 @@ async def test_score_citation_multi_chunk_response() -> None:
 
     provider = _make_provider(["", "2", "\n"])
     adapter = CitationJudgeAdapter(provider, timeout_s=10.0)
-    result = await adapter.score_citation(claim="prompt", snippet="unused")
+    result = await adapter.score_citation(claim="prompt")
     assert result == "2\n"
     # Callers strip() the result before parsing, so this is fine.
