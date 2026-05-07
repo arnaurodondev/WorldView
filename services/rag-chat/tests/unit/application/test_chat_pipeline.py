@@ -9,6 +9,7 @@ Test IDs follow the pattern:
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 from collections import Counter
 from typing import Any
@@ -490,6 +491,86 @@ class TestBuildPrompt:
         context_assembler.assemble.assert_called_once_with(reranked)
         contradiction_assembler.build.assert_called_once_with([])
         prompt_builder.build.assert_called_once()
+
+
+# ── Step 11: stream_llm ──────────────────────────────────────────────────────
+
+
+class TestStreamLlm:
+    @pytest.mark.unit
+    def test_stream_llm_yields_filtered_raw_tuples(self) -> None:
+        """stream_llm yields (filtered_chunk, raw_chunk) tuples.
+
+        The raw_chunk values must accumulate to the full original LLM output.
+        The filtered_chunk suppresses <think>...</think> blocks in real time.
+        """
+
+        async def _fake_stream(prompt: str, **kwargs: Any):  # type: ignore[return]
+            # Simulate a plain response with no think blocks — raw and filtered are identical.
+            for chunk in ["Hello ", "world!"]:
+                yield chunk
+
+        llm_chain = MagicMock()
+        llm_chain.stream = _fake_stream
+
+        pipeline = _make_pipeline(llm_chain=llm_chain)
+
+        async def _collect() -> list[tuple[str, str]]:
+            pairs: list[tuple[str, str]] = []
+            async for filtered, raw in pipeline.stream_llm("test prompt"):
+                pairs.append((filtered, raw))
+            return pairs
+
+        pairs = asyncio.run(_collect())
+
+        # All raw chunks combined must equal the full LLM output.
+        full_raw = "".join(raw for _, raw in pairs)
+        assert full_raw == "Hello world!"
+
+        # When there are no think blocks, filtered chunks must also combine to
+        # the same text (modulo possible minor buffering offsets from tag-boundary
+        # look-ahead).
+        full_filtered = "".join(f for f, _ in pairs)
+        assert "Hello" in full_filtered
+        assert "world" in full_filtered
+
+    @pytest.mark.unit
+    def test_stream_llm_flush_emits_remaining(self) -> None:
+        """After the LLM stream ends, flush() yields any buffered content.
+
+        _ThinkBlockFilter holds back up to (max_tag_len - 1) chars at the end of
+        each chunk to guard against tag boundaries split across chunks.  When the
+        stream ends, flush() releases whatever remains in the buffer as a final
+        (remaining, "") tuple.
+        """
+
+        async def _fake_stream(prompt: str, **kwargs: Any):  # type: ignore[return]
+            # Single chunk — no think-block; all content passes through.
+            yield "Answer text"
+
+        llm_chain = MagicMock()
+        llm_chain.stream = _fake_stream
+
+        pipeline = _make_pipeline(llm_chain=llm_chain)
+
+        async def _collect() -> list[tuple[str, str]]:
+            pairs: list[tuple[str, str]] = []
+            async for filtered, raw in pipeline.stream_llm("prompt"):
+                pairs.append((filtered, raw))
+            return pairs
+
+        pairs = asyncio.run(_collect())
+
+        # At least one tuple must have been yielded.
+        assert len(pairs) >= 1
+
+        # All raw chunks from per-chunk yields (raw != "") must combine to the
+        # original stream.  The flush tuple has raw="" so we filter it out.
+        assert "".join(raw for _, raw in pairs if raw) == "Answer text"
+
+        # The full visible text (all filtered chunks including flush remainder)
+        # must also reconstruct the full answer.
+        assert "".join(f for f, _ in pairs) == "Answer text"
 
 
 # ── Step 12: process_output ───────────────────────────────────────────────────

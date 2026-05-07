@@ -175,7 +175,6 @@ class ChatOrchestratorUseCase:
         token_count_in_est = len(prompt) // 4
 
         # Step 13: persist (best-effort — persist_chat swallows exceptions internally)
-        asst_msg_id = _new_thread_id()
         _user_msg_id, asst_msg_id = await p.persist_chat(
             thread_id=thread_id,
             user_message=request.message,
