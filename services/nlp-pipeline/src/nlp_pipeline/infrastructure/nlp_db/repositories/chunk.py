@@ -45,6 +45,8 @@ class ChunkRepository:
                 title_denorm=chunk.title_denorm,
                 section_heading_denorm=chunk.section_heading_denorm,
                 chunk_text=chunk.text,
+                # PLAN-0078 Wave B: persist GLiNER mention metadata for GIN filtering.
+                entity_mentions=chunk.entity_mentions,
             )
             .on_conflict_do_nothing(index_elements=["chunk_id"])
         )

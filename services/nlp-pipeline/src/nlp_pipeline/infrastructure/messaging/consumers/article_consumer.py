@@ -552,6 +552,19 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             cem_repo = ChunkEntityMentionRepository(nlp_session)
             outbox_repo = OutboxRepository(nlp_session)
 
+            # PLAN-0078 Wave B: augment chunks with denormalised entity mention
+            # metadata BEFORE write so the GIN-indexed entity_mentions column
+            # is populated at INSERT time.  Block 9 has already resolved
+            # ``resolved_entity_id`` on each EntityMention, so the JSONB will
+            # include entity_id for resolved mentions and null for unresolved.
+            if chunks and final_mentions:
+                chunk_mention_map = _build_chunk_entity_mentions(
+                    chunks, final_mentions, self._settings.gliner_mention_floor
+                )
+                chunks = [
+                    dataclasses.replace(chunk, entity_mentions=chunk_mention_map[chunk.chunk_id]) for chunk in chunks
+                ]
+
             await section_repo.add_batch(sections)
             await chunk_repo.add_batch(chunks)
             await mention_repo.add_batch(final_mentions)
@@ -907,6 +920,43 @@ def _write_chunk_embeddings(
                 model_id=model_id,
             ),
         )
+
+
+def _build_chunk_entity_mentions(
+    chunks: list[Chunk],
+    mentions: list[EntityMention],
+    mention_floor: float,
+) -> dict[uuid.UUID, list[dict]]:
+    """Build entity_mentions JSONB payload for each chunk (PLAN-0078 Wave B).
+
+    Matches resolved EntityMention objects to chunks by char-offset overlap
+    (same logic as _compute_chunk_mention_pairs).  Only mentions with
+    ``confidence >= mention_floor`` are included to avoid GIN index bloat.
+
+    Returns a mapping of chunk_id → list[mention_dict] where each dict has:
+        entity_id (str|null), entity_type (str), char_start (int),
+        char_end (int), gliner_score (float), raw_text (str).
+    """
+    result: dict[uuid.UUID, list[dict]] = {chunk.chunk_id: [] for chunk in chunks}
+    for chunk in chunks:
+        for mention in mentions:
+            if (
+                mention.section_id == chunk.section_id
+                and mention.char_start < chunk.char_end
+                and mention.char_end > chunk.char_start
+                and mention.confidence >= mention_floor
+            ):
+                result[chunk.chunk_id].append(
+                    {
+                        "entity_id": str(mention.resolved_entity_id) if mention.resolved_entity_id else None,
+                        "entity_type": mention.mention_class.value if mention.mention_class else None,
+                        "char_start": mention.char_start,
+                        "char_end": mention.char_end,
+                        "gliner_score": mention.confidence,
+                        "raw_text": mention.mention_text,
+                    }
+                )
+    return result
 
 
 def _compute_chunk_mention_pairs(
