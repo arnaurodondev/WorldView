@@ -1161,3 +1161,168 @@ class TestPhase3PerRowSessionIsolation:
         assert any(
             str(entity_id_2).encode() == key for key in produced_ids
         ), f"Row 2 entity_id {entity_id_2} not in produced keys: {produced_ids}"
+
+
+# ---------------------------------------------------------------------------
+# F-QA-202/203/204 (Wave C-1): noise pipeline coverage gaps
+# ---------------------------------------------------------------------------
+# Notes on coverage already present (do not duplicate):
+#   • F-QA-201 aclose() lifecycle: covered by TestAcloseLifecycle above
+#     (test_aclose_when_no_client_is_noop, test_aclose_closes_http_client).
+#   • F-QA-203 fail-open semantics: _run_noise_filters() already calls
+#     asyncio.gather(..., return_exceptions=True) and recovers via index.
+#     We add a test below that exercises the recovery branch directly.
+
+
+class TestNoiseLayer2EmptyApiKey:
+    """F-QA-202: when noise_classifier_api_key='' Layer 2 must be a no-op (no HTTP)."""
+
+    @pytest.mark.asyncio
+    async def test_layer2_classify_returns_false_with_empty_api_key(self) -> None:
+        """Empty noise_api_key → _layer2_classify returns False without creating an HTTP client."""
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([])
+        worker = ProvisionalEnrichmentWorker(
+            session_factory=factory,
+            llm_client=AsyncMock(),
+            noise_classifier_api_key="",
+        )
+
+        # Layer 2 must short-circuit on the empty-key guard at the top of
+        # _layer2_classify (returns False) without ever instantiating an
+        # httpx.AsyncClient or making a network call.
+        result = await worker._layer2_classify("any mention text")
+
+        assert result is False
+        # The guard must NOT lazily create a client when the key is empty.
+        assert worker._noise_http_client is None
+
+    @pytest.mark.asyncio
+    async def test_run_noise_filters_with_empty_api_key_passes_rows_to_layer3(self) -> None:
+        """With empty noise_api_key, non-blocklisted rows pass through to Layer 3.
+
+        F-QA-202: Layer 2 disabled (empty key) must NOT silently drop rows.  All
+        rows that survive Layer 1 should appear in `remaining` (i.e. Layer 3
+        candidates).
+        """
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([])
+        worker = ProvisionalEnrichmentWorker(
+            session_factory=factory,
+            llm_client=AsyncMock(),
+            noise_classifier_api_key="",
+        )
+
+        qid = UUID("01234567-89ab-7def-8012-fff000000001")
+        # Mention is NOT in the blocklist → must pass to Layer 2; Layer 2
+        # short-circuits (empty key) → row appears in remaining.
+        rows = [(qid, "Apple Inc.", "financial_instrument", "context", 0)]
+
+        l1, l2, remaining = await worker._run_noise_filters(rows)
+
+        assert l1 == [], "No Layer 1 (blocklist) hits expected for 'Apple Inc.'"
+        assert l2 == [], "No Layer 2 hits expected when API key is empty"
+        assert len(remaining) == 1
+        assert remaining[0][0] == qid
+        # Confirm no HTTP client was created.
+        assert worker._noise_http_client is None
+
+
+class TestNoiseGatherFailOpen:
+    """F-QA-203: asyncio.gather(return_exceptions=True) → wrapper exceptions
+    must NOT silently drop rows; they must propagate to Layer 3 instead."""
+
+    @pytest.mark.asyncio
+    async def test_gather_wrapper_exception_recovers_row_via_index(self) -> None:
+        """If gather() returns an Exception in slot i, layer2_candidates[i] is
+        recovered into the `remaining` (Layer 3) bucket — never dropped.
+
+        We patch asyncio.gather inside the worker module so that one of the
+        results is an Exception instance; the recovery branch (lines 619-625
+        of provisional_enrichment.py) must place the corresponding original
+        row into `layer2_pass`.
+        """
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([])
+        worker = ProvisionalEnrichmentWorker(
+            session_factory=factory,
+            llm_client=AsyncMock(),
+            noise_classifier_api_key="fake-key",
+        )
+
+        qid_a = UUID("01234567-89ab-7def-8012-aaa000000001")
+        qid_b = UUID("01234567-89ab-7def-8012-bbb000000002")
+        row_a = (qid_a, "Foo Corp", "financial_instrument", "ctx", 0)
+        row_b = (qid_b, "Bar Inc", "financial_instrument", "ctx", 0)
+        rows = [row_a, row_b]
+
+        # Replace asyncio.gather inside the worker module with a stub that
+        # returns one Exception (slot 0) + one valid (row, False) tuple
+        # (slot 1).  This exercises the index-based recovery branch.
+        async def _fake_gather(*coros: object, **_kwargs: object) -> list[object]:
+            # Cancel the unused coros so pytest does not warn about
+            # un-awaited coroutines.
+            for c in coros:
+                if asyncio.iscoroutine(c):
+                    c.close()
+            return [RuntimeError("simulated wrapper failure"), (row_b, False)]
+
+        with patch(
+            "knowledge_graph.infrastructure.workers.provisional_enrichment.asyncio.gather",
+            new=_fake_gather,
+        ):
+            l1, l2, remaining = await worker._run_noise_filters(rows)
+
+        # Row A was lost in the gather wrapper; the recovery branch must put
+        # it back into `remaining` so Layer 3 still sees it.
+        assert l1 == []
+        assert l2 == []
+        remaining_ids = {r[0] for r in remaining}
+        assert qid_a in remaining_ids, "Row recovered from gather exception must reach Layer 3"
+        assert qid_b in remaining_ids, "Row that classified as not-noise must reach Layer 3"
+
+
+class TestNoiseLayer1CounterMetric:
+    """F-QA-204: s7_provisional_noise_filtered_total.inc() must be called
+    once per Layer-1 noise hit (1:1 with blocklist matches)."""
+
+    @pytest.mark.asyncio
+    async def test_layer1_counter_incremented_per_blocklist_row(self) -> None:
+        """N blocklist rows → counter.inc() called exactly N times."""
+        from knowledge_graph.infrastructure.workers.provisional_enrichment import (
+            ProvisionalEnrichmentWorker,
+        )
+
+        _session, factory = _make_session_with_rows([])
+        worker = ProvisionalEnrichmentWorker(
+            session_factory=factory,
+            llm_client=AsyncMock(),
+            noise_classifier_api_key="",  # Layer 2 disabled — only Layer 1 fires.
+        )
+
+        # Three blocklist mentions ("analysts" is in _NOISE_BLOCKLIST, plus
+        # variants).  We rely on case-insensitive match for one of them.
+        rows = [
+            (UUID("01234567-89ab-7def-8012-1111aaaa0001"), "analysts", "financial_instrument", "", 0),
+            (UUID("01234567-89ab-7def-8012-1111aaaa0002"), "ANALYSTS", "financial_instrument", "", 0),
+            (UUID("01234567-89ab-7def-8012-1111aaaa0003"), "analysts", "financial_instrument", "", 0),
+        ]
+
+        with patch(
+            "knowledge_graph.infrastructure.workers.provisional_enrichment.s7_provisional_noise_filtered_total"
+        ) as mock_counter:
+            l1, _l2, _remaining = await worker._run_noise_filters(rows)
+
+        assert len(l1) == 3, f"Expected 3 Layer-1 noise hits, got {len(l1)}"
+        assert (
+            mock_counter.inc.call_count == 3
+        ), f"Counter must be incremented once per Layer-1 hit; got {mock_counter.inc.call_count}"

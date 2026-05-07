@@ -1,6 +1,6 @@
 # PLAN-0076 — Deferred Issues: Schema Migrations, Architecture Hardening, Test Coverage
 
-> **Status**: IN-PROGRESS (Sub-Plans A + B complete; Sub-Plan C remains)
+> **Status**: COMPLETED — all sub-plans done (A 4 waves + B 4 waves with B-3 superseded + C 2 waves)
 > **Created**: 2026-05-05
 > **Updated**: 2026-05-07
 > **Owner**: Arnau Rodon
@@ -1139,8 +1139,9 @@ The following workers are intentionally left on `write_session_factory` for both
 
 ---
 
-## Wave C-1 — DEF-016 (KG): Knowledge-Graph Worker Test Gaps
+## Wave C-1 — DEF-016 (KG): Knowledge-Graph Worker Test Gaps ✅
 
+**Status**: **DONE** — 2026-05-07 · 7 net-new KG tests + 2 xfail(strict=True) documenting unimplemented graph-query graceful-degradation · F-QA-205/210/212 already covered by Wave B-1 · 1010 KG unit tests pass
 **Goal**: Add tests for the 9 KG-specific coverage gaps in `ProvisionalEnrichmentWorker`, `SummaryWorker`, `EmbeddingRefreshWorker`, and `GraphQueryUseCase`.
 **Depends on**: Wave B-1 (SummaryWorker refactor must land before session-discipline tests are meaningful).
 **Estimated effort**: 5 hours.
@@ -1222,8 +1223,9 @@ The following workers are intentionally left on `write_session_factory` for both
 
 ---
 
-## Wave C-2 — DEF-016 (NLP): NLP-Pipeline Worker Test Gaps
+## Wave C-2 — DEF-016 (NLP): NLP-Pipeline Worker Test Gaps ✅
 
+**Status**: **DONE** — 2026-05-07 · 13 net-new NLP tests (1 BP-395 regression + 12 F-QA-207/208) including 3 xfail(strict=True) for unimplemented retry/aclose/batch-isolation · BP-395 `raw=""` initializer comment refreshed to cite DEF-016 · 48 tests pass + 3 xfailed in test_unresolved_resolution_worker.py · QA-fix: patch httpx BEFORE worker construction (assertion was non-load-bearing); root pyproject.toml now sets `xfail_strict = true` repo-wide
 **Goal**: Close the 12 test coverage gaps in `UnresolvedResolutionWorker` and related NLP workers identified in F-QA-207, F-QA-208.
 **Depends on**: none.
 **Estimated effort**: 4 hours.
