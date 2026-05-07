@@ -107,12 +107,16 @@ async def test_cb_closes_on_success() -> None:
     cb = SourceCircuitBreaker(valkey, "claims")
     await cb.record_success()
 
-    # State key and probe key deleted; failures ZSET NOT deleted
-    deleted_keys = [call.args[0] for call in valkey.delete.call_args_list]
-    assert "rag:cb:claims:state" in deleted_keys
-    assert "rag:cb:claims:probe" in deleted_keys
-    # The failures ZSET should NOT be in the deleted keys
-    assert "rag:cb:claims:failures" not in deleted_keys
+    # D-004 fix: record_success() now uses a single atomic Lua DEL instead of
+    # two separate delete() calls, so we verify execute_lua_script was called
+    # with both keys in the KEYS list.
+    valkey.execute_lua_script.assert_awaited_once()
+    call_kwargs = valkey.execute_lua_script.call_args
+    lua_keys: list[str] = call_kwargs.kwargs.get("keys") or call_kwargs.args[1]
+    assert "rag:cb:claims:state" in lua_keys
+    assert "rag:cb:claims:probe" in lua_keys
+    # The failures ZSET should NOT be included in the atomic DEL keys
+    assert "rag:cb:claims:failures" not in lua_keys
 
 
 @pytest.mark.unit
@@ -278,13 +282,16 @@ async def test_is_open_other_probes_return_True() -> None:
 
 @pytest.mark.unit
 async def test_record_success_clears_probe_key() -> None:
-    """record_success() deletes both state key and probe key (F-X05)."""
+    """record_success() deletes both state key and probe key (F-X05 / D-004)."""
     valkey = _make_valkey()
     cb = SourceCircuitBreaker(valkey, "chunk_a2_test4")
     await cb.record_success()
 
-    deleted = [call.args[0] for call in valkey.delete.call_args_list]
-    assert "rag:cb:chunk_a2_test4:probe" in deleted
+    # D-004: deletion is now atomic via Lua; verify probe key is in the KEYS list.
+    valkey.execute_lua_script.assert_awaited_once()
+    call_kwargs = valkey.execute_lua_script.call_args
+    lua_keys: list[str] = call_kwargs.kwargs.get("keys") or call_kwargs.args[1]
+    assert "rag:cb:chunk_a2_test4:probe" in lua_keys
 
 
 @pytest.mark.unit
@@ -305,13 +312,16 @@ def test_probe_ttl_default_5s() -> None:
 
 @pytest.mark.unit
 async def test_record_success_does_not_delete_failures_zset() -> None:
-    """F-X05: record_success deletes state + probe but NOT the failures ZSET."""
+    """F-X05 / D-004: record_success deletes state + probe but NOT the failures ZSET."""
     valkey = _make_valkey()
     cb = SourceCircuitBreaker(valkey, "chunk_a2_test7")
     await cb.record_success()
 
-    deleted = [call.args[0] for call in valkey.delete.call_args_list]
-    assert "rag:cb:chunk_a2_test7:failures" not in deleted
+    # D-004: deletion is atomic via Lua; failures ZSET must not appear in KEYS.
+    valkey.execute_lua_script.assert_awaited_once()
+    call_kwargs = valkey.execute_lua_script.call_args
+    lua_keys: list[str] = call_kwargs.kwargs.get("keys") or call_kwargs.args[1]
+    assert "rag:cb:chunk_a2_test7:failures" not in lua_keys
 
 
 @pytest.mark.unit
