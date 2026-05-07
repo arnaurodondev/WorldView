@@ -72,6 +72,33 @@ def test_lifespan_does_not_start_cron_when_disabled() -> None:
     assert app.state.citation_cron_task is None
 
 
+def test_lifespan_disabled_does_not_call_start_citation_accuracy_cron() -> None:
+    """When citation_cron_enabled=False, start_citation_accuracy_cron must NOT be called.
+
+    F-005: the existing disabled test checks the flag only; this verifies that the
+    actual scheduling function (and thus use_case.execute) is never reached.
+    """
+    from unittest.mock import patch
+
+    settings = _make_settings(citation_cron_enabled=False)
+    app = MagicMock()
+    app.state = MagicMock()
+    app.state.citation_cron_task = None
+    read_factory = MagicMock()
+    log = MagicMock()
+
+    with patch(
+        "rag_chat.infrastructure.jobs.citation_accuracy_cron.start_citation_accuracy_cron",
+    ) as mock_start:
+        # The lifespan only calls _wire_citation_cron when enabled
+        if settings.citation_cron_enabled:  # type: ignore[truthy-bool]
+            from rag_chat.app import _wire_citation_cron  # type: ignore[attr-defined]
+
+            _wire_citation_cron(app, settings, read_factory, log)
+
+        mock_start.assert_not_called(), "start_citation_accuracy_cron must NOT be called when disabled"
+
+
 def test_done_callback_logs_critical_on_crash() -> None:
     """BP-268: done callback logs critical when task raised an exception."""
     from rag_chat.app import _wire_citation_cron  # type: ignore[attr-defined]

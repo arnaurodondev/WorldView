@@ -173,25 +173,12 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
             )
 
-        # BP-159: Read from app.state, not self — serving instance != startup instance
-        public_key = getattr(request.app.state, "_internal_jwt_public_key", None) or self._public_key
-        if public_key is None:
-            # F-001: Fail-closed by default when JWKS public key is unavailable.
-            # Without the public key we cannot verify JWT signatures, so accepting
-            # tokens here would allow any forged JWT to pass through unchecked.
-            if not self._skip_verification:
-                logger.error(  # type: ignore[no-any-return]
-                    "internal_jwt_no_public_key",
-                    detail="JWKS public key not loaded — rejecting request (fail-closed).",
-                )
-                return Response(
-                    content='{"detail":"Service Unavailable — JWKS not loaded"}',
-                    status_code=503,
-                    media_type="application/json",
-                )
-
-            # skip_verification=True: decode WITHOUT signature verification.
-            # This path exists ONLY for E2E tests without the full S9 stack.
+        # F-001: skip_verification=True bypasses signature validation regardless of
+        # whether the JWKS public key is loaded. This mode is used exclusively for
+        # the eval stack (RAG_CHAT_INTERNAL_JWT_SKIP_VERIFICATION=true) so that
+        # eval_retrieval.py can call /v1/internal/retrieve without a signed JWT.
+        # MUST NOT be used in production (validated at startup via config.py).
+        if self._skip_verification:
             logger.critical(  # type: ignore[no-any-return]
                 "internal_jwt_unverified_decode",
                 detail="Decoding JWT WITHOUT signature verification (skip_verification=True).",
@@ -205,12 +192,23 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 request.state.tenant_id = ""
                 request.state.user_id = ""
                 request.state.role = ""
-            # Set ContextVar so upstream service clients can include X-Internal-JWT
-            # in outgoing calls without threading the token through every method signature.
             from rag_chat.infrastructure.clients.auth_context import set_current_jwt
 
             set_current_jwt(token)
             return cast("Response", await call_next(request))
+
+        # BP-159: Read from app.state, not self — serving instance != startup instance
+        public_key = getattr(request.app.state, "_internal_jwt_public_key", None) or self._public_key
+        if public_key is None:
+            logger.error(  # type: ignore[no-any-return]
+                "internal_jwt_no_public_key",
+                detail="JWKS public key not loaded — rejecting request (fail-closed).",
+            )
+            return Response(
+                content='{"detail":"Service Unavailable — JWKS not loaded"}',
+                status_code=503,
+                media_type="application/json",
+            )
 
         try:
             # F-015: pass issuer= to jwt.decode so PyJWT validates iss internally.
