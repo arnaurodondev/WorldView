@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from common.time import utc_now  # type: ignore[import-untyped]
 from nlp_pipeline.infrastructure.nlp_db.models import EntityMentionModel
@@ -41,28 +42,38 @@ class EntityMentionRepository:
         self._session = session
 
     async def add(self, mention: EntityMention) -> None:
+        """Insert an entity mention row.
+
+        PLAN-0084 B-3 (T-B-3-02): uses ``ON CONFLICT (mention_id) DO NOTHING``
+        so that Kafka replays that produce the same deterministic ``mention_id``
+        (via ``uuid5_from_parts``) are silently idempotent at the DB level.
+        """
         # Persist resolution_outcome when the in-memory object has one set
         # (e.g. Block 9 sets AUTO_RESOLVED / PROVISIONAL / UNRESOLVED before add)
         resolution_outcome = str(mention.resolution_outcome) if mention.resolution_outcome is not None else "unresolved"
-        row = EntityMentionModel(
-            mention_id=mention.mention_id,
-            doc_id=mention.doc_id,
-            section_id=mention.section_id,
-            mention_text=mention.mention_text,
-            mention_class=str(mention.mention_class),
-            confidence=mention.confidence,
-            char_start=mention.char_start,
-            char_end=mention.char_end,
-            resolved_entity_id=mention.resolved_entity_id,
-            tenant_id=mention.tenant_id,
-            resolution_confidence=mention.resolution_confidence,
-            resolution_stage=mention.resolution_stage,
-            ner_model_id=mention.ner_model_id,
-            resolution_outcome=resolution_outcome,
-            resolution_noise_reason=mention.resolution_noise_reason,
-            resolution_processed_at=mention.resolution_processed_at,
+        stmt = (
+            pg_insert(EntityMentionModel)
+            .values(
+                mention_id=mention.mention_id,
+                doc_id=mention.doc_id,
+                section_id=mention.section_id,
+                mention_text=mention.mention_text,
+                mention_class=str(mention.mention_class),
+                confidence=mention.confidence,
+                char_start=mention.char_start,
+                char_end=mention.char_end,
+                resolved_entity_id=mention.resolved_entity_id,
+                tenant_id=mention.tenant_id,
+                resolution_confidence=mention.resolution_confidence,
+                resolution_stage=mention.resolution_stage,
+                ner_model_id=mention.ner_model_id,
+                resolution_outcome=resolution_outcome,
+                resolution_noise_reason=mention.resolution_noise_reason,
+                resolution_processed_at=mention.resolution_processed_at,
+            )
+            .on_conflict_do_nothing(index_elements=["mention_id"])
         )
-        self._session.add(row)
+        await self._session.execute(stmt)
 
     async def add_batch(self, mentions: list[EntityMention]) -> None:
         for mention in mentions:

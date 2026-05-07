@@ -231,6 +231,11 @@ async def main() -> None:
         backpressure=bp,
         chunk_text_store=_chunk_text_store,
         usage_logger=SessionScopedNlpUsageLogger(nlp_sf),
+        # PLAN-0084 B-3: wire Valkey client for ValkeyDedupMixin fast-path dedup.
+        # The same `valkey` instance used for WatchlistCache is reused here;
+        # dedup keys are namespaced under "nlp:dedup:article_consumer" so there
+        # is no key collision with the watchlist keys.
+        valkey_client=valkey,
     )
 
     # BP-239: Warm up Valkey connection before entering the Kafka consumer loop.
