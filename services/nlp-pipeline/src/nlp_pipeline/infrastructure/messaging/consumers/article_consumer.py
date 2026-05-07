@@ -178,6 +178,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     - ``chunk_embeddings.embedding_id``  — ``uuid5_from_parts(doc_id, chunk_id, model_id)``
     - outbox ``event_id`` for ``nlp.article.enriched.v1`` — ``uuid5_from_parts(doc_id, "article_enriched_v1")``
     - outbox ``event_id`` for ``nlp.signal.detected.v1``  — ``uuid5_from_parts(doc_id, signal_kind, signal_idx)``
+    - outbox ``event_id`` for ``intelligence.temporal_event.v1`` — ``uuid5_from_parts(doc_id, raw_type, str(loop_idx))``
 
     Cross-reference: R9 (STANDARDS.md §3.11), PLAN-0084 Wave B-3.
     """
@@ -1644,7 +1645,7 @@ async def _emit_temporal_events(
     """
     confidence_threshold = 0.5
 
-    for evt in raw_events:
+    for _idx, evt in enumerate(raw_events):
         evt_d: dict[str, Any] = dict(evt) if not isinstance(evt, dict) else evt  # type: ignore[call-overload]
 
         # ── Filter 1: event_type must be temporal ────────────────────────────
@@ -1681,8 +1682,13 @@ async def _emit_temporal_events(
         # ── Build Avro payload (all fields match intelligence.temporal_event.v1.avsc)
         # Avro empty-string convention: the S7 consumer converts "" → NULL for
         # region, active_until, source_url, description (per avsc doc field).
+        # PLAN-0084 QA D-009: deterministic event_id prevents duplicate outbox rows
+        # on Kafka re-delivery. UUID5 is derived from (doc_id, event_type, loop_index)
+        # so each qualifying temporal event in an article gets a stable, unique ID
+        # that bypasses the outbox ON CONFLICT (event_id) DO NOTHING guard on replay.
+        te_event_id = uuid.UUID(uuid5_from_parts(str(doc_id), raw_type, str(_idx)))
         payload: dict[str, Any] = {
-            "event_id": str(common.ids.new_uuid7()),
+            "event_id": str(te_event_id),
             "event_type": "intelligence.temporal_event",  # envelope field
             "schema_version": 1,
             "occurred_at": common.time.utc_now().isoformat(),
@@ -1720,6 +1726,10 @@ async def _emit_temporal_events(
             # same S7 partition, reducing out-of-order temporal event upserts.
             partition_key=raw_type,
             payload_avro=payload_bytes,
+            # PLAN-0084 QA D-009: pass deterministic event_id so the outbox
+            # INSERT ON CONFLICT (event_id) DO NOTHING guard deduplicates
+            # Kafka re-deliveries of the same article at the outbox-table level.
+            event_id=te_event_id,
         )
 
         logger.debug(  # type: ignore[no-any-return]
