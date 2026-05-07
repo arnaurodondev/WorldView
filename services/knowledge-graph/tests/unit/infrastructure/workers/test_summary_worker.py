@@ -743,3 +743,289 @@ class TestSummaryWorkerLlmFailure:
         # F-DS-208: mark_summary_updated MUST be called even when LLM returns None,
         # to clear the summary_stale flag and prevent the relation being retried every cycle.
         mock_rel.mark_summary_updated.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# DEF-018 / Wave B-1: 3-phase session pattern + read_session_factory wiring
+# ---------------------------------------------------------------------------
+
+
+class TestSummaryWorkerWaveB1:
+    """DEF-018: read_session_factory threading + ARCH-003 session-discipline guards.
+
+    These tests verify the Wave B-1 refactor:
+      * The constructor accepts ``read_session_factory`` and stores it.
+      * Phase 1 (fetch stale list) opens its session via the read factory.
+      * The Phase 1 read session is fully closed before any LLM call fires
+        (the original ARCH-003 violation).
+      * On LLM failure (returns None), the worker still calls
+        ``mark_summary_updated`` (F-DS-208 stale-clear behaviour).
+      * The repo's ``fetch_stale_summary`` SQL no longer carries
+        ``FOR UPDATE`` (per F-DS-201 — single-instance APScheduler).
+    """
+
+    def test_summary_worker_accepts_read_factory(self) -> None:
+        """Constructor stores read_session_factory verbatim when supplied."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+
+        write_sf = MagicMock()
+        read_sf = MagicMock()
+        llm = AsyncMock()
+
+        worker = SummaryWorker(write_sf, llm, read_session_factory=read_sf)
+
+        # The worker must hold the exact factory we supplied — not the write
+        # factory and not a wrapper.
+        assert worker._read_session_factory is read_sf
+        assert worker._sf is write_sf
+
+    def test_summary_worker_falls_back_to_write_factory_when_read_none(self) -> None:
+        """Default read_session_factory=None → falls back to the write factory.
+
+        Backward-compat guard: existing call sites that pass only
+        ``session_factory`` must continue to work.
+        """
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+
+        write_sf = MagicMock()
+        llm = AsyncMock()
+
+        worker = SummaryWorker(write_sf, llm)
+
+        # No read factory supplied → reuse the write factory for reads.
+        assert worker._read_session_factory is write_sf
+
+    def test_summary_worker_phase1_uses_read_factory(self) -> None:
+        """Phase 1 fetch_stale_summary opens a session from the READ factory.
+
+        Mocks both factories and asserts the read factory is invoked at least
+        once for the stale-list fetch — proving Phase 1 routes through the
+        read replica when one is supplied.
+        """
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+
+        # Build distinct read/write session factories so we can verify
+        # which one is opened by Phase 1.
+        read_session = AsyncMock()
+        read_session.__aenter__ = AsyncMock(return_value=read_session)
+        read_session.__aexit__ = AsyncMock(return_value=False)
+        read_sf = MagicMock(name="read_factory")
+        read_sf.return_value = read_session
+
+        write_session = AsyncMock()
+        write_session.__aenter__ = AsyncMock(return_value=write_session)
+        write_session.__aexit__ = AsyncMock(return_value=False)
+        write_session.commit = AsyncMock()
+        write_sf = MagicMock(name="write_factory")
+        write_sf.return_value = write_session
+
+        # No stale relations → Phase 2/3/4 are skipped, so we ONLY exercise
+        # Phase 1.  This isolates the assertion: read factory must be opened
+        # exactly once for the stale-list fetch.
+        mock_rel = AsyncMock()
+        mock_rel.fetch_stale_summary = AsyncMock(return_value=[])
+        mock_ev = AsyncMock()
+        mock_sum = AsyncMock()
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock()
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(write_sf, llm, read_session_factory=read_sf)
+            asyncio.run(worker.run())
+
+        # Phase 1 must open the read factory; the write factory must NOT be
+        # touched when there are no stale relations to write.
+        assert read_sf.call_count >= 1, "Phase 1 should open at least one read session"
+        assert write_sf.call_count == 0, (
+            "Phase 1-only run must not touch the write factory; " f"got write_sf.call_count={write_sf.call_count}"
+        )
+
+    def test_summary_worker_llm_failure_clears_stale(self) -> None:
+        """F-DS-208 (Wave B-1 phase-3 failure path): LLM=None still clears stale flag.
+
+        Mirrors the existing ``test_llm_failure_clears_stale_flag`` but
+        explicitly with the read_session_factory wired so we cover both
+        factory-routing and the failure path together.
+        """
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+
+        evidence_rows = [{"evidence_text": "Some evidence.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-0000000000b1"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        llm = AsyncMock()
+        # Simulate permanent LLM failure
+        llm.extract = AsyncMock(return_value=None)
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            # Pass the same MagicMock as both factories so the legacy
+            # _make_session helper continues to work; the assertion is on
+            # the failure-path behaviour, not factory routing.
+            worker = SummaryWorker(sf, llm, read_session_factory=sf)
+            asyncio.run(worker.run())
+
+        # mark_summary_updated MUST be called once to clear summary_stale,
+        # preventing the relation from being retried every cycle.  insert_new
+        # MUST NOT be called because the LLM produced no summary text.
+        mock_rel.mark_summary_updated.assert_awaited_once()
+        mock_sum.insert_new.assert_not_awaited()
+
+    def test_summary_worker_phase_isolation(self) -> None:
+        """ARCH-003 session-discipline regression guard.
+
+        Records ordered events (read_session_open / read_session_close /
+        llm_called / write_session_open) and asserts that:
+          * Phase 1 read session closes BEFORE the first LLM call.
+          * Phase 2 read session closes BEFORE the LLM call for that
+            relation.
+          * The Phase 4 write session opens AFTER the LLM call returns.
+
+        This is the F-QA-212 invariant: at no point during LLM I/O is a
+        DB session open.
+        """
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        # Shared event log — appended to in-order from each mock so the
+        # final assertions can compare relative positions.
+        events: list[str] = []
+
+        # Build a read-session mock that records its open/close events.
+        read_session = AsyncMock()
+
+        async def _read_enter(*_args: object, **_kwargs: object) -> AsyncMock:
+            events.append("read_session_open")
+            return read_session
+
+        async def _read_exit(*_args: object, **_kwargs: object) -> bool:
+            events.append("read_session_close")
+            return False
+
+        read_session.__aenter__ = AsyncMock(side_effect=_read_enter)
+        read_session.__aexit__ = AsyncMock(side_effect=_read_exit)
+        read_sf = MagicMock(name="read_factory")
+        read_sf.return_value = read_session
+
+        # Build a write-session mock that records its open event.
+        write_session = AsyncMock()
+
+        async def _write_enter(*_args: object, **_kwargs: object) -> AsyncMock:
+            events.append("write_session_open")
+            return write_session
+
+        async def _write_exit(*_args: object, **_kwargs: object) -> bool:
+            events.append("write_session_close")
+            return False
+
+        write_session.__aenter__ = AsyncMock(side_effect=_write_enter)
+        write_session.__aexit__ = AsyncMock(side_effect=_write_exit)
+        write_session.commit = AsyncMock()
+        write_sf = MagicMock(name="write_factory")
+        write_sf.return_value = write_session
+
+        evidence_rows = [{"evidence_text": "Phase isolation test evidence.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-0000000000b2"}]
+
+        mock_rel = AsyncMock()
+        mock_rel.fetch_stale_summary = AsyncMock(return_value=stale_relations)
+        mock_rel.mark_summary_updated = AsyncMock()
+
+        mock_ev = AsyncMock()
+        mock_ev.get_all_for_relation = AsyncMock(return_value=evidence_rows)
+        mock_ev.get_raw_for_relation_id = AsyncMock(return_value=[])
+
+        mock_sum = AsyncMock()
+        # No existing summary → hash differs → LLM is called → write phase fires.
+        mock_sum.get_current = AsyncMock(return_value=None)
+        mock_sum.insert_new = AsyncMock()
+
+        # LLM extract records its call event so we can compare ordering.
+        async def _record_extract(*_args: object, **_kwargs: object) -> ExtractionOutput:
+            events.append("llm_called")
+            return ExtractionOutput(result={"summary": "ok"}, raw_response="ok", model_id="m")
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(side_effect=_record_extract)
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(write_sf, llm, read_session_factory=read_sf)
+            asyncio.run(worker.run())
+
+        # Sanity: each phase fired at least once.
+        assert "llm_called" in events, f"LLM was never called; events={events}"
+        assert "read_session_open" in events, f"Read session never opened; events={events}"
+        assert "write_session_open" in events, f"Write session never opened; events={events}"
+
+        first_llm_idx = events.index("llm_called")
+
+        # Every read_session_open BEFORE the LLM call must have a matching
+        # close event also BEFORE the LLM call — i.e., no read session is
+        # held across the LLM I/O.
+        opens_before_llm = [i for i, ev in enumerate(events[:first_llm_idx]) if ev == "read_session_open"]
+        closes_before_llm = [i for i, ev in enumerate(events[:first_llm_idx]) if ev == "read_session_close"]
+        assert len(opens_before_llm) == len(closes_before_llm), (
+            "Read session was open across the LLM call (ARCH-003 regression). "
+            f"opens_before_llm={opens_before_llm}, closes_before_llm={closes_before_llm}, events={events}"
+        )
+
+        # The Phase 4 write session must open AFTER the LLM call returns.
+        first_write_open_idx = events.index("write_session_open")
+        assert first_write_open_idx > first_llm_idx, (
+            "Write session opened before the LLM call (Phase 4 should run only "
+            f"after the LLM returns). events={events}"
+        )
+
+    def test_summary_worker_for_update_removed(self) -> None:
+        """F-DS-201: fetch_stale_summary SQL no longer contains FOR UPDATE.
+
+        Captures the SQL passed to session.execute() during Phase 1 and
+        asserts ``FOR UPDATE`` does not appear.  Single-instance APScheduler
+        coalescing (``max_instances=1``) makes the row-level lock redundant
+        and harmful (it serialises the read against any concurrent writer).
+        """
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation import (
+            RelationRepository,
+        )
+        from sqlalchemy import text as _text
+
+        # Capture every SQL string passed to session.execute.
+        captured_sql: list[str] = []
+
+        async def _capture_execute(stmt: object, params: object | None = None) -> AsyncMock:
+            # `stmt` is a SQLAlchemy TextClause; render its text via .text
+            # attribute (set by sqlalchemy.text()).
+            sql_str = getattr(stmt, "text", str(stmt))
+            captured_sql.append(sql_str)
+            result = AsyncMock()
+            result.fetchall = MagicMock(return_value=[])
+            return result
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=_capture_execute)
+
+        repo = RelationRepository(session)
+        asyncio.run(repo.fetch_stale_summary(limit=10))
+
+        assert captured_sql, "fetch_stale_summary did not execute any SQL"
+        sql = captured_sql[0]
+        # Hard guard: the production SQL must not contain a row-level lock.
+        assert (
+            "FOR UPDATE" not in sql.upper()
+        ), f"fetch_stale_summary SQL still contains FOR UPDATE — F-DS-201 regression: {sql!r}"
+        # Sentinel — make sure we actually captured the right query.
+        assert "summary_stale" in sql, f"Captured wrong SQL: {sql!r}"
+        # Silence unused-import lint for the in-test alias.
+        _ = _text

@@ -51,7 +51,9 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
-    engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
+    # DEF-034 (Wave B-5): bind both engines + factories so the read replica is
+    # threaded into ``build_workers`` and disposed in the teardown block below.
+    engine, read_engine, write_factory, read_factory = _build_factories(settings)
 
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
     from messaging.valkey.client import create_valkey_client_from_url  # type: ignore[import-untyped]
@@ -152,6 +154,7 @@ async def main() -> None:
     workers = build_workers(
         settings,
         write_factory,
+        read_factory,
         llm_client=llm_client,
         valkey_client=valkey_client,
         usage_logger=kg_usage_logger,
@@ -175,6 +178,15 @@ async def main() -> None:
         with contextlib.suppress(Exception):
             await scheduler.stop()
         await engine.dispose()
+        # DEF-034 (Wave B-5): dispose the read-replica engine alongside the
+        # write engine.  Suppressed because a teardown failure must never
+        # mask the original shutdown reason captured above.
+        # QA-fix §2.4: skip when read_engine is the same object as the write
+        # engine (no DATABASE_URL_READ configured) — calling dispose() twice
+        # on one engine is idempotent but logs misleading diagnostics.
+        if read_engine is not engine:
+            with contextlib.suppress(Exception):
+                await read_engine.dispose()
 
 
 if __name__ == "__main__":

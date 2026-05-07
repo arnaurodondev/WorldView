@@ -18,12 +18,17 @@ import asyncio
 import dataclasses
 import random
 import sys
+import time
 from abc import ABC, abstractmethod
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+from messaging.kafka.consumer.backpressure import BackpressurePolicy, LagCalculator
 from messaging.kafka.consumer.errors import ConsumerError, FatalError, RetryableError
 from observability import ServiceMetrics, get_logger  # type: ignore[import-untyped]
 from observability import create_metrics as _create_metrics  # type: ignore[import-untyped]
+
+if TYPE_CHECKING:
+    from confluent_kafka import TopicPartition
 
 logger = get_logger(__name__)
 
@@ -156,6 +161,7 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         self,
         config: ConsumerConfig,
         metrics: ServiceMetrics | None = None,
+        backpressure_policy: BackpressurePolicy | None = None,
     ) -> None:
         self._config = config
         self._metrics = metrics or _create_metrics(config.group_id)
@@ -164,6 +170,20 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         # Running count of dead-letters sent; crashes the consumer when it
         # exceeds dead_letter_cap to trigger a container restart.
         self._dead_letter_count: int = 0
+        # DEF-032 backpressure (opt-in).  When None or policy.enabled=False,
+        # the integration short-circuits in _maybe_apply_backpressure with
+        # zero per-poll overhead so existing consumers see no behaviour change.
+        self._backpressure_policy: BackpressurePolicy | None = backpressure_policy
+        self._paused_partitions: set[TopicPartition] = set()
+        # Monotonic timestamp of the last backpressure evaluation; used to
+        # rate-limit checks to ``policy.check_interval_seconds``.
+        self._last_backpressure_check: float = 0.0
+        # Lazily created only when backpressure is enabled (avoids constructing
+        # the calculator when the feature is off — keeps tests + production
+        # behaviour identical for non-opted-in consumers).
+        self._lag_calculator: LagCalculator | None = (
+            LagCalculator() if backpressure_policy is not None and backpressure_policy.enabled else None
+        )
 
     # ── Abstract interface ────────────────────────────────────────────────────
 
@@ -314,12 +334,45 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
 
     # ── Concrete implementation ───────────────────────────────────────────────
 
+    def _on_partitions_revoked(self, _consumer: Any, _partitions: list[Any]) -> None:
+        """Rebalance callback fired before partitions are revoked.
+
+        We must resume any partitions we paused for backpressure before they
+        leave our assignment — otherwise the next consumer to receive them
+        could inherit a paused state we no longer track, and the pause set
+        would still hold stale references that never resume.
+
+        This callback signature matches Confluent's ``on_revoke`` contract;
+        the consumer + partitions args are unused because we resume *all*
+        currently-paused partitions regardless of which were revoked
+        (over-resume is a no-op for un-paused partitions).
+        """
+        # Backpressure may not be configured — guard before doing any work.
+        if self._backpressure_policy is None or not self._backpressure_policy.enabled:
+            return
+        self._resume_all_paused_partitions()
+        # QA-fix §2.2: reset the throttle timer so the new assignment is
+        # evaluated immediately on the next poll, instead of waiting up to a
+        # full ``check_interval_seconds`` window during which fresh partitions
+        # could grow lag without triggering a pause.
+        self._last_backpressure_check = 0.0
+
     def _init_kafka(self) -> None:
         """Initialise the Confluent Kafka consumer."""
         from confluent_kafka import Consumer
 
         self._consumer = Consumer(self._config.to_dict())
-        self._consumer.subscribe(self._config.topics)
+        # Register the revoke callback only when backpressure is enabled — this
+        # keeps the subscribe() call shape identical to the previous behaviour
+        # for the default (non-opted-in) code path, so any subclass relying on
+        # the old subscribe semantics is unaffected.
+        if self._backpressure_policy is not None and self._backpressure_policy.enabled:
+            self._consumer.subscribe(
+                self._config.topics,
+                on_revoke=self._on_partitions_revoked,
+            )
+        else:
+            self._consumer.subscribe(self._config.topics)
         logger.info(
             "kafka_consumer_started",
             group_id=self._config.group_id,
@@ -329,6 +382,10 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
     def _shutdown_kafka(self) -> None:
         """Close the Confluent Kafka consumer gracefully."""
         if self._consumer is not None:
+            # Resume any backpressure-paused partitions before close so the
+            # rebalance hand-off does not leave them paused for the next
+            # member of the group.
+            self._resume_all_paused_partitions()
             self._consumer.close()
             logger.info("kafka_consumer_stopped", group_id=self._config.group_id)
 
@@ -549,6 +606,121 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
             # Non-critical — don't break the consumer loop on lag polling failure.
             pass
 
+    def _maybe_apply_backpressure(self) -> None:
+        """Pause/resume partitions based on the configured backpressure policy.
+
+        Called once per poll cycle (before ``consumer.poll``).  Short-circuits
+        immediately when no policy is set or the policy is disabled, so the
+        default code path adds essentially zero overhead for consumers that
+        have not opted in.
+
+        When enabled, the function rate-limits itself to one evaluation every
+        ``policy.check_interval_seconds`` (monotonic clock) — there is no
+        benefit to evaluating lag on every poll, and the broker watermark
+        cache may not have refreshed yet.
+
+        Pause logic: any partition whose current lag exceeds
+        ``policy.pause_lag_threshold`` and is not already paused gets paused.
+        Resume logic: any currently-paused partition whose lag has fallen
+        below ``policy.resume_lag_threshold`` (or is no longer assigned) gets
+        resumed.  The hysteresis gap between the two thresholds prevents
+        flapping when lag oscillates near the boundary.
+        """
+        policy = self._backpressure_policy
+        # Fast path: no policy or disabled → zero work, zero broker calls.
+        if policy is None or not policy.enabled:
+            return
+        # Rate-limit: skip until the configured interval has elapsed since
+        # the last check.  Uses monotonic time so wall-clock jumps cannot
+        # cause us to miss or double-up evaluations.
+        now = time.monotonic()
+        if now - self._last_backpressure_check < policy.check_interval_seconds:
+            return
+        if self._lag_calculator is None or self._consumer is None:
+            return
+
+        lag_by_tp = self._lag_calculator.get_lag_for_assignment(self._consumer)
+
+        # ── Pause partitions that crossed the high-water threshold ──────────
+        for tp, lag in lag_by_tp.items():
+            if lag > policy.pause_lag_threshold and tp not in self._paused_partitions:
+                try:
+                    self._consumer.pause([tp])
+                except Exception as exc:
+                    # Pause is best-effort — failing here would just delay
+                    # backpressure by one cycle; do not crash the loop.
+                    logger.warning(
+                        "consumer.backpressure.pause_failed",
+                        topic=tp.topic,
+                        partition=tp.partition,
+                        error=str(exc),
+                    )
+                    continue
+                self._paused_partitions.add(tp)
+                logger.info(
+                    "consumer.backpressure.paused",
+                    topic=tp.topic,
+                    partition=tp.partition,
+                    lag=lag,
+                    threshold=policy.pause_lag_threshold,
+                )
+
+        # ── Resume partitions that recovered below the low-water threshold ──
+        # Iterate over a copy because we mutate the set during iteration.
+        for tp in list(self._paused_partitions):
+            current_lag = lag_by_tp.get(tp)
+            # Two reasons to resume:
+            # 1. Lag dropped below resume threshold.
+            # 2. Partition is no longer in the assignment (current_lag is None
+            #    because the calculator only returns assigned partitions).
+            #    Without this branch, a revoked-then-reassigned partition
+            #    would stay in our paused set forever.
+            should_resume = current_lag is None or current_lag < policy.resume_lag_threshold
+            if should_resume:
+                try:
+                    self._consumer.resume([tp])
+                except Exception as exc:
+                    logger.warning(
+                        "consumer.backpressure.resume_failed",
+                        topic=tp.topic,
+                        partition=tp.partition,
+                        error=str(exc),
+                    )
+                    # Remove from paused set even on resume failure — otherwise
+                    # we leak the entry; the next pause cycle can re-add it.
+                self._paused_partitions.discard(tp)
+                logger.info(
+                    "consumer.backpressure.resumed",
+                    topic=tp.topic,
+                    partition=tp.partition,
+                    lag=current_lag if current_lag is not None else -1,
+                    threshold=policy.resume_lag_threshold,
+                )
+
+        self._last_backpressure_check = now
+
+    def _resume_all_paused_partitions(self) -> None:
+        """Resume every currently-paused partition and clear the tracking set.
+
+        Called from the rebalance revoke callback and from ``_shutdown_kafka``
+        so that paused partitions are not left dangling for the next consumer
+        in the group.  Errors are swallowed — we are in a teardown / rebalance
+        path and cannot do anything useful with them.
+        """
+        if not self._paused_partitions:
+            return
+        partitions = list(self._paused_partitions)
+        try:
+            if self._consumer is not None:
+                self._consumer.resume(partitions)
+        except Exception as exc:
+            logger.warning(
+                "consumer.backpressure.bulk_resume_failed",
+                count=len(partitions),
+                error=str(exc),
+            )
+        self._paused_partitions.clear()
+
     async def _process_retry_batch(self) -> None:
         """Fetch and retry all pending failures once per poll cycle."""
         pending = await self.get_pending_retries()
@@ -593,6 +765,11 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         try:
             loop = asyncio.get_event_loop()
             while not self._stop_event.is_set():
+                # DEF-032: opt-in backpressure check before each poll.
+                # Short-circuits to a single attribute check when no policy
+                # is configured; otherwise rate-limits to once per
+                # ``check_interval_seconds`` so the cost is negligible.
+                self._maybe_apply_backpressure()
                 msg = await loop.run_in_executor(
                     None,
                     self._consumer.poll,

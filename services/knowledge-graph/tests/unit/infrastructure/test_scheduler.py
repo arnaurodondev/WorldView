@@ -240,3 +240,84 @@ class TestEmbeddingRefreshRegistration:
         ), f"worker_13j must use 'cron' trigger (got '{job['trigger']}') — daily sweep at 02:00 UTC."
         assert job.get("hour") == 2, f"cron hour must be 2 (got {job.get('hour')})"
         assert job.get("minute") == 0, f"cron minute must be 0 (got {job.get('minute')})"
+
+
+# ---------------------------------------------------------------------------
+# DEF-034 (Wave B-5) — read/write factory split through build_workers()
+# ---------------------------------------------------------------------------
+
+
+class TestBuildWorkersReadWriteFactorySplit:
+    """build_workers() must thread the read replica factory into split workers
+    while keeping R23-EXEMPT workers (Confidence/Contradiction/MonthlyPartition)
+    on the write factory only."""
+
+    def _make_full_settings(self) -> MagicMock:
+        """Settings stub broad enough that ``build_workers`` does not raise on
+        attribute access from any worker constructor — read-only attributes
+        only; no DB or LLM connections are made because the factories are
+        themselves mocks and ``llm_client`` is None for the simplest path."""
+        s = _make_settings()
+        # Embedding/extraction are not exercised when llm_client is None, but
+        # the structured-enrichment helper still reads description settings.
+        s.description_provider = "null"
+        s.description_deepinfra_concurrency = 1
+        s.description_gemini_concurrency = 1
+        s.deepinfra_api_key = MagicMock(get_secret_value=lambda: "")
+        s.deepinfra_extraction_base_url = "https://api.deepinfra.com/v1/openai"
+        s.gemini_api_key = MagicMock(get_secret_value=lambda: "")
+        s.embedding_provider = "ollama"
+        s.embedding_api_key = MagicMock(get_secret_value=lambda: "")
+        s.embedding_api_model_id = "x"
+        s.embedding_api_base_url = "x"
+        s.embedding_model_id = "x"
+        s.worker_embedding_batch_limit = 0
+        s.market_data_internal_url = "http://localhost:9999"
+        s.kafka_bootstrap_servers = "localhost:9092"
+        s.kafka_topic_entity_dirtied = "entity.dirtied.v1"
+        s.internal_jwt_private_key = MagicMock(get_secret_value=lambda: "")
+        return s
+
+    def test_build_workers_accepts_read_factory_kwarg(self) -> None:
+        """``build_workers`` accepts a read_session_factory and stores it on
+        every worker that participates in the R23 split."""
+        from knowledge_graph.infrastructure.scheduler.scheduler import build_workers
+
+        settings = self._make_full_settings()
+        write_sf = MagicMock(name="write_factory")
+        read_sf = MagicMock(name="read_factory")
+
+        workers = build_workers(settings, write_sf, read_sf)
+
+        # confidence_recompute is R23-EXEMPT — must NOT receive a read factory
+        # (it should still be using the write factory exclusively).
+        assert "confidence_recompute" in workers
+        assert "contradiction_batch" in workers
+        assert "partition_management" in workers
+
+        # The structured-enrichment adapter is built unconditionally; assert
+        # that its read factory equals the read factory passed in.
+        sew = workers["structured_enrichment"]
+        assert sew is not None
+        # The adapter is the use case's enrichment_adapter; it stores the read
+        # factory on ``_read_session_factory``.
+        adapter = sew._adapter
+        assert adapter._read_session_factory is read_sf, "EntityEnrichmentAdapter must use the read factory"
+        assert adapter._sf is write_sf, "EntityEnrichmentAdapter writes must use the write factory"
+
+    def test_build_workers_falls_back_when_read_factory_none(self) -> None:
+        """When ``read_session_factory`` is None, every worker falls back to
+        the write factory so existing call sites do not break."""
+        from knowledge_graph.infrastructure.scheduler.scheduler import build_workers
+
+        settings = self._make_full_settings()
+        write_sf = MagicMock(name="write_factory")
+
+        # No read factory — must fall back without raising AttributeError.
+        workers = build_workers(settings, write_sf, None)
+
+        sew = workers["structured_enrichment"]
+        adapter = sew._adapter
+        # Falls back to write factory when no read replica is configured.
+        assert adapter._read_session_factory is write_sf
+        assert adapter._sf is write_sf

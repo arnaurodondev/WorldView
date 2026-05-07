@@ -13,7 +13,7 @@ Performance (batch embed):
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from observability import get_logger  # type: ignore[import-untyped]
@@ -61,8 +61,12 @@ class EmbeddingRefreshWorker:
         embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
         batch_limit: int = 0,
         summary_embedding_model_id: str | None = None,
+        read_session_factory: Any = None,
     ) -> None:
         self._sf = session_factory
+        # DEF-034 (Wave B-5): Phase 1 SELECT of stale summaries uses the read
+        # replica when configured; Phase 3 UPDATE stays on the write factory.
+        self._read_session_factory: Any = read_session_factory if read_session_factory is not None else session_factory
         self._llm = llm_client
         self._embed_model_id = embedding_model_id
         self._batch_limit = batch_limit
@@ -99,7 +103,9 @@ class EmbeddingRefreshWorker:
 
         rows_to_embed: list[_Row] = []
 
-        async with self._sf() as session:
+        # DEF-034 (Wave B-5): pure SELECT — runs on the read replica when
+        # configured. The Phase 3 update stays on the write factory below.
+        async with self._read_session_factory() as session:
             rel_repo = RelationRepository(session)
             raw_rows = await rel_repo.fetch_stale_summary_embeddings(self._batch_limit)  # type: ignore[attr-defined]
             for row in raw_rows:
