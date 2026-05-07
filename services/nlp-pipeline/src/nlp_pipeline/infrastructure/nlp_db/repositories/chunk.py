@@ -21,6 +21,12 @@ class ChunkRepository:
         self._session = session
 
     async def add(self, chunk: Chunk) -> None:
+        # PLAN-0063 W5-2: ``title_denorm`` and ``section_heading_denorm`` feed
+        # the GENERATED ``tsv_english`` tsvector column (weights A and B).
+        # ``chunk_text`` feeds weight D (and the entire ``tsv_simple``); it must
+        # be the actual chunk body (NOT ``chunk_text_key`` which is a MinIO
+        # object path — see BP-NEW-CHUNK-TEXT). Skipping any of these would
+        # leave new chunks invisible to lexical search.
         stmt = (
             pg_insert(ChunkModel)
             .values(
@@ -36,6 +42,9 @@ class ChunkRepository:
                 speaker=chunk.speaker,
                 heading_path=chunk.heading_path,
                 chunk_text_key=chunk.text_key,
+                title_denorm=chunk.title_denorm,
+                section_heading_denorm=chunk.section_heading_denorm,
+                chunk_text=chunk.text,
             )
             .on_conflict_do_nothing(index_elements=["chunk_id"])
         )

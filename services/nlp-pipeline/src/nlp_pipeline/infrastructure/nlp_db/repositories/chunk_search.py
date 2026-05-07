@@ -222,6 +222,170 @@ class ChunkANNRepository:
 
         return section_results, total
 
+    async def lexical_search(
+        self,
+        query_text: str,
+        *,
+        mode: str = "both",
+        granularity: str = "chunk",
+        top_k: int = 20,
+        min_score: float = 0.0,
+        date_from: Any | None = None,
+        date_to: Any | None = None,
+        source_types: list[str] | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Run a Postgres full-text search over the chunks table (PLAN-0063 W5-2).
+
+        Args:
+            query_text: User-provided search string. Passed through
+                ``websearch_to_tsquery`` so familiar operators (``"phrase"``,
+                ``-exclude``, ``OR``) work natively.
+            mode: ``"english"`` (stemmed), ``"simple"`` (no stemming, preserves
+                identifier tokens like ``AAPL`` or ``PLAN-0063``), or
+                ``"both"`` (default — server-side ``GREATEST`` of the two ranks).
+            granularity: only ``"chunk"`` is supported in W5; section-level
+                lexical retrieval is deferred to a future wave.
+            top_k: Result row cap.
+            min_score: Filter out rows whose ``ts_rank_cd`` is strictly less
+                than this value.
+            date_from / date_to: Optional published_at bounds (UTC).
+            source_types: Optional whitelist of ``document_source_metadata``
+                source types (e.g. ``["sec_filing", "eodhd_news"]``).
+
+        Returns:
+            ``(rows, total_searched)`` — ``rows`` is a list of result dicts
+            with the same shape as the ANN path (chunk_id, doc_id, section_id,
+            heading_path, granularity, text, score, section_type,
+            chunk_text_key); ``total_searched`` is the number of chunks that
+            matched the WHERE clause BEFORE the LIMIT — separate COUNT(*)
+            query, mirroring ``_search_chunks``.
+
+        BP-180 — every nullable parameter goes through ``CAST(:param AS TYPE)``
+        in the SQL because asyncpg raises ``AmbiguousParameterError`` otherwise
+        when a parameter only appears inside ``IS NULL``-style guards. The CAST
+        gives the planner a concrete type to bind to. Do NOT simplify these
+        guards back to ``:param IS NULL``.
+        """
+        if granularity != "chunk":
+            raise ValueError(
+                "lexical_search supports granularity='chunk' only in W5; section-level lexical is deferred"
+            )
+        if mode not in {"english", "simple", "both"}:
+            raise ValueError(f"lexical_search mode must be one of english/simple/both; got {mode!r}")
+
+        # Build the WHERE / score expression based on mode.
+        if mode == "english":
+            match_sql = "c.tsv_english @@ websearch_to_tsquery('english', :q)"
+            score_sql = "ts_rank_cd(c.tsv_english, websearch_to_tsquery('english', :q))"
+        elif mode == "simple":
+            match_sql = "c.tsv_simple @@ websearch_to_tsquery('simple', :q)"
+            score_sql = "ts_rank_cd(c.tsv_simple, websearch_to_tsquery('simple', :q))"
+        else:  # both
+            match_sql = (
+                "(c.tsv_english @@ websearch_to_tsquery('english', :q) "
+                "OR c.tsv_simple @@ websearch_to_tsquery('simple', :q))"
+            )
+            score_sql = (
+                "GREATEST("
+                "ts_rank_cd(c.tsv_english, websearch_to_tsquery('english', :q)), "
+                "ts_rank_cd(c.tsv_simple, websearch_to_tsquery('simple', :q))"
+                ")"
+            )
+
+        params: dict[str, Any] = {
+            "q": query_text,
+            "min_score": min_score,
+            "top_k": top_k,
+            "date_from": date_from,
+            "date_to": date_to,
+            "source_types": source_types if source_types else None,
+        }
+
+        # Common date / source-type filter clauses (BP-180 CAST guards).
+        date_filter = (
+            "(CAST(:date_from AS TIMESTAMPTZ) IS NULL OR dsm.published_at >= CAST(:date_from AS TIMESTAMPTZ)) "
+            "AND (CAST(:date_to AS TIMESTAMPTZ) IS NULL OR dsm.published_at <= CAST(:date_to AS TIMESTAMPTZ))"
+        )
+        source_filter = (
+            "(CAST(:source_types AS TEXT[]) IS NULL OR dsm.source_type = ANY(CAST(:source_types AS TEXT[])))"
+        )
+
+        # Use a CTE so we can reuse the result set for COUNT and SELECT without
+        # re-running the (relatively cheap, but not free) GIN match twice
+        # against arbitrarily large filter sets.
+        sql = f"""
+            WITH matched AS (
+                SELECT
+                    c.chunk_id,
+                    c.doc_id,
+                    c.section_id,
+                    c.heading_path,
+                    c.chunk_text_key,
+                    c.chunk_text,
+                    s.section_type,
+                    {score_sql} AS score
+                FROM chunks c
+                JOIN sections s ON s.section_id = c.section_id
+                LEFT JOIN document_source_metadata dsm ON dsm.doc_id = c.doc_id
+                WHERE {match_sql}
+                  AND {date_filter}
+                  AND {source_filter}
+            )
+            SELECT chunk_id, doc_id, section_id, heading_path, chunk_text_key,
+                   chunk_text, section_type, score
+            FROM matched
+            WHERE score >= :min_score
+            ORDER BY score DESC
+            LIMIT :top_k
+            """
+
+        # Use the second-arg dict params form (instead of ``bindparams(**params)``)
+        # because ``bindparams`` requires every key to appear in the SQL, and
+        # the COUNT-only query below intentionally does not reference ``top_k``.
+        # Both ``execute(text, params)`` and ``execute(text(...).bindparams(...))``
+        # are public APIs; the dict form is the one with permissive key handling.
+        result = await self._session.execute(text(sql), params)
+        rows = result.all()
+
+        chunk_results: list[dict[str, Any]] = [
+            {
+                "chunk_id": row.chunk_id,
+                "doc_id": row.doc_id,
+                "section_id": row.section_id,
+                "granularity": "chunk",
+                # ``text`` carries the actual chunk body (BP-NEW-CHUNK-TEXT) so
+                # downstream snippet rendering does not require a MinIO fetch.
+                # Falls back to heading_path when chunk_text is NULL (legacy
+                # rows ingested before migration 0017).
+                "text": row.chunk_text or row.heading_path or "",
+                "score": float(row.score),
+                "section_type": row.section_type,
+                "heading_path": row.heading_path,
+                "chunk_text_key": row.chunk_text_key,
+                "chunk_text": row.chunk_text,
+            }
+            for row in rows
+        ]
+
+        # total_searched = number of matched rows BEFORE LIMIT (post-filter).
+        # We re-run the matched CTE through COUNT — slightly redundant but
+        # mirrors the existing _search_chunks behaviour and avoids materialising
+        # an OVER() window over the full result set.
+        count_sql = f"""
+            SELECT COUNT(*)
+            FROM chunks c
+            JOIN sections s ON s.section_id = c.section_id
+            LEFT JOIN document_source_metadata dsm ON dsm.doc_id = c.doc_id
+            WHERE {match_sql}
+              AND {date_filter}
+              AND {source_filter}
+              AND {score_sql} >= :min_score
+            """
+        count_result = await self._session.execute(text(count_sql), params)
+        total = int(count_result.scalar_one())
+
+        return chunk_results, total
+
     async def fetch_entity_mentions(
         self,
         chunk_ids: list[UUID],

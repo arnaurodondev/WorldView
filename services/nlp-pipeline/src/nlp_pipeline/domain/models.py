@@ -52,6 +52,13 @@ class Chunk:
     speaker: str | None = None  # transcripts only
     heading_path: str | None = None  # e.g. "Item 1A > Risk Factors"
     text_key: str | None = None  # MinIO key for chunk text; set after upload
+    # PLAN-0063 W5-2 / FR-T1-2: denorm fields fed into the GENERATED tsv_english
+    # column (weight A and B respectively). Optional because not every code path
+    # has the title/heading at construction time — but they MUST be populated by
+    # the article-consumer chunk-creation block when the data is available, or
+    # the lexical search will silently miss the highest-weight matches.
+    title_denorm: str | None = None  # parent doc title — feeds tsv_english weight A
+    section_heading_denorm: str | None = None  # section.title — feeds tsv_english weight B
 
 
 @dataclass
