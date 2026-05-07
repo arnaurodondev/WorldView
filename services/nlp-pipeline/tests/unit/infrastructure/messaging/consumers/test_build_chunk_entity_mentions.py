@@ -171,6 +171,26 @@ class TestBuildChunkEntityMentions:
         assert result[chunk_b_id][0]["entity_id"] == str(eid_b)
 
     @pytest.mark.unit
+    def test_mention_straddling_boundary_assigned_to_both_chunks(self) -> None:
+        """A mention whose char range spans a chunk boundary is assigned to both adjacent chunks."""
+        section_id = uuid.uuid4()
+        chunk_a_id = uuid.uuid4()
+        chunk_b_id = uuid.uuid4()
+        eid = uuid.uuid4()
+
+        chunk_a = _chunk(chunk_a_id, section_id, 0, 100)
+        chunk_b = _chunk(chunk_b_id, section_id, 100, 200)
+        # mention spans the boundary at 90-110 -> overlaps both chunks
+        mention = _mention(uuid.uuid4(), section_id, 90, 110, confidence=0.9, resolved_entity_id=eid)
+
+        result = _build_chunk_entity_mentions([chunk_a, chunk_b], [mention], mention_floor=0.6)
+
+        assert len(result[chunk_a_id]) == 1, "mention should be assigned to chunk_a (overlap)"
+        assert len(result[chunk_b_id]) == 1, "mention should be assigned to chunk_b (overlap)"
+        assert result[chunk_a_id][0]["entity_id"] == str(eid)
+        assert result[chunk_b_id][0]["entity_id"] == str(eid)
+
+    @pytest.mark.unit
     def test_empty_inputs_return_empty_maps(self) -> None:
         """Empty chunk and mention lists produce an empty result."""
         result = _build_chunk_entity_mentions([], [], mention_floor=0.6)
