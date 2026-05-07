@@ -1,7 +1,7 @@
 # PLAN-0078 — Chunk Entity-Filter + GLiNER Mention Storage
 
 > **PRD**: derived from `/investigate` 2026-05-07 — long-term consistency review (issue C-2)
-> **Status**: stub
+> **Status**: complete (4/4 waves done 2026-05-07)
 > **Created**: 2026-05-07
 > **Owner**: TBD
 > **Estimated effort**: ~2 dev-days (4 waves, ~12 tasks)

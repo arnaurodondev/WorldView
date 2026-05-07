@@ -59,6 +59,14 @@ class Chunk:
     # the lexical search will silently miss the highest-weight matches.
     title_denorm: str | None = None  # parent doc title — feeds tsv_english weight A
     section_heading_denorm: str | None = None  # section.title — feeds tsv_english weight B
+    # PLAN-0078 Wave B: denormalised GLiNER mention metadata for GIN-indexed
+    # query-time entity filtering (chunks.entity_mentions JSONB column).
+    # Populated by the article consumer after Block 9 entity resolution so
+    # resolved_entity_id is available.  Each dict has keys:
+    #   entity_id (str|null), entity_type (str), char_start (int),
+    #   char_end (int), gliner_score (float), raw_text (str).
+    # Only mentions with gliner_score >= settings.gliner_mention_floor are stored.
+    entity_mentions: list[dict] = field(default_factory=list)
 
 
 @dataclass
