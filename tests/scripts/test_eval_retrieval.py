@@ -312,10 +312,15 @@ def test_boost_sweep_rejects_boost_that_regresses_other_class() -> None:
     assert any("comparison" in r["reason"] for r in decision["rejected"] if r["boost"] == 2.0)
 
 
-def test_boost_sweep_writes_output(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """run_boost_sweep with --boost-sweep-inputs writes the expected JSON shape."""
+def test_boost_sweep_writes_output(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """run_boost_sweep with --boost-sweep-inputs writes the expected JSON shape.
+
+    S-011 (Wave 1): --boost-sweep-inputs paths are now validated to be under cwd.
+    monkeypatch.chdir(tmp_path) makes tmp_path the cwd so the paths are valid.
+    """
     import asyncio
 
+    monkeypatch.chdir(tmp_path)  # S-011: path guard checks relative to cwd
     base_path = tmp_path / "agg_1_0.json"
     boost15_path = tmp_path / "agg_1_5.json"
     base_path.write_text(json.dumps(_agg(identifier=0.40, comparison=0.50, factual=0.50)))
@@ -628,3 +633,53 @@ def test_empty_per_query_with_few_labelled_exits_0(tmp_path: Path) -> None:
         rc = asyncio.run(eval_retrieval.run_eval(args))
 
     assert rc == 0
+
+
+def test_per_class_gate_skips_class_with_fewer_than_6_queries(tmp_path: Path) -> None:
+    """Classes with n < 6 must emit a WARN and be excluded from the n<6-guarded gate.
+
+    F-013: The n<6 guard lives in the SEPARATE per-class check in run_eval
+    (lines 699-738), which is distinct from compare_to_baseline's built-in check.
+    Setup: baseline ndcg=0.04 so a drop to 0.0 is -0.04, which is within
+    compare_to_baseline's 0.05 threshold (passes) but exceeds the
+    --fail-on-regression-per-class=0.03 threshold.  The n<6 guard must then
+    skip the class and return exit 0.
+    """
+    import asyncio
+    import unittest.mock
+
+    # 5 labelled rows → n_graded=5 < 6 after eval
+    golden = _make_golden_jsonl(tmp_path, n_labelled=5)
+    # Baseline ndcg=0.04: a drop to 0.0 is -0.04, within compare_to_baseline's 0.05 gate
+    baseline = _make_baseline_json(tmp_path, factual_lookup_ndcg=0.04, factual_lookup_n=5)
+    args = eval_retrieval.parse_args(
+        [
+            "--golden",
+            str(golden),
+            "--baseline",
+            str(baseline),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--fail-on-regression",
+            "1.0",  # disable global gate
+            "--fail-on-regression-per-class",
+            "0.03",  # -0.04 drop exceeds this, but n<6 guard must skip
+        ]
+    )
+
+    async def _zero_retrieve(
+        client: object,
+        rag_url: str,
+        query_text: str,
+        *,
+        query_embedding: object = None,
+        top_k: int = 20,
+        internal_jwt: object = None,
+    ) -> list[dict[str, object]]:
+        return []  # NDCG=0 → delta=-0.04 (within compare_to_baseline's 0.05 gate)
+
+    with unittest.mock.patch.object(eval_retrieval, "call_retrieve", side_effect=_zero_retrieve):
+        rc = asyncio.run(eval_retrieval.run_eval(args))
+
+    # n=5 < 6 → per-class gate skips class → exit 0 despite -0.04 regression
+    assert rc == 0, "Class with n < 6 must be skipped by the n<6 guard — should not trigger exit 1"

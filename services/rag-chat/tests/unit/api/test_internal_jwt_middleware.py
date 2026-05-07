@@ -115,6 +115,7 @@ async def test_internal_jwt_rejects_wrong_issuer() -> None:
             "tenant_id": "tenant-1",
             "role": "user",
             "iss": "evil",  # <-- wrong issuer; should be "worldview-gateway"
+            "aud": "worldview-internal",
             "exp": int(time.time()) + 3600,
         },
         private_key,
@@ -122,10 +123,11 @@ async def test_internal_jwt_rejects_wrong_issuer() -> None:
     )
 
     # Inject the public key directly — bypasses JWKS HTTP fetch in unit tests.
+    # skip_verification=False (default) so full RS256 + issuer validation runs.
     mock_app = Starlette()
     mock_app.state._internal_jwt_public_key = public_key
 
-    mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=True)
+    mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks")
     mw._public_key = public_key
 
     called: list[bool] = []

@@ -166,6 +166,54 @@ class TestMarkProcessed:
 
         assert 3580 < ttl <= 3600
 
+    async def test_mark_processed_set_call_signature(self) -> None:
+        """mark_processed MUST call set(key, '1', ex=TTL) — not setex or other variants.
+
+        F-001: exact call signature guard so implementation cannot silently drift to
+        setex() or a different kwarg shape that would break against real Valkey.
+        """
+        client = MagicMock(spec=ValkeyClient)
+        client.set = AsyncMock(return_value=True)
+        client.exists = AsyncMock(return_value=False)
+        mixin = _make_mixin(client=client)  # type: ignore[arg-type]
+
+        await mixin.mark_processed("evt-sig")
+
+        client.set.assert_awaited_once_with(
+            f"{mixin._dedup_prefix}:evt-sig",
+            "1",
+            ex=86400,
+        )
+
+    async def test_fail_open_re_delivery_after_valkey_error(self) -> None:
+        """If Valkey is down during mark_processed, the next is_duplicate must still
+        return False — ensuring at-least-once delivery rather than blocking.
+
+        F-009: fail-open on Valkey write errors.
+        """
+        call_count = 0
+
+        class _FlakyClient:
+            async def exists(self, key: str) -> bool:
+                return False  # always misses (Valkey down)
+
+            async def set(self, key: str, value: str, ex: int | None = None) -> bool:
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    raise OSError("connection refused")
+                return True
+
+            async def ttl(self, key: str) -> int:
+                return -2
+
+        mixin = _make_mixin(client=_FlakyClient())  # type: ignore[arg-type]
+
+        await mixin.mark_processed("evt-flaky")
+
+        result = await mixin.is_duplicate("evt-flaky")
+        assert result is False, "Valkey-down must fail-open, not block processing"
+
 
 class TestEdgeCases:
     async def test_concurrent_is_duplicate_returns_consistent_result(self) -> None:
@@ -200,3 +248,29 @@ class TestEdgeCases:
 
         assert await mixin.is_duplicate("evt-A") is True
         assert await mixin.is_duplicate("evt-B") is False
+
+    async def test_fail_open_sequence_mark_fails_then_next_check_returns_false(self) -> None:
+        """Sequence: mark_processed fails (Valkey down) → next is_duplicate returns False.
+
+        DP-009: at-least-once guarantee — never block delivery when dedup store is down.
+        """
+        failed_set = False
+
+        class _MarkFailClient:
+            async def set(self, key: str, value: str, ex: int | None = None) -> bool:
+                nonlocal failed_set
+                failed_set = True
+                raise ConnectionError("valkey unreachable")
+
+            async def exists(self, key: str) -> bool:
+                return False  # key was never stored because set() failed
+
+            async def ttl(self, key: str) -> int:
+                return -2
+
+        mixin = _make_mixin(client=_MarkFailClient())  # type: ignore[arg-type]
+        await mixin.mark_processed("evt-recover")
+
+        assert failed_set, "set() must have been attempted"
+        result = await mixin.is_duplicate("evt-recover")
+        assert result is False, "After failed mark_processed, is_duplicate must return False (fail-open)"
