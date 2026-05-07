@@ -26,7 +26,7 @@ from uuid import UUID
 
 from sqlalchemy import text
 
-from common.ids import new_uuid7  # type: ignore[import-untyped]
+from common.ids import uuid5_from_parts  # type: ignore[import-untyped]
 from knowledge_graph.domain.enums import EventScope
 from knowledge_graph.infrastructure.intelligence_db.repositories.temporal_event_repository import (
     EntityEventExposureRepository,
@@ -132,6 +132,11 @@ class TemporalEventConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
 
     """
 
+    # Class-level default; specialised in __init__ with config.group_id.
+    # Prefix aligned to ``kg:dedup:`` namespace for consistent Valkey key scanning
+    # across all KG consumers (DP-004).  Old ``kg:temporal:`` keys expire after 24h.
+    _dedup_prefix: str = "kg:dedup:temporal"
+
     def __init__(
         self,
         config: ConsumerConfig,
@@ -142,7 +147,7 @@ class TemporalEventConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         super().__init__(config)
         self._sf = session_factory
         self._dedup_client = dedup_client
-        self._dedup_prefix = f"kg:temporal:{config.group_id}"
+        self._dedup_prefix = f"kg:dedup:temporal:{config.group_id}"
 
     # ------------------------------------------------------------------
     # Core processing
@@ -212,8 +217,13 @@ class TemporalEventConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                         )
                         continue
 
+                # DP-006/D-015: deterministic exposure_id so that Kafka re-delivery
+                # of the same (temporal_event_id, entity_id) pair does not generate
+                # a new UUID7 that bypasses ON CONFLICT DO NOTHING on exposure_id.
+                # uuid5_from_parts produces a stable UUID5 for the natural key.
+                det_exposure_id = UUID(uuid5_from_parts(str(db_event_id), str(entity_id_val), "exposure"))
                 await ee_repo.upsert(
-                    exposure_id=new_uuid7(),
+                    exposure_id=det_exposure_id,
                     event_id=db_event_id,
                     entity_id=entity_id_val,
                     exposure_type=exposure_type,

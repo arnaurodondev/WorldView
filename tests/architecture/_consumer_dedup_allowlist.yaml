@@ -37,6 +37,18 @@ allowlist:
     granted_at: "2026-05-07"
 
   # ── market-data ───────────────────────────────────────────────────────────
+  - class_name: QuotesConsumer
+    module_path: services.market-data.src.market_data.infrastructure.messaging.consumers.quotes_consumer
+    justification: >
+      BP-035 pattern: event_id dedup is handled atomically inside process_message
+      via create_if_not_exists (INSERT … ON CONFLICT DO NOTHING … RETURNING) in the
+      ingestion_events repository, within the same DB transaction as the quote write.
+      ValkeyDedupMixin was previously in the MRO but both is_duplicate() and
+      mark_processed() were shadowed by no-ops — the mixin provided no actual dedup.
+      Removed in PLAN-0084 QA Wave 2-4 (D-011/DP-001). _dedup_prefix is kept as a
+      class attribute for architecture test coverage.
+    granted_at: "2026-05-07"
+
   - class_name: PredictionMarketConsumer
     module_path: services.market-data.src.market_data.infrastructure.messaging.consumers.prediction_market_consumer
     justification: >

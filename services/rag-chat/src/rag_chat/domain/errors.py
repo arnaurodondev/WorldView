@@ -88,6 +88,25 @@ class EntityNotFoundError(DomainError):
     error_code = "ENTITY_NOT_FOUND"
 
 
+class ProviderClientError(RagError):
+    """Raised when an LLM provider returns a 4xx client error.
+
+    These errors indicate a bad request (bad prompt, invalid params, quota exceeded)
+    not a service fault.  The circuit breaker MUST NOT count these as failures —
+    only 5xx / network-layer errors indicate the provider itself is unhealthy.
+
+    Args:
+        message:     Human-readable description of the error.
+        status_code: HTTP status code returned by the provider (4xx).
+    """
+
+    error_code = "PROVIDER_CLIENT_ERROR"
+
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class LLMJudgeTimeoutError(DomainError):
     """LLM judge call exceeded the per-call timeout budget (PLAN-0084 A-1 T-A-1-02).
 
