@@ -32,8 +32,8 @@ INSERT INTO users (id, tenant_id, email, status, created_at, external_id, role) 
     ('01900000-0000-7000-8000-000000000010', '01900000-0000-7000-8000-000000000001', 'demo@worldview.dev', 'active', NOW(), 'dev-user', 'owner')
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO portfolios (id, tenant_id, owner_id, name, currency, status, created_at) VALUES
-    ('01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000000001', '01900000-0000-7000-8000-000000000010', 'Demo Portfolio', 'USD', 'active', NOW())
+INSERT INTO portfolios (id, tenant_id, owner_id, name, kind, currency, status, created_at) VALUES
+    ('01900000-0000-7000-8000-000000000100', '01900000-0000-7000-8000-000000000001', '01900000-0000-7000-8000-000000000010', 'Demo Portfolio', 'manual', 'USD', 'active', NOW())
 ON CONFLICT (id) DO NOTHING;
 
 -- F-402 (MAJOR, QA iter-4): extend portfolio_db.instruments to mirror

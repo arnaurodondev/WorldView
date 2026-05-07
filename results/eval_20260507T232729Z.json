@@ -1,0 +1,1204 @@
+{
+  "single_reviewer": true,
+  "reviewer_id": "claude-agent-1",
+  "timestamp": "20260507T232729Z",
+  "git_sha": "0a3ad290349e33f0ed93db487275ebe3521c6318",
+  "mode": "hybrid",
+  "embedding_model": "BAAI/bge-large-en-v1.5",
+  "rrf_k": null,
+  "golden_set_path": "tests/eval/golden/queries_eval_stack.jsonl",
+  "n_queries_total": 120,
+  "n_queries_evaluated": 63,
+  "n_queries_skipped_unlabelled": 56,
+  "n_queries_failed": 1,
+  "skipped_query_ids": [
+    "q001",
+    "q003",
+    "q004",
+    "q008",
+    "q023",
+    "q024",
+    "q025",
+    "q026",
+    "q027",
+    "q030",
+    "q031",
+    "q033",
+    "q035",
+    "q053",
+    "q054",
+    "q044",
+    "q061",
+    "q045",
+    "q065",
+    "q066",
+    "q067",
+    "q068",
+    "q069",
+    "q070",
+    "q049",
+    "q050",
+    "q072",
+    "q075",
+    "q076",
+    "q079",
+    "q082",
+    "q083",
+    "q084",
+    "q085",
+    "q086",
+    "q089",
+    "q090",
+    "q091",
+    "q093",
+    "q098",
+    "q100",
+    "q101",
+    "q102",
+    "q103",
+    "q104",
+    "q105",
+    "q106",
+    "q107",
+    "q108",
+    "q109",
+    "q110",
+    "q112",
+    "q113",
+    "q118",
+    "q125",
+    "q126"
+  ],
+  "failed_query_ids": [
+    "q081"
+  ],
+  "summary": {
+    "ndcg_at_10": {
+      "mean": 0.5765856437417691,
+      "std": 0.41691263518958815,
+      "n": 63
+    },
+    "mrr": {
+      "mean": 0.5746336996336996,
+      "std": 0.44512502358406997,
+      "n": 63
+    },
+    "p_at_5": {
+      "mean": 0.2857142857142857,
+      "std": 0.24614948539657305,
+      "n": 63
+    },
+    "recall_at_20": {
+      "mean": 0.678042328042328,
+      "std": 0.4452356587910839,
+      "n": 63
+    }
+  },
+  "by_class": {
+    "factual_lookup": {
+      "n": 13,
+      "ndcg_at_10": 0.7251529346200563,
+      "mrr": 0.7366863905325444,
+      "p_at_5": 0.35384615384615387,
+      "recall_at_20": 0.8461538461538461
+    },
+    "comparison": {
+      "n": 5,
+      "ndcg_at_10": 0.736957751066608,
+      "mrr": 0.65,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0
+    },
+    "reasoning": {
+      "n": 5,
+      "ndcg_at_10": 0.6771409420383643,
+      "mrr": 0.65,
+      "p_at_5": 0.44,
+      "recall_at_20": 0.8
+    },
+    "financial_data": {
+      "n": 9,
+      "ndcg_at_10": 0.2793271567723399,
+      "mrr": 0.25925925925925924,
+      "p_at_5": 0.15555555555555556,
+      "recall_at_20": 0.3333333333333333
+    },
+    "relationship": {
+      "n": 9,
+      "ndcg_at_10": 0.251380729454893,
+      "mrr": 0.2361111111111111,
+      "p_at_5": 0.15555555555555556,
+      "recall_at_20": 0.3851851851851852
+    },
+    "signal_intel": {
+      "n": 5,
+      "ndcg_at_10": 0.7285151904653342,
+      "mrr": 0.8,
+      "p_at_5": 0.32,
+      "recall_at_20": 0.7333333333333333
+    },
+    "portfolio": {
+      "n": 4,
+      "ndcg_at_10": 0.8288681910959755,
+      "mrr": 0.875,
+      "p_at_5": 0.35000000000000003,
+      "recall_at_20": 0.8333333333333334
+    },
+    "identifier_lookup": {
+      "n": 3,
+      "ndcg_at_10": 0.7925302018846102,
+      "mrr": 0.8333333333333334,
+      "p_at_5": 0.4666666666666667,
+      "recall_at_20": 0.8333333333333334
+    },
+    "ambiguous": {
+      "n": 3,
+      "ndcg_at_10": 0.6666666666666666,
+      "mrr": 0.6666666666666666,
+      "p_at_5": 0.26666666666666666,
+      "recall_at_20": 0.6666666666666666
+    },
+    "non_analyst": {
+      "n": 5,
+      "ndcg_at_10": 0.49731978279014954,
+      "mrr": 0.5,
+      "p_at_5": 0.16,
+      "recall_at_20": 0.6
+    },
+    "time_anchored_edge": {
+      "n": 2,
+      "ndcg_at_10": 0.6144023638928082,
+      "mrr": 0.5833333333333334,
+      "p_at_5": 0.2,
+      "recall_at_20": 0.875
+    }
+  },
+  "per_query": [
+    {
+      "query_id": "q002",
+      "query_class": "factual_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.07692307692307693,
+      "p_at_5": 0.0,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "c124234a-c7f5-5eb2-beda-dfca7f54d0e0",
+        "2ef3a639-cf8b-5c12-a257-3889dcb1cde3",
+        "bd01f2e5-fbf3-59ef-8fcd-b392d5f31b59",
+        "852a3f24-6612-58de-9205-404cb4c7d92b",
+        "43053136-959a-5521-9eac-5a2fbf337b32"
+      ]
+    },
+    {
+      "query_id": "q006",
+      "query_class": "factual_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.9421945763140684,
+      "mrr": 1.0,
+      "p_at_5": 0.6,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "83554722-1d44-5765-9f79-6a56382d1dd5",
+        "c391aac8-25c3-5b70-91bd-c5551ccc5833",
+        "3780f7e1-e744-531e-9021-d756160075bb",
+        "9f166440-3bba-56a8-bc69-3d9047592b69",
+        "933ce030-d6dd-5f25-bc9d-680ee15aa619"
+      ]
+    },
+    {
+      "query_id": "q007",
+      "query_class": "factual_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 4,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q009",
+      "query_class": "factual_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 4,
+      "ndcg_at_10": 0.9631405415421671,
+      "mrr": 1.0,
+      "p_at_5": 0.8,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "2673fae9-d2e0-5beb-9906-d93606718123",
+        "cfa9aa62-f100-582b-ad11-7ca6197a18d3",
+        "8adb80e4-935b-5b75-8875-87fa24563b4b",
+        "bce8a45d-432c-51bf-895b-2c8a735a2f20",
+        "55397e10-916a-5f32-8b15-0bb09c9b9717"
+      ]
+    },
+    {
+      "query_id": "q010",
+      "query_class": "factual_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 0.6934264036172708,
+      "mrr": 0.5,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "8e132413-0aae-56fa-9dc5-dd9e45e6d6a1",
+        "d59f2b18-0916-5820-95c6-9c9203200e18",
+        "caa303b8-2b47-5bb4-a45d-d8d86758dbbf",
+        "9443ca02-c0d6-501f-8134-18e32ef078d0",
+        "4fcded34-1930-5e7f-902c-142301eaa11d"
+      ]
+    },
+    {
+      "query_id": "q011",
+      "query_class": "factual_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.9129425246483648,
+      "mrr": 1.0,
+      "p_at_5": 0.6,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "ac7a94e6-2b9f-5de6-9d73-086607a4b092",
+        "84e0a95b-1244-58d8-9f71-3936170e365d",
+        "12e5aafe-0007-581e-a7f7-7f13107ff579",
+        "a411cfc8-acf3-5337-857e-4d4659b64103",
+        "867676ba-fec2-5253-9c8d-5c835a4ba13b"
+      ]
+    },
+    {
+      "query_id": "q012",
+      "query_class": "factual_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 1,
+      "ndcg_at_10": 1.0,
+      "mrr": 1.0,
+      "p_at_5": 0.2,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "ee4b12c5-0515-5a79-b835-8a7e6f7b17ae",
+        "5ec622ea-4bfc-54cd-b750-35b467fad47c",
+        "80aff276-1953-5676-ad54-de5b0d5e0940",
+        "d1467143-0176-533c-a713-42e483ec8aee",
+        "4f94a10b-92a0-5b3c-8d40-741a978100fc"
+      ]
+    },
+    {
+      "query_id": "q013",
+      "query_class": "factual_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.9594535145926796,
+      "mrr": 1.0,
+      "p_at_5": 0.6,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "aea02e03-cb89-58e7-9c3a-2fec4254877f",
+        "1a79948b-58ca-5748-aa62-01089f461c80",
+        "0228bf0a-8f10-58dd-bdf7-0a18474754a1",
+        "d8bda897-707d-5295-9aae-3449a43d8bd4",
+        "16c79952-258b-55ce-9ab8-3db31900a11a"
+      ]
+    },
+    {
+      "query_id": "q022",
+      "query_class": "comparison",
+      "intent": "COMPARISON",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 1,
+      "ndcg_at_10": 0.6309297535714575,
+      "mrr": 0.5,
+      "p_at_5": 0.2,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "bc4a256e-525e-5655-9b50-b10fcba42df5",
+        "a61b010c-24f3-541b-9d53-04e3a04b4a4a",
+        "8dc3cd23-7302-5780-9923-6d0a3ec7c0d1",
+        "37e0e2db-f2c9-550c-9c62-c86357b3d2b4",
+        "852a3f24-6612-58de-9205-404cb4c7d92b"
+      ]
+    },
+    {
+      "query_id": "q028",
+      "query_class": "comparison",
+      "intent": "COMPARISON",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 4,
+      "ndcg_at_10": 0.5397529439637757,
+      "mrr": 0.25,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "ef30337b-4ca8-5d12-9ab1-44762b09976d",
+        "2c251e70-7b1a-54e5-8cb4-becae0086950",
+        "53279c65-7ebd-5681-afd8-92cf88e19b6c",
+        "f4385fd6-b41d-566c-9c95-9fde090f39a7",
+        "c42e69c7-40c7-50a6-a2d0-d795cc93d63d"
+      ]
+    },
+    {
+      "query_id": "q029",
+      "query_class": "comparison",
+      "intent": "COMPARISON",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.8903334984314729,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "be73ec34-dbaa-5050-9cf6-a7e1326be84f",
+        "865faecf-1050-5fc9-ac17-c677aeddb003",
+        "611768c3-aa1e-5b1b-b555-a67bd59ab2b3",
+        "9562da7d-1d26-59d7-9dd6-5c84881e9045",
+        "fe5b8b4d-82ac-58e8-a1aa-f149993e0a9a"
+      ]
+    },
+    {
+      "query_id": "q052",
+      "query_class": "comparison",
+      "intent": "COMPARISON",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 5,
+      "ndcg_at_10": 0.9928428057948763,
+      "mrr": 1.0,
+      "p_at_5": 0.8,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "a06678d5-ae50-549a-97bf-60e1499d2f5b",
+        "b02fdbe3-2688-5742-8efc-a8541e7f7bd5",
+        "bfa87e98-535d-5ce2-93a3-f91c0e5d32fa",
+        "16d1234f-911f-50f0-8640-53a42646aeb2",
+        "1e5982bd-569a-5798-9e91-67971db3dbb2"
+      ]
+    },
+    {
+      "query_id": "q032",
+      "query_class": "reasoning",
+      "intent": "REASONING",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.9594535145926796,
+      "mrr": 1.0,
+      "p_at_5": 0.6,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "6e70f05c-feb4-5abe-8ee9-490d46db6cfe",
+        "22a76c88-1568-5f47-9c47-7fb53cb7ad90",
+        "e07b5b54-e245-5178-906b-185eb77fcc0d",
+        "c28002d2-e421-5daf-b05e-7830bd053e78",
+        "c22733a1-b91f-5b21-95ce-0b426ac43a6a"
+      ]
+    },
+    {
+      "query_id": "q034",
+      "query_class": "reasoning",
+      "intent": "REASONING",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.9518897201264301,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "06a2ccb3-1215-5f82-b46b-5ed557790ce7",
+        "d9d08c27-27da-594e-9a45-08f997672b10",
+        "7e3caeab-5b91-547d-99b9-3e488e1148bc",
+        "111dac26-3360-5019-8bb5-7971cc0974c5",
+        "d8ebf302-ae05-5996-aeee-ed89dd769fd2"
+      ]
+    },
+    {
+      "query_id": "q036",
+      "query_class": "reasoning",
+      "intent": "REASONING",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 4,
+      "ndcg_at_10": 0.9538875661138424,
+      "mrr": 1.0,
+      "p_at_5": 0.8,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "d33383da-4d2d-59aa-a43c-fca5958f485a",
+        "af03de75-a8d8-5f8c-97d4-7effe1937622",
+        "ae4f0495-ef31-50d5-b144-003594f820b8",
+        "d7bd3ff9-e1c5-5e3f-a312-6caf3498487f",
+        "e971a74f-2908-583a-8b37-0ea3816cb9cf"
+      ]
+    },
+    {
+      "query_id": "q055",
+      "query_class": "reasoning",
+      "intent": "REASONING",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.5204739093588694,
+      "mrr": 0.25,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "35428fc0-02cb-5df5-a2d7-a0a9d7c3f21e",
+        "92484e98-7011-58ed-b86d-6c32ef7d78c4",
+        "53279c65-7ebd-5681-afd8-92cf88e19b6c",
+        "99cf324a-dc3a-5357-af1f-2fcd341e9632",
+        "35802f7d-4121-531d-ab53-0cb54ebf4599"
+      ]
+    },
+    {
+      "query_id": "q131",
+      "query_class": "financial_data",
+      "intent": "FINANCIAL_DATA",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.5942236218028711,
+      "mrr": 0.3333333333333333,
+      "p_at_5": 0.6,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "7c27c5c6-b1d5-5d02-a1a5-28e11b749310",
+        "e8d5028e-e1c0-5f88-8b08-ec4cf1aa05e5",
+        "cd3a0199-8da4-5955-ab8d-9257984eec4b",
+        "a41503be-d2cb-51a3-b623-4daf2ecafb41",
+        "d254f5d2-b19d-5e08-8947-904ff83f2685"
+      ]
+    },
+    {
+      "query_id": "q132",
+      "query_class": "financial_data",
+      "intent": "FINANCIAL_DATA",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q015",
+      "query_class": "financial_data",
+      "intent": "FINANCIAL_DATA",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q016",
+      "query_class": "financial_data",
+      "intent": "FINANCIAL_DATA",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q017",
+      "query_class": "financial_data",
+      "intent": "FINANCIAL_DATA",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q018",
+      "query_class": "financial_data",
+      "intent": "FINANCIAL_DATA",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q019",
+      "query_class": "financial_data",
+      "intent": "FINANCIAL_DATA",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q020",
+      "query_class": "financial_data",
+      "intent": "FINANCIAL_DATA",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 0.9197207891481876,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "f7b807f7-cfa1-5383-b0fd-00f2b41e8d84",
+        "83bb0a16-b88c-532f-9e4f-b8826b603c84",
+        "fd1bc2ee-2178-5b23-bcea-917551de7ef1",
+        "a79a1d04-eb5b-569e-ba7a-d621aabd9983",
+        "7c27c5c6-b1d5-5d02-a1a5-28e11b749310"
+      ]
+    },
+    {
+      "query_id": "q038",
+      "query_class": "relationship",
+      "intent": "RELATIONSHIP",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 4,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q039",
+      "query_class": "relationship",
+      "intent": "RELATIONSHIP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.5515792483508383,
+      "mrr": 0.5,
+      "p_at_5": 0.4,
+      "recall_at_20": 0.6666666666666666,
+      "retrieved_top_5": [
+        "a5ba8896-2dc5-5064-989c-d40bceeac27f",
+        "4fcded34-1930-5e7f-902c-142301eaa11d",
+        "41a9de04-7583-50ec-9829-7b41655baa41",
+        "8e132413-0aae-56fa-9dc5-dd9e45e6d6a1",
+        "fb445aa9-c3c4-55cb-8c9e-429432f88928"
+      ]
+    },
+    {
+      "query_id": "q040",
+      "query_class": "relationship",
+      "intent": "RELATIONSHIP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 5,
+      "ndcg_at_10": 0.973494864667227,
+      "mrr": 1.0,
+      "p_at_5": 0.8,
+      "recall_at_20": 0.8,
+      "retrieved_top_5": [
+        "3f4cf178-ee35-57e4-820c-c984da095ffa",
+        "0bef9494-5f2a-5a82-8766-0c1d0785c497",
+        "d1467143-0176-533c-a713-42e483ec8aee",
+        "da22e4a2-8ad8-5c66-9eb8-b8e4eccd221a",
+        "c474b023-9774-58c1-a018-1b7a49976765"
+      ]
+    },
+    {
+      "query_id": "q041",
+      "query_class": "relationship",
+      "intent": "RELATIONSHIP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 1,
+      "ndcg_at_10": 0.6309297535714575,
+      "mrr": 0.5,
+      "p_at_5": 0.2,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "185f53e4-0409-5e48-ab42-e06461eba6de",
+        "b310f8c8-7d3f-5e9c-9c79-46e117dd8db0",
+        "6aee7566-4f1b-5f7b-a3a9-1d311f67c032",
+        "97c4de10-cbeb-5cd6-8819-b559a5dd0f62",
+        "41f49c24-99f1-5cdd-9b64-51b60a204e74"
+      ]
+    },
+    {
+      "query_id": "q057",
+      "query_class": "relationship",
+      "intent": "RELATIONSHIP",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q058",
+      "query_class": "relationship",
+      "intent": "RELATIONSHIP",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q059",
+      "query_class": "relationship",
+      "intent": "RELATIONSHIP",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q047",
+      "query_class": "signal_intel",
+      "intent": "SIGNAL_INTEL",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 1.0,
+      "mrr": 1.0,
+      "p_at_5": 0.6,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "2649e5f7-4c4a-5d44-9117-0a33be9194e7",
+        "a79622e9-08a1-5324-a4eb-bbcfe360eb13",
+        "8dc38d01-7a35-5444-8113-332800ec7c7c",
+        "8529d3ed-73eb-58aa-b9cf-bf48f53d292a",
+        "c4cd1131-5808-51eb-85c3-e03b2030b9f0"
+      ]
+    },
+    {
+      "query_id": "q062",
+      "query_class": "signal_intel",
+      "intent": "SIGNAL_INTEL",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q063",
+      "query_class": "signal_intel",
+      "intent": "SIGNAL_INTEL",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.7653606369886218,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 0.6666666666666666,
+      "retrieved_top_5": [
+        "42eff66b-a5c4-54d8-ac9d-766c1bf73b6a",
+        "568a3681-ace7-5d19-ae87-1299020319b6",
+        "fa9b1961-94a7-571b-8e49-deb1361edbfc",
+        "3c943179-bd34-5c0e-a797-18682c372e9d",
+        "5ca6afe2-1e55-5d61-96e5-17c909bbed53"
+      ]
+    },
+    {
+      "query_id": "q064",
+      "query_class": "signal_intel",
+      "intent": "SIGNAL_INTEL",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 0.8772153153380492,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "e0995235-dd6f-559f-82d2-4cac1b831766",
+        "fe916023-55f1-5da2-ab7d-c737bee865f3",
+        "c10a386c-5f13-5fe9-91e0-4d1a6bc3d12d",
+        "d0b7a1ef-73da-580c-9ea6-d35822c32bfc",
+        "726bc7db-aa77-565c-9402-3316287f7cdc"
+      ]
+    },
+    {
+      "query_id": "q048",
+      "query_class": "portfolio",
+      "intent": "PORTFOLIO",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 1.0,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "5ad41964-93ef-58d8-8a1c-4a6510ab8e11",
+        "e3dda4cf-b6fc-5958-8f28-c3d6cb6c7ef2",
+        "81d16e15-5ec6-59f0-9164-79ed59efa1d4",
+        "726bc7db-aa77-565c-9402-3316287f7cdc",
+        "5f36deb4-f243-5371-862a-797642da8123"
+      ]
+    },
+    {
+      "query_id": "q071",
+      "query_class": "portfolio",
+      "intent": "PORTFOLIO",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 1.0,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "0ae09d76-89af-5fd2-a003-67d4c4f11b51",
+        "65bb3d55-1520-5f9e-9411-caf897957545",
+        "d2475659-b851-5001-88ba-11ef15c65952",
+        "f26064ad-beea-50f5-add5-ec30790318f6",
+        "ff8e7718-b3d3-5a6b-99ac-e91b44e3722d"
+      ]
+    },
+    {
+      "query_id": "q073",
+      "query_class": "portfolio",
+      "intent": "PORTFOLIO",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.6735439182299785,
+      "mrr": 1.0,
+      "p_at_5": 0.2,
+      "recall_at_20": 0.3333333333333333,
+      "retrieved_top_5": [
+        "d1cf88b9-75c5-5d56-b6ed-dbf8297e29d0",
+        "62cb464c-241a-54e6-8cca-f7f7eb99100b",
+        "9b143b32-7312-5892-ba49-e9825c780558",
+        "fa9b1961-94a7-571b-8e49-deb1361edbfc",
+        "0f51795a-a34d-5165-aa83-453c4f621f25"
+      ]
+    },
+    {
+      "query_id": "q074",
+      "query_class": "portfolio",
+      "intent": "PORTFOLIO",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 0.6419288461539238,
+      "mrr": 0.5,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "0f51795a-a34d-5165-aa83-453c4f621f25",
+        "e45ce533-dd80-598e-9714-52457406c82f",
+        "43daeeb5-ff3f-5141-8bfd-12046f005783",
+        "dd2d0d50-e624-58a8-8724-adc9849a9443",
+        "f4313351-b2ea-5051-b12f-0d056b659e75"
+      ]
+    },
+    {
+      "query_id": "q077",
+      "query_class": "identifier_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 4,
+      "ndcg_at_10": 0.7610549474692552,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 0.5,
+      "retrieved_top_5": [
+        "3d04b2cc-909d-55de-8275-cf75a76eedd1",
+        "a120791f-7317-5234-86a0-74a01f1ba529",
+        "ed744cc9-36db-5d13-9c63-8838d17f7d20",
+        "4f94a10b-92a0-5b3c-8d40-741a978100fc",
+        "c124234a-c7f5-5eb2-beda-dfca7f54d0e0"
+      ]
+    },
+    {
+      "query_id": "q078",
+      "query_class": "identifier_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.6165356581845756,
+      "mrr": 0.5,
+      "p_at_5": 0.6,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "4f94a10b-92a0-5b3c-8d40-741a978100fc",
+        "98f5c80a-f309-5aaf-b76f-f2e1f27e010c",
+        "a9c87485-1973-5c9a-b7b8-4280c86cd9e2",
+        "ced06275-3c85-56c7-a640-f2253c23d894",
+        "3d04b2cc-909d-55de-8275-cf75a76eedd1"
+      ]
+    },
+    {
+      "query_id": "q080",
+      "query_class": "identifier_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 1.0,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "8afaf7c1-2535-55f3-b31f-a5d3af850875",
+        "493c4d5d-f4da-54d7-a2a1-116cb377eabb",
+        "db5551ab-228e-5e47-bf53-57684c384836",
+        "43053136-959a-5521-9eac-5a2fbf337b32",
+        "c124234a-c7f5-5eb2-beda-dfca7f54d0e0"
+      ]
+    },
+    {
+      "query_id": "q087",
+      "query_class": "ambiguous",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 4,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q088",
+      "query_class": "ambiguous",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 1.0,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "40583414-1098-5965-9ef2-2582b114177c",
+        "25cc49ef-69da-5513-8534-949c122e659a",
+        "33d99c77-682d-5bb1-ab10-423793df6405",
+        "894c069c-d66b-5c0e-82cc-3c28179e88e1",
+        "ddf1e0a0-a68d-5e6c-8022-6c5feb00fc91"
+      ]
+    },
+    {
+      "query_id": "q092",
+      "query_class": "ambiguous",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 1.0,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "0d2d866f-728c-5d39-b066-ba544c7378a1",
+        "b7eb97f3-e85f-5d7a-80ce-81cd0ec78891",
+        "aea02e03-cb89-58e7-9c3a-2fec4254877f",
+        "e09596a1-87cc-5787-82df-f1bad1c6614a",
+        "573497d6-5513-5490-bc6a-c6f56b2d8c9d"
+      ]
+    },
+    {
+      "query_id": "q094",
+      "query_class": "non_analyst",
+      "intent": "GENERAL",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 1,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q095",
+      "query_class": "non_analyst",
+      "intent": "GENERAL",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.8556691603792903,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "03e44e4c-b377-5bf2-ae28-5bf1860f23ac",
+        "03304efd-0d28-5d87-811e-6948bb52a458",
+        "3020b762-e2b6-5645-ac22-bae8d133bf08",
+        "88b954a8-57dc-52c2-9d48-255180b534cd",
+        "4f94a10b-92a0-5b3c-8d40-741a978100fc"
+      ]
+    },
+    {
+      "query_id": "q096",
+      "query_class": "non_analyst",
+      "intent": "GENERAL",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 1,
+      "ndcg_at_10": 1.0,
+      "mrr": 1.0,
+      "p_at_5": 0.2,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "305c6a5d-a73c-578b-a850-66d2e421daa6",
+        "6cee2472-17b7-5fba-9775-de9d83191614",
+        "d28aef40-3a12-5c77-965e-266a485f2587",
+        "e09596a1-87cc-5787-82df-f1bad1c6614a",
+        "a9bfff04-17b0-5ae9-b617-2b57f846fb61"
+      ]
+    },
+    {
+      "query_id": "q097",
+      "query_class": "non_analyst",
+      "intent": "GENERAL",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 1,
+      "ndcg_at_10": 0.6309297535714575,
+      "mrr": 0.5,
+      "p_at_5": 0.2,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "d28aef40-3a12-5c77-965e-266a485f2587",
+        "e09596a1-87cc-5787-82df-f1bad1c6614a",
+        "ff46d06d-0cd1-5a3d-bee1-54367347b155",
+        "5ec622ea-4bfc-54cd-b750-35b467fad47c",
+        "e04a39ce-2479-51a1-8bc4-686ea2dcf22c"
+      ]
+    },
+    {
+      "query_id": "q099",
+      "query_class": "non_analyst",
+      "intent": "GENERAL",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q111",
+      "query_class": "time_anchored_edge",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.871078544000337,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "ff8e7718-b3d3-5a6b-99ac-e91b44e3722d",
+        "f26064ad-beea-50f5-add5-ec30790318f6",
+        "0ae09d76-89af-5fd2-a003-67d4c4f11b51",
+        "726bc7db-aa77-565c-9402-3316287f7cdc",
+        "ed744cc9-36db-5d13-9c63-8838d17f7d20"
+      ]
+    },
+    {
+      "query_id": "q114",
+      "query_class": "time_anchored_edge",
+      "intent": "REASONING",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 4,
+      "ndcg_at_10": 0.35772618378527954,
+      "mrr": 0.16666666666666666,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.75,
+      "retrieved_top_5": [
+        "124238e4-1eda-5b65-90c7-9149b1fe2b1f",
+        "543b0f2a-feb0-58e0-bb0a-ddf2bda5e7c1",
+        "92484e98-7011-58ed-b86d-6c32ef7d78c4",
+        "16c79952-258b-55ce-9ab8-3db31900a11a",
+        "2c251e70-7b1a-54e5-8cb4-becae0086950"
+      ]
+    },
+    {
+      "query_id": "q115",
+      "query_class": "factual_lookup",
+      "intent": "FINANCIAL_DATA",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q116",
+      "query_class": "factual_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 1.0,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "6367a1da-a32e-5a8c-beef-eafc2f4b1131",
+        "6a08bd31-4c0c-5faf-8688-628beaf299d6",
+        "04177536-78fc-5aef-8801-4a9b52626e89",
+        "15531c9f-8277-5156-aa3a-443ff63eb908",
+        "98c53262-4eb0-5da4-aa1c-38545fc2399f"
+      ]
+    },
+    {
+      "query_id": "q120",
+      "query_class": "relationship",
+      "intent": "RELATIONSHIP",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 4,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q121",
+      "query_class": "factual_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 1.0,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "3130cdcf-2554-5c81-b6c1-d17d3bb5571e",
+        "cb3665c3-5c67-5ea5-bb84-25e1bd347629",
+        "8ce9681d-39f2-5a90-8480-a7829219c1c7",
+        "ecceed80-8917-544f-bfd6-5c3370977d90",
+        "89269d22-b7ee-578d-b2cd-8c77e0648ed1"
+      ]
+    },
+    {
+      "query_id": "q122",
+      "query_class": "factual_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 1,
+      "ndcg_at_10": 1.0,
+      "mrr": 1.0,
+      "p_at_5": 0.2,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "eb74cc47-324e-56e3-83d1-3c0e3f6c042a",
+        "7daf1532-495f-520f-9cbf-6961d9e55b8d",
+        "73a62964-8ea7-5907-b970-e24edffe7ed0",
+        "e5da032c-9106-55af-9804-f5fd1e2fa9af",
+        "7c27c5c6-b1d5-5d02-a1a5-28e11b749310"
+      ]
+    },
+    {
+      "query_id": "q123",
+      "query_class": "factual_lookup",
+      "intent": "FACTUAL_LOOKUP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 0.95583058934618,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "3f298717-d5f5-506c-84ac-5dd898823e2e",
+        "97532cf2-793b-5bc2-97dc-649d27ca3fb6",
+        "55397e10-916a-5f32-8b15-0bb09c9b9717",
+        "35de053d-9a1d-5c46-a59b-df3b676011bf",
+        "556ee72c-b10a-56a9-ba58-df839c0c5037"
+      ]
+    },
+    {
+      "query_id": "q124",
+      "query_class": "comparison",
+      "intent": "COMPARISON",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 1,
+      "ndcg_at_10": 0.6309297535714575,
+      "mrr": 0.5,
+      "p_at_5": 0.2,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "2433858d-36f4-5876-b07d-dce8d816ba2f",
+        "10e82d2e-1b90-5ddc-9d99-dfd0e5fc3ffe",
+        "c0ee016a-0c30-5ff6-ae60-800e14367661",
+        "9c75d588-bc16-5f1b-8c1a-7967d8557424",
+        "2a6e3dd2-ab33-55bc-a60f-3f25930403c2"
+      ]
+    },
+    {
+      "query_id": "q127",
+      "query_class": "reasoning",
+      "intent": "REASONING",
+      "n_retrieved": 0,
+      "n_relevant_labelled": 3,
+      "ndcg_at_10": 0.0,
+      "mrr": 0.0,
+      "p_at_5": 0.0,
+      "recall_at_20": 0.0,
+      "retrieved_top_5": []
+    },
+    {
+      "query_id": "q128",
+      "query_class": "financial_data",
+      "intent": "FINANCIAL_DATA",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 1.0,
+      "mrr": 1.0,
+      "p_at_5": 0.4,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "1a1d6d3e-f804-5d55-9fda-919a2b9b7a6e",
+        "1960cbf4-e3a3-58f0-a7df-fa4032ddfd7a",
+        "e78431be-0aa2-5d6e-a16b-12c423ec7b1b",
+        "25a6c23c-ba31-59a3-87f0-14fd29c369c8",
+        "7e3caeab-5b91-547d-99b9-3e488e1148bc"
+      ]
+    },
+    {
+      "query_id": "q129",
+      "query_class": "relationship",
+      "intent": "RELATIONSHIP",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 2,
+      "ndcg_at_10": 0.10642269850451405,
+      "mrr": 0.125,
+      "p_at_5": 0.0,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "4f42bc54-7825-5131-9eab-1a2327f0d3ca",
+        "2ef3a639-cf8b-5c12-a257-3889dcb1cde3",
+        "c7506812-312f-5cac-8d22-78e402d540ac",
+        "62cb464c-241a-54e6-8cca-f7f7eb99100b",
+        "8dc3cd23-7302-5780-9923-6d0a3ec7c0d1"
+      ]
+    },
+    {
+      "query_id": "q130",
+      "query_class": "signal_intel",
+      "intent": "SIGNAL_INTEL",
+      "n_retrieved": 20,
+      "n_relevant_labelled": 1,
+      "ndcg_at_10": 1.0,
+      "mrr": 1.0,
+      "p_at_5": 0.2,
+      "recall_at_20": 1.0,
+      "retrieved_top_5": [
+        "8d3fa771-7fa4-5a38-943e-c18c83fbfb08",
+        "ca8a89ca-6c5e-5df7-b76d-6f59cb001d00",
+        "2649e5f7-4c4a-5d44-9117-0a33be9194e7",
+        "4f94a10b-92a0-5b3c-8d40-741a978100fc",
+        "a79622e9-08a1-5324-a4eb-bbcfe360eb13"
+      ]
+    }
+  ]
+}
