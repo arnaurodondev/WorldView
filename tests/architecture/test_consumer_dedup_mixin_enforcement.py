@@ -174,9 +174,9 @@ class TestConsumerDedupMixinEnforcement:
     def test_all_consumers_use_valkey_dedup_mixin(self) -> None:
         """Every BaseKafkaConsumer subclass must declare ValkeyDedupMixin.
 
-        xfail until PLAN-0084 Wave B-3: remove the xfail decorator from this
-        class once all 8 consumers have been migrated and this test passes
-        cleanly.
+        Non-migrated consumers are exempted via the allowlist with documented
+        justifications (BP-035 atomic upsert, hand-rolled Valkey, natural
+        idempotency). Future waves should migrate allowlisted consumers.
 
         Allowlist path: tests/architecture/_consumer_dedup_allowlist.yaml
         Rule: CONSUMER-DEDUP-001

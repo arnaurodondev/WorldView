@@ -68,6 +68,9 @@ class _NoOpUoW:
 
 
 class EntityCreatedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
+    # DP-005 fix: class-level constant so key prefix is stable across config changes.
+    _dedup_prefix: str = "kg:dedup:entity_created_consumer"
+
     """Consumes ``entity.canonical.created.v1`` and unblocks held evidence rows.
 
     Args:
@@ -88,7 +91,6 @@ class EntityCreatedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         super().__init__(config)
         self._sf = session_factory
         self._dedup_client = dedup_client
-        self._dedup_prefix = f"kg:dedup:{config.group_id}"
 
     # ------------------------------------------------------------------
     # Core processing
