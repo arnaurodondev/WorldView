@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -26,6 +26,7 @@ from rag_chat.application.metrics.prometheus import (
 from rag_chat.domain.errors import LLMJudgeTimeoutError
 
 if TYPE_CHECKING:
+    from rag_chat.application.ports.llm_judge import LLMJudgePort
     from rag_chat.application.ports.message_repository import MessageRepository
     from rag_chat.domain.entities.conversation import Message
 
@@ -94,14 +95,6 @@ Score the snippet's support of the claim on this 0-3 scale:
 - 3: Snippet directly answers/contains the claim verbatim or near-verbatim.
 
 Respond with ONLY a single digit 0, 1, 2, or 3."""
-
-
-class LLMJudgePort(Protocol):
-    """Minimal interface for the LLM judge used by ScoreCitationAccuracyUseCase."""
-
-    async def score_citation(self, *, claim: str, snippet: str) -> str:
-        """Return a single-digit string '0', '1', '2', or '3'."""
-        ...
 
 
 def iter_cited_claims(msg: Message) -> Iterator[tuple[str, str]]:
@@ -193,9 +186,12 @@ class ScoreCitationAccuracyUseCase:
                     prompt = _CITATION_RUBRIC.format(claim=safe_claim, snippet=safe_snippet)
 
                     try:
+                        # A-002: snippet param removed from LLMJudgePort.score_citation —
+                        # the full fenced prompt (rubric + claim + snippet) is already
+                        # assembled above and passed as `claim`.  The adapter does not
+                        # need the raw snippet text separately.
                         raw_response = await self._judge.score_citation(
                             claim=prompt,
-                            snippet=safe_snippet,  # kept for protocol compliance
                         )
                     except LLMJudgeTimeoutError:
                         rag_citation_accuracy_call_failures_total.labels(reason="timeout").inc()

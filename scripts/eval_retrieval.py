@@ -46,6 +46,7 @@ import os
 import statistics
 import subprocess
 import sys
+import urllib.parse
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,6 +57,66 @@ import structlog
 
 logger = logging.getLogger("eval_retrieval")
 _log = structlog.get_logger(__name__)
+
+
+# ─── Argument validators ─────────────────────────────────────────────────────
+
+
+def _validate_rag_url(url: str) -> str:
+    """Validate *url* is an HTTP/HTTPS URL with a non-empty hostname.
+
+    S-009: Protects against accidental non-HTTP schemes (e.g. ``file://``,
+    ``javascript:``) that could cause ``httpx.AsyncClient`` to exhibit
+    unexpected behaviour or expose internal paths.
+
+    Args:
+        url: Raw URL string from the ``--rag-url`` argument.
+
+    Returns:
+        The validated URL string, unchanged.
+
+    Raises:
+        argparse.ArgumentTypeError: When the scheme is not ``http``/``https``
+            or the hostname is empty.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise argparse.ArgumentTypeError(f"--rag-url must use http or https scheme, got {parsed.scheme!r}")
+    if not parsed.hostname:
+        raise argparse.ArgumentTypeError(f"--rag-url must have a non-empty hostname, got {url!r}")
+    return url
+
+
+def _validate_boost_sweep_input_path(spec: str) -> str:
+    """Validate the path component of a ``<boost>:<path>`` boost-sweep spec.
+
+    S-011: Resolves the path and checks it stays within the working directory
+    to guard against path-traversal payloads (e.g. ``1.0:../../etc/passwd``).
+
+    Args:
+        spec: Raw ``<boost>:<path>`` string from ``--boost-sweep-inputs``.
+
+    Returns:
+        The spec string unchanged when valid.
+
+    Raises:
+        argparse.ArgumentTypeError: When the path resolves outside the current
+            working directory or does not contain a colon separator.
+    """
+    if ":" not in spec:
+        raise argparse.ArgumentTypeError(f"--boost-sweep-inputs must be '<boost>:<path>', got {spec!r}")
+    _, _, path_str = spec.partition(":")
+    resolved = Path(path_str).resolve()
+    cwd = Path.cwd().resolve()
+    try:
+        resolved.relative_to(cwd)
+    except ValueError:
+        raise argparse.ArgumentTypeError(  # noqa: B904
+            f"--boost-sweep-inputs path {path_str!r} resolves outside the working directory "
+            f"({resolved} not under {cwd})"
+        )
+    return spec
+
 
 DEFAULT_RAG_URL = "http://localhost:8008"  # rag-chat port (market-data is :8003)
 DEFAULT_GOLDEN = "tests/eval/golden/queries.jsonl"
@@ -881,9 +942,71 @@ async def run_boost_sweep(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _smoke_probe(rag_url: str) -> None:
+    """Send a single retrieve request and verify at least one candidate is returned.
+
+    S-012: Python-based smoke probe called from main() before the full eval run.
+    Reads EVAL_INTERNAL_JWT from ``os.environ`` and sends a single
+    ``POST /v1/internal/retrieve`` with a known-good query.  Raises
+    ``RuntimeError`` when the endpoint is unreachable or returns 0 candidates,
+    preventing a misleading "all queries failed" eval result.
+
+    This complements the bash-based smoke probe in ``retrieval-eval.yml``
+    (PLAN-0084 E-1) which fires inside the CI workflow before eval is invoked.
+    The Python probe runs in the same process so failures surface as a clean
+    error message rather than a curl exit code.
+
+    Args:
+        rag_url: The validated rag-chat base URL (e.g. ``http://localhost:8008``).
+
+    Raises:
+        RuntimeError: When the endpoint is unreachable, returns a non-2xx
+            status, or returns fewer than 1 candidate.
+    """
+    internal_jwt = os.environ.get("EVAL_INTERNAL_JWT")
+    headers: dict[str, str] = {}
+    if internal_jwt:
+        headers["X-Internal-JWT"] = internal_jwt
+
+    timeout = httpx.Timeout(15.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{rag_url.rstrip('/')}/v1/internal/retrieve",
+                json={"query_text": "Apple Q4 earnings", "top_k": 5},
+                headers=headers,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError(
+            f"SMOKE PROBE FAILED: endpoint returned HTTP {exc.response.status_code}. "
+            f"Check service health before running eval."
+        ) from exc
+    except (httpx.TimeoutException, httpx.RequestError) as exc:
+        raise RuntimeError(
+            f"SMOKE PROBE FAILED: could not reach {rag_url!r} — {type(exc).__name__}. "
+            "Check service health before running eval."
+        ) from exc
+
+    n_candidates = payload.get("n_candidates") or len(payload.get("candidates", []))
+    if n_candidates < 1:
+        raise RuntimeError(
+            "SMOKE PROBE FAILED: endpoint returned 0 candidates. "
+            "Check that rag-chat is running and the index is populated. Aborting eval."
+        )
+
+    print(f"Smoke probe OK — {n_candidates} candidates returned.", file=sys.stderr)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--rag-url", default=os.getenv("RAG_CHAT_URL", DEFAULT_RAG_URL))
+    # S-009: validate scheme + hostname so accidental non-HTTP URLs fail early.
+    parser.add_argument(
+        "--rag-url",
+        default=os.getenv("RAG_CHAT_URL", DEFAULT_RAG_URL),
+        type=_validate_rag_url,
+    )
     parser.add_argument("--golden", default=DEFAULT_GOLDEN)
     parser.add_argument("--baseline", default=None)
     parser.add_argument(
@@ -928,6 +1051,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--boost-sweep-inputs",
         action="append",
         default=None,
+        # S-011: validate path component against traversal before argparse returns.
+        type=_validate_boost_sweep_input_path,
         help=(
             "PLAN-0063 W5-3 boost-sweep input. Format: '<boost>:<path-to-eval-json>'. "
             "Repeatable. When set, --mode hybrid_boost_sweep aggregates these files "
@@ -964,6 +1089,17 @@ def main() -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    # S-012: Python smoke probe — fast-fail before the expensive eval run.
+    # Disabled when EVAL_SKIP_SMOKE_PROBE=1 (allows unit-test invocations that
+    # run without a live rag-chat service).
+    if not os.getenv("EVAL_SKIP_SMOKE_PROBE"):
+        try:
+            asyncio.run(_smoke_probe(args.rag_url))
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
     if args.mode == "hybrid_boost_sweep":
         return asyncio.run(run_boost_sweep(args))
     if args.mode == "trust_sweep":

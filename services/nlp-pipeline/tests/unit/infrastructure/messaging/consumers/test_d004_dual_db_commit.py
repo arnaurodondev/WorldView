@@ -4,9 +4,11 @@ Validates the D-004 session lifecycle invariant:
   1. nlp_session.commit() is called BEFORE intel_session.commit().
   2. If nlp_session.commit() fails, intel_session.commit() is NEVER called
      and the exception propagates (Kafka retry).
-  3. If intel_session.commit() fails AFTER nlp_session.commit() succeeds,
-     the error is logged but NOT re-raised (NLP is committed, intel writes
-     are idempotent on retry).
+  3. D-010 (PLAN-0084 deferred findings): if intel_session.commit() fails AFTER
+     nlp_session.commit() succeeds, the error is logged at ERROR level, the
+     s6_intel_commit_failures_total Prometheus counter is incremented, and the
+     exception IS re-raised so the Kafka offset is not committed — re-delivery
+     retries the intel writes (which are idempotent on retry).
   4. NLP writes (sections, chunks, mentions, routing, embeddings, outbox)
      go to nlp_session; intel writes (entity alias reads, provisional queue)
      go to intel_session.
@@ -189,18 +191,23 @@ class TestNlpCommitFailureRollsBackIntel:
         intel_session.commit.assert_not_called()
 
 
-# ── Test 2: Intel commit failure does not raise ──────────────────────────────
+# ── Test 2: Intel commit failure re-raises (D-010) ───────────────────────────
 
 
 @pytest.mark.unit
-class TestIntelCommitFailureDoesNotRaise:
-    """D-004 invariant: if intel_session.commit() fails AFTER nlp_session
-    committed, the error is logged but NOT re-raised."""
+class TestIntelCommitFailureReraises:
+    """D-010 invariant (PLAN-0084 deferred findings): if intel_session.commit()
+    fails AFTER nlp_session committed, the error is logged at ERROR level and
+    re-raised so the Kafka offset is NOT committed → message re-delivery retries
+    the intel writes (which are idempotent on retry)."""
 
     @pytest.mark.asyncio
-    async def test_intel_commit_failure_does_not_raise(self) -> None:
-        """If intel_session.commit() fails after nlp_session.commit() succeeds,
-        no exception propagates to the caller and a warning is logged."""
+    async def test_intel_commit_failure_reraises(self) -> None:
+        """D-010: intel commit failure MUST propagate so Kafka retries the message.
+
+        The Prometheus counter s6_intel_commit_failures_total must be incremented
+        and an error log entry with event='d004_intel_commit_failed' must be emitted.
+        """
         nlp_session, nlp_sf = _make_session_factory()  # commit succeeds
         intel_session, intel_sf = _make_session_factory(
             commit_side_effect=RuntimeError("intel db down"),
@@ -209,8 +216,9 @@ class TestIntelCommitFailureDoesNotRaise:
         consumer = _make_consumer(nlp_sf, intel_sf)
 
         with capture_logs() as cap:
-            # This must NOT raise despite intel commit failure.
-            await _run_pipeline_with_patches(consumer)
+            # D-010: MUST raise — Kafka offset must NOT be committed on intel failure.
+            with pytest.raises(RuntimeError, match="intel db down"):
+                await _run_pipeline_with_patches(consumer)
 
         # nlp_session.commit() was called and succeeded.
         nlp_session.commit.assert_called_once()
@@ -218,10 +226,10 @@ class TestIntelCommitFailureDoesNotRaise:
         # intel_session.commit() was called (and failed).
         intel_session.commit.assert_called_once()
 
-        # A warning log must have been emitted for the intel failure.
+        # An ERROR log must have been emitted (not WARNING — D-010 upgrade).
         assert any(
             e.get("event") == "d004_intel_commit_failed" for e in cap
-        ), f"Expected 'd004_intel_commit_failed' warning not found in: {cap}"
+        ), f"Expected 'd004_intel_commit_failed' error log not found in: {cap}"
 
 
 # ── Test 3: Both sessions receive correct writes ────────────────────────────

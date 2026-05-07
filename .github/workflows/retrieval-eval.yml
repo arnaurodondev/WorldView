@@ -186,7 +186,10 @@ jobs:
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
           RAG_CHAT_URL: ${{ vars.RAG_CHAT_URL || 'http://localhost:8003' }}
           EVAL_INTERNAL_JWT: ${{ secrets.EVAL_INTERNAL_JWT }}
-          EVAL_JWT_REFRESH_URL: ${{ vars.EVAL_JWT_REFRESH_URL || '' }}
+          # S-013: EVAL_JWT_REFRESH_URL moved from vars → secrets so the URL
+          # (which includes any embedded tokens or path-based auth) is masked
+          # in GitHub Actions logs.
+          EVAL_JWT_REFRESH_URL: ${{ secrets.EVAL_JWT_REFRESH_URL || '' }}
         run: |
           # PLAN-0063 W5-3 wired --baseline; --fail-on-regression stays at
           # the default 0.03 absolute (regression > 0.03 → exits 1, but

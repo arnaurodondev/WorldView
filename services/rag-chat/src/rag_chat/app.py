@@ -104,6 +104,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 6. Build and wire the ChatOrchestratorUseCase
     _wire_orchestrator(app, settings, valkey_client)
 
+    # 6b. D-006: reconcile CB Prometheus gauges with Valkey state on startup.
+    # Without this, a restart after a CB trip shows gauge=0 (healthy) while
+    # the CB is actually open in Valkey (the state key has a TTL and persists
+    # across restarts).  Reconciling here corrects the gauge immediately.
+    await _reconcile_cb_gauges(app)
+
     # 7. Build and wire the GenerateBriefingUseCase
     _wire_briefing_uc(app, settings, valkey_client)
 
@@ -366,7 +372,9 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         s3_client=s3,
         s1_client=s1,
         timeout=settings.upstream_timeout_seconds,
-        s1_internal_token=settings.s1_internal_token,
+        # S-004: s1_internal_token is SecretStr — extract raw value for the
+        # downstream orchestrator which expects a plain str.
+        s1_internal_token=settings.s1_internal_token.get_secret_value(),
         trust_scorer=_trust_scorer,
         circuit_breakers={
             name: SourceCircuitBreaker(
@@ -415,6 +423,9 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     app.state.chat_orchestrator = orchestrator
     app.state.chat_pipeline = pipeline  # expose for PLAN-0074 Wave F + PLAN-0067 W11-3
     app.state.llm_chain = llm_chain
+    # D-006: expose CBs on app.state so _reconcile_cb_gauges() can sync Prometheus
+    # gauges with Valkey CB state on startup (avoids false-healthy gauge after restart).
+    app.state.circuit_breakers = _retrieval._cbs
 
     from rag_chat.application.use_cases.retrieve_only import RetrieveOnlyUseCase
 
@@ -497,9 +508,12 @@ def _wire_citation_cron(
     if settings.citation_judge_provider == "deepinfra" and _deepinfra_api_key:
         from rag_chat.infrastructure.llm.deepinfra_adapter import DeepInfraCompletionAdapter
 
+        # A-006: use settings.citation_judge_model (default: Meta-Llama-3.1-8B-Instruct)
+        # instead of the heavier completion_model — the judge only needs a single digit
+        # response and the 8B model is ~10x cheaper than the 235B completion model.
         provider_client: Any = DeepInfraCompletionAdapter(
             api_key=_deepinfra_api_key,
-            model=settings.completion_model,
+            model=settings.citation_judge_model,  # RAG_CHAT_CITATION_JUDGE_MODEL
         )
     else:
         # Ollama fallback (or explicit citation_judge_provider="ollama").
@@ -572,6 +586,22 @@ def _wire_citation_cron(
         provider=settings.citation_judge_provider,
         timeout_s=settings.citation_call_timeout_s,
     )
+
+
+async def _reconcile_cb_gauges(app: FastAPI) -> None:
+    """D-006: Sync Prometheus CB gauges with actual Valkey CB state on startup.
+
+    Called once in the lifespan startup after ``_wire_orchestrator`` has
+    populated ``app.state.circuit_breakers``.  Without this, a restart after a
+    CB trip shows gauge=0 (healthy) while the CB is actually open in Valkey —
+    the state key persists with a TTL across restarts.
+
+    Best-effort: if ``circuit_breakers`` is not set (e.g. ``cb_enabled=False``),
+    or if any reconcile call fails, errors are swallowed.
+    """
+    cbs = getattr(app.state, "circuit_breakers", None) or {}
+    for cb in cbs.values():
+        await cb.reconcile_gauge()
 
 
 def create_app(settings: RagChatSettings | None = None) -> FastAPI:
