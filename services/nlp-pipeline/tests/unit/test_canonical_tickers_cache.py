@@ -254,9 +254,15 @@ async def test_concurrent_is_known_ticker_during_refresh() -> None:
 
 
 async def test_refresh_handles_empty_source() -> None:
-    """fetch_all_tickers() returns [] → DEL fires, SADD skipped, key absent."""
+    """fetch_all_tickers() returns [] → D-017 guard skips the wipe entirely.
+
+    The previous behaviour was: DEL fires, SADD skipped → cache wiped.
+    The new behaviour (D-017 fix) is: empty source is treated as a transient
+    query issue; the existing (possibly stale) SET is left untouched so callers
+    continue to see valid tickers until the next successful refresh.
+    """
     valkey = _FakeValkey()
-    # Seed the SET first so the DEL has something to clear.
+    # Seed the SET first so we can verify it is NOT wiped.
     await valkey.sadd("nlp:v1:canonical_tickers", "AAPL", "MSFT")
     assert await valkey.sismember("nlp:v1:canonical_tickers", "AAPL") is True
 
@@ -266,9 +272,9 @@ async def test_refresh_handles_empty_source() -> None:
     count = await cache.refresh()
     assert count == 0
 
-    # Key should be absent after DEL (SADD was skipped — nothing to add).
-    assert await cache.is_known_ticker("AAPL") is False
-    assert await cache.is_known_ticker("MSFT") is False
+    # D-017: stale cache must be preserved — NOT wiped — when source returns 0.
+    assert await cache.is_known_ticker("AAPL") is True
+    assert await cache.is_known_ticker("MSFT") is True
 
 
 # ── T-C-1-01 / T-C-1-03: Refresh loop + lifecycle ────────────────────────────
