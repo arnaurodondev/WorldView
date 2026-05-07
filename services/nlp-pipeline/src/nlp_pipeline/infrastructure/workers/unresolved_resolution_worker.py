@@ -806,9 +806,11 @@ class UnresolvedResolutionWorker:
         Returns (ResolutionOutcome, noise_reason | None).
         """
         client = self._http_client
-        # Initialize raw before the try block so the except handler's
-        # hashlib.sha256(raw...) reference is always bound even if the
-        # exception fires before the `raw = msg.get(...)` assignment.
+        # BP-395 (PLAN-0076 Wave C-2 / DEF-016): initialize ``raw`` before the
+        # try block so the except handler's ``hashlib.sha256(raw...)`` reference
+        # is always bound — even when the exception fires before the
+        # ``raw = msg.get(...)`` assignment (e.g. KeyError from
+        # ``response.json()["choices"][0]["message"]`` indexing).
         raw: str = ""
         try:
             response = await asyncio.wait_for(

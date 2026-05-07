@@ -39,6 +39,12 @@ extend = "ruff.toml"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-ra -q --strict-markers"
+# PLAN-0076 Wave C QA: any xfail without strict=True silently flips XPASS when
+# the deferred feature lands and the marker rots in place — the antipattern R19
+# warns against. Default xfail_strict=true platform-wide so every new xfail
+# explicitly opts out (with an `# xfail_strict=False` comment) if it really
+# wants the loose behaviour.
+xfail_strict = true
 markers = [
     "unit: fast, isolated unit tests",
     "integration: tests that require infrastructure (DB, Kafka, MinIO)",

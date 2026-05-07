@@ -504,3 +504,142 @@ class TestGetGraphStatsUseCase:
 
         assert result == stats
         relation_repo.get_stats.assert_called_once()
+
+
+class TestGraphQueryGracefulDegradationGaps:
+    """F-QA-206 (Wave C-1): graceful-degradation gaps for the entity + relations
+    fetch paths.
+
+    Existing tests in `TestEvidenceBatchDegradation` already cover graceful
+    degradation for evidence- and summary-batch failures.  These tests document
+    the remaining gaps:
+
+      • F-QA-206a: ``entity_repo.get(entity_id)`` failure currently propagates
+        (no try/except in GetEntityGraphUseCase line 48).
+      • F-QA-206b: ``relation_repo.list_for_entity`` failure currently
+        propagates (no try/except in GetEntityGraphUseCase line 52).
+
+    Production code is unchanged in Wave C-1 (test-only wave), so these two
+    tests use ``@pytest.mark.xfail`` to document the desired behaviour without
+    breaking the suite.  When PLAN-0076 graduates these gaps to a code-fix
+    wave, the xfail markers should be removed.
+
+      • F-QA-206c: when the centre entity has zero referenced neighbours
+        (i.e. no relations or no edges to other entities), ``get_batch`` is
+        not called.  This guards the existing short-circuit at
+        graph_query.py:71-77.
+    """
+
+    @pytest.mark.xfail(
+        reason="F-QA-206a: GetEntityGraphUseCase does not graceful-degrade on "
+        "entity_repo.get() failure — desired behaviour, not yet implemented "
+        "(test-only wave C-1; code fix tracked separately).",
+        strict=True,
+    )
+    def test_graph_query_entity_fetch_fails_gracefully(self) -> None:
+        """``entity_repo.get`` raises → use case should return (None, [], {})
+        rather than propagate a 500.
+
+        Until the production code wraps the get() call in try/except, this
+        test xfails: the RuntimeError currently propagates out of execute().
+        """
+        from knowledge_graph.application.use_cases.graph_query import GetEntityGraphUseCase
+
+        entity_repo = AsyncMock()
+        entity_repo.get = AsyncMock(side_effect=RuntimeError("transient db error"))
+        entity_repo.get_batch = AsyncMock(return_value=[])
+        relation_repo = _make_relation_repo()
+
+        # Desired behaviour: the use case catches the exception and returns
+        # an empty graph response.  Currently this raises.
+        entity_row, relation_rows, entities_map = asyncio.run(
+            GetEntityGraphUseCase().execute(
+                entity_repo=entity_repo,
+                relation_repo=relation_repo,
+                evidence_repo=_make_evidence_repo(),
+                summary_repo=_make_summary_repo(),
+                entity_id=_ENT_ID,
+                min_confidence=0.0,
+                semantic_mode=None,
+                limit=50,
+            )
+        )
+
+        assert entity_row is None
+        assert relation_rows == []
+        assert entities_map == {}
+
+    @pytest.mark.xfail(
+        reason="F-QA-206b: GetEntityGraphUseCase does not graceful-degrade on "
+        "relation_repo.list_for_entity() failure — desired behaviour, not yet "
+        "implemented (test-only wave C-1; code fix tracked separately).",
+        strict=True,
+    )
+    def test_graph_query_relations_fetch_fails_gracefully(self) -> None:
+        """``relation_repo.list_for_entity`` raises → use case should return
+        the entity row with an empty relations list rather than propagate a 500.
+
+        Until the production code wraps list_for_entity in try/except, this
+        test xfails: the RuntimeError currently propagates out of execute().
+        """
+        from knowledge_graph.application.use_cases.graph_query import GetEntityGraphUseCase
+
+        center = _entity_row(_ENT_ID)
+        entity_repo = _make_entity_repo(entity=center)
+        relation_repo = AsyncMock()
+        relation_repo.list_for_entity = AsyncMock(side_effect=RuntimeError("transient db error"))
+
+        entity_row, relation_rows, entities_map = asyncio.run(
+            GetEntityGraphUseCase().execute(
+                entity_repo=entity_repo,
+                relation_repo=relation_repo,
+                evidence_repo=_make_evidence_repo(),
+                summary_repo=_make_summary_repo(),
+                entity_id=_ENT_ID,
+                min_confidence=0.0,
+                semantic_mode=None,
+                limit=50,
+            )
+        )
+
+        # Desired behaviour: entity row preserved, relations empty.
+        assert entity_row == center
+        assert relation_rows == []
+        assert entities_map == {}
+
+    def test_graph_query_no_referenced_entities_skips_get_batch(self) -> None:
+        """F-QA-206c: when the centre entity has zero referenced neighbours,
+        ``entity_repo.get_batch`` is NOT called.
+
+        This is the existing short-circuit at graph_query.py:72 (``if
+        referenced_ids:``).  We exercise it by returning relations whose
+        subject and object both equal the centre entity_id, so the
+        ``referenced_ids`` set stays empty.
+        """
+        from knowledge_graph.application.use_cases.graph_query import GetEntityGraphUseCase
+
+        center = _entity_row(_ENT_ID)
+        # Self-loop relation: subject==object==centre → referenced_ids = ∅.
+        self_loop = _relation_row(subject_id=_ENT_ID, object_id=_ENT_ID)
+
+        entity_repo = _make_entity_repo(entity=center)
+        relation_repo = _make_relation_repo(rows=[self_loop])
+
+        entity_row, relation_rows, entities_map = asyncio.run(
+            GetEntityGraphUseCase().execute(
+                entity_repo=entity_repo,
+                relation_repo=relation_repo,
+                evidence_repo=_make_evidence_repo(),
+                summary_repo=_make_summary_repo(),
+                entity_id=_ENT_ID,
+                min_confidence=0.0,
+                semantic_mode=None,
+                limit=50,
+            )
+        )
+
+        assert entity_row == center
+        assert len(relation_rows) == 1
+        assert entities_map == {}, "No referenced neighbours → entities_map must be empty"
+        # Critical assertion: the short-circuit must skip the batch fetch.
+        entity_repo.get_batch.assert_not_called()
