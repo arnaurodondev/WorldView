@@ -138,6 +138,9 @@ class _NoOpUoW:
 
 
 class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
+    # DP-005 fix: class-level constant so key prefix is stable across config changes.
+    _dedup_prefix: str = "kg:dedup:enriched_article_consumer"
+
     """Consumes ``nlp.article.enriched.v1`` and materializes the knowledge graph.
 
     Args:
@@ -170,7 +173,6 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         self._entity_dirtied_topic = entity_dirtied_topic
         self._canon_threshold = canonicalization_threshold
         self._dedup_client = dedup_client
-        self._dedup_prefix = f"kg:dedup:{config.group_id}"
 
     # ------------------------------------------------------------------
     # Core processing
