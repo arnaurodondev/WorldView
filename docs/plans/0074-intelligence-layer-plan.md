@@ -3,8 +3,38 @@
 > **PRD**: [docs/specs/0074-intelligence-layer.md](../specs/0074-intelligence-layer.md)
 > **Status**: draft → in-progress
 > **Created**: 2026-05-05
+> **Last revised**: 2026-05-07 (post `/investigate` long-term consistency review + BP-405 principal architect audit)
 > **Owner**: Arnau Rodon
-> **Depends on**: PLAN-0073 (must complete migrations covering structured enrichment columns + `relation_type_registry` source fields + `relations.relation_source` before Wave A starts)
+> **Depends on**:
+> - PLAN-0073 (intelligence_db structured enrichment columns + `relation_type_registry` source fields + `relations.relation_source` — required before Wave A).
+> - **PLAN-0077** (chat-pipeline rename + decomposition) — required before Wave F.
+> - **PLAN-0078** (chunk entity-filter + GLiNER mention persistence) — required before Wave F.
+
+---
+
+## §0 Revision Log
+
+**2026-05-07 — long-term consistency review** (post thesis-to-product pivot):
+
+- **C-1 (class name)**: Wave F T-F-02 said "compose existing `RunChatUseCase`". The actual class is `ChatOrchestrator`; PLAN-0077 renames it to `ChatOrchestratorUseCase` and exposes a re-entrant `ChatPipeline` collaborator that can be composed cleanly. Wave F composes via the post-PLAN-0077 `ChatPipeline`, not by recreating the orchestrator.
+- **C-2 (entity filter)**: Wave F T-F-02 originally said "Add entity_id filter to RAG retrieval call: `vector_search(filter={'entity_mentions': entity_id})`." That filter does not exist on `ChunkSearchRequest`. **PLAN-0078** ships the missing port field + S6 storage of GLiNER mentions; Wave F **depends on PLAN-0078**.
+- **M-1 (entity-context enforcement)**: Under tool-use mode (PLAN-0067), entity scoping is enforced by `ToolExecutorFactory.for_request(entity_context=...)` — not by system-prompt steering. Wave F builds the request-scoped `EntityContext` and passes it to the factory; tools auto-inject `entity_ids` into every tool call.
+- **A-3 (single SSE hook)**: Wave H T-H-06 originally created a parallel `useEntityChatStream` hook. **Replaced**: extend the existing `useChatStream` hook with an optional `entityId?: string` argument. One hook, one set of SSE events, one place to add tool-call indicators.
+- **I-9 (migration numbering)**: Wave A previously said "reserve next available 6 numbers." Concurrent PLAN-0073 work can collide. **Hard rule**: before Wave A starts, the lead engineer rebases onto `main`, reads `services/intelligence-migrations/alembic/versions/`, and writes the explicit reserved range into TRACKING.md. No "pick at execution time."
+
+**2026-05-07 — BP-405 principal architect audit** (plan consistency + name verification pass):
+
+- **BP-405-M1 (migration numbers stale)**: Plan §0.2 said "current head is `0024`" and "PLAN-0073 consumes some of 0025–0027." Verified head is actually `0029` (PLAN-0073 consumed `0025`–`0029`). §0.2, §4 pre-flight, and Wave A pre-read all updated to reference `0029` as HEAD and `0030`–`0035` as Wave A's range. R32 compliant.
+- **BP-405-M2 (worker class name)**: Plan said `ConfidenceRefreshWorker` in `application/workers/confidence_refresh_worker.py`. Actual class: `ConfidenceWorker` in `infrastructure/workers/confidence.py`. All T-B-01 references corrected.
+- **BP-405-M3 (worker layer boundary)**: All 3 existing workers (`ConfidenceWorker`, `ContradictionBatchWorker`, `SummaryWorker`) and `NarrativeRefreshWorker` + `DefinitionRefreshWorker` live in `infrastructure/workers/`, not `application/workers/`. The plan had 8 stale `application/workers/` path references — all corrected to `infrastructure/workers/`.
+- **BP-405-M4 (consumer namespace)**: Plan said `infrastructure/kafka/consumers/`. Actual: `infrastructure/messaging/consumers/`. T-B-03 and Wave B pre-read corrected.
+- **BP-405-M5 (rag-chat run_chat.py)**: Wave F pre-read referenced non-existent `run_chat.py`. Corrected to `chat_orchestrator.py` (class `ChatOrchestratorUseCase`, post PLAN-0077).
+- **BP-405-M6 (rag-chat retrieval path)**: Wave F pre-read referenced non-existent `infrastructure/retrieval/`. Pipeline components are in `application/pipeline/`. Corrected.
+- **BP-405-M7 (rag-chat app.py vs main.py)**: Wave F break impact listed `main.py` for wiring. Actual wiring entry is `app.py` (lifespan). Corrected.
+- **BP-405-M8 (KG repository path)**: T-E1-02 said `infrastructure/db/repositories/`. Actual: `infrastructure/intelligence_db/repositories/`. Corrected.
+- **BP-405-M9 (test path convention)**: T-B-01 and T-B-04 had test paths under `tests/unit/application/workers/`. Actual convention: `tests/unit/infrastructure/workers/`. Corrected.
+- **BP-405-M10 (new worker placement)**: T-C-04 and T-E1-04 new workers were specified as `application/workers/`. Corrected to `infrastructure/workers/` per service convention, with a note that use cases stay in `application/use_cases/` (R25).
+- **No new architecture issues found**: R27 (ReadOnlyUoW), R25 (API→use case), R8 (outbox), R10 (UUIDv7), R11 (UTC), R20 (BaseKafkaConsumer), R22 (R22 standalone processes) are all correctly specified throughout.
 
 ---
 
@@ -30,7 +60,9 @@ Decompose PRD-0074 into 9 dependency-ordered waves across 5 services (`intellige
 
 ### 0.2 Migration Numbering
 
-Migration numbers are **flexible** — Wave A reserves the next 6 available numbers after PLAN-0073's head. At plan-write time, current head is `0024_add_relation_source_to_relations.py`; PLAN-0073 is expected to consume some of `0025`–`0027`. Wave A allocates whatever 6 contiguous numbers are free at execution time and the wave-A task documents the assigned range in the wave commit message. References below use logical names (`MIG-NARRATIVE`, `MIG-PATH-INSIGHTS`, etc.).
+Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-05-07 post-BP-405 audit), the verified HEAD is `0029_add_provisional_queue_next_retry_at.py`. PLAN-0073 consumed `0025`–`0029`. Wave A **must** use `0030`–`0035` for its 6 migrations. The Wave A task documents the assigned range in the wave commit message. References below use logical names (`MIG-NARRATIVE`, `MIG-PATH-INSIGHTS`, etc.).
+
+**Pre-flight verification (R32)**: before creating any migration file, confirm HEAD is still `0029` with `ls services/intelligence-migrations/alembic/versions/ | sort | tail -3`. If PLAN-0075/0076/0078 added more migrations, pick `max + 1` for each. **Never guess; always grep.**
 
 ### 0.3 Critical Path
 
@@ -95,7 +127,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **Architecture layer**: schema.
 
 ### Pre-read
-- `services/intelligence-migrations/alembic/versions/0024_add_relation_source_to_relations.py` (current head pattern)
+- `services/intelligence-migrations/alembic/versions/0029_add_provisional_queue_next_retry_at.py` (verified HEAD as of 2026-05-07 — current head pattern; confirm still HEAD before starting)
 - `services/intelligence-migrations/alembic/versions/0001_init.py` (relations / relation_summaries / canonical_entities original definitions — confirm columns this wave activates already exist)
 - `services/intelligence-migrations/alembic/versions/0019_add_evidence_text_to_relation_evidence_raw.py` (recent ALTER TABLE pattern with backfill)
 - PRD §8 (database changes), §16 (migration plan)
@@ -282,23 +314,23 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **Architecture layer**: infrastructure (worker code only — no domain or API changes).
 
 ### Pre-read
-- `services/knowledge-graph/src/knowledge_graph/application/workers/contradiction_batch_worker.py`
-- `services/knowledge-graph/src/knowledge_graph/application/workers/confidence_refresh_worker.py`
-- `services/knowledge-graph/src/knowledge_graph/application/workers/summary_worker.py`
-- `services/knowledge-graph/src/knowledge_graph/infrastructure/kafka/consumers/` (the consumer that inserts into `relation_evidence_raw`)
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/contradiction_batch.py` — class `ContradictionBatchWorker` (BP-405: file lives in `infrastructure/workers/`, not `application/workers/`)
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/confidence.py` — class `ConfidenceWorker` (BP-405: class is `ConfidenceWorker` not `ConfidenceRefreshWorker`; path is `infrastructure/workers/`)
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/summary.py` — class `SummaryWorker` (BP-405: path is `infrastructure/workers/`, not `application/workers/`)
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/messaging/consumers/` (BP-405: correct namespace is `messaging/consumers/`, not `kafka/consumers/`; consumer that inserts into `relation_evidence_raw` is `enriched_consumer.py`)
 - PRD §8.5 (relations activation), §8.6 (summary embedding), §8.7 (source diversity fix)
 
 ### Tasks
 
-#### T-B-01: Populate `valid_from` + `relation_period_type` in ConfidenceRefreshWorker
+#### T-B-01: Populate `valid_from` + `relation_period_type` in ConfidenceWorker
 
 **Type**: impl
 **depends_on**: T-A-03
 **blocks**: T-D-02
-**Target files**: `services/knowledge-graph/src/knowledge_graph/application/workers/confidence_refresh_worker.py`, `services/knowledge-graph/tests/unit/application/workers/test_confidence_refresh_worker.py`
+**Target files**: `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/confidence.py` (class `ConfidenceWorker` — BP-405: was incorrectly listed as `application/workers/confidence_refresh_worker.py`), `services/knowledge-graph/tests/unit/infrastructure/workers/test_confidence_worker.py`
 **PRD reference**: §8.5
 
-**What to build**: Extend `ConfidenceRefreshWorker._refresh_one_relation` to compute and persist `valid_from` (= `MIN(evidence_date)` across raw evidence rows for that relation) and derive `relation_period_type`.
+**What to build**: Extend `ConfidenceWorker._refresh_one_relation` to compute and persist `valid_from` (= `MIN(evidence_date)` across raw evidence rows for that relation) and derive `relation_period_type`.
 
 **Logic & Behavior**:
 - After existing confidence recompute, query `SELECT MIN(evidence_date) FROM relation_evidence_raw WHERE subject_canonical_id=? AND object_canonical_id=? AND canonical_type=? AND processed=true`.
@@ -319,14 +351,14 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **Acceptance criteria**:
 - [ ] All 4 unit tests pass.
 - [ ] Integration test: run worker on fixture relation with 3 evidence rows → `valid_from = earliest`.
-- [ ] Existing ConfidenceRefreshWorker tests still pass.
+- [ ] Existing `ConfidenceWorker` tests in `tests/unit/infrastructure/workers/test_confidence_worker.py` still pass.
 
 #### T-B-02: Populate contra columns in ContradictionBatchWorker
 
 **Type**: impl
 **depends_on**: T-A-03
 **blocks**: T-D-02
-**Target files**: `services/knowledge-graph/src/knowledge_graph/application/workers/contradiction_batch_worker.py`, corresponding test file.
+**Target files**: `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/contradiction_batch.py` (class `ContradictionBatchWorker` — BP-405: was incorrectly listed as `application/workers/contradiction_batch_worker.py`), `services/knowledge-graph/tests/unit/infrastructure/workers/test_contradiction_batch_worker.py` (NEW — no existing test; create here).
 **PRD reference**: §8.5, FR-14
 
 **What to build**: When the worker detects contradictions for a relation, persist `strongest_contra_score`, `contra_count_by_type` (JSONB `{relation_type: count}`), and `latest_contra_at`. Also: when contradiction drives `confidence_score < 0.1`, set `valid_to = NOW()`, `valid_to_confidence`, `valid_to_source = model_id`.
@@ -352,7 +384,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **Type**: impl
 **depends_on**: T-A-05
 **blocks**: T-D-02
-**Target files**: `services/knowledge-graph/src/knowledge_graph/infrastructure/kafka/consumers/<evidence_consumer>.py` (locate via grep for INSERT into `relation_evidence_raw`), test file.
+**Target files**: `services/knowledge-graph/src/knowledge_graph/infrastructure/messaging/consumers/enriched_consumer.py` (BP-405: correct namespace is `messaging/consumers/`, not `kafka/consumers/`; `enriched_consumer.py` is the consumer that inserts into `relation_evidence_raw` via `materialize_graph()`), test file.
 **PRD reference**: §8.7, FR-16
 
 **What to build**: When the consumer inserts a `relation_evidence_raw` row, include `source_name` and `source_type` either via JOIN to `document_source_metadata` or by copying from the inbound event payload (whichever the consumer already has access to).
@@ -378,7 +410,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **Type**: impl
 **depends_on**: T-A-04
 **blocks**: T-D-02
-**Target files**: `services/knowledge-graph/src/knowledge_graph/application/workers/summary_worker.py`, test file.
+**Target files**: `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/summary.py` (class `SummaryWorker` — BP-405: was incorrectly listed as `application/workers/summary_worker.py`), `services/knowledge-graph/tests/unit/infrastructure/workers/test_summary_worker.py` (exists; extend it).
 **PRD reference**: §8.6, FR-15
 
 **What to build**: After `SummaryWorker` generates `summary_text`, call the shared embedding port (`libs/ml-clients`) with `BAAI/bge-large-en-v1.5` and store the 1024-dim vector in `summary_embedding`.
@@ -403,7 +435,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 ### Validation Gate
 
 - [ ] `ruff check` clean on changed files.
-- [ ] `mypy` clean on `knowledge_graph.application.workers` and `knowledge_graph.infrastructure.kafka.consumers`.
+- [ ] `mypy` clean on `knowledge_graph.infrastructure.workers` and `knowledge_graph.infrastructure.messaging.consumers` (BP-405: correct namespaces).
 - [ ] All new + existing worker unit tests pass (target: ≥10 new tests).
 - [ ] Integration test: `pytest tests/integration/workers/` green.
 - [ ] No naive datetimes (R7); all UoW transactions commit/rollback explicitly.
@@ -412,9 +444,8 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 
 | Broken File | Why It Breaks | Fix Required |
 |-------------|--------------|--------------|
-| `tests/unit/application/workers/test_contradiction_batch_worker.py` | New UPDATE to relations adds extra SQL | Update assert counts on mock UoW |
-| `tests/unit/application/workers/test_confidence_refresh_worker.py` | Worker now performs additional UPDATE | Update mock expectations |
-| `tests/unit/application/workers/test_summary_worker.py` | New embedding_port dependency | Add `embedding_port=AsyncMock()` to test fixtures |
+| `tests/unit/infrastructure/workers/test_confidence_worker.py` | Worker now performs additional UPDATE (BP-405: was incorrectly listed as `application/workers/test_confidence_refresh_worker.py`) | Update mock expectations |
+| `tests/unit/infrastructure/workers/test_summary_worker.py` | New embedding_port dependency (BP-405: was incorrectly listed as `application/workers/`) | Add `embedding_port=AsyncMock()` to test fixtures |
 | Any consumer-test fixture asserting INSERT column count for `relation_evidence_raw` | Two new columns | Add `source_name=None, source_type=None` defaults |
 
 ### Regression Guardrails
@@ -435,7 +466,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **Architecture layer**: domain + application + infrastructure.
 
 ### Pre-read
-- `services/knowledge-graph/src/knowledge_graph/application/workers/definition_refresh_worker.py` (closest analogue — LLM-driven worker that updates canonical_entities)
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/definition_refresh.py` (class `DefinitionRefreshWorker` — BP-405: actual file is `infrastructure/workers/definition_refresh.py`, not `application/workers/definition_refresh_worker.py`; closest analogue — LLM-driven worker that updates canonical_entities)
 - `services/knowledge-graph/src/knowledge_graph/domain/entities/relation_summary.py` (frozen domain entity pattern)
 - `libs/messaging/src/messaging/outbox/` (outbox publisher pattern)
 - `libs/ml-clients/src/ml_clients/text_completion/` (LLM port interface)
@@ -478,7 +509,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **Type**: impl
 **depends_on**: T-C-01, T-A-01
 **blocks**: T-C-04, T-D-02
-**Target files**: `services/knowledge-graph/src/knowledge_graph/infrastructure/db/repositories/narrative_repository.py`, port in `application/ports/narrative_repository.py`, tests `tests/unit/infrastructure/db/test_narrative_repository.py`.
+**Target files**: `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/narrative_repository.py` (NEW — BP-405: existing repositories are under `infrastructure/intelligence_db/repositories/`, not `infrastructure/db/repositories/`), port in `application/ports/narrative_repository.py` (ABC interface per R25), tests `tests/unit/infrastructure/intelligence_db/test_narrative_repository.py` (NEW).
 **PRD reference**: §6.3, §9.1, §10.1
 
 **Methods**:
@@ -526,10 +557,10 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **depends_on**: T-C-01, T-C-02, T-C-03, T-A-01
 **blocks**: T-C-05, T-D-03
 **Target files**:
-- `services/knowledge-graph/src/knowledge_graph/application/use_cases/generate_narrative.py`
-- `services/knowledge-graph/src/knowledge_graph/application/workers/narrative_generation_worker.py`
-- Wire into `services/knowledge-graph/src/knowledge_graph/main.py` (or worker entrypoint module)
-- Tests under `tests/unit/application/use_cases/`, `tests/unit/application/workers/`
+- `services/knowledge-graph/src/knowledge_graph/application/use_cases/generate_narrative.py` (NEW — created in Wave C; use case lives in application layer per R25)
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/narrative_generation_worker.py` (NEW — created in Wave C; worker infrastructure lives in `infrastructure/workers/` per existing convention — BP-405: do NOT place in `application/workers/` which does not exist in this service)
+- Wire into `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py` (existing `KnowledgeGraphScheduler`)
+- Tests: `tests/unit/application/use_cases/test_generate_narrative.py` (NEW), `tests/unit/infrastructure/workers/test_narrative_generation_worker.py` (NEW)
 **PRD reference**: §10.1 (full data flow), §12 (security), §13 (failure modes), FR-1, FR-2, FR-18, NFR-3
 
 **What to build**: `GenerateNarrativeUseCase` orchestrates the §10.1 flow. Worker = thin scheduler that calls the use case for batched entity_ids per trigger source.
@@ -578,7 +609,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **Type**: impl
 **depends_on**: T-C-04
 **blocks**: none
-**Target files**: existing `narrative_refresh_worker.py` (verify exists; create if missing) — extend to consume `entity.narrative.generated.v1` and re-embed `narrative_text` into `canonical_entity_embeddings.narrative` slot.
+**Target files**: `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/narrative_refresh.py` (class `NarrativeRefreshWorker` — BP-405: file already exists at `infrastructure/workers/narrative_refresh.py`; extend to consume `entity.narrative.generated.v1` and re-embed `narrative_text` into `canonical_entity_embeddings.narrative` slot). Test: `tests/unit/infrastructure/workers/test_narrative_refresh_worker.py` (extends existing test file).
 **PRD reference**: §7 consumers
 
 **Logic & Behavior**:
@@ -605,7 +636,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 | Broken File | Why It Breaks | Fix Required |
 |-------------|--------------|--------------|
 | `libs/contracts/tests/test_avro_alignment.py` | New Avro schema | Extend assertion list |
-| `services/knowledge-graph/src/knowledge_graph/main.py` | Worker registration | Add `NarrativeGenerationWorker` to startup |
+| `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py` | Worker registration | Add `NarrativeGenerationWorker` to `KnowledgeGraphScheduler.build_workers()` (workers are registered in scheduler, not main.py — per R22 process topology) |
 | `services/knowledge-graph/src/knowledge_graph/infrastructure/outbox/serializers.py` | Outbox dispatcher missing serializer (BP-147 pattern) | Register `entity.narrative.generated.v1` serializer |
 | `services/knowledge-graph/.claude-context.md` | Missing new worker | Document |
 
@@ -646,7 +677,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **Target files**:
 - `services/knowledge-graph/src/knowledge_graph/api/schemas/intelligence.py` — `EntityIntelligencePublic`, `NarrativeVersionPublic`, `ConfidenceBreakdownPublic`, `SourceSharePublic`, `ConfidenceTrendPoint`.
 - `services/knowledge-graph/src/knowledge_graph/application/use_cases/get_entity_intelligence.py` — `GetEntityIntelligenceUseCase`.
-- Read repositories: `services/knowledge-graph/src/knowledge_graph/infrastructure/db/repositories/intelligence_aggregates_repository.py` (queries for source distribution, confidence trend, key metrics).
+- Read repositories: `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/intelligence_aggregates_repository.py` (NEW — BP-405: correct path is `infrastructure/intelligence_db/repositories/`; queries for source distribution, confidence trend, key metrics).
 - Tests under `tests/unit/api/schemas/`, `tests/unit/application/use_cases/`, `tests/contract/`.
 **PRD reference**: §6.1, §9.5
 
@@ -768,7 +799,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **Architecture layer**: domain + application + infrastructure.
 
 ### Pre-read
-- `services/knowledge-graph/src/knowledge_graph/application/workers/canonicalization_worker.py` (closest claim-based worker analogue — `provisional_entity_queue` SKIP LOCKED pattern)
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/provisional_enrichment.py` (class `ProvisionalEnrichmentWorker` — BP-405: claim-based SKIP LOCKED analogue lives at `infrastructure/workers/`, not `application/workers/canonicalization_worker.py`; the claim-based SKIP LOCKED pattern is in `provisional_entity_queue`)
 - `services/knowledge-graph/src/knowledge_graph/infrastructure/age/` (AGE Cypher session helpers — `SET search_path = ag_catalog, "$user", public`)
 - `infra/docker-compose.yml` for `path-insight-worker` deploy template
 - PRD §10.2 (full data flow), §11 ADR-0074-001/003/007, §13, §14
@@ -802,7 +833,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **Type**: impl
 **depends_on**: T-E1-01, T-A-02
 **blocks**: T-E1-04
-**Target files**: `services/knowledge-graph/src/knowledge_graph/infrastructure/db/repositories/path_insight_job_repository.py`, `path_insight_repository.py`, ports under `application/ports/`, tests.
+**Target files**: `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/path_insight_job_repository.py` (NEW — BP-405: existing repos are under `infrastructure/intelligence_db/repositories/`, not `infrastructure/db/repositories/`), `path_insight_repository.py` (same dir), ports under `application/ports/path_insight_repository.py` (ABC interfaces per R25), tests under `tests/unit/infrastructure/` (not `tests/unit/application/`).
 **PRD reference**: §10.2 (claim semantics), §13 (failure modes)
 
 **Methods**:
@@ -863,7 +894,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **Type**: impl
 **depends_on**: T-E1-02, T-E1-03
 **blocks**: T-E2-01
-**Target files**: `services/knowledge-graph/src/knowledge_graph/application/workers/path_insight_worker.py`, `path_insight_seeder.py`, wiring into worker entrypoint, `infra/docker-compose.yml` adds `path-insight-worker` service block (scaling-friendly), tests.
+**Target files**: `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/path_insight_worker.py` (NEW — created in Wave E1; BP-405: workers live in `infrastructure/workers/`, not `application/workers/`), `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/path_insight_seeder.py` (NEW), wiring into `infrastructure/scheduler/scheduler.py` (seeder as APScheduler cron job) + new standalone worker entrypoint `path_insight_worker_main.py` (R22 — separate process), `infra/docker-compose.yml` adds `path-insight-worker` service block (scaling-friendly), tests.
 **PRD reference**: §10.2, §11 ADR-0074-003, FR-17, NFR-5
 
 **Worker `PathInsightWorker`**:
@@ -911,7 +942,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 
 | Broken File | Why It Breaks | Fix Required |
 |-------------|--------------|--------------|
-| `services/knowledge-graph/src/knowledge_graph/main.py` | New worker | Register on startup |
+| `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py` | New seeder job | Register `PathInsightSeeder` in `KnowledgeGraphScheduler` (R22: seeder is a cron job in the scheduler process) |
 | `infra/docker-compose.yml` | New service block | Add `path-insight-worker` (uses same image as knowledge-graph) |
 | `services/knowledge-graph/.claude-context.md` | New worker + seeder | Document |
 
@@ -1020,9 +1051,10 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **Architecture layer**: API + application.
 
 ### Pre-read
-- `services/rag-chat/src/rag_chat/api/routers/chat.py` (existing `POST /api/v1/chat` — SSE stream pattern)
-- `services/rag-chat/src/rag_chat/application/use_cases/run_chat.py`
-- `services/rag-chat/src/rag_chat/infrastructure/retrieval/` (RAG vector + BM25 pipeline)
+- `services/rag-chat/src/rag_chat/api/routes/chat.py` (existing `POST /api/v1/chat` — SSE stream pattern; BP-405: actual path is `api/routes/`, not `api/routers/`)
+- `services/rag-chat/src/rag_chat/application/use_cases/chat_orchestrator.py` (class `ChatOrchestratorUseCase` — BP-405: `run_chat.py` does not exist; PLAN-0077 renamed `ChatOrchestrator` → `ChatOrchestratorUseCase` and the file is `chat_orchestrator.py`)
+- `services/rag-chat/src/rag_chat/application/pipeline/chat_pipeline.py` (class `ChatPipeline` — value object extracted by PLAN-0077 Wave B; `app.state.chat_pipeline` is the composition point for Wave F)
+- `services/rag-chat/src/rag_chat/application/pipeline/` (BP-405: no `infrastructure/retrieval/` dir; all pipeline components live in `application/pipeline/`)
 - PRD §6.5, §10.3, §11 ADR-0074-004, §12, §13
 
 ### Tasks
@@ -1064,7 +1096,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 - Use case:
   1. Load `EntityChatContext` (T-F-01).
   2. Build system prompt prefix per §10.3 template.
-  3. Pass system prefix + question to existing `RunChatUseCase` (compose, don't duplicate).
+  3. Pass system prefix + question to the post-PLAN-0077 `ChatPipeline` collaborator (compose, don't duplicate). Under tool-use mode (PLAN-0067, default after merge), the orchestrator routes through the tool-loop; `EntityContext(entity_id, ticker, name)` is bound to the request-scoped `ToolExecutor` via `ToolExecutorFactory.for_request(...)` and the executor enforces entity scoping on every tool call (M-1).
   4. Add entity_id filter to RAG retrieval call: `vector_search(filter={'entity_mentions': entity_id}) + bm25(canonical_name) + rerank(relation_relevance)`.
 - Stream SSE response via existing pipeline.
 
@@ -1085,7 +1117,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 
 | Broken File | Why It Breaks | Fix Required |
 |-------------|--------------|--------------|
-| `services/rag-chat/src/rag_chat/main.py` | New router + use case | Register |
+| `services/rag-chat/src/rag_chat/app.py` | New router + use case | Register in `app.py` lifespan wiring (BP-405: rag-chat wiring is in `app.py`, not `main.py`; `main.py` is the uvicorn entrypoint only) |
 | `services/rag-chat/.claude-context.md` | New endpoint | Document |
 
 ### Regression Guardrails
@@ -1303,7 +1335,7 @@ Migration numbers are **flexible** — Wave A reserves the next 6 available numb
 **Type**: impl
 **depends_on**: T-H-02, T-H-01
 **blocks**: T-H-07
-**Target files**: `components/intelligence/EntityChatPanel.tsx`, custom SSE hook `lib/streaming/use-entity-chat-stream.ts`, tests.
+**Target files**: `components/intelligence/EntityChatPanel.tsx`, **extension to existing `apps/worldview-web/features/chat/hooks/useChatStream.ts`** (add `entityId?: string` option that forwards to the chat endpoint and scopes the conversation — A-3 fix; do NOT create a parallel `useEntityChatStream` hook), tests.
 **PRD reference**: §6.5, §10.3, FR-9, NFR-4
 
 **Behavior**:
@@ -1402,7 +1434,7 @@ None blocking. All PRD §18 OQs are deferred and non-blocking.
 ## 4. Implementation Pre-flight Checklist
 
 Before starting Wave A:
-- [ ] Confirm PLAN-0073 has merged migrations consuming 0025–0027 (check `services/intelligence-migrations/alembic/versions/`).
+- [ ] Confirm intelligence-migrations HEAD is `0029` (PLAN-0073 consumed `0025`–`0029`): `ls services/intelligence-migrations/alembic/versions/ | sort | tail -3`. If any plan merged more migrations after 2026-05-07, pick `max + 1` for Wave A's first migration (R32 — never guess).
 - [ ] `setup-secrets.sh` updated to fetch new env vars (or note env vars to add manually).
 - [ ] `worldview-gitops` PR opened with new env var stubs.
 - [ ] `docs/plans/TRACKING.md` row flipped from `prd-ready` → `in-progress` with Wave A start.
