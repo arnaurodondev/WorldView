@@ -377,35 +377,35 @@ KG_EXTRA_ENTITIES: list[dict] = [
     {
         "entity_id": "11111111-0101-7000-8000-000000000001",
         "canonical_name": "Artificial Intelligence",
-        "entity_type": "technology_theme",
+        "entity_type": "concept",
         "ticker": None,
         "exchange": None,
     },
     {
         "entity_id": "11111111-0102-7000-8000-000000000001",
         "canonical_name": "Semiconductor Industry",
-        "entity_type": "industry",
+        "entity_type": "concept",
         "ticker": None,
         "exchange": None,
     },
     {
         "entity_id": "11111111-0103-7000-8000-000000000001",
         "canonical_name": "Cloud Computing",
-        "entity_type": "technology_theme",
+        "entity_type": "concept",
         "ticker": None,
         "exchange": None,
     },
     {
         "entity_id": "11111111-0104-7000-8000-000000000001",
         "canonical_name": "Electric Vehicles",
-        "entity_type": "technology_theme",
+        "entity_type": "concept",
         "ticker": None,
         "exchange": None,
     },
     {
         "entity_id": "11111111-0105-7000-8000-000000000001",
         "canonical_name": "Digital Advertising",
-        "entity_type": "technology_theme",
+        "entity_type": "concept",
         "ticker": None,
         "exchange": None,
     },
@@ -1148,41 +1148,51 @@ def validate_seeding(conn_mkt, conn_intel, conn_ci, instrument_map: dict[str, st
     n_relations = cur_intel.fetchone()[0]
     print(f"  KG relations seeded: {n_relations} (expected ≥ {len(KG_RELATIONS)})")
 
-    # Polymarket source check
-    cur_ci.execute(
-        "SELECT COUNT(*) FROM sources WHERE source_type = 'polymarket' AND enabled = true",
-        (),
-    )
-    n_polymarket = cur_ci.fetchone()[0]
-    pm_ok = n_polymarket > 0
-    status = "✓" if pm_ok else "✗"
-    print(f"  {status} Polymarket source: enabled={pm_ok} (count={n_polymarket})")
-    if not pm_ok:
-        all_ok = False
+    # content_ingestion_db checks — skipped when running in eval stack (no sources table)
+    try:
+        cur_ci.execute("SELECT 1 FROM sources LIMIT 1")
+        ci_available = True
+    except Exception:
+        conn_ci.rollback()
+        ci_available = False
+        print("  — content_ingestion sources: skipped (table not available in eval stack)")
 
-    # Finnhub sources check
-    cur_ci.execute(
-        "SELECT COUNT(*) FROM sources WHERE source_type = 'finnhub' AND enabled = true",
-        (),
-    )
-    n_finnhub = cur_ci.fetchone()[0]
-    fh_ok = n_finnhub >= len(_FINNHUB_SOURCES)
-    status = "✓" if fh_ok else "✗"
-    print(f"  {status} Finnhub sources: enabled={n_finnhub} (expected ≥ {len(_FINNHUB_SOURCES)})")
-    if not fh_ok:
-        all_ok = False
+    if ci_available:
+        # Polymarket source check
+        cur_ci.execute(
+            "SELECT COUNT(*) FROM sources WHERE source_type = 'polymarket' AND enabled = true",
+            (),
+        )
+        n_polymarket = cur_ci.fetchone()[0]
+        pm_ok = n_polymarket > 0
+        status = "✓" if pm_ok else "✗"
+        print(f"  {status} Polymarket source: enabled={pm_ok} (count={n_polymarket})")
+        if not pm_ok:
+            all_ok = False
 
-    # NewsAPI sources check
-    cur_ci.execute(
-        "SELECT COUNT(*) FROM sources WHERE source_type = 'newsapi' AND enabled = true",
-        (),
-    )
-    n_newsapi = cur_ci.fetchone()[0]
-    na_ok = n_newsapi >= len(_NEWSAPI_SOURCES)
-    status = "✓" if na_ok else "✗"
-    print(f"  {status} NewsAPI sources: enabled={n_newsapi} (expected ≥ {len(_NEWSAPI_SOURCES)})")
-    if not na_ok:
-        all_ok = False
+        # Finnhub sources check
+        cur_ci.execute(
+            "SELECT COUNT(*) FROM sources WHERE source_type = 'finnhub' AND enabled = true",
+            (),
+        )
+        n_finnhub = cur_ci.fetchone()[0]
+        fh_ok = n_finnhub >= len(_FINNHUB_SOURCES)
+        status = "✓" if fh_ok else "✗"
+        print(f"  {status} Finnhub sources: enabled={n_finnhub} (expected ≥ {len(_FINNHUB_SOURCES)})")
+        if not fh_ok:
+            all_ok = False
+
+        # NewsAPI sources check
+        cur_ci.execute(
+            "SELECT COUNT(*) FROM sources WHERE source_type = 'newsapi' AND enabled = true",
+            (),
+        )
+        n_newsapi = cur_ci.fetchone()[0]
+        na_ok = n_newsapi >= len(_NEWSAPI_SOURCES)
+        status = "✓" if na_ok else "✗"
+        print(f"  {status} NewsAPI sources: enabled={n_newsapi} (expected ≥ {len(_NEWSAPI_SOURCES)})")
+        if not na_ok:
+            all_ok = False
 
     cur_mkt.close()
     cur_intel.close()
@@ -1240,7 +1250,11 @@ def main() -> None:
         seed_intelligence_db(conn_intel, instrument_map, reset=args.reset)
 
         print("\n── content_ingestion_db ───────────────────────────────────────────────")
-        seed_content_ingestion_db(conn_ci, reset=args.reset)
+        try:
+            seed_content_ingestion_db(conn_ci, reset=args.reset)
+        except Exception as exc:
+            conn_ci.rollback()
+            print(f"  SKIP — content_ingestion_db seeding failed (table may not exist in eval stack): {exc}")
 
         ok = validate_seeding(conn_mkt, conn_intel, conn_ci, instrument_map)
         print()

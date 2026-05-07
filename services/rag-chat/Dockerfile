@@ -17,6 +17,8 @@ COPY libs/ml-clients/pyproject.toml /build/libs/ml-clients/pyproject.toml
 COPY libs/ml-clients/src /build/libs/ml-clients/src
 COPY libs/prompts/pyproject.toml /build/libs/prompts/pyproject.toml
 COPY libs/prompts/src /build/libs/prompts/src
+COPY libs/contracts/pyproject.toml /build/libs/contracts/pyproject.toml
+COPY libs/contracts/src /build/libs/contracts/src
 
 COPY services/rag-chat/pyproject.toml /build/services/rag-chat/pyproject.toml
 COPY services/rag-chat/src /build/services/rag-chat/src
@@ -30,6 +32,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         /build/libs/observability \
         /build/libs/ml-clients \
         /build/libs/prompts \
+        /build/libs/contracts \
         /build/services/rag-chat
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────

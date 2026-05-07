@@ -256,7 +256,7 @@ seed-eval:
 	@.venv312/bin/python scripts/seed_demo_data.py
 	@echo "[seed-eval] Step 3/3: Eval corpus (225 chunks + bge-large embeddings)..."
 	@OLLAMA_URL=http://localhost:11434 \
-	  EVAL_DB_URL=postgresql://postgres:postgres@localhost:5432/intelligence_db \
+	  EVAL_DB_URL=postgresql://postgres:postgres@localhost:5432/nlp_db \
 	  .venv312/bin/python scripts/seed-eval-corpus.py
 	@echo "[seed-eval] Done. Run: make eval"
 
@@ -266,10 +266,18 @@ seed-eval:
 ## Reports NDCG@10, MRR, P@5, Recall@20 overall and per query_class.
 ## Gate: NDCG@10 must not drop >0.03 from results/baseline_pre_hybrid.json.
 ## Requires: make test + make seed-eval already run.
+## Dev-only RS256 token (eval harness; signed with api-gateway dev keypair; no jti → replay check skipped).
+## This token is intentionally committed — it uses a dev-only key stored in worldview-gitops (private repo),
+## is only valid when RAG_CHAT_INTERNAL_JWT_SKIP_VERIFICATION=false with the matching public key,
+## and expires 2027-04-21. Rotate by re-running scripts/gen-eval-jwt.py.
+EVAL_JWT := eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwOTkiLCJ0ZW5hbnRfaWQiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMDEiLCJyb2xlIjoic3lzdGVtIiwiZXhwIjoxODA5NzMxNjA1LCJpc3MiOiJ3b3JsZHZpZXctZ2F0ZXdheSIsImF1ZCI6Indvcmxkdmlldy1pbnRlcm5hbCJ9.HlVtdMTE1e1psgv-7F2KvD7QU6ITl6mq4jQ89RKUnxj_R7Ub0vbL1iFIapkOo_npb_BrIYHZ2SAKnVAc52JutoAJ734ke3TavHLj6qRE5X34TYLNrJfCo_JRBKx0dbl4jMwGTgNCMQv4hxYpRzjyokh3mPBjdKmknupTiLcLic8sFKwvLdgrItQcu0fhDToLCzMXQXhO8ZS1ivoGMjnmzAsPaQnLDJ1vcuEOW16jtNifQrMcZvKw8F9z-PRmiqQ5H84n6WdfkSm9VpWr7eac20neou6OnTxiMM2opW-EnQB6meKmt6---p-vjoxkkEjXn17_3l-Sp8cO1ow73lnvCA
+
 eval:
-	.venv312/bin/python scripts/eval_retrieval.py \
+	EVAL_INTERNAL_JWT=$(EVAL_JWT) \
+	  .venv312/bin/python scripts/eval_retrieval.py \
 	  --rag-url http://localhost:8008 \
 	  --golden tests/eval/golden/queries_eval_stack.jsonl \
+	  --query-embeddings tests/eval/golden/query_embeddings.parquet \
 	  --mode hybrid \
 	  --fail-on-regression 0.03 \
 	  --output-dir results/

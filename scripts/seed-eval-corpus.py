@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Seed script: inserts synthetic eval corpus into intelligence_db.
+"""Seed script: inserts synthetic eval corpus into nlp_db (document_source_metadata / sections / chunks / chunk_embeddings).
 
 Run: python3 scripts/seed-eval-corpus.py
 Env vars:
   OLLAMA_URL  - default http://localhost:11434
-  EVAL_DB_URL - default postgresql://postgres:postgres@localhost:5432/intelligence_db
+  EVAL_DB_URL - default postgresql://postgres:postgres@localhost:5432/nlp_db
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ EVAL_NS = uuid.UUID("a0b1c2d3-0000-5000-8000-ea0100000000")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 EVAL_DB_URL = os.environ.get(
     "EVAL_DB_URL",
-    "postgresql://postgres:postgres@localhost:5432/intelligence_db",
+    "postgresql://postgres:postgres@localhost:5432/nlp_db",
 )
 
 # ---------------------------------------------------------------------------
@@ -5721,8 +5721,8 @@ def main() -> None:
 
     conn.commit()
     cur.close()
-    conn.close()
     _seed_legacy_corpus(conn)
+    conn.close()
     print("[seed-eval-corpus] Done. Corpus seeded successfully.")
 
 
