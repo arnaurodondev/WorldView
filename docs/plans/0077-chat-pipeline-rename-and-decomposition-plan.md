@@ -109,9 +109,10 @@ This plan does two things — both behaviour-preserving:
 
 ---
 
-## Wave B — Extract `ChatPipeline` value object
+## Wave B ✅ — Extract `ChatPipeline` value object
 
 **Estimated effort**: 1 day
+**Status**: **DONE** — 2026-05-07 · 615 tests pass · ruff + mypy clean
 **Depends on**: Wave A ✅
 
 ### Design
@@ -209,11 +210,11 @@ Step methods (all receive per-request state as args, return result):
 - **Acceptance criteria**: All pass, zero errors, new tests green
 
 **Validation gate**:
-- [ ] `ChatPipeline` has 16 step methods
-- [ ] `frozen=True` on the dataclass
-- [ ] `_ThinkBlockFilter` in `chat_pipeline.py`
-- [ ] ≥16 new unit tests in `test_chat_pipeline.py`
-- [ ] ruff + mypy + all unit tests pass
+- [x] `ChatPipeline` has 16 step methods
+- [x] `frozen=True` on the dataclass
+- [x] `_ThinkBlockFilter` in `chat_pipeline.py`
+- [x] ≥16 new unit tests in `test_chat_pipeline.py` (29 tests added)
+- [x] ruff + mypy + all unit tests pass (615 total)
 
 ---
 
