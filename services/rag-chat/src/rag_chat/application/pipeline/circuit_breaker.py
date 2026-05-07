@@ -13,6 +13,13 @@ Valkey keys (per source):
 
 All Valkey calls are best-effort: if Valkey is unavailable the breaker
 stays CLOSED (fail-open) so requests are never blocked by a cache outage.
+
+PLAN-0076 Wave B-2 / DEF-031 (BP-403): the ZADD → ZREMRANGEBYSCORE → ZCARD
+sequence used by ``record_failure()`` is now executed inside a single Lua
+script (atomic + isolated on the Redis server). The previous pipeline-with-
+``transaction=False`` implementation was non-atomic — two concurrent failures
+could both observe count below the threshold and one trip would be missed
+even though both writers committed their ZADD.
 """
 
 from __future__ import annotations
@@ -26,6 +33,24 @@ if TYPE_CHECKING:
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
+
+
+# ── Atomic record-failure: single Lua script eliminates TOCTOU race ──────────
+# KEYS[1] = failures ZSET key
+# ARGV[1] = now (unix seconds, score+member)
+# ARGV[2] = window cutoff (oldest score to keep)
+# ARGV[3] = window TTL seconds (refreshed on every failure)
+_RECORD_FAILURE_LUA = """
+local key = KEYS[1]
+local now = ARGV[1]
+local cutoff = ARGV[2]
+local ttl = tonumber(ARGV[3])
+redis.call('ZADD', key, now, now)
+redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff)
+local count = redis.call('ZCARD', key)
+redis.call('EXPIRE', key, ttl)
+return count
+"""
 
 
 class SourceCircuitBreaker:
@@ -88,20 +113,21 @@ class SourceCircuitBreaker:
     async def record_failure(self) -> None:
         """Add a failure timestamp; trip to OPEN if threshold is reached.
 
-        Best-effort — Valkey errors are swallowed.
+        The ZADD → ZREMRANGEBYSCORE → ZCARD → EXPIRE sequence runs inside a
+        single Lua script (BP-403) so two concurrent failures cannot both
+        observe count below the threshold. Best-effort — Valkey errors are
+        swallowed (fail-open).
         """
         try:
             now = time.time()
             cutoff = now - self._window
 
-            async with self._valkey.pipeline(transaction=False) as pipe:
-                pipe.zadd(self._failures_key, {str(now): now})
-                pipe.zremrangebyscore(self._failures_key, 0, cutoff)
-                pipe.zcard(self._failures_key)
-                pipe.expire(self._failures_key, self._window)
-                results = await pipe.execute()
-
-            failure_count: int = results[2]
+            count_result = await self._valkey.execute_lua_script(
+                _RECORD_FAILURE_LUA,
+                keys=[self._failures_key],
+                args=[str(now), str(cutoff), str(self._window)],
+            )
+            failure_count = int(count_result)
 
             if failure_count >= self._threshold:
                 # Trip breaker: set "open" with TTL = cool_down.  When the

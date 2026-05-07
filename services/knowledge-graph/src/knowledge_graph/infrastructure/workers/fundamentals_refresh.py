@@ -137,8 +137,13 @@ class FundamentalsRefreshWorker:
         embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
         concurrency: int = 5,
         internal_jwt_private_key_pem: str = "",
+        read_session_factory: Any = None,
     ) -> None:
         self._sf = session_factory
+        # DEF-034 (Wave B-5): Phase 1 due-entity SELECT runs on the read
+        # replica.  Phase 3 (earnings + sector relations + embedding upsert)
+        # stays on the write factory.
+        self._read_session_factory: Any = read_session_factory if read_session_factory is not None else session_factory
         self._llm = llm_client
         self._market_data_url = market_data_base_url.rstrip("/")
         self._http = http_client
@@ -179,8 +184,10 @@ class FundamentalsRefreshWorker:
 
         try:
             # ── Phase 1: Read due entities, then release the session ──
+            # DEF-034 (Wave B-5): Phase 1 fetch uses the read replica when
+            # configured. Phase 3 writes still go through ``self._sf``.
             due_entities: list[dict[str, Any]] = []
-            async with self._sf() as session:
+            async with self._read_session_factory() as session:
                 emb_repo = EntityEmbeddingStateRepository(session)
                 # 0 = unlimited (drain full queue); see EntityEmbeddingStateRepository.get_due_for_refresh
                 due = await emb_repo.get_due_for_refresh(VIEW_FUNDAMENTALS, 0)

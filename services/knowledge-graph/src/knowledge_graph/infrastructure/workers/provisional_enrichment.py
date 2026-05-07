@@ -176,8 +176,18 @@ class ProvisionalEnrichmentWorker:
         # from ``Settings.provisional_enrichment_{base,max}_retry_minutes``.
         base_retry_minutes: int = 2,
         max_retry_minutes: int = 1440,
+        # DEF-034 (Wave B-5): the Phase 1 claim path is SELECT FOR UPDATE +
+        # UPDATE in a single transaction so it MUST stay on the write factory.
+        # We accept ``read_session_factory`` for forward-compat (Wave B-1 may
+        # leverage it for purely-read diagnostic queries) and store it without
+        # changing behaviour today.  See PLAN-0076 §B-5 T-B5-05.
+        read_session_factory: Any = None,
     ) -> None:
         self._sf = session_factory
+        # Read factory wired for future use; current path is atomic read+write
+        # (claim_batch does SELECT FOR UPDATE + UPDATE in one transaction), so
+        # all queries continue to run on the write factory.
+        self._read_session_factory: Any = read_session_factory if read_session_factory is not None else session_factory
         self._embed_model_id = embedding_model_id
         self._llm = llm_client
         self._producer = direct_producer

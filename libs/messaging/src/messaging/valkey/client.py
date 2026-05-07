@@ -308,6 +308,31 @@ class ValkeyClient:
 
     # ── Sorted-set / pipeline ─────────────────────────────────────────────────
 
+    async def execute_lua_script(
+        self,
+        script: str,
+        keys: list[str],
+        args: list[str],
+    ) -> Any:
+        """Execute a Lua script atomically on Valkey/Redis.
+
+        Wraps ``redis.asyncio.Redis.eval()``. Use this when a multi-step
+        sorted-set / counter sequence (e.g. ZADD → ZREMRANGEBYSCORE → ZCARD)
+        must be atomic and isolated from concurrent writers — pipelines with
+        ``transaction=False`` only batch the round-trips, they do not provide
+        atomicity. Lua scripts run on the Redis server with no interleaving
+        from other clients (BP-403, PLAN-0076 Wave B-2 / DEF-031).
+
+        Args:
+            script: Lua source code. ``KEYS`` / ``ARGV`` are 1-indexed.
+            keys: Keys touched by the script (passed as ``KEYS[1..N]``).
+            args: Positional script arguments (passed as ``ARGV[1..M]``).
+
+        Returns:
+            Whatever the Lua script returns (int, str, list, or nil → ``None``).
+        """
+        return await self._redis.eval(script, len(keys), *keys, *args)  # type: ignore[no-any-return]
+
     @asynccontextmanager  # type: ignore[misc]
     async def pipeline(self, *, transaction: bool = False) -> Any:
         """Async context manager that yields the underlying redis pipeline.

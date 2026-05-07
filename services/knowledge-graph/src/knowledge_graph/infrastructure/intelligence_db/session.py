@@ -19,6 +19,9 @@ from typing import TYPE_CHECKING
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from knowledge_graph.domain.errors import IntelligenceDbAlembicError
+from observability import get_logger  # type: ignore[import-untyped]
+
+_log = get_logger(__name__)  # type: ignore[no-any-return]
 
 if TYPE_CHECKING:
     from knowledge_graph.config import Settings
@@ -87,6 +90,16 @@ def _build_factories(
         else settings.database_url.get_secret_value()
     )
     if _same_db_endpoint(read_url, settings.database_url.get_secret_value()):
+        # QA-fix §2.5: surface the misconfiguration explicitly so an operator
+        # who forgot to set DATABASE_URL_READ does not silently route 100% of
+        # read traffic through the write pool (defeats Wave B-5 / R23).
+        _log.warning(
+            "kg_read_replica_not_configured",
+            message=(
+                "DATABASE_URL_READ is empty or matches DATABASE_URL — read traffic "
+                "falls through to the write pool (Wave B-5 / R23 partially active)."
+            ),
+        )
         read_engine = write_engine
         read_factory = write_factory
     else:
@@ -104,6 +117,7 @@ def _build_factories(
             class_=AsyncSession,
             expire_on_commit=False,
         )
+        _log.info("kg_read_replica_engine_initialized")
 
     return write_engine, read_engine, write_factory, read_factory
 

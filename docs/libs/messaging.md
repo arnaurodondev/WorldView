@@ -431,6 +431,83 @@ When `max_retries` is exceeded for a `RetryableError`, it is also dead-lettered.
 
 ---
 
+## Consumer Backpressure (DEF-032)
+
+`BaseKafkaConsumer` supports **opt-in** per-partition pause/resume backpressure
+to prevent unbounded lag growth on slow consumers (e.g. an LLM-bound worker
+hit by an upstream provider outage).
+
+### Behaviour
+
+When a `BackpressurePolicy` is passed to the consumer constructor and
+`enabled=True`:
+
+1. Once every `check_interval_seconds`, the consumer measures lag for each
+   assigned partition (`high_watermark - position`, using cached watermarks
+   so no extra broker round-trip is needed).
+2. Any partition whose lag exceeds `pause_lag_threshold` is paused via
+   `Consumer.pause([tp])`. The partition is added to an internal tracking
+   set so it is not paused twice.
+3. Any currently-paused partition whose lag falls below
+   `resume_lag_threshold` is resumed.
+4. **Hysteresis is enforced**: `pause_lag_threshold` MUST be strictly greater
+   than `resume_lag_threshold`. The constructor raises `ValueError` otherwise.
+   This prevents thrash when lag oscillates near the boundary.
+5. On rebalance (`on_revoke`) and consumer shutdown, every paused partition
+   is resumed and the tracking set is cleared so the next group member
+   starts from a clean slate.
+
+### Opt-in
+
+The default behaviour is **disabled** — a consumer constructed without a
+policy (or with `enabled=False`) sees zero overhead in the poll loop:
+
+```python
+# No backpressure (default, no behaviour change)
+class MyConsumer(BaseKafkaConsumer[MyFailureRecord]):
+    ...
+
+consumer = MyConsumer(config=cfg)
+```
+
+A worker opts in by building a policy from its settings and passing it:
+
+```python
+from messaging.kafka.consumer import BackpressurePolicy
+
+policy = BackpressurePolicy.from_settings(settings)
+consumer = MyConsumer(config=cfg, backpressure_policy=policy)
+```
+
+### Configuration
+
+`BackpressurePolicy.from_settings(settings)` reads four optional attributes
+from any settings-like object (typically a pydantic-settings instance):
+
+| Attribute | Env var | Default |
+|-----------|---------|---------|
+| `kafka_consumer_backpressure_enabled` | `KAFKA_CONSUMER_BACKPRESSURE_ENABLED` | `False` |
+| `kafka_consumer_lag_pause_threshold` | `KAFKA_CONSUMER_LAG_PAUSE_THRESHOLD` | `10_000` |
+| `kafka_consumer_lag_resume_threshold` | `KAFKA_CONSUMER_LAG_RESUME_THRESHOLD` | `1_000` |
+| `kafka_consumer_backpressure_check_interval_seconds` | `KAFKA_CONSUMER_BACKPRESSURE_CHECK_INTERVAL_SECONDS` | `30.0` |
+
+Missing attributes fall back to defaults — there is no global
+`MessagingSettings` class; each service exposes its own settings.
+
+### Logging
+
+When backpressure fires, the consumer emits structured log events you can
+filter on:
+
+- `consumer.backpressure.paused` — `topic`, `partition`, `lag`, `threshold`
+- `consumer.backpressure.resumed` — `topic`, `partition`, `lag`, `threshold`
+- `consumer.backpressure.pause_failed` / `resume_failed` — best-effort
+  pause/resume call raised; logged at WARNING and the consumer continues.
+- `consumer.backpressure.bulk_resume_failed` — rebalance/shutdown bulk
+  resume failed; logged and swallowed.
+
+---
+
 ## Testing Strategy
 
 - **Unit**: test error classification, retry back-off arithmetic, serialization helpers,

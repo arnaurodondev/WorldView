@@ -10,10 +10,20 @@ Runs every 60 minutes.  Processes relations with ``summary_stale=true``:
 
 All LLM calls are logged to llm_usage_log.
 
-Session discipline (DS-001):
+Session discipline (DS-001 / ARCH-003 / DEF-018, Wave B-1):
   DB connections are held only for the duration of each DB operation.  The LLM
   call (which can take 5-30 s) is always issued with NO open session to prevent
   connection-pool starvation under a 20-relation batch.
+
+  Three-phase split:
+    Phase 1 (READ session via ``self._read_session_factory``): fetch the stale
+            relation list.  When ``DATABASE_URL_READ`` is configured this
+            targets the read replica; otherwise it falls back to the write
+            pool (Wave B-5 wired ``read_session_factory`` from the scheduler).
+    Phase 2 (NO session): call the LLM for each relation.
+    Phase 3 (WRITE session per row via ``self._sf``): insert the summary and
+            clear the stale flag.  On LLM failure (per F-DS-208) the stale
+            flag is still cleared to prevent indefinite retry storms.
 """
 
 from __future__ import annotations
@@ -22,6 +32,7 @@ import hashlib
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from common.time import utc_now  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -41,12 +52,20 @@ class SummaryWorker:
 
     Args:
     ----
-        session_factory: Read/write sessionmaker for intelligence_db.
+        session_factory: Write sessionmaker for intelligence_db.  Used for
+                         Phase 3 writes (insert summary + clear stale flag).
         llm_client:      FallbackChainClient for extraction.
         force_regen_batch_size:
             When > 0, skip the evidence-hash equality check for up to this many
             relations per cycle.  Allows forced refresh after prompt-template
             upgrades.  0 (default) uses normal hash-based skip logic.
+        read_session_factory:
+            Optional read-replica sessionmaker (DEF-034 / Wave B-5).  Used for
+            Phase 1 (fetch stale list) and Phase 2 (fetch evidence + existing
+            summary) so heavy summary cycles do not contend with write traffic.
+            When ``None`` (default), falls back to ``session_factory`` so
+            existing call sites and tests that pass only the write factory
+            continue to work unchanged.
 
     """
 
@@ -55,8 +74,14 @@ class SummaryWorker:
         session_factory: async_sessionmaker[AsyncSession],
         llm_client: FallbackChainClient,
         force_regen_batch_size: int = 0,
+        read_session_factory: Any = None,
     ) -> None:
         self._sf = session_factory
+        # DEF-018 / Wave B-1: route Phase 1 + Phase 2 reads through the read
+        # replica when one is wired in by the scheduler.  Falling back to the
+        # write factory preserves backward-compat with existing tests that
+        # construct the worker with only ``session_factory``.
+        self._read_session_factory: Any = read_session_factory if read_session_factory is not None else session_factory
         self._llm = llm_client
         self._force_regen_batch_size = force_regen_batch_size
 
@@ -86,17 +111,28 @@ class SummaryWorker:
         raw_fallback_hits_total = 0
         skipped_no_evidence = 0
         skipped_null_evidence_text = 0
+        # DEF-018 / Wave B-1: per-phase counters for observability.  Emitted in
+        # the final ``summary_worker_complete`` structlog record below.
+        phase1_fetched_count = 0
+        phase2_llm_calls = 0
+        phase3_written_count = 0
 
-        # ── Phase 1: fetch stale list (short-lived session) ──────────────────
-        async with self._sf() as session:
+        # ── Phase 1: fetch stale list (READ session, short-lived) ───────────
+        # DEF-018 / Wave B-1: open the read-replica session so the stale-list
+        # SELECT does not contend with the write pool.  ``fetch_stale_summary``
+        # no longer uses ``FOR UPDATE SKIP LOCKED`` (per F-DS-201:
+        # ``max_instances=1`` APScheduler coalescing prevents concurrency).
+        async with self._read_session_factory() as session:
             rel_repo = RelationRepository(session)
             stale_relations = await rel_repo.fetch_stale_summary(_BATCH_LIMIT)  # type: ignore[attr-defined]
 
         batch_size = len(stale_relations)
+        phase1_fetched_count = batch_size
 
         logger.info(  # type: ignore[no-any-return]
             "summary_worker_batch_start",
             stale_relations=batch_size,
+            phase1_fetched_count=phase1_fetched_count,
         )
 
         # Track how many relations in this cycle have been force-regenerated so
@@ -106,8 +142,11 @@ class SummaryWorker:
         for rel in stale_relations:
             relation_id = rel["relation_id"]  # type: ignore[assignment]
 
-            # ── Phase 2: fetch evidence + existing summary (short-lived session)
-            async with self._sf() as session:
+            # ── Phase 2: fetch evidence + existing summary (READ session) ───
+            # DEF-018 / Wave B-1: also routed through the read replica — these
+            # are pure SELECTs against ``relation_evidence_*`` and
+            # ``relation_summaries``.  No session is held while the LLM runs.
+            async with self._read_session_factory() as session:
                 ev_repo = RelationEvidenceRepository(session)
                 summary_repo = RelationSummaryRepository(session)
 
@@ -181,51 +220,88 @@ class SummaryWorker:
             # ── Determine whether the LLM call is needed ─────────────────────
             # Force-regen mode: skip the hash check for the first
             # _force_regen_batch_size relations in this cycle.
+            # QA-fix §3.1: increment the counter BEFORE the hash check so a
+            # force-regen slot is not consumed by a no-op hash-unchanged skip.
             force_regen_active = self._force_regen_batch_size > 0 and force_regen_used < self._force_regen_batch_size
-
-            if not force_regen_active and existing and existing.get("evidence_hash") == evidence_hash:
-                # Hash unchanged — skip expensive LLM call; just clear the stale flag.
-                async with self._sf() as session:
-                    rel_repo = RelationRepository(session)
-                    await rel_repo.mark_summary_updated(relation_id)  # type: ignore[arg-type, attr-defined]
-                    await session.commit()
-                summaries_skipped += 1
-                continue
-
             if force_regen_active:
                 force_regen_used += 1
 
-            # ── Phase 3: LLM call — NO session is open here ─────────────────
+            if not force_regen_active and existing and existing.get("evidence_hash") == evidence_hash:
+                # Hash unchanged — skip expensive LLM call; just clear the stale flag.
+                # QA-fix §2.1: per-relation try/except so one commit failure does
+                # not abort the whole batch.
+                try:
+                    async with self._sf() as session:
+                        rel_repo = RelationRepository(session)
+                        await rel_repo.mark_summary_updated(relation_id)  # type: ignore[arg-type, attr-defined]
+                        await session.commit()
+                    summaries_skipped += 1
+                except Exception as exc:
+                    logger.error(  # type: ignore[no-any-return]
+                        "summary_worker_phase4_commit_failed",
+                        phase="hash_unchanged_clear_stale",
+                        relation_id=str(relation_id),
+                        error=str(exc),
+                    )
+                continue
+
+            # ── Phase 3 (LLM): NO session is open here ──────────────────────
+            # DEF-018 / Wave B-1 / ARCH-003: this is the single most expensive
+            # step in the cycle (5-30 s per relation).  Holding a DB session
+            # across this call is the original ARCH-003 violation we are
+            # fixing — ``self._read_session_factory`` was already exited above.
+            phase2_llm_calls += 1
             summary_text = await self._generate_summary(evidence_texts, relation_id)  # type: ignore[arg-type]
             if summary_text is None:
+                # F-DS-208: on permanent LLM failure clear the stale flag
+                # rather than retry every cycle (retry-storm prevention).
+                # The flag is re-set when fresh evidence arrives via upsert.
                 logger.warning(  # type: ignore[no-any-return]
                     "summary_worker_llm_failed",
                     relation_id=str(relation_id),
+                    summary_last_failed_at=utc_now().isoformat(),
                 )
-                # Clear stale flag to prevent indefinite retry on permanent LLM
-                # failures; the flag is re-set when new evidence arrives via upsert.
-                async with self._sf() as session:
-                    rel_repo = RelationRepository(session)
-                    await rel_repo.mark_summary_updated(relation_id)  # type: ignore[arg-type, attr-defined]
-                    await session.commit()
+                try:
+                    async with self._sf() as session:
+                        rel_repo = RelationRepository(session)
+                        await rel_repo.mark_summary_updated(relation_id)  # type: ignore[arg-type, attr-defined]
+                        await session.commit()
+                except Exception as exc:
+                    logger.error(  # type: ignore[no-any-return]
+                        "summary_worker_phase4_commit_failed",
+                        phase="llm_failure_clear_stale",
+                        relation_id=str(relation_id),
+                        error=str(exc),
+                    )
                 continue
 
-            # ── Phase 4: write summary (short-lived session) ─────────────────
-            async with self._sf() as session:
-                summary_repo = RelationSummaryRepository(session)
-                rel_repo = RelationRepository(session)
-                await summary_repo.insert_new(
-                    relation_id=relation_id,  # type: ignore[arg-type]
-                    summary_text=summary_text,
-                    evidence_count=len(evidence_texts),
-                    evidence_hash=evidence_hash,
-                    model_id="kg-summary-v1",
-                    prompt_template_id=UUID(_PROMPT_TEMPLATE_ID),
-                    generation_trigger="worker_13c_scheduled",
+            # ── Phase 3 (write): WRITE session per row ──────────────────────
+            # QA-fix §2.1: per-relation try/except — Phase 4 commit failure
+            # must not abort the remaining batch.
+            try:
+                async with self._sf() as session:
+                    summary_repo = RelationSummaryRepository(session)
+                    rel_repo = RelationRepository(session)
+                    await summary_repo.insert_new(
+                        relation_id=relation_id,  # type: ignore[arg-type]
+                        summary_text=summary_text,
+                        evidence_count=len(evidence_texts),
+                        evidence_hash=evidence_hash,
+                        model_id="kg-summary-v1",
+                        prompt_template_id=UUID(_PROMPT_TEMPLATE_ID),
+                        generation_trigger="worker_13c_scheduled",
+                    )
+                    await rel_repo.mark_summary_updated(relation_id)  # type: ignore[arg-type, attr-defined]
+                    await session.commit()
+                summaries_created += 1
+                phase3_written_count += 1
+            except Exception as exc:
+                logger.error(  # type: ignore[no-any-return]
+                    "summary_worker_phase4_commit_failed",
+                    phase="insert_new",
+                    relation_id=str(relation_id),
+                    error=str(exc),
                 )
-                await rel_repo.mark_summary_updated(relation_id)  # type: ignore[arg-type, attr-defined]
-                await session.commit()
-            summaries_created += 1
 
         logger.info(  # type: ignore[no-any-return]
             "summary_worker_complete",
@@ -236,6 +312,10 @@ class SummaryWorker:
             skipped_null_evidence_text=skipped_null_evidence_text,
             immutable_hits=immutable_hits_total,
             raw_fallback_hits=raw_fallback_hits_total,
+            # DEF-018 / Wave B-1 phase metrics:
+            phase1_fetched_count=phase1_fetched_count,
+            phase2_llm_calls=phase2_llm_calls,
+            phase3_written_count=phase3_written_count,
         )
 
     async def _generate_summary(

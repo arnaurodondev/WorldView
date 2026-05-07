@@ -1,8 +1,8 @@
 # PLAN-0076 — Deferred Issues: Schema Migrations, Architecture Hardening, Test Coverage
 
-> **Status**: IN-PROGRESS (Sub-Plan A complete)
+> **Status**: IN-PROGRESS (Sub-Plans A + B complete; Sub-Plan C remains)
 > **Created**: 2026-05-05
-> **Updated**: 2026-05-06
+> **Updated**: 2026-05-07
 > **Owner**: Arnau Rodon
 > **Depends on**: PLAN-0072 (KG data quality) — migrations must be at head before Sub-Plan A starts; PLAN-0062 (Avro enforcement) — Avro wire format migration in Sub-Plan B, Wave B-3 depends on PLAN-0062 contract infra.
 
@@ -491,8 +491,9 @@ def uuid5_from_parts(*parts: str) -> str:
 
 ---
 
-## Wave B-1 — DEF-018: SummaryWorker ARCH-003 Refactor (3-Phase Session Pattern)
+## Wave B-1 — DEF-018: SummaryWorker ARCH-003 Refactor (3-Phase Session Pattern) ✅
 
+**Status**: **DONE** — 2026-05-07 · 1005 KG unit tests pass · 3-phase pattern: read factory for stale-list+evidence fetch, no session during LLM, write factory per row · F-DS-208 (LLM failure clears stale flag) · per-relation try/except on Phase 4 commit so one failure doesn't abort batch · per-phase counters wired
 **Goal**: Eliminate the ARCH-003 violation in `SummaryWorker` where a single DB session spans 20 LLM calls (up to 600s of I/O). Refactor to 3-phase: fetch-and-close → LLM batch → write-per-relation. Phase 1 uses the read replica session factory wired by Wave B-5.
 **Depends on**: Wave A-2 (new `summary_embedding_model_id` column); **Wave B-5** (read_session_factory must be threaded into `SummaryWorker` before Phase 1 can use the read replica).
 **Estimated effort**: 6 hours.
@@ -560,8 +561,9 @@ def uuid5_from_parts(*parts: str) -> str:
 
 ---
 
-## Wave B-2 — DEF-031: Circuit Breaker TOCTOU Race — Lua Script Atomicity
+## Wave B-2 — DEF-031: Circuit Breaker TOCTOU Race — Lua Script Atomicity ✅
 
+**Status**: **DONE** — 2026-05-07 · 10 rag-chat CB tests pass + 20 valkey tests (incl. 2 new for `execute_lua_script`) · BP-403 added · `is_open()` left as single-GET (already atomic; T-B2-03 N/A) · circuit breaker is in `services/rag-chat/src/rag_chat/application/pipeline/circuit_breaker.py` (plan referred to `services/knowledge-graph/...` which never existed)
 **Goal**: Replace the `ZADD → ZREMRANGEBYSCORE → ZCARD → EXPIRE` non-atomic sequence in `circuit_breaker.py` with a Lua script that executes atomically on Valkey, preventing two concurrent coroutines from both observing failure_count < threshold.
 **Depends on**: none (independent of all other waves).
 **Estimated effort**: 5 hours.
@@ -663,8 +665,9 @@ return redis.call('ZCARD', key)
 
 ---
 
-## Wave B-3 — DEF-023: EntityCreatedConsumer Avro Migration
+## Wave B-3 — DEF-023: EntityCreatedConsumer Avro Migration ✅ SUPERSEDED
 
+**Status**: **SUPERSEDED 2026-05-07** by PLAN-0062 Wave A (committed 2026-05-03) — already migrated `entity.canonical.created.v1` to Avro with JSON fallback. Schema exists at `infra/kafka/schemas/entity.canonical.created.v1.avsc`; consumer is `services/knowledge-graph/.../infrastructure/messaging/consumers/entity_consumer.py` and uses `deserialize_confluent_avro()` with magic-byte detection per BP-313. No work needed.
 **Goal**: Migrate `entity.canonical.created.v1` events from JSON wire format to Avro, aligned with the platform standard (BP-313). Add a contract test that pins the wire format during migration.
 **Depends on**: PLAN-0062 (Avro enforcement infrastructure must be landed — Confluent SR client + `deserialize_confluent_avro()` in `libs/messaging`).
 **Estimated effort**: 7 hours (Avro schema + SR registration + consumer + contract test).
@@ -796,8 +799,9 @@ return redis.call('ZCARD', key)
 
 ---
 
-## Wave B-4 — DEF-032: Kafka Consumer Backpressure (Pause/Resume)
+## Wave B-4 — DEF-032: Kafka Consumer Backpressure (Pause/Resume) ✅
 
+**Status**: **DONE** — 2026-05-07 · 233 libs/messaging tests pass (+23 new for backpressure) · `BackpressurePolicy` (frozen, hysteresis-validated) + `LagCalculator` in new `backpressure.py` module · `_maybe_apply_backpressure()` in `BaseKafkaConsumer` poll loop · `_paused_partitions` set + rebalance-revoke resume + `_last_backpressure_check` reset on revoke (QA-fix §2.2) · default disabled (opt-in via env vars) · `confluent_kafka` stubs extended for `pause`/`resume`/`get_watermark_offsets` + `TopicPartition`
 **Goal**: Add a configurable pause/resume mechanism to `BaseKafkaConsumer` based on consumer group lag, preventing indefinite fallback under sustained load.
 **Depends on**: none (independent).
 **Estimated effort**: 8 hours (design + implementation + testing).
@@ -908,8 +912,9 @@ class LagCalculator:
 
 ---
 
-## Wave B-5 — DEF-034: R23 Read/Write Replica Split for All Scheduler Workers
+## Wave B-5 — DEF-034: R23 Read/Write Replica Split for All Scheduler Workers ✅
 
+**Status**: **DONE** — 2026-05-07 · 999+6 KG tests pass (B-5 added 20 + B-1 added 6) · `build_workers(settings, write_session_factory, read_session_factory=None, ...)` · 6 workers + EntityEnrichmentAdapter accept `read_session_factory` and use it for purely-read phases · 3 R23-EXEMPT: ConfidenceWorker, ContradictionBatchWorker, MonthlyPartitionWorker · `scheduler_main.py` disposes `read_engine` (skipped when same as write engine, QA-fix §2.4) · startup `kg_read_replica_not_configured` warning when `DATABASE_URL_READ` unset (QA-fix §2.5)
 **Goal**: Wire `read_session_factory` (from `_build_factories()`) into every scheduler worker so that read-only fetch phases target the read replica connection pool, and only writes use the write pool. Currently `_read_factory` is built but discarded — every worker reads and writes via the write pool, violating R23.
 **Depends on**: none (independent infrastructure wiring wave; must land before B-1).
 **Estimated effort**: 8 hours.

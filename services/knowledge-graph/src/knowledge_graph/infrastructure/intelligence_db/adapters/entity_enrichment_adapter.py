@@ -14,7 +14,7 @@ and MUST NOT be called while a DB session is held open by the caller (3-phase pa
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import text
@@ -52,8 +52,17 @@ _ALLOWED_SOURCE_FIELDS: frozenset[str] = frozenset(
 class EntityEnrichmentAdapter:
     """Port implementation for enrichment result persistence (PRD-0073 §9.4)."""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        read_session_factory: Any = None,
+    ) -> None:
         self._sf = session_factory
+        # DEF-034 (Wave B-5): ``list_unenriched`` is a pure SELECT and routes
+        # through the read replica when configured.  The mutation methods
+        # (``write_enrichment_result``, ``increment_attempts``, ``seed_relations``)
+        # all take a caller-supplied session and stay on the write path.
+        self._read_session_factory: Any = read_session_factory if read_session_factory is not None else session_factory
 
     # ------------------------------------------------------------------
     # EntityEnrichmentPort methods
@@ -136,7 +145,10 @@ WHERE entity_id = :entity_id
         """
         from knowledge_graph.domain.models import CanonicalEntity
 
-        async with self._sf() as session:
+        # DEF-034 (Wave B-5): pure SELECT — runs on the read replica when
+        # configured.  Falls back to the write factory when no replica is
+        # wired (default in tests + dev environments).
+        async with self._read_session_factory() as session:
             result = await session.execute(
                 text("""
 SELECT entity_id, canonical_name, entity_type, ticker, isin, exchange,

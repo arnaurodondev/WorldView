@@ -20,7 +20,7 @@ Performance (batch embed):
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from common.time import utc_now  # type: ignore[import-untyped]
@@ -69,8 +69,14 @@ class NarrativeRefreshWorker:
         llm_client: FallbackChainClient,
         embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
         batch_limit: int = 0,
+        read_session_factory: Any = None,
     ) -> None:
         self._sf = session_factory
+        # DEF-034 (Wave B-5): Phase 1 fetch + narrative-text build use the
+        # read replica factory when configured; Phase 3 upsert stays on the
+        # write factory.  Falls back to the write factory when no replica is
+        # wired so existing call sites continue to work.
+        self._read_session_factory: Any = read_session_factory if read_session_factory is not None else session_factory
         self._embed_model_id = embedding_model_id
         self._llm = llm_client
         self._batch_limit = batch_limit
@@ -105,7 +111,9 @@ class NarrativeRefreshWorker:
 
         prepared: list[_Prepared] = []
 
-        async with self._sf() as session:
+        # DEF-034 (Wave B-5): the entire Phase 1 read (due rows + narrative
+        # text build, both pure SELECTs) runs on the read replica.
+        async with self._read_session_factory() as session:
             emb_repo = EntityEmbeddingStateRepository(session)
             due = await emb_repo.get_due_for_refresh(VIEW_NARRATIVE, self._batch_limit)
 

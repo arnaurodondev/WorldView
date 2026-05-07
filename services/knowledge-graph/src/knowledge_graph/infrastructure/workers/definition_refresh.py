@@ -77,8 +77,13 @@ class DefinitionRefreshWorker:
         usage_logger: LlmUsageLogProtocol | None = None,
         embedding_model_id: str = _DEFAULT_EMBED_MODEL_ID,
         batch_limit: int = 0,
+        read_session_factory: Any = None,
     ) -> None:
         self._sf = session_factory
+        # DEF-034 (Wave B-5): route Phase 1 fetch through the read replica when
+        # one is configured; fall back to the write factory so existing tests
+        # that pass only ``session_factory`` keep working unchanged.
+        self._read_session_factory: Any = read_session_factory if read_session_factory is not None else session_factory
         self._llm = llm_client
         self._embed_model_id = embedding_model_id
         if description_client is None:
@@ -114,7 +119,9 @@ class DefinitionRefreshWorker:
         # Fetch all due rows and resolve source texts (including LLM description
         # generation for non-company entities).  Session is released before any
         # embed() calls.
-        async with self._sf() as session:
+        # DEF-034 (Wave B-5): the SELECT batch uses the read replica factory.
+        # Writes in Phase 3 stay on the primary write factory.
+        async with self._read_session_factory() as session:
             emb_repo = EntityEmbeddingStateRepository(session)
             due = await emb_repo.get_due_for_refresh(VIEW_DEFINITION, self._batch_limit)
         # Session released here — FOR UPDATE lock released, that is acceptable
