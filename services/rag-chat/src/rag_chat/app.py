@@ -350,6 +350,16 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         embedding_client=embedding_client,
         valkey=valkey_client,
     )
+    # PLAN-0079 Wave C: build TrustScorer from env-var-tunable weights so operators
+    # can adjust the source/corroboration/extraction mix without redeploying code.
+    from rag_chat.application.pipeline.trust_scorer import TrustScorer
+
+    _trust_scorer = TrustScorer(
+        w_source=settings.trust_w_source,
+        w_corroboration=settings.trust_w_corroboration,
+        w_extraction=settings.trust_w_extraction,
+    )
+
     _retrieval = ParallelRetrievalOrchestrator(
         s6_client=s6,
         s7_client=s7,
@@ -357,6 +367,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         s1_client=s1,
         timeout=settings.upstream_timeout_seconds,
         s1_internal_token=settings.s1_internal_token,
+        trust_scorer=_trust_scorer,
         circuit_breakers={
             name: SourceCircuitBreaker(
                 valkey_client,

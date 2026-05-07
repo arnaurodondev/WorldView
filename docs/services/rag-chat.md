@@ -405,6 +405,66 @@ services/rag-chat/src/rag_chat/
 
 ---
 
+## Trust Model (PLAN-0079)
+
+Every `RetrievedItem` carries a `trust_weight ∈ [0, 1]` computed by `TrustScorer`
+(`application/pipeline/trust_scorer.py`). The weight feeds the existing fusion
+pipeline invariant `fusion_score = retrieval_score × recency_score × trust_weight`.
+
+### Formula
+
+```
+trust = w_source × source_authority(source_type)
+      + w_corroboration × corroboration_factor(evidence_count)
+      + w_extraction × extraction_confidence_factor
+```
+
+The formula is **additive** (not multiplicative) to prevent numerical collapse.
+With default weights, a `sec_10k` item yields `0.4×1.0 + 0.1×0.5 + 0.1×0.5 = 0.50`.
+
+### SOURCE_AUTHORITY Table
+
+Canonical per-source authority scores live in
+`libs/contracts/src/contracts/trust/__init__.py`. Representative values:
+
+| Source type | Authority |
+|---|---|
+| `sec_10k`, `sec_10q` | 1.0 |
+| `earnings_data` | 0.95 |
+| `financial` | 0.90 |
+| `analyst_report` | 0.80 |
+| `eodhd_news` | 0.70 |
+| `claim`, `relation` | 0.65 |
+| `default` | 0.50 |
+| `social_media` | 0.30 |
+
+### Recency
+
+Recency is **not** included in the trust formula — it is handled separately by
+`item.recency_score` (computed by `compute_recency_score`, PLAN-0063 W5-4) and
+multiplied into the final `fusion_score` downstream.
+
+### Tunable Weights (env vars)
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAG_CHAT_TRUST_W_SOURCE` | `0.4` | Weight for source authority factor |
+| `RAG_CHAT_TRUST_W_CORROBORATION` | `0.1` | Weight for corroboration factor (MVP: 0.5 when evidence_count=0) |
+| `RAG_CHAT_TRUST_W_EXTRACTION` | `0.1` | Weight for extraction confidence (defaults to 0.5 when unavailable) |
+
+Weights can be tuned without redeploying code. The remaining `0.4` budget is
+reserved for the recency signal applied via `fusion_score`.
+
+### Eval Gate
+
+Production weight changes MUST be validated against the 120-query golden set
+(PLAN-0063 §3) with a ≥0.03 NDCG@10 regression threshold before being promoted.
+Use `python scripts/eval_retrieval.py --mode trust_sweep --trust-w-source <W>
+--trust-w-corroboration <W> --trust-w-extraction <W>` to run the eval harness
+(live sweep gated on PLAN-0063 §3 golden set completion).
+
+---
+
 ## Tenant Isolation
 
 S8 enforces tenant isolation at the **application layer** via `tenant_id` scoping
