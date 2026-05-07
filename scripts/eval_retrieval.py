@@ -23,6 +23,11 @@ exits 0 in that case so it can run during the W5-1 iteration where labelling
 is in flight (the CI gate is DISABLED in W5-1; it enables in W5-3 by which
 point the dataset is fully labelled).
 
+PLAN-0084 E-2 additions:
+- --fail-on-regression-per-class THRESHOLD: per-class NDCG@10 gate, requires
+  >=6 graded queries per class (warns + skips otherwise). 0.0 disables.
+- Empty per_query exit: exits 1 when n_labelled >= 50 (eval should have run).
+
 References:
 - §0-bis.0 v2 (L1-L16) for locked decisions
 - §0-bis.4-v2 for the 12 query_class buckets
@@ -565,13 +570,23 @@ async def run_eval(args: argparse.Namespace) -> int:
         return 1
 
     if not per_query:
+        # PLAN-0084 E-2: tighten exit code based on how many rows are labelled.
+        # If >=50 rows have relevant_doc_ids, the eval *should* have produced
+        # results — every query failing retrieval is a sign of a broken service,
+        # not a labelling gap. Exit 1 so CI catches it.
+        # Below 50, labelling is still in flight; exit 0 (informational gate).
+        n_labelled = sum(1 for r in rows if r.get("relevant_doc_ids"))
+        if n_labelled < 50:
+            print(
+                f"WARN: {n_labelled} labelled queries, eval skipped (gate informational); exit 0.",
+                file=sys.stderr,
+            )
+            return 0
         print(
-            "ERROR: no queries evaluated (all rows skipped or failed). Have you labelled the golden set?",
+            f"ERROR: {n_labelled} labelled queries but 0 evaluated — every query failed retrieval. Exit 1.",
             file=sys.stderr,
         )
-        # Exit 0 because in W5-1 the labelling is in flight; the CI gate is
-        # disabled during this period.
-        return 0
+        return 1
 
     aggregated = aggregate(per_query)
     timestamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -619,6 +634,47 @@ async def run_eval(args: argparse.Namespace) -> int:
             print(m, file=sys.stderr)
         if not passed:
             return 1
+
+        # PLAN-0084 E-2 (T-E-2-01): per-class regression gate.
+        # Activated only when --fail-on-regression-per-class > 0.0.
+        # Unlike the guardrail inside compare_to_baseline (which always applies),
+        # this check enforces a minimum-query-count guard: classes with <6 graded
+        # queries emit a WARNING and are skipped rather than failing the run.
+        # This prevents noisy failures when a query_class is sparsely labelled.
+        per_class_threshold = args.fail_on_regression_per_class
+        if per_class_threshold > 0.0:
+            base_by_class = baseline_data.get("by_class", {})
+            cur_by_class = aggregated.get("by_class", {})
+            per_class_regressions: list[str] = []
+            for cls, cur_vals in cur_by_class.items():
+                base_vals = base_by_class.get(cls)
+                if not base_vals:
+                    # Class not in baseline — no regression possible.
+                    continue
+                n_graded = cur_vals.get("n", 0)
+                if n_graded < 6:
+                    print(
+                        f"WARN: class {cls!r} has only {n_graded} graded queries "
+                        "— skipping regression check for this class.",
+                        file=sys.stderr,
+                    )
+                    continue
+                cls_delta = cur_vals["ndcg_at_10"] - base_vals["ndcg_at_10"]
+                if cls_delta < -per_class_threshold:
+                    per_class_regressions.append(
+                        f"  {cls}: NDCG@10 dropped {-cls_delta:.4f} "
+                        f"(>= threshold {per_class_threshold:.4f}); "
+                        f"cur={cur_vals['ndcg_at_10']:.4f} base={base_vals['ndcg_at_10']:.4f}"
+                    )
+            if per_class_regressions:
+                print(
+                    "ERROR: per-class NDCG@10 regression detected "
+                    f"(--fail-on-regression-per-class={per_class_threshold:.4f}):",
+                    file=sys.stderr,
+                )
+                for msg in per_class_regressions:
+                    print(msg, file=sys.stderr)
+                return 1
 
     return 0
 
@@ -841,6 +897,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.03,
         help="If positive, fail when global NDCG@10 drops by >= this delta. "
         "If negative, treat |value| as required improvement floor (W5-3 mode).",
+    )
+    parser.add_argument(
+        "--fail-on-regression-per-class",
+        type=float,
+        default=0.0,
+        help=(
+            "PLAN-0084 E-2: per-class NDCG@10 regression gate. "
+            "When > 0, any class whose NDCG@10 drops by >= this threshold exits 1. "
+            "Classes with fewer than 6 graded queries emit a WARNING and are skipped. "
+            "Default 0.0 = disabled (behaviour unchanged). Recommended value: 0.05."
+        ),
     )
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument(
