@@ -26,6 +26,7 @@ async def main() -> None:
     from market_data.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from market_data.infrastructure.messaging.consumers.ohlcv_consumer import OHLCVConsumer
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+    from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
     from storage.factory import build_object_storage  # type: ignore[import-untyped]
     from storage.settings import StorageSettings  # type: ignore[import-untyped]
 
@@ -67,6 +68,8 @@ async def main() -> None:
         )
     )
 
+    valkey = create_valkey_client_from_url(settings.valkey_url)
+
     consumer = OHLCVConsumer(
         uow_factory=uow_factory,
         object_storage=object_storage,
@@ -75,6 +78,7 @@ async def main() -> None:
             group_id="market-data-ohlcv",
             topics=["market.dataset.fetched"],
         ),
+        dedup_client=valkey,
     )
 
     try:
@@ -91,6 +95,7 @@ async def main() -> None:
         log.error("ohlcv_consumer_fatal_error", error=str(exc))
         sys.exit(1)
     finally:
+        await valkey.close()
         await write_engine.dispose()
         if read_engine is not write_engine:
             await read_engine.dispose()

@@ -38,6 +38,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -115,7 +116,7 @@ class _NoOpUoW:
 # ---------------------------------------------------------------------------
 
 
-class TemporalEventConsumer(BaseKafkaConsumer[None]):
+class TemporalEventConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     """Consumes ``intelligence.temporal_event.v1`` and upserts temporal data.
 
     Deduplication is performed via Valkey before ``process_message`` is called
@@ -228,22 +229,6 @@ class TemporalEventConsumer(BaseKafkaConsumer[None]):
             scope=scope,
             exposures_created=exposure_count,
         )
-
-    # ------------------------------------------------------------------
-    # Idempotency (BP-124)
-    # ------------------------------------------------------------------
-
-    async def is_duplicate(self, event_id: str) -> bool:
-        if self._dedup_client is None:
-            return False
-        key = f"{self._dedup_prefix}:{event_id}"
-        return bool(await self._dedup_client.exists(key))
-
-    async def mark_processed(self, event_id: str) -> None:
-        if self._dedup_client is None:
-            return
-        key = f"{self._dedup_prefix}:{event_id}"
-        await self._dedup_client.set(key, "1", ex=86400)
 
     # ------------------------------------------------------------------
     # Failure tracking (DLQ)
