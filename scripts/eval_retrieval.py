@@ -47,8 +47,10 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import structlog
 
 logger = logging.getLogger("eval_retrieval")
+_log = structlog.get_logger(__name__)
 
 DEFAULT_RAG_URL = "http://localhost:8003"
 DEFAULT_GOLDEN = "tests/eval/golden/queries.jsonl"
@@ -378,13 +380,14 @@ def write_outputs(
     mode: str,
     embedding_model: str | None,
     rrf_k: int | None = None,
+    trust_weights: dict[str, float] | None = None,
 ) -> Path:
     """Write JSON + CSV outputs. Returns the JSON path."""
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / f"eval_{timestamp}.json"
     csv_path = output_dir / f"eval_{timestamp}.csv"
 
-    payload = {
+    payload: dict[str, Any] = {
         "single_reviewer": True,
         "reviewer_id": "claude-agent-1",
         "timestamp": timestamp,
@@ -403,6 +406,10 @@ def write_outputs(
         "by_class": aggregated["by_class"],
         "per_query": per_query,
     }
+    # PLAN-0079 Wave C: persist trust weights so sweep results are
+    # reproducible from the artifact alone (QA finding: MAJOR).
+    if trust_weights is not None:
+        payload["trust_weights"] = trust_weights
     json_path.write_text(json.dumps(payload, indent=2, default=str))
 
     with csv_path.open("w", newline="", encoding="utf-8") as fh:
@@ -568,6 +575,15 @@ async def run_eval(args: argparse.Namespace) -> int:
 
     aggregated = aggregate(per_query)
     timestamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
+    # PLAN-0079 Wave C: include trust weights in JSON output when in trust_sweep
+    # mode so the artifact is self-contained and results are reproducible.
+    trust_weights: dict[str, float] | None = None
+    if args.mode == "trust_sweep":
+        trust_weights = {
+            "w_source": args.trust_w_source,
+            "w_corroboration": args.trust_w_corroboration,
+            "w_extraction": args.trust_w_extraction,
+        }
     json_path = write_outputs(
         Path(args.output_dir),
         timestamp,
@@ -579,6 +595,7 @@ async def run_eval(args: argparse.Namespace) -> int:
         failed,
         args.mode,
         args.embedding_model,
+        trust_weights=trust_weights,
     )
     print(f"wrote {json_path}", file=sys.stderr)
 
@@ -888,12 +905,12 @@ def main() -> int:
         # ≥0.03 NDCG@10 regression threshold). Until the golden set is built,
         # this mode logs the configured weights and falls through to default eval
         # so --mode trust_sweep is a valid, non-crashing invocation for CI.
-        logging.getLogger(__name__).info(
-            "trust_sweep: weights w_source=%.3f w_corroboration=%.3f w_extraction=%.3f — "
-            "live sweep gated on PLAN-0063 §3 golden set; running default eval",
-            args.trust_w_source,
-            args.trust_w_corroboration,
-            args.trust_w_extraction,
+        _log.info(
+            "trust_sweep_weights",
+            w_source=args.trust_w_source,
+            w_corroboration=args.trust_w_corroboration,
+            w_extraction=args.trust_w_extraction,
+            note="live sweep gated on PLAN-0063 §3 golden set; running default eval",
         )
     return asyncio.run(run_eval(args))
 

@@ -26,7 +26,7 @@ import json
 import re
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert  # type: ignore[import-untyped]
 
@@ -187,7 +187,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     _dedup_prefix: str = "nlp:dedup:article_consumer"
     # 24-hour TTL — matches the default on the mixin but declared explicitly here
     # so the intent is visible when reading this class in isolation.
-    _dedup_ttl_seconds: int = 86400
+    _dedup_ttl_seconds: ClassVar[int] = 86400
 
     def __init__(
         self,
