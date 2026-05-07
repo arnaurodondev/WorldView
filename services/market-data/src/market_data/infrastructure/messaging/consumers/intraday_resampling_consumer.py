@@ -23,6 +23,7 @@ from market_data.domain.entities import OHLCVBar
 from market_data.domain.enums import Timeframe
 from market_data.domain.value_objects import ProviderPriority
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from market_data.application.ports.uow import UnitOfWork
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
     from storage.interface import ObjectStorage  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)
@@ -49,7 +51,7 @@ def _parse_ohlcv_bytes(raw: bytes) -> list[CanonicalOHLCVBar]:
     return [CanonicalOHLCVBar.from_dict(json.loads(line)) for line in lines if line.strip()]
 
 
-class IntradayResamplingConsumer(BaseKafkaConsumer[dict]):
+class IntradayResamplingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
     """Resamples finest-granularity OHLCV bars into all coarser timeframes.
 
     Filters ``market.dataset.fetched`` events for ``dataset_type == "ohlcv"``
@@ -64,6 +66,10 @@ class IntradayResamplingConsumer(BaseKafkaConsumer[dict]):
 
     The base class owns the single UoW commit (M-04) — this consumer
     must NOT call ``uow.commit()`` in ``process_message``.
+
+    Dedup mixin is belt-and-braces over the consumer's natural-key
+    ``create_if_not_exists()`` idempotency.  The mixin protects against expensive
+    ML/HTTP work on Kafka rebalance re-delivery; the natural key protects rows.
     """
 
     def __init__(
@@ -73,6 +79,7 @@ class IntradayResamplingConsumer(BaseKafkaConsumer[dict]):
         config: ConsumerConfig | None = None,
         metrics: Any = None,
         source_timeframe: str = "1m",
+        dedup_client: ValkeyClient | None = None,
     ) -> None:
         if config is None:
             config = ConsumerConfig(group_id=_GROUP_ID, topics=[_TOPIC])
@@ -80,6 +87,8 @@ class IntradayResamplingConsumer(BaseKafkaConsumer[dict]):
         self._uow_factory = uow_factory
         self._object_storage = object_storage
         self._current_uow: UnitOfWork | None = None
+        self._dedup_client = dedup_client
+        self._dedup_prefix = f"market_data:dedup:{_GROUP_ID}"
         # BP-254: source timeframe is injected from Settings.intraday_source_tf
         # so the pipeline can be migrated to 5m/15m by env-var change only.
         self._source_timeframe_str = source_timeframe
@@ -114,17 +123,6 @@ class IntradayResamplingConsumer(BaseKafkaConsumer[dict]):
 
     def extract_event_id(self, value: dict[str, Any]) -> str:
         return str(value["event_id"])
-
-    async def is_duplicate(self, event_id: str) -> bool:
-        # Dedup is handled atomically via create_if_not_exists at the start of
-        # process_message (BP-035). Always return False here so the base class
-        # proceeds to process_message regardless.
-        return False
-
-    async def mark_processed(self, event_id: str) -> None:
-        # No-op: the event_id was already recorded by create_if_not_exists inside
-        # process_message before any data was written.
-        pass
 
     async def store_failure(self, failure: FailureInfo[dict]) -> dict:
         if self._current_uow is None:

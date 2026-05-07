@@ -21,6 +21,7 @@ from market_data.infrastructure.db.fundamentals_snapshot_writer import (
 from market_data.infrastructure.db.metric_extractor import extract_metrics
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from market_data.application.ports.uow import UnitOfWork
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
     from storage.interface import ObjectStorage  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)
@@ -152,8 +154,13 @@ async def _upsert_metrics_for_record(uow: Any, record: FundamentalsRecord) -> No
         await uow.fundamental_metrics.upsert_metrics(metric_rows)
 
 
-class FundamentalsConsumer(BaseKafkaConsumer[dict]):
-    """Materializes fundamentals datasets from object storage into the database."""
+class FundamentalsConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
+    """Materializes fundamentals datasets from object storage into the database.
+
+    Dedup mixin is belt-and-braces over the consumer's natural-key
+    ``create_if_not_exists()`` idempotency.  The mixin protects against expensive
+    ML/HTTP work on Kafka rebalance re-delivery; the natural key protects rows.
+    """
 
     def __init__(
         self,
@@ -161,6 +168,7 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
         object_storage: ObjectStorage | None,
         config: ConsumerConfig | None = None,
         metrics: Any = None,
+        dedup_client: ValkeyClient | None = None,
     ) -> None:
         if config is None:
             config = ConsumerConfig(group_id=_GROUP_ID, topics=[_TOPIC])
@@ -168,6 +176,8 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
         self._uow_factory = uow_factory
         self._object_storage = object_storage
         self._current_uow: UnitOfWork | None = None
+        self._dedup_client = dedup_client
+        self._dedup_prefix = f"market_data:dedup:{_GROUP_ID}"
 
     # ── abstract implementations ──────────────────────────────────────────────
 
@@ -190,17 +200,6 @@ class FundamentalsConsumer(BaseKafkaConsumer[dict]):
 
     def extract_event_id(self, value: dict[str, Any]) -> str:
         return str(value["event_id"])
-
-    async def is_duplicate(self, event_id: str) -> bool:
-        # Dedup is handled atomically via create_if_not_exists at the start of
-        # process_message (BP-035). Always return False here so the base class
-        # proceeds to process_message regardless.
-        return False
-
-    async def mark_processed(self, event_id: str) -> None:
-        # No-op: the event_id was already recorded by create_if_not_exists inside
-        # process_message before any data was written.
-        pass
 
     async def store_failure(self, failure: FailureInfo[dict]) -> dict:
         if self._current_uow is None:

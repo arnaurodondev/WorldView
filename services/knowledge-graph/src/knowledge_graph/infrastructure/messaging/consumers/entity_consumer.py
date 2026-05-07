@@ -25,6 +25,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from messaging.topics import ENTITY_CANONICAL_CREATED as _ENTITY_CANONICAL_CREATED_TOPIC  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
@@ -66,7 +67,7 @@ class _NoOpUoW:
 # ---------------------------------------------------------------------------
 
 
-class EntityCreatedConsumer(BaseKafkaConsumer[None]):
+class EntityCreatedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     """Consumes ``entity.canonical.created.v1`` and unblocks held evidence rows.
 
     Args:
@@ -124,37 +125,6 @@ class EntityCreatedConsumer(BaseKafkaConsumer[None]):
             "entity_consumer_retry_not_supported",
             event_id=failure.event_id,
         )
-
-    # ------------------------------------------------------------------
-    # Idempotency
-    # ------------------------------------------------------------------
-
-    async def is_duplicate(self, event_id: str) -> bool:
-        if self._dedup_client is None:
-            return False
-        key = f"{self._dedup_prefix}:{event_id}"
-        try:
-            return bool(await self._dedup_client.exists(key))
-        except Exception:
-            logger.warning(  # type: ignore[no-any-return]
-                "entity_consumer_dedup_check_failed",
-                event_id=event_id,
-                exc_info=True,
-            )
-            return False  # prefer at-least-once on dedup failure
-
-    async def mark_processed(self, event_id: str) -> None:
-        if self._dedup_client is None:
-            return
-        key = f"{self._dedup_prefix}:{event_id}"
-        try:
-            await self._dedup_client.set(key, "1", ex=86400)
-        except Exception:
-            logger.warning(  # type: ignore[no-any-return]
-                "entity_consumer_dedup_mark_failed",
-                event_id=event_id,
-                exc_info=True,
-            )
 
     # ------------------------------------------------------------------
     # Failure tracking
