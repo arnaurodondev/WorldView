@@ -38,6 +38,25 @@ class SectionModel(Base):
 
 
 class ChunkModel(Base):
+    """ORM mapping for the ``chunks`` table.
+
+    PLAN-0063 W5-2 / migration 0017 added two GENERATED tsvector columns
+    (``tsv_english`` and ``tsv_simple``) to support hybrid lexical search.
+    BP-NEW1 — those columns are intentionally NOT declared on this model:
+    Postgres rejects any INSERT or UPDATE that targets a GENERATED column,
+    so adding them would break every chunk write the moment SQLAlchemy
+    tried to send a value (even ``None``) for them. They are computed by
+    the database from ``title_denorm`` / ``section_heading_denorm`` /
+    ``chunk_text`` (NOT ``chunk_text_key`` — that holds a MinIO key, not
+    body text — see BP-NEW-CHUNK-TEXT) and read directly via raw SQL by
+    ``ChunkANNRepository.lexical_search()``.
+
+    The two plain text columns ``title_denorm`` and ``section_heading_denorm``
+    are normal ORM-writeable columns; the chunk-writer populates them at
+    insert time so the GENERATED tsvector picks up the analyst-relevant
+    weighting (title=A, heading=B).
+    """
+
     __tablename__ = "chunks"
 
     chunk_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -56,6 +75,16 @@ class ChunkModel(Base):
     speaker: Mapped[str | None] = mapped_column(Text, nullable=True)
     heading_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     chunk_text_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PLAN-0063 W5-2 (migration 0017): denormalised columns that feed the
+    # weighted tsv_english GENERATED column. NULL until the next ingestion
+    # populates them (BP-NEW1 — see class docstring).
+    title_denorm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    section_heading_denorm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PLAN-0063 W5-2 (BP-NEW-CHUNK-TEXT): denormalised chunk body for FTS.
+    # MinIO retains the canonical copy via chunk_text_key; this column exists
+    # so the GENERATED tsvector tokenizes actual content rather than the
+    # MinIO object path. The chunk-writer populates from `Chunk.text` at insert.
+    chunk_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 

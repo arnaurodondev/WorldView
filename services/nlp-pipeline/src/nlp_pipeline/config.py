@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     # Valkey
     valkey_url: str = "redis://localhost:6379/0"
     valkey_watchlist_key: str = "nlp:v1:watched_entities"
+    # PLAN-0063 W5-2 / FR-T1-2: SET key for the canonical tickers cache used
+    # by the W5-3 rare-token analyzer to disambiguate tickers from noise
+    # uppercase tokens. NLP_PIPELINE_VALKEY_CANONICAL_TICKERS_KEY.
+    valkey_canonical_tickers_key: str = "nlp:v1:canonical_tickers"
 
     # Ollama / ML endpoints
     ollama_base_url: str = "http://localhost:11434"
