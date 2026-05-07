@@ -3,10 +3,36 @@
 > **PRD**: PRD-0034 §3 FR-T1-1 extensions + dai-backend TTYD investigation 2026-05-03
 > **Status**: draft
 > **Created**: 2026-05-03
+> **Last revised**: 2026-05-07 (BP-405 name verification + architecture compliance pass)
 > **Owner agent**: Staff engineer / TPM
 > **Estimated effort**: ~5 dev-days (8 waves, 28 tasks)
 > **Critical path**: Wave A → Wave B → Wave C ∥ Wave D ∥ Wave E → Wave F (frontend) → Wave G → Wave H
-> **Hard dependency**: PLAN-0062-W4 all waves must ship first (requires `BriefBullet`, `BriefCitation`, `confidence`, `lead` in schema)
+> **Hard dependency**: PLAN-0062-W4 all waves must ship first; PLAN-0077 (chat-pipeline rename + decomposition) must land before Wave H.
+
+---
+
+## §0 Revision Log
+
+**2026-05-07 — long-term consistency review** (post thesis-to-product pivot):
+
+- **C-1 (class name)**: This plan refers to `ChatOrchestratorUseCase`. Code today has `ChatOrchestrator` (no suffix). PLAN-0077 renames + decomposes the monolithic `execute_streaming` into composable steps before Wave H starts. Treat every `ChatOrchestratorUseCase` reference as the post-PLAN-0077 class name.
+- **I-4 (brief-implicit seed migration)**: Wave D Sub-Plan B introduces `RetrievalOrchestrator._fetch_brief_seed`. PLAN-0067 W11-3 will delete `RetrievalOrchestrator`. Wave D still ships the method as planned; **PLAN-0067 W11-3 must port the brief-seed logic** to one of: (a) system-prompt prefix injection, (b) auto-call of a `get_morning_brief` tool when same-day brief exists. This handoff is documented in PLAN-0067 §0.
+- **A-1 (no fallback path)**: Wave H originally added `_tool_use_path` *alongside* the classical pipeline. PLAN-0067 hard-deletes the classical pipeline; Wave H is now framed as "establishes the path that becomes the only path." No feature flag retained.
+
+**2026-05-07 — BP-405 name verification + architecture compliance pass**:
+
+- **N-1 (uuid_generate_v7 DB default)**: `T-W10-A-01` SQL DDL shows `DEFAULT uuid_generate_v7()`. The `uuid_generate_v7()` PostgreSQL extension is NOT guaranteed to be installed in all rag_db environments. The established pattern in this repo is **app-side ID generation** via `new_uuid7()` from `libs/common`. The migration MUST NOT rely on a DB-level `uuid_generate_v7()` default. IDs must be generated in the Python ORM models, matching the pattern in `create_thread.py` and `persist_chat.py`. DDL corrected in T-W10-A-01 below.
+- **N-2 (S3 router file)**: `T-W10-G-01` says to modify `services/market-data/src/market_data/api/routers/market.py`. All OHLCV routes live in `routers/ohlcv.py`, not `market.py`. Corrected in T-W10-G-01.
+- **N-3 (OHLCV endpoint URL conflict)**: S3 already has `GET /api/v1/ohlcv/{instrument_id}` (bars with `start`/`end` date params) and `GET /api/v1/ohlcv/{instrument_id}/range` (returns min/max date range metadata). The plan's proposed `GET /api/v1/instruments/{id}/ohlcv` uses a different URL scheme (instruments-first). The new endpoint must use the `ohlcv/` prefix to stay consistent with existing routes. Corrected to `GET /api/v1/ohlcv/{instrument_id}/bars` in T-W10-G-01.
+- **N-4 (SSEEmitter location)**: `T-W10-H-04` references `services/rag-chat/src/rag_chat/infrastructure/streaming/sse_emitter.py`. SSEEmitter actually lives in `services/rag-chat/src/rag_chat/application/pipeline/sse_emitter.py`. Corrected.
+- **N-5 (wiring/dependencies path)**: `T-W10-H-03` references `services/rag-chat/src/rag_chat/infrastructure/wiring/dependencies.py`. No `wiring/` subdirectory exists. The DI file is `services/rag-chat/src/rag_chat/api/dependencies.py`. Corrected.
+- **N-6 (ChatOrchestratorUseCase method name)**: `T-W10-H-03` refers to `handle()` method. Post-PLAN-0077, the methods are `execute_streaming()` and `execute_sync()`. Corrected.
+- **N-7 (RetrievedItem field `content` vs `text`)**: `T-W10-H-02` uses `RetrievedItem(content=...)`. The actual field is `text` (see `domain/entities/chat.py:139`). Corrected.
+- **N-8 (libs/tools does not exist)**: `T-W10-H-01` creates `libs/tools/` — this lib does NOT exist yet. Tagged as `(NEW — created in Wave H)`.
+- **N-9 (R-012 reference)**: `T-W10-H-02` cites `R-012` for structlog requirement. No such rule number. The rule is R-14 (sanitize logs) + the structlog-only convention documented in STANDARDS.md §5. Corrected to `(structlog only — STANDARDS.md §5)`.
+- **N-10 (fundamentals history table)**: `T-W10-G-02` references a `fundamentals_records` table. S3 actually stores fundamentals in per-type tables (income_statement, balance_sheet, earnings_history, etc.). The use case must use the `earnings-history` endpoint (`GET /api/v1/fundamentals/{id}/earnings`) as the quarterly history source, not a non-existent `fundamentals_records` table. Corrected in T-W10-G-02.
+- **N-11 (S3Port.get_ohlcv_range URL)**: `T-W10-G-03` S3Client calls `GET /api/v1/instruments/{id}/ohlcv`. After N-3 fix, the correct URL is `GET /api/v1/ohlcv/{id}/bars`. Corrected.
+- **N-12 (proxy line numbers stale)**: Wave E and Wave B say "proxy.py lines 1660–1700". The file is 3242 lines; briefing proxy routes are at lines 1950–1990. References updated to "lines 1950–1990".
 
 ---
 
@@ -168,7 +194,7 @@ Read 2026-05-03.
 - **DB ownership respected** — S8 adds tables only to its own PostgreSQL. S3 adds routes to its own DB. R7 compliant.
 - **ReadOnlyUoW** — `GET /v1/briefings/morning/history` and `GET /v1/briefings/morning/diff` use `ReadUoWDep`. All POST/feedback endpoints use `UoWDep`.
 - **R22 independent processes** — no new background processes; all new logic is in-request or in use cases.
-- **R10 UUIDv7** — all new entity IDs use `uuid7()` from `libs/common`.
+- **R10 UUIDv7** — all new entity IDs use `new_uuid7()` from `libs/common` (app-side generation — do NOT use `uuid_generate_v7()` DB default; see N-1 in §0 revision log). Pattern: `from common.ids import new_uuid7  # type: ignore[import-untyped]` in the use case / repository that creates the entity.
 - **Configuration**: 1 new env var: `S3_OHLCV_MAX_DAYS=365` (cap on date range for OHLCV to prevent oversized responses; default 365).
 - **Documentation**: `docs/services/rag-chat.md` (new endpoints), `docs/services/market-data.md` (OHLCV range + history endpoints).
 
@@ -202,12 +228,19 @@ Read 2026-05-03.
 **What to build**:
 Single Alembic revision that creates both tables in one transaction. `user_briefs` is the brief archive; `brief_feedback` records per-bullet and per-brief reactions.
 
+> **ARCH NOTE (N-1)**: IDs are NOT generated at the DB level. Do NOT use `DEFAULT uuid_generate_v7()` in DDL — that PostgreSQL extension is not guaranteed to be installed. IDs must be generated app-side in the ORM model (or use case) via `new_uuid7()` from `libs/common`, matching the pattern in `create_thread.py`. The migration uses `sa.Column("id", PgUUID(as_uuid=True), primary_key=True)` with NO server_default. The ORM model sets the default using `mapped_column(default=...)` (see `ThreadModel` as the canonical example).
+
+> **ARCH NOTE (R10)**: In the ORM model (T-W10-A-02), the `id` column default must be: `id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=new_uuid7)` — never `default=uuid4()` or a DB-level call.
+
+> **ARCH NOTE (R11)**: `generated_at` and `created_at` must use UTC. In use cases: `from common.time import utc_now` → `now = utc_now()`. Never `datetime.utcnow()` (naive). Column type: `DateTime(timezone=True)`.
+
 **Schema**:
 
 `user_briefs`:
 ```sql
+-- NOTE: No DEFAULT for id — generated app-side via new_uuid7() (R10, N-1)
 CREATE TABLE user_briefs (
-    id              UUID NOT NULL DEFAULT uuid_generate_v7() PRIMARY KEY,
+    id              UUID NOT NULL PRIMARY KEY,
     user_id         UUID NOT NULL,
     tenant_id       UUID NOT NULL,
     brief_type      VARCHAR(20) NOT NULL,          -- 'morning' | 'instrument'
@@ -226,8 +259,9 @@ CREATE INDEX ix_user_briefs_tenant_date ON user_briefs (tenant_id, generated_at 
 
 `brief_feedback`:
 ```sql
+-- NOTE: No DEFAULT for id — generated app-side via new_uuid7() (R10, N-1)
 CREATE TABLE brief_feedback (
-    id              UUID NOT NULL DEFAULT uuid_generate_v7() PRIMARY KEY,
+    id              UUID NOT NULL PRIMARY KEY,
     brief_id        UUID NOT NULL REFERENCES user_briefs(id) ON DELETE CASCADE,
     user_id         UUID NOT NULL,
     scope           VARCHAR(10) NOT NULL,   -- 'brief' | 'bullet'
@@ -243,7 +277,8 @@ CREATE INDEX ix_brief_feedback_user ON brief_feedback (user_id, created_at DESC)
 **Acceptance criteria**:
 - [ ] `alembic upgrade head` applies cleanly against a fresh DB
 - [ ] `alembic downgrade -1` reverts both tables cleanly
-- [ ] `uuid_generate_v7()` extension prerequisite verified in revision
+- [ ] NO `uuid_generate_v7()` DB function used — IDs are app-generated (N-1)
+- [ ] Timestamps are `TIMESTAMPTZ` (R11)
 
 ---
 
@@ -259,12 +294,12 @@ CREATE INDEX ix_brief_feedback_user ON brief_feedback (user_id, created_at DESC)
 SQLAlchemy `Mapped` ORM models for both tables. `UserBriefModel` uses `JSONB` columns for `sections_json` and `citations_json` (stored as Python `list[dict]` — no custom type needed, SQLAlchemy handles JSON ↔ Python dict natively).
 
 **Key attributes — `UserBriefModel`**:
-- `id: Mapped[UUID]` — primary key, `uuid7()` default
+- `id: Mapped[UUID]` — primary key, `mapped_column(PgUUID(as_uuid=True), primary_key=True, default=new_uuid7)` — app-side UUIDv7 (R10, N-1). Import: `from common.ids import new_uuid7  # type: ignore[import-untyped]`
 - `user_id: Mapped[UUID]`
 - `tenant_id: Mapped[UUID]`
 - `brief_type: Mapped[str]` — `"morning"` | `"instrument"`
 - `entity_id: Mapped[UUID | None]`
-- `generated_at: Mapped[datetime]` — `DateTime(timezone=True)`
+- `generated_at: Mapped[datetime]` — `DateTime(timezone=True)` (R11 — UTC-aware, never naive)
 - `headline: Mapped[str]`
 - `lead: Mapped[str | None]`
 - `sections_json: Mapped[list]` — `JSONB`, default `[]`
@@ -273,14 +308,14 @@ SQLAlchemy `Mapped` ORM models for both tables. `UserBriefModel` uses `JSONB` co
 - `source_version: Mapped[str]` — `"v2"`
 
 **Key attributes — `BriefFeedbackModel`**:
-- `id: Mapped[UUID]`
+- `id: Mapped[UUID]` — `mapped_column(PgUUID(as_uuid=True), primary_key=True, default=new_uuid7)` — app-side UUIDv7 (R10, N-1)
 - `brief_id: Mapped[UUID]` — FK to `user_briefs.id`
 - `user_id: Mapped[UUID]`
 - `scope: Mapped[str]` — `"brief"` | `"bullet"`
 - `section_idx: Mapped[int | None]`
 - `bullet_idx: Mapped[int | None]`
 - `reaction: Mapped[str]`
-- `created_at: Mapped[datetime]`
+- `created_at: Mapped[datetime]` — `DateTime(timezone=True)` (R11 — UTC-aware). Set in use case via `utc_now()` from `libs/common`.
 
 **Tests to write**:
 | Test | What it verifies | Type |
@@ -311,19 +346,22 @@ Minimum: 3 new tests.
 Protocol port defining the contract between application layer and the brief archive repository. Follows the pattern in `application/ports/thread_repository.py`.
 
 **Entities / Components**:
-- **`BriefArchivePort`** (Protocol):
+- **`BriefArchivePort`** (NEW — created in Wave A) (Protocol):
   - `async def save(self, brief: UserBriefRecord) -> None`
   - `async def get_latest(self, user_id: UUID, tenant_id: UUID, brief_type: str, limit: int = 2) -> list[UserBriefRecord]`
   - `async def get_history(self, user_id: UUID, tenant_id: UUID, brief_type: str, page: int, page_size: int) -> tuple[list[UserBriefRecord], int]`
 
-- **`UserBriefRecord`** (dataclass in same file):
+> **ARCH NOTE (R25)**: `BriefArchivePort` is a `Protocol` in the APPLICATION layer (`application/ports/brief_archive.py`). Use cases MUST depend on `BriefArchivePort` (the port), never on `BriefArchiveRepository` (the concrete SQLAlchemy class in `infrastructure/`). API routes inject via `BriefArchiveRepositoryDep` (type alias wrapping the ABC), as with the existing `ThreadRepositoryDep` pattern.
+
+- **`UserBriefRecord`** (NEW — created in Wave A) (dataclass in same file):
   - `id: UUID`, `user_id: UUID`, `tenant_id: UUID`, `brief_type: str`, `entity_id: UUID | None`
-  - `generated_at: datetime`, `headline: str`, `lead: str | None`
+  - `generated_at: datetime` (UTC-aware — R11), `headline: str`, `lead: str | None`
   - `sections_json: list[dict]`, `citations_json: list[dict]`
   - `confidence: float`, `source_version: str`
 
 **Acceptance criteria**:
 - [ ] `BriefArchivePort` is a `Protocol` (not ABC) matching the pattern in `thread_repository.py`
+- [ ] Use cases depend on `BriefArchivePort` (R25 — never import `BriefArchiveRepository` directly in application layer)
 - [ ] `UserBriefRecord` is importable and constructable with no defaults required except `entity_id`
 
 ---
@@ -355,7 +393,7 @@ Protocol port defining the contract between application layer and the brief arch
 #### Pre-read
 - `services/rag-chat/src/rag_chat/application/use_cases/generate_briefing.py` lines 1–200 (persistence hook insertion point)
 - `services/rag-chat/src/rag_chat/infrastructure/db/repositories/thread_repository.py` — adapter pattern to follow
-- `services/rag-chat/src/rag_chat/api/routes/public_briefings.py` — existing briefing route patterns
+- `services/rag-chat/src/rag_chat/api/routes/public_briefings.py` (EXISTS) — existing briefing route patterns
 
 #### Tasks
 
@@ -367,7 +405,17 @@ Protocol port defining the contract between application layer and the brief arch
 - `services/rag-chat/src/rag_chat/infrastructure/db/repositories/brief_archive_repository.py` (new)
 
 **What to build**:
-SQLAlchemy `AsyncSession`-based implementation of `BriefArchivePort`. Uses `ReadOnlyUnitOfWork` for `get_latest` and `get_history`; `UnitOfWork` for `save`. The `save` method converts `UserBriefRecord` → `UserBriefModel`, adds to session, and commits. The `get_latest` method returns the 2 most recent records (needed for diff).
+SQLAlchemy `AsyncSession`-based implementation of `BriefArchivePort`. Named `BriefArchiveRepository` (NEW — created in Wave B). The `save` method converts `UserBriefRecord` → `UserBriefModel`, adds to session, and commits. The `get_latest` method returns the 2 most recent records (needed for diff).
+
+> **ARCH NOTE (R25)**: `BriefArchiveRepository` is in `infrastructure/` — it must NEVER be imported directly by use cases or API routes. Only `BriefArchivePort` (the Protocol) crosses the layer boundary.
+
+> **ARCH NOTE (R27)**: Read-only operations (`get_latest`, `get_history`) MUST use `ReadOnlyUnitOfWork` / `ReadUoWDep` from the API route DI. Write operations (`save`) use `UnitOfWork` / `UoWDep`. The repository receives an already-entered session from the UoW (it does not open its own UoW). Route handlers inject the correct dep: `uow: ReadUoWDep` for GET endpoints, `uow: UoWDep` for POST/mutation endpoints.
+
+> **ARCH NOTE (R26)**: `BriefArchiveRepository.save()` must NOT call `commit()` internally. The use case calls `await uow.commit()` explicitly after calling `save()`. The repository only calls `session.add(model)`.
+
+> **ARCH NOTE (R10)**: `UserBriefModel.id` set via `new_uuid7()` in the use case before calling `save()`, or via ORM `default=new_uuid7` (consistent with `ThreadModel` pattern). Never relies on DB default.
+
+> **ARCH NOTE (R11)**: `UserBriefRecord.generated_at` and `BriefFeedbackModel.created_at` must be UTC-aware datetimes, set via `utc_now()` from `libs/common`.
 
 **Logic & Behavior**:
 - `save`: `INSERT INTO user_briefs (…) VALUES (…) ON CONFLICT DO NOTHING` — idempotency guard keyed on `(user_id, generated_at, brief_type)` to prevent double-save on retry.
@@ -387,7 +435,9 @@ Minimum: 4 integration tests.
 **Acceptance criteria**:
 - [ ] `save` is idempotent on duplicate `(user_id, generated_at, brief_type)`
 - [ ] `get_latest` returns at most `limit=2` records, most recent first
-- [ ] Uses `ReadUoWDep` (not `UoWDep`) in read paths — R27 compliance
+- [ ] GET endpoint uses `ReadUoWDep` (read replica session) — R27 compliance
+- [ ] `BriefArchiveRepository` is in `infrastructure/` and is NEVER imported by application layer directly (R25)
+- [ ] `save()` does not call `commit()` — use case calls `await uow.commit()` (R26)
 
 ---
 
@@ -399,12 +449,16 @@ Minimum: 4 integration tests.
 - `services/rag-chat/src/rag_chat/application/use_cases/generate_briefing.py` (modify)
 
 **What to build**:
-After `execute_public_morning()` and `execute_public_instrument()` successfully build the `PublicBriefingResponse`, call `await self._brief_archive.save(record)`. The `_brief_archive: BriefArchivePort` dependency is injected via constructor (optional — defaults to a `NullBriefArchive` no-op adapter so the use case still works without DI wiring). `NullBriefArchive` is defined in the same file; `BriefArchiveRepository` is wired in `dependencies.py`.
+After `execute_public_morning()` and `execute_public_instrument()` successfully build the `PublicBriefingResponse`, call `await self._brief_archive.save(record)`. The `_brief_archive: BriefArchivePort` dependency is injected via constructor (optional — defaults to a `NullBriefArchive` no-op adapter so the use case still works without DI wiring). `NullBriefArchive` (NEW — created in Wave B) is defined in the same file; `BriefArchiveRepository` is wired in `api/dependencies.py`.
+
+> **ARCH NOTE (R25)**: `GenerateBriefingUseCase` holds `_brief_archive: BriefArchivePort` (the Protocol, from `application/ports/`). The constructor NEVER takes `BriefArchiveRepository` (the infra class). DI injects the concrete class from `api/dependencies.py`.
+
+> **ARCH NOTE (structlog — STANDARDS.md §5)**: Use `structlog.get_logger(__name__)`. Never `import logging`.
 
 **Logic & Behavior**:
-1. Build `UserBriefRecord` from the response (serialise `sections` and `citations` to `list[dict]` via `.model_dump()`).
+1. Build `UserBriefRecord` from the response (serialise `sections` and `citations` to `list[dict]` via `.model_dump()`). Set `id = new_uuid7()` and `generated_at = utc_now()` (R10, R11).
 2. `await self._brief_archive.save(record)` — fire-and-forget with `asyncio.shield` so a DB failure does NOT fail the brief response to the user.
-3. Log `brief_persisted=True/False` at DEBUG level.
+3. Log `brief_persisted=True/False` at DEBUG level via structlog.
 
 **Idempotency**: If Valkey cache serves a cached response, the brief is NOT re-saved (it was already saved when first generated). The `(user_id, generated_at, brief_type)` unique guard in the repository handles the rare case.
 
@@ -447,7 +501,7 @@ Response: {
 
 **What to build**:
 - S8 route: `ReadUoWDep` (R27) + `BriefArchiveRepositoryDep` → calls `get_history(user_id, tenant_id, "morning", page, page_size)`. Max page_size=50.
-- S9 proxy: `GET /api/v1/briefings/morning/history` → S8 passthrough (same pattern as existing brief proxies at `proxy.py:1660`).
+- S9 proxy: `GET /api/v1/briefings/morning/history` → S8 passthrough (same pattern as existing brief proxies at `proxy.py` lines 1950–1990 — `get_morning_briefing`/`get_instrument_briefing`).
 - TS type `BriefHistoryItem` in `types/api.ts`: `{id: string, generated_at: string, headline: string, lead: string | null, confidence: number}`.
 - `getBriefHistory(page: number)` in `lib/api/briefing.ts`.
 
@@ -507,6 +561,12 @@ Minimum: 3 unit tests.
 - `services/rag-chat/src/rag_chat/api/routes/public_briefings.py` (modify)
 
 **What to build**:
+`BriefDiffUseCase` (NEW — created in Wave C) — `application/use_cases/brief_diff.py`.
+
+> **ARCH NOTE (R25)**: `BriefDiffUseCase` depends on `BriefArchivePort` (ABC Protocol), injected via constructor. Never imports `BriefArchiveRepository`.
+> **ARCH NOTE (R27)**: `GET /v1/briefings/morning/diff` is read-only — route handler MUST use `ReadUoWDep`.
+> **ARCH NOTE (structlog)**: Use `structlog.get_logger(__name__)` if logging is needed.
+
 `BriefDiffUseCase.execute(user_id, tenant_id)`:
 1. Fetch last 2 briefs via `BriefArchivePort.get_latest(limit=2)`.
 2. If fewer than 2, return `{"status": "no_diff_available"}`.
@@ -566,6 +626,16 @@ POST /v1/briefings/feedback/brief
 Body: {brief_id: str, reaction: "1"|"2"|"3"|"4"|"5"}
 Response: {id: str, created_at: str}
 ```
+
+**Files to create**:
+- `application/use_cases/brief_feedback.py` — `BriefFeedbackUseCase` (NEW — created in Wave C)
+- `infrastructure/db/repositories/brief_feedback_repository.py` — `BriefFeedbackRepository` (NEW — created in Wave C)
+- (optional) `application/ports/brief_feedback.py` — `BriefFeedbackPort` (NEW — created in Wave C) if a separate Protocol is desired; alternatively, inline the port on `BriefFeedbackUseCase`.
+
+> **ARCH NOTE (R25)**: If a `BriefFeedbackPort` Protocol is defined, use cases depend on the port. If the use case is thin enough (just one method), the infra repo can be injected as the Protocol via structural subtyping.
+> **ARCH NOTE (R10)**: New feedback `id` set via `new_uuid7()` from `libs/common` in the use case, not via DB default.
+> **ARCH NOTE (R11)**: `BriefFeedbackModel.created_at` set via `utc_now()` from `libs/common`.
+> **ARCH NOTE (R26)**: Use case calls `await uow.commit()` after `session.add(model)` — repository does not commit.
 
 **Logic**:
 - Validate `brief_id` exists in `user_briefs` for the requesting user (not a different user's brief) before inserting.
@@ -646,6 +716,10 @@ Response: {thread_id: str, seeded_with_brief_id: str}
 3. Create a new thread with `seed_brief_id=brief.id` via existing `CreateThreadUseCase` (extend it to accept optional `seed_brief_id`).
 4. Return `{thread_id, seeded_with_brief_id}`.
 
+> **ARCH NOTE (R25)**: The route handler for `POST /v1/briefings/chat/discuss` must depend on `BriefArchivePort` via DI — never import `BriefArchiveRepository` in the route or use case.
+> **ARCH NOTE (R27)**: This POST endpoint WRITES (creates a thread) — use `UoWDep`, not `ReadUoWDep`.
+> **ARCH NOTE (R10)**: New `thread_id` set via `new_uuid7()` in `CreateThreadUseCase` (already done in existing implementation — verify it persists `seed_brief_id` correctly).
+
 **Tests to write**:
 | Test | What it verifies | Type |
 |---|---|---|
@@ -658,6 +732,7 @@ Minimum: 3 tests.
 **Acceptance criteria**:
 - [ ] Thread `seed_brief_id` FK is nullable
 - [ ] `CreateThreadUseCase` updated to accept and persist `seed_brief_id`
+- [ ] Route uses `UoWDep` (write path — R27)
 
 ---
 
@@ -674,13 +749,22 @@ Two new methods on `ParallelRetrievalOrchestrator`:
 2. This method is called unconditionally at the top of `retrieve()` and its results are prepended to the items list with `trust_weight=0.95` (highest — user explicitly generated this brief today; it's the freshest signal).
 
 **Logic**:
-```
-_fetch_brief_seed(user_id, tenant_id, seed_brief_id=None):
+```python
+# _fetch_brief_seed lives in ParallelRetrievalOrchestrator
+# (class exists at services/rag-chat/src/rag_chat/application/pipeline/retrieval_orchestrator.py)
+# _fetch_brief_seed is a NEW method (NEW — created in Wave D)
+#
+# ARCH NOTE (R25): self._archive is BriefArchivePort (ABC), never BriefArchiveRepository
+# ARCH NOTE (structlog): use structlog.get_logger(__name__) for logging
+
+async def _fetch_brief_seed(
+    self, user_id: UUID, tenant_id: UUID, seed_brief_id: UUID | None = None
+) -> list[RetrievedItem]:
     if seed_brief_id:
-        brief = await archive.get_by_id(seed_brief_id)
+        brief = await self._archive.get_by_id(seed_brief_id)
     else:
         # implicit: check for a same-calendar-day brief
-        briefs = await archive.get_latest(user_id, tenant_id, "morning", limit=1)
+        briefs = await self._archive.get_latest(user_id, tenant_id, "morning", limit=1)
         brief = briefs[0] if briefs and is_same_day(briefs[0].generated_at) else None
 
     if not brief or not brief.citations_json:
@@ -688,21 +772,25 @@ _fetch_brief_seed(user_id, tenant_id, seed_brief_id=None):
 
     return [
         RetrievedItem.create(
-            item_id=f"brief_seed:{brief.id}:{c['document_id']}",
+            item_id=f"brief_seed:{brief.id}:{c.get('document_id', i)}",
             item_type=ItemType.chunk,
             text=c.get("snippet", c.get("title", "")),
             score=0.95,
             trust_weight=0.95,
+            # CitationMeta constructor: CitationMeta(title, url, source_name, ...)
+            # (see domain/entities/chat.py for actual CitationMeta fields)
             citation_meta=CitationMeta(
                 title=c.get("title"),
                 url=c.get("url"),
                 source_name="Morning Brief",
-                ...
             ),
         )
-        for c in brief.citations_json[:8]  # cap at 8 seed items
+        for i, c in enumerate(brief.citations_json[:8])  # cap at 8 seed items
     ]
 ```
+
+> **ARCH NOTE (R10/R11)**: `is_same_day()` helper compares `brief.generated_at.date()` (UTC) against `utc_now().date()` (R11 — avoid `datetime.today()` which uses local TZ).
+> **ARCH NOTE (RetrievedItem)**: Use the `.create()` factory (never construct directly — `fusion_score` invariant enforced in `__post_init__`). The field is `text` (NOT `content`). `item_id` is a string (not UUID).
 
 The `BriefArchivePort` needs a new `get_by_id(id)` method — add to the Protocol and adapter in Wave B's repository.
 
@@ -731,7 +819,7 @@ Minimum: 4 unit tests.
 - `services/rag-chat/src/rag_chat/application/ports/brief_archive.py` (modify — add `get_by_id`)
 - `services/rag-chat/src/rag_chat/infrastructure/db/repositories/brief_archive_repository.py` (modify — implement `get_by_id`)
 
-**What to build**: Add `async def get_by_id(self, brief_id: UUID) -> UserBriefRecord | None` to both the Protocol and the SQLAlchemy adapter. Simple primary key lookup.
+**What to build**: Add `async def get_by_id(self, brief_id: UUID) -> UserBriefRecord | None` (NEW — added in Wave D) to both `BriefArchivePort` (Protocol in `application/ports/brief_archive.py`) and the SQLAlchemy adapter (`BriefArchiveRepository`). Simple primary key lookup. `NullBriefArchive` must also implement `get_by_id` returning `None`.
 
 Minimum: 1 unit test (`test_get_by_id_returns_none_for_unknown`).
 
@@ -766,7 +854,7 @@ Minimum: 1 unit test (`test_get_by_id_returns_none_for_unknown`).
 **Architecture layer**: API Gateway
 
 #### Pre-read
-- `services/api-gateway/src/api_gateway/routes/proxy.py` lines 1650–1700 (existing brief proxy patterns)
+- `services/api-gateway/src/api_gateway/routes/proxy.py` lines 1950–1990 (existing brief proxy patterns — `get_morning_briefing` at line 1950, `get_instrument_briefing` at line 1972; file is 3242 lines total)
 
 #### Tasks
 
@@ -777,7 +865,7 @@ Minimum: 1 unit test (`test_get_by_id_returns_none_for_unknown`).
 **Target files**:
 - `services/api-gateway/src/api_gateway/routes/proxy.py` (modify)
 
-**Endpoints to proxy** (all follow existing passthrough pattern at lines 1660–1700):
+**Endpoints to proxy** (all follow existing passthrough pattern at lines 1950–1990):
 ```
 GET  /api/v1/briefings/morning/history        → S8 GET /v1/briefings/morning/history
 GET  /api/v1/briefings/morning/diff           → S8 GET /v1/briefings/morning/diff
@@ -978,17 +1066,22 @@ Minimum: 3 unit tests.
 
 #### Tasks
 
-##### T-W10-G-01: `GET /api/v1/instruments/{id}/ohlcv` — OHLCV range endpoint in S3
+##### T-W10-G-01: `GET /api/v1/ohlcv/{instrument_id}/bars` — OHLCV bars with interval resampling in S3
 **Type**: impl
 **depends_on**: none
 **blocks**: T-W10-H-01
 **Target files**:
-- `services/market-data/src/market_data/api/routers/market.py` (modify)
-- `services/market-data/src/market_data/application/use_cases/get_ohlcv_range.py` (new)
+- `services/market-data/src/market_data/api/routers/ohlcv.py` (modify — all OHLCV routes live here, NOT market.py)
+- `services/market-data/src/market_data/application/use_cases/get_ohlcv_range.py` (new) — `GetOHLCVBarsUseCase` (NEW — created in Wave G)
+
+> **ARCH NOTE (N-2/N-3)**: All OHLCV routes live in `routers/ohlcv.py`, not `market.py`. The existing `GET /api/v1/ohlcv/{instrument_id}` endpoint already returns bars with `start`/`end` filters but does NOT resample to week/month intervals. The existing `GET /api/v1/ohlcv/{instrument_id}/range` returns min/max date metadata (not bars). The new endpoint `/bars` adds explicit `from_date`, `to_date`, `interval` params with `time_bucket` resampling. URL scheme must stay consistent with the `ohlcv/` prefix.
+
+> **ARCH NOTE (R25)**: New route in `ohlcv.py` uses `Depends(get_ohlcv_bars_uc)` pattern — never imports repository directly. Use case depends on `IOHLCVRepository` ABC port (see `application/ports/repositories.py`).
+> **ARCH NOTE (R27)**: Read-only GET endpoint — must use `ReadUoWDep` (read replica session).
 
 **API Spec**:
 ```
-GET /api/v1/instruments/{instrument_id}/ohlcv
+GET /api/v1/ohlcv/{instrument_id}/bars
   ?from_date=2026-02-01         # ISO date, required
   ?to_date=2026-05-01           # ISO date, required
   ?interval=day                 # 'day' | 'week' | 'month', default 'day'
@@ -1005,7 +1098,7 @@ Response: {
 
 **Logic**:
 - Validate `to_date - from_date ≤ S3_OHLCV_MAX_DAYS` (new env var, default 365). Return 422 if exceeded.
-- Resample to `interval` using TimescaleDB `time_bucket` function (already used elsewhere in S3).
+- Resample to `interval` using TimescaleDB `time_bucket` function (already used in `ohlcv_queries.py` — follow that pattern).
 - If `bar_count > max_bars`, truncate to the most recent `max_bars` bars.
 - Auth: existing S3 JWT middleware (same as other S3 endpoints).
 
@@ -1026,13 +1119,17 @@ Minimum: 4 unit tests.
 
 ---
 
-##### T-W10-G-02: `GET /api/v1/instruments/{id}/fundamentals/history` — quarterly history in S3
+##### T-W10-G-02: `GET /api/v1/fundamentals/{id}/history` — quarterly fundamentals history in S3
 **Type**: impl
 **depends_on**: none
 **blocks**: T-W10-H-01
 **Target files**:
-- `services/market-data/src/market_data/api/routers/market.py` (modify)
-- `services/market-data/src/market_data/application/use_cases/get_fundamentals_history.py` (new)
+- `services/market-data/src/market_data/api/routers/fundamentals.py` (modify — fundamentals routes live here, NOT market.py)
+- `services/market-data/src/market_data/application/use_cases/get_fundamentals_history.py` (new) — `GetFundamentalsHistoryUseCase` (NEW — created in Wave G)
+
+> **ARCH NOTE (N-10)**: There is no single `fundamentals_records` table. S3 stores fundamentals in per-type tables (income_statement, balance_sheet, earnings_history, etc.), populated by the `FundamentalsRecord` entity. The quarterly history source is `GET /api/v1/fundamentals/{id}/earnings` (the existing `earnings_history` table). The new endpoint aggregates `earnings_history` records ordered by `period_end_date`. Check `IEarningsRepository` in `application/ports/repositories.py` for the correct query method.
+> **ARCH NOTE (R25)**: New route uses `Depends(...)` DI — never imports a repository class directly in the router.
+> **ARCH NOTE (R27)**: Read-only — use `ReadUoWDep`.
 
 **API Spec**:
 ```
@@ -1056,7 +1153,7 @@ Response: {
 }
 ```
 
-**Logic**: query `fundamentals_records` table for the instrument, select the last `periods` quarterly records ordered `period_end_date DESC`, return ordered `ASC`. Fields are nullable; include only fields that have data.
+**Logic**: query the earnings_history records for the instrument (via the `IEarningsRepository` port), select the last `periods` records ordered `period_end_date DESC`, return ordered `ASC`. Fields are nullable; include all 7 fields (null when data absent). Do NOT query a `fundamentals_records` table — that table does not exist (N-10).
 
 **Tests to write**:
 | Test | What it verifies | Type |
@@ -1082,7 +1179,10 @@ Minimum: 3 unit tests.
 - `services/rag-chat/src/rag_chat/infrastructure/clients/s3_client.py` (modify — implement new methods)
 
 **What to build**:
-Add to `S3Port` Protocol:
+Add to `S3Port` Protocol (NEW methods — added in Wave G):
+
+> **ARCH NOTE (R25)**: Methods are added to `S3Port` (Protocol in `application/ports/upstream_clients.py`). `S3Client` in `infrastructure/clients/s3_client.py` implements them. Use cases depend on `S3Port`, never on `S3Client` directly.
+
 ```python
 async def get_ohlcv_range(
     self, instrument_id: UUID,
@@ -1100,9 +1200,9 @@ async def get_fundamentals_history(
     ...
 ```
 
-`S3Client` implementation calls:
-- `GET /api/v1/instruments/{id}/ohlcv?from_date={}&to_date={}&interval={interval}`
-- `GET /api/v1/instruments/{id}/fundamentals/history?periods={periods}`
+`S3Client` implementation calls (N-3/N-11 — URL corrected to match ohlcv router):
+- `GET /api/v1/ohlcv/{id}/bars?from_date={}&to_date={}&interval={interval}`
+- `GET /api/v1/fundamentals/{id}/history?periods={periods}`
 
 Both return `[]` on any HTTP error (safe degradation per port contract).
 
@@ -1145,9 +1245,9 @@ Minimum: 3 unit tests.
 **Architecture layer**: libs (ToolRegistry) + S8 application (ToolExecutor, ChatOrchestrator)
 
 #### Pre-read
-- `services/rag-chat/src/rag_chat/application/use_cases/chat_orchestrator.py` — `handle()` method structure
+- `services/rag-chat/src/rag_chat/application/use_cases/chat_orchestrator.py` — `execute_streaming()` and `execute_sync()` methods (NOT `handle()` — N-6). Post-PLAN-0077, the use case takes a `ChatPipeline` constructor arg.
 - `services/rag-chat/src/rag_chat/application/ports/upstream_clients.py` — `S3Port` Protocol (after Wave G)
-- `services/rag-chat/src/rag_chat/infrastructure/streaming/sse_emitter.py` — existing SSE event format
+- `services/rag-chat/src/rag_chat/application/pipeline/sse_emitter.py` — existing SSE event format (NOT `infrastructure/streaming/` — N-4)
 - `services/rag-chat/src/rag_chat/infrastructure/llm/` — existing LLM client, how tool_use blocks are parsed
 
 #### Tasks
@@ -1157,10 +1257,12 @@ Minimum: 3 unit tests.
 **depends_on**: none
 **blocks**: T-W10-H-02, T-W10-H-03
 **Target files**:
-- `libs/tools/__init__.py` (new package)
-- `libs/tools/tool_spec.py` (new)
-- `libs/tools/tool_registry.py` (new)
-- `libs/tools/capability_manifest.yaml` (new — R29 entry)
+- `libs/tools/__init__.py` (NEW — `libs/tools/` lib does NOT exist yet, must be created in Wave H — N-8)
+- `libs/tools/tool_spec.py` (NEW — created in Wave H)
+- `libs/tools/tool_registry.py` (NEW — created in Wave H)
+- `libs/tools/capability_manifest.yaml` (NEW — created in Wave H — R29 entry)
+
+> **ARCH NOTE**: `libs/tools/` is a new shared Python library. It needs: `pyproject.toml` (hatch packaging), `src/tools/__init__.py`, and must be added to `PYTHONPATH` in the rag-chat Dockerfile (same pattern as `libs/ml-clients`). See BP-181 — missing lib COPY+install in Dockerfile causes `ModuleNotFoundError` at startup.
 
 **What to build**:
 
@@ -1179,9 +1281,11 @@ class ToolSpec:
     name: str                     # matches tool_use block "name"
     description: str              # LLM sees this to decide when to call
     parameters: list[ParameterSpec]
-    trust_weight: float           # injected as RetrievedItem trust_weight
+    source_type: str              # used by TrustScorer (R29 note: trust_weight NOT stored on manifest entries — TrustScorer computes it at retrieval time from SOURCE_AUTHORITY × recency_decay × corroboration × extraction_confidence)
     example_queries: list[str]    # included in capability manifest for few-shot
 ```
+
+> **ARCH NOTE (R29)**: Per R29 (updated 2026-05-07), per-tool `trust_weight` is NOT set on manifest entries. `TrustScorer` computes trust per-item at retrieval time. The manifest references `source_type` so `TrustScorer` can look up authority. The `ToolExecutor` handlers set `trust_weight` at result construction time based on the source authority lookup, not a manifest field.
 
 `ToolRegistry` (in `tool_registry.py`):
 ```python
@@ -1222,6 +1326,8 @@ tools:
         description: Bar granularity. Default "week".
         required: false
     trust_weight: 0.90
+    example_queries:
+    source_type: ohlcv          # used by TrustScorer (replaces trust_weight — R29)
     example_queries:
       - "How has AAPL performed over the last 3 months?"
       - "What was NVDA's price range in Q1 2026?"
@@ -1268,7 +1374,10 @@ Minimum: 4 unit tests.
 **depends_on**: T-W10-H-01, T-W10-G-03
 **blocks**: T-W10-H-03
 **Target files**:
-- `services/rag-chat/src/rag_chat/application/pipeline/tool_executor.py` (new)
+- `services/rag-chat/src/rag_chat/application/pipeline/tool_executor.py` (NEW — created in Wave H)
+
+> **ARCH NOTE (R25)**: `ToolExecutor` is in the APPLICATION layer (`application/pipeline/`). It depends on `S3Port` (Protocol), never on `S3Client` (infra). Injected via constructor.
+> **ARCH NOTE (structlog — N-9)**: Use `import structlog; log = structlog.get_logger(__name__)  # type: ignore[no-any-return]`. Never `import logging`. (The reference to `R-012` in earlier drafts was incorrect — there is no such rule number. The structlog requirement comes from STANDARDS.md §5.)
 
 **What to build**:
 ```python
@@ -1292,9 +1401,10 @@ class ToolExecutor:
         """Run all tool calls concurrently (asyncio.gather). Cap at 5 calls."""
 ```
 
-**Structured logging** (required — see R-012):
+**Structured logging** (required — STANDARDS.md §5, structlog only):
 ```python
-log = structlog.get_logger(__name__)
+import structlog
+log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 ```
 Every `execute()` call must emit:
 - `log.info("tool_executed", tool=call.name, latency_ms=round((t1-t0)*1000), items_returned=1 if result else 0)` on success
@@ -1315,7 +1425,7 @@ Every `execute()` call must emit:
    | 2026-02-07 | $185.2 | 52M    |
    ...
    ```
-5. Return `RetrievedItem(content=table_text[:_TOOL_RESULT_MAX_CHARS], item_type=ItemType.financial, score=0.88, trust_weight=spec.trust_weight, source="S3:ohlcv")`
+5. Return `RetrievedItem.create(item_id=f"tool:price_history:{ticker}", item_type=ItemType.financial, text=table_text[:_TOOL_RESULT_MAX_CHARS], score=0.88, trust_weight=0.90)` — CRITICAL: field is `text` NOT `content` (N-7); use `.create()` factory (never direct construction — `fusion_score` invariant); `trust_weight=0.90` is a sensible default pending `TrustScorer` wiring (R29)
 
 `_TOOL_RESULT_MAX_CHARS = 4000` — class-level constant. Prevents context window overflow when OHLCV data (252 bars × ~50 chars ≈ 12,600 chars) or chunk results are injected into messages.
 
@@ -1323,7 +1433,7 @@ Every `execute()` call must emit:
 1. Resolve ticker → instrument_id
 2. `data = await self._s3.get_fundamentals_history(instrument_id, periods)`
 3. Format as markdown table (Period | Revenue | Gross Profit | Net Income | EPS | P/E)
-4. Return `RetrievedItem(content=table_text[:_TOOL_RESULT_MAX_CHARS], trust_weight=spec.trust_weight)`
+4. Return `RetrievedItem.create(item_id=f"tool:fundamentals:{ticker}", item_type=ItemType.financial, text=table_text[:_TOOL_RESULT_MAX_CHARS], score=0.88, trust_weight=0.90)` — same `text` field note (N-7)
 
 **Tests to write**:
 | Test | What it verifies | Type |
@@ -1335,7 +1445,7 @@ Every `execute()` call must emit:
 | `test_executor_execute_all_caps_at_5` | 8 tool_calls → only 5 executed | unit |
 | `test_executor_fundamentals_formats_markdown_table` | periods → RetrievedItem with Period column | unit |
 | `test_executor_unknown_tool_name_logs_warning` | unregistered tool name → `log.warning("unknown_tool_name")` emitted, `None` returned | unit |
-| `test_executor_tool_result_truncated_at_max_chars` | formatter produces > 4000 chars → content ≤ 4000 chars | unit |
+| `test_executor_tool_result_truncated_at_max_chars` | formatter produces > 4000 chars → `RetrievedItem.text` ≤ 4000 chars (N-7: field is `text` not `content`) | unit |
 
 Minimum: 8 unit tests.
 
@@ -1354,13 +1464,16 @@ Minimum: 8 unit tests.
 **blocks**: T-W10-H-04
 **Target files**:
 - `services/rag-chat/src/rag_chat/application/use_cases/chat_orchestrator.py` (modify)
-- `services/rag-chat/src/rag_chat/infrastructure/wiring/dependencies.py` (modify — inject `ToolExecutor`)
+- `services/rag-chat/src/rag_chat/api/dependencies.py` (modify — inject `ToolExecutor`) — NOTE: no `infrastructure/wiring/` directory exists (N-5); DI file is `api/dependencies.py`
 
 **What to build**:
 
 Add `_tool_executor: ToolExecutor | None` as an optional constructor argument on `ChatOrchestratorUseCase`.
 
-In `handle()`, after building the initial retrieval context (Path 1 unchanged):
+> **ARCH NOTE (N-6)**: Post-PLAN-0077, `ChatOrchestratorUseCase` has methods `execute_streaming()` and `execute_sync()` — NOT `handle()`. The tool-use loop is inserted in `execute_streaming()` (and optionally `execute_sync()`) after the initial retrieval context is assembled (via `ChatPipeline` steps).
+> **ARCH NOTE (R30)**: `ToolExecutor` must NOT hold per-request state (no `user_id`, `tenant_id`, or `jwt` in `ToolExecutor.__init__`). These are passed at call time if needed (they aren't for S3 queries).
+
+In `execute_streaming()`, after building the initial retrieval context (Path 1 unchanged):
 1. Include `self._tool_executor._registry.to_system_prompt_section()` in the system prompt when `_tool_executor` is not `None`.
 2. Call LLM (first turn). Parse the response for `tool_use` blocks.
 3. If no `tool_use` blocks (typical classical query): stream answer directly (no change to existing flow).
@@ -1414,7 +1527,7 @@ Minimum: 5 unit tests.
 **blocks**: none
 **Target files**:
 - `services/rag-chat/src/rag_chat/application/use_cases/chat_orchestrator.py` (modify — add SSE emissions)
-- `services/rag-chat/src/rag_chat/infrastructure/streaming/sse_emitter.py` (modify — new event type)
+- `services/rag-chat/src/rag_chat/application/pipeline/sse_emitter.py` (modify — new event type) — NOTE: SSEEmitter lives in `application/pipeline/`, NOT `infrastructure/streaming/` (N-4)
 
 **What to build**:
 
@@ -1467,7 +1580,7 @@ Minimum: 3 unit tests.
 |---|---|---|
 | Any test mocking `S3Port` | new `get_ohlcv_range` + `get_fundamentals_history` methods required by Protocol (from Wave G T-W10-G-03) | add stub implementations |
 | `services/rag-chat/tests/unit/use_cases/test_chat_orchestrator.py` | `ChatOrchestratorUseCase` constructor gains `tool_executor` arg | pass `tool_executor=None` in existing test fixtures |
-| `services/rag-chat/src/rag_chat/infrastructure/wiring/dependencies.py` | `ToolExecutor` must be injected | add `ToolExecutor` construction with `ToolRegistry` wired to S3Port |
+| `services/rag-chat/src/rag_chat/api/dependencies.py` | `ToolExecutor` must be injected (N-5: no `infrastructure/wiring/` dir exists) | add `ToolExecutor` construction with `ToolRegistry` wired to S3Port |
 
 #### Regression Guardrails — Wave H
 - BP-025 (external I/O timeout): `ToolExecutor` handlers wrap S3 calls in `asyncio.wait_for(timeout=5.0)` — same pattern as all existing orchestrator fetch methods.
