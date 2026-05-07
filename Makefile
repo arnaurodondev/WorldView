@@ -1,4 +1,4 @@
-.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down schema-set-compat qa qa-exhaustive qa-exhaustive-backend qa-exhaustive-frontend qa-live-stack qa-contract dev dev-down dev-reset dev-logs dev-ps dev-rebuild dev-clean seed prod prod-down prod-rebuild
+.PHONY: help lint typecheck test-unit test-e2e test-all test-arch infra-up infra-down schema-set-compat qa qa-exhaustive qa-exhaustive-backend qa-exhaustive-frontend qa-live-stack qa-contract dev dev-down dev-reset dev-logs dev-ps dev-rebuild dev-clean seed prod prod-down prod-rebuild test test-down test-rebuild seed-eval eval
 
 # ── Default target ────────────────────────────────────────────────────────────
 
@@ -25,7 +25,15 @@ help:
 	@echo "  (worldview-gitops)/scripts/setup-dev.sh   Copy dev env files from private repo"
 	@echo "  make dev                                   Start full Docker Compose dev stack"
 	@echo "  make dev-clean                             Remove local docker.env files"
-	@echo "  make seed                                  Load sample data"
+	@echo "  make seed                                  Load sample data (SQL + Python)"
+	@echo ""
+	@echo "Retrieval eval (isolated — no live data ingestion):"
+	@echo "  (worldview-gitops)/scripts/setup-eval.sh  Copy eval env files (run once)"
+	@echo "  make test                                  Boot minimal eval stack"
+	@echo "  make test-rebuild                          Rebuild images + boot eval stack"
+	@echo "  make test-down                             Stop eval stack"
+	@echo "  make seed-eval                             Seed SQL + demo data + eval corpus"
+	@echo "  make eval                                  Run eval_retrieval.py vs live stack"
 	@echo ""
 	@echo "Production (Hetzner single-server, Traefik TLS):"
 	@echo "  DOMAIN=worldview.example.com ACME_EMAIL=ops@example.com make prod"
@@ -188,9 +196,85 @@ dev-clean:
 	@find services/*/configs -name "docker.env" -delete
 	@echo "docker.env files removed. Run scripts/setup-dev.sh from worldview-gitops to restore."
 
-## Seed development data (instruments, entities, sample articles)
+## Seed development data (SQL fixtures + Python demo data).
+## Runs both seed-dev-data.sh (portfolio/market instruments) AND seed_demo_data.py
+## (canonical entities, OHLCV bars, company profiles, content_ingestion sources).
+## WS3 audit finding: seed_demo_data.py was previously not called by make seed,
+## leaving entity_embedding_state, ohlcv_bars, company_profiles and content_ingestion
+## sources empty on a fresh stack.
 seed:
 	@./scripts/seed-dev-data.sh
+	@.venv312/bin/python scripts/seed_demo_data.py
+
+# ── Retrieval eval stack (isolated — no ingestion workers) ──────────────────
+#
+# The eval stack boots a controlled subset of services (API servers only) so
+# that the intelligence_db corpus is never overwritten by live data ingestion
+# during a test run.  Use make test + make seed-eval, then make eval.
+#
+# Prerequisites: run worldview-gitops/scripts/setup-eval.sh once to copy eval
+# env files into services/*/configs/docker.env.  The eval env is identical to
+# dev except rag-chat has INTERNAL_JWT_SKIP_VERIFICATION=true so eval_retrieval.py
+# can call /v1/internal/retrieve without generating a signed JWT.
+
+COMPOSE_EVAL := docker compose \
+  -f infra/compose/docker-compose.yml \
+  -f infra/compose/docker-compose.eval.yml \
+  --profile eval
+
+## Boot the minimal eval stack (infra + API servers; no workers or ingestion).
+## Run worldview-gitops/scripts/setup-eval.sh first.
+test:
+	$(COMPOSE_EVAL) up -d --wait
+	@echo ""
+	@echo "Eval stack is running. Next: make seed-eval"
+	@echo "  RAG Chat:      http://localhost:8008"
+	@echo "  API Gateway:   http://localhost:8000"
+	@echo "  Postgres:      localhost:5432"
+	@echo "  Ollama:        http://localhost:11434"
+	@echo ""
+
+## Rebuild all eval images from scratch, then boot the eval stack.
+test-rebuild:
+	$(COMPOSE_EVAL) build --no-cache
+	$(COMPOSE_EVAL) up -d --wait
+
+## Stop the eval stack (graceful 5s timeout).
+test-down:
+	$(COMPOSE_EVAL) down --timeout 5
+
+## Seed the eval corpus (SQL fixtures + Python demo data + synthetic eval chunks).
+## Requires: make test (stack must be running), Ollama healthy with bge-large loaded.
+## Order:
+##   1. seed-dev-data.sh    — portfolio_db + market_data_db instruments
+##   2. seed_demo_data.py   — canonical entities, OHLCV bars, company profiles
+##   3. seed-eval-corpus.py — 225 synthetic financial chunks with bge-large embeddings
+seed-eval:
+	@echo "[seed-eval] Step 1/3: SQL fixtures (portfolio_db, market_data_db)..."
+	@./scripts/seed-dev-data.sh
+	@echo "[seed-eval] Step 2/3: Python demo data (entities, OHLCV, profiles)..."
+	@.venv312/bin/python scripts/seed_demo_data.py
+	@echo "[seed-eval] Step 3/3: Eval corpus (225 chunks + bge-large embeddings)..."
+	@OLLAMA_URL=http://localhost:11434 \
+	  EVAL_DB_URL=postgresql://postgres:postgres@localhost:5432/intelligence_db \
+	  .venv312/bin/python scripts/seed-eval-corpus.py
+	@echo "[seed-eval] Done. Run: make eval"
+
+## Run the retrieval evaluation harness vs the live eval stack.
+## Uses queries_eval_stack.jsonl (synthetic-only corpus, 64 labelled queries).
+## Full production eval uses queries.jsonl (120 queries, requires live ingestion).
+## Reports NDCG@10, MRR, P@5, Recall@20 overall and per query_class.
+## Gate: NDCG@10 must not drop >0.03 from results/baseline_pre_hybrid.json.
+## Requires: make test + make seed-eval already run.
+eval:
+	.venv312/bin/python scripts/eval_retrieval.py \
+	  --rag-url http://localhost:8008 \
+	  --golden tests/eval/golden/queries_eval_stack.jsonl \
+	  --mode hybrid \
+	  --fail-on-regression 0.03 \
+	  --output-dir results/
+
+.PHONY: test test-down test-rebuild seed-eval eval
 
 # ── Observability stack ─────────────────────────────────────────────────────
 
