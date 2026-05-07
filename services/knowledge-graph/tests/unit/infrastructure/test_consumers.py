@@ -349,20 +349,24 @@ class TestEntityCreatedConsumerDedupResilience:
         assert result is False
 
     def test_entity_consumer_dedup_check_failure_logs_warning(self) -> None:
-        """is_duplicate() emits entity_consumer_dedup_check_failed warning on error (P-4)."""
+        """is_duplicate() emits dedup.valkey_check_failed warning on error (P-4).
+
+        Now logged by ValkeyDedupMixin (messaging.kafka.consumer.dedup module),
+        not by the consumer's own logger — updated for B-2 mixin migration.
+        """
         dedup_client = AsyncMock()
         dedup_client.exists = AsyncMock(side_effect=ConnectionError("valkey down"))
 
         consumer = self._make_consumer_with_dedup(dedup_client)
 
-        with patch("knowledge_graph.infrastructure.messaging.consumers.entity_consumer.logger") as mock_logger:
+        with patch("messaging.kafka.consumer.dedup.logger") as mock_logger:
             asyncio.run(
                 consumer.is_duplicate("event-1")  # type: ignore[attr-defined]
             )
 
         mock_logger.warning.assert_called_once()
         call_args = mock_logger.warning.call_args
-        assert call_args.args[0] == "entity_consumer_dedup_check_failed"
+        assert call_args.args[0] == "dedup.valkey_check_failed"
         assert call_args.kwargs.get("event_id") == "event-1"
 
     def test_entity_consumer_dedup_mark_failure_does_not_crash(self) -> None:
@@ -378,18 +382,22 @@ class TestEntityCreatedConsumerDedupResilience:
         )
 
     def test_entity_consumer_dedup_mark_failure_logs_warning(self) -> None:
-        """mark_processed() emits entity_consumer_dedup_mark_failed warning on error (P-4)."""
+        """mark_processed() emits dedup.valkey_mark_failed warning on error (P-4).
+
+        Now logged by ValkeyDedupMixin (messaging.kafka.consumer.dedup module),
+        not by the consumer's own logger — updated for B-2 mixin migration.
+        """
         dedup_client = AsyncMock()
         dedup_client.set = AsyncMock(side_effect=ConnectionError("valkey down"))
 
         consumer = self._make_consumer_with_dedup(dedup_client)
 
-        with patch("knowledge_graph.infrastructure.messaging.consumers.entity_consumer.logger") as mock_logger:
+        with patch("messaging.kafka.consumer.dedup.logger") as mock_logger:
             asyncio.run(
                 consumer.mark_processed("event-1")  # type: ignore[attr-defined]
             )
 
         mock_logger.warning.assert_called_once()
         call_args = mock_logger.warning.call_args
-        assert call_args.args[0] == "entity_consumer_dedup_mark_failed"
+        assert call_args.args[0] == "dedup.valkey_mark_failed"
         assert call_args.kwargs.get("event_id") == "event-1"

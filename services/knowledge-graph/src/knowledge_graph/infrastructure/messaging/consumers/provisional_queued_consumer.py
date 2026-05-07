@@ -35,6 +35,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from messaging.topics import (  # type: ignore[import-untyped]
     ENTITY_DIRTIED as _ENTITY_DIRTIED_TOPIC,
@@ -74,7 +75,7 @@ class _NoOpUoW:
         pass
 
 
-class ProvisionalQueuedConsumer(BaseKafkaConsumer[None]):
+class ProvisionalQueuedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     """Consumes entity.provisional.queued.v1 and triggers immediate enrichment.
 
     Args:
@@ -315,22 +316,6 @@ WHERE queue_id = :queue_id
             "provisional_queued_consumer_retry_not_supported",
             event_id=failure.event_id,
         )
-
-    # ------------------------------------------------------------------
-    # Idempotency
-    # ------------------------------------------------------------------
-
-    async def is_duplicate(self, event_id: str) -> bool:
-        if self._dedup_client is None:
-            return False
-        key = f"{self._dedup_prefix}:{event_id}"
-        return bool(await self._dedup_client.exists(key))
-
-    async def mark_processed(self, event_id: str) -> None:
-        if self._dedup_client is None:
-            return
-        key = f"{self._dedup_prefix}:{event_id}"
-        await self._dedup_client.set(key, "1", ex=86400)
 
     # ------------------------------------------------------------------
     # Failure tracking

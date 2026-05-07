@@ -50,7 +50,7 @@ class TestEnrichedConsumerValkey:
 
         assert result is False
         assert any(
-            e.get("event") == "enriched_consumer.valkey_check_failed" for e in cap
+            e.get("event") == "dedup.valkey_check_failed" for e in cap
         ), f"Expected warning log not found in {cap}"
 
     @pytest.mark.unit
@@ -65,7 +65,7 @@ class TestEnrichedConsumerValkey:
             await consumer.mark_processed("evt-002")
 
         assert any(
-            e.get("event") == "enriched_consumer.valkey_mark_failed" for e in cap
+            e.get("event") == "dedup.valkey_mark_failed" for e in cap
         ), f"Expected warning log not found in {cap}"
 
 

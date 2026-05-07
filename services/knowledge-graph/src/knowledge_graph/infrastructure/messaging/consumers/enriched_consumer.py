@@ -56,6 +56,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -136,7 +137,7 @@ class _NoOpUoW:
 # ---------------------------------------------------------------------------
 
 
-class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
+class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     """Consumes ``nlp.article.enriched.v1`` and materializes the knowledge graph.
 
     Args:
@@ -364,37 +365,6 @@ class EnrichedArticleConsumer(BaseKafkaConsumer[None]):
             "enriched_consumer_retry_not_supported",
             event_id=failure.event_id,
         )
-
-    # ------------------------------------------------------------------
-    # Idempotency (Valkey-based with fallback no-op)
-    # ------------------------------------------------------------------
-
-    async def is_duplicate(self, event_id: str) -> bool:
-        if self._dedup_client is None:
-            return False
-        key = f"{self._dedup_prefix}:{event_id}"
-        try:
-            return bool(await self._dedup_client.exists(key))
-        except Exception:
-            logger.warning(  # type: ignore[no-any-return]
-                "enriched_consumer.valkey_check_failed",
-                event_id=event_id,
-                exc_info=True,
-            )
-            return False  # prefer at-least-once over skipping
-
-    async def mark_processed(self, event_id: str) -> None:
-        if self._dedup_client is None:
-            return
-        key = f"{self._dedup_prefix}:{event_id}"
-        try:
-            await self._dedup_client.set(key, "1", ex=86400)  # 24h TTL
-        except Exception:
-            logger.warning(  # type: ignore[no-any-return]
-                "enriched_consumer.valkey_mark_failed",
-                event_id=event_id,
-                exc_info=True,
-            )
 
     # ------------------------------------------------------------------
     # Failure tracking (log-only for Wave D-2)
