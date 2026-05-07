@@ -634,3 +634,64 @@ async def is_open(self) -> bool:
 # Find is_open implementations that lack a probe/SETNX step
 grep -A 10 "async def is_open" services/ -r | grep -v "set_nx\|setnx\|probe"
 ```
+
+---
+
+### HR-048: `except Exception: logger.warning(...) # DON'T re-raise` After Second-Session Commit
+
+**Pattern** (RED):
+```python
+try:
+    await intel_session.commit()
+except Exception:
+    logger.warning("d004_intel_commit_failed", doc_id=str(doc_id), exc_info=True)
+    # DON'T re-raise — intel writes are idempotent on retry
+```
+
+**Risk**: Silently swallowing a second-session commit failure in a dual-session consumer causes
+permanent data loss when the message has an early-skip guard. On re-delivery, the early-skip
+fires (e.g. "routing_decision already exists") before the second session's writes are retried.
+The "idempotent on retry" claim is technically true for the WRITE, but the retry never happens.
+Downstream effects: entities extracted by the NLP pipeline never appear in the KG; provisional
+queue rows are never created. The service appears healthy (no exception, no metric spike).
+See BP-419.
+**Action**: Any `except Exception: ... # DON'T re-raise` after a session commit in a
+multi-session consumer is a RED flag. Require: (a) re-raise so the message is nacked and
+re-delivered; AND (b) a Prometheus counter so failures are observable; AND (c) verify that
+re-delivery actually retries the second session's writes (no early-skip bypasses them).
+**Grep pattern**:
+```bash
+grep -n "DON'T re-raise\|do not re-raise\|# don't raise" services/ -r --include="*.py"
+```
+
+---
+
+### HR-049: Fire-and-Forget `producer.produce()` After `session.commit()` for Lifecycle Events
+
+**Pattern** (YELLOW for repeat events, RED for one-time lifecycle events):
+```python
+await session.commit()
+# ... loop outside transaction ...
+for entity_id in entity_ids_to_dirty:
+    try:
+        await direct_producer.produce(topic=..., value=...)
+    except Exception:
+        logger.warning("dirtied_emit_failed", ...)
+```
+
+**Risk**: A process crash between `session.commit()` and the `produce()` calls permanently
+drops the event. For frequently-repeated events (entity enriched on next article), loss is
+tolerable. For one-time lifecycle events (entity promoted from provisional, entity first
+created, entity deleted), loss is permanent: the downstream pipeline (embeddings, enrichment)
+never receives the trigger. The entity exists in the DB but is invisible to downstream
+services.
+**Action**: Require the outbox pattern (`outbox_repo.add()` + dispatcher) for any lifecycle
+event that fires at most once per entity transition. Fire-and-forget is acceptable ONLY when
+(a) the event is high-frequency AND (b) a missed emission will be corrected by the next
+occurrence. Must be justified in a code comment. See BP-418.
+**Grep pattern**:
+```bash
+# Find direct produce calls outside outbox transaction context
+grep -n "direct_producer\|DirectProducer\|producer\.produce" services/ -r --include="*.py" | \
+  grep -v "outbox\|test_"
+```
