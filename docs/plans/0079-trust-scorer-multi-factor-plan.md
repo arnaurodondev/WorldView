@@ -1,7 +1,7 @@
 # PLAN-0079 — TrustScorer Multi-Factor Replacement of `DEFAULT_TRUST_WEIGHTS`
 
 > **PRD**: derived from `/investigate` 2026-05-07 — long-term consistency review (issue A-2)
-> **Status**: in-progress (Wave A ✅ done 2026-05-07)
+> **Status**: completed (all waves done 2026-05-07)
 > **Created**: 2026-05-07
 > **Owner**: TBD
 > **Estimated effort**: ~2 dev-days (3 waves, ~9 tasks)
@@ -15,7 +15,7 @@
 |------|-------|--------|-----------|
 | A | Domain: `TrustScorer` + `SOURCE_AUTHORITY` + `extraction_confidence` field + unit tests | ✅ done | 2026-05-07 |
 | B | Replace `DEFAULT_TRUST_WEIGHTS` call sites in `ParallelRetrievalOrchestrator` | ✅ done | 2026-05-07 |
-| C | Tunable weights via env vars + eval sweep harness | pending | — |
+| C | Tunable weights via env vars + eval sweep harness | ✅ done | 2026-05-07 |
 
 ---
 
