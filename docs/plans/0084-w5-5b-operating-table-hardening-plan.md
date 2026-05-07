@@ -6,7 +6,7 @@ title: "W5-5b — Operating-Table Hardening (PLAN-0063 close-out)"
 status: in-progress
 created: 2026-05-07
 updated: 2026-05-07
-waves_done: "A-1, A-2 (2026-05-07)"
+waves_done: "A-1, A-2, B-1, B-2, B-3, C-1, D-1, D-2, D-3, E-1, E-2, F-1, H-1 (2026-05-07)"
 plans: 8
 waves: 15
 tasks: 48
@@ -1317,9 +1317,9 @@ R9 currently says "Check `event_id` against a processed-events table before proc
 - HR-NEW: `cool_down_seconds: int >= 300` (or any breaker cooldown ≥5 min) without a HALF_OPEN probe is a red flag.
 
 #### Validation Gate
-- [ ] All updated docs committed
-- [ ] BP grep for collisions: `grep -c "^| BP-41[2-5] " docs/BUG_PATTERNS.md` returns 4 (one per BP)
-- [ ] No conflicting rule-number assignments
+- [x] All updated docs committed
+- [x] BP grep for collisions: `grep -c "^| BP-41[2-5] " docs/BUG_PATTERNS.md` returns 4 (one per BP)
+- [x] No conflicting rule-number assignments
 
 ---
 

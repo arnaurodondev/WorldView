@@ -499,3 +499,138 @@ s5_processing_duration_seconds = Histogram("s5_processing_duration_seconds", "..
 grep -rn "s5_articles_processed_total" services/content-store/src/ --include="*.py"
 # Must return ≥2 lines: definition + call site.
 ```
+
+---
+
+## ORANGE — Added 2026-05-07 (Session failure analysis)
+
+### HR-042: Running `pytest <touched-file>` Only After a Fix (Fix-Induced Regression Risk)
+```bash
+# BAD — only tests the changed file
+python -m pytest tests/unit/test_my_worker.py
+
+# GOOD — tests the entire service
+python -m pytest tests/ -x -q
+```
+**Risk**: A fix that changes a shared utility, port interface, or consumer behavior can break tests in files that were not modified. Touched-file-only test runs never catch these regressions (BP-408). The fix ships appearing correct.
+**Action**: After any fix commit, always run the full service test suite. If a broader test scope reveals failures, classify each as: (a) fix-induced regression → fix before proceeding, (b) pre-existing → file separately, (c) stale expectation → update with justification.
+**Grep pattern**:
+```bash
+# Detect if only a single file was run in a pytest invocation
+# Look for explicit file paths in pytest args (warning sign):
+grep -rn "pytest tests/unit/test_" Makefile scripts/ --include="*.sh"
+```
+
+### HR-043: Commit Without `docker compose build` for a Runtime Behavior Fix
+```bash
+# BAD — commits fix but never rebuilds the container
+git commit -m "fix: ..."
+# <declares done — container still running old code>
+
+# GOOD
+git commit -m "fix: ..."
+docker compose build <svc>
+docker compose up -d --no-deps <svc>
+# verify: docker compose logs <svc> | tail -20
+```
+**Risk**: Unit tests pass against source, but the live Docker container still has the old code because `docker compose build` was never run. The bug persists in the running service despite the source fix (BP-410). Related: BP-257 (`restart` does not swap image), BP-319 (stale Alembic image), BP-346 (missing module after build).
+**Action**: For every commit that modifies service runtime behavior, verify that the Docker image is rebuilt. Check image build time against commit time: `docker inspect <container> | grep -i created`.
+**Grep pattern**:
+```bash
+# Confirm image was rebuilt after last commit
+docker inspect <container-name> --format '{{.Created}}'
+git log -1 --format="%ci" HEAD
+# Image Created timestamp must be AFTER the commit timestamp
+```
+
+### HR-044: Parallel Subagent Run Without Verifying Commits Landed in Main Branch
+```bash
+# BAD — orchestrator launches agents, checks "status: success", moves on
+# Agents applied fixes in their worktrees but never committed
+
+# GOOD — after parallel agents complete, always verify
+git log --oneline -10          # confirm new commit messages from subagents
+git diff HEAD~N --name-only    # confirm expected files were changed
+git status                     # confirm no uncommitted changes remain
+```
+**Risk**: Subagents operating in isolated git worktrees can apply fixes without committing. The worktree is destroyed on cleanup, taking all changes with it. The orchestrator receives a success status but the main branch is unchanged (BP-409). Discovering this after multiple further commits makes recovery harder.
+**Action**: Any time parallel agents are used with `isolation: "worktree"`, the orchestrating agent MUST verify the changes appear in the main working tree before proceeding to the test phase.
+
+### HR-045: Assigning a New R##, BP-NNN, or PLAN-XXXX by Incrementing from Memory
+```markdown
+<!-- BAD — author estimated next BP number from memory -->
+## BP-185 — Some New Pattern
+<!-- BP-185 was already assigned to "Content-Ingestion TokenBucket..." -->
+
+<!-- GOOD — grep first -->
+# grep -o 'BP-[0-9]\+' docs/BUG_PATTERNS.md | sort -t- -k2 -n | tail -1
+# → BP-411  →  use BP-412
+```
+**Risk**: ID collision creates two entries with the same number, making all references to that ID ambiguous. The quick-lookup table acquires duplicate rows. Cross-document references (plans citing BP numbers, checklists citing HR numbers) become unreliable (BP-411).
+**Action**: Before assigning any new numbered ID, grep the canonical file for the current maximum. Use `highest + 1`. Never estimate from memory in a fast-moving document.
+**Grep pattern**:
+```bash
+# Highest BP number
+grep -o 'BP-[0-9]\+' docs/BUG_PATTERNS.md | sort -t- -k2 -n | tail -1
+# Highest R-rule number
+grep -o '^R[0-9]\+' RULES.md | sort -t R -k2 -n | tail -1
+# Highest HR number
+grep -o 'HR-[0-9]\+' .claude/review/heuristics/HIGH_RISK_PATTERNS.md | sort -t- -k2 -n | tail -1
+# Highest PLAN number
+grep -o 'PLAN-[0-9]\+' docs/plans/TRACKING.md | sort -t- -k2 -n | tail -1
+```
+
+### HR-046: `is_duplicate(self, event_id) -> bool: return False` Stub (or Ad-Hoc Valkey Dedup)
+```python
+# BAD — stub or hand-rolled dedup (CONSUMER-DEDUP-001 will flag this)
+class MyConsumer(BaseKafkaConsumer[None]):
+    async def is_duplicate(self, event_id: str) -> bool:
+        return False  # silent no-op; every event is reprocessed on replay
+    async def mark_processed(self, event_id: str) -> None:
+        pass
+
+# ALSO BAD — hand-rolled Valkey logic
+class MyConsumer(BaseKafkaConsumer[None]):
+    async def is_duplicate(self, event_id: str) -> bool:
+        return bool(await self._valkey.exists(f"my_key:{event_id}"))
+
+# GOOD — inherit mixin; set prefix + optional TTL
+class MyConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
+    _dedup_prefix = "my_service:dedup:my_consumer"
+    _dedup_ttl_seconds = 86400
+```
+**Risk**: `return False` stub disables dedup entirely — every duplicate event is processed on replay. Hand-rolled logic diverges in TTL policy, key naming, and error handling from the standard mixin, making cross-service reasoning unreliable (BP-415, R9).
+**Action**: Any `is_duplicate` or `mark_processed` implementation that does not delegate to `ValkeyDedupMixin` is a yellow flag. Require either: (a) `ValkeyDedupMixin` inheritance, or (b) a docstring documenting the natural-key idempotency guarantee AND an allowlist entry in `tests/architecture/_consumer_dedup_allowlist.yaml`.
+**Grep pattern**:
+```bash
+# Find consumers with hand-rolled or stub is_duplicate
+grep -rn "async def is_duplicate" services/ | grep -v ".pyc"
+# Cross-check against mixin usage
+grep -rn "ValkeyDedupMixin" services/ | grep -v ".pyc"
+```
+
+### HR-047: Circuit Breaker `is_open()` Without HALF_OPEN Probe Gating
+```python
+# BAD — cooldown expiry admits ALL concurrent callers at once
+async def is_open(self) -> bool:
+    state = await self._valkey.get(self._state_key)
+    return state == "open"  # no probe slot → stampede when cooldown expires
+
+# GOOD — SETNX probe key admits only the first caller per probe_ttl window
+async def is_open(self) -> bool:
+    state = await self._valkey.get(self._state_key)
+    if state != "open":
+        return False
+    # Try to acquire the probe slot; only the first caller in the TTL window succeeds
+    probe_acquired = await self._valkey.set_nx(
+        self._probe_key, "1", ex=self._probe_ttl_seconds
+    )
+    return not probe_acquired  # True = still open (probe taken by another); False = this caller probes
+```
+**Risk**: When a circuit-breaker cooldown expires, every in-flight coroutine simultaneously transitions from "open" to "probing" and hammers the recovering downstream service. This typically retrips the breaker before the first probe response returns, creating an oscillation loop (BP-413).
+**Action**: Any circuit-breaker `is_open()` that compares state without a SETNX probe slot is a red flag when `cool_down_seconds >= 60` (high-concurrency paths). Require a probe key with `probe_ttl_seconds` (recommended 5 s). Flag during review; do not merge without the probe gate.
+**Grep pattern**:
+```bash
+# Find is_open implementations that lack a probe/SETNX step
+grep -A 10 "async def is_open" services/ -r | grep -v "set_nx\|setnx\|probe"
+```

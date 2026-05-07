@@ -39,6 +39,8 @@
 - [ ] Outbox payload includes all required Avro envelope fields (event_id, event_type, schema_version, occurred_at)
 - [ ] **Atomic dedup**: `is_duplicate` + `process_message` + `mark_processed` are NOT in separate transactions — use BP-035/BP-045 `INSERT…ON CONFLICT DO NOTHING RETURNING` inside the same UoW as business logic; `is_duplicate()` → `return False`; `mark_processed()` → no-op (HR-021)
 - [ ] **All storage steps have skip-if-exists (D-008)**: if `_store_bronze` has an `exists()` guard, `_store_canonical` and any other storage steps must have the same guard — partial guards break retry idempotency (BP-048)
+- [ ] **Use case wired in `app.py` lifespan**: if a new use case updates a Prometheus metric, launches a cron, or returns a computed value, grep for at least one caller in `app.py` / `lifespan` / `_wire_*`; a use case with no caller is silently dead (BP-412)
+- [ ] **Cache has a refresh loop**: if a new class has a `refresh()` method or a startup-populated cache, search for either a `_refresh_loop()` background task or a Kafka invalidation consumer; startup-only population goes stale after first fill (BP-414)
 
 ## 4b. Unit of Work / Transaction Integrity (R26)
 
@@ -137,6 +139,21 @@
 - [ ] Tests verify side effects (events published, DB updated), not just return values
 - [ ] No test interdependencies (each test is independent)
 - [ ] **Blast radius verified**: if Avro schemas, DB schemas, or shared lib APIs changed, downstream tests outside the immediate scope have been identified and run (see implement skill §2.4). Key files to check: `libs/contracts/tests/test_avro_alignment.py`, `tests/contract/test_avro_schemas.py`
+- [ ] **Full service suite run after fix** (not just touched files) — `python -m pytest tests/ -x -q` from the service root (HR-042, BP-408)
+- [ ] New test failures classified: pre-existing / fix-induced regression / stale expectation
+- [ ] Fix-induced regressions resolved before declaring done
+
+## 8b. Deployment Verification
+
+- [ ] If change affects service runtime behavior: Docker image rebuilt (`docker compose build <svc>`) and smoke tested
+- [ ] Image build timestamp verified to be after commit timestamp: `docker inspect <container> | grep -i created` vs `git log -1 --format="%ci"` (HR-043, BP-410)
+- [ ] `docker compose up -d --no-deps <svc>` used (not `docker compose restart`) to apply new image
+
+## 8c. Parallel Agent Execution
+
+- [ ] Each parallel agent committed its changes before returning (confirmed via `git log`) (HR-044, BP-409)
+- [ ] Full test suite run after all parallel agents complete
+- [ ] No changes left only in isolated worktrees — `git status` clean, expected files present in working tree
 
 ## 9. Test Integrity (R19 — blocks approval if violated)
 
