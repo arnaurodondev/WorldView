@@ -28,8 +28,11 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert  # type: ignore[import-untyped]
+
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
+from common.ids import uuid5_from_parts  # type: ignore[import-untyped]
 from contracts.events.nlp.article_enriched import encode_raw_array  # type: ignore[import-untyped]
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     BaseKafkaConsumer,
@@ -37,6 +40,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import (  # type: ignore[import-untyped]
     find_schema_dir,
     get_schema_path,
@@ -106,6 +110,7 @@ if TYPE_CHECKING:
     from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
     from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
     from nlp_pipeline.config import Settings
     from nlp_pipeline.domain.models import Chunk, EntityMention, RoutingDecision, Section
@@ -155,11 +160,34 @@ class _NoOpUnitOfWork:
         pass
 
 
-class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
+class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     """Orchestrates S6 Blocks 3-10 for each incoming stored article.
 
     All ML clients and repository factories are injected at construction time.
+
+    Idempotency strategy (PLAN-0084 B-3)
+    -------------------------------------
+    This consumer uses ``ValkeyDedupMixin`` for fast-path dedup (Valkey
+    SET with 24h TTL).  The mixin's at-least-once fallback is safe because
+    every downstream write uses a deterministic ID (``uuid5_from_parts``) or
+    ``INSERT ... ON CONFLICT DO NOTHING``:
+
+    - ``routing_decisions.decision_id``  — ``uuid5_from_parts(doc_id, "routing_decision")``
+    - ``entity_mentions.mention_id``     — ``uuid5_from_parts(doc_id, idx, surface)``
+    - ``section_embeddings.embedding_id``— ``uuid5_from_parts(doc_id, section_id, model_id)``
+    - ``chunk_embeddings.embedding_id``  — ``uuid5_from_parts(doc_id, chunk_id, model_id)``
+    - outbox ``event_id`` for ``nlp.article.enriched.v1`` — ``uuid5_from_parts(doc_id, "article_enriched_v1")``
+    - outbox ``event_id`` for ``nlp.signal.detected.v1``  — ``uuid5_from_parts(doc_id, signal_kind, signal_idx)``
+
+    Cross-reference: R9 (STANDARDS.md §3.11), PLAN-0084 Wave B-3.
     """
+
+    # ── ValkeyDedupMixin class attributes (PLAN-0084 B-3) ────────────────────
+    # Unique key prefix ensures no collision with other consumers' dedup sets.
+    _dedup_prefix: str = "nlp:dedup:article_consumer"
+    # 24-hour TTL — matches the default on the mixin but declared explicitly here
+    # so the intent is visible when reading this class in isolation.
+    _dedup_ttl_seconds: int = 86400
 
     def __init__(
         self,
@@ -175,8 +203,13 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
         backpressure: BackpressureController,
         chunk_text_store: ChunkTextStorePort | None = None,
         usage_logger: LlmUsageLogProtocol | None = None,
+        # PLAN-0084 B-3: Valkey client injected for ValkeyDedupMixin.
+        # None means at-least-once mode (safe because all writes are idempotent).
+        valkey_client: ValkeyClient | None = None,
     ) -> None:
         super().__init__(config)
+        # ValkeyDedupMixin reads _dedup_client for dedup checks.
+        self._dedup_client = valkey_client
         self._settings = settings
         self._nlp_sf = nlp_session_factory
         self._intel_sf = intelligence_session_factory
@@ -328,6 +361,16 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             section_token_limit=self._settings.gliner_section_token_limit,
         )
 
+        # PLAN-0084 B-3 (T-B-3-02): replace random mention_id values (assigned in
+        # run_ner_block) with deterministic UUID5s derived from (doc_id, loop_index,
+        # normalized_surface).  The 0-based loop index is the position in the NMS-
+        # deduped output list; for a given doc the NER output is deterministic at
+        # inference time so this index is stable across replays.  The INSERT uses
+        # ON CONFLICT DO NOTHING (see entity_mention.py add_batch) so replays are
+        # no-ops at the DB level.
+        for _i, mention in enumerate(mentions):
+            mention.mention_id = uuid.UUID(uuid5_from_parts(str(doc_id), str(_i), mention.mention_text.lower().strip()))
+
         # F-009: Stamp tenant_id from Kafka envelope onto every mention so
         # entity_mentions can be filtered by tenant at query time.
         if tenant_id is not None:
@@ -359,7 +402,10 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 exc_info=True,
             )
 
-        decision_id = common.ids.new_uuid7()
+        # PLAN-0084 B-3 (T-B-3-02): deterministic routing-decision ID.
+        # Same doc_id always yields the same decision_id — safe for replays because
+        # routing_decisions INSERT uses ON CONFLICT DO NOTHING (see routing_decision.py).
+        decision_id = uuid.UUID(uuid5_from_parts(str(doc_id), "routing_decision"))
         routing_decision = compute_routing_score(
             doc_id=doc_id,
             decision_id=decision_id,
@@ -587,9 +633,14 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
             routing_decision.processing_path = final_path
             await routing_repo.add(routing_decision)
 
-            # Write embeddings directly (no dedicated repo)
-            _write_section_embeddings(nlp_session, section_embs, model_id=self._settings.embedding_model_id)
-            _write_chunk_embeddings(nlp_session, chunk_embs, model_id=self._settings.embedding_model_id)
+            # Write embeddings directly (no dedicated repo).
+            # PLAN-0084 B-3: async helpers use ON CONFLICT DO NOTHING + deterministic IDs.
+            await _write_section_embeddings(
+                nlp_session, section_embs, model_id=self._settings.embedding_model_id, doc_id=doc_id
+            )
+            await _write_chunk_embeddings(
+                nlp_session, chunk_embs, model_id=self._settings.embedding_model_id, doc_id=doc_id
+            )
 
             # Persist failed embeddings for retry by EmbeddingRetryWorker
             if pending:
@@ -804,13 +855,11 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
                 exc_info=True,
             )
 
-    # ── Idempotency ───────────────────────────────────────────────────────────
-
-    async def is_duplicate(self, event_id: str) -> bool:
-        return False  # At-least-once; idempotency via DB-level constraints
-
-    async def mark_processed(self, event_id: str) -> None:
-        pass
+    # ── Idempotency (PLAN-0084 B-3) ──────────────────────────────────────────
+    # is_duplicate / mark_processed are now provided by ValkeyDedupMixin.
+    # The no-op stubs that previously lived here have been removed; the mixin
+    # handles Valkey SET/EXISTS with a 24h TTL and safe at-least-once fallback.
+    # See ValkeyDedupMixin docstring in libs/messaging for the failure contract.
 
     # ── Retry / DLQ ───────────────────────────────────────────────────────────
 
@@ -888,38 +937,62 @@ class ArticleProcessingConsumer(BaseKafkaConsumer[None]):
 # ── Module-level helpers (pure functions) ────────────────────────────────────
 
 
-def _write_section_embeddings(
+async def _write_section_embeddings(
     session: AsyncSession,
     section_embs: list[tuple[uuid.UUID, list[float]]],
     model_id: str,
+    doc_id: uuid.UUID,
 ) -> None:
-    """Insert SectionEmbeddingModel rows (best-effort, no flush)."""
+    """Insert SectionEmbeddingModel rows (best-effort, no flush).
+
+    PLAN-0084 B-3 (T-B-3-02): ``embedding_id`` is a deterministic UUID5 derived
+    from ``(doc_id, section_id, model_id)`` so Kafka replays produce the same ID
+    and the INSERT uses ``ON CONFLICT (embedding_id) DO NOTHING`` instead of
+    raising a PK violation on duplicate delivery.
+    """
     for section_id, vec in section_embs:
-        session.add(
-            SectionEmbeddingModel(
-                embedding_id=common.ids.new_uuid7(),
+        # Deterministic embedding_id: same section + model always → same UUID5.
+        embedding_id = uuid.UUID(uuid5_from_parts(str(doc_id), str(section_id), model_id))
+        stmt = (
+            pg_insert(SectionEmbeddingModel)
+            .values(
+                embedding_id=embedding_id,
                 section_id=section_id,
                 embedding=vec,
                 model_id=model_id,
-            ),
+            )
+            .on_conflict_do_nothing(index_elements=["embedding_id"])
         )
+        await session.execute(stmt)
 
 
-def _write_chunk_embeddings(
+async def _write_chunk_embeddings(
     session: AsyncSession,
     chunk_embs: list[tuple[uuid.UUID, list[float]]],
     model_id: str,
+    doc_id: uuid.UUID,
 ) -> None:
-    """Insert ChunkEmbeddingModel rows (best-effort, no flush)."""
+    """Insert ChunkEmbeddingModel rows (best-effort, no flush).
+
+    PLAN-0084 B-3 (T-B-3-02): ``embedding_id`` is a deterministic UUID5 derived
+    from ``(doc_id, chunk_id, model_id)`` so Kafka replays produce the same ID
+    and the INSERT uses ``ON CONFLICT (embedding_id) DO NOTHING`` instead of
+    raising a PK violation on duplicate delivery.
+    """
     for chunk_id, vec in chunk_embs:
-        session.add(
-            ChunkEmbeddingModel(
-                embedding_id=common.ids.new_uuid7(),
+        # Deterministic embedding_id: same chunk + model always → same UUID5.
+        embedding_id = uuid.UUID(uuid5_from_parts(str(doc_id), str(chunk_id), model_id))
+        stmt = (
+            pg_insert(ChunkEmbeddingModel)
+            .values(
+                embedding_id=embedding_id,
                 chunk_id=chunk_id,
                 embedding=vec,
                 model_id=model_id,
-            ),
+            )
+            .on_conflict_do_nothing(index_elements=["embedding_id"])
         )
+        await session.execute(stmt)
 
 
 def _build_chunk_entity_mentions(
@@ -1100,8 +1173,13 @@ async def _enqueue_enriched(
     # while still gaining schema enforcement on the metadata fields.  KG
     # ``EnrichedArticleConsumer`` JSON-decodes these back into RawRelation /
     # RawEvent / RawClaim dataclasses.
+    # PLAN-0084 B-3 (T-B-3-02): deterministic event_id for the enriched event.
+    # Same doc_id → same UUID5 on replay, so the outbox INSERT ON CONFLICT DO NOTHING
+    # guard prevents duplicate outbox rows on Kafka re-delivery.
+    enriched_event_id = uuid5_from_parts(str(doc_id), "article_enriched_v1")
+
     payload: dict[str, Any] = {
-        "event_id": str(common.ids.new_uuid7()),
+        "event_id": enriched_event_id,
         "event_type": "nlp.article.enriched",
         "schema_version": 1,
         "occurred_at": common.time.utc_now().isoformat(),
@@ -1130,6 +1208,9 @@ async def _enqueue_enriched(
         topic=settings.topic_article_enriched,
         partition_key=str(doc_id),
         payload_avro=serialize_confluent_avro(schema_path, payload),
+        # Pass deterministic event_id so the outbox PK INSERT ON CONFLICT DO NOTHING
+        # deduplicates replay deliveries at the outbox-table level as well.
+        event_id=uuid.UUID(enriched_event_id),
     )
 
 
@@ -1468,8 +1549,18 @@ async def _enqueue_signal_events(
     One outbox record per signal.  The partition key is the entity_id so that
     S10 (alert service) fans out per-entity.  market_impact_score defaults to 0.0
     here; it is updated later by PriceImpactLabellingWorker (PLAN-0020).
+
+    PLAN-0084 B-3 (T-B-3-02): the outbox ``event_id`` for each signal is derived
+    deterministically from ``(doc_id, signal_type, loop_index)`` so Kafka replays
+    of the same article produce the same outbox primary keys and the INSERT ON
+    CONFLICT DO NOTHING guard prevents duplicate signal rows.
     """
-    for signal in signals:
+    for signal_index, signal in enumerate(signals):
+        # Deterministic outbox event_id: same doc + signal type + position → same UUID5.
+        # signal.signal_type is stable for a given doc (LLM output is deterministic
+        # at temperature=0); the 0-based loop index provides positional disambiguation
+        # when multiple signals of the same type are extracted from one article.
+        outbox_event_id = uuid.UUID(uuid5_from_parts(str(doc_id), str(signal.signal_type), str(signal_index)))
         payload: dict[str, Any] = {
             "event_id": str(signal.signal_id),
             "event_type": "nlp.signal.detected",
@@ -1497,6 +1588,7 @@ async def _enqueue_signal_events(
             topic=settings.topic_signal_detected,
             partition_key=str(signal.entity_id),
             payload_avro=payload_bytes,
+            event_id=outbox_event_id,
         )
 
 

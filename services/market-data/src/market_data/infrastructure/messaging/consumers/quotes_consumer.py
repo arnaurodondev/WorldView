@@ -13,6 +13,7 @@ from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
@@ -40,8 +41,16 @@ def _parse_quote_bytes(raw: bytes) -> CanonicalQuote:
     return CanonicalQuote.from_dict(json.loads(raw.decode()))
 
 
-class QuotesConsumer(BaseKafkaConsumer[dict]):
-    """Materializes quote datasets from object storage into the database."""
+class QuotesConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
+    """Materializes quote datasets from object storage into the database.
+
+    Dedup mixin is belt-and-braces over the consumer's natural-key
+    ``create_if_not_exists()`` idempotency. The mixin protects against expensive
+    S3 object-storage work on Kafka rebalance re-delivery; the natural key protects rows.
+    """
+
+    _dedup_prefix = "market-data:dedup:quotes_consumer"
+    _dedup_ttl_seconds = 86400
 
     def __init__(
         self,
@@ -58,6 +67,7 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
         self._uow_factory = uow_factory
         self._object_storage = object_storage
         self._valkey_client = valkey_client
+        self._dedup_client = valkey_client  # ValkeyDedupMixin reads this attribute
         self._quote_cache: QuoteCache | None = None
         self._price_snapshot_cache: PriceSnapshotCache | None = price_snapshot_cache
         self._current_uow: UnitOfWork | None = None

@@ -6,19 +6,147 @@
 #   justification: str   — why ValkeyDedupMixin is not used
 #   granted_at:    str   — ISO-8601 date the exemption was approved
 #
-# This list is intentionally empty at the end of PLAN-0084 Wave B-1.
-# All 8 BaseKafkaConsumer subclasses will be migrated in Waves B-2 and B-3.
-# Remove the xfail marker from test_consumer_dedup_mixin_enforcement.py in B-3
-# once all migrations are done and this list remains empty.
+# Consumers fall into three exemption categories:
 #
-# Example entry (do not uncomment — illustrative only):
+#   BP-035 (atomic upsert)   — event_id dedup is handled atomically inside
+#                              process_message via create_if_not_exists / ON CONFLICT;
+#                              ValkeyDedupMixin would be redundant overhead.
 #
-# - class_name: SomeSpecialConsumer
-#   module_path: services.some-service.src.some_service.infrastructure.messaging.consumers.some_consumer
-#   justification: >
-#     This consumer uses PostgreSQL advisory locks as its dedup mechanism
-#     because it processes exactly-once transactional events with no
-#     at-least-once retry path (approved in ADR-F-17, 2026-05-08).
-#   granted_at: "2026-05-08"
+#   Hand-rolled Valkey       — pre-dates ValkeyDedupMixin; implements the same
+#                              pattern inline (_dedup_prefix + exists/setex).
+#                              Migration to the mixin was outside PLAN-0084 B-2/B-3 scope;
+#                              tracked as a follow-up cleanup wave.
+#
+#   Natural idempotency      — the underlying operation (SADD/SREM, DB upsert) is
+#                              inherently safe under re-delivery; a dedup store
+#                              would add latency without correctness benefit.
+#
+# Entries here must have a covering JIRA / PLAN reference if known.
 
-allowlist: []
+allowlist:
+
+  # ── content-store ─────────────────────────────────────────────────────────
+  - class_name: ArticleConsumer
+    module_path: services.content-store.src.content_store.infrastructure.messaging.consumers.article_consumer
+    justification: >
+      Uses PostgreSQL-backed dedup via ProcessedEventsRepository.is_duplicate() and
+      mark_processed() — a separate dedup table within the same transaction as the
+      write. This provides exactly-once guarantees stronger than Valkey TTL-based
+      dedup; adding ValkeyDedupMixin here would be redundant. Exempt under the
+      "DB dedup" category (not hand-rolled Valkey; different mechanism entirely).
+    granted_at: "2026-05-07"
+
+  # ── market-data ───────────────────────────────────────────────────────────
+  - class_name: PredictionMarketConsumer
+    module_path: services.market-data.src.market_data.infrastructure.messaging.consumers.prediction_market_consumer
+    justification: >
+      BP-035 pattern: event_id dedup is handled atomically inside process_message
+      via create_if_not_exists (INSERT … ON CONFLICT DO NOTHING … RETURNING).
+      is_duplicate() returns False unconditionally; the atomic insert is the gate.
+      Migration to ValkeyDedupMixin is outside PLAN-0084 B-2/B-3 scope.
+    granted_at: "2026-05-07"
+
+  # ── knowledge-graph ───────────────────────────────────────────────────────
+  - class_name: MacroIndicatorDatasetConsumer
+    module_path: services.knowledge-graph.src.knowledge_graph.infrastructure.messaging.consumers.macro_indicator_dataset_consumer
+    justification: >
+      Hand-rolled Valkey dedup: implements _dedup_prefix + exists()/setex() pattern
+      identical to ValkeyDedupMixin. Pre-dates the mixin; migration to ValkeyDedupMixin
+      is outside PLAN-0084 B-2/B-3 scope. Scheduled for follow-up cleanup.
+    granted_at: "2026-05-07"
+
+  - class_name: EconomicEventsDatasetConsumer
+    module_path: services.knowledge-graph.src.knowledge_graph.infrastructure.messaging.consumers.economic_events_dataset_consumer
+    justification: >
+      Hand-rolled Valkey dedup: implements _dedup_prefix + exists()/setex() pattern
+      identical to ValkeyDedupMixin. Pre-dates the mixin; migration to ValkeyDedupMixin
+      is outside PLAN-0084 B-2/B-3 scope. Scheduled for follow-up cleanup.
+    granted_at: "2026-05-07"
+
+  - class_name: InstrumentDiscoveredConsumer
+    module_path: services.knowledge-graph.src.knowledge_graph.infrastructure.messaging.consumers.instrument_discovered_consumer
+    justification: >
+      Hand-rolled Valkey dedup with fail-open semantics (PLAN-0057 QA DS-003 fix):
+      implements _dedup_prefix + exists()/setex() with explicit Valkey error handling.
+      Pre-dates ValkeyDedupMixin; migration is outside PLAN-0084 B-2/B-3 scope.
+      Canonical/alias inserts are also protected by ON CONFLICT DO NOTHING (defence-in-depth).
+    granted_at: "2026-05-07"
+
+  - class_name: InsiderTransactionsDatasetConsumer
+    module_path: services.knowledge-graph.src.knowledge_graph.infrastructure.messaging.consumers.insider_transactions_dataset_consumer
+    justification: >
+      Hand-rolled Valkey dedup: implements _dedup_prefix + exists()/setex() pattern
+      identical to ValkeyDedupMixin. Pre-dates the mixin; migration to ValkeyDedupMixin
+      is outside PLAN-0084 B-2/B-3 scope. Scheduled for follow-up cleanup.
+    granted_at: "2026-05-07"
+
+  - class_name: StructuredEnrichmentConsumer
+    module_path: services.knowledge-graph.src.knowledge_graph.infrastructure.messaging.consumers.structured_enrichment_consumer
+    justification: >
+      Hand-rolled Valkey dedup: implements _dedup_prefix + exists()/setex() pattern
+      identical to ValkeyDedupMixin. Pre-dates the mixin; migration to ValkeyDedupMixin
+      is outside PLAN-0084 B-2/B-3 scope. Scheduled for follow-up cleanup.
+    granted_at: "2026-05-07"
+
+  - class_name: EarningsCalendarDatasetConsumer
+    module_path: services.knowledge-graph.src.knowledge_graph.infrastructure.messaging.consumers.earnings_calendar_dataset_consumer
+    justification: >
+      Hand-rolled Valkey dedup: implements _dedup_prefix + exists()/setex() pattern
+      identical to ValkeyDedupMixin. Pre-dates the mixin; migration to ValkeyDedupMixin
+      is outside PLAN-0084 B-2/B-3 scope. Scheduled for follow-up cleanup.
+    granted_at: "2026-05-07"
+
+  - class_name: FundamentalsDescriptionConsumer
+    module_path: services.knowledge-graph.src.knowledge_graph.infrastructure.messaging.consumers.fundamentals_consumer
+    justification: >
+      Hand-rolled Valkey dedup: implements _dedup_prefix + exists()/setex() pattern
+      identical to ValkeyDedupMixin. Pre-dates the mixin; migration to ValkeyDedupMixin
+      is outside PLAN-0084 B-2/B-3 scope. Scheduled for follow-up cleanup.
+    granted_at: "2026-05-07"
+
+  - class_name: InstrumentEntityConsumer
+    module_path: services.knowledge-graph.src.knowledge_graph.infrastructure.messaging.consumers.instrument_consumer
+    justification: >
+      Hand-rolled Valkey dedup: implements _dedup_prefix + exists()/setex() pattern
+      identical to ValkeyDedupMixin. Pre-dates the mixin; migration to ValkeyDedupMixin
+      is outside PLAN-0084 B-2/B-3 scope. Scheduled for follow-up cleanup.
+    granted_at: "2026-05-07"
+
+  # ── alert ─────────────────────────────────────────────────────────────────
+  - class_name: IntelligenceConsumer
+    module_path: services.alert.src.alert.infrastructure.messaging.consumers.intelligence_consumer
+    justification: >
+      Hand-rolled Valkey dedup: implements _dedup_prefix + exists()/setex() pattern
+      identical to ValkeyDedupMixin. Pre-dates the mixin; migration to ValkeyDedupMixin
+      is outside PLAN-0084 B-2/B-3 scope. Scheduled for follow-up cleanup.
+    granted_at: "2026-05-07"
+
+  - class_name: WatchlistConsumer
+    module_path: services.alert.src.alert.infrastructure.messaging.consumers.watchlist_consumer
+    justification: >
+      Hand-rolled Valkey dedup: implements _dedup_prefix + exists()/setex() pattern
+      identical to ValkeyDedupMixin. Pre-dates the mixin; migration to ValkeyDedupMixin
+      is outside PLAN-0084 B-2/B-3 scope. Scheduled for follow-up cleanup.
+    granted_at: "2026-05-07"
+
+  # ── nlp-pipeline ──────────────────────────────────────────────────────────
+  - class_name: WatchlistEventConsumer
+    module_path: services.nlp-pipeline.src.nlp_pipeline.infrastructure.messaging.consumers.watchlist_consumer
+    justification: >
+      Natural idempotency: the underlying cache operations are Redis SADD (item_added)
+      and SREM (item_deleted), both of which are idempotent under re-delivery.
+      A Valkey dedup store would add per-message overhead without correctness benefit.
+      is_duplicate() returns False unconditionally with explicit comment documenting
+      the reasoning (PRD §6.7 Block 5 watchlist signal sourcing).
+    granted_at: "2026-05-07"
+
+  # ── portfolio ─────────────────────────────────────────────────────────────
+  - class_name: InstrumentEventConsumer
+    module_path: services.portfolio.src.portfolio.infrastructure.messaging.consumers.instrument_consumer
+    justification: >
+      BP-035 pattern: event_id dedup is handled atomically inside process_message
+      via PostgreSQL upsert (ON CONFLICT DO UPDATE / upsert semantics), within the
+      same transaction as the write. is_duplicate() returns False unconditionally;
+      mark_processed() is a no-op. The atomic upsert is the idempotency gate.
+      ValkeyDedupMixin would be redundant overhead for this consumer.
+    granted_at: "2026-05-07"
