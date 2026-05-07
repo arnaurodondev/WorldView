@@ -147,6 +147,7 @@ class TestGeneralFollowUpRouting:
 
     def test_orchestrator_passes_intent_to_prompt_builder(self) -> None:
         """execute_streaming passes intent=intent to PromptBuilder.build()."""
+        from rag_chat.application.pipeline.chat_pipeline import ChatPipeline
         from rag_chat.application.pipeline.prompt_builder import PromptBuilder
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
@@ -157,19 +158,21 @@ class TestGeneralFollowUpRouting:
                 captured_intents.append(kwargs.get("intent", QueryIntent.FACTUAL_LOOKUP))
                 return super().build(**kwargs)
 
-        # Build a minimal orchestrator with mocked-out dependencies
-        orch = ChatOrchestratorUseCase(
-            validator=MagicMock(),
+        # Build a ChatPipeline with mocked-out dependencies, injecting the capturing
+        # PromptBuilder directly (ChatPipeline is frozen=True so it must be passed at
+        # construction time, not patched afterwards).
+        pipeline = ChatPipeline(
+            validator=MagicMock(validate=MagicMock(return_value="How do central banks control inflation?")),
             rate_limiter=AsyncMock(),
             cache=AsyncMock(get=AsyncMock(return_value=None)),
-            get_thread_uc=AsyncMock(),
+            get_thread=AsyncMock(),
             s6_client=AsyncMock(resolve_entities=AsyncMock(return_value=[])),
             classifier=AsyncMock(
                 classify=AsyncMock(return_value=(QueryIntent.GENERAL, [], "How do rates affect bonds?"))
             ),
             plan_builder=RetrievalPlanBuilder(),
             hyde=AsyncMock(expand=AsyncMock(return_value=("hypo", None))),
-            embedding_client=AsyncMock(embed=AsyncMock(return_value=[0.1] * 8)),
+            embedder=AsyncMock(embed=AsyncMock(return_value=[0.1] * 8)),
             retrieval=AsyncMock(retrieve=AsyncMock(return_value=[])),
             graph_enricher=MagicMock(enrich=MagicMock(return_value=[])),
             fusion=MagicMock(process=MagicMock(return_value=[])),
@@ -177,11 +180,12 @@ class TestGeneralFollowUpRouting:
             llm_chain=AsyncMock(
                 stream=_async_token_gen(["Answer text."]),
                 last_provider_name="ollama",
+                _providers=[],  # _resolve_model_id iterates this
             ),
             persistence=AsyncMock(execute=AsyncMock(return_value=("id1", "id2"))),
+            prompt_builder=_CapturingPromptBuilder(),  # inject the capturing builder here
         )
-        # Patch the internal PromptBuilder instance
-        orch._prompt_builder = _CapturingPromptBuilder()
+        orch = ChatOrchestratorUseCase(pipeline=pipeline)
 
         import asyncio
 

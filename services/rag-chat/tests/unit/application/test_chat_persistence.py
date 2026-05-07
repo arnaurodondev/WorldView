@@ -337,7 +337,7 @@ class TestThinkBlockFilter:
     """Bug 1 Fix: _ThinkBlockFilter strips <think> blocks from streaming tokens."""
 
     def _filter(self) -> object:
-        from rag_chat.application.use_cases.chat_orchestrator import _ThinkBlockFilter
+        from rag_chat.application.pipeline.chat_pipeline import _ThinkBlockFilter
 
         return _ThinkBlockFilter()
 

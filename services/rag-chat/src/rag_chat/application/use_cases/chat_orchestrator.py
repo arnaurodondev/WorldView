@@ -1,6 +1,6 @@
 """Chat orchestrator use case - top-level pipeline coordinator (T-F-4-02).
 
-Chains all 13 pipeline steps for streaming (/chat/stream) and sync (/chat) paths.
+Delegates all 13 pipeline steps to ChatPipeline (PLAN-0077 Wave C).
 The class is named ChatOrchestratorUseCase for consistency with other use cases in this layer.
 """
 
@@ -15,22 +15,10 @@ import structlog
 
 from rag_chat.application.metrics.prometheus import (
     rag_cache_hits,
-    rag_contradiction_surfaced,
-    rag_injection_blocked,
     rag_latency,
     rag_queries_total,
-    rag_retrieval_items,
     record_reranker_position_change,
 )
-from rag_chat.application.pipeline.chat_pipeline import _ThinkBlockFilter
-from rag_chat.application.pipeline.context_assembler import (
-    ContextAssembler,
-    ContradictionAssembler,
-)
-from rag_chat.application.pipeline.output_processor import OutputProcessor
-from rag_chat.application.pipeline.prompt_builder import PromptBuilder
-from rag_chat.application.pipeline.prompts import RetrievalCounts
-from rag_chat.application.pipeline.sse_emitter import SSEEmitter
 from rag_chat.application.use_cases.persist_chat import AssistantResponse
 from rag_chat.domain.entities.chat import ResolvedQuery
 
@@ -38,34 +26,32 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from uuid import UUID
 
-    from rag_chat.application.caching.completion_cache import CompletionCache
-    from rag_chat.application.caching.rate_limiter import RateLimiter
-    from rag_chat.application.pipeline.fusion import FusionPipeline, GraphEnricher
-    from rag_chat.application.pipeline.hyde_expander import HydeExpander
-    from rag_chat.application.pipeline.intent_classifier import OllamaIntentClassifier
-    from rag_chat.application.pipeline.reranker import BGEReranker
-    from rag_chat.application.pipeline.retrieval_orchestrator import ParallelRetrievalOrchestrator
-    from rag_chat.application.pipeline.retrieval_plan_builder import RetrievalPlanBuilder
-    from rag_chat.application.ports.embedding import EmbeddingPort
+    from rag_chat.application.pipeline.chat_pipeline import ChatPipeline
     from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
-    from rag_chat.application.ports.upstream_clients import S6Port
-    from rag_chat.application.security.input_validator import InputValidator
-    from rag_chat.application.use_cases.get_thread import GetThreadUseCase
-    from rag_chat.application.use_cases.persist_chat import ChatPersistenceUseCase
     from rag_chat.domain.entities.chat import ChatRequest
-    from rag_chat.infrastructure.llm.provider_chain import LLMProviderChain
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
-_MIN_RETRIEVAL_ITEMS = 0  # allow empty retrieval for graceful response
 
-# _ThinkBlockFilter is defined in chat_pipeline.py and imported above.
-# The import is the single source of truth; keeping a re-export here is not
-# necessary because all direct usages are inside this module.
+def _resolve_model_id(llm_chain: Any, provider_name: str) -> str:
+    """Extract model_id from the active provider in the chain (Bug 4 Fix pattern).
+
+    The LLMProviderChain sets last_provider_name but the provider object itself holds
+    the model_id attribute. We retrieve it via the private provider list to avoid
+    adding a new public API on LLMProviderChain.
+    """
+    for _p in llm_chain._providers:
+        if getattr(_p, "name", None) == provider_name:
+            return getattr(_p, "model_id", None) or getattr(_p, "model", None) or getattr(_p, "_model", None) or ""
+    return ""
 
 
 class ChatOrchestratorUseCase:
     """Coordinate all pipeline steps for a single chat request.
+
+    After PLAN-0077 Wave C this class is a pure delegator: it holds a
+    ChatPipeline and calls its step methods in order, emitting SSE events
+    via pipeline.emitter between steps.  All logic lives in ChatPipeline.
 
     Steps (PRD §6.7):
      0. Input validation
@@ -84,44 +70,8 @@ class ChatOrchestratorUseCase:
     13. Persistence + finalize (Step 13)
     """
 
-    def __init__(
-        self,
-        validator: InputValidator,
-        rate_limiter: RateLimiter,
-        cache: CompletionCache,
-        get_thread_uc: GetThreadUseCase,
-        s6_client: S6Port,
-        classifier: OllamaIntentClassifier,
-        plan_builder: RetrievalPlanBuilder,
-        hyde: HydeExpander,
-        embedding_client: EmbeddingPort,
-        retrieval: ParallelRetrievalOrchestrator,
-        graph_enricher: GraphEnricher,
-        fusion: FusionPipeline,
-        reranker: BGEReranker,
-        llm_chain: LLMProviderChain,
-        persistence: ChatPersistenceUseCase,
-    ) -> None:
-        self._validator = validator
-        self._rate_limiter = rate_limiter
-        self._cache = cache
-        self._get_thread = get_thread_uc
-        self._s6 = s6_client
-        self._classifier = classifier
-        self._plan_builder = plan_builder
-        self._hyde = hyde
-        self._embedder = embedding_client
-        self._retrieval = retrieval
-        self._graph_enricher = graph_enricher
-        self._fusion = fusion
-        self._reranker = reranker
-        self._llm_chain = llm_chain
-        self._persistence = persistence
-        self._context_assembler = ContextAssembler()
-        self._contradiction_assembler = ContradictionAssembler()
-        self._prompt_builder = PromptBuilder()
-        self._output_processor = OutputProcessor()
-        self._emitter = SSEEmitter()
+    def __init__(self, pipeline: ChatPipeline) -> None:
+        self._pipeline = pipeline
 
     async def execute_streaming(
         self,
@@ -131,201 +81,126 @@ class ChatOrchestratorUseCase:
         """Run the full 13-step pipeline, yielding SSE events as they occur."""
         start = datetime.now(tz=UTC)
         thread_id: UUID = request.thread_id or _new_thread_id()
+        p = self._pipeline  # shorthand
 
-        # Step 0: input validation (synchronous)
-        try:
-            validated_message = self._validator.validate(request.message)
-        except Exception as _exc:
-            # Count injection blocks before re-raising so the route can return 400.
-            from rag_chat.domain.errors import PromptInjectionError  # local import avoids cycle
+        # Step 0: input validation (raises on injection — counter incremented inside step)
+        validated_message = await p.validate_input(request.message)
 
-            if isinstance(_exc, PromptInjectionError):
-                rag_injection_blocked.inc()
-            raise
-
-        # Check completion cache
-        cached = await self._cache.get(request.message, request.thread_id)
+        # Step 1: completion cache check
+        cached = await p.check_cache(request.message, request.thread_id)
         if cached:
             rag_cache_hits.labels(cache_type="completion").inc()
-            yield self._emitter.emit_status("cache_hit")
-            yield self._emitter.emit_token(cached.get("answer", ""))
-            yield self._emitter.emit_citations([])
-            yield self._emitter.emit_contradictions([])
+            yield p.emitter.emit_status("cache_hit")
+            yield p.emitter.emit_token(cached.get("answer", ""))
+            yield p.emitter.emit_citations([])
+            yield p.emitter.emit_contradictions([])
             return
 
-        # Step 1: rate limit
-        await self._rate_limiter.check_and_increment(request.tenant_id)
+        # Step 2: rate limit
+        await p.check_rate_limit(request.tenant_id)
 
-        yield self._emitter.emit_status("loading_context")
+        yield p.emitter.emit_status("loading_context")
 
-        # Step 2: load conversation history
-        conversation_history = []
-        if request.thread_id:
-            try:
-                thread = await self._get_thread.execute(
-                    uow, request.thread_id, request.user_id, tenant_id=request.tenant_id
-                )
-                conversation_history = list(thread.recent_history(5))
-            except Exception:
-                log.debug("thread_load_skipped")  # type: ignore[no-any-return]
+        # Step 3: conversation history
+        conversation_history = await p.load_history(request.thread_id, request.user_id, request.tenant_id, uow)
 
-        yield self._emitter.emit_status("entity_resolution")
+        yield p.emitter.emit_status("entity_resolution")
 
-        # Step 3: entity resolution
-        entities = await self._s6.resolve_entities(validated_message)
+        # Step 4: entity resolution
+        entities = await p.resolve_entities(validated_message)
 
-        yield self._emitter.emit_status("intent_classification")
+        yield p.emitter.emit_status("intent_classification")
 
-        # Step 4: intent + retrieval plan
-        history_dicts = [{"role": m.role.value, "content": m.content} for m in conversation_history]
-        intent, sub_questions, rephrased = await self._classifier.classify(validated_message, history_dicts, entities)
-        entity_ids = tuple(e.entity_id for e in entities)
-        plan = self._plan_builder.build(intent, entity_ids, request.context.date_range)
+        # Step 5: intent + retrieval plan
+        intent, sub_questions, rephrased, plan = await p.classify_and_plan(
+            validated_message, conversation_history, entities, request.context.date_range
+        )
+        effective_query = rephrased or validated_message
 
-        yield self._emitter.emit_status("query_expansion")
+        yield p.emitter.emit_status("query_expansion")
 
-        # Step 5: HyDE expansion + query embedding
-        _hypothesis, hyde_embedding = await self._hyde.expand(rephrased or validated_message, intent)
+        # Step 5bis: HyDE expansion + query embedding
+        _hypothesis, hyde_embedding = await p.expand_query(effective_query, intent)
         query_embedding = hyde_embedding
         if query_embedding is None:
-            query_embedding = await self._embedder.embed(rephrased or validated_message)
+            query_embedding = await p.embed_query(effective_query)
 
         resolved_query = ResolvedQuery(
             intent=intent,
-            rephrased_query=rephrased or validated_message,
+            rephrased_query=effective_query,
             sub_questions=tuple(sub_questions),
             resolved_entities=tuple(entities),
             hyde_hypothesis=_hypothesis,
         )
 
-        yield self._emitter.emit_status("parallel_retrieval")
+        yield p.emitter.emit_status("parallel_retrieval")
 
-        # Steps 5A-5I: parallel retrieval
-        raw_items = await self._retrieval.retrieve(plan, resolved_query, request, query_embedding)
-        # Record item counts per item_type so the dashboard can show retrieval breakdown.
+        # Steps 5A-5I: parallel retrieval (metric emitted inside step)
+        raw_items = await p.retrieve(plan, resolved_query, request, query_embedding)
         _type_counts = _Counter(item.item_type.value for item in raw_items)
-        for _source_type, _count in _type_counts.items():
-            rag_retrieval_items.labels(source_type=_source_type).observe(_count)
 
         # Steps 6-7: graph enrichment + fusion
-        enriched = self._graph_enricher.enrich(raw_items, [])  # relation_results passed as []
-        fused = self._fusion.process(enriched)
+        fused = p.enrich_and_fuse(raw_items)
 
-        yield self._emitter.emit_status("ranking_evidence")
+        yield p.emitter.emit_status("ranking_evidence")
 
         # Step 8: reranking
-        reranked = await self._reranker.rerank(rephrased or validated_message, fused[:30])
-
-        # Emit reranker-position-change metric: did the reranker change the top-1 result?
+        reranked = await p.rerank_items(effective_query, fused)
         if fused and reranked:
             record_reranker_position_change(fused[0].item_id != reranked[0].item_id)
 
-        # Step 9: contradiction detection
-        contradiction_refs: list = []
-        contradiction_block = self._contradiction_assembler.build(contradiction_refs)
-        for _ref in contradiction_refs:
-            _claim_type = getattr(_ref, "claim_type", "unknown")
-            rag_contradiction_surfaced.labels(claim_type=str(_claim_type)).inc()
-
-        # Step 10: prompt construction
-        context_block = self._context_assembler.assemble(reranked)
-        _counts = RetrievalCounts(
-            n_context_items=len(reranked),
-            n_chunks=_type_counts.get("chunk", 0),
-            n_rel=_type_counts.get("relation", 0),
-            n_events=_type_counts.get("event", 0),
-            n_fin=_type_counts.get("financial", 0),
-        )
-        prompt = self._prompt_builder.build(
-            context_block=context_block,
-            conversation_history=conversation_history,
-            rephrased_query=rephrased or validated_message,
-            sub_questions=tuple(sub_questions),
-            contradiction_block=contradiction_block,
-            intent=intent,
-            retrieval_counts=_counts,
+        # Steps 9-10: contradiction + context + prompt
+        prompt, contradiction_refs, _context_block = p.build_prompt(
+            reranked, conversation_history, effective_query, tuple(sub_questions), intent, _type_counts
         )
 
-        # Step 11: LLM streaming — filter out <think> blocks in real time (Bug 1 Fix B).
-        # WHY: DeepSeek R1 prepends a <think>...</think> chain-of-thought block.
-        # We must suppress it from the SSE stream; _ThinkBlockFilter handles tokens
-        # that arrive with tag boundaries split across chunk boundaries.
+        # Step 11: LLM streaming with <think> filter
         full_text = ""
         provider_name = "unknown"
-        think_filter = _ThinkBlockFilter()
-        async for chunk in self._llm_chain.stream(prompt, max_tokens=4000, temperature=0.1):
-            full_text += chunk
-            filtered = think_filter.feed(chunk)
+        async for filtered, raw in p.stream_llm(prompt):
+            full_text += raw
             if filtered:
-                yield self._emitter.emit_token(filtered)
-        # Flush any buffered content that didn't need holding for tag detection.
-        remaining = think_filter.flush()
-        if remaining:
-            yield self._emitter.emit_token(remaining)
-        provider_name = self._llm_chain.last_provider_name
+                yield p.emitter.emit_token(filtered)
+        provider_name = p.llm_chain.last_provider_name
 
-        # Step 12: output processing + citation injection.
-        # OutputProcessor.process() re-strips <think> blocks on the accumulated full_text
-        # (catching anything the streaming filter may have missed) and extracts citations.
-        answer, citations = self._output_processor.process(full_text, reranked)
+        # Step 12: output processing + citation injection
+        answer, citations = p.process_output(full_text, reranked)
         latency_ms = int((datetime.now(tz=UTC) - start).total_seconds() * 1000)
 
-        yield self._emitter.emit_citations(citations)
-        yield self._emitter.emit_contradictions(contradiction_refs)
+        yield p.emitter.emit_citations(citations)
+        yield p.emitter.emit_contradictions(contradiction_refs)
 
-        # Bug 4 Fix: retrieve model identifier from the active provider for the audit trail.
-        # The LLMProviderChain sets _last_provider_name but the provider object itself holds
-        # the model_id attribute. We retrieve it via the provider list to avoid a new public API.
-        _model_id = ""
-        for _p in self._llm_chain._providers:
-            if getattr(_p, "name", None) == provider_name:
-                _model_id = (
-                    getattr(_p, "model_id", None) or getattr(_p, "model", None) or getattr(_p, "_model", None) or ""
-                )
-                break
-
-        # Bug 4 Fix: estimate prompt token count from the built prompt text.
-        # DeepInfra stream does not return token counts, so we use the industry-standard
-        # 4-chars-per-token heuristic (same approach already used in provider_chain.py).
+        # Resolve model ID from the provider chain (Bug 4 Fix pattern preserved)
+        _model_id = _resolve_model_id(p.llm_chain, provider_name)
         token_count_in_est = len(prompt) // 4
 
-        # Step 13: persist (best-effort)
-        asst_msg_id = _new_thread_id()  # fallback if persistence fails
-        try:
-            _user_msg_id, asst_msg_id = await self._persistence.execute(
-                thread_id=thread_id,
-                user_message=request.message,
-                assistant_response=AssistantResponse(
-                    content=answer,
-                    intent=intent,
-                    resolved_entities=tuple(entities),
-                    retrieval_plan=plan,
-                    citations=tuple(citations),
-                    contradiction_refs=tuple(contradiction_refs),
-                    provider=provider_name,
-                    model=_model_id,
-                    token_count_in=token_count_in_est,
-                    token_count_out=len(full_text.split()),
-                    latency_ms=latency_ms,
-                ),
-                uow=uow,
-                tenant_id=request.tenant_id,
-                user_id=request.user_id,
-            )
-        except Exception as exc:
-            log.error("chat_persistence_failed", error=str(exc))  # type: ignore[no-any-return]
+        # Step 13: persist (best-effort — persist_chat swallows exceptions internally)
+        asst_msg_id = _new_thread_id()
+        _user_msg_id, asst_msg_id = await p.persist_chat(
+            thread_id=thread_id,
+            user_message=request.message,
+            assistant_response=AssistantResponse(
+                content=answer,
+                intent=intent,
+                resolved_entities=tuple(entities),
+                retrieval_plan=plan,
+                citations=tuple(citations),
+                contradiction_refs=tuple(contradiction_refs),
+                provider=provider_name,
+                model=_model_id,
+                token_count_in=token_count_in_est,
+                token_count_out=len(full_text.split()),
+                latency_ms=latency_ms,
+            ),
+            uow=uow,
+            tenant_id=request.tenant_id,
+            user_id=request.user_id,
+        )
 
-        # Cache the completion for future identical requests (best-effort)
-        try:
-            await self._cache.set(
-                request.message,
-                request.thread_id,
-                {"answer": answer, "citations": [c.__dict__ if hasattr(c, "__dict__") else c for c in citations]},
-            )
-        except Exception:
-            log.debug("completion_cache_write_failed")  # type: ignore[no-any-return]
+        # Cache write (best-effort)
+        await p.write_completion_cache(request.message, request.thread_id, answer, citations)
 
-        # Record query + latency metrics after the full pipeline completes.
+        # Record query + latency metrics
         _total_latency_s = (datetime.now(tz=UTC) - start).total_seconds()
         rag_queries_total.labels(
             intent=intent.value,
@@ -334,12 +209,12 @@ class ChatOrchestratorUseCase:
         ).inc()
         rag_latency.labels(intent=intent.value, step="total").observe(_total_latency_s)
 
-        yield self._emitter.emit_metadata(thread_id, asst_msg_id, intent.value, provider_name, latency_ms)
+        yield p.emitter.emit_metadata(thread_id, asst_msg_id, intent.value, provider_name, latency_ms)
 
         # Terminal event: signals to the frontend EventSource that the stream is fully
         # complete.  Without this, some reverse-proxy setups (nginx, S9 proxy) buffer
         # the final metadata frame and the UI spinner never stops.
-        yield self._emitter.emit_done()
+        yield p.emitter.emit_done()
 
     async def execute_sync(
         self,
@@ -367,7 +242,7 @@ class ChatOrchestratorUseCase:
         # Bug 1 Fix A — sync path safety net: strip any residual <think> blocks from the
         # accumulated token stream. The SSE path uses _ThinkBlockFilter but regex is applied
         # here too in case a think block boundary was not caught by the real-time filter.
-        answer = self._output_processor.process(answer, [])[0]
+        answer = self._pipeline.process_output(answer, [])[0]
 
         return {
             "answer": answer,

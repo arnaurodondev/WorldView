@@ -1,7 +1,7 @@
 ---
 id: PLAN-0077
 prd: derived from /investigate 2026-05-07 (issues C-1, A-5)
-status: in-progress
+status: completed
 created: 2026-05-07
 updated: 2026-05-07
 owner: TBD
@@ -218,9 +218,10 @@ Step methods (all receive per-request state as args, return result):
 
 ---
 
-## Wave C — Migrate `ChatOrchestratorUseCase` to delegate to `ChatPipeline`
+## Wave C ✅ — Migrate `ChatOrchestratorUseCase` to delegate to `ChatPipeline`
 
 **Estimated effort**: ~4 hours
+**Status**: **DONE** — 2026-05-07 · 615 tests pass · ruff + mypy clean
 **Depends on**: Wave B ✅
 
 ### Design
@@ -390,11 +391,11 @@ class ChatOrchestratorUseCase:
 - **Acceptance criteria**: All pass; no tests deleted or weakened
 
 **Validation gate**:
-- [ ] `ChatOrchestratorUseCase.__init__` has single `pipeline: ChatPipeline` arg
-- [ ] `execute_streaming` delegates to pipeline step methods (no inline logic)
-- [ ] `app.py` constructs `ChatPipeline` before `ChatOrchestratorUseCase`
-- [ ] `test_orchestrator_passes_intent_to_prompt_builder` uses new constructor style
-- [ ] ruff + mypy + all unit tests pass (no tests deleted or weakened)
+- [x] `ChatOrchestratorUseCase.__init__` has single `pipeline: ChatPipeline` arg
+- [x] `execute_streaming` delegates to pipeline step methods (no inline logic)
+- [x] `app.py` constructs `ChatPipeline` before `ChatOrchestratorUseCase`
+- [x] `test_orchestrator_passes_intent_to_prompt_builder` uses new constructor style
+- [x] ruff + mypy + all unit tests pass (no tests deleted or weakened — 615 total)
 
 ---
 

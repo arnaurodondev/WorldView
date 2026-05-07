@@ -129,7 +129,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: ValkeyClient) -> None:
-    """Build and attach the ChatOrchestratorUseCase to app.state."""
+    """Build and attach the ChatPipeline and ChatOrchestratorUseCase to app.state."""
 
     from rag_chat.application.caching.completion_cache import CompletionCache
     from rag_chat.application.caching.rate_limiter import RateLimiter
@@ -365,16 +365,18 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         else {},
     )
 
-    orchestrator = ChatOrchestratorUseCase(
+    from rag_chat.application.pipeline.chat_pipeline import ChatPipeline
+
+    pipeline = ChatPipeline(
         validator=_validator,
         rate_limiter=RateLimiter(valkey=valkey_client, limit=settings.rate_limit_per_tenant),
         cache=CompletionCache(valkey=valkey_client),
-        get_thread_uc=GetThreadUseCase(),
+        get_thread=GetThreadUseCase(),
         s6_client=s6,
         classifier=classifier,
         plan_builder=_plan_builder,
         hyde=_hyde,
-        embedding_client=embedding_client,
+        embedder=embedding_client,
         retrieval=_retrieval,
         graph_enricher=GraphEnricher(),
         fusion=FusionPipeline(),
@@ -382,7 +384,9 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         llm_chain=llm_chain,
         persistence=ChatPersistenceUseCase(),
     )
+    orchestrator = ChatOrchestratorUseCase(pipeline=pipeline)
     app.state.chat_orchestrator = orchestrator
+    app.state.chat_pipeline = pipeline  # expose for PLAN-0074 Wave F + PLAN-0067 W11-3
     app.state.llm_chain = llm_chain
 
     from rag_chat.application.use_cases.retrieve_only import RetrieveOnlyUseCase
