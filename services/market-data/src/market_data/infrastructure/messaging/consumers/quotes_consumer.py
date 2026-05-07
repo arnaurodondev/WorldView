@@ -13,7 +13,6 @@ from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
-from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
@@ -41,12 +40,22 @@ def _parse_quote_bytes(raw: bytes) -> CanonicalQuote:
     return CanonicalQuote.from_dict(json.loads(raw.decode()))
 
 
-class QuotesConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
+class QuotesConsumer(BaseKafkaConsumer[dict]):
     """Materializes quote datasets from object storage into the database.
 
-    Dedup mixin is belt-and-braces over the consumer's natural-key
-    ``create_if_not_exists()`` idempotency. The mixin protects against expensive
-    S3 object-storage work on Kafka rebalance re-delivery; the natural key protects rows.
+    Idempotency strategy: ``create_if_not_exists`` (BP-035 pattern).
+    The ``ingestion_events`` repository uses ``INSERT … ON CONFLICT DO NOTHING … RETURNING``
+    to atomically record the event_id before any data write.  This is strictly stronger
+    than Valkey TTL-based dedup because the record survives Valkey restarts and persists
+    in the same DB transaction as the actual write.
+
+    ``ValkeyDedupMixin`` is intentionally NOT in the MRO — it would be misleading
+    (the mixin's ``is_duplicate`` / ``mark_processed`` are shadowed by no-ops anyway).
+    This consumer is allowlisted in tests/architecture/_consumer_dedup_allowlist.yaml.
+
+    ``_dedup_prefix`` is kept as a class attribute so the architecture test
+    ``test_consumer_dedup_mixin_enforcement.py`` can confirm a dedup strategy is
+    at least named, even when the mixin is not used.
     """
 
     _dedup_prefix = "market-data:dedup:quotes_consumer"

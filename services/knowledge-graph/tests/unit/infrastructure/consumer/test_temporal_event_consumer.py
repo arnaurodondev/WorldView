@@ -622,7 +622,7 @@ class TestTemporalEventConsumerIdempotency:
 
         result = asyncio.run(consumer.is_duplicate("abc123"))
         assert result is True
-        dedup_client.exists.assert_awaited_once_with("kg:temporal:kg-temporal-event-test:abc123")
+        dedup_client.exists.assert_awaited_once_with("kg:dedup:temporal:kg-temporal-event-test:abc123")
 
     def test_mark_processed_sets_valkey_key_with_ttl(self) -> None:
         """mark_processed sets a 24h TTL key in Valkey."""
@@ -631,7 +631,7 @@ class TestTemporalEventConsumerIdempotency:
         consumer, _sf, _session = _make_consumer(dedup_client=dedup_client)
 
         asyncio.run(consumer.mark_processed("evt-xyz"))
-        dedup_client.set.assert_awaited_once_with("kg:temporal:kg-temporal-event-test:evt-xyz", "1", ex=86400)
+        dedup_client.set.assert_awaited_once_with("kg:dedup:temporal:kg-temporal-event-test:evt-xyz", "1", ex=86400)
 
     def test_mark_processed_noop_without_dedup_client(self) -> None:
         """mark_processed is a no-op when dedup_client is None."""

@@ -101,6 +101,11 @@ class FundamentalsDescriptionConsumer(BaseKafkaConsumer[None]):
 
     """
 
+    # Class-level default; specialised in __init__ with config.group_id for
+    # uniqueness across consumer replicas.  The architecture test checks that
+    # this attribute exists at the class level (DP-002/DP-003).
+    _dedup_prefix: str = "kg:fund"
+
     def __init__(
         self,
         config: ConsumerConfig,
