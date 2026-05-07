@@ -47,7 +47,6 @@ import ast
 from pathlib import Path
 from typing import NamedTuple
 
-import pytest
 import yaml  # type: ignore[import-untyped]
 
 from tests.architecture._utils import (
@@ -169,15 +168,6 @@ def _has_valkey_dedup_mixin_in_bases(info: _ConsumerClassInfo) -> bool:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "enforced after B-3 — all 8 BaseKafkaConsumer subclasses must migrate to "
-        "ValkeyDedupMixin before this passes; remove xfail in the B-3 commit once "
-        "every consumer declares ValkeyDedupMixin as a direct base class. "
-        "See PLAN-0084 Wave B-3 and STANDARDS.md §3.11."
-    ),
-)
 class TestConsumerDedupMixinEnforcement:
     """Every BaseKafkaConsumer subclass must use ValkeyDedupMixin.
 
