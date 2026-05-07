@@ -1,6 +1,6 @@
 """ChatPipeline — composable pipeline value object (PLAN-0077 Wave B, T-B-1).
 
-Encapsulates all 13 pipeline steps as named async/sync methods.
+Encapsulates all 16 step methods as named async/sync methods.
 Per-request state (validated message, history, intent, entities, etc.) is
 passed as method arguments and returned as method outputs — the class itself
 holds NO mutable per-request state.
