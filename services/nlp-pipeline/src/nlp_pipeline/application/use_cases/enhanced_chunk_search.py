@@ -29,12 +29,12 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from ml_clients.protocols import EmbeddingClient  # type: ignore[import-not-found]
 
+    from nlp_pipeline.application.ports.canonical_entity import CanonicalEntityPort
+    from nlp_pipeline.application.ports.chunk_search import ChunkSearchPort
     from nlp_pipeline.application.ports.repositories import (
         ChunkTextStorePort,
         DocumentSourceMetadataRepository,
     )
-    from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import CanonicalEntityRepository
-    from nlp_pipeline.infrastructure.nlp_db.repositories.chunk_search import ChunkANNRepository
 
 _log = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -115,9 +115,9 @@ class EnhancedChunkSearchUseCase:
 
     def __init__(
         self,
-        chunk_ann_repo: ChunkANNRepository,
+        chunk_ann_repo: ChunkSearchPort,
         source_metadata_repo: DocumentSourceMetadataRepository,
-        canonical_entity_repo: CanonicalEntityRepository,
+        canonical_entity_repo: CanonicalEntityPort,
         valkey: Any | None = None,  # redis.asyncio.Redis
         embedding_client: EmbeddingClient | None = None,
         chunk_text_store: ChunkTextStorePort | None = None,
@@ -147,6 +147,8 @@ class EnhancedChunkSearchUseCase:
         date_to: date | None = None,
         source_types: list[str] | None = None,
         search_type: str = "ann",
+        entity_ids: list[UUID] | None = None,
+        entity_types: list[str] | None = None,
     ) -> tuple[list[EnrichedChunkResult], int, str]:
         """Execute enriched chunk search.
 
@@ -180,6 +182,8 @@ class EnhancedChunkSearchUseCase:
                 date_from=date_from,
                 date_to=date_to,
                 source_types=source_types,
+                entity_ids=entity_ids,
+                entity_types=entity_types,
             )
         if search_type == "lexical":
             return await self._execute_lexical(
@@ -190,6 +194,8 @@ class EnhancedChunkSearchUseCase:
                 date_from=date_from,
                 date_to=date_to,
                 source_types=source_types,
+                entity_ids=entity_ids,
+                entity_types=entity_types,
             )
         if search_type == "hybrid":
             return await self._execute_hybrid(
@@ -202,6 +208,8 @@ class EnhancedChunkSearchUseCase:
                 date_from=date_from,
                 date_to=date_to,
                 source_types=source_types,
+                entity_ids=entity_ids,
+                entity_types=entity_types,
             )
         raise ValueError(f"unknown search_type: {search_type!r}")
 
@@ -219,6 +227,8 @@ class EnhancedChunkSearchUseCase:
         date_from: date | None,
         date_to: date | None,
         source_types: list[str] | None,
+        entity_ids: list[UUID] | None = None,
+        entity_types: list[str] | None = None,
     ) -> tuple[list[EnrichedChunkResult], int, str]:
         """Vector ANN path — original B-3 behaviour."""
         vec, embedding_model = await self._resolve_embedding(query_text, query_embedding)
@@ -231,6 +241,8 @@ class EnhancedChunkSearchUseCase:
             date_from=date_from,
             date_to=date_to,
             source_types=source_types or [],
+            entity_ids=entity_ids,
+            entity_types=entity_types,
         )
 
         if not raw_results:
@@ -249,6 +261,8 @@ class EnhancedChunkSearchUseCase:
         date_from: date | None,
         date_to: date | None,
         source_types: list[str] | None,
+        entity_ids: list[UUID] | None = None,
+        entity_types: list[str] | None = None,
     ) -> tuple[list[EnrichedChunkResult], int, str]:
         """Postgres FTS path — used by the eval harness and lexical-only debug.
 
@@ -263,6 +277,8 @@ class EnhancedChunkSearchUseCase:
             date_from=date_from,
             date_to=date_to,
             source_types=source_types or None,
+            entity_ids=entity_ids,
+            entity_types=entity_types,
         )
         if not raw_rows:
             return [], total, "lexical-only"
@@ -287,6 +303,8 @@ class EnhancedChunkSearchUseCase:
         date_from: date | None,
         date_to: date | None,
         source_types: list[str] | None,
+        entity_ids: list[UUID] | None = None,
+        entity_types: list[str] | None = None,
     ) -> tuple[list[EnrichedChunkResult], int, str]:
         """Hybrid ANN + lexical path with RRF + adaptive boost (L9)."""
         # Short-query fallback: 1-2 token FTS queries are too noisy.
@@ -305,6 +323,8 @@ class EnhancedChunkSearchUseCase:
                 date_from=date_from,
                 date_to=date_to,
                 source_types=source_types,
+                entity_ids=entity_ids,
+                entity_types=entity_types,
             )
 
         # BP-NEW-ASYNCSESSION (this commit): the two legs are run SEQUENTIALLY,
@@ -329,6 +349,8 @@ class EnhancedChunkSearchUseCase:
             date_from=date_from,
             date_to=date_to,
             source_types=source_types,
+            entity_ids=entity_ids,
+            entity_types=entity_types,
         )
         (lex_results, lex_total, _lex_model) = await self._execute_lexical(
             query_text=query_text,
@@ -338,6 +360,8 @@ class EnhancedChunkSearchUseCase:
             date_from=date_from,
             date_to=date_to,
             source_types=source_types,
+            entity_ids=entity_ids,
+            entity_types=entity_types,
         )
 
         # Adaptive boost: when the query has identifier-style rare tokens,

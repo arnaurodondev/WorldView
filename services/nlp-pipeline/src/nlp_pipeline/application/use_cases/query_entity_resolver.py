@@ -26,7 +26,7 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from ml_clients.protocols import EmbeddingClient, NERClient  # type: ignore[import-not-found]
 
-    from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import CanonicalEntityRepository
+    from nlp_pipeline.application.ports.canonical_entity import CanonicalEntityPort
     from nlp_pipeline.infrastructure.intelligence_db.repositories.entity_alias import EntityAliasRepository
     from nlp_pipeline.infrastructure.intelligence_db.repositories.entity_profile_embedding import (
         EntityProfileEmbeddingRepository,
@@ -86,7 +86,7 @@ class QueryEntityResolverUseCase:
     def __init__(
         self,
         alias_repo: EntityAliasRepository,
-        canonical_repo: CanonicalEntityRepository,
+        canonical_repo: CanonicalEntityPort,
         valkey: Any,  # redis.asyncio.Redis
         ner_client: NERClient | None = None,
         embedding_client: EmbeddingClient | None = None,
