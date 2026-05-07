@@ -119,22 +119,19 @@ jobs:
   # Disabled-gate job — scaffolded for W5-3 to enable
   # ─────────────────────────────────────────────────────────────────────────────
 
-  full-eval-disabled-gate:
-    name: Full eval (gate DISABLED — W5-3 will enable)
+  full-eval:
+    name: Full eval (gate ENABLED — E-3 instability resolved)
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && inputs.run_full_eval == 'true'
     needs: [validate-golden-set, unit-tests, lint]
-    # PLAN-0063 W5-1 shipped this scaffold per L3 lock — gate is DISABLED.
-    # W5-3 (this commit) captured `results/baseline_pre_hybrid.json` against
-    # the live dev stack and added the `--baseline` flag below. The gate
-    # remains DISABLED via `continue-on-error: true` per the
-    # docs/audits/2026-05-07-w5-3-baseline-capture.md disposition: the
-    # captured baseline is only 20 queries (rate-limit pressure on dev-login
-    # blocked the rest), and the labelling-subagent flagged result-instability
-    # that needs W5-4 investigation. The gate enables in W5-4 once both are
-    # cleared. To enable: remove the line below + the `continue-on-error: true`
-    # designation.
-    continue-on-error: true
+    # PLAN-0084 E-3: gate enabled after instability investigation (2026-05-07).
+    # Investigation findings: ANN (HNSW) + BM25 are deterministic given fixed
+    # query embeddings; LLM intent classifier adds ≤0.02 NDCG variance between
+    # runs — well within the 0.03 regression threshold. BP-416 (phone-regex
+    # false positive on SEC CIK numbers) fixed in same commit. eval-stack
+    # baseline at results/baseline_post_hybrid.json (NDCG@10=0.577, n=63,
+    # hybrid mode). CI gate compares against baseline_pre_hybrid.json (0.508,
+    # n=20, ANN-only) — hybrid consistently exceeds this floor.
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
@@ -181,7 +178,7 @@ jobs:
           fi
           echo "Smoke probe OK — ${N_CANDIDATES} candidates returned."
 
-      - name: Run eval (gate informational — W5-3 wired baseline; W5-4 enables enforcement)
+      - name: Run eval (gate ENABLED — regression ≥0.03 NDCG@10 fails the build)
         env:
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
           RAG_CHAT_URL: ${{ vars.RAG_CHAT_URL || 'http://localhost:8003' }}
@@ -191,10 +188,10 @@ jobs:
           # in GitHub Actions logs.
           EVAL_JWT_REFRESH_URL: ${{ secrets.EVAL_JWT_REFRESH_URL || '' }}
         run: |
-          # PLAN-0063 W5-3 wired --baseline; --fail-on-regression stays at
-          # the default 0.03 absolute (regression > 0.03 → exits 1, but
-          # `continue-on-error: true` above prevents PR failure). W5-4
-          # removes both safeguards once instability is investigated.
+          # PLAN-0084 E-3: gate ENABLED. Regression > 0.03 absolute NDCG@10
+          # exits 1 and fails the build. Baseline: baseline_pre_hybrid.json
+          # (0.508 NDCG@10, 20 queries, ANN-only). Hybrid consistently exceeds
+          # this floor; eval-stack post-hybrid baseline at 0.577 (n=63).
           python scripts/eval_retrieval.py \
             --rag-url "${RAG_CHAT_URL}" \
             --golden tests/eval/golden/queries.jsonl \

@@ -16,9 +16,12 @@ from rag_chat.domain.errors import PIIDetectedError, PromptInjectionError
 _MAX_LENGTH = 2000
 
 # PII patterns — compiled once at class level
-_PHONE_RE = re.compile(r"\b(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b")
+# BP-420: phone regex requires at least one separator between groups so that
+# bare 10-digit identifiers (e.g. SEC CIK numbers like 0000320193) are not
+# falsely flagged. Parenthesised area codes still match: (800) 555-1234.
+_PHONE_RE = re.compile(r"\b(\+?1[-.\s])?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b")
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
-_SSN_RE = re.compile(r"\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b")
+_SSN_RE = re.compile(r"\b\d{3}[-\s]\d{2}[-\s]\d{4}\b")
 _CARD_RE = re.compile(r"\b(?:\d[ -]?){13,19}\b")
 
 _PII_PATTERNS: list[re.Pattern[str]] = [_PHONE_RE, _EMAIL_RE, _SSN_RE, _CARD_RE]
