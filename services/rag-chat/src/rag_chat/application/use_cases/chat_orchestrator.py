@@ -22,6 +22,7 @@ from rag_chat.application.metrics.prometheus import (
     rag_retrieval_items,
     record_reranker_position_change,
 )
+from rag_chat.application.pipeline.chat_pipeline import _ThinkBlockFilter
 from rag_chat.application.pipeline.context_assembler import (
     ContextAssembler,
     ContradictionAssembler,
@@ -58,84 +59,9 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 _MIN_RETRIEVAL_ITEMS = 0  # allow empty retrieval for graceful response
 
-
-class _ThinkBlockFilter:
-    """Real-time streaming filter that strips DeepSeek <think>/<reasoning>/<scratchpad> blocks.
-
-    WHY NEEDED: DeepSeek R1 outputs a <think>...</think> reasoning block at the start
-    of every response. This block must not be shown to users — it is internal chain-of-thought.
-    We use a stateful buffer (not regex) because tokens arrive in arbitrary-length chunks
-    and tag boundaries can be split across multiple chunks.
-    """
-
-    _OPEN_TAGS: frozenset[str] = frozenset({"think", "reasoning", "scratchpad"})
-
-    def __init__(self) -> None:
-        self._buf: str = ""
-        self._in_block: bool = False
-        self._block_tag: str = ""
-
-    def feed(self, chunk: str) -> str:
-        """Feed a streaming chunk; return the portion that should be emitted."""
-        self._buf += chunk
-        out = ""
-
-        while self._buf:
-            if self._in_block:
-                # Suppress tokens until we find the closing tag for the active block.
-                close = f"</{self._block_tag}>"
-                idx = self._buf.lower().find(close)
-                if idx >= 0:
-                    # Found the closing tag — discard up to and including it, then exit block.
-                    self._buf = self._buf[idx + len(close) :]
-                    self._in_block = False
-                    self._block_tag = ""
-                else:
-                    # Closing tag not yet fully received — keep the last (len(close)-1) chars
-                    # in the buffer in case the close tag is split across this chunk boundary.
-                    keep = len(close) - 1
-                    if len(self._buf) > keep:
-                        self._buf = self._buf[-keep:]
-                    break
-            else:
-                buf_lower = self._buf.lower()
-                # Find the earliest open tag in the buffer.
-                earliest = len(self._buf)
-                found_tag = ""
-                for tag in self._OPEN_TAGS:
-                    open_tag = f"<{tag}>"
-                    idx = buf_lower.find(open_tag)
-                    if 0 <= idx < earliest:
-                        earliest = idx
-                        found_tag = tag
-                if found_tag:
-                    # Emit everything before the opening tag, then enter block-suppression mode.
-                    out += self._buf[:earliest]
-                    self._buf = self._buf[earliest + len(f"<{found_tag}>") :]
-                    self._in_block = True
-                    self._block_tag = found_tag
-                else:
-                    # No open tag found — emit all but the last (max_tag_len - 1) chars in case
-                    # an open tag is split at the current chunk boundary.
-                    max_tag_len = max(len(f"<{t}>") for t in self._OPEN_TAGS)
-                    safe = len(self._buf) - (max_tag_len - 1)
-                    if safe > 0:
-                        out += self._buf[:safe]
-                        self._buf = self._buf[safe:]
-                    break
-        return out
-
-    def flush(self) -> str:
-        """Return any remaining buffer content after the stream ends.
-
-        If we are still inside a think block when the stream ends, discard the
-        buffer (incomplete block — never show to users).
-        """
-        if self._in_block:
-            self._buf = ""
-        result = self._buf
-        self._buf = ""
-        return result
+# _ThinkBlockFilter is defined in chat_pipeline.py and imported above.
+# The import is the single source of truth; keeping a re-export here is not
+# necessary because all direct usages are inside this module.
 
 
 class ChatOrchestratorUseCase:
