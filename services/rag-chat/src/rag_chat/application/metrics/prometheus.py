@@ -141,9 +141,25 @@ def record_reranker_position_change(top_changed: bool) -> None:
     rag_reranker_position_change.set(fraction)
 
 
-# ── Citation accuracy (PLAN-0063 W5-5 T-W5-5-02) ─────────────────────────────
+# ── Citation accuracy (PLAN-0063 W5-5 T-W5-5-02, PLAN-0084 A-1) ─────────────
 
 rag_citation_accuracy = Gauge(
     "rag_citation_accuracy",
     "Mean citation accuracy score from weekly LLM-as-judge (0=irrelevant … 1=direct)",
+)
+
+# PLAN-0084 A-1 T-A-1-04: per-call failure counter for the citation judge cron.
+# label reason: "timeout" | "provider_error" | "invalid_response"
+rag_citation_accuracy_call_failures_total = Counter(
+    "rag_citation_accuracy_call_failures_total",
+    "Number of citation-accuracy judge call failures, broken down by reason",
+    ["reason"],
+)
+
+# ── Circuit breaker (PLAN-0084 A-2 T-A-2-04) ─────────────────────────────────
+
+rag_circuit_breaker_open = Gauge(
+    "rag_circuit_breaker_open",
+    "1 if circuit breaker is open for the labelled source, 0 otherwise.",
+    ["source"],
 )

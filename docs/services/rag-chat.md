@@ -327,6 +327,8 @@ services/rag-chat/src/rag_chat/
 | `rag_source_contribution_total` | counter | `source` |
 | `rag_reranker_position_change` | gauge | — |
 | `rag_citation_accuracy` | gauge | — |
+| `rag_citation_accuracy_call_failures_total` | counter | `reason` |
+| `rag_circuit_breaker_open` | gauge | `source` |
 
 #### Retrieval Quality Metrics (PLAN-0063 W5-5)
 
@@ -351,7 +353,55 @@ services/rag-chat/src/rag_chat/
 4. Normalises raw 0–3 scores to [0, 1] (÷3), drops invalid responses
 5. Sets `rag_citation_accuracy` gauge; returns 0.0 if fewer than 10 samples
 
-Wire-up: add `start_citation_accuracy_cron(use_case)` to the FastAPI lifespan startup; store the returned `asyncio.Task` on `app.state` and cancel it on shutdown.
+**PLAN-0084 A-1 hardening (wire-up + prompt fence + error isolation):**
+
+- **Wire-up** (`app.py`): Controlled by `RAG_CHAT_CITATION_CRON_ENABLED` (default `false`). When enabled, `_wire_citation_cron()` builds a `CitationJudgeAdapter` → `ScoreCitationAccuracyUseCase` and calls `start_citation_accuracy_cron()`. The returned `asyncio.Task` is stored on `app.state.citation_cron_task` and cancelled on shutdown. A done-callback (BP-268 pattern) logs `CRITICAL` if the cron task crashes unexpectedly.
+- **Prompt injection fence** (F-S01): `_sanitise(text, max_chars)` truncates claim and snippet to 1024 chars and replaces known delimiter tokens (`<<<CLAIM `, `<<<SNIPPET `, `>>>`, `Respond with ONLY`) with `[REDACTED]`. The rubric uses explicit `<<<CLAIM START/END>>>` and `<<<SNIPPET START/END>>>` delimiters.
+- **Per-call timeout**: `CitationJudgeAdapter` wraps the provider call in `asyncio.wait_for(timeout=citation_call_timeout_s)`. On timeout it raises `LLMJudgeTimeoutError` (domain error, never swallowed).
+- **Error isolation**: `execute()` catches `LLMJudgeTimeoutError` and generic provider exceptions per-pair; both increment `rag_citation_accuracy_call_failures_total` (`reason=timeout|provider_error|invalid_response`). The outer loop continues for remaining pairs.
+- **Wall-clock budget**: `asyncio.timeout(run_budget_s)` (default 600s) wraps the entire scoring loop. If the budget is exceeded the partial results are committed and the gauge is emitted.
+
+**Environment variables (citation cron):**
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAG_CHAT_CITATION_CRON_ENABLED` | `false` | Set `true` to enable the cron (off by default to avoid LLM cost on first deploy) |
+| `RAG_CHAT_CITATION_JUDGE_PROVIDER` | `deepinfra` | `deepinfra` or `ollama` |
+| `RAG_CHAT_CITATION_MIN_SAMPLES` | `10` | Minimum messages required to emit a gauge |
+| `RAG_CHAT_CITATION_CALL_TIMEOUT_S` | `15.0` | Per-judge-call timeout in seconds |
+| `RAG_CHAT_CITATION_RUN_BUDGET_S` | `600.0` | Total wall-clock budget per cron run |
+
+**New metrics (PLAN-0084 A-1):**
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `rag_citation_accuracy_call_failures_total` | counter | `reason` | Count of skipped judge calls; reason = `timeout`, `provider_error`, `invalid_response` |
+
+### Circuit Breaker (PLAN-0084 A-2)
+
+`application/pipeline/circuit_breaker.py` — `SourceCircuitBreaker` guards each retrieval source (chunk, relations, graph, claims, events, contradictions, financial, portfolio) with a sliding-window failure counter backed by Valkey.
+
+**Key design decisions (PLAN-0084 A-2):**
+
+- **SETNX probe gating (F-X01)**: When the cooldown TTL expires (state key absent), only one caller wins the SETNX probe key. That caller receives `is_open() = False` and is allowed through. All other concurrent callers receive `True` (backed off) until the probe TTL expires. Prevents stampede on recovery.
+- **Symmetric ZSET cleanup (F-X05 Option A)**: `record_success()` deletes only the state key and probe key. The failures ZSET is intentionally NOT deleted — it expires via its own TTL. This avoids a race where a concurrent `record_failure()` writer that ZADD'd just before `record_success()` ran would have its entry deleted, silently losing failure history.
+- **Default cooldown lowered to 120s** (was 3600s): more appropriate for transient ML-provider outages where recovery is typically under 2 minutes.
+- **Probe TTL default 5s**: controls how long the "back off" window lasts after one probe is admitted.
+- **Prometheus gauge**: `rag_circuit_breaker_open` (label: `source`) set to 1 when breaker trips, 0 when recovered.
+
+**Environment variables (circuit breaker):**
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAG_CHAT_CB_COOL_DOWN_SECONDS` | `120` | Cooldown after open (10–3600s) |
+| `RAG_CHAT_CB_PROBE_TTL_SECONDS` | `5` | How long the "only one probe" lock lasts (1–30s) |
+| `RAG_CHAT_CB_ENABLED` | `true` | Set `false` to disable all circuit breakers |
+
+**New metrics (PLAN-0084 A-2):**
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `rag_circuit_breaker_open` | gauge | `source` | 1 = breaker open, 0 = closed/recovered |
 
 ---
 
