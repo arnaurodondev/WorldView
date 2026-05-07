@@ -18,6 +18,7 @@ from rag_chat.application.metrics.prometheus import (
     rag_retrieval_score_distribution,
     rag_source_contribution_total,
 )
+from rag_chat.application.pipeline.trust_scorer import TrustScorer
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType, QueryIntent
 
@@ -41,21 +42,6 @@ if TYPE_CHECKING:
     from rag_chat.domain.entities.chat import ChatRequest, ResolvedQuery, RetrievalPlan
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
-
-# Source type → trust weight mapping (from PRD §6.7 Step 7)
-DEFAULT_TRUST_WEIGHTS: dict[str, float] = {
-    "sec_10k": 0.95,
-    "sec_10q": 0.95,
-    "sec_8k": 0.90,
-    "earnings_data": 0.95,
-    "corporate_action": 0.90,
-    "eodhd_news": 0.70,
-    "finnhub_news": 0.65,
-    "relation": 0.85,
-    "claim": 0.80,
-    "financial": 0.90,
-    "default": 0.60,
-}
 
 _RETRIEVAL_TIMEOUT = 5.0  # seconds per task
 _MAX_GRAPH_ENTITIES = 3  # cap for egocentric + contradiction fetches
@@ -85,6 +71,7 @@ class ParallelRetrievalOrchestrator:
         timeout: float = _RETRIEVAL_TIMEOUT,
         s1_internal_token: str = "",
         circuit_breakers: dict[str, SourceCircuitBreaker] | None = None,
+        trust_scorer: TrustScorer | None = None,
     ) -> None:
         self._s6 = s6_client
         self._s7 = s7_client
@@ -93,6 +80,8 @@ class ParallelRetrievalOrchestrator:
         self._timeout = timeout
         self._s1_internal_token = s1_internal_token
         self._cbs = circuit_breakers or {}
+        # TODO: run eval gate (PLAN-0063 §3, 120-query golden set, ≥0.03 NDCG@10)
+        self._trust_scorer = trust_scorer or TrustScorer()
 
     async def retrieve(
         self,
@@ -254,7 +243,7 @@ class ParallelRetrievalOrchestrator:
         items: list[RetrievedItem] = []
         _seen_sources: set[str] = set()
         for r in results:
-            trust = DEFAULT_TRUST_WEIGHTS.get(r.source_type, DEFAULT_TRUST_WEIGHTS["default"])
+            trust = self._trust_scorer.score(source_type=r.source_type)
             items.append(
                 RetrievedItem.create(
                     item_id=r.chunk_id,
@@ -298,7 +287,7 @@ class ParallelRetrievalOrchestrator:
                     item_type=ItemType.relation,
                     text=text,
                     score=r.confidence,
-                    trust_weight=DEFAULT_TRUST_WEIGHTS["relation"],
+                    trust_weight=self._trust_scorer.score(source_type="relation"),
                     citation_meta=CitationMeta(
                         title=None,
                         url=None,
@@ -334,7 +323,7 @@ class ParallelRetrievalOrchestrator:
                     item_type=ItemType.relation,
                     text=text,
                     score=float(edge.get("confidence", 0.5)),
-                    trust_weight=DEFAULT_TRUST_WEIGHTS["relation"],
+                    trust_weight=self._trust_scorer.score(source_type="relation"),
                     citation_meta=CitationMeta(
                         title=None,
                         url=None,
@@ -372,7 +361,9 @@ class ParallelRetrievalOrchestrator:
                     item_type=ItemType.claim,
                     text=text,
                     score=r.extraction_confidence,
-                    trust_weight=DEFAULT_TRUST_WEIGHTS["claim"],
+                    trust_weight=self._trust_scorer.score(
+                        source_type="claim", extraction_confidence=r.extraction_confidence
+                    ),
                     citation_meta=CitationMeta(
                         title=None,
                         url=None,
@@ -411,7 +402,9 @@ class ParallelRetrievalOrchestrator:
                     item_type=ItemType.event,
                     text=text,
                     score=r.extraction_confidence,
-                    trust_weight=DEFAULT_TRUST_WEIGHTS["default"],
+                    trust_weight=self._trust_scorer.score(
+                        source_type="default", extraction_confidence=r.extraction_confidence
+                    ),
                     citation_meta=CitationMeta(
                         title=None,
                         url=None,
@@ -439,7 +432,7 @@ class ParallelRetrievalOrchestrator:
                     item_type=ItemType.claim,
                     text=text,
                     score=r.strength,
-                    trust_weight=DEFAULT_TRUST_WEIGHTS["claim"],
+                    trust_weight=self._trust_scorer.score(source_type="claim"),
                     citation_meta=CitationMeta(
                         title=None,
                         url=None,
@@ -475,7 +468,7 @@ class ParallelRetrievalOrchestrator:
                     item_type=ItemType.financial,
                     text=text,
                     score=0.90,
-                    trust_weight=DEFAULT_TRUST_WEIGHTS["financial"],
+                    trust_weight=self._trust_scorer.score(source_type="financial"),
                     citation_meta=CitationMeta(
                         title=f"{ticker} Fundamentals",
                         url=None,
@@ -493,7 +486,7 @@ class ParallelRetrievalOrchestrator:
                     item_type=ItemType.financial,
                     text=text,
                     score=0.85,
-                    trust_weight=DEFAULT_TRUST_WEIGHTS["financial"],
+                    trust_weight=self._trust_scorer.score(source_type="financial"),
                     citation_meta=CitationMeta(
                         title=f"{ticker} Quote",
                         url=None,
@@ -511,7 +504,7 @@ class ParallelRetrievalOrchestrator:
                     item_type=ItemType.financial,
                     text=text,
                     score=0.90,
-                    trust_weight=DEFAULT_TRUST_WEIGHTS["earnings_data"],
+                    trust_weight=self._trust_scorer.score(source_type="earnings_data"),
                     citation_meta=CitationMeta(
                         title=f"{ticker} Earnings",
                         url=None,
@@ -543,7 +536,7 @@ class ParallelRetrievalOrchestrator:
                 item_type=ItemType.financial,
                 text=text,
                 score=0.80,
-                trust_weight=DEFAULT_TRUST_WEIGHTS["financial"],
+                trust_weight=self._trust_scorer.score(source_type="financial"),
                 citation_meta=CitationMeta(
                     title="My Portfolio",
                     url=None,
@@ -569,7 +562,7 @@ class ParallelRetrievalOrchestrator:
                     item_type=ItemType.cypher_path,
                     text=text,
                     score=0.70,
-                    trust_weight=DEFAULT_TRUST_WEIGHTS["relation"],
+                    trust_weight=self._trust_scorer.score(source_type="relation"),
                     citation_meta=CitationMeta(
                         title=None,
                         url=None,

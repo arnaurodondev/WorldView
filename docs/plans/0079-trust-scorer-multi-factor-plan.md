@@ -14,7 +14,7 @@
 | Wave | Title | Status | Committed |
 |------|-------|--------|-----------|
 | A | Domain: `TrustScorer` + `SOURCE_AUTHORITY` + `extraction_confidence` field + unit tests | ✅ done | 2026-05-07 |
-| B | Replace `DEFAULT_TRUST_WEIGHTS` call sites in `ParallelRetrievalOrchestrator` | pending | — |
+| B | Replace `DEFAULT_TRUST_WEIGHTS` call sites in `ParallelRetrievalOrchestrator` | ✅ done | 2026-05-07 |
 | C | Tunable weights via env vars + eval sweep harness | pending | — |
 
 ---
