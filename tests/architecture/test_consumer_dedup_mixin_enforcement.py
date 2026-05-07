@@ -30,15 +30,6 @@ Each allowlist entry requires:
 - ``justification`` — explanation approved by the architecture team
 - ``granted_at``    — ISO-8601 date the exemption was approved
 
-xfail notice
-------------
-This test is marked ``xfail(strict=True)`` until the end of PLAN-0084 Wave B-3.
-All 8 existing BaseKafkaConsumer subclasses must migrate to the mixin before
-the xfail is removed.  When B-3 is committed:
-
-    1. Delete the ``@pytest.mark.xfail(...)`` decorator below.
-    2. Run the full architecture test suite — it must PASS (0 xfail, 0 skip).
-    3. Update STANDARDS.md §3.11 to remove the "B-3 migration pending" notice.
 """
 
 from __future__ import annotations

@@ -131,8 +131,16 @@ class SourceCircuitBreaker:
         Best-effort — Valkey errors are swallowed.
         """
         try:
-            await self._valkey.delete(self._state_key)
-            await self._valkey.delete(self._probe_key)
+            # D-004 fix: delete both keys atomically via a Lua script so a
+            # mid-call crash cannot leave the probe key alive and cause a
+            # false-positive circuit-open for up to probe_ttl_seconds.
+            # ValkeyClient.delete() only accepts a single key; Lua gives us
+            # a single atomic server-side DEL of both keys in one round-trip.
+            await self._valkey.execute_lua_script(
+                "redis.call('DEL', KEYS[1], KEYS[2]); return 1",
+                keys=[self._state_key, self._probe_key],
+                args=[],
+            )
             rag_circuit_breaker_open.labels(source=self._source).set(0)
         except Exception:
             log.warning("cb_valkey_unavailable", source=self._source, op="record_success")
