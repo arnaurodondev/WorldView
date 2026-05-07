@@ -395,7 +395,7 @@ services/nlp-pipeline/src/nlp_pipeline/
 
 ## Observability
 
-- **Metrics**: `articles_enriched_total`, `articles_suppressed_total`, `embedding_duration_seconds`, `gliner_entities_detected_total`, `resolution_cascade_steps_total`, `signal_emitted_total`
+- **Metrics**: `articles_enriched_total`, `articles_suppressed_total`, `embedding_duration_seconds`, `gliner_entities_detected_total`, `resolution_cascade_steps_total`, `signal_emitted_total`, `news_display_score_path_total{path}` (PLAN-0063 W5-5 — tracks which `display_relevance_score` formula branch was used per article: `full_formula` / `no_price_impact` / `no_llm_score` / `routing_only`; emitted from `_row_to_ranked_article` in `infrastructure/nlp_db/repositories/news_query.py`)
 - **Log fields**: `service=nlp-pipeline`, `article_id`, `routing_score`, `entity_count`, `block`
 
 ---

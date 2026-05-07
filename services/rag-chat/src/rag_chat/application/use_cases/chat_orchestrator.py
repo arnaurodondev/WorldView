@@ -19,6 +19,7 @@ from rag_chat.application.metrics.prometheus import (
     rag_latency,
     rag_queries_total,
     rag_retrieval_items,
+    record_reranker_position_change,
 )
 from rag_chat.application.pipeline.context_assembler import (
     ContextAssembler,
@@ -287,6 +288,10 @@ class ChatOrchestrator:
 
         # Step 8: reranking
         reranked = await self._reranker.rerank(rephrased or validated_message, fused[:30])
+
+        # Emit reranker-position-change metric: did the reranker change the top-1 result?
+        if fused and reranked:
+            record_reranker_position_change(fused[0].item_id != reranked[0].item_id)
 
         # Step 9: contradiction detection
         contradiction_refs: list = []
