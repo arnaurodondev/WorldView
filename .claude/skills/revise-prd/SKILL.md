@@ -109,6 +109,36 @@ For every entity, table, topic, or endpoint the PRD proposes to **modify** (not 
 ### 3.3 Flag stale assumptions
 Any delta where the codebase has evolved past the PRD's assumed baseline is a **stale assumption**. These produce silent bugs when implemented (the code already exists in a different form and the new code conflicts or duplicates it).
 
+### 3.4 Name Verification — Mandatory `git grep` Pass (BP-405 Guard)
+
+For every class, method, port field, file path, env var, and Avro schema name the PRD/plan mentions, run a mechanical `git grep` and confirm the named target actually exists in the repo (or is explicitly marked as new). Names *read correctly* even when they have drifted from the codebase — humans cannot reliably catch this. The pass must be mechanical.
+
+**Procedure** (mirrors `/plan` Phase 1.4):
+
+1. Extract every class, method, port field, file path, env var, and Avro schema name mentioned in the PRD/plan body. Include both targets the PRD intends to modify and targets it merely intends to call into.
+2. Run `git grep` for each name with the appropriate command:
+   - Python class: `git grep -E "^class <Name>(\(|:)"`
+   - Python function/method: `git grep -E "^( {4})?(async )?def <name>\("`
+   - Pydantic / dataclass field: `git grep -E "<field>: " <suspected_file>`
+   - File path: `ls <path>`
+   - Env var: `git grep -E "<ENV_NAME>"`
+   - Avro schema: `ls infra/kafka/schemas/<name>.avsc`
+   - Kafka topic: `git grep "<topic.name.v1>"`
+   - Endpoint path: `git grep -E "['\"]<path>['\"]"`
+3. Build a verification table:
+
+| Name (kind) | Found? | Tag/Action |
+|---|---|---|
+| `ChatOrchestratorUseCase` (class) | NO (actual: `ChatOrchestrator`) | **HIGH stale assumption** — rename or add precursor refactor plan |
+| `ChunkSearchRequest.entity_tickers` (field) | NO | **HIGH stale assumption** — port shape doesn't exist; add precursor wave or upstream plan |
+| `GET /entities/{id}/intelligence` (endpoint) | NO | mark `(NEW — created in Wave D)` if this PRD ships it; otherwise stale |
+
+4. Every row marked **HIGH stale assumption** is a Phase 7 BLOCKING issue. The PRD/plan body must be corrected (rename, add precursor work, or tag as new) before the document is fit for `/plan` to consume.
+
+**Why this is mandatory** (not optional): the 2026-05-07 `/investigate` against PLAN-0066/0067/0074 found three concurrent plans that all referenced classes (`ChatOrchestratorUseCase`, `RunChatUseCase`) and port fields (`ChunkSearchRequest.entity_tickers`, `entity_mentions`) that did not exist anywhere in the repo. Each plan was reviewed by humans and approved. Editorial review didn't catch the drift — fix has to be mechanical. See BP-405.
+
+**Add the verification table to the §3 Codebase Alignment section of the inconsistency report** (Phase 7 §3) so the user can see exactly which names failed and why.
+
 ---
 
 ## Phase 4 — External API Reality Check
@@ -166,14 +196,22 @@ Produce a structured report:
 - Internal inconsistencies: N
 - Architecture violations: N
 - Stale assumptions: N
+- **Failed name verifications (BP-405)**: N
 - External API issues: N
 - Cross-PRD conflicts: N
 - Unresolved blocking OQs: N
+
+## Name Verification Results (BP-405 guard — Phase 3.4)
+| Name (kind) | Mentioned at | Found in repo? | Action |
+|---|---|---|---|
+| `<ClassName>` (class) | §<sec> | NO | rename / tag NEW / add precursor |
+| `<port.field>` (field) | §<sec> | NO | upstream port doesn't exist — add precursor wave |
 
 ## Blocking Issues (must fix before /plan)
 | ID | Category | Location | Issue | Fix |
 |----|----------|----------|-------|-----|
 | R-001 | Stale assumption | §6.5 EntityName | PRD says IVFFlat, code uses HNSW | Update §6.5 to HNSW; remove migration task |
+| R-NNN | Failed name verification | §<sec> | Class `RunChatUseCase` not found in repo (actual: `ChatOrchestrator`) | Rename in plan to `ChatOrchestratorUseCase`; add precursor refactor plan |
 
 ## Non-blocking Issues (should fix)
 | ID | Category | Location | Issue | Fix |
@@ -226,6 +264,28 @@ Produce a plan delta table:
 |-----------|--------|-------|
 | T-A-1-03: Add `IVFFlat` index migration | ORPHANED | PRD now uses HNSW (no new migration needed) |
 | (none) | MISSING | PRD-0017 §6.4 now has `price_impact_labels` table; no task covers it |
+
+### 9.4 Per-Task Architecture Compliance (MANDATORY — applies even without --plan flag when plan files exist)
+
+For every task in the plan that creates a use case, worker, or API endpoint, run this compliance check. These patterns are the most consistently missing and cannot be caught by reading task descriptions alone — you must actively look for absence.
+
+| Pattern | Rule | Check (for each use case/worker task) |
+|---------|------|---------------------------------------|
+| **ABC port** | R25 | Does the task explicitly name the ABC port interface? If not: BLOCKING — add "depends on `IXyzRepository` (ABC in `application/ports/`)" |
+| **ReadOnlyUoW** | R27 | For every GET/query use case: does it specify `ReadOnlyUnitOfWork` + `ReadUoWDep`? If not: BLOCKING |
+| **UUIDv7** | R10 | For every new entity with ID field: does it specify `new_uuid7()`? If not: add guardrail |
+| **UTC timestamps** | R11 | For every new timestamp field: does it specify `utc_now()`? If not: add guardrail |
+| **structlog** | — | For every new worker/use case: does it specify structlog? If not: add guardrail |
+| **Outbox** | R8 | For any task writing to DB + Kafka: does it specify outbox pattern? If not: BLOCKING |
+| **Alembic head** | R32 | For any migration task: does it specify the verified current HEAD filename? If not: BLOCKING |
+
+Produce a per-task architecture compliance table:
+| Task ID | Use Case / Worker | ABC Port Named? | UoW Type Correct? | IDs/Timestamps OK? | Structlog? | Issues |
+|---------|------------------|----------------|-------------------|---------------------|------------|--------|
+| T-A-1-01 | `StoreChunkUseCase` | YES — `IChunkRepository` | YES — ReadOnly | YES | YES | PASS |
+| T-B-2-03 | `SummaryWorker` | NO | — | NO (no utc_now note) | NO | 3 issues |
+
+Fix all BLOCKING items in-place in the plan file. Non-blocking items (missing guardrails) should be added to the wave's Regression Guardrails section.
 
 ---
 

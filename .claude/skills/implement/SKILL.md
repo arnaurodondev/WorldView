@@ -93,10 +93,35 @@ When a wave contains tasks that touch **different services** and have `depends_o
 - **Only parallelize when tasks have zero file overlap** — if two tasks modify the same file, execute sequentially
 - After all parallel agents complete, run the full validation gate on the merged result
 
+#### Subagent Guardrails (MANDATORY when using parallel agents)
+
+Before launching any parallel subagents:
+
+1. **Budget check**: Confirm that spawning N parallel agents will not exhaust the session budget before all can complete. If uncertain, execute sequentially.
+2. **Commit mandate**: Instruct every subagent explicitly: "You MUST commit your changes to the main worktree (not just leave them in a worktree) before returning. If the worktree merge fails, apply your changes directly to the main branch files and commit."
+3. **Stall fallback**: If a subagent has not returned after ~5 minutes or shows signs of budget exhaustion (incomplete output, no commit evidence), **do not wait — apply that agent's planned changes directly in this main session** using the task spec from the plan.
+4. **Post-merge full test**: After ALL subagents return and their changes are in the main worktree, run the full validation gate (Step 4) on the merged result. Cross-agent regressions are common (two agents independently change overlapping dependencies).
+
 ### 2.1 Pre-Implementation Check
 - Re-read the specific files you'll modify
 - Check for any recent changes that might conflict
 - Verify the architecture layer you're working in (domain, application, infrastructure, API)
+
+### 2.1.5 Architecture Self-Check (MANDATORY before writing any use case or worker)
+
+For EVERY use case or worker you are about to implement, answer these questions before writing a single line of code. If any answer is "I don't know" — look it up, don't guess.
+
+| Check | Question | Required Answer |
+|-------|----------|----------------|
+| **ABC port** (R25) | What ABC port interface does this use case depend on? | Name the file: `application/ports/<name>.py` — if it doesn't exist yet, create it FIRST |
+| **UoW type** (R27) | Is this use case read-only or write? | Read-only → `ReadOnlyUnitOfWork` + `ReadUoWDep`; write → `UnitOfWork` + `UoWDep` |
+| **IDs** (R10) | Does this task create any new entities with ID fields? | Yes → `common.ids.new_uuid7()` — verify import, never `uuid.uuid4()` |
+| **Timestamps** (R11) | Does this task create any new timestamp fields? | Yes → `common.time.utc_now()` — verify import, never `datetime.now()` or naive datetime |
+| **Logging** | Does this task add any logging? | Yes → `import structlog; log = structlog.get_logger(__name__)` — NEVER `import logging` |
+| **Dual write** (R8) | Does this task write to both DB and Kafka? | Yes → outbox pattern via `libs/messaging` — never direct DB + Kafka in same transaction |
+| **Domain purity** (R12) | Is this code in the domain layer? | Yes → zero infrastructure imports allowed |
+
+**Failure to complete this check before writing code is the single largest source of architecture violations in this codebase.** The 2026-05-07 revise-prd pass found R25/R27 violations across 7 of 9 plans because the check was skipped at implementation time, not just planning time.
 
 ### 2.2 Write Code
 Follow Clean/Hexagonal Architecture strictly:
@@ -212,6 +237,45 @@ python -m pytest tests/architecture -v
 ```
 
 **If any check fails**: Fix immediately and re-run. Do NOT proceed to Step 5 with failures. Maximum 2 fix attempts per issue before escalating to the user.
+
+### 4.3 Full Test Suite Triage (Mandatory)
+
+After running the targeted test suite, run the **FULL** test suite for every affected service — not just the files you touched. New test failures that appear in untouched files must be triaged before proceeding:
+
+```bash
+# Run every test in the service (not just unit)
+python -m pytest <service>/tests -v --tb=short
+```
+
+Classify every failure:
+- **(a) Pre-existing** — failure existed before this wave (confirm by checking out main and re-running). Log it, do not fix it here unless the plan explicitly covers it.
+- **(b) Fix-induced regression** — your change broke an existing test. **Must be resolved in this wave before committing.** Investigate and fix the regression; do not skip or weaken the test.
+- **(c) Stale expectation** — the test was already asserting on stale behavior that the wave legitimately changes (e.g., the plan adds a required field and the test didn't account for it). **Update the test to match the new correct behavior**, with a comment citing the plan task ID. Do not delete or skip.
+
+**A wave is not complete if any (b) or (c) failures are unresolved.**
+
+### 4.4 Docker Rebuild & Live Smoke Test (Mandatory for Runtime Changes)
+
+If the change affects code that runs inside a Docker container (i.e., any service code under `services/`), you must rebuild the container and verify the new code is actually running before declaring the wave done:
+
+```bash
+# Rebuild the affected service image
+docker compose build <service-name>
+
+# Restart the service
+docker compose up -d <service-name>
+
+# Verify the container started and the new code is present
+docker compose logs <service-name> --tail=30
+# Look for startup log (should show no errors, correct version/config)
+
+# Run a live smoke test — at minimum, hit the health check endpoint
+curl -s http://localhost:<port>/health | python3 -m json.tool
+```
+
+**Only declare the wave done after confirming the container started cleanly and the smoke test passes.** Passing unit tests alone is not sufficient — the container may fail to start due to import errors, missing env vars, or config issues that are invisible to pytest.
+
+> **Why this is mandatory**: Multiple sessions have declared a wave "complete" after tests passed, only for the next session to discover the Docker container was still running old code or failing to start with a ModuleNotFoundError. The rebuild step is the only reliable way to verify the deployed artifact matches the tested code.
 
 ### 4.2 Blocking I/O Check (Async Services)
 
@@ -434,7 +498,11 @@ At any point, if you are blocked for >2 attempts on the same issue:
 - [ ] ruff format passes
 - [ ] mypy passes
 - [ ] All unit tests pass
+- [ ] **Full test suite run** — not just touched-file tests
+- [ ] **Test failures triaged**: (b) fix-induced regressions resolved; (c) stale expectations updated with comment
 - [ ] Integration tests pass (or N/A)
+- [ ] **Docker rebuild + smoke test completed** (if service code changed): container starts clean, health check passes
+- [ ] If parallel subagents were used: all changes committed to main worktree, cross-agent regression check done
 - [ ] Security review completed — no blocking issues
 - [ ] Code review completed — no blocking issues
 - [ ] Documentation updated (service docs, lib docs, config examples, `.claude-context.md`)
