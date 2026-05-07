@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     # uppercase tokens. NLP_PIPELINE_VALKEY_CANONICAL_TICKERS_KEY.
     valkey_canonical_tickers_key: str = "nlp:v1:canonical_tickers"
 
+    # PLAN-0084 C-1 / F-X02: background refresh interval for the canonical
+    # tickers cache (seconds). The loop wakes every N seconds and calls
+    # refresh() to re-read from intelligence_db. Staleness guarantee:
+    # <= N seconds after a source-of-truth change. Range: 60-3600.
+    # NLP_PIPELINE_CANONICAL_TICKERS_REFRESH_INTERVAL_S
+    canonical_tickers_refresh_interval_s: int = Field(default=600, ge=60, le=3600)
+
     # PLAN-0063 W5-3 §0-bis.7 / L9: lexical-leg RRF weight applied when the
     # query has rare identifier tokens. Default 1.5 from the spec; tuned
     # empirically per dataset via ``scripts/eval_retrieval.py --mode
@@ -124,6 +131,9 @@ class Settings(BaseSettings):
     gliner_batch_size: int = 32
     gliner_section_token_limit: int = 450  # truncate sections before NER
     gliner_nms_iou_threshold: float = 0.5  # Non-Maximum Suppression overlap threshold
+    # PLAN-0078 Wave B: minimum GLiNER confidence score for storing a mention in
+    # chunks.entity_mentions JSONB (avoids index bloat from low-confidence noise).
+    gliner_mention_floor: float = 0.6
 
     # Routing tier thresholds (PRD §6.7 Block 5)
     routing_tier_deep: float = 0.70  # score >= this → DEEP processing

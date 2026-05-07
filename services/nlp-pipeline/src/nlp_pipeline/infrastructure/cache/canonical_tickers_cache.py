@@ -27,21 +27,37 @@ others — same pattern as the entity ``watchlist_cache``. Default key:
 Lifecycle
 ---------
 * ``startup()`` runs ``refresh()`` once at process start so the SET is warm
-  before the first message is processed.
+  before the first message is processed, then launches ``_refresh_loop()``
+  as a background asyncio task.
 * ``refresh()`` re-reads the source of truth and atomically replaces the SET
-  contents. Failure is logged and the existing (possibly stale) SET is left
-  untouched — never wipe the cache on a transient source error.
+  contents via a MULTI/EXEC transaction (DEL + SADD in one round-trip).
+  Failure is logged and the existing (possibly stale) SET is left untouched
+  — never wipe the cache on a transient source error.
+* ``_refresh_loop()`` runs forever, sleeping ``_refresh_interval_s`` seconds
+  between ticks; transient errors are swallowed (with a 60s back-off sleep)
+  so a temporary Valkey blip cannot kill the background task.
+* ``close()`` cancels and awaits the background task, then returns.
 * ``is_known_ticker(symbol)`` is the read API used by the rare-token
   analyzer; case-insensitive (the SET is normalised to upper-case on write).
+
+Staleness guarantee
+-------------------
+With the default ``canonical_tickers_refresh_interval_s = 600`` (10 minutes)
+the SET will be at most 600 seconds stale after a source-of-truth change.
+The interval is operator-tunable via
+``NLP_PIPELINE_CANONICAL_TICKERS_REFRESH_INTERVAL_S`` (range 60-3600).
 
 W5 scope
 --------
 This module ships the cache and the unit tests. Wiring into the rare-token
-analyzer + app startup hook is W5-3 work.
+analyzer + app startup hook is W5-3 work. Background loop wiring is PLAN-0084
+Wave C-1 work.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from typing import TYPE_CHECKING, Protocol
 
 from observability import get_logger  # type: ignore[import-untyped]
@@ -49,7 +65,10 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     import redis.asyncio as redis
 
-logger = get_logger(__name__)  # type: ignore[no-any-return]
+log = get_logger(__name__)  # type: ignore[no-any-return]
+
+# Keep legacy alias so external callers that imported ``logger`` continue to work.
+logger = log
 
 _VALKEY_UNAVAILABLE_MSG = "valkey_unavailable"
 _DEFAULT_KEY = "nlp:v1:canonical_tickers"
@@ -69,12 +88,16 @@ class CanonicalTickerSource(Protocol):
 
 
 class CanonicalTickersCache:
-    """Valkey-backed SET of canonical ticker symbols.
+    """Valkey-backed SET of canonical ticker symbols with background refresh.
 
     All read APIs are best-effort: when Valkey is unreachable they return a
     safe default (``False`` for ``is_known_ticker``) and log a warning, so
     the rare-token analyzer keeps making progress on a degraded signal
     rather than failing the whole pipeline.
+
+    The atomic swap in ``refresh()`` uses MULTI/EXEC (``transaction=True``)
+    so concurrent ``is_known_ticker`` callers never observe an empty SET
+    between the DEL and the SADD.
     """
 
     def __init__(
@@ -82,15 +105,22 @@ class CanonicalTickersCache:
         client: redis.Redis,  # type: ignore[type-arg]
         source: CanonicalTickerSource,
         key: str = _DEFAULT_KEY,
+        refresh_interval_s: int = 600,
     ) -> None:
         self._client = client
         self._source = source
         self._key = key
+        # Interval in seconds between background refresh ticks (default 600s = 10 min).
+        # Clamp is a safety net; Settings validation enforces ge=60/le=3600.
+        self._refresh_interval_s = max(60, refresh_interval_s)
+        # Background asyncio.Task created by startup(); cancelled by close().
+        self._refresh_task: asyncio.Task[None] | None = None
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
     async def startup(self) -> None:
-        """Cold-start hook — warm the SET from the source of truth.
+        """Cold-start hook — warm the SET from the source of truth, then start
+        the background refresh loop.
 
         Never raises. A failed startup leaves the cache empty and the
         rare-token analyzer falls back to "all uppercase tokens are
@@ -99,25 +129,96 @@ class CanonicalTickersCache:
         try:
             await self.refresh()
         except Exception as exc:
-            logger.warning(  # type: ignore[no-any-return]
+            log.warning(  # type: ignore[no-any-return]
                 "canonical_tickers_cache.startup_failed",
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+        # Launch background loop regardless of whether the initial refresh
+        # succeeded — the loop will retry after ``_refresh_interval_s`` seconds.
+        self._refresh_task = asyncio.create_task(self._refresh_loop())
+
+    async def close(self) -> None:
+        """Cancel and await the background refresh loop.
+
+        Safe to call even if ``startup()`` was never called (no-op).
+        """
+        if self._refresh_task is not None and not self._refresh_task.done():
+            self._refresh_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._refresh_task
+            self._refresh_task = None
+
+    async def _refresh_loop(self) -> None:
+        """Background loop: sleep then call ``refresh()``, forever.
+
+        Design notes
+        ------------
+        * ``asyncio.CancelledError`` is re-raised immediately so the task can
+          be cancelled cleanly by ``close()``.
+        * All other exceptions are swallowed after logging a warning; the loop
+          then sleeps 60 seconds before the next attempt so a persistent Valkey
+          outage cannot spin-loop the CPU.
+        * The sleep comes FIRST so the initial warm-up from ``startup()``
+          is not redundantly repeated on the first tick.
+        """
+        while True:
+            try:
+                await asyncio.sleep(self._refresh_interval_s)
+                count = await self.refresh()
+                log.info(  # type: ignore[no-any-return]
+                    "canonical_tickers.refresh_loop_tick",
+                    count=count,
+                )
+            except asyncio.CancelledError:
+                raise  # propagate so the task terminates cleanly
+            except Exception:
+                # Transient error (Valkey blip, source DB down, etc.).
+                # Log + back-off rather than crashing the loop.
+                log.warning(  # type: ignore[no-any-return]
+                    "canonical_tickers.refresh_loop_error",
+                    exc_info=True,
+                )
+                await asyncio.sleep(60)
+
+    def start_loop(self) -> asyncio.Task[None]:
+        """Create and return the background refresh task.
+
+        Prefer ``startup()`` in application code — this method exists for
+        callers that need a handle to the task for introspection or testing.
+        Idempotent: if a task already exists and is not done, returns it.
+        """
+        if self._refresh_task is None or self._refresh_task.done():
+            self._refresh_task = asyncio.create_task(self._refresh_loop())
+        return self._refresh_task
 
     async def refresh(self) -> int:
         """Re-read the source of truth and atomically replace the SET.
+
+        Uses MULTI/EXEC (``transaction=True``) so the DEL and SADD execute
+        as a single atomic unit — concurrent ``is_known_ticker`` callers
+        cannot observe an empty SET between the two operations.
 
         Returns the size of the new SET. A source-side error is logged and
         the existing SET is left untouched; the caller can detect this by
         observing that the returned count is 0 AND a warning was logged
         (the zero-source case is also legal — see the
         ``test_startup_does_not_raise_on_empty_source`` unit test).
+
+        Implementation note on the pipeline API
+        ----------------------------------------
+        ``_client`` is a raw ``redis.asyncio.Redis`` instance. Its
+        ``.pipeline(transaction=True)`` returns a ``Pipeline`` that wraps
+        commands in MULTI/EXEC when ``execute()`` is called. Unlike the
+        ``ValkeyClient`` wrapper (which exposes an async-context-manager
+        ``pipeline()``), the raw redis object returns the pipeline
+        synchronously and it must be used as an async context manager via
+        ``async with self._client.pipeline(transaction=True) as pipe``.
         """
         try:
             tickers = await self._source.fetch_all_tickers()
         except Exception as exc:
-            logger.warning(  # type: ignore[no-any-return]
+            log.warning(  # type: ignore[no-any-return]
                 "canonical_tickers_cache.source_failed",
                 operation="fetch_all_tickers",
                 error=str(exc),
@@ -130,22 +231,23 @@ class CanonicalTickersCache:
         normalised = {t.strip().upper() for t in tickers if t and t.strip()}
 
         try:
-            # Atomic-ish swap: pipeline DEL + SADD so the empty window is at
-            # most one round-trip wide. ``redis.asyncio`` returns a coroutine.
-            pipe = self._client.pipeline()
-            pipe.delete(self._key)
-            if normalised:
-                pipe.sadd(self._key, *normalised)
-            await pipe.execute()
+            # Atomic swap via MULTI/EXEC. DEL + SADD execute as a single
+            # transaction so concurrent ``is_known_ticker`` callers cannot
+            # observe an empty SET between the two commands (F-X03 fix).
+            async with self._client.pipeline(transaction=True) as pipe:  # type: ignore[misc]
+                pipe.delete(self._key)
+                if normalised:
+                    pipe.sadd(self._key, *normalised)
+                await pipe.execute()
         except Exception as exc:
-            logger.warning(  # type: ignore[no-any-return]
+            log.warning(  # type: ignore[no-any-return]
                 _VALKEY_UNAVAILABLE_MSG,
                 operation="refresh",
                 error=str(exc),
             )
             return 0
 
-        logger.info(  # type: ignore[no-any-return]
+        log.info(  # type: ignore[no-any-return]
             "canonical_tickers_cache.refreshed",
             count=len(normalised),
         )
