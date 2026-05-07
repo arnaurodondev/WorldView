@@ -15,11 +15,20 @@ def _make_valkey(
     *,
     get_return: str | None = None,
     pipeline_results: list | None = None,
+    lua_return: int = 1,
 ) -> AsyncMock:
-    """Build a mock ValkeyClient with configurable pipeline results."""
+    """Build a mock ValkeyClient.
+
+    PLAN-0076 Wave B-2 (BP-403): record_failure() now uses ``execute_lua_script``
+    which returns the failure count directly (no pipeline indexing needed). Pass
+    ``lua_return`` to control the failure count seen by ``record_failure()``.
+    The ``pipeline_results`` parameter is retained for ``record_success()``
+    tests, which still use a pipeline.
+    """
     valkey = AsyncMock()
     valkey.get.return_value = get_return
     valkey.set = AsyncMock()
+    valkey.execute_lua_script = AsyncMock(return_value=lua_return)
 
     pipe = AsyncMock()
     pipe.zadd = MagicMock()
@@ -55,8 +64,8 @@ async def test_cb_closed_initially() -> None:
 @pytest.mark.unit
 async def test_cb_opens_after_threshold() -> None:
     """After N failures within the window, is_open() returns True."""
-    # Pipeline returns failure_count = 3 (== threshold)
-    valkey = _make_valkey(pipeline_results=[1, 0, 3, True])
+    # Lua script returns failure_count = 3 (== threshold)
+    valkey = _make_valkey(lua_return=3)
     cb = SourceCircuitBreaker(valkey, "relations", failure_threshold=3, cool_down_seconds=3600)
 
     await cb.record_failure()
@@ -117,8 +126,8 @@ async def test_cb_valkey_unavailable_fail_open() -> None:
 @pytest.mark.unit
 async def test_cb_below_threshold_does_not_trip() -> None:
     """Fewer failures than threshold -> state key is NOT set."""
-    # Pipeline returns failure_count = 2 (< threshold of 3)
-    valkey = _make_valkey(pipeline_results=[1, 0, 2, True])
+    # Lua script returns failure_count = 2 (< threshold of 3)
+    valkey = _make_valkey(lua_return=2)
     cb = SourceCircuitBreaker(valkey, "financial", failure_threshold=3)
 
     await cb.record_failure()
@@ -131,18 +140,39 @@ async def test_cb_below_threshold_does_not_trip() -> None:
 async def test_cb_record_failure_valkey_unavailable() -> None:
     """Valkey error during record_failure() is swallowed (best-effort)."""
     valkey = AsyncMock()
-
-    @asynccontextmanager
-    async def _pipeline(*, transaction: bool = False):
-        raise ConnectionError("Valkey down")
-        yield  # pragma: no cover
-
-    valkey.pipeline = _pipeline
+    valkey.execute_lua_script = AsyncMock(side_effect=ConnectionError("Valkey down"))
 
     cb = SourceCircuitBreaker(valkey, "portfolio")
 
     # Should not raise
     await cb.record_failure()
+
+
+@pytest.mark.unit
+async def test_cb_record_failure_uses_lua_script_atomically() -> None:
+    """record_failure() invokes execute_lua_script with the correct keys/args.
+
+    Regression for BP-403 — a non-atomic ZADD/ZREMRANGEBYSCORE/ZCARD pipeline
+    (the previous implementation) allowed two concurrent failures to both
+    observe count below the threshold. The Lua script makes the read+write
+    atomic on the Redis server.
+    """
+    valkey = _make_valkey(lua_return=1)
+    cb = SourceCircuitBreaker(valkey, "chunk", failure_threshold=3, failure_window_seconds=120)
+
+    await cb.record_failure()
+
+    valkey.execute_lua_script.assert_awaited_once()
+    call_args = valkey.execute_lua_script.await_args
+    # First positional arg is the Lua script body — must contain ZADD + ZREMRANGEBYSCORE + ZCARD
+    script = call_args.args[0]
+    assert "ZADD" in script
+    assert "ZREMRANGEBYSCORE" in script
+    assert "ZCARD" in script
+    # keys=[failures_key]
+    assert call_args.kwargs["keys"] == ["rag:cb:chunk:failures"]
+    # args = [now, cutoff, ttl] — last must be the window seconds as a string
+    assert call_args.kwargs["args"][2] == "120"
 
 
 # ── B-6 regression: circuit breakers wired into ParallelRetrievalOrchestrator ─

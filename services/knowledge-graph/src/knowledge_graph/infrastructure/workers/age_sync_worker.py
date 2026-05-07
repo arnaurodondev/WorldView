@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import text
 
@@ -169,8 +169,20 @@ class AgeSyncWorker:
         session_factory: async_sessionmaker[AsyncSession],
         valkey_client: ValkeyClient,
         settings: Settings,
+        read_session_factory: Any = None,
     ) -> None:
         self._sf = session_factory
+        # DEF-034 (Wave B-5): AGE Cypher MERGE statements (which are writes
+        # against intelligence_db) and the entity/relation SELECTs all share
+        # one session in :meth:`run` because every AGE write requires
+        # ``LOAD 'age'`` + ``SET search_path`` to be loaded on that same
+        # session.  The session therefore has to be a write session.  We
+        # accept ``read_session_factory`` for API consistency and store it for
+        # any future purely-read diagnostic queries; current behaviour is
+        # unchanged.
+        # Read factory wired for future use; current path is atomic read+write
+        # because AGE Cypher MERGE writes share the session with the SELECTs.
+        self._read_session_factory: Any = read_session_factory if read_session_factory is not None else session_factory
         self._valkey = valkey_client
         self._settings = settings
 

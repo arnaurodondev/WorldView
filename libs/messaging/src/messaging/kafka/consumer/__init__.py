@@ -1,5 +1,9 @@
 """Kafka consumer base class and error hierarchy."""
 
+from messaging.kafka.consumer.backpressure import (
+    BackpressurePolicy,
+    LagCalculator,
+)
 from messaging.kafka.consumer.base import (
     BaseKafkaConsumer,
     ConsumerConfig,
@@ -22,6 +26,7 @@ from messaging.kafka.consumer.errors import (
 )
 
 __all__ = [
+    "BackpressurePolicy",
     "BaseKafkaConsumer",
     "BusinessRuleViolationError",
     "ConsumerConfig",
@@ -29,6 +34,7 @@ __all__ = [
     "DatabaseConnectionError",
     "FailureInfo",
     "FatalError",
+    "LagCalculator",
     "MalformedDataError",
     "MissingRequiredFieldError",
     "NetworkTimeoutError",

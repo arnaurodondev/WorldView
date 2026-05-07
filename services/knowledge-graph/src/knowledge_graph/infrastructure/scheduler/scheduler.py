@@ -215,7 +215,8 @@ class KnowledgeGraphScheduler:
 
 def build_workers(
     settings: Settings,
-    session_factory: Any,
+    write_session_factory: Any,
+    read_session_factory: Any | None = None,
     llm_client: FallbackChainClient | None = None,
     valkey_client: Any | None = None,
     usage_logger: LlmUsageLogProtocol | None = None,
@@ -224,14 +225,19 @@ def build_workers(
 
     Args:
     ----
-        settings:        Service settings.
-        session_factory: intelligence_db async_sessionmaker.
-        llm_client:      FallbackChainClient (None → workers use stubs).
-        valkey_client:   ValkeyClient for watermark storage (None → age_sync stub).
-        usage_logger:    PLAN-0057 A-5 / F-CRIT-03 — fire-and-forget LLM cost
-                         logger threaded into ``DefinitionRefreshWorker`` and
-                         ``ProvisionalEnrichmentWorker``.  When None the
-                         workers stay backward-compatible (no logging).
+        settings:             Service settings.
+        write_session_factory: intelligence_db write async_sessionmaker (primary pool).
+        read_session_factory:  intelligence_db read-replica async_sessionmaker
+                               (DEF-034 / Wave B-5). When ``None`` (default) all
+                               workers fall back to ``write_session_factory`` so
+                               existing tests + dev environments without a read
+                               replica continue to work unchanged.
+        llm_client:           FallbackChainClient (None → workers use stubs).
+        valkey_client:        ValkeyClient for watermark storage (None → age_sync stub).
+        usage_logger:         PLAN-0057 A-5 / F-CRIT-03 — fire-and-forget LLM cost
+                              logger threaded into ``DefinitionRefreshWorker`` and
+                              ``ProvisionalEnrichmentWorker``.  When None the
+                              workers stay backward-compatible (no logging).
 
     Returns:
     -------
@@ -248,20 +254,44 @@ def build_workers(
     from knowledge_graph.infrastructure.workers.provisional_enrichment import ProvisionalEnrichmentWorker
     from knowledge_graph.infrastructure.workers.summary import SummaryWorker
 
+    # DEF-034 (Wave B-5): when no read replica is wired, fall back to the write
+    # factory.  Workers that opt into the split use ``_read_factory`` for their
+    # read-only fetch phase; workers exempted from R23 (atomicity-bound or
+    # DDL-only) keep using ``write_session_factory`` for both reads and writes.
+    _read_factory = read_session_factory if read_session_factory is not None else write_session_factory
+
     workers: dict[str, Any] = {
-        "confidence_recompute": ConfidenceWorker(session_factory, settings),
-        "contradiction_batch": ContradictionBatchWorker(session_factory),
-        "partition_management": MonthlyPartitionWorker(session_factory),
+        # R23-EXEMPT: read+write atomicity required (evidence read + confidence
+        # write must occur in the same transaction or the recompute can read a
+        # stale snapshot).
+        "confidence_recompute": ConfidenceWorker(write_session_factory, settings),
+        # R23-EXEMPT: read+write atomicity required (contradiction detection
+        # reads evidence pairs and flags them in the same atomic batch).
+        "contradiction_batch": ContradictionBatchWorker(write_session_factory),
+        # R23-EXEMPT: DDL-only (CREATE TABLE IF NOT EXISTS for monthly
+        # partitions; partition existence check + creation must be atomic).
+        "partition_management": MonthlyPartitionWorker(write_session_factory),
     }
 
     if valkey_client is not None:
         from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
 
-        workers["age_sync"] = AgeSyncWorker(session_factory, valkey_client, settings)
+        workers["age_sync"] = AgeSyncWorker(
+            write_session_factory,
+            valkey_client,
+            settings,
+            read_session_factory=_read_factory,
+        )
 
     # Worker 13J: structured enrichment (PRD-0073). Built unconditionally —
     # uses NullDescriptionAdapter when no LLM is configured.
-    _add_structured_enrichment_worker(workers, settings, session_factory, valkey_client)
+    _add_structured_enrichment_worker(
+        workers,
+        settings,
+        write_session_factory,
+        valkey_client,
+        read_session_factory=_read_factory,
+    )
 
     if llm_client is not None:
         description_client = _build_description_client(settings, valkey_client)
@@ -273,29 +303,38 @@ def build_workers(
         # ``ProvisionalEnrichmentWorker`` accepts the logger and forwards it
         # into its FallbackChainClient calls (see provisional_enrichment.py).
         def_worker = DefinitionRefreshWorker(
-            session_factory,
+            write_session_factory,
             llm_client,
             description_client,
             usage_logger=usage_logger,
             embedding_model_id=embed_model,
             batch_limit=embed_batch_limit,
+            read_session_factory=_read_factory,
         )
         workers.update(
             {
+                # DEF-018 / Wave B-1: SummaryWorker now uses the 3-phase
+                # session pattern — Phase 1 (fetch stale list) and Phase 2
+                # (fetch evidence + existing summary) run on the read replica
+                # via ``read_session_factory``; the LLM call holds no session;
+                # Phase 4 writes use the write factory.  See
+                # workers/summary.py for the phase split details.
                 "summary_generation": SummaryWorker(
-                    session_factory=session_factory,
+                    session_factory=write_session_factory,
                     llm_client=llm_client,
                     force_regen_batch_size=settings.summary_worker_force_regen_batch_size,
+                    read_session_factory=_read_factory,
                 ),
                 "definition_embedding": def_worker,
                 "narrative_embedding": NarrativeRefreshWorker(
-                    session_factory,
+                    write_session_factory,
                     llm_client,
                     embedding_model_id=embed_model,
                     batch_limit=embed_batch_limit,
+                    read_session_factory=_read_factory,
                 ),
                 "fundamentals_embedding": FundamentalsRefreshWorker(
-                    session_factory,
+                    write_session_factory,
                     llm_client,
                     market_data_base_url=getattr(settings, "market_data_base_url", "http://market-data:8003"),
                     embedding_model_id=embed_model,
@@ -306,9 +345,10 @@ def build_workers(
                     internal_jwt_private_key_pem=getattr(
                         settings, "internal_jwt_private_key", type("_", (), {"get_secret_value": lambda _: ""})()
                     ).get_secret_value(),
+                    read_session_factory=_read_factory,
                 ),
                 "provisional_enrichment": ProvisionalEnrichmentWorker(
-                    session_factory,
+                    write_session_factory,
                     llm_client,
                     embedding_model_id=embed_model,
                     usage_logger=usage_logger,
@@ -324,9 +364,10 @@ def build_workers(
                     # outage does not cause every retry sweep to re-hit the API.
                     base_retry_minutes=settings.provisional_enrichment_base_retry_minutes,
                     max_retry_minutes=settings.provisional_enrichment_max_retry_minutes,
+                    read_session_factory=_read_factory,
                 ),
                 "embedding_refresh": EmbeddingRefreshWorker(
-                    session_factory,
+                    write_session_factory,
                     llm_client,
                     embedding_model_id=embed_model,
                     batch_limit=embed_batch_limit,
@@ -335,6 +376,7 @@ def build_workers(
                     # for mixed-model drift even when ``embed_model`` differs
                     # by environment (Ollama tag vs. DeepInfra slug).
                     summary_embedding_model_id=settings.summary_embedding_model_id,
+                    read_session_factory=_read_factory,
                 ),
             },
         )
@@ -483,6 +525,7 @@ def _add_structured_enrichment_worker(
     settings: Settings,
     session_factory: Any,
     valkey_client: Any | None,
+    read_session_factory: Any | None = None,
 ) -> None:
     """Instantiate StructuredEnrichmentWorker (Worker 13J) and add to workers dict.
 
@@ -491,6 +534,11 @@ def _add_structured_enrichment_worker(
     client.  Each non-Worker resource that owns a network handle is also
     registered on ``self._aux_aclose`` so :meth:`KnowledgeGraphScheduler.stop`
     closes it cleanly (F-X15).
+
+    DEF-034 / Wave B-5: when ``read_session_factory`` is provided the
+    ``EntityEnrichmentAdapter`` routes its read-only ``list_unenriched`` query
+    to the read replica; mutations stay on the write factory.  Falls back to
+    ``session_factory`` for both when no read replica is configured.
     """
     from knowledge_graph.application.use_cases.structured_enrichment import (
         StructuredEnrichmentUseCase,
@@ -503,7 +551,10 @@ def _add_structured_enrichment_worker(
         StructuredEnrichmentWorker,
     )
 
-    enrichment_adapter = EntityEnrichmentAdapter(session_factory)
+    enrichment_adapter = EntityEnrichmentAdapter(
+        session_factory,
+        read_session_factory=read_session_factory if read_session_factory is not None else session_factory,
+    )
 
     # F-A02 / F-X06 / F-S02: per-request RS256 signer (HS256 fallback in dev).
     signer = build_market_data_signer(settings)

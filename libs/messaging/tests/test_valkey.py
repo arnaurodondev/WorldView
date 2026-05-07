@@ -7,6 +7,8 @@ Integration tests (requiring a running Valkey container) are tagged
 
 from __future__ import annotations
 
+import pytest
+
 from messaging.valkey.client import ValkeyConfig, create_valkey_client, create_valkey_client_from_url
 
 
@@ -141,6 +143,35 @@ class TestValkeyClientPipeline:
         client = create_valkey_client_from_url("redis://localhost:6379/0")
         assert hasattr(client, "setex"), "ValkeyClient is missing setex() method"
         assert callable(client.setex)
+
+
+class TestValkeyClientExecuteLuaScript:
+    """execute_lua_script() exposes Redis EVAL for atomic multi-step ops (BP-403)."""
+
+    def test_execute_lua_script_method_exists(self) -> None:
+        """execute_lua_script() must be defined on ValkeyClient."""
+        client = create_valkey_client_from_url("redis://localhost:6379/0")
+        assert hasattr(client, "execute_lua_script")
+        assert callable(client.execute_lua_script)
+
+    @pytest.mark.asyncio
+    async def test_execute_lua_script_calls_redis_eval(self) -> None:
+        """The wrapper passes script + len(keys) + *keys + *args to redis.eval()."""
+        from unittest.mock import AsyncMock
+
+        client = create_valkey_client_from_url("redis://localhost:6379/0")
+        # Replace the underlying redis client with a mock to avoid a live connection.
+        client._redis = AsyncMock()
+        client._redis.eval = AsyncMock(return_value=42)
+
+        result = await client.execute_lua_script(
+            "return ARGV[1]",
+            keys=["k1", "k2"],
+            args=["a1", "a2", "a3"],
+        )
+
+        assert result == 42
+        client._redis.eval.assert_awaited_once_with("return ARGV[1]", 2, "k1", "k2", "a1", "a2", "a3")
 
     def test_close_method_exists(self) -> None:
         """close() must be defined on ValkeyClient."""
