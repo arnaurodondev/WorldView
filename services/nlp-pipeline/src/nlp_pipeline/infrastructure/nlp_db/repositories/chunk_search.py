@@ -49,6 +49,9 @@ def _build_entity_mention_filter(
     The ``entity_id_strs`` and ``entity_type_strs`` lists are passed as TEXT[]
     CAST (BP-180) to avoid asyncpg AmbiguousParameterError.
     """
+    if not entity_ids and not entity_types:
+        raise ValueError("_build_entity_mention_filter requires at least one non-empty filter list")
+
     clauses: list[str] = []
     if entity_ids:
         params["entity_id_strs"] = [str(eid) for eid in entity_ids]
