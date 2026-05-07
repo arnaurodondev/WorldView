@@ -22,7 +22,9 @@ from messaging.topics import (  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-# Outbox topics produced by S7 (entity.dirtied.v1 is direct-produce, NOT via outbox)
+# Outbox topics produced by S7.
+# NOTE (D-014, PLAN-0084 QA fix): entity.dirtied.v1 now uses the outbox
+# (changed from fire-and-forget direct-produce in provisional_enrichment.py).
 TOPIC_GRAPH_STATE_CHANGED = GRAPH_STATE_CHANGED
 TOPIC_CONTRADICTION = "intelligence.contradiction.v1"
 TOPIC_RELATION_PROPOSED = "relation.type.proposed.v1"
