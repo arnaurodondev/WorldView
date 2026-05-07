@@ -138,6 +138,23 @@ class CanonicalTickersCache:
         # succeeded — the loop will retry after ``_refresh_interval_s`` seconds.
         self._refresh_task = asyncio.create_task(self._refresh_loop())
 
+        # D-018 fix: add a done-callback so a crash *outside* the inner
+        # try/except (e.g. a bug in the loop scaffolding itself) is surfaced
+        # to the log rather than silently swallowed — mirrors the BP-268
+        # pattern used in services/rag-chat/src/rag_chat/app.py.
+        def _on_task_done(task: asyncio.Task[None]) -> None:  # type: ignore[type-arg]
+            if task.cancelled():
+                # Normal shutdown via close() — not an error.
+                return
+            exc = task.exception()
+            if exc is not None:
+                log.critical(  # type: ignore[no-any-return]
+                    "canonical_tickers_refresh_task_crashed",
+                    exc_info=exc,
+                )
+
+        self._refresh_task.add_done_callback(_on_task_done)
+
     async def close(self) -> None:
         """Cancel and await the background refresh loop.
 
@@ -230,14 +247,27 @@ class CanonicalTickersCache:
         # comparison in ``is_known_ticker`` is unambiguous.
         normalised = {t.strip().upper() for t in tickers if t and t.strip()}
 
+        # D-017 fix: if the source returned 0 tickers (not an exception —
+        # just a genuinely empty result set), skip the wipe rather than
+        # issuing DEL with no SADD.  That would permanently erase the cache
+        # and leave every ticker lookup returning False until the next
+        # successful refresh — a silent data-loss regression caused by a
+        # transient DB query issue (e.g. cold start before entities are
+        # synced, or a brief lock contention window).
+        if not normalised:
+            log.warning(  # type: ignore[no-any-return]
+                "canonical_tickers_cache.empty_source_skipping_wipe",
+                reason="DB returned 0 tickers — may indicate transient query issue",
+            )
+            return 0
+
         try:
             # Atomic swap via MULTI/EXEC. DEL + SADD execute as a single
             # transaction so concurrent ``is_known_ticker`` callers cannot
             # observe an empty SET between the two commands (F-X03 fix).
             async with self._client.pipeline(transaction=True) as pipe:  # type: ignore[misc]
                 pipe.delete(self._key)
-                if normalised:
-                    pipe.sadd(self._key, *normalised)
+                pipe.sadd(self._key, *normalised)
                 await pipe.execute()
         except Exception as exc:
             log.warning(  # type: ignore[no-any-return]
