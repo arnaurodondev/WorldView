@@ -13,6 +13,10 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+# PLAN-0084 D-1: ChunkSearchPort moved to its own module.
+# Re-exported here so that existing imports continue to work.
+from nlp_pipeline.application.ports.chunk_search import ChunkSearchPort as ChunkSearchPort
+
 if TYPE_CHECKING:
     from nlp_pipeline.domain.models import ArticleImpactWindow, ArticlePriceImpact
 
