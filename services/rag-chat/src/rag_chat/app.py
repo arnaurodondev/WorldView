@@ -10,6 +10,7 @@ Observability wiring follows STANDARDS.md §5 (canonical lifespan pattern):
 
 from __future__ import annotations
 
+import asyncio
 import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
@@ -106,7 +107,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 7. Build and wire the GenerateBriefingUseCase
     _wire_briefing_uc(app, settings, valkey_client)
 
-    # 8. InternalJWTMiddleware — fetch JWKS from S9 (PRD-0025)
+    # 8. Citation-accuracy cron (PLAN-0084 A-1 T-A-1-05)
+    # Only starts when RAG_CHAT_CITATION_CRON_ENABLED=true (L5: flag-controlled rollout).
+    # Uses read_factory (R23: read-only use case → ReadOnlyUnitOfWork equivalent).
+    app.state.citation_cron_task = None
+    if settings.citation_cron_enabled:
+        _wire_citation_cron(app, settings, read_factory, log)
+
+    # 9. InternalJWTMiddleware — fetch JWKS from S9 (PRD-0025)
     jwt_mw = InternalJWTMiddleware(
         app,
         jwks_url=f"{settings.api_gateway_url}/internal/jwks",
@@ -118,6 +126,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     # Shutdown — reverse order
+    # Citation cron — cancel gracefully before closing DB/Valkey.
+    # The gather(return_exceptions=True) prevents CancelledError from propagating.
+    if app.state.citation_cron_task is not None:
+        _cron_task: asyncio.Task[None] = app.state.citation_cron_task
+        _cron_task.cancel()
+        await asyncio.gather(_cron_task, return_exceptions=True)
+
     # If ContextManager is attached to app.state in a future wave, call:
     #   await app.state.context_manager.shutdown()
     # before closing Valkey (M-04: drains in-flight turn-summary background tasks).
@@ -349,6 +364,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
                 failure_threshold=settings.cb_failure_threshold,
                 failure_window_seconds=settings.cb_failure_window_seconds,
                 cool_down_seconds=settings.cb_cool_down_seconds,
+                probe_ttl_seconds=settings.cb_probe_ttl_seconds,
             )
             for name in [
                 "chunk",
@@ -437,6 +453,113 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
         llm_chain=app.state.llm_chain,  # same chain as ChatOrchestratorUseCase
         valkey=valkey_client,
         context_gatherer=context_gatherer,
+    )
+
+
+def _wire_citation_cron(
+    app: FastAPI,
+    settings: RagChatSettings,
+    read_factory: Any,
+    log: Any,
+) -> None:
+    """Build and start the citation-accuracy cron task (PLAN-0084 A-1 T-A-1-05).
+
+    Only called when ``settings.citation_cron_enabled`` is True.  The task is
+    attached to ``app.state.citation_cron_task`` so the lifespan shutdown can
+    cancel it cleanly.
+
+    Provider selection (L4):
+    - "deepinfra" → ``DeepInfraCompletionAdapter`` (requires deepinfra_api_key)
+    - "ollama"    → ``OllamaCompletionAdapter`` (local; good for dev)
+
+    R23: ``SqlAlchemyMessageRepository`` receives the *read_factory* (read replica
+    session maker) because ``sample_recent_with_citations`` is read-only.
+    """
+    from rag_chat.application.use_cases.score_citation_accuracy import ScoreCitationAccuracyUseCase
+    from rag_chat.infrastructure.db.repositories.message_repository import SqlAlchemyMessageRepository
+    from rag_chat.infrastructure.jobs.citation_accuracy_cron import start_citation_accuracy_cron
+    from rag_chat.infrastructure.llm.citation_judge_adapter import CitationJudgeAdapter
+
+    # Resolve provider client (L4).
+    _deepinfra_api_key = settings.deepinfra_api_key.get_secret_value() if settings.deepinfra_api_key else None
+
+    if settings.citation_judge_provider == "deepinfra" and _deepinfra_api_key:
+        from rag_chat.infrastructure.llm.deepinfra_adapter import DeepInfraCompletionAdapter
+
+        provider_client: Any = DeepInfraCompletionAdapter(
+            api_key=_deepinfra_api_key,
+            model=settings.completion_model,
+        )
+    else:
+        # Ollama fallback (or explicit citation_judge_provider="ollama").
+        from rag_chat.infrastructure.llm.ollama_adapter import OllamaCompletionAdapter
+
+        provider_client = OllamaCompletionAdapter(
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_completion_model,
+        )
+        if settings.citation_judge_provider == "deepinfra" and not _deepinfra_api_key:
+            log.warning(  # type: ignore[no-any-return]
+                "citation_cron_deepinfra_key_missing_falling_back_to_ollama",
+            )
+
+    # Build adapter + use case.
+    judge = CitationJudgeAdapter(
+        provider_client,
+        timeout_s=settings.citation_call_timeout_s,
+    )
+
+    # R23: message repository uses read_factory (read-only session).
+    # We create a thin subclass that manages the session lifecycle per-call
+    # so the repository doesn't hold an open session across cron sleeps.
+    class _ReadSessionRepo(SqlAlchemyMessageRepository):
+        """Message repo that opens a fresh read-replica session for each call."""
+
+        def __init__(self, session_factory: Any) -> None:
+            self._session_factory = session_factory
+
+        async def sample_recent_with_citations(self, n: int) -> list:  # type: ignore[override]
+            session = self._session_factory()
+            try:
+                repo = SqlAlchemyMessageRepository(session)
+                return await repo.sample_recent_with_citations(n)
+            finally:
+                await session.close()
+
+        async def create(self, message: Any) -> None:  # type: ignore[override]
+            raise NotImplementedError("_ReadSessionRepo is read-only")
+
+        async def list_by_thread(self, thread_id: Any, limit: int) -> list:  # type: ignore[override]
+            raise NotImplementedError("_ReadSessionRepo is read-only")
+
+    message_repo = _ReadSessionRepo(read_factory)
+
+    use_case = ScoreCitationAccuracyUseCase(
+        message_repo=message_repo,
+        llm_judge=judge,
+        min_samples=settings.citation_min_samples,
+        run_budget_s=settings.citation_run_budget_s,
+    )
+
+    task = start_citation_accuracy_cron(use_case)
+    app.state.citation_cron_task = task
+
+    # BP-268 done-callback: surface crashes to the log instead of silently
+    # swallowing them (mirror of BaseKafkaConsumer._on_retry_task_done).
+    def _on_done(t: asyncio.Task[None]) -> None:
+        if t.cancelled():
+            # Normal shutdown — cancelled by lifespan teardown.
+            return
+        exc = t.exception()
+        if exc is not None:
+            log.critical("citation_cron_task_crashed", exc_info=exc)  # type: ignore[no-any-return]
+
+    task.add_done_callback(_on_done)
+
+    log.info(  # type: ignore[no-any-return]
+        "citation_cron_started",
+        provider=settings.citation_judge_provider,
+        timeout_s=settings.citation_call_timeout_s,
     )
 
 

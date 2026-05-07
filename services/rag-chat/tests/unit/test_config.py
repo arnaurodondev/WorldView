@@ -1,4 +1,4 @@
-"""Unit tests for rag-chat service Settings (F-007 + F-014)."""
+"""Unit tests for rag-chat service Settings (F-007 + F-014 + PLAN-0084 A-1/A-2)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,105 @@ import pytest
 from pydantic import ValidationError
 
 pytestmark = pytest.mark.unit
+
+
+# ── PLAN-0084 A-1: Citation cron settings ────────────────────────────────────
+
+
+def _make_settings(**kwargs):  # type: ignore[no-untyped-def]
+    """Convenience: build Settings with test defaults."""
+    from rag_chat.config import Settings
+
+    base = {
+        "database_url": "postgresql+asyncpg://test:test@localhost:5432/test_rag_db",
+        "s1_internal_token": "test-token",
+        "_env_file": None,
+    }
+    base.update(kwargs)
+    return Settings(**base)  # type: ignore[arg-type]
+
+
+def test_citation_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """All citation cron fields default to documented values (PLAN-0084 A-1 T-A-1-01)."""
+    for key in list(os.environ):
+        if key.startswith("RAG_CHAT_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    s = _make_settings()
+    assert s.citation_cron_enabled is False
+    assert s.citation_judge_provider == "deepinfra"
+    assert s.citation_min_samples == 10
+    assert s.citation_call_timeout_s == 15.0
+    assert s.citation_run_budget_s == 600.0
+
+
+def test_citation_judge_provider_validates_enum(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Invalid citation_judge_provider raises ValidationError."""
+    for key in list(os.environ):
+        if key.startswith("RAG_CHAT_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    with pytest.raises(ValidationError):
+        _make_settings(citation_judge_provider="unknown_provider")
+
+
+def test_citation_call_timeout_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """citation_call_timeout_s must be > 0 and ≤ 120."""
+    for key in list(os.environ):
+        if key.startswith("RAG_CHAT_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    with pytest.raises(ValidationError):
+        _make_settings(citation_call_timeout_s=0.0)
+
+    with pytest.raises(ValidationError):
+        _make_settings(citation_call_timeout_s=121.0)
+
+    # Valid boundary
+    s = _make_settings(citation_call_timeout_s=120.0)
+    assert s.citation_call_timeout_s == 120.0
+
+
+# ── PLAN-0084 A-2: Circuit-breaker settings ───────────────────────────────────
+
+
+def test_cb_cool_down_default_is_120(monkeypatch: pytest.MonkeyPatch) -> None:
+    """cb_cool_down_seconds defaults to 120 (was 3600 before PLAN-0084 A-2)."""
+    for key in list(os.environ):
+        if key.startswith("RAG_CHAT_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    s = _make_settings()
+    assert s.cb_cool_down_seconds == 120
+
+
+def test_cb_probe_ttl_default_is_5(monkeypatch: pytest.MonkeyPatch) -> None:
+    """cb_probe_ttl_seconds defaults to 5."""
+    for key in list(os.environ):
+        if key.startswith("RAG_CHAT_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    s = _make_settings()
+    assert s.cb_probe_ttl_seconds == 5
+
+
+def test_cb_cool_down_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """cb_cool_down_seconds must be in [10, 3600]."""
+    for key in list(os.environ):
+        if key.startswith("RAG_CHAT_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    with pytest.raises(ValidationError):
+        _make_settings(cb_cool_down_seconds=9)  # below min
+
+    with pytest.raises(ValidationError):
+        _make_settings(cb_cool_down_seconds=3601)  # above max
 
 
 def test_skip_verification_blocked_in_production(monkeypatch: pytest.MonkeyPatch) -> None:

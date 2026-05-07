@@ -12,8 +12,9 @@ Example::
 from __future__ import annotations
 
 import os
+from typing import Literal
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -102,11 +103,25 @@ class Settings(BaseSettings):
     # ── Feature flags ─────────────────────────────────────────────────────────
     cypher_enabled: bool = False
 
-    # ── Circuit breaker (PLAN-0031 T-D-1-02) ──────────────────────────────────
+    # ── Circuit breaker (PLAN-0031 T-D-1-02, PLAN-0084 A-2) ──────────────────
     cb_enabled: bool = True
     cb_failure_threshold: int = 3
     cb_failure_window_seconds: int = 120
-    cb_cool_down_seconds: int = 3600
+    # PLAN-0084 A-2: lowered from 3600 → 120s (F-X04 fix) and added probe-TTL
+    # for SETNX stampede prevention (F-X01 fix).
+    cb_cool_down_seconds: int = Field(default=120, ge=10, le=3600)  # RAG_CHAT_CB_COOL_DOWN_SECONDS
+    cb_probe_ttl_seconds: int = Field(default=5, ge=1, le=30)  # RAG_CHAT_CB_PROBE_TTL_SECONDS
+
+    # ── Citation accuracy cron (PLAN-0084 A-1) ────────────────────────────────
+    # Set RAG_CHAT_CITATION_CRON_ENABLED=true to activate the weekly LLM-judge
+    # cron that populates the rag_citation_accuracy Prometheus gauge.
+    # Disabled by default to avoid unintended ~$0.50/run LLM cost on first deploy
+    # (L5: flag-controlled rollout — same pattern as internal_jwt_skip_verification).
+    citation_cron_enabled: bool = False  # RAG_CHAT_CITATION_CRON_ENABLED
+    citation_judge_provider: Literal["deepinfra", "ollama"] = "deepinfra"  # RAG_CHAT_CITATION_JUDGE_PROVIDER
+    citation_min_samples: int = Field(default=10, ge=1, le=500)  # RAG_CHAT_CITATION_MIN_SAMPLES
+    citation_call_timeout_s: float = Field(default=15.0, gt=0.0, le=120.0)  # RAG_CHAT_CITATION_CALL_TIMEOUT_S
+    citation_run_budget_s: float = Field(default=600.0, gt=0.0)  # RAG_CHAT_CITATION_RUN_BUDGET_S
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
     rate_limit_per_tenant: int = 10  # requests per minute per tenant

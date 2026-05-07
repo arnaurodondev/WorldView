@@ -1,4 +1,8 @@
-"""Unit tests for SourceCircuitBreaker (T-D-1-01) and CB wiring (B-6 regression)."""
+"""Unit tests for SourceCircuitBreaker (T-D-1-01) and CB wiring (B-6 regression).
+
+PLAN-0084 A-2: tests for SETNX probe gating (T-A-2-02), TTL cleanup (T-A-2-03),
+Prometheus gauge (T-A-2-04), cooldown/probe-TTL defaults.
+"""
 
 from __future__ import annotations
 
@@ -16,18 +20,20 @@ def _make_valkey(
     get_return: str | None = None,
     pipeline_results: list | None = None,
     lua_return: int = 1,
+    set_nx_return: bool = True,
 ) -> AsyncMock:
     """Build a mock ValkeyClient.
 
     PLAN-0076 Wave B-2 (BP-403): record_failure() now uses ``execute_lua_script``
     which returns the failure count directly (no pipeline indexing needed). Pass
     ``lua_return`` to control the failure count seen by ``record_failure()``.
-    The ``pipeline_results`` parameter is retained for ``record_success()``
-    tests, which still use a pipeline.
+    PLAN-0084 A-2: ``set_nx_return`` controls whether the SETNX probe wins.
     """
     valkey = AsyncMock()
     valkey.get.return_value = get_return
     valkey.set = AsyncMock()
+    valkey.set_nx = AsyncMock(return_value=set_nx_return)
+    valkey.delete = AsyncMock()
     valkey.execute_lua_script = AsyncMock(return_value=lua_return)
 
     pipe = AsyncMock()
@@ -66,12 +72,13 @@ async def test_cb_opens_after_threshold() -> None:
     """After N failures within the window, is_open() returns True."""
     # Lua script returns failure_count = 3 (== threshold)
     valkey = _make_valkey(lua_return=3)
-    cb = SourceCircuitBreaker(valkey, "relations", failure_threshold=3, cool_down_seconds=3600)
+    # Note: cool_down_seconds=120 is the new default (was 3600 before PLAN-0084 A-2)
+    cb = SourceCircuitBreaker(valkey, "relations", failure_threshold=3, cool_down_seconds=120)
 
     await cb.record_failure()
 
     # Verify state was set to "open" with cool-down TTL
-    valkey.set.assert_awaited_once_with("rag:cb:relations:state", "open", ttl=3600)
+    valkey.set.assert_awaited_once_with("rag:cb:relations:state", "open", ttl=120)
 
     # Now is_open should return True when state key reads "open"
     valkey.get.return_value = "open"
@@ -91,24 +98,21 @@ async def test_cb_half_open_after_cooldown() -> None:
 
 @pytest.mark.unit
 async def test_cb_closes_on_success() -> None:
-    """record_success() clears state and failures (HALF_OPEN -> CLOSED)."""
+    """record_success() clears state and probe keys (PLAN-0084 A-2 F-X05 fix).
+
+    The failures ZSET is NOT deleted — it expires naturally via its TTL to avoid
+    a race with concurrent failure writers (F-X05 Option A).
+    """
     valkey = _make_valkey(get_return=None)
-    pipe_mock = AsyncMock()
-    pipe_mock.delete = MagicMock()
-    pipe_mock.execute = AsyncMock(return_value=[1, 1])
-
-    @asynccontextmanager
-    async def _pipeline(*, transaction: bool = False):
-        yield pipe_mock
-
-    valkey.pipeline = _pipeline
-
     cb = SourceCircuitBreaker(valkey, "claims")
     await cb.record_success()
 
-    # Both state and failures keys should be deleted
-    assert pipe_mock.delete.call_count == 2
-    pipe_mock.execute.assert_awaited_once()
+    # State key and probe key deleted; failures ZSET NOT deleted
+    deleted_keys = [call.args[0] for call in valkey.delete.call_args_list]
+    assert "rag:cb:claims:state" in deleted_keys
+    assert "rag:cb:claims:probe" in deleted_keys
+    # The failures ZSET should NOT be in the deleted keys
+    assert "rag:cb:claims:failures" not in deleted_keys
 
 
 @pytest.mark.unit
@@ -197,7 +201,8 @@ def test_circuit_breakers_wired_when_enabled() -> None:
             name,
             failure_threshold=3,
             failure_window_seconds=120,
-            cool_down_seconds=3600,
+            # PLAN-0084 A-2: default lowered to 120; still valid to pass explicitly
+            cool_down_seconds=120,
         )
         for name in source_names
     }
@@ -233,3 +238,143 @@ def test_circuit_breakers_empty_when_disabled() -> None:
     )
 
     assert orchestrator._cbs == {}
+
+
+# ── PLAN-0084 A-2: SETNX probe gating + cooldown + gauge ─────────────────────
+
+
+@pytest.mark.unit
+async def test_is_open_returns_True_when_state_set() -> None:
+    """state key present with value 'open' → is_open() returns True (F-X01)."""
+    valkey = _make_valkey(get_return="open")
+    cb = SourceCircuitBreaker(valkey, "chunk_a2_test1", failure_threshold=3)
+    assert await cb.is_open() is True
+
+
+@pytest.mark.unit
+async def test_is_open_admits_one_probe_after_cooldown() -> None:
+    """When state key absent and SETNX wins → exactly one probe caller gets False."""
+    # state absent → set_nx returns True (won probe slot)
+    valkey = _make_valkey(get_return=None, set_nx_return=True)
+    cb = SourceCircuitBreaker(valkey, "chunk_a2_test2", probe_ttl_seconds=5)
+
+    result = await cb.is_open()
+    assert result is False
+
+    # Verify SETNX was called with correct key and TTL
+    valkey.set_nx.assert_awaited_once_with("rag:cb:chunk_a2_test2:probe", "1", ex=5)
+
+
+@pytest.mark.unit
+async def test_is_open_other_probes_return_True() -> None:
+    """When state key absent but SETNX loses → caller returns True (backed off)."""
+    # set_nx returns False → another caller already holds the probe slot
+    valkey = _make_valkey(get_return=None, set_nx_return=False)
+    cb = SourceCircuitBreaker(valkey, "chunk_a2_test3", probe_ttl_seconds=5)
+
+    result = await cb.is_open()
+    assert result is True
+
+
+@pytest.mark.unit
+async def test_record_success_clears_probe_key() -> None:
+    """record_success() deletes both state key and probe key (F-X05)."""
+    valkey = _make_valkey()
+    cb = SourceCircuitBreaker(valkey, "chunk_a2_test4")
+    await cb.record_success()
+
+    deleted = [call.args[0] for call in valkey.delete.call_args_list]
+    assert "rag:cb:chunk_a2_test4:probe" in deleted
+
+
+@pytest.mark.unit
+def test_default_cool_down_is_120s() -> None:
+    """SourceCircuitBreaker default cool_down_seconds is 120 (PLAN-0084 A-2 F-X04)."""
+    valkey = AsyncMock()
+    cb = SourceCircuitBreaker(valkey, "chunk_a2_test5")
+    assert cb._cooldown == 120
+
+
+@pytest.mark.unit
+def test_probe_ttl_default_5s() -> None:
+    """SourceCircuitBreaker default probe_ttl_seconds is 5 (PLAN-0084 A-2 F-X01)."""
+    valkey = AsyncMock()
+    cb = SourceCircuitBreaker(valkey, "chunk_a2_test6")
+    assert cb._probe_ttl == 5
+
+
+@pytest.mark.unit
+async def test_record_success_does_not_delete_failures_zset() -> None:
+    """F-X05: record_success deletes state + probe but NOT the failures ZSET."""
+    valkey = _make_valkey()
+    cb = SourceCircuitBreaker(valkey, "chunk_a2_test7")
+    await cb.record_success()
+
+    deleted = [call.args[0] for call in valkey.delete.call_args_list]
+    assert "rag:cb:chunk_a2_test7:failures" not in deleted
+
+
+@pytest.mark.unit
+async def test_gauge_set_to_1_on_open() -> None:
+    """When breaker trips, rag_circuit_breaker_open gauge is set to 1 (T-A-2-04)."""
+    from prometheus_client import REGISTRY
+
+    def _gauge_value(source: str) -> float:
+        for m in REGISTRY.collect():
+            for s in m.samples:
+                if s.name == "rag_circuit_breaker_open" and s.labels.get("source") == source:
+                    return s.value
+        return -1.0
+
+    valkey = _make_valkey(lua_return=3)
+    # Use unique source name to avoid cross-test gauge contamination (BP-404)
+    source_name = "chunk_gauge_open_test"
+    cb = SourceCircuitBreaker(valkey, source_name, failure_threshold=3, cool_down_seconds=120)
+
+    await cb.record_failure()
+
+    assert _gauge_value(source_name) == 1.0
+
+
+@pytest.mark.unit
+async def test_gauge_set_to_0_on_recovery() -> None:
+    """After record_success(), rag_circuit_breaker_open gauge is set to 0 (T-A-2-04)."""
+    from prometheus_client import REGISTRY
+
+    def _gauge_value(source: str) -> float:
+        for m in REGISTRY.collect():
+            for s in m.samples:
+                if s.name == "rag_circuit_breaker_open" and s.labels.get("source") == source:
+                    return s.value
+        return -1.0
+
+    valkey = _make_valkey(lua_return=3)
+    source_name = "chunk_gauge_recovery_test"
+    cb = SourceCircuitBreaker(valkey, source_name, failure_threshold=3, cool_down_seconds=120)
+
+    # First trip the breaker
+    await cb.record_failure()
+    assert _gauge_value(source_name) == 1.0
+
+    # Now recover
+    await cb.record_success()
+    assert _gauge_value(source_name) == 0.0
+
+
+@pytest.mark.unit
+async def test_concurrent_failure_after_success_does_not_corrupt() -> None:
+    """record_success() + concurrent record_failure() does not corrupt state.
+
+    F-X05 Option A: failures ZSET is NOT deleted by record_success(), so a
+    concurrent failure that ZADD'd before record_success() ran is still in
+    the ZSET. The breaker will trip again if the count is >= threshold.
+    """
+    valkey = _make_valkey(lua_return=1)  # single failure, below threshold
+    cb = SourceCircuitBreaker(valkey, "chunk_a2_concurrent_test", failure_threshold=3)
+
+    # Simulate recovery then a new failure
+    await cb.record_success()
+    await cb.record_failure()
+
+    # Below threshold — state key should NOT be set
+    valkey.set.assert_not_awaited()
