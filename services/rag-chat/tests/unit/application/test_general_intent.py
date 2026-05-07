@@ -5,7 +5,7 @@ Covers:
 - GENERAL plan: use_chunks=True, all other sources False
 - Entity IDs are populated from resolved entities when present
 - GENERAL plan with no entities: entity_ids empty tuple
-- ChatOrchestrator passes intent to PromptBuilder (intent routing)
+- ChatOrchestratorUseCase passes intent to PromptBuilder (intent routing)
 - GENERAL prompt does NOT produce follow-up suggestions (institutional terminal)
 - KeywordHeuristicClassifier GENERAL keyword paths
 """
@@ -148,7 +148,7 @@ class TestGeneralFollowUpRouting:
     def test_orchestrator_passes_intent_to_prompt_builder(self) -> None:
         """execute_streaming passes intent=intent to PromptBuilder.build()."""
         from rag_chat.application.pipeline.prompt_builder import PromptBuilder
-        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestrator
+        from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
         captured_intents: list[QueryIntent] = []
 
@@ -158,7 +158,7 @@ class TestGeneralFollowUpRouting:
                 return super().build(**kwargs)
 
         # Build a minimal orchestrator with mocked-out dependencies
-        orch = ChatOrchestrator(
+        orch = ChatOrchestratorUseCase(
             validator=MagicMock(),
             rate_limiter=AsyncMock(),
             cache=AsyncMock(get=AsyncMock(return_value=None)),
@@ -204,7 +204,7 @@ class TestGeneralFollowUpRouting:
 
         assert (
             QueryIntent.GENERAL in captured_intents
-        ), "ChatOrchestrator must pass intent=intent to PromptBuilder.build()"
+        ), "ChatOrchestratorUseCase must pass intent=intent to PromptBuilder.build()"
 
 
 # ── KeywordHeuristicClassifier — GENERAL keyword paths ───────────────────────
