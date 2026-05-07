@@ -126,19 +126,16 @@ class EntityMentionRepository:
                            Set False in read-only tests.
 
         """
-        lock_clause = "FOR UPDATE SKIP LOCKED" if lock else ""
-        result = await self._session.execute(
-            text(
-                f"""
+        _base_sql = """
                 SELECT *
                 FROM entity_mentions
                 WHERE resolution_outcome = 'unresolved'
                   AND created_at >= now() - make_interval(days => :days)
                 ORDER BY created_at ASC
-                LIMIT :limit
-                {lock_clause}
-                """,
-            ),
+                LIMIT :limit"""
+        _lock_sql = "\n                FOR UPDATE SKIP LOCKED"
+        result = await self._session.execute(
+            text(_base_sql + (_lock_sql if lock else "")),
             {"days": lookback_days, "limit": batch_size},
         )
         rows = result.fetchall()
@@ -195,19 +192,16 @@ class EntityMentionRepository:
         # JOIN in this SELECT because PostgreSQL forbids FOR UPDATE on rows
         # produced by an outer join — so we lock entity_mentions only, then
         # hydrate context in a second non-locking query.
-        lock_clause = "FOR UPDATE SKIP LOCKED" if lock else ""
-        result = await self._session.execute(
-            text(
-                f"""
+        _base_sql = """
                 SELECT mention_id
                 FROM entity_mentions
                 WHERE resolution_outcome = 'unresolved'
                   AND created_at >= now() - make_interval(days => :days)
                 ORDER BY created_at ASC
-                LIMIT :limit
-                {lock_clause}
-                """,
-            ),
+                LIMIT :limit"""
+        _lock_sql = "\n                FOR UPDATE SKIP LOCKED"
+        result = await self._session.execute(
+            text(_base_sql + (_lock_sql if lock else "")),
             {"days": lookback_days, "limit": batch_size},
         )
         rows = result.fetchall()
