@@ -22,6 +22,7 @@ from contracts.parsing import (
     to_jsonl,
     to_parquet,
 )
+from contracts.trust import SOURCE_AUTHORITY
 from contracts.versions import (
     ARTICLE_SCHEMA_VERSION,
     ENRICHED_ARTICLE_SCHEMA_VERSION,
@@ -38,6 +39,7 @@ from contracts.versions import (
 )
 
 __all__ = [
+    "SOURCE_AUTHORITY",
     "ARTICLE_SCHEMA_VERSION",
     "ENRICHED_ARTICLE_SCHEMA_VERSION",
     "ENTITY_SCHEMA_VERSION",
