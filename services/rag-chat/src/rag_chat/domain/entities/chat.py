@@ -14,17 +14,53 @@ if TYPE_CHECKING:
 
 # ── Recency score helper ───────────────────────────────────────────────────────
 
+# Decay rate per source type: score = exp(-rate * days_old). Higher rate = faster decay.
+# Calibrated so SEC filings retain >0.83 after 365 days; news drops below 0.55 after 30 days.
+_RECENCY_DECAY_RATES: dict[str, float] = {
+    "sec_filing": 0.0005,  # 10-K/10-Q stay relevant for years
+    "earnings_transcript": 0.001,
+    "press_release": 0.01,
+    "eodhd_news": 0.02,
+    "finnhub_news": 0.02,
+    "newsapi": 0.025,
+    "default": 0.005,  # unchanged from pre-W5-4 uniform constant
+}
 
-def compute_recency_score(published_at: datetime | None) -> float:
-    """Compute temporal decay weight for a retrieved item.
+# Source-quality floor multiplier — applied AFTER recency decay so primary sources
+# (filings, transcripts) dominate over transient news on tied lexical relevance.
+# WHY: eodhd_news decays 40x faster than sec_filing, so a 14-day-old transcript
+# would rank near zero against a 1-day-old blurb without this lift.
+# Wired to RetrievedItem fusion_score in F-W5-9 follow-up after 30d of telemetry.
+_SOURCE_QUALITY_FLOOR: dict[str, float] = {
+    "sec_filing": 1.4,
+    "earnings_transcript": 1.3,
+    "press_release": 1.0,
+    "eodhd_news": 0.9,
+    "finnhub_news": 0.9,
+    "newsapi": 0.85,
+    "default": 1.0,
+}
 
-    Returns exp(-0.005 * days_old).  Items without a published_at date
-    receive a neutral score of 0.5 (not penalised, not boosted).
+
+def compute_recency_score(
+    published_at: datetime | None,
+    source_type: str | None = None,
+) -> float:
+    """Temporal decay weight for a retrieved item, source-aware.
+
+    Returns exp(-rate * days_old) where rate is looked up from
+    _RECENCY_DECAY_RATES by source_type (default 0.005 if unknown).
+    Returns 0.5 when published_at is None (matches pre-W5-4 behaviour).
+    Future dates are clamped to days_old=0 (returns 1.0).
+    Naive datetimes are treated as UTC.
     """
     if published_at is None:
         return 0.5
-    days_old = (datetime.now(tz=UTC) - published_at).days
-    return math.exp(-0.005 * days_old)
+    if published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=UTC)
+    days_old = max(0, (datetime.now(tz=UTC) - published_at).days)
+    rate = _RECENCY_DECAY_RATES.get(source_type or "default", _RECENCY_DECAY_RATES["default"])
+    return math.exp(-rate * days_old)
 
 
 # ── Request context ────────────────────────────────────────────────────────────
@@ -133,9 +169,10 @@ class RetrievedItem:
         doc_id: UUID | None = None,
         published_at: datetime | None = None,
         graph_enrichment: tuple[dict, ...] = (),
+        source_type: str | None = None,
     ) -> RetrievedItem:
         """Factory that computes recency_score and fusion_score automatically."""
-        recency_score = compute_recency_score(published_at)
+        recency_score = compute_recency_score(published_at, source_type=source_type)
         fusion_score = score * recency_score * trust_weight
         return cls(
             item_id=item_id,

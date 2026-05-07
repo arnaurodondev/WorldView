@@ -29,20 +29,20 @@ class TestComputeRecencyScore:
         assert compute_recency_score(None) == 0.5
 
     def test_recency_score_365_days(self) -> None:
-        """365-day-old item → exp(-0.005 * 365) ≈ 0.1613."""
+        """365-day-old item with default source → exp(-0.005 * 365) ≈ 0.1613."""
         from rag_chat.domain.entities.chat import compute_recency_score
 
         published = datetime.now(tz=UTC) - timedelta(days=365)
-        score = compute_recency_score(published)
+        score = compute_recency_score(published, source_type=None)  # explicit: default rate=0.005
         expected = math.exp(-0.005 * 365)
         assert abs(score - expected) < 1e-6
 
     def test_recency_score_today(self) -> None:
-        """Item published today → score close to 1.0."""
+        """Item published today with default source → score close to 1.0."""
         from rag_chat.domain.entities.chat import compute_recency_score
 
         published = datetime.now(tz=UTC)
-        score = compute_recency_score(published)
+        score = compute_recency_score(published, source_type=None)  # explicit: default rate=0.005
         assert score > 0.99
 
 
