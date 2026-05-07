@@ -2,10 +2,58 @@
 
 > **Status**: draft
 > **Created**: 2026-05-03
+> **Last revised**: 2026-05-07 (BP-405 name-verification + architecture compliance audit)
 > **Owner agent**: Staff engineer / TPM
-> **Estimated effort**: ~4.5 dev-days (5 waves, 20 tasks + security/safety additions from revision 2026-05-03)
-> **Critical path**: Wave 1 → Wave 2 → Wave 3 → Wave 4 ∥ Wave 5 (frontend)
-> **Hard dependency**: PLAN-0066 Wave H must ship first — Wave H creates `ToolRegistry`, `ToolExecutor` (S3 only), `capability_manifest.yaml` (2 tools), and the 2-turn tool loop in `ChatOrchestratorUseCase`.
+> **Estimated effort**: ~6 dev-days (5 waves: W11-1..W11-5; ~32 tasks)
+> **Critical path**: W11-1 → W11-2 → W11-3 → W11-4 ∥ W11-5 (frontend)
+> **Hard dependencies**:
+> - PLAN-0066 Wave H (tool-use foundation: `ToolRegistry`, base `ToolExecutor`, `capability_manifest.yaml` with 2 temporal tools).
+> - **PLAN-0077** (chat-pipeline rename + decomposition) — required before W11-3.
+> - **PLAN-0078** (chunk entity-filter + GLiNER mention persistence) — required before W11-2 `search_documents` handler is implementable as designed.
+> - **PLAN-0079** (TrustScorer multi-factor) — required before W11-2 (per-tool `trust_weight` removed in favour of factor-based composition).
+
+---
+
+## §0 Revision Log
+
+**2026-05-07 — long-term consistency review** (post thesis-to-product pivot to a Bloomberg-grade competitor). Issues C-1, C-2, C-3, A-1, A-2, A-4, M-1, I-1, I-2, I-3, I-5, I-6, I-7, I-10. Plan re-scoped substantially:
+
+- **C-1 (class name)**: `ChatOrchestratorUseCase` references throughout this plan are correct **post-PLAN-0077**. PLAN-0077 renames the current `ChatOrchestrator` and extracts a `ChatPipeline` value object.
+- **C-3 (per-request auth)**: `ToolExecutor` constructor no longer takes `user_id`/`tenant_id`/`x_internal_token`. Replaced with **`ToolExecutorFactory`** (singleton) that exposes `for_request(*, user_id, tenant_id, internal_jwt, entity_context) -> ToolExecutor`. Per-request auth + entity scope are bound at construction of the request-scoped executor; per-LLM-call signatures stay clean.
+- **M-1 (entity scope enforcement)**: `EntityContext(entity_id, ticker, name)` is a first-class value passed to `for_request(...)`. Tool handlers that take entity-scoped queries (`search_documents`, `get_entity_graph`, `traverse_graph`, `search_*`) auto-inject `entity_ids = [entity_context.entity_id]` into the underlying port call. The LLM cannot call cross-entity when scope is set. Tools intended for cross-entity queries (`compare_entities`, `screen_universe`, etc.) check for `entity_context is None`.
+- **A-1 (no fallback path)**: Original W11-3 said "feature-flag the classical pipeline off; classical becomes fallback." **Replaced**: W11-3 hard-deletes `IntentClassifier`, `RetrievalPlanBuilder`, `ParallelRetrievalOrchestrator`. No `TOOL_USE_ENABLED` flag; tool-use is the only path. The 60-query golden eval (PLAN-0063) is the merge gate — must match within 0.03 NDCG@10 of the classical baseline before merge. This frees us from indefinite double maintenance and is consistent with the long-term product direction (the classical intent classifier is naive and expensive — not worth keeping).
+- **A-2 (trust weights)**: The per-tool `trust_weight` field in the manifest is **removed**. `TrustScorer` (PLAN-0079) computes trust per-item at retrieval time from four factors: source authority (table), recency decay (exp), corroboration (`evidence_count`), extraction confidence (GLiNER/relation/claim score). Manifest entries no longer carry trust scores; instead they reference `source_type` so `TrustScorer` can derive authority. Single source of truth for ranking quality.
+- **A-4 (catalog coverage)**: This plan ships 8 retrieval/portfolio tools. **Follow-on plans land more**: PLAN-0080 (intelligence-layer tools: narratives/paths/health), PLAN-0081 (catalog tools: morning_brief/compare_entities/screen_universe/market_movers/economic_calendar/earnings_calendar), PLAN-0082 (action tools: alerts read/create — gated behind safety eval). PLAN-0067 itself is unchanged in scope; the §0 list cross-references the rollout.
+- **I-1 (TTFT regression)**: Tool-use first turn is non-streaming → adds ~600ms blocking latency vs. classical. **Mitigations** added: (a) emit `thinking` SSE event the moment first-turn LLM call starts so the user sees activity; (b) `tool_use_first_turn_latency_seconds` Prometheus histogram; (c) optional fast-path skip for queries that match a tiny regex-based "no tools needed" gate (greetings, follow-ups). Captured as new W11-3 tasks.
+- **I-2 (cost tax + observability)**: (a) Prompt caching enabled in `LlmChatProvider` (system prompt + tool defs cache-stable across turns within a request and across requests within a tenant). (b) New Alembic migration extends `llm_usage_log` with `prompt_cache_read_tokens`, `prompt_cache_creation_tokens`, `tool_calls_count`, `tool_names TEXT[]`. (c) Per-tool cost attribution surfaced in metrics. New W11-3 tasks.
+- **I-3 (UoW lifetime)**: Tool execution must NOT be inside the chat UoW (would hold a connection across the 3-turn loop and exhaust the pool under load). Acquire UoW for thread-load → release before tool loop → re-acquire for persistence. Hard constraint added to W11-3.
+- **I-4 (brief-implicit seed migration)**: PLAN-0066 Wave D Sub-Plan B's `RetrievalOrchestrator._fetch_brief_seed` is destroyed when this plan deletes `RetrievalOrchestrator`. **W11-3 must port** the seed logic to either system-prompt prefix (cheap) or auto-call of `get_morning_brief` tool when same-day brief exists. Captured as a W11-3 task.
+- **I-5 (eval coverage)**: 20 tool-use queries is too thin to declare quality parity. **W11-4 now runs the full PLAN-0063 60-query golden set** under tool-use mode (parity gate) plus the 20 tool-specific queries (catalog coverage gate).
+- **I-6 (citation provenance)**: `RetrievedItem` extended with `tool_call_provenance: ToolCallProvenance | None` (tool_name, tool_input dict, call_id) when produced via tool-use. Provenance flows to `llm_usage_log.tool_names` and to citation persistence for audit/explainability.
+- **I-7 (adversarial safety)**: W11-4 adds an adversarial eval (10 prompt-injection attempts: cross-tenant access, EntityContext bypass, system-prompt extraction, destructive-tool trigger). Must produce refusal or scope-limited execution; required for any future write-tool plans (PLAN-0082).
+- **I-10 (manifest versioning)**: `capability_manifest.yaml` schema gains `version: "v1"` (top-level) and per-tool `since: "v1"` and `deprecated_at: <version> | null`. Architecture test asserts no tool removed without `deprecated_at` set. Required so prior thread histories that reference a removed tool can be replayed/explained.
+
+The numbered task list below has not been mechanically re-keyed to absorb every revision item — read this §0 as the binding spec, the wave content as the implementation decomposition.
+
+**2026-05-07 — BP-405 name verification + architecture compliance audit**. Issues found and fixed inline:
+
+- **N-1 (PLAN-0066 Wave H not implemented yet)**: `ToolRegistry`, `ToolExecutor`, `capability_manifest.yaml`, and `libs/tools/` do NOT exist in the repository. These are created by PLAN-0066 Wave H. All plan tasks that build on them are correctly described as depending on PLAN-0066 Wave H.
+- **N-2 (OpenRouterAdapter → OpenRouterCompletionAdapter)**: Task T-W11-1-03 and the codebase state table referenced the class as `OpenRouterAdapter`. The actual class name is `OpenRouterCompletionAdapter` (`services/rag-chat/src/rag_chat/infrastructure/llm/openrouter_adapter.py`). Fixed throughout.
+- **N-3 (ProviderChain → LLMProviderChain)**: T-W11-1-04 body referred to "The `ProviderChain` class". The actual class name is `LLMProviderChain` (`services/rag-chat/src/rag_chat/infrastructure/llm/provider_chain.py`). Fixed.
+- **N-4 (S7Port.search_relations signature mismatch)**: T-W11-2-03/04 described `_s7.search_relations(entity_name, top_k=1)` taking an entity name string. The actual port signature is `search_relations(embedding: list[float], entity_ids: list[UUID], top_k, min_confidence)` — it takes a pre-computed query embedding and a list of entity UUIDs, not an entity name string. The `_handle_get_entity_graph` and `_handle_search_entity_relations` handlers must resolve entity names to UUIDs and embeddings first. Fixed in T-W11-2-03 and T-W11-2-04.
+- **N-5 (S7Port.search_claims signature mismatch)**: T-W11-2-04 described `search_claims(entity_name, claim_type, date_from, date_to)`. Actual signature: `search_claims(entity_ids: list[UUID], claim_types: list[str] | None, date_from, date_to, top_k, min_confidence)`. Fixed.
+- **N-6 (S7Port.search_events signature mismatch)**: T-W11-2-04 described `search_events(entity_name, event_type, ...)`. Actual: `search_events(entity_ids: list[UUID], event_types: list[str] | None, ...)`. Fixed.
+- **N-7 (S7Port.get_contradictions signature mismatch)**: T-W11-2-04 described `get_contradictions(entity_name, confidence_threshold)`. Actual: `get_contradictions(entity_id: UUID, top_k: int)`. Fixed.
+- **N-8 (ChunkSearchRequest has no entity_tickers field)**: T-W11-2-02 described resolving tickers to instrument_ids and adding them to `ChunkSearchRequest`. The current `ChunkSearchRequest` has no `entity_ids` or `entity_tickers` field. PLAN-0078 adds `entity_ids` to `ChunkSearchRequest`. Until PLAN-0078 ships, the ticker→instrument_id resolution in `_handle_search_documents` should pass instrument_ids via the existing `S6Port.search_chunks` mechanism, not via a non-existent `entity_tickers` field. Added note to T-W11-2-02.
+- **N-9 (W11-0 missing)**: Header claims 6 waves including W11-0, but no W11-0 section exists. Corrected header to 5 waves (W11-1..W11-5). PLAN-0066 Wave H is the prerequisite wave, not W11-0 of this plan.
+- **A-1-vs-§1 contradiction (TOOL_USE_ENABLED flag)**: §0 A-1 says hard-delete the classical pipeline with NO `TOOL_USE_ENABLED` flag. But §1 "Out of scope" says `IntentClassifier`/`RetrievalPlanBuilder` stay as dead code, and T-W11-3-02 adds `TOOL_USE_ENABLED`. §0 A-1 is the binding decision (it was written after §1 as a revision). Fixed: §1 and §5.2 updated to reflect §0 A-1 (no flag, hard delete, NDCG@10 eval gate before merge).
+- **A-2 contradiction (trust_weight in manifest and RetrievedItem)**: §0 A-2 says `trust_weight` removed from manifest. But T-W11-2-01 YAML entries still carry `trust_weight: 0.80..0.92`, and T-W11-2-02/05 handlers still use `trust_weight=spec.trust_weight`. Per §0 A-2 and PLAN-0079, the manifest entries must carry `source_type` instead of `trust_weight`. Fixed in T-W11-2-01 YAML and handler code sketches.
+- **I-1 missing in wave tasks**: §0 I-1 (thinking SSE event + `tool_use_first_turn_latency_seconds` histogram) was mentioned in §0 but never added to any task. Added to T-W11-3-01 (SSEEmitter) and T-W11-3-03 (metrics).
+- **I-2 contradiction (no DB migrations vs. llm_usage_log extension)**: §0 I-2 says extend `llm_usage_log` with 4 new columns. §5.1 says "No DB migrations". §0 I-2 takes precedence. Fixed: §5.1 updated to note the single Alembic migration for `llm_usage_log`; T-W11-3-02 gains the migration task.
+- **I-3 missing in task spec**: §0 I-3 (release UoW before tool loop) mentioned in §0 but not documented in T-W11-3-02 task body. Added explicit acquire→release→tool-loop→re-acquire constraint to T-W11-3-02.
+- **I-6 missing (ToolCallProvenance)**: §0 I-6 mentioned `RetrievedItem.tool_call_provenance` but no task specified it. Added to T-W11-2-02 with the dataclass definition.
+- **I-10 missing in T-W11-2-01**: §0 I-10 (manifest `version`/`since`/`deprecated_at` fields) mentioned in §0 but T-W11-2-01 YAML had no `since` fields. Added to T-W11-2-01.
+- **structlog**: T-W11-1-04 body used `logger.warning(...)` (stdlib style). All logging in this service MUST use structlog (`log = structlog.get_logger()`). Fixed in T-W11-1-04 to use `log.warning(...)` with keyword args.
 
 ---
 
@@ -30,12 +78,12 @@ Specifically, PLAN-0066 Wave H does NOT include:
 - The S6, S7, S3, S1 port implementations — all retrieval logic is untouched
 - The `ToolSpec`, `ToolRegistry`, `ToolExecutor` base classes from PLAN-0066
 - The `capability_manifest.yaml` format (only adds entries, per R29)
-- The existing 13-step classical pipeline — it becomes the feature-flag-off fallback path
 
 **Out of scope**:
 - NL→SQL (TTYD-style) tool — future ADR
-- `IntentClassifier` / `RetrievalPlanBuilder` hard deletion — they stay as dead code until PLAN-0067 is validated in staging
-- PLAN-0067 does not retire the golden eval CI gate (PLAN-0063) — it adds a parallel tool-use eval path
+- PLAN-0067 does not retire the golden eval CI gate (PLAN-0063) — W11-4 uses it as the merge gate
+
+**[BP-405 N-1 fix — §0 A-1 binding]** The classical pipeline (`IntentClassifier`, `RetrievalPlanBuilder`, `ParallelRetrievalOrchestrator`) is **hard-deleted** in W11-3. There is **no** `TOOL_USE_ENABLED` feature flag. The NDCG@10 golden eval (60 queries, PLAN-0063) must match within 0.03 of the classical baseline before the merge is allowed. §1 previously said "it becomes the feature-flag-off fallback path" — this was superseded by §0 A-1.
 
 ---
 
@@ -85,8 +133,8 @@ Read 2026-05-03.
 |-----------|------|---------|--------------------------|-------------------------------|-------|
 | `LlmStreamProvider` port | interface | S8 | `stream(prompt: str)` only — no messages format, no tools | `chat_with_tools(messages, tools)` + keep `stream()` for back-compat | extend port |
 | `DeepInfraCompletionAdapter` | class | S8 | no `tools` key in payload, no `delta.tool_calls` parsing | add `tools` parameter, parse tool_use blocks, signal `ToolCallBatch` | modify |
-| `OpenRouterAdapter` | class | S8 | no tool support | same as DeepInfra | modify |
-| `OllamaAdapter` | class | S8 | no tool support | add stub (log warning — not all Ollama models support tools) | modify |
+| `OpenRouterCompletionAdapter` | class | S8 | no tool support | same as DeepInfra | modify |
+| `OllamaCompletionAdapter` | class | S8 | no tool support | add stub (log warning — not all Ollama models support tools) | modify |
 | `ToolCallBatch` | domain type | libs | does not exist after PLAN-0066 (Wave H assumed it) | `@dataclass class ToolCallBatch: tool_calls: list[ToolUseBlock]` | new in `libs/tools/types.py` |
 | `LLMToolResponse` | domain type | libs | does not exist | `@dataclass: text: str | None, tool_calls: list[ToolUseBlock], finish_reason: str` | new |
 | `capability_manifest.yaml` | config | libs | 2 tools (PLAN-0066 Wave H) | 10 tools (+ 8 new) | extend (R29) |
@@ -97,11 +145,10 @@ Read 2026-05-03.
 | `ToolExecutor.__init__` | constructor | S8 | `(registry, s3)` after PLAN-0066 | `(registry, s3, s6, s7, s1)` | modify |
 | `SSEEmitter.emit_tool_call` | method | S8 | does not exist | `emit_tool_call(tool_name, input_dict, status)` | new |
 | `SSEEmitter.emit_tool_result` | method | S8 | does not exist | `emit_tool_result(tool_name, status)` | new |
-| `ChatOrchestratorUseCase` | use case | S8 | PLAN-0066 Wave H adds tool loop after classical pipeline | tool-use path becomes default (feature flag); classical path becomes fallback | modify |
-| `config.tool_use_enabled` | env var | S8 | does not exist | `TOOL_USE_ENABLED=true` in dev env; `false` as safe default | new env var |
-| `IntentClassifier` | class | S8 | 3-tier, active for all queries | gated: runs only when `tool_use_enabled=False` | gate |
-| `RetrievalPlanBuilder` | class | S8 | active for all queries | gated: runs only when `tool_use_enabled=False` | gate |
-| `ParallelRetrievalOrchestrator` | class | S8 | active for all queries | gated: runs only when `tool_use_enabled=False` | gate |
+| `ChatOrchestratorUseCase` | use case | S8 | delegates to `ChatPipeline` (PLAN-0077) | tool-use path becomes the only path after hard-deletion of classical classes | modify |
+| `IntentClassifier` | class | S8 | 3-tier (`OllamaIntentClassifier`, `DeepInfraIntentClassifier`, `KeywordHeuristicClassifier`), active for all queries | **hard-deleted** in W11-3 (§0 A-1) — NDCG@10 eval gate is the merge guard | delete |
+| `RetrievalPlanBuilder` | class | S8 | active for all queries | **hard-deleted** in W11-3 (§0 A-1) | delete |
+| `ParallelRetrievalOrchestrator` | class | S8 | active for all queries | **hard-deleted** in W11-3 (§0 A-1) | delete |
 | `ToolCallIndicator` | component | worldview-web | does not exist | spinner + tool label, consumed from SSE `tool_call` events | new |
 | `useChatStream` | hook | worldview-web | no `tool_call`/`tool_result` event handling | consume new SSE events, expose `activeTools: string[]` state | modify |
 
@@ -236,16 +283,19 @@ Minimum: 1 unit test.
 
 ---
 
-##### T-W11-1-03: `DeepInfraCompletionAdapter` + `OpenRouterAdapter` function calling
+##### T-W11-1-03: `DeepInfraCompletionAdapter` + `OpenRouterCompletionAdapter` function calling
 **Type**: impl
 **depends_on**: T-W11-1-01, T-W11-1-02
 **blocks**: T-W11-3-02
 **Target files**:
 - `services/rag-chat/src/rag_chat/infrastructure/llm/deepinfra_adapter.py` (modify)
-- `services/rag-chat/src/rag_chat/infrastructure/llm/openrouter_adapter.py` (modify)
-- `services/rag-chat/src/rag_chat/infrastructure/llm/ollama_adapter.py` (modify — stub)
+- `services/rag-chat/src/rag_chat/infrastructure/llm/openrouter_adapter.py` (modify) — class: `OpenRouterCompletionAdapter`
+- `services/rag-chat/src/rag_chat/infrastructure/llm/ollama_adapter.py` (modify — stub) — class: `OllamaCompletionAdapter`
 
-**What to build**:
+**What to build** (all three class names confirmed via BP-405 grep):
+- `DeepInfraCompletionAdapter` — in `deepinfra_adapter.py` ✓
+- `OpenRouterCompletionAdapter` — in `openrouter_adapter.py` ✓ (N-2 fix: NOT `OpenRouterAdapter`)
+- `OllamaCompletionAdapter` — in `ollama_adapter.py` ✓ (stub only)
 
 `DeepInfraCompletionAdapter.chat_with_tools()`:
 ```python
@@ -295,7 +345,7 @@ def stream_chat(self, messages: list[dict], *, max_tokens=1024, temperature=0.2)
     # payload["messages"] = messages (not [{"role": "user", "content": prompt}])
 ```
 
-`OllamaAdapter`: add stub implementations that log a warning and raise `NotImplementedError` with message "Ollama function calling not supported — use DeepInfra or OpenRouter for tool-use path".
+`OllamaCompletionAdapter`: add stub implementations that log a warning and raise `NotImplementedError` with message "Ollama function calling not supported — use DeepInfra or OpenRouter for tool-use path".
 
 **Tests to write**:
 | Test | What it verifies | Type |
@@ -304,7 +354,7 @@ def stream_chat(self, messages: list[dict], *, max_tokens=1024, temperature=0.2)
 | `test_deepinfra_chat_with_tools_returns_tool_calls` | response with `tool_calls` → `LLMToolResponse.has_tool_calls=True` | unit |
 | `test_deepinfra_chat_with_tools_returns_text_on_stop` | response with `content` → `LLMToolResponse.text` set | unit |
 | `test_deepinfra_chat_with_no_tools_omits_tools_from_payload` | `tools=None` → no `tools` key in payload | unit |
-| `test_openrouter_chat_with_tools_identical_contract` | OpenRouter adapter same behavior as DeepInfra for tool calls | unit (mock HTTP) |
+| `test_openrouter_completion_adapter_chat_with_tools_identical_contract` | `OpenRouterCompletionAdapter` same behavior as DeepInfra for tool calls | unit (mock HTTP) |
 | `test_deepinfra_parse_tool_calls_handles_bad_json_arguments` | malformed `arguments` JSON → empty dict, no exception | unit |
 
 Minimum: 6 unit tests.
@@ -312,7 +362,7 @@ Minimum: 6 unit tests.
 **Acceptance criteria**:
 - [ ] `tools=None` → no `tools` key in payload (clean backwards compat)
 - [ ] Malformed `arguments` JSON → `input={}` with warning log, not exception
-- [ ] `OllamaAdapter` raises `NotImplementedError` for `chat_with_tools` (clear error for developers)
+- [ ] `OllamaCompletionAdapter` raises `NotImplementedError` for `chat_with_tools` (clear error for developers)
 
 ---
 
@@ -324,9 +374,16 @@ Minimum: 6 unit tests.
 - `services/rag-chat/src/rag_chat/infrastructure/llm/provider_chain.py` (modify)
 
 **What to build**:
-The `ProviderChain` class currently manages failover between DeepInfra → OpenRouter → Ollama for streaming. It must expose `chat_with_tools()` and `stream_chat()` with the same fallback logic:
+The `LLMProviderChain` class (`services/rag-chat/src/rag_chat/infrastructure/llm/provider_chain.py`) manages failover between DeepInfra → OpenRouter → Ollama for streaming. It must expose `chat_with_tools()` and `stream_chat()` with the same fallback logic.
+
+**[BP-405 N-3 fix]**: The class is `LLMProviderChain`, NOT `ProviderChain`.
+**[structlog fix]**: Use `structlog.get_logger()` bound logger (`log`), not stdlib `logger.warning(...)`. All rag-chat code uses structlog exclusively (R14 + STANDARDS §observability).
 
 ```python
+# At module top:
+import structlog
+log = structlog.get_logger()
+
 async def chat_with_tools(
     self,
     messages: list[dict],
@@ -339,9 +396,9 @@ async def chat_with_tools(
             await self._usage_logger.log(resp.usage, provider=provider.name)
             return resp
         except NotImplementedError:
-            continue          # skip Ollama if it can't do tool calling
+            continue          # skip OllamaCompletionAdapter if it can't do tool calling
         except Exception as e:
-            logger.warning("provider %s failed chat_with_tools: %s", provider.name, e)
+            log.warning("provider_chat_with_tools_failed", provider=provider.name, error=str(e))
             continue
     raise RuntimeError("All LLM providers failed for chat_with_tools")
 ```
@@ -351,8 +408,8 @@ Cost tracking: `resp.usage` from `LLMToolResponse` logged to the existing `Usage
 **Tests to write**:
 | Test | What it verifies | Type |
 |---|---|---|
-| `test_provider_chain_skips_ollama_for_tool_calls` | Ollama `NotImplementedError` → chain continues to OpenRouter | unit (mocks) |
-| `test_provider_chain_chat_with_tools_logs_usage` | successful call → usage logger called | unit |
+| `test_llm_provider_chain_skips_ollama_for_tool_calls` | `OllamaCompletionAdapter` `NotImplementedError` → chain continues to `OpenRouterCompletionAdapter` | unit (mocks) |
+| `test_llm_provider_chain_chat_with_tools_logs_usage` | successful call → usage logger called | unit |
 
 Minimum: 2 unit tests.
 
@@ -373,7 +430,7 @@ Minimum: 2 unit tests.
 | Broken file | Why | Fix |
 |---|---|---|
 | Any test that mocks `LlmStreamProvider` | New `LlmChatProvider` protocol added; mocks may fail `isinstance` checks | Ensure mocks that need both implement both; existing stream-only mocks unaffected |
-| `services/rag-chat/src/rag_chat/infrastructure/llm/provider_chain.py` | Must implement `LlmChatProvider` | Done by T-W11-1-04 |
+| `services/rag-chat/src/rag_chat/infrastructure/llm/provider_chain.py` (class: `LLMProviderChain`) | Must implement `LlmChatProvider` | Done by T-W11-1-04 |
 
 #### Regression Guardrails — Wave W11-1
 - BP-025 (external I/O timeout): `chat_with_tools()` is a non-streaming HTTP call to DeepInfra. Add `asyncio.wait_for(timeout=self._timeout)` identical to the streaming path.
@@ -407,6 +464,12 @@ Minimum: 2 unit tests.
 **What to add** (append under existing temporal tools):
 
 ```yaml
+  # [BP-405 A-2 fix] trust_weight REMOVED from all entries per §0 A-2.
+  # TrustScorer (PLAN-0079) derives trust from source_authority × recency_decay ×
+  # corroboration × extraction_confidence at retrieval time. The manifest carries
+  # source_type so TrustScorer can look up authority.
+  # [BP-405 I-10 fix] All entries carry since: "v1" and deprecated_at: null per §0 I-10.
+
   - name: search_documents
     description: >
       Searches the platform's document corpus using hybrid BM25 + ANN embedding search.
@@ -435,7 +498,9 @@ Minimum: 2 unit tests.
         type: array
         description: "Filter by source: ['sec_filing', 'earnings', 'news', 'analyst_report']"
         required: false
-    trust_weight: 0.80
+    source_type: "mixed"           # used by TrustScorer to look up SOURCE_AUTHORITY
+    since: "v1"
+    deprecated_at: null
     example_queries:
       - "What risks does AAPL mention in their latest 10-K?"
       - "What did analysts say about NVDA's data centre revenue?"
@@ -460,7 +525,9 @@ Minimum: 2 unit tests.
         type: array
         description: "Filter by relation type: ['subsidiary_of', 'board_member_of', 'partnership', 'competitor_of']"
         required: false
-    trust_weight: 0.85
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
     example_queries:
       - "What companies is Elon Musk connected to?"
       - "Who are AAPL's main subsidiaries?"
@@ -489,7 +556,9 @@ Minimum: 2 unit tests.
         type: string
         description: Optional Cypher relationship filter (e.g. "[:INVESTS_IN|:BOARD_MEMBER_OF]")
         required: false
-    trust_weight: 0.85
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
     example_queries:
       - "How is Sam Altman connected to Microsoft?"
       - "What is the investment chain between SoftBank and ARM?"
@@ -517,7 +586,9 @@ Minimum: 2 unit tests.
         type: integer
         description: Maximum number of relations to return. Default 15.
         required: false
-    trust_weight: 0.82
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
     example_queries:
       - "List all companies that Microsoft has acquired"
       - "Who competes with NVDA in the GPU market?"
@@ -545,7 +616,9 @@ Minimum: 2 unit tests.
         type: date
         description: Latest claim extraction date (YYYY-MM-DD)
         required: false
-    trust_weight: 0.78
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
     example_queries:
       - "What are analysts saying about AAPL's AI strategy?"
       - "What price targets exist for NVDA?"
@@ -572,7 +645,9 @@ Minimum: 2 unit tests.
         type: date
         description: Latest event date
         required: false
-    trust_weight: 0.82
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
     example_queries:
       - "When did AAPL last announce a major acquisition?"
       - "What leadership changes happened at Google in 2025?"
@@ -591,7 +666,9 @@ Minimum: 2 unit tests.
         type: number
         description: Minimum contradiction strength (0.0–1.0). Default 0.5.
         required: false
-    trust_weight: 0.75
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
     example_queries:
       - "Are there conflicting analyst views on TSLA's profitability?"
       - "What do different sources disagree about regarding AAPL's China exposure?"
@@ -603,7 +680,9 @@ Minimum: 2 unit tests.
       Do NOT call this tool unless the question explicitly references "my portfolio",
       "my holdings", "my watchlist", or similar personal context.
     parameters: []
-    trust_weight: 0.92
+    source_type: "portfolio"
+    since: "v1"
+    deprecated_at: null
     example_queries:
       - "How is my portfolio performing today?"
       - "Which of my holdings have the highest exposure to AI?"
@@ -613,7 +692,7 @@ Minimum: 2 unit tests.
 - `tests/architecture/test_tool_manifest_sync.py` — after this task, the manifest has 10 entries but only 2 registered handlers (S3 from PLAN-0066). The architecture test will FAIL until T-W11-2-02 through T-W11-2-05 complete. This is expected and must be fixed before Wave W11-2's validation gate.
 
 **Acceptance criteria**:
-- [ ] All 8 new entries have `name`, `description`, `parameters`, `trust_weight`, `example_queries`
+- [ ] All 8 new entries have `name`, `description`, `parameters`, `source_type`, `since: "v1"`, `deprecated_at: null`, `example_queries` — no `trust_weight` field (§0 A-2)
 - [ ] `get_portfolio_context` description explicitly says "Do NOT call unless..." — prevents LLM over-calling
 
 ---
@@ -627,27 +706,81 @@ Minimum: 2 unit tests.
 
 **What to build**:
 
-First, update `ToolExecutor.__init__` to accept all four port clients:
+**[BP-405 C-3 / R30 fix — ToolExecutorFactory pattern]**: Per §0 C-3 and R30, per-request auth fields (`user_id`, `tenant_id`, `internal_jwt`, `entity_context`) MUST NOT live in `ToolExecutor.__init__` (which is a singleton). The binding decision is:
+- `ToolExecutorFactory` (NEW — singleton wired into DI) holds shared collaborators (`registry`, `s3`, `s6`, `s7`, `s1`, `timeout`, `embedder`)
+- `ToolExecutor` (per-request) holds auth + scope; created via `ToolExecutorFactory.for_request(...)`
+
 ```python
-class ToolExecutor:
+@dataclass
+class EntityContext:
+    """NEW (§0 M-1) — entity scope injected at request time. Tool handlers that take
+    entity-scoped queries auto-inject entity_ids=[entity_context.entity_id].
+    Cross-entity tools (compare_entities, screen_universe) check entity_context is None."""
+    entity_id: UUID
+    ticker: str
+    name: str
+
+class ToolExecutorFactory:
+    """Singleton — wired once into DI container. Holds all shared collaborators."""
     def __init__(
         self,
         registry: ToolRegistry,
         s3: S3Port,
-        s6: S6Port,          # NEW
-        s7: S7Port,          # NEW
-        s1: S1Port,          # NEW
-        user_id: UUID | None = None,    # NEW — for portfolio context
-        tenant_id: UUID | None = None,  # NEW
-        x_internal_token: str | None = None,  # NEW
+        s6: S6Port,
+        s7: S7Port,
+        s1: S1Port,
+        timeout: float = 5.0,
+    ) -> None: ...
+
+    def for_request(
+        self,
+        *,
+        user_id: UUID | None,
+        tenant_id: UUID | None,
+        internal_jwt: str | None,
+        entity_context: EntityContext | None = None,
+    ) -> "ToolExecutor":
+        """Per-request factory call. Returns a ToolExecutor with auth bound."""
+        ...
+
+class ToolExecutor:
+    """Per-request — short-lived. Created by ToolExecutorFactory.for_request()."""
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        s3: S3Port,
+        s6: S6Port,
+        s7: S7Port,
+        s1: S1Port,
+        user_id: UUID | None,
+        tenant_id: UUID | None,
+        internal_jwt: str | None,
+        entity_context: EntityContext | None,
+        timeout: float = 5.0,
     ) -> None: ...
 ```
 
+`ToolExecutorFactory` and `EntityContext` are NEW — created in this task.
+`ToolExecutorFactory` is stored on `app.state` (singleton); `for_request(...)` is called at the top of every `ChatOrchestratorUseCase.execute_streaming()` call.
+
+**[BP-405 I-6 fix — ToolCallProvenance]**: Add `ToolCallProvenance` dataclass alongside `EntityContext`:
+```python
+@dataclass
+class ToolCallProvenance:
+    """§0 I-6 — provenance for citation audit. Attached to each RetrievedItem produced via tool-use."""
+    tool_name: str
+    tool_input: dict          # the raw arguments dict from ToolUseBlock.input
+    call_id: str              # ToolUseBlock.id (LLM-assigned call ID)
+```
+`RetrievedItem` must accept an optional `tool_call_provenance: ToolCallProvenance | None = None` field. All handlers must populate it from the `ToolUseBlock` context.
+
 `_handle_search_documents(query, entity_tickers=None, date_from=None, date_to=None, source_types=None)`:
-1. Build `ChunkSearchRequest(query_text=query, top_k=20, date_from=date_from, date_to=date_to)`.
-2. If `entity_tickers`: resolve each via `_s3.find_instrument_by_ticker()` → get `instrument_id` list. **Partial resolution**: if some tickers resolve and some don't (unknown tickers return `None`), proceed with the resolved subset — do NOT abort the whole call. Log `log.warning("ticker_not_found", ticker=t)` for each unresolved ticker. Add only the resolved `instrument_id`s to the request filter.
+1. Build `ChunkSearchRequest(query_text=query, top_k=20, date_from=date_from, date_to=date_to, source_types=source_types or [])`.
+2. **Entity scope injection (§0 M-1)**: if `self._entity_context` is set, the S6 call is automatically scoped to that entity. If `entity_tickers` is also provided by the LLM: resolve each via `_s3.find_instrument_by_ticker()` → get `instrument_id` list. **Partial resolution**: proceed with resolved subset; log `log.warning("ticker_not_found", ticker=t)` for each unresolved.
+   **[BP-405 N-8 fix — ChunkSearchRequest.entity_ids]**: The current `ChunkSearchRequest` has no `entity_ids` or `entity_tickers` field. PLAN-0078 adds `entity_ids: list[UUID]` to `ChunkSearchRequest`. Until PLAN-0078 ships, instrument_id filtering is NOT possible via `ChunkSearchRequest` — the ticker resolution step is a no-op placeholder that must be activated post-PLAN-0078. Add a `# TODO(PLAN-0078): pass entity_ids=resolved_ids once ChunkSearchRequest.entity_ids exists` comment.
 3. Call `_s6.search_chunks(request)` → list of `EnrichedChunkResult`.
-4. Format each as `RetrievedItem(content=result.text[:_TOOL_RESULT_MAX_CHARS], item_type=ItemType.chunk, score=result.score, trust_weight=spec.trust_weight, source=result.source_type, title=result.metadata.get("title"), url=result.metadata.get("url"), published_at=result.metadata.get("published_at"))`.
+4. Format each as `RetrievedItem(content=result.text[:_TOOL_RESULT_MAX_CHARS], item_type=ItemType.chunk, score=result.score, source_type=result.source_type, title=result.title, url=result.url, published_at=result.published_at, tool_call_provenance=provenance)`.
+   **[BP-405 A-2 fix]**: Do NOT pass `trust_weight=spec.trust_weight` — `TrustScorer` (PLAN-0079) derives trust at query time from `source_type`. Pass `source_type` instead.
 5. Return up to 20 items.
 
 `_TOOL_RESULT_MAX_CHARS = 4000` — class-level constant shared by all handlers. Each `RetrievedItem.content` is truncated to this limit before returning. Prevents context window overflow when multiple tools return large payloads (10 tools × 4000 chars = 40,000 chars max, well within typical LLM context limits).
@@ -685,8 +818,15 @@ Minimum: 6 unit tests.
 **What to build**:
 
 `_handle_get_entity_graph(entity_name, depth=1, relation_types=None)`:
-1. Resolve entity_name → entity_id via `_s7.search_relations(entity_name, top_k=1)` → get first result's entity_id. If not found: return `[]`.
-2. Call `_s7.get_egocentric_graph(entity_id, depth=depth)` → `EgocentricGraph`.
+1. **[BP-405 N-4 fix — S7Port.search_relations actual signature]**: `S7Port.search_relations` takes `(embedding: list[float], entity_ids: list[UUID], top_k, min_confidence)` — NOT an entity name string. Entity name → entity_id resolution requires a dedicated endpoint or local entity lookup. For W11-2, use `_s7.get_egocentric_graph` with a known entity_id from `entity_context` OR use S6's entity resolution endpoint (`_s6.resolve_entities(entity_name)`) to get UUIDs:
+   ```python
+   resolved = await self._s6.resolve_entities(entity_name)
+   if not resolved:
+       return []
+   entity_id = resolved[0].entity_id
+   ```
+   If `self._entity_context` is set, use `entity_context.entity_id` directly (no resolution call needed).
+2. Call `_s7.get_egocentric_graph(entity_id, min_confidence=0.3, limit=30)` → `EgocentricGraph`.
 3. Format as a text summary:
    ```
    Knowledge Graph for {entity_name} (depth {depth}):
@@ -695,10 +835,11 @@ Minimum: 6 unit tests.
    - {subject} --[{relation_type} (conf: {confidence:.2f})]→ {object}: {summary}
    ...
    ```
-4. Return 1 `RetrievedItem(content=summary_text, item_type=ItemType.relation, trust_weight=spec.trust_weight)`.
+4. Return 1 `RetrievedItem(content=summary_text, item_type=ItemType.relation, source_type="knowledge_graph", tool_call_provenance=provenance)`.
+   **[BP-405 A-2 fix]**: No `trust_weight` field — `TrustScorer` uses `source_type="knowledge_graph"` to derive authority.
 
 `_handle_traverse_graph(start_entity, target_entity=None, depth=3, cypher_pattern=None)`:
-1. Resolve `start_entity` → entity_id.
+1. Resolve `start_entity` → entity_id via `_s6.resolve_entities(start_entity)` → first result. If `entity_context` set, use `entity_context.entity_id` directly.
 2. **Cypher injection guard** (CRITICAL — R-001): the `cypher_pattern` parameter is set by the LLM. An unconstrained pattern like `[:DETACH DELETE n]` or arbitrary Cypher could corrupt the graph. Validate against an allowlist:
    ```python
    _ALLOWED_CYPHER_REL_TYPES: frozenset[str] = frozenset({
@@ -722,7 +863,8 @@ Minimum: 6 unit tests.
 3. Build Cypher query using sanitized pattern only: if `target_entity` provided → path query; else → exploration from start.
 4. Call `_s7.cypher_traverse(entity_id, depth, sanitized_pattern)`.
 5. Format paths as numbered list. Truncate to `_TOOL_RESULT_MAX_CHARS`.
-6. Return 1 `RetrievedItem(content=result_text[:_TOOL_RESULT_MAX_CHARS], item_type=ItemType.cypher_path)`.
+6. Return 1 `RetrievedItem(content=result_text[:_TOOL_RESULT_MAX_CHARS], item_type=ItemType.cypher_path, source_type="knowledge_graph", tool_call_provenance=provenance)`.
+   **[BP-405 A-2 fix]**: No `trust_weight` — `TrustScorer` derives from `source_type`.
 
 **Structured logging**:
 ```python
@@ -757,28 +899,63 @@ Minimum: 8 unit tests.
 Each handler follows the same pattern: call the corresponding S7 port method, format results as a text list, return `list[RetrievedItem]`. Every handler **must** emit structured logs and truncate content to `_TOOL_RESULT_MAX_CHARS`.
 
 `_handle_search_entity_relations(entity_name, relation_type=None, min_confidence=0.6, limit=15)`:
-- Call `_s7.search_relations(entity_name, relation_type, min_confidence, top_k=limit)`.
+- **[BP-405 N-4 fix]**: `S7Port.search_relations` takes `(embedding: list[float], entity_ids: list[UUID], top_k, min_confidence)`. Entity name → entity_id resolution via `_s6.resolve_entities(entity_name)`. Entity name → query embedding via `_s6.embed_text(entity_name)` (or embed the full query string). If `entity_context` set, use `entity_context.entity_id` directly.
+  ```python
+  # Correct call (actual S7Port signature):
+  results = await self._s7.search_relations(
+      embedding=query_embedding,
+      entity_ids=[entity_id],
+      top_k=limit,
+      min_confidence=min_confidence,
+  )
+  ```
 - Format: `"{subject} --[{relation_type}]→ {object} (confidence: {conf:.2f})\n  {summary}"`.
 - Truncate each item's content to `_TOOL_RESULT_MAX_CHARS`.
-- Return 1 `RetrievedItem(item_type=ItemType.relation)` per result, up to `limit`.
+- Return 1 `RetrievedItem(item_type=ItemType.relation, source_type="knowledge_graph", tool_call_provenance=provenance)` per result, up to `limit`.
+  **[BP-405 A-2 fix]**: No `trust_weight`.
 - Log: `log.info("tool_executed", tool="search_entity_relations", latency_ms=..., items_returned=N)` or `log.warning("tool_failed", ...)` on exception.
 
 `_handle_search_claims(entity_name, claim_type=None, date_from=None, date_to=None)`:
-- Call `_s7.search_claims(entity_name, claim_type, date_from, date_to)`.
-- Format: `"[{polarity}] {claim_type}: {text} (confidence: {conf:.2f}, date: {date})"`.
-- Return 1 `RetrievedItem(item_type=ItemType.claim)` per result, content truncated.
+- **[BP-405 N-5 fix]**: `S7Port.search_claims` actual signature: `(entity_ids: list[UUID], claim_types: list[str] | None, date_from, date_to, top_k, min_confidence)`. Resolve entity_name → entity_id first.
+  ```python
+  # Correct call:
+  results = await self._s7.search_claims(
+      entity_ids=[entity_id],
+      claim_types=[claim_type] if claim_type else None,
+      date_from=date_from,
+      date_to=date_to,
+      top_k=15,
+      min_confidence=0.45,
+  )
+  ```
+- Format: `"[{polarity}] {claim_type}: {claim_text} (confidence: {conf:.2f}, date: {created_at})"`.
+- Return 1 `RetrievedItem(item_type=ItemType.claim, source_type="knowledge_graph", tool_call_provenance=provenance)` per result, content truncated.
 - Log `tool_executed` / `tool_failed`.
 
 `_handle_search_events(entity_name, event_type=None, date_from=None, date_to=None)`:
-- Call `_s7.search_events(entity_name, event_type, date_from, date_to)`.
+- **[BP-405 N-6 fix]**: `S7Port.search_events` actual signature: `(entity_ids: list[UUID], event_types: list[str] | None, date_from, date_to, top_k)`. Resolve entity_name → entity_id first.
+  ```python
+  # Correct call:
+  results = await self._s7.search_events(
+      entity_ids=[entity_id],
+      event_types=[event_type] if event_type else None,
+      date_from=date_from,
+      date_to=date_to,
+      top_k=10,
+  )
+  ```
 - Format: `"{event_date}: [{event_type}] {event_text}"`.
-- Return 1 `RetrievedItem(item_type=ItemType.event)` per result, content truncated.
+- Return 1 `RetrievedItem(item_type=ItemType.event, source_type="knowledge_graph", tool_call_provenance=provenance)` per result, content truncated.
 - Log `tool_executed` / `tool_failed`.
 
 `_handle_get_contradictions(entity_name, confidence_threshold=0.5)`:
-- Call `_s7.get_contradictions(entity_name, confidence_threshold)`.
+- **[BP-405 N-7 fix]**: `S7Port.get_contradictions` actual signature: `(entity_id: UUID, top_k: int)`. No `confidence_threshold` parameter in the port — the threshold is a manifest-level hint only. Resolve entity_name → entity_id first. Use `top_k=5` (default).
+  ```python
+  # Correct call:
+  results = await self._s7.get_contradictions(entity_id=entity_id, top_k=5)
+  ```
 - Format each contradiction as a paired statement block.
-- Return 1 `RetrievedItem` per contradiction pair, content truncated.
+- Return 1 `RetrievedItem(source_type="knowledge_graph", tool_call_provenance=provenance)` per contradiction pair, content truncated.
 - Log `tool_executed` / `tool_failed`.
 
 **Tests to write**:
@@ -805,9 +982,11 @@ Minimum: 5 unit tests.
 
 `_handle_get_portfolio_context()`:
 1. If `self._user_id` is None (no auth context): return `[]` (anonymous sessions have no portfolio).
-2. Call `_s1.get_portfolio_context(self._user_id, self._tenant_id, self._x_internal_token)`.
+2. Call `_s1.get_portfolio_context(self._user_id, self._tenant_id, self._internal_jwt)`.
+   Note: per §0 C-3, per-request auth lives in `ToolExecutor` fields `_user_id`, `_tenant_id`, `_internal_jwt` (NOT `_x_internal_token` — use the JWT, not a separate token).
 3. Format: list holdings (ticker, market_value, unrealized_pnl) + watchlist tickers as a compact text block. Truncate to `_TOOL_RESULT_MAX_CHARS`.
-4. Return 1 `RetrievedItem(item_type=ItemType.financial, trust_weight=0.92, content=text[:_TOOL_RESULT_MAX_CHARS])`.
+4. Return 1 `RetrievedItem(item_type=ItemType.financial, source_type="portfolio", content=text[:_TOOL_RESULT_MAX_CHARS], tool_call_provenance=provenance)`.
+   **[BP-405 A-2 fix]**: No `trust_weight=0.92` — `TrustScorer` uses `source_type="portfolio"` to derive authority from `SOURCE_AUTHORITY` table.
 
 **Privacy / R14 compliance**: portfolio holdings are PII (specific monetary positions of a real user). The structured log for this handler MUST NOT include tickers, market values, or P&L figures:
 ```python
@@ -855,19 +1034,22 @@ Minimum: 4 unit tests.
 
 ### Wave W11-3: ChatOrchestrator Full Tool-Use Migration
 
-**Goal**: Migrate `ChatOrchestratorUseCase` to use the tool-use path for ALL queries, behind `TOOL_USE_ENABLED` feature flag. Add SSE tool-call events. Gate the classical pipeline as the fallback path.
-**Depends on**: Wave W11-1 (`LlmChatProvider` port), Wave W11-2 (`ToolExecutor` with all handlers)
-**Estimated effort**: 75 min
+**Goal**: Migrate `ChatOrchestratorUseCase` to use tool-use as the ONLY path for ALL queries. Add SSE tool-call events. Hard-delete the classical pipeline classes. [BP-405 A-1 fix: no TOOL_USE_ENABLED flag — §0 A-1 is binding.]
+**Depends on**: Wave W11-1 (`LlmChatProvider` port), Wave W11-2 (`ToolExecutor` + `ToolExecutorFactory` with all handlers)
+**Estimated effort**: 90 min (increased: migration + 3 file deletions + Alembic migration)
 **Architecture layer**: S8 application / config
 
 #### Pre-read
-- `services/rag-chat/src/rag_chat/application/use_cases/chat_orchestrator.py` — full orchestrator (453 lines)
+- `services/rag-chat/src/rag_chat/application/use_cases/chat_orchestrator.py` — full orchestrator (post-PLAN-0077: delegates to `ChatPipeline`)
+- `services/rag-chat/src/rag_chat/application/pipeline/chat_pipeline.py` — `ChatPipeline` value object (PLAN-0077)
 - `services/rag-chat/src/rag_chat/application/pipeline/sse_emitter.py` — current 7 event types
-- `services/rag-chat/src/rag_chat/infrastructure/config/settings.py` — how feature flags / env vars are added
+- `services/rag-chat/src/rag_chat/application/pipeline/retrieval_orchestrator.py` — class to DELETE
+- `services/rag-chat/src/rag_chat/application/pipeline/intent_classifier.py` — classes to DELETE
+- `services/rag-chat/src/rag_chat/application/pipeline/retrieval_plan_builder.py` — class to DELETE
 
 #### Tasks
 
-##### T-W11-3-01: `SSEEmitter` — `tool_call` + `tool_result` event types
+##### T-W11-3-01: `SSEEmitter` — `thinking` + `tool_call` + `tool_result` event types
 **Type**: impl
 **depends_on**: none
 **blocks**: T-W11-3-02
@@ -875,6 +1057,19 @@ Minimum: 4 unit tests.
 - `services/rag-chat/src/rag_chat/application/pipeline/sse_emitter.py` (modify)
 
 **What to build**:
+
+**[BP-405 I-1 fix — `thinking` SSE event]**: Emit a `thinking` event the moment the first-turn LLM call starts. This is the TTFT visibility mitigation from §0 I-1 — the user sees activity immediately rather than staring at a blank screen for ~600ms:
+```python
+def emit_thinking(self, stage: str = "tool_classification") -> dict[str, str]:
+    """Emitted immediately when first-turn LLM call starts. Stage: 'tool_classification'.
+    WHY: non-streaming first turn adds ~600ms latency vs classical path. This event
+    shows the user activity before the first token arrives (I-1 TTFT mitigation)."""
+    return {
+        "event": "thinking",
+        "data": json.dumps({"stage": stage}),
+    }
+```
+
 ```python
 def emit_tool_call(
     self,
@@ -927,30 +1122,53 @@ _TOOL_LABELS: dict[str, str] = {
 **Tests to write**:
 | Test | What it verifies | Type |
 |---|---|---|
+| `test_sse_thinking_event_has_stage` | `emit_thinking()` → `event="thinking"`, `data.stage="tool_classification"` | unit |
 | `test_sse_tool_call_event_has_label` | known tool_name → `label` set to user-friendly string | unit |
 | `test_sse_tool_call_unknown_tool_uses_name_as_label` | unknown tool → `label = tool_name` | unit |
 | `test_sse_tool_result_event_has_item_count` | `item_count=5` → data contains `"item_count": 5` | unit |
 
-Minimum: 3 unit tests.
+Minimum: 4 unit tests.
 
 ---
 
-##### T-W11-3-02: `TOOL_USE_ENABLED` config + `ChatOrchestratorUseCase._tool_use_path()`
+##### T-W11-3-02: `ChatOrchestratorUseCase` full migration + classical pipeline deletion
 **Type**: impl
 **depends_on**: T-W11-1-04, T-W11-2-02, T-W11-3-01
 **blocks**: none
+**[BP-405 A-1 fix — no TOOL_USE_ENABLED flag]**: §0 A-1 binding: no feature flag. Tool-use is the only path after W11-3. The classical pipeline classes (`IntentClassifier`, `RetrievalPlanBuilder`, `ParallelRetrievalOrchestrator`) are hard-deleted in this wave. The NDCG@10 golden eval (W11-4) is the merge gate.
+**[BP-405 I-3 fix — UoW released before tool loop]**: The tool execution loop MUST NOT hold a database UoW (R24 — no session held across external I/O). The correct session lifecycle in `ChatOrchestratorUseCase.execute_streaming()` is:
+```python
+# 1. Acquire UoW — load thread + message history
+async with uow:
+    thread = await uow.threads.get(thread_id, tenant_id)
+    history = await uow.messages.list(thread_id, limit=20)
+# 2. UoW released — connection returned to pool
+
+# 3. Tool loop (may take 3-5 seconds across multiple HTTP calls)
+tool_executor = self._tool_factory.for_request(...)
+async for event in self._tool_use_path(request, messages, sse, tool_executor):
+    yield event
+
+# 4. Re-acquire UoW — persist results
+async with uow:
+    await uow.messages.save(...)
+    await uow.commit()
+```
+**[BP-405 I-2 fix — llm_usage_log migration]**: This wave adds an Alembic migration to extend `llm_usage_log` with 4 new columns (see §5.1 correction). The migration task is:
+- New Alembic migration `services/rag-chat/alembic/versions/0009_extend_llm_usage_log_tool_tracking.py`
+- Columns added (all nullable/with default for forward-compat): `prompt_cache_read_tokens INT`, `prompt_cache_creation_tokens INT`, `tool_calls_count INT DEFAULT 0`, `tool_names TEXT[]`
 **Target files**:
-- `services/rag-chat/src/rag_chat/infrastructure/config/settings.py` (modify — add `tool_use_enabled: bool = False`)
-- `services/rag-chat/src/rag_chat/application/use_cases/chat_orchestrator.py` (modify — add `_tool_use_path()`)
+- `services/rag-chat/src/rag_chat/application/use_cases/chat_orchestrator.py` (modify — full tool-use path; delete classical pipeline integration)
+- `services/rag-chat/src/rag_chat/application/pipeline/intent_classifier.py` (**DELETE**)
+- `services/rag-chat/src/rag_chat/application/pipeline/retrieval_plan_builder.py` (**DELETE**)
+- `services/rag-chat/src/rag_chat/application/pipeline/retrieval_orchestrator.py` (**DELETE**)
+- `services/rag-chat/alembic/versions/0009_extend_llm_usage_log_tool_tracking.py` (NEW)
 
 **What to build**:
 
-Add to `Settings`:
-```python
-tool_use_enabled: bool = Field(default=False, alias="TOOL_USE_ENABLED")
-```
+**[BP-405 A-1 fix]**: Do NOT add `TOOL_USE_ENABLED` to `Settings`. Tool-use is the only path. Delete the classical pipeline classes instead (see Target files above).
 
-In `ChatOrchestratorUseCase`, add `_tool_use_path()` private async method:
+In `ChatOrchestratorUseCase`, replace the classical pipeline call with `_tool_use_path()` as the primary (only) method:
 ```python
 async def _tool_use_path(
     self,
@@ -1067,13 +1285,14 @@ async def _tool_use_path(
     # ... (same as classical path output processing)
 ```
 
-In `execute_streaming()` / `execute_sync()`, add the feature-flag branch:
+**[BP-405 A-1 fix]**: No feature-flag branch. `execute_streaming()` calls `_tool_use_path()` directly — there is no classical pipeline fallback after W11-3:
 ```python
-if self._config.tool_use_enabled and self._tool_executor is not None:
-    async for event in self._tool_use_path(request, messages, resolved_entities, sse):
-        yield event
-    return
-# Existing classical pipeline follows unchanged
+# In execute_streaming() — tool-use is the ONLY path
+async for event in self._tool_use_path(request, messages, resolved_entities, sse):
+    yield event
+
+# [I-3 UoW constraint] See task header for the acquire → release → tool-loop → re-acquire pattern.
+# This method must NOT hold a UoW context manager during the tool execution loop.
 ```
 
 **Cap**: tool loop max 3 turns (up from 2 in PLAN-0066 MVP) — allows the LLM to call tools, receive results, and potentially request one more clarifying tool call before final answer.
@@ -1094,8 +1313,7 @@ log.info("tool_use_path_complete", total_items=K, latency_ms=X)
 **Tests to write**:
 | Test | What it verifies | Type |
 |---|---|---|
-| `test_orchestrator_tool_use_disabled_follows_classical_path` | `tool_use_enabled=False` → `_tool_use_path` never called | unit (mock) |
-| `test_orchestrator_tool_use_enabled_calls_tool_use_path` | `tool_use_enabled=True` → classical pipeline skipped | unit (mock) |
+| `test_orchestrator_calls_tool_use_path_as_only_path` | `execute_streaming()` → `_tool_use_path` always called (no classical pipeline) | unit (mock) |
 | `test_orchestrator_tool_calls_emit_tool_call_events` | LLM emits tool_use → `tool_call` SSE event yielded | unit (mock LLM) |
 | `test_orchestrator_tool_results_injected_into_messages` | after execute_all → tool_result turn added to messages | unit |
 | `test_orchestrator_tool_use_path_applies_reranking` | retrieved items from tools → reranker called | unit |
@@ -1107,9 +1325,8 @@ log.info("tool_use_path_complete", total_items=K, latency_ms=X)
 Minimum: 9 unit tests.
 
 **Acceptance criteria**:
-- [ ] `TOOL_USE_ENABLED=false` (default) → classical pipeline completely unchanged
-- [ ] `TOOL_USE_ENABLED=true` → tool loop runs; IntentClassifier + RetrievalPlanBuilder skipped
-- [ ] Tool loop cap at 3 LLM turns (not infinite)
+- [ ] **[BP-405 A-1 fix]** Classical pipeline classes (`OllamaIntentClassifier`, `DeepInfraIntentClassifier`, `KeywordHeuristicClassifier`, `RetrievalPlanBuilder`, `ParallelRetrievalOrchestrator`) deleted — no references remain in `src/`
+- [ ] Tool loop runs for all requests; tool loop cap at 3 LLM turns (not infinite)
 - [ ] All-tools-failed → `all_tools_failed` warning logged, second LLM turn NOT called (no hallucination on empty context)
 - [ ] Preamble text (`response.text` set alongside tool_calls) → streamed to user, not discarded
 - [ ] Tool result content in messages capped at 4000 chars (context budget enforced)
@@ -1117,14 +1334,14 @@ Minimum: 9 unit tests.
 
 ---
 
-##### T-W11-3-03: Metrics update + dev env config
-**Type**: config + impl
+##### T-W11-3-03: Metrics update
+**Type**: impl
 **depends_on**: T-W11-3-02
 **blocks**: none
 **Target files**:
-- `env/dev/rag-chat.env` (modify — add `TOOL_USE_ENABLED=true` for dev)
-- `env/dev/rag-chat.env.example` (modify — document the variable)
 - `services/rag-chat/src/rag_chat/application/metrics/` (modify — add tool-use metrics)
+
+**[BP-405 A-1 fix]**: No `TOOL_USE_ENABLED` env var. Tool-use is the only path (§0 A-1 binding). No dev/prod flag needed — the env files are not modified in this task.
 
 **What to build**:
 
@@ -1143,46 +1360,55 @@ tool_call_latency_seconds = Histogram(
 )
 tool_use_path_total = Counter(
     "rag_tool_use_path_total",
-    "Requests handled by tool-use path vs classical path",
-    ["path"],    # "tool_use" | "classical"
+    "Requests handled by the tool-use path",
+    ["path"],    # "tool_use" (only value; classical path hard-deleted in W11-3)
+)
+tool_use_first_turn_latency_seconds = Histogram(
+    "rag_tool_use_first_turn_latency_seconds",
+    "Latency of the first LLM turn (blocking, non-streaming) in the tool-use path",
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
 )
 ```
 
-Emit these from `ToolExecutor.execute()` and `ChatOrchestratorUseCase`.
+Emit `tool_call_total` and `tool_call_latency_seconds` from `ToolExecutor.execute()`.
+Emit `tool_use_path_total` and `tool_use_first_turn_latency_seconds` from `ChatOrchestratorUseCase._tool_use_path()`.
 
 **Tests to write**:
 | Test | What it verifies | Type |
 |---|---|---|
-| `test_tool_call_total_incremented_on_success` | successful execute → `tool_call_total` counter incremented | unit |
-| `test_tool_use_path_total_classical_when_disabled` | `tool_use_enabled=False` → `path="classical"` recorded | unit |
+| `test_tool_call_total_incremented_on_success` | successful execute → `tool_call_total` counter incremented with `status="ok"` | unit |
+| `test_tool_use_first_turn_latency_recorded` | `_tool_use_path()` completes → `tool_use_first_turn_latency_seconds` histogram observed | unit |
 
 Minimum: 2 unit tests.
 
 **Acceptance criteria**:
-- [ ] `TOOL_USE_ENABLED` documented in `rag-chat.env.example` with default `false` and explanation
-- [ ] `env/dev/rag-chat.env` has `TOOL_USE_ENABLED=true` so dev environment tests tool-use path
+- [ ] `rag_tool_call_total{tool_name, status}` counter incremented for each tool execution
+- [ ] `rag_tool_call_latency_seconds{tool_name}` histogram recorded per tool execution
+- [ ] `rag_tool_use_first_turn_latency_seconds` histogram recorded per chat request (TTFT regression tracking per §0 I-1)
 
 ---
 
 #### Validation Gate — Wave W11-3
 - [ ] `ruff` + `mypy` pass
 - [ ] 14 new tests pass (3 from T-W11-3-01 + 9 from T-W11-3-02 + 2 from T-W11-3-03)
-- [ ] Existing 50-query golden set (PLAN-0063 Wave W5-1) still passes with `TOOL_USE_ENABLED=false` — classical pipeline unchanged
-- [ ] `TOOL_USE_ENABLED=false` → `tool_use_path` never called in any test
-- [ ] `TOOL_USE_ENABLED=true` → SSE stream contains `tool_call` events for appropriate queries
+- [ ] Classical pipeline classes (`OllamaIntentClassifier`, `DeepInfraIntentClassifier`, `KeywordHeuristicClassifier`, `RetrievalPlanBuilder`, `ParallelRetrievalOrchestrator`) are deleted — no references remain in `src/`
+- [ ] SSE stream contains `tool_call` events for appropriate queries (tool-use is the only path)
 - [ ] `test_orchestrator_all_tools_failed_returns_early` passes — hallucination on zero context is blocked
+- [ ] Alembic migration `0009_extend_llm_usage_log_tool_tracking.py` runs cleanly (`alembic upgrade head`)
+- [ ] `rag_tool_use_first_turn_latency_seconds` histogram visible in `/metrics` response
 
 #### Break Impact — Wave W11-3
 | Broken file | Why | Fix |
 |---|---|---|
-| `services/rag-chat/tests/unit/use_cases/test_chat_orchestrator.py` | new `tool_use_enabled` config field; new `_tool_executor` constructor arg | pass `tool_use_enabled=False` in fixtures; pass `tool_executor=None` |
+| `services/rag-chat/tests/unit/use_cases/test_chat_orchestrator.py` | classical pipeline deleted; `ChatOrchestratorUseCase` constructor gains `tool_executor` + `llm_chat` args | update fixtures; mock `ToolExecutor` and `LlmChatProvider` |
 | `services/rag-chat/src/rag_chat/infrastructure/wiring/dependencies.py` | `ChatOrchestratorUseCase` constructor gains `tool_executor` + `llm_chat` args | wire in new providers |
+| Any test that imported `OllamaIntentClassifier`, `DeepInfraIntentClassifier`, `KeywordHeuristicClassifier`, `RetrievalPlanBuilder`, or `ParallelRetrievalOrchestrator` | these classes are deleted | remove or rewrite the tests |
 
 #### Regression Guardrails — Wave W11-3
-- The feature flag default is `False`. Every existing test runs with the classical pipeline unless the test explicitly sets `tool_use_enabled=True`. This is the hard safety net for regression prevention.
-- `TOOL_USE_ENABLED=false` must be verified in CI — do not set it to `true` in test fixtures by default.
+- **[BP-405 A-1 fix]** There is no `TOOL_USE_ENABLED` feature flag. The classical pipeline is hard-deleted. The 60-query NDCG@10 golden eval (W11-4) is the only regression gate for answer quality. Run it before merging this wave.
 - **All-tools-failed**: the `all_tools_failed` guard prevents the single most dangerous failure mode — the LLM answering financial questions with no retrieved context. Any future refactor of `_tool_use_path()` must preserve this guard. The test `test_orchestrator_all_tools_failed_returns_early` is the enforcement mechanism — never skip or delete it (R19).
 - **Token budget**: the `_MSG_CONTENT_MAX_CHARS = 4000` limit in Step 4 is a second-line defence after `ToolExecutor`'s per-handler truncation. If either limit is changed, update both and adjust the test.
+- **TTFT regression**: after merging W11-3, the `rag_tool_use_first_turn_latency_seconds` P95 must be measured in staging and compared against the classical P95 baseline. If P95 exceeds 2× classical baseline, investigate before releasing.
 
 ---
 
@@ -1242,7 +1468,7 @@ Minimum: 2 unit tests.
 ```
 
 Eval harness `eval_tool_use.py`:
-- Runs each query through `ChatOrchestratorUseCase` with `tool_use_enabled=True`
+- Runs each query through `ChatOrchestratorUseCase` (tool-use is the only path after W11-3)
 - Captures which tools were called (from SSE `tool_call` events)
 - Asserts `expected_tools ⊆ actual_tools_called` (subset — LLM may call more)
 - Asserts `min_retrieved_items` met
@@ -1271,7 +1497,9 @@ Eval harness `eval_tool_use.py`:
 | `test_temporal_query_calls_price_history` | "AAPL last 3 months price" → `get_price_history` | integration (mock S3) |
 | `test_portfolio_query_calls_portfolio_tool` | "How is my portfolio?" → `get_portfolio_context` | integration (mock S1) |
 | `test_multi_tool_query_calls_multiple_tools` | "What risks for AAPL and how connected to suppliers?" → multiple tools | integration |
-| `test_classical_path_unaffected_when_flag_off` | `tool_use_enabled=False` → no `tool_call` SSE events | integration |
+| `test_all_tools_failed_returns_graceful_answer` | all tool executions return `None` → `all_tools_failed` emitted; answer generated without tool context | integration |
+
+**[BP-405 A-1 fix]**: The `test_classical_path_unaffected_when_flag_off` test is removed — there is no feature flag and no classical path after W11-3. Replace with `test_all_tools_failed_returns_graceful_answer` which guards the all-tools-failed safety net.
 
 Minimum: 6 integration tests.
 
@@ -1308,7 +1536,7 @@ Assert that `get_portfolio_context` is called ≤ 2/20 times (over-calling = bad
 - [ ] All 6 integration tests pass (mocked or containerized)
 - [ ] 20-query eval: ≥ 18/20 produce valid responses
 - [ ] Tool use rates within acceptable bounds (search_documents ≥ 85%, portfolio ≤ 10%)
-- [ ] Existing 50-query classical eval still passes (with `tool_use_enabled=False`)
+- [ ] NDCG@10 golden eval (60 queries, PLAN-0063): ≤ 0.03 NDCG@10 regression vs. classical baseline (§0 A-1 merge gate)
 
 #### Break Impact — Wave W11-4
 None — Wave W11-4 only adds new test files.
@@ -1498,17 +1726,16 @@ Minimum: 2 vitest tests.
 
 ## 5. Cross-Cutting Concerns
 
-### 5.1 No Kafka / Avro / DB changes
-This plan is pure application-layer + frontend. No migrations, no topics, no contracts.
+### 5.1 Kafka / Avro unchanged; one DB migration
+No Kafka topics or Avro schema changes. One Alembic migration is added in W11-3:
 
-### 5.2 New env var
-`TOOL_USE_ENABLED` — add to:
-- `env/dev/rag-chat.env` → `TOOL_USE_ENABLED=true` (dev: enable the new path)
-- `env/dev/rag-chat.env.example` → document with explanation
-- GitOps: `values/rag-chat.yaml` + `env/dev/rag-chat.env` in worldview-gitops repo (set `false` initially in staging)
+**[BP-405 I-2 fix — §0 I-2 binding]**: `0009_extend_llm_usage_log_tool_tracking.py` adds 4 nullable columns to `llm_usage_log` to track tool-use turn metadata. §5.1 originally said "No DB migrations" — superseded by §0 I-2. See T-W11-3-02 for the migration spec.
+
+### 5.2 No new env vars
+**[BP-405 A-1 fix — §0 A-1 binding]**: There is no `TOOL_USE_ENABLED` feature flag. §5.2 previously specified adding `TOOL_USE_ENABLED` to `env/dev/rag-chat.env`, `rag-chat.env.example`, and `values/rag-chat.yaml`. These changes are **not made**. Tool-use is the only path after W11-3. The only new env vars introduced by this plan are inherited from PLAN-0066 Wave H (already defined there).
 
 ### 5.3 Documentation
-- `docs/services/rag-chat.md` — update with tool-use architecture, capability manifest location, `TOOL_USE_ENABLED` flag
+- `docs/services/rag-chat.md` — update with tool-use architecture, capability manifest location (no `TOOL_USE_ENABLED` flag to document)
 - `libs/tools/README.md` (new) — brief explanation of `ToolRegistry`, `ToolExecutor`, `capability_manifest.yaml`, and R29 enforcement
 
 ### 5.4 Architecture test for R29
@@ -1525,10 +1752,10 @@ PLAN-0066 Wave H defined `tests/architecture/test_tool_manifest_sync.py`. This p
 |---|---|---|
 | LLM emits tool calls on every query, including simple greetings | HIGH | `get_portfolio_context` description explicitly says when NOT to call; tool descriptions scoped narrowly. Monitor `rag_tool_use_path_total` counter and tool-call rate in staging before promoting to prod. |
 | DeepInfra OpenAI-compat endpoint tool_call parsing breaks on model updates | MEDIUM | `_parse_tool_calls` wraps all access in `call.get(...)` with defaults; malformed JSON → `input={}` with warning log, not crash. |
-| Tool-use path produces lower quality answers than classical pipeline | MEDIUM | `TOOL_USE_ENABLED=false` is the default + rollback. Wave W11-4 golden eval must show ≥90% valid responses before `TOOL_USE_ENABLED=true` is promoted to staging/prod. |
+| Tool-use path produces lower quality answers than classical pipeline | MEDIUM | No feature flag — §0 A-1 binding. Wave W11-4 60-query golden eval must match within 0.03 NDCG@10 of the classical baseline before merge is allowed. |
 | `traverse_graph` Cypher tool over-calls KG with expensive queries | LOW | `depth` parameter capped at 4 in tool spec; `ToolExecutor` adds `asyncio.wait_for(timeout=5.0)`. |
-| `LlmChatProvider.chat_with_tools()` adds latency (non-streaming first turn) | LOW | First turn is typically short (LLM returns just tool_calls, no long text). Measure P95 latency in staging and set alert threshold. |
-| Ollama stub raises `NotImplementedError` in production if Ollama is primary | LOW | `ProviderChain` skips `NotImplementedError` and falls through to DeepInfra/OpenRouter. Add explicit log warning at chain construction time if Ollama is first in chain. |
+| `LlmChatProvider.chat_with_tools()` adds latency (non-streaming first turn) | LOW | First turn is typically short (LLM returns just tool_calls, no long text). Measure P95 latency in staging; `tool_use_first_turn_latency_seconds` histogram in T-W11-3-03. |
+| `OllamaCompletionAdapter` stub raises `NotImplementedError` in production if Ollama is primary | LOW | `LLMProviderChain` skips `NotImplementedError` and falls through to DeepInfra/OpenRouter. Add explicit structlog warning at chain construction time if Ollama is first in chain. |
 
 ---
 
@@ -1536,8 +1763,8 @@ PLAN-0066 Wave H defined `tests/architecture/test_tool_manifest_sync.py`. This p
 
 | OQ | Question | Decision Needed By |
 |---|---|---|
-| OQ-1 | Should the `IntentClassifier`, `RetrievalPlanBuilder`, and `ParallelRetrievalOrchestrator` be deleted in a follow-on plan (PLAN-0068) or kept permanently as the feature-flag-off path? | Post-thesis validation (after staging proves tool-use quality ≥ classical) |
-| OQ-2 | Should `TOOL_USE_ENABLED` be a per-request flag (in the API request body) or only a service-level config? Per-request would allow A/B testing in the UI. | Before Wave W11-3 |
+| OQ-1 | **RESOLVED (§0 A-1)**: Classical pipeline hard-deleted in W11-3. No follow-on plan needed. | Resolved 2026-05-07 |
+| OQ-2 | **RESOLVED (§0 A-1)**: No `TOOL_USE_ENABLED` flag at all — neither per-request nor service-level. Tool-use is the only path. | Resolved 2026-05-07 |
 | OQ-3 | Should `search_documents` pass the HyDE-expanded embedding or just `query_text` to `ChunkSearchRequest`? HyDE adds quality but requires the HyDE expander to still run on the tool-use path. | Before Wave W11-2 implementation |
 
 ---
