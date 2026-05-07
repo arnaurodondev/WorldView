@@ -67,6 +67,12 @@ VALID_MODES = (
     # maximises identifier_lookup NDCG@10 without regressing other classes
     # by ≥0.02. See `run_boost_sweep` below.
     "hybrid_boost_sweep",
+    # PLAN-0079 Wave C: trust weight sweep stub.
+    # Full live-stack sweep is gated on PLAN-0063 §3 (120-query golden set,
+    # ≥0.03 NDCG@10 regression threshold). Until the golden set exists this
+    # mode logs the configured weights and runs default retrieval so the flag
+    # is a no-op that doesn't crash CI.
+    "trust_sweep",
 )
 
 # Candidate boost factors swept by --mode hybrid_boost_sweep. The 1.0 anchor
@@ -844,6 +850,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "instead of running eval_retrieval per-boost. The 1.0 baseline MUST be present."
         ),
     )
+    # PLAN-0079 Wave C: trust weight args for --mode trust_sweep.
+    # Full sweep is gated on PLAN-0063 §3 (120-query golden set).
+    # Until then, these args are recorded in the report header only.
+    parser.add_argument(
+        "--trust-w-source",
+        type=float,
+        default=float(os.getenv("RAG_CHAT_TRUST_W_SOURCE", "0.4")),
+        help="TrustScorer source-authority weight (RAG_CHAT_TRUST_W_SOURCE, default 0.4).",
+    )
+    parser.add_argument(
+        "--trust-w-corroboration",
+        type=float,
+        default=float(os.getenv("RAG_CHAT_TRUST_W_CORROBORATION", "0.1")),
+        help="TrustScorer corroboration weight (RAG_CHAT_TRUST_W_CORROBORATION, default 0.1).",
+    )
+    parser.add_argument(
+        "--trust-w-extraction",
+        type=float,
+        default=float(os.getenv("RAG_CHAT_TRUST_W_EXTRACTION", "0.1")),
+        help="TrustScorer extraction-confidence weight (RAG_CHAT_TRUST_W_EXTRACTION, default 0.1).",
+    )
     return parser.parse_args(argv)
 
 
@@ -855,6 +882,19 @@ def main() -> int:
     )
     if args.mode == "hybrid_boost_sweep":
         return asyncio.run(run_boost_sweep(args))
+    if args.mode == "trust_sweep":
+        # PLAN-0079 Wave C: trust_sweep stub.
+        # Full live-stack sweep is gated on PLAN-0063 §3 (120-query golden set,
+        # ≥0.03 NDCG@10 regression threshold). Until the golden set is built,
+        # this mode logs the configured weights and falls through to default eval
+        # so --mode trust_sweep is a valid, non-crashing invocation for CI.
+        logging.getLogger(__name__).info(
+            "trust_sweep: weights w_source=%.3f w_corroboration=%.3f w_extraction=%.3f — "
+            "live sweep gated on PLAN-0063 §3 golden set; running default eval",
+            args.trust_w_source,
+            args.trust_w_corroboration,
+            args.trust_w_extraction,
+        )
     return asyncio.run(run_eval(args))
 
 

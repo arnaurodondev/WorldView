@@ -123,6 +123,16 @@ class Settings(BaseSettings):
     citation_call_timeout_s: float = Field(default=15.0, gt=0.0, le=120.0)  # RAG_CHAT_CITATION_CALL_TIMEOUT_S
     citation_run_budget_s: float = Field(default=600.0, gt=0.0)  # RAG_CHAT_CITATION_RUN_BUDGET_S
 
+    # ── Trust scoring weights (PLAN-0079 Wave C) ─────────────────────────────
+    # The TrustScorer formula is additive:
+    #   trust = w_source * source_authority + w_corroboration * corr_factor + w_extraction * extr_factor
+    # Defaults chosen so a sec_10k item yields 0.4*1.0 + 0.1*0.5 + 0.1*0.5 = 0.50
+    # (numerically stable, backward-compatible with existing fusion_score invariant).
+    # Override via RAG_CHAT_TRUST_W_SOURCE / _CORROBORATION / _EXTRACTION env vars.
+    trust_w_source: float = 0.4  # RAG_CHAT_TRUST_W_SOURCE
+    trust_w_corroboration: float = 0.1  # RAG_CHAT_TRUST_W_CORROBORATION
+    trust_w_extraction: float = 0.1  # RAG_CHAT_TRUST_W_EXTRACTION
+
     # ── Rate limiting ─────────────────────────────────────────────────────────
     rate_limit_per_tenant: int = 10  # requests per minute per tenant
     upstream_timeout_seconds: float = 5.0

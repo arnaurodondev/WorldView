@@ -198,3 +198,35 @@ def test_valid_database_url_read_preserved(monkeypatch: pytest.MonkeyPatch) -> N
     )
     assert settings.database_url_read is not None
     assert "reader" in settings.database_url_read.get_secret_value()
+
+
+# ── PLAN-0079 Wave C: Trust scoring weight settings ───────────────────────────
+
+
+def test_trust_weight_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PLAN-0079 Wave C: trust_w_* settings default to 0.4/0.1/0.1."""
+    for key in list(os.environ):
+        if key.startswith("RAG_CHAT_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+
+    s = _make_settings()
+    assert s.trust_w_source == 0.4
+    assert s.trust_w_corroboration == 0.1
+    assert s.trust_w_extraction == 0.1
+
+
+def test_trust_weight_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PLAN-0079 Wave C: trust_w_* can be overridden via env vars."""
+    for key in list(os.environ):
+        if key.startswith("RAG_CHAT_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.setenv("RAG_CHAT_TRUST_W_SOURCE", "0.6")
+    monkeypatch.setenv("RAG_CHAT_TRUST_W_CORROBORATION", "0.2")
+    monkeypatch.setenv("RAG_CHAT_TRUST_W_EXTRACTION", "0.15")
+
+    s = _make_settings()
+    assert s.trust_w_source == pytest.approx(0.6)
+    assert s.trust_w_corroboration == pytest.approx(0.2)
+    assert s.trust_w_extraction == pytest.approx(0.15)
