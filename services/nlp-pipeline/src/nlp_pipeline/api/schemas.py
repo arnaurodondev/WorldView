@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -142,11 +143,36 @@ class ChunkSearchRequest(BaseModel):
     date_from: date | None = None
     date_to: date | None = None
     source_types: list[str] = []
+    # PLAN-0063 W5-3: hybrid retrieval substrate.
+    #   "ann"     — vector-only ANN (HNSW) — current default, requires query_text OR query_embedding
+    #   "lexical" — Postgres FTS (tsv_english + tsv_simple GREATEST) — requires query_text
+    #   "hybrid"  — both legs in parallel + RRF fusion — requires query_text
+    # Hybrid + lexical both run BM25-style FTS server-side so they cannot fall
+    # back to a pure embedding (the `_search_type_requires_query_text` validator
+    # below enforces this). The orchestrator at S8 decides which mode to use
+    # inline (per L11 — no plan flag).
+    search_type: Literal["ann", "lexical", "hybrid"] = "ann"
 
     @model_validator(mode="after")
     def exactly_one_query(self) -> ChunkSearchRequest:
-        if (self.query_text is None) == (self.query_embedding is None):
+        # ANN mode keeps the strict "exactly one" rule because the use case
+        # picks the embedding path when `query_embedding` is set, and the
+        # text path otherwise. The hybrid/lexical modes loosen this — a
+        # caller can supply both (the embedding feeds the ANN leg, the text
+        # feeds the FTS leg) — so we only enforce exclusivity when the
+        # search_type is the default ANN.
+        if self.search_type == "ann" and (self.query_text is None) == (self.query_embedding is None):
             raise ValueError("Exactly one of query_text or query_embedding must be provided")
+        return self
+
+    @model_validator(mode="after")
+    def _search_type_requires_query_text(self) -> ChunkSearchRequest:
+        # Lexical and hybrid search both run a Postgres FTS query that has no
+        # meaningful interpretation of a raw embedding vector — they need the
+        # original surface text. Reject early at the API boundary so the
+        # caller gets a 422 instead of an ambiguous downstream error.
+        if self.search_type in ("lexical", "hybrid") and not self.query_text:
+            raise ValueError(f"search_type={self.search_type!r} requires query_text")
         return self
 
 

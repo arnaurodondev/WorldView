@@ -35,6 +35,9 @@ async def search_chunks(
     When ``query_embedding`` is supplied (pre-computed by S8), the embed step
     is skipped.
     """
+    # PLAN-0063 W5-3: forward the new search_type literal through to the use
+    # case, which dispatches between the ANN / lexical / hybrid execution
+    # paths. Default is "ann" so the existing API contract is unchanged.
     results, total_searched, embedding_model = await use_case.execute(
         query_text=body.query_text,
         query_embedding=body.query_embedding,
@@ -45,6 +48,7 @@ async def search_chunks(
         date_from=body.date_from,
         date_to=body.date_to,
         source_types=body.source_types,
+        search_type=body.search_type,
     )
 
     _log.info(  # type: ignore[no-any-return]

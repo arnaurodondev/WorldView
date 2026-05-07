@@ -1123,7 +1123,9 @@ LIMIT :top_k
 
 ---
 
-## 6. Wave W5-3: Hybrid Use-Case + S8 Plumbing + Eval Gate
+## 6. Wave W5-3: Hybrid Use-Case + S8 Plumbing + Eval Gate ⏳
+
+**Status (impl tasks DONE 2026-05-07; T-W5-3-04 baseline capture + gate enable deferred)**: T-W5-3-01 (search_type schema field), T-W5-3-02 (hybrid use-case + pure RRF helper + rare-token analyzer + adaptive lexical boost via setting), T-W5-3-03 (rag-chat orchestrator inline `_search_type` decision; per L11 the originally-planned `_PlanFlags.use_hybrid_chunks` flag is INTENTIONALLY NOT ADDED), T-W5-3-05 (`--mode hybrid_boost_sweep` + `--boost-sweep-inputs` aggregator in `scripts/eval_retrieval.py`) all DONE. **T-W5-3-04 (capture post-hybrid baseline + remove `continue-on-error: true` from CI workflow + add `--baseline` flag) is deferred** until the 120-query golden set is hand-graded (labelling subagent in flight; eval script tolerates partial labelling). 60+ new tests across both services: 7 schema + 9 RRF + 12 rare-token + 10 hybrid-branch use-case + 7 orchestrator-hybrid + 4 boost-sweep. Validation gate: 830 nlp-pipeline + 563 rag-chat + 22 eval-script + 100 architecture tests pass; ruff + format + mypy clean (114 + 104 source files); import_guards 0 violations. Pre-existing fix bundled: 4 RUF059 in `services/rag-chat/tests/unit/application/test_citation_pipeline.py` (unused unpacked variables) prefixed with `_`.
 
 **Goal**: Wire the lexical path into `ChunkSearchUseCaseImpl` with server-side Reciprocal Rank Fusion, expose the new `search_type` field on the API and on the rag-chat port, set `search_type="hybrid"` for eligible intents in the orchestrator, and run the eval gate. **Wave W5-3 does not ship until eval shows ≥0.05 NDCG@10 lift over the recorded baseline from `results/baseline_pre_hybrid.json` (T-W5-1-03)** — or the re-validated target if the recorded baseline fell outside [0.20, 0.85] per OQ-W5-4 resolution.
 

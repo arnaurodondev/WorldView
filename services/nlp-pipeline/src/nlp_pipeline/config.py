@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     # uppercase tokens. NLP_PIPELINE_VALKEY_CANONICAL_TICKERS_KEY.
     valkey_canonical_tickers_key: str = "nlp:v1:canonical_tickers"
 
+    # PLAN-0063 W5-3 §0-bis.7 / L9: lexical-leg RRF weight applied when the
+    # query has rare identifier tokens. Default 1.5 from the spec; tuned
+    # empirically per dataset via ``scripts/eval_retrieval.py --mode
+    # hybrid_boost_sweep``. NLP_PIPELINE_HYBRID_LEXICAL_BOOST.
+    hybrid_lexical_boost: float = 1.5
+
     # Ollama / ML endpoints
     ollama_base_url: str = "http://localhost:11434"
     embedding_model_id: str = "bge-large"

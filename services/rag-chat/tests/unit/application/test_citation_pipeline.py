@@ -34,7 +34,7 @@ def _cit(doc_id: str, snippet: str = "Some evidence.") -> BriefCitation:
 
 def _make_context_citations(n: int = 5) -> list[BriefCitation]:
     """Build a list of n test BriefCitation objects (c1..cN)."""
-    return [_cit(f"doc-{i+1}", f"Snippet for item {i+1}.") for i in range(n)]
+    return [_cit(f"doc-{i + 1}", f"Snippet for item {i + 1}.") for i in range(n)]
 
 
 # ── _parse_sections_with_citations ────────────────────────────────────────────
@@ -83,7 +83,7 @@ Some claim without valid source. [c99]
 - Bullet B [c2]
 """
         ctx_cits = _make_context_citations(3)
-        lead, lead_cits, sections = _parse_sections_with_citations(md, ctx_cits)
+        lead, lead_cits, _sections = _parse_sections_with_citations(md, ctx_cits)
         # [c99] is out of range (only 3 citations available) → lead=None
         assert lead is None
         assert lead_cits == []
@@ -100,7 +100,7 @@ Some claim without valid source. [c99]
     def test_empty_markdown_returns_empty(self) -> None:
         """Empty or whitespace-only input returns empty outputs."""
         for md in ("", "   \n  \n"):
-            lead, lead_cits, sections = _parse_sections_with_citations(md, [])
+            lead, _lead_cits, sections = _parse_sections_with_citations(md, [])
             assert lead is None
             assert sections == []
 
@@ -241,7 +241,7 @@ Old-style summary. [c1]
 - Bullet B [c2]
 """
         ctx_cits = _make_context_citations(3)
-        lead, lead_cits, sections = _parse_sections_with_citations(md, ctx_cits)
+        lead, _lead_cits, _sections = _parse_sections_with_citations(md, ctx_cits)
         # The SUMMARY block becomes the lead
         assert lead is not None
         assert "Old-style summary" in lead

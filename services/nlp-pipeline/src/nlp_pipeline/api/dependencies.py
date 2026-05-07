@@ -195,6 +195,11 @@ def get_chunk_search_use_case(
     )
 
     chunk_text_store = getattr(request.app.state, "chunk_text_store", None)
+    # PLAN-0063 W5-3: pull the hybrid lexical boost from settings so the
+    # tuned value flows from env → Settings → use case. Falls back to the
+    # spec default of 1.5 when the setting is absent (older configs).
+    settings = getattr(request.app.state, "settings", None)
+    lexical_boost = float(getattr(settings, "hybrid_lexical_boost", 1.5)) if settings is not None else 1.5
     return EnhancedChunkSearchUseCase(
         chunk_ann_repo=ChunkANNRepository(nlp_session),
         source_metadata_repo=SQLAlchemyDocumentSourceMetadataRepository(nlp_session),
@@ -202,6 +207,7 @@ def get_chunk_search_use_case(
         valkey=raw_valkey,
         embedding_client=None,
         chunk_text_store=chunk_text_store,
+        lexical_boost=lexical_boost,
     )
 
 
