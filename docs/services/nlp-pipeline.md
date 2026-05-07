@@ -400,6 +400,37 @@ services/nlp-pipeline/src/nlp_pipeline/
 
 ---
 
+## Canonical Tickers Cache (PLAN-0084 C-1)
+
+`infrastructure/cache/canonical_tickers_cache.py`
+
+Valkey-backed SET (`nlp:v1:canonical_tickers`) of all known ticker symbols used by the rare-token analyzer (W5-3) to disambiguate genuine tickers from noise uppercase tokens (`CEO`, `USA`, `IPO`, ...).
+
+### Lifecycle
+
+| Phase | What happens |
+|-------|-------------|
+| `startup()` | Calls `refresh()` once to warm the SET, then launches `_refresh_loop()` as a background asyncio task. |
+| `_refresh_loop()` | Sleeps `canonical_tickers_refresh_interval_s` seconds, then calls `refresh()`. Transient errors are swallowed (60s back-off). `CancelledError` propagates immediately. |
+| `close()` | Cancels and awaits the background task. Safe to call before `startup()`. |
+
+### Staleness guarantee
+
+The SET is at most `canonical_tickers_refresh_interval_s` seconds stale after a source-of-truth change in `intelligence_db.canonical_entities`. Default: **600 seconds** (10 minutes).
+
+### Atomic swap
+
+`refresh()` uses `pipeline(transaction=True)` (MULTI/EXEC) so the DEL and SADD execute atomically. Concurrent `is_known_ticker()` callers cannot observe an empty SET between the two commands (F-X03 fix).
+
+### Configuration
+
+| Env var | Default | Range | Purpose |
+|---------|---------|-------|---------|
+| `NLP_PIPELINE_CANONICAL_TICKERS_REFRESH_INTERVAL_S` | `600` | 60-3600 | Background refresh interval in seconds |
+| `NLP_PIPELINE_VALKEY_CANONICAL_TICKERS_KEY` | `nlp:v1:canonical_tickers` | — | Valkey SET key (shared across replicas) |
+
+---
+
 ## Testing Plan
 
 | Type | What | Command |
