@@ -146,6 +146,9 @@ class RetrievedItem:
     doc_id: UUID | None = None
     published_at: datetime | None = None
     graph_enrichment: tuple[dict, ...] = field(default_factory=tuple)  # type: ignore[assignment]
+    # Informational only — does NOT affect fusion_score formula (PLAN-0079 Wave A).
+    # Set by callers that have extraction confidence (e.g. ClaimResult); None = unknown.
+    extraction_confidence: float | None = None
 
     def __post_init__(self) -> None:
         expected = self.score * self.recency_score * self.trust_weight
@@ -170,8 +173,15 @@ class RetrievedItem:
         published_at: datetime | None = None,
         graph_enrichment: tuple[dict, ...] = (),
         source_type: str | None = None,
+        extraction_confidence: float | None = None,
     ) -> RetrievedItem:
-        """Factory that computes recency_score and fusion_score automatically."""
+        """Factory that computes recency_score and fusion_score automatically.
+
+        Args:
+            extraction_confidence: Optional confidence score [0,1] from the extraction
+                model (e.g. ClaimResult.extraction_confidence). Informational only —
+                does NOT affect fusion_score (PLAN-0079 Wave A). Pass None when unknown.
+        """
         recency_score = compute_recency_score(published_at, source_type=source_type)
         fusion_score = score * recency_score * trust_weight
         return cls(
@@ -194,6 +204,7 @@ class RetrievedItem:
             doc_id=doc_id,
             published_at=published_at,
             graph_enrichment=graph_enrichment,
+            extraction_confidence=extraction_confidence,
         )
 
 
