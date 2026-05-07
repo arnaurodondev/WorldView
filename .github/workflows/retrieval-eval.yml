@@ -198,6 +198,7 @@ jobs:
             --query-embeddings tests/eval/golden/query_embeddings.parquet \
             --baseline results/baseline_pre_hybrid.json \
             --fail-on-regression 0.03 \
+            --fail-on-regression-per-class 0.05 \
             --max-failures 50 \
             --output-dir results/
 

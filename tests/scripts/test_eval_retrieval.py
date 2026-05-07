@@ -8,6 +8,7 @@ import math
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -350,3 +351,280 @@ def test_boost_sweep_baseline_required() -> None:
     per_boost = {1.5: _agg(identifier=0.55)}
     with pytest.raises(ValueError):
         eval_retrieval.select_optimal_boost(per_boost)
+
+
+# ─── PLAN-0084 E-2: per-class regression check tests ─────────────────────────
+
+
+def _make_golden_jsonl(tmp_path: Path, *, n_labelled: int = 10, n_unlabelled: int = 0) -> Path:
+    """Write a minimal JSONL golden set to tmp_path/queries.jsonl."""
+    golden = tmp_path / "queries.jsonl"
+    lines = []
+    # Labelled rows: one class with n_labelled entries (>=6 for the gate to apply)
+    for i in range(n_labelled):
+        lines.append(
+            json.dumps(
+                {
+                    "query_id": f"q{i:04d}",
+                    "query_text": f"test query {i}",
+                    "query_class": "factual_lookup",
+                    "intent": "FACTUAL_LOOKUP",
+                    "relevant_doc_ids": [{"doc_id": f"doc{i}", "relevance": 1}],
+                }
+            )
+        )
+    # Unlabelled rows: no relevant_doc_ids
+    for i in range(n_unlabelled):
+        lines.append(
+            json.dumps(
+                {
+                    "query_id": f"u{i:04d}",
+                    "query_text": f"unlabelled {i}",
+                    "query_class": "factual_lookup",
+                    "intent": "FACTUAL_LOOKUP",
+                    "relevant_doc_ids": [],
+                }
+            )
+        )
+    golden.write_text("\n".join(lines) + "\n")
+    return golden
+
+
+def _make_baseline_json(
+    tmp_path: Path,
+    *,
+    factual_lookup_ndcg: float = 0.6,
+    factual_lookup_n: int = 10,
+) -> Path:
+    """Write a minimal baseline JSON to tmp_path/baseline.json."""
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "summary": {"ndcg_at_10": {"mean": factual_lookup_ndcg}},
+                "by_class": {
+                    "factual_lookup": {
+                        "n": factual_lookup_n,
+                        "ndcg_at_10": factual_lookup_ndcg,
+                        "mrr": 0.6,
+                        "p_at_5": 0.4,
+                        "recall_at_20": 0.5,
+                    }
+                },
+            }
+        )
+    )
+    return baseline
+
+
+def test_per_class_regression_check_passes_when_within_threshold(tmp_path: Path) -> None:
+    """Global pass + per-class within threshold → exit 0.
+
+    NDCG@10 ≈ 1.0 (perfect retrieval) vs baseline 0.60 — well within 0.05 → exit 0.
+    Uses call_retrieve patch so no HTTP is needed.
+    """
+    import asyncio
+    import unittest.mock
+
+    golden = _make_golden_jsonl(tmp_path, n_labelled=10)
+    # Baseline: factual_lookup NDCG@10 = 0.60
+    baseline = _make_baseline_json(tmp_path, factual_lookup_ndcg=0.60)
+    args = eval_retrieval.parse_args(
+        [
+            "--golden",
+            str(golden),
+            "--baseline",
+            str(baseline),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--fail-on-regression",
+            "0.03",
+            "--fail-on-regression-per-class",
+            "0.05",
+        ]
+    )
+
+    # Patch call_retrieve to return the matching doc for each query (NDCG≈1.0).
+    async def _good_retrieve(
+        client: object,
+        rag_url: str,
+        query_text: str,
+        *,
+        query_embedding: object = None,
+        top_k: int = 20,
+        internal_jwt: object = None,
+    ) -> list[dict[str, object]]:
+        try:
+            idx = int(query_text.split()[-1])
+        except (ValueError, IndexError):
+            idx = 0
+        return [{"doc_id": f"doc{idx}", "chunk_id": f"chunk{idx}"}]
+
+    with unittest.mock.patch.object(eval_retrieval, "call_retrieve", side_effect=_good_retrieve):
+        rc = asyncio.run(eval_retrieval.run_eval(args))
+
+    assert rc == 0
+
+
+def test_per_class_regression_check_fails_when_one_class_regresses(tmp_path: Path) -> None:
+    """When a class drops > threshold → exit 1 and message names the class.
+
+    Baseline NDCG = 0.95; current returns empty candidates (NDCG=0.0).
+    Drop of 0.95 >> 0.05 threshold → exit 1.
+    Global gate is disabled (fail_on_regression=1.0) so only per-class fires.
+    """
+    import asyncio
+    import unittest.mock
+
+    golden = _make_golden_jsonl(tmp_path, n_labelled=10)
+    baseline = _make_baseline_json(tmp_path, factual_lookup_ndcg=0.95)
+    args = eval_retrieval.parse_args(
+        [
+            "--golden",
+            str(golden),
+            "--baseline",
+            str(baseline),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--fail-on-regression",
+            "1.0",  # disable global gate — only per-class should fire
+            "--fail-on-regression-per-class",
+            "0.05",
+        ]
+    )
+
+    async def _zero_retrieve(
+        client: object,
+        rag_url: str,
+        query_text: str,
+        *,
+        query_embedding: object = None,
+        top_k: int = 20,
+        internal_jwt: object = None,
+    ) -> list[dict[str, object]]:
+        return []  # empty candidates → NDCG=0 for all queries
+
+    with unittest.mock.patch.object(eval_retrieval, "call_retrieve", side_effect=_zero_retrieve):
+        rc = asyncio.run(eval_retrieval.run_eval(args))
+
+    assert rc == 1
+
+
+def test_per_class_regression_check_absent_means_no_per_class_check(tmp_path: Path) -> None:
+    """Flag not set (0.0) → new per-class gate code path never fires; exits 0.
+
+    Without --fail-on-regression-per-class AND without --baseline, there is
+    nothing to compare against — the run produces its own output and exits 0.
+    This verifies that omitting the flag doesn't introduce unexpected failures
+    from the new gate code path (the new code path is guarded by
+    ``per_class_threshold > 0.0``).
+    """
+    import asyncio
+    import unittest.mock
+
+    golden = _make_golden_jsonl(tmp_path, n_labelled=10)
+    args = eval_retrieval.parse_args(
+        [
+            "--golden",
+            str(golden),
+            "--output-dir",
+            str(tmp_path / "out"),
+            # No --baseline → compare_to_baseline never runs.
+            # No --fail-on-regression-per-class → defaults to 0.0 (disabled).
+        ]
+    )
+
+    async def _zero_retrieve(
+        client: object,
+        rag_url: str,
+        query_text: str,
+        *,
+        query_embedding: object = None,
+        top_k: int = 20,
+        internal_jwt: object = None,
+    ) -> list[dict[str, object]]:
+        return []  # NDCG=0 for all queries
+
+    with unittest.mock.patch.object(eval_retrieval, "call_retrieve", side_effect=_zero_retrieve):
+        rc = asyncio.run(eval_retrieval.run_eval(args))
+
+    # Without a baseline and with the flag disabled, we always exit 0.
+    assert rc == 0
+
+
+def test_empty_per_query_with_many_labelled_exits_1(tmp_path: Path) -> None:
+    """n_labelled >= 50 and per_query empty → exit 1 (eval should have run).
+
+    When >=50 rows are labelled but every retrieve call raises RequestError
+    (all go to ``failed`` list), ``per_query`` stays empty.  The tightened
+    exit code (PLAN-0084 E-2) must return 1 because the labelling coverage is
+    sufficient — the failure signals a broken service, not a labelling gap.
+    """
+    import asyncio
+    import unittest.mock
+
+    golden = _make_golden_jsonl(tmp_path, n_labelled=50)
+    args = eval_retrieval.parse_args(
+        [
+            "--golden",
+            str(golden),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--max-failures",
+            "100",  # don't exit on max-failures — let per_query stay empty
+        ]
+    )
+
+    async def _always_fails(
+        client: object,
+        rag_url: str,
+        query_text: str,
+        *,
+        query_embedding: object = None,
+        top_k: int = 20,
+        internal_jwt: object = None,
+    ) -> list[dict[str, object]]:
+        raise httpx.RequestError("connection refused", request=unittest.mock.MagicMock())
+
+    with unittest.mock.patch.object(eval_retrieval, "call_retrieve", side_effect=_always_fails):
+        rc = asyncio.run(eval_retrieval.run_eval(args))
+
+    assert rc == 1
+
+
+def test_empty_per_query_with_few_labelled_exits_0(tmp_path: Path) -> None:
+    """n_labelled < 50 and per_query empty → exit 0 (labelling still in flight).
+
+    When <50 rows are labelled and per_query is empty, the gate is informational:
+    the labelling gap explains the empty result, so exit 0 is correct.
+    """
+    import asyncio
+    import unittest.mock
+
+    golden = _make_golden_jsonl(tmp_path, n_labelled=10)
+    args = eval_retrieval.parse_args(
+        [
+            "--golden",
+            str(golden),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--max-failures",
+            "100",
+        ]
+    )
+
+    async def _always_fails(
+        client: object,
+        rag_url: str,
+        query_text: str,
+        *,
+        query_embedding: object = None,
+        top_k: int = 20,
+        internal_jwt: object = None,
+    ) -> list[dict[str, object]]:
+        raise httpx.RequestError("connection refused", request=unittest.mock.MagicMock())
+
+    with unittest.mock.patch.object(eval_retrieval, "call_retrieve", side_effect=_always_fails):
+        rc = asyncio.run(eval_retrieval.run_eval(args))
+
+    assert rc == 0
