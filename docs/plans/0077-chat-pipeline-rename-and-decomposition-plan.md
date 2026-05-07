@@ -221,7 +221,7 @@ Step methods (all receive per-request state as args, return result):
 ## Wave C ✅ — Migrate `ChatOrchestratorUseCase` to delegate to `ChatPipeline`
 
 **Estimated effort**: ~4 hours
-**Status**: **DONE** — 2026-05-07 · 615 tests pass · ruff + mypy clean
+**Status**: **DONE** — 2026-05-07 · 617 tests pass · ruff + mypy clean (617 after QA fixes: dead code removal + stream_llm test)
 **Depends on**: Wave B ✅
 
 ### Design
