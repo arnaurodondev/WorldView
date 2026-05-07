@@ -134,6 +134,34 @@ class KeyBuilder:
             extension=extension,
         )
 
+    # Pattern for silver-layer keys written by content-store:
+    # silver/<source_slug>/<YYYY>/<MM>/<DD>/<uuid>.txt
+    # Example: silver/reuters/2024/01/15/0195c7b4-a9f2-7b3e-8d1c-3f2e1a4b5c6d.txt
+    _SILVER_KEY_PATTERN = re.compile(
+        r"^silver/[a-zA-Z0-9_\-]+/\d{4}/\d{2}/\d{2}/[0-9a-f\-]+\.txt$",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def is_valid_silver_key(cls, key: str) -> bool:
+        """Return True if *key* is a canonical silver-layer MinIO key.
+
+        Expected format::
+
+            silver/<source_slug>/<YYYY>/<MM>/<DD>/<uuid>.txt
+
+        The source slug may contain letters, digits, underscores, and hyphens.
+        The UUID portion is case-insensitive hex with hyphens.
+
+        Args:
+            key: The MinIO object key to validate.
+
+        Returns:
+            ``True`` when the key matches the silver-key pattern; ``False``
+            otherwise.  Never raises.
+        """
+        return bool(cls._SILVER_KEY_PATTERN.match(key))
+
     @staticmethod
     def build_prefix(service: str, domain: str | None = None) -> str:
         """Build a key prefix for listing objects in a service (and optional domain).

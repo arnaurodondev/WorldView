@@ -77,6 +77,7 @@ from nlp_pipeline.infrastructure.metrics.prometheus import (
     s6_claims_extracted_total,
     s6_embeddings_created_total,
     s6_extraction_entity_ref_hallucinated_total,
+    s6_intel_commit_failures_total,
     s6_ner_mentions_total,
     s6_ollama_queue_depth_current,
 )
@@ -104,6 +105,7 @@ from nlp_pipeline.infrastructure.nlp_db.repositories.routing_decision import (
 )
 from nlp_pipeline.infrastructure.nlp_db.repositories.section import SectionRepository
 from observability import get_logger  # type: ignore[import-untyped]
+from storage.key_builder import KeyBuilder  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from ml_clients.protocols import EmbeddingClient, ExtractionClient, NERClient  # type: ignore[import-not-found]
@@ -111,6 +113,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
+    from nlp_pipeline.application.ports.canonical_entity import CanonicalEntityPort
     from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
     from nlp_pipeline.config import Settings
     from nlp_pipeline.domain.models import Chunk, EntityMention, RoutingDecision, Section
@@ -496,7 +499,11 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             if should_run_entity_resolution(final_path):
                 alias_repo = EntityAliasRepository(intel_session)
                 ep_repo2 = EntityProfileEmbeddingRepository(intel_session)
-                canon_repo = CanonicalEntityRepository(intel_session)
+                # A-007: explicit CanonicalEntityPort annotation so mypy and
+                # the architecture test (IG-LAYER-002) can verify that this
+                # variable is typed against the port ABC, not the concrete
+                # infrastructure class.
+                canon_repo: CanonicalEntityPort = CanonicalEntityRepository(intel_session)
                 # MentionResolutionRepository writes audit trail to nlp_db.
                 mr_repo = MentionResolutionRepository(nlp_session)
 
@@ -748,20 +755,26 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 )
                 raise
 
-            # Intel commit (best-effort — idempotent on retry).
-            # NLP is already committed; if intel fails the provisional queue
-            # inserts will be retried on next article re-delivery.
+            # Intel commit (D-004 dual-commit).
+            # NLP is already committed above.  If intel fails we log at ERROR,
+            # increment the Prometheus counter, and RE-RAISE so that the Kafka
+            # offset is NOT committed — the message will be re-delivered and the
+            # intel writes will be retried.  The idempotency-skip at the top of
+            # process_message (routing_decision exists?) fires on re-delivery,
+            # preventing the full NLP pipeline from running again.  Intel writes
+            # are idempotent on retry because provisional_entity_queue has a
+            # UNIQUE constraint on (normalized_surface, mention_class) and all
+            # other intel inserts use ON CONFLICT DO NOTHING.
             try:
                 await intel_session.commit()
             except Exception:
-                logger.warning(  # type: ignore[no-any-return]
+                s6_intel_commit_failures_total.inc()
+                logger.error(  # type: ignore[no-any-return]
                     "d004_intel_commit_failed",
                     doc_id=str(doc_id),
                     exc_info=True,
                 )
-                # DON'T re-raise — NLP is committed; intel writes are
-                # idempotent on retry (provisional_entity_queue has
-                # UNIQUE constraint on (normalized_surface, mention_class)).
+                raise  # re-raise so Kafka offset is not committed → re-delivery
 
         _final_tier = (routing_decision.final_routing_tier or routing_decision.routing_tier).value
         logger.info(  # type: ignore[no-any-return]
@@ -784,7 +797,18 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
 
         The silver object is a JSON envelope (see content-store minio_silver.py):
         {"body": "<cleaned text>", "source_type": ..., ...}
+
+        S-006: Validate the key against the canonical silver-key pattern before
+        attempting the download.  A non-canonical key means the upstream event was
+        malformed or tampered — reject immediately so the error is visible rather
+        than producing a confusing storage 404 or returning garbled content.
         """
+        # S-006: Reject keys that do not match the silver-layer canonical pattern.
+        # Pattern: silver/<source>/<YYYY>/<MM>/<DD>/<uuid>.txt
+        # An invalid key is a hard error — re-delivery would produce the same failure.
+        if not KeyBuilder.is_valid_silver_key(minio_key):
+            raise ValueError(f"Rejected non-canonical minio_key: {minio_key!r}")
+
         if self._storage is None:
             msg = "Object storage not configured; cannot download article text"
             raise RuntimeError(msg)

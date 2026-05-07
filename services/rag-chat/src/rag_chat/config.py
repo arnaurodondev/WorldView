@@ -98,7 +98,8 @@ class Settings(BaseSettings):
     # Deprecated (PRD-0025): S1 Portfolio now uses X-Internal-JWT (RS256) propagated
     # from the ContextVar set by InternalJWTMiddleware. This field is kept with a
     # default to avoid startup ValidationError on existing deployments, but is unused.
-    s1_internal_token: str = ""
+    # S-004: SecretStr prevents the token from appearing in logs, repr(), or __str__.
+    s1_internal_token: SecretStr = SecretStr("")  # RAG_CHAT_S1_INTERNAL_TOKEN
 
     # ── Feature flags ─────────────────────────────────────────────────────────
     cypher_enabled: bool = False
@@ -119,6 +120,10 @@ class Settings(BaseSettings):
     # (L5: flag-controlled rollout — same pattern as internal_jwt_skip_verification).
     citation_cron_enabled: bool = False  # RAG_CHAT_CITATION_CRON_ENABLED
     citation_judge_provider: Literal["deepinfra", "ollama"] = "deepinfra"  # RAG_CHAT_CITATION_JUDGE_PROVIDER
+    # A-006: configurable citation judge model so production can use a cheaper/faster
+    # model than the main completion model.  Default matches the classification model
+    # (8B Instruct — confirmed available on the DeepInfra account in MEMORY.md).
+    citation_judge_model: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"  # RAG_CHAT_CITATION_JUDGE_MODEL
     citation_min_samples: int = Field(default=10, ge=1, le=500)  # RAG_CHAT_CITATION_MIN_SAMPLES
     citation_call_timeout_s: float = Field(default=15.0, gt=0.0, le=120.0)  # RAG_CHAT_CITATION_CALL_TIMEOUT_S
     citation_run_budget_s: float = Field(default=600.0, gt=0.0)  # RAG_CHAT_CITATION_RUN_BUDGET_S
@@ -149,12 +154,21 @@ class Settings(BaseSettings):
 
         DEF-028: Use case-insensitive APP_ENV comparison so "Production", "PRODUCTION",
         and "prod" all trigger the guard — prevents bypassing the check via env var casing.
+        S-005: staging and stage added to the protected-envs set so skip_verification
+        is rejected in staging too (same attack surface as production).
         """
-        # F-007: internal_jwt_skip_verification=True MUST NOT be used in production.
+        # S-005: extend the protected envs set to include staging — skip_verification
+        # MUST NOT be enabled anywhere that real user data or real tokens are in play.
+        _protected_envs: frozenset[str] = frozenset({"production", "prod", "staging", "stage"})
+
+        # F-007: internal_jwt_skip_verification=True MUST NOT be used in production/staging.
         # Prevents accidentally deploying with signature verification disabled.
         _app_env = os.environ.get("APP_ENV", "").strip().lower()
-        if self.internal_jwt_skip_verification and _app_env in {"production", "prod"}:
-            raise ValueError("internal_jwt_skip_verification MUST NOT be enabled in production")
+        if self.internal_jwt_skip_verification and _app_env in _protected_envs:
+            raise ValueError(
+                f"internal_jwt_skip_verification MUST NOT be enabled in protected environments "
+                f"(APP_ENV={_app_env!r} is in {sorted(_protected_envs)})"
+            )
 
         # F-014: Coerce whitespace-only database_url_read to None — functionally empty
         # DSN strings cause asyncpg connection errors at startup.
