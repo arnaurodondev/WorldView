@@ -15,7 +15,6 @@ stored as MinIO objects.
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import hashlib
 from datetime import date
@@ -308,41 +307,37 @@ class EnhancedChunkSearchUseCase:
                 source_types=source_types,
             )
 
-        # Run both legs concurrently so total latency = max(ann, lex), not
-        # sum. Each repo call already enforces its own timeout via the
-        # session — no explicit asyncio.wait_for at this layer (BP-235 only
-        # bites on httpx clients).
-        ann_task = asyncio.create_task(
-            self._execute_ann(
-                query_text=query_text,
-                query_embedding=query_embedding,
-                granularity=granularity,
-                top_k=top_k,
-                min_score=min_score,
-                include_entities=include_entities,
-                date_from=date_from,
-                date_to=date_to,
-                source_types=source_types,
-            )
+        # BP-NEW-ASYNCSESSION (this commit): the two legs are run SEQUENTIALLY,
+        # not concurrently, because both ultimately use the same AsyncSession
+        # held by ``self._repo``. SQLAlchemy AsyncSession is documented as
+        # NOT safe for concurrent use from multiple coroutines (each connection
+        # `_connection_for_bind` operation must complete before the next is
+        # started). Running them under ``asyncio.gather`` raised
+        # ``IllegalStateChangeError`` ("Method 'close()' can't be called here;
+        # method '_connection_for_bind()' is already in progress") on every
+        # request. Fix is sequential: ANN first (typically ~80-150ms), lex
+        # second (~50ms). Total latency ~max+min instead of max — acceptable
+        # tradeoff for correctness. A future wave that injects a session
+        # factory (one session per leg) can restore true parallelism.
+        (ann_results, ann_total, ann_model) = await self._execute_ann(
+            query_text=query_text,
+            query_embedding=query_embedding,
+            granularity=granularity,
+            top_k=top_k,
+            min_score=min_score,
+            include_entities=include_entities,
+            date_from=date_from,
+            date_to=date_to,
+            source_types=source_types,
         )
-        lex_task = asyncio.create_task(
-            self._execute_lexical(
-                query_text=query_text,
-                top_k=top_k,
-                min_score=min_score,
-                include_entities=include_entities,
-                date_from=date_from,
-                date_to=date_to,
-                source_types=source_types,
-            )
-        )
-        # gather() with default return_exceptions=False → either failure
-        # propagates and aborts the request. The orchestrator at S8 already
-        # wraps this with a circuit breaker, so a hard fail is the right
-        # signal upward.
-        (ann_results, ann_total, ann_model), (lex_results, lex_total, _lex_model) = await asyncio.gather(
-            ann_task,
-            lex_task,
+        (lex_results, lex_total, _lex_model) = await self._execute_lexical(
+            query_text=query_text,
+            top_k=top_k,
+            min_score=min_score,
+            include_entities=include_entities,
+            date_from=date_from,
+            date_to=date_to,
+            source_types=source_types,
         )
 
         # Adaptive boost: when the query has identifier-style rare tokens,

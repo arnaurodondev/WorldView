@@ -355,7 +355,7 @@ def compare_to_baseline(
 
 def _git_sha() -> str:
     try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()  # noqa: S603, S607
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     except Exception:
         return "unknown"
 
@@ -473,13 +473,47 @@ async def run_eval(args: argparse.Namespace) -> int:
 
     timeout = httpx.Timeout(DEFAULT_TIMEOUT_SECONDS)
     internal_jwt = os.getenv("EVAL_INTERNAL_JWT")
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    # Optional dev-login URL — when set, the script re-mints the JWT on any 401
+    # so a long eval run survives the api-gateway 5-min TTL without manual
+    # JWT refresh. In CI we use a long-lived service-account JWT instead.
+    jwt_refresh_url = os.getenv("EVAL_JWT_REFRESH_URL")
+
+    # JWT minting strategy: when EVAL_JWT_REFRESH_URL is set, mint a FRESH
+    # JWT for EACH query. The rag-chat InternalJWTMiddleware enforces
+    # F-012 JTI replay protection — each JWT can only be used ONCE within
+    # its TTL. The api-gateway dev-login endpoint is rate-limited (~10/min
+    # by default) but adequate for a 61-query baseline run paced ~5s/query.
+    # When EVAL_JWT_REFRESH_URL is unset, the static EVAL_INTERNAL_JWT is
+    # reused (suitable only for short single-query smoke tests, not full
+    # eval runs against the dev stack with JTI protection enabled).
+
+    async def _mint_jwt() -> str | None:
+        if not jwt_refresh_url:
+            return None
+        try:
+            r = await refresh_client.post(jwt_refresh_url, json={})
+            r.raise_for_status()
+            return str(r.json().get("access_token", ""))
+        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+            print(f"WARN: JWT mint failed: {exc}", file=sys.stderr)
+            return None
+
+    async with (
+        httpx.AsyncClient(timeout=timeout) as client,
+        httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as refresh_client,
+    ):
         for row in rows:
             qid = row["query_id"]
             relevant = row.get("relevant_doc_ids", [])
             if not relevant:
                 skipped.append(qid)
                 continue
+
+            # F-012 JTI replay protection requires a fresh JWT per query.
+            if jwt_refresh_url:
+                fresh = await _mint_jwt()
+                if fresh:
+                    internal_jwt = fresh
 
             try:
                 candidates = await call_retrieve(
@@ -507,9 +541,10 @@ async def run_eval(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
-    if len(failed) > 5:
+    if len(failed) > args.max_failures:
         print(
-            f"ERROR: {len(failed)} queries failed at retrieval — retrieval is broken, not a regression. Exiting 1.",
+            f"ERROR: {len(failed)} queries failed at retrieval (>--max-failures={args.max_failures}); "
+            "retrieval is broken, not a regression. Exiting 1.",
             file=sys.stderr,
         )
         return 1
@@ -789,6 +824,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Recorded in the report header; not used at runtime.",
     )
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--max-failures",
+        type=int,
+        default=5,
+        help="Threshold above which retrieval is declared 'broken' and the run exits 1. "
+        "Default 5 is right for CI; for one-shot baseline capture against a flaky dev "
+        "stack (~30%% timeouts observed) raise to 50+.",
+    )
     parser.add_argument(
         "--boost-sweep-inputs",
         action="append",

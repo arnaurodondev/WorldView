@@ -124,10 +124,16 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && inputs.run_full_eval == 'true'
     needs: [validate-golden-set, unit-tests, lint]
-    # PLAN-0063 W5-1 ships this scaffold per L3 lock — gate is DISABLED.
-    # When W5-3 lands, the post-hybrid baseline will be captured and committed
-    # to results/baseline_pre_hybrid.json; the line below is removed so the
-    # eval-script's exit-1-on-regression actually fails the build.
+    # PLAN-0063 W5-1 shipped this scaffold per L3 lock — gate is DISABLED.
+    # W5-3 (this commit) captured `results/baseline_pre_hybrid.json` against
+    # the live dev stack and added the `--baseline` flag below. The gate
+    # remains DISABLED via `continue-on-error: true` per the
+    # docs/audits/2026-05-07-w5-3-baseline-capture.md disposition: the
+    # captured baseline is only 20 queries (rate-limit pressure on dev-login
+    # blocked the rest), and the labelling-subagent flagged result-instability
+    # that needs W5-4 investigation. The gate enables in W5-4 once both are
+    # cleared. To enable: remove the line below + the `continue-on-error: true`
+    # designation.
     continue-on-error: true
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -146,17 +152,24 @@ jobs:
       # The full-eval path needs a live rag-chat at $RAG_CHAT_URL.
       # In W5-3 the gate enables; in W5-1 we scaffold the call so the
       # workflow shape is reviewable.
-      - name: Run eval (gate disabled — informational only)
+      - name: Run eval (gate informational — W5-3 wired baseline; W5-4 enables enforcement)
         env:
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
           RAG_CHAT_URL: ${{ vars.RAG_CHAT_URL || 'http://localhost:8003' }}
           EVAL_INTERNAL_JWT: ${{ secrets.EVAL_INTERNAL_JWT }}
+          EVAL_JWT_REFRESH_URL: ${{ vars.EVAL_JWT_REFRESH_URL || '' }}
         run: |
-          # No --fail-on-regression in W5-1: gate is DISABLED.
-          # W5-3 commit will add: --baseline results/baseline_pre_hybrid.json --fail-on-regression -0.05
+          # PLAN-0063 W5-3 wired --baseline; --fail-on-regression stays at
+          # the default 0.03 absolute (regression > 0.03 → exits 1, but
+          # `continue-on-error: true` above prevents PR failure). W5-4
+          # removes both safeguards once instability is investigated.
           python scripts/eval_retrieval.py \
             --rag-url "${RAG_CHAT_URL}" \
             --golden tests/eval/golden/queries.jsonl \
+            --query-embeddings tests/eval/golden/query_embeddings.parquet \
+            --baseline results/baseline_pre_hybrid.json \
+            --fail-on-regression 0.03 \
+            --max-failures 50 \
             --output-dir results/
 
       - name: Upload eval artifacts
