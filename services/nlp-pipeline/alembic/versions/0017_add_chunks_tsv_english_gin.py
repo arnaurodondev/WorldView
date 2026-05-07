@@ -35,6 +35,17 @@ fetch on display; ``chunk_text`` is the denormalised copy purely for FTS.
 These columns remain NULL for any pre-existing rows; the dev environment
 recreates from scratch so no backfill is necessary.
 
+Forward-compatibility / storage budget:
+  Median chunk_text ~3 KB; p99 ~8 KB.  Each stored tsvector is roughly 10-20%
+  the size of its source text, so the two GENERATED columns add ~0.6-1.6 KB
+  per row on average.  At 1 M rows the GIN index for tsv_english is typically
+  50-200 MB depending on vocabulary diversity; tsv_simple is somewhat smaller.
+  For 10 M rows, tune autovacuum: set ``autovacuum_vacuum_scale_factor=0.01``
+  and ``autovacuum_analyze_scale_factor=0.005`` on the chunks table to avoid
+  bloat.  Retirement path: PLAN-0064 W6 may render the GIN index redundant if
+  full-text search migrates to a dedicated search layer (e.g. Elasticsearch or
+  Typesense); drop the two GIN indexes and the GENERATED columns at that point.
+
 Forward-compatibility:
   * All ``ALTER TABLE`` use ``IF NOT EXISTS`` / ``IF EXISTS``.
   * Indexes are unique-named (``ix_chunks_tsv_english_gin`` / ``ix_chunks_tsv_simple_gin``).

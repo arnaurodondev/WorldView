@@ -379,6 +379,8 @@ def write_outputs(
     csv_path = output_dir / f"eval_{timestamp}.csv"
 
     payload = {
+        "single_reviewer": True,
+        "reviewer_id": "claude-agent-1",
         "timestamp": timestamp,
         "git_sha": _git_sha(),
         "mode": mode,

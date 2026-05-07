@@ -89,6 +89,10 @@ DOWNGRADE:
   Drop the index. Dedup is irreversible (DELETEd rows are gone) — this is
   acceptable: the rows were broken duplicates with no useful payload divergence
   beyond what the keeper already carries.
+
+RUNTIME ESTIMATE:
+  Expected runtime on dev stack: ~2-5 seconds with 132 dedup groups;
+  production runtime depends on dataset size — measure before applying.
 """
 
 from __future__ import annotations
@@ -126,6 +130,16 @@ DO $migration_0026_dedup$
 DECLARE
     dup_count INT := 0;
 BEGIN
+    -- Acquire exclusive locks on all tables touched by this migration before
+    -- any reads or writes.  NOWAIT means the migration fails immediately if
+    -- another session already holds a conflicting lock, rather than blocking
+    -- indefinitely — this prevents a migration from silently stalling the
+    -- Alembic runner under concurrent load.
+    LOCK TABLE canonical_entities, entity_aliases, entity_embedding_state,
+               relations, relation_evidence_raw, claims, events, event_entities,
+               entity_event_exposures, provisional_entity_queue, relation_summaries
+        IN ACCESS EXCLUSIVE MODE NOWAIT;
+
     -- Short-circuit when there are no duplicates (typical for fresh DBs).
     SELECT COUNT(*) INTO dup_count
     FROM (

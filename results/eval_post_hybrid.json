@@ -1,4 +1,6 @@
 {
+  "single_reviewer": true,
+  "reviewer_id": "claude-agent-1",
   "timestamp": "20260507T070650Z",
   "git_sha": "ce6494841aeb8026fc43b77e313684d7b8ec02d7",
   "mode": "default",
