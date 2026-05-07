@@ -10,6 +10,7 @@ from messaging.kafka.consumer.base import (
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin
 from messaging.kafka.consumer.errors import (
     BusinessRuleViolationError,
     ConsumerError,
@@ -44,4 +45,5 @@ __all__ = [
     "ServiceUnavailableError",
     "StorageUnavailableError",
     "UnitOfWorkProtocol",
+    "ValkeyDedupMixin",
 ]

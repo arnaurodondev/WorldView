@@ -31,6 +31,8 @@
 15. [Read/Write Database Session Pattern](#15-readwrite-database-session-pattern)
 16. [Session Optimization](#16-session-optimization)
 17. [Unit of Work — Explicit Commit Pattern](#17-unit-of-work--explicit-commit-pattern)
+18. [Docker Container Validation](#18-docker-container-validation-r31)
+19. [Parallel Execution & Subagent Patterns](#19-parallel-execution--subagent-patterns-r33-r34)
 
 ---
 
@@ -715,6 +717,67 @@ side effects (e.g., LSH indexing after DB commit), always:
 4. On exception, run compensating deletes (MinIO GC) before re-raising
 
 Enforced by `tests/architecture/test_consumer_enforcement.py`.
+
+### 3.11 Consumer Dedup — ALWAYS use `ValkeyDedupMixin`
+
+Every `BaseKafkaConsumer` subclass **must** declare `ValkeyDedupMixin` as a
+direct base class to satisfy the `is_duplicate` / `mark_processed` abstract
+interface.  Writing a hand-rolled implementation is **forbidden**.
+
+```python
+# ✅ CORRECT
+from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin
+from messaging.valkey.client import ValkeyClient
+
+class ArticleRawConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
+    def __init__(self, config: ConsumerConfig, valkey: ValkeyClient) -> None:
+        super().__init__(config)
+        self._dedup_client = valkey
+        self._dedup_prefix = "content_ingestion:dedup:article_raw"
+        # _dedup_ttl_seconds defaults to 86400 (24 h); override if needed
+
+# ❌ FORBIDDEN — hand-rolled dedup inside the consumer class
+class ArticleRawConsumer(BaseKafkaConsumer[None]):
+    async def is_duplicate(self, event_id: str) -> bool:
+        key = f"my_prefix:{event_id}"
+        return bool(await self._valkey.exists(key))  # reinvents the mixin
+```
+
+**Contract**:
+
+| Scenario | `is_duplicate` returns | `mark_processed` behaviour |
+|----------|----------------------|---------------------------|
+| Key exists in Valkey | `True` | — |
+| Key absent | `False` | — |
+| `_dedup_client is None` | `False` (at-least-once mode) | no-op |
+| Valkey unreachable | `False` (at-least-once mode, logs `dedup.valkey_check_failed`) | swallowed (logs `dedup.valkey_mark_failed`) |
+
+**At-least-once fallback safety**: when Valkey is unavailable the mixin
+falls back to `False` (prefer reprocessing over silent drop).  This is only
+safe when the consumer's downstream writes are idempotent — i.e. they use
+deterministic IDs (`uuid5_from_parts`) **or** `INSERT … ON CONFLICT DO NOTHING`.
+Every `BaseKafkaConsumer` subclass **must** document which strategy it relies on
+in a comment near the class definition.
+
+**Key naming**: follow the taxonomy in `docs/architecture/decisions/0004-valkey-key-taxonomy.md`.
+The `_dedup_prefix` should be unique per consumer class:
+
+```
+{service_prefix}:dedup:{consumer_name}
+# e.g. "content_ingestion:dedup:article_raw"
+```
+
+**TTL**: defaults to 86 400 seconds (24 hours).  Override `_dedup_ttl_seconds`
+in the subclass when the message replay window differs.
+
+**Cross-reference R9**: Valkey is the correct shared-state store for dedup keys.
+PostgreSQL dedup tables are **forbidden** — they create cross-service DB coupling
+and are single-point-of-failure under high throughput (R9).
+
+**Enforcement**: `tests/architecture/test_consumer_dedup_mixin_enforcement.py`
+(CONSUMER-DEDUP-001).  Allowlist for justified exceptions in
+`tests/architecture/_consumer_dedup_allowlist.yaml`.
 
 ---
 
@@ -1469,6 +1532,101 @@ The following patterns are **explicitly forbidden** and constitute review blocke
 | `else: await self.commit()` in `__aexit__` | Silent writes on every clean context exit; double-commit undetectable (R26) | Option B: `__aexit__` only rolls back on exception; every mutating use case calls `await uow.commit()` explicitly — see §17 |
 | `from __future__ import annotations` missing | Lazy evaluation needed for `TYPE_CHECKING` pattern | Add to every file using `if TYPE_CHECKING` |
 | `print()` statements | Not structured, not queryable | `logger.info(...)` with keyword args |
+| Per-request auth (`user_id`, `tenant_id`, `internal_jwt`, `entity_context`) in singleton `__init__` | Singleton holds `None` forever after first request → silent auth strip / cross-tenant leak risk (R30, BP-406) | Split into `<Class>Factory` (singleton) + `<Class>` (per-request); factory exposes `for_request(*, user_id, tenant_id, jwt, entity_context, ...) -> Class` |
+| Per-tool `trust_weight` field in `capability_manifest.yaml` (or any other duplicate ranking-weight table) | Two sources of truth drift over time → ranking quality differs between tool-use path and classical path; tied to BP-* drift class | Reference `source_type` only in manifests; let `TrustScorer` (libs/contracts `SOURCE_AUTHORITY` × recency_decay × corroboration × extraction_confidence) compute final weight at retrieval time |
+| Pydantic `BaseModel` for domain entities | Convention drift (worldview domain layer = frozen dataclasses); 5–10× slower construction; pydantic stays in API layer | `@dataclass(frozen=True, kw_only=True)` for domain; `BaseModel` only in `api/schemas.py` |
+
+---
+
+## 11.1 Ranking trust weights — single source of truth (PLAN-0079)
+
+**Standard**: ranking trust is computed per-item at retrieval time by `TrustScorer` from four named factors. There is one source of truth for source authority — the `SOURCE_AUTHORITY` table in `libs/contracts`.
+
+```
+trust(item) = w_source       · source_authority(item)            # SOURCE_AUTHORITY table
+            ·                  recency_decay(item, now)          # exp(-Δdays / τ_source)
+            · w_corroboration · corroboration_factor(item)       # 1 - exp(-evidence_count / 3)
+            · w_extraction   · extraction_confidence(item)       # GLiNER/relation/claim confidence
+```
+
+**Hard rules**:
+
+- The flat `DEFAULT_TRUST_WEIGHTS` map (legacy, in `services/rag-chat/src/rag_chat/application/pipeline/retrieval_orchestrator.py`) is renamed to `SOURCE_AUTHORITY` and lifted into `libs/contracts`. Once PLAN-0079 ships, no service may declare its own per-source-type weight table.
+- `capability_manifest.yaml` entries (PLAN-0067 R29) reference `source_type` for tools that produce `RetrievedItem`s. They MUST NOT carry a `trust_weight` field. `TrustScorer` looks up authority via the source_type.
+- Tool-handler authors who introduce a new `source_type` value extend `SOURCE_AUTHORITY` in the same PR, with a justifying review comment for the chosen authority value (cite a comparable existing entry: news, filing, transcript, social, …).
+- Eval gate: any change to `SOURCE_AUTHORITY` weights, the `TrustScorer` formula, or the four `w_*` / `τ_*` knobs MUST run the PLAN-0063 60-query golden eval and pass within 0.03 NDCG@10 of the prior baseline before merge.
+
+**Why this matters now**: without a single source of truth, a future PLAN that adds a new `source_type` (e.g., `polymarket_clob`) would set its own ad-hoc weight in either the manifest, the orchestrator, or a tool handler — and quietly diverge from the ranking semantics every other source uses. With `TrustScorer` + `SOURCE_AUTHORITY`, every ranking decision is visible and auditable from one place.
+
+---
+
+## 11.2 Per-request auth/scope context — factory pattern (R30)
+
+**Standard**: any class that needs request-scoped state (`user_id`, `tenant_id`, `internal_jwt`, `entity_context`, or any field that varies per HTTP request) is built by a singleton factory's `for_request(...)` method, not via constructor injection of the per-request fields into the class itself.
+
+**Pattern**:
+
+```python
+# libs/.../tool_executor.py
+
+class ToolExecutorFactory:                  # singleton — wired into DI container
+    """Holds shared collaborators (registry, S3 client, S6 client, ...).
+    Builds a fresh ToolExecutor for each HTTP request via for_request()."""
+
+    def __init__(self, registry: ToolRegistry, s3: S3Port, s6: S6Port,
+                 s7: S7Port, s1: S1Port) -> None:
+        self._registry, self._s3, self._s6 = registry, s3, s6
+        self._s7, self._s1 = s7, s1
+
+    def for_request(
+        self,
+        *,
+        user_id: UUID,
+        tenant_id: UUID,
+        internal_jwt: str,
+        entity_context: EntityContext | None = None,
+    ) -> ToolExecutor:
+        return ToolExecutor(
+            registry=self._registry,
+            s3=self._s3, s6=self._s6, s7=self._s7, s1=self._s1,
+            user_id=user_id, tenant_id=tenant_id,
+            internal_jwt=internal_jwt, entity_context=entity_context,
+        )
+
+class ToolExecutor:                          # per-request — short-lived
+    """One per HTTP request. Auth + scope bound at construction;
+    every execute() call inherits them automatically."""
+
+    def __init__(self, *, registry, s3, s6, s7, s1,
+                 user_id, tenant_id, internal_jwt, entity_context) -> None: ...
+
+    async def execute(self, tool_call: ToolUseBlock) -> RetrievedItem | None: ...
+```
+
+**Route handler usage**:
+
+```python
+# services/rag-chat/.../api/routes/chat.py
+
+@router.post("/chat")
+async def chat(req: ChatRequest, principal: Principal = Depends(...)):
+    executor = tool_executor_factory.for_request(
+        user_id=principal.user_id,
+        tenant_id=principal.tenant_id,
+        internal_jwt=principal.internal_jwt,
+        entity_context=req.entity_context,  # may be None
+    )
+    # executor lives only for this request; auth + scope already bound
+    ...
+```
+
+**Hard rules**:
+
+- A class taking `Optional[user_id|tenant_id|jwt]` in `__init__` is a review blocker (R30). Either it's stateless and shouldn't carry it, or it's request-scoped and needs a factory.
+- Tools that intend to act on the scoped entity (`search_documents`, `get_entity_graph`, `get_entity_narrative`, etc.) read `self._entity_context` and auto-inject `entity_ids = [entity_context.entity_id]` into the underlying port call. The LLM cannot override this when scope is set — that's the whole point of binding it at executor construction.
+- Tools that act cross-entity (`compare_entities`, `screen_universe`, `get_market_movers`) check `if self._entity_context is not None` and refuse / require explicit operands.
+
+**See also**: BP-406 (the silent failure mode this standard prevents), PLAN-0067 §0 (where this pattern was introduced after `/investigate` 2026-05-07), PLAN-0080/0081/0082 (downstream tool plans that depend on this contract).
 
 ---
 
@@ -1630,6 +1788,9 @@ Each microservice adds operational overhead. The decision must be deliberate and
 | R25 | Architecture | MUST NOT |
 | R26 | Infrastructure | MUST NOT |
 | R27 | Security | MUST |
+| R28 | Contracts | MUST | (Avro on the wire — see §3.7.1) |
+| R29 | Architecture | MUST | (capability manifest sync) |
+| R30 | Architecture | MUST NOT | (per-request auth in singleton — see §11.2) |
 
 ---
 
@@ -2167,3 +2328,128 @@ Before merging any service with a `UnitOfWork` implementation:
 - [ ] Read-only use cases do NOT call `commit()` (no phantom commits)
 - [ ] Post-commit hooks run inside `commit()`, not `__aexit__()`
 - [ ] Hook failures are caught and logged — never propagated to the base consumer
+
+---
+
+## 18. Docker Container Validation (R31)
+
+After any source-code fix that affects runtime behaviour, the running Docker container must
+be rebuilt and verified before the fix is declared live. Editing a `.py` file does NOT
+affect the running container — the container image was built at `docker compose build` time.
+
+### 18.1 Standard Verification Pattern
+
+```bash
+# 1. Rebuild the image for the affected service
+docker compose build <svc>
+
+# 2. Replace the running container with the new image
+docker compose up -d <svc>
+
+# 3. Verify the new code is present (choose one)
+docker compose exec <svc> python -c "from <module> import <symbol>; print('OK')"
+docker compose logs <svc> --tail=20   # look for the new log line or version marker
+```
+
+### 18.2 Which Containers Need Rebuilding
+
+| Change type | Containers to rebuild |
+|------------|----------------------|
+| Python source file in service | That service's API, worker, scheduler, and dispatcher containers |
+| Shared lib (`libs/`) | Every service that installs the lib |
+| `config.py` / env var | That service's containers (API + workers) |
+| Alembic migration | The migration runner container only |
+| `docker-compose.yml` changes | `docker compose up -d` is sufficient (no build needed) |
+
+### 18.3 Anti-Pattern
+
+```
+# ❌ WRONG — source is edited but container is never rebuilt
+Edit services/rag_chat/src/rag_chat/pipeline.py
+git commit -m "fix: pipeline timeout"
+# Container still runs the pre-fix image. Fix is NOT live.
+
+# ✅ CORRECT
+Edit services/rag_chat/src/rag_chat/pipeline.py
+docker compose build rag-chat && docker compose up -d rag-chat
+docker compose exec rag-chat python -c "from rag_chat.pipeline import Pipeline; print(Pipeline.TIMEOUT)"
+git commit -m "fix: pipeline timeout — verified in running container"
+```
+
+### 18.4 Fast-Path (Development Only)
+
+In active development with bind mounts configured (where the container source is mounted
+from the host), container rebuilds are not needed for Python changes. Verify that bind
+mounts are active before skipping the rebuild step — production-mode compose files do NOT
+use bind mounts.
+
+---
+
+## 19. Parallel Execution & Subagent Patterns (R33, R34)
+
+This section covers standards for sessions that spawn parallel subagents (e.g., `/qa`
+with specialist agents, `/implement` with parallel wave agents, or orchestrated fix sprints).
+
+### 19.1 When to Use Parallel Subagents vs Sequential
+
+| Criterion | Use Parallel | Use Sequential |
+|-----------|-------------|----------------|
+| Tasks touch disjoint file sets | Yes | No |
+| Tasks share a fixture, model, or constant | No — sequential | Yes |
+| Combined output needs cross-validation | No — run sequentially then validate | Yes |
+| Each task takes >10 min independently | Yes — amortise wall-clock time | No |
+| Tasks have strict dependency order | No — sequential | Yes |
+
+**Default**: prefer sequential unless wall-clock time savings clearly justify the cross-agent
+regression risk. The marginal cost of a cross-agent regression (discover → diagnose → fix)
+often exceeds the time saved by parallelism.
+
+### 19.2 Commit Discipline — Subagents
+
+Every subagent MUST commit before returning, even if the commit is incremental. The checklist:
+
+```
+[ ] Subagent staged all changed files
+[ ] Subagent created a commit with a descriptive message
+[ ] Commit is on the main worktree (not a discarded worktree branch)
+[ ] Commit message references the plan/task IDs being completed
+```
+
+If a subagent returns without committing, the orchestrator must immediately reapply and
+commit the reported work before launching the next agent. Stale worktrees are ephemeral;
+commits are permanent.
+
+### 19.3 Budget Guardrails Before Launching N Agents
+
+Before spawning N parallel subagents, estimate:
+- **Token budget**: N × ~100k tokens/agent (approximate). If total exceeds project context
+  budget, reduce N or split into sequential batches.
+- **File conflict risk**: do a quick grep to confirm no two agents will touch the same file.
+  If conflict is likely, assign non-overlapping file sets explicitly in each agent's prompt.
+- **Test isolation**: confirm that each agent's test suite runs independently without
+  shared in-memory state (e.g. `pytest-asyncio` event loop isolation).
+
+### 19.4 Post-Return Full Suite Run
+
+After all parallel subagents return and their commits are merged/applied:
+
+```bash
+# Run the full suite for every service touched by any agent
+for svc in <svc1> <svc2> ...; do
+    echo "=== $svc ===" && python -m pytest services/$svc/tests/ -v --tb=short
+done
+```
+
+Classify failures using the R33 taxonomy: (a) pre-existing, (b) fix-induced regression,
+(c) stale test expectation. Resolve all (b) and (c) before the session is complete.
+
+### 19.5 Cross-Agent Regression Examples
+
+Known cross-agent regression patterns to watch for:
+
+| Pattern | Detection |
+|---------|-----------|
+| Agent A changes a shared fixture; Agent B's test expects the old fixture | `fixture` error in Agent B's tests after merge |
+| Agent A renames a constant; Agent B's new code references the old name | `NameError`/`ImportError` after merge |
+| Agent A changes a `side_effect` list; Agent B adds a call expecting the old list order | `StopIteration` or `AssertionError` after merge |
+| Agent A adds a migration; Agent B adds a conflicting migration with the same version number | Alembic `MultipleHeads` error |

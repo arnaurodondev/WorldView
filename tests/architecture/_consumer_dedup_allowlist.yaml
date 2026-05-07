@@ -1,0 +1,24 @@
+# Consumer dedup mixin allowlist
+# ─────────────────────────────────────────────────────────────────────────────
+# Schema: each entry must have:
+#   class_name:    str   — exact Python class name
+#   module_path:   str   — dotted module path from repo root
+#   justification: str   — why ValkeyDedupMixin is not used
+#   granted_at:    str   — ISO-8601 date the exemption was approved
+#
+# This list is intentionally empty at the end of PLAN-0084 Wave B-1.
+# All 8 BaseKafkaConsumer subclasses will be migrated in Waves B-2 and B-3.
+# Remove the xfail marker from test_consumer_dedup_mixin_enforcement.py in B-3
+# once all migrations are done and this list remains empty.
+#
+# Example entry (do not uncomment — illustrative only):
+#
+# - class_name: SomeSpecialConsumer
+#   module_path: services.some-service.src.some_service.infrastructure.messaging.consumers.some_consumer
+#   justification: >
+#     This consumer uses PostgreSQL advisory locks as its dedup mechanism
+#     because it processes exactly-once transactional events with no
+#     at-least-once retry path (approved in ADR-F-17, 2026-05-08).
+#   granted_at: "2026-05-08"
+
+allowlist: []
