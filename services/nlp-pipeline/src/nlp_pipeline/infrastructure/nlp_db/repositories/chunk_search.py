@@ -9,6 +9,10 @@ fetch full chunk text from MinIO (via ``ChunkTextStorePort``).
 
 Section results have no ``chunk_text_key`` (sections are not stored as objects);
 their ``text`` field falls back to ``sections.title`` (heading_path) or ``""``.
+
+PLAN-0078 Wave C: implements ``ChunkSearchPort`` ABC.  The new ``entity_ids``
+and ``entity_types`` parameters filter via the GIN-indexed
+``chunks.entity_mentions`` JSONB column using @> containment queries.
 """
 
 from __future__ import annotations
@@ -18,11 +22,46 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from nlp_pipeline.application.ports.chunk_search import ChunkSearchPort
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class ChunkANNRepository:
+def _build_entity_mention_filter(
+    params: dict[str, Any],
+    entity_ids: list[UUID] | None,
+    entity_types: list[str] | None,
+) -> str:
+    """Build a parameterized SQL fragment for filtering chunks.entity_mentions.
+
+    PLAN-0078 §3 filter semantics:
+      - OR within entity_ids: chunk must mention ANY of the listed entity IDs.
+      - OR within entity_types: any mention must match ANY of the listed types.
+      - AND across fields: when both entity_ids and entity_types are provided,
+        the SAME mention element must satisfy both conditions.
+
+    Uses an EXISTS subquery over ``jsonb_array_elements`` so the GIN index is
+    consulted for the outer chunk scan, and the row-level predicate is pushed
+    into the subquery.  This avoids f-string SQL injection by keeping all
+    values in the parameterised ``params`` dict.
+
+    The ``entity_id_strs`` and ``entity_type_strs`` lists are passed as TEXT[]
+    CAST (BP-180) to avoid asyncpg AmbiguousParameterError.
+    """
+    clauses: list[str] = []
+    if entity_ids:
+        params["entity_id_strs"] = [str(eid) for eid in entity_ids]
+        clauses.append("em.value->>'entity_id' = ANY(CAST(:entity_id_strs AS TEXT[]))")
+    if entity_types:
+        params["entity_type_strs"] = entity_types
+        clauses.append("em.value->>'entity_type' = ANY(CAST(:entity_type_strs AS TEXT[]))")
+
+    predicate = " AND ".join(clauses)
+    return f"EXISTS (" f"SELECT 1 FROM jsonb_array_elements(c.entity_mentions) AS em(value) " f"WHERE {predicate}" f")"
+
+
+class ChunkANNRepository(ChunkSearchPort):
     """Run ANN searches and fetch entity mention annotations from nlp_db."""
 
     def __init__(self, session: AsyncSession) -> None:
@@ -37,6 +76,8 @@ class ChunkANNRepository:
         date_from: Any | None = None,
         date_to: Any | None = None,
         source_types: list[str] | None = None,
+        entity_ids: list[UUID] | None = None,
+        entity_types: list[str] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Run HNSW ANN query; return (results, total_searched).
 
@@ -54,6 +95,8 @@ class ChunkANNRepository:
                 date_from=date_from,
                 date_to=date_to,
                 source_types=source_types or [],
+                entity_ids=entity_ids,
+                entity_types=entity_types,
             )
             results.extend(chunk_rows)
             total_searched += chunk_total
@@ -85,6 +128,8 @@ class ChunkANNRepository:
         date_from: Any | None,
         date_to: Any | None,
         source_types: list[str],
+        entity_ids: list[UUID] | None = None,
+        entity_types: list[str] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         vec_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
@@ -101,6 +146,12 @@ class ChunkANNRepository:
         if source_types:
             where_clauses.append("dsm.source_type = ANY(:source_types)")
             params["source_types"] = source_types
+
+        # PLAN-0078 Wave C: entity filter via GIN-indexed JSONB @> containment.
+        # Filter semantics: OR within field, AND across fields (§3).
+        # Uses parameterized CAST to avoid asyncpg type-ambiguity (BP-180).
+        if entity_ids or entity_types:
+            where_clauses.append(_build_entity_mention_filter(params, entity_ids, entity_types))
 
         where_sql = " AND ".join(where_clauses)
 
@@ -233,6 +284,8 @@ class ChunkANNRepository:
         date_from: Any | None = None,
         date_to: Any | None = None,
         source_types: list[str] | None = None,
+        entity_ids: list[UUID] | None = None,
+        entity_types: list[str] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Run a Postgres full-text search over the chunks table (PLAN-0063 W5-2).
 
@@ -310,6 +363,11 @@ class ChunkANNRepository:
             "(CAST(:source_types AS TEXT[]) IS NULL OR dsm.source_type = ANY(CAST(:source_types AS TEXT[])))"
         )
 
+        # PLAN-0078 Wave C: optional entity filter via GIN-indexed JSONB column.
+        entity_filter_sql = ""
+        if entity_ids or entity_types:
+            entity_filter_sql = "AND " + _build_entity_mention_filter(params, entity_ids, entity_types)
+
         # Use a CTE so we can reuse the result set for COUNT and SELECT without
         # re-running the (relatively cheap, but not free) GIN match twice
         # against arbitrarily large filter sets.
@@ -330,6 +388,7 @@ class ChunkANNRepository:
                 WHERE {match_sql}
                   AND {date_filter}
                   AND {source_filter}
+                  {entity_filter_sql}
             )
             SELECT chunk_id, doc_id, section_id, heading_path, chunk_text_key,
                    chunk_text, section_type, score
@@ -379,6 +438,7 @@ class ChunkANNRepository:
             WHERE {match_sql}
               AND {date_filter}
               AND {source_filter}
+              {entity_filter_sql}
               AND {score_sql} >= :min_score
             """
         count_result = await self._session.execute(text(count_sql), params)

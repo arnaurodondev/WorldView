@@ -1,6 +1,9 @@
 """CanonicalEntity repository — get/create in intelligence_db.
 
 Uses raw SQL (text()) — S6 does not own intelligence_db DDL.
+
+PLAN-0084 D-2: declares ``CanonicalEntityPort`` as parent so that use cases
+can depend on the port ABC rather than this concrete class directly.
 """
 
 from __future__ import annotations
@@ -12,12 +15,13 @@ from uuid import UUID
 from sqlalchemy import text
 
 import common.ids  # type: ignore[import-untyped]
+from nlp_pipeline.application.ports.canonical_entity import CanonicalEntityPort
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class CanonicalEntityRepository:
+class CanonicalEntityRepository(CanonicalEntityPort):
     """Read/create canonical entities in intelligence_db (PRD §6.7 Block 9)."""
 
     def __init__(self, session: AsyncSession) -> None:

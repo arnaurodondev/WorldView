@@ -29,7 +29,7 @@ from nlp_pipeline.domain.models import EntityMention, MentionResolution
 if TYPE_CHECKING:
     from ml_clients.protocols import EmbeddingClient  # type: ignore[import-not-found]
 
-    from nlp_pipeline.infrastructure.intelligence_db.repositories.canonical_entity import CanonicalEntityRepository
+    from nlp_pipeline.application.ports.canonical_entity import CanonicalEntityPort
     from nlp_pipeline.infrastructure.intelligence_db.repositories.entity_alias import EntityAliasRepository
     from nlp_pipeline.infrastructure.intelligence_db.repositories.entity_profile_embedding import (
         EntityProfileEmbeddingRepository,
@@ -345,7 +345,7 @@ async def run_entity_resolution_block(
     *,
     alias_repo: EntityAliasRepository,
     embedding_repo: EntityProfileEmbeddingRepository,
-    canonical_entity_repo: CanonicalEntityRepository,
+    canonical_entity_repo: CanonicalEntityPort,
     resolution_audit_repo: MentionResolutionRepository,
     embedding_client: EmbeddingClient,
     intelligence_session: object,
