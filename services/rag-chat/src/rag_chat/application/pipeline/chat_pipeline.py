@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from rag_chat.application.pipeline.retrieval_orchestrator import ParallelRetrievalOrchestrator
     from rag_chat.application.pipeline.retrieval_plan_builder import RetrievalPlanBuilder
     from rag_chat.application.ports.embedding import EmbeddingPort
+    from rag_chat.application.ports.intent_classifier import IntentClassifierPort
     from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
     from rag_chat.application.ports.upstream_clients import S6Port
     from rag_chat.application.security.input_validator import InputValidator
@@ -162,8 +163,8 @@ class ChatPipeline:
     cache: CompletionCache
     get_thread: GetThreadUseCase
     s6_client: S6Port
-    # OllamaIntentClassifier | DeepInfraIntentClassifier — both expose .classify()
-    classifier: Any
+    # Both OllamaIntentClassifier and DeepInfraIntentClassifier satisfy IntentClassifierPort
+    classifier: IntentClassifierPort
     plan_builder: RetrievalPlanBuilder
     hyde: HydeExpander
     embedder: EmbeddingPort

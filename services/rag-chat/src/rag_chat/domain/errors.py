@@ -86,3 +86,14 @@ class EntityNotFoundError(DomainError):
     """Entity not found in knowledge graph."""
 
     error_code = "ENTITY_NOT_FOUND"
+
+
+class LLMJudgeTimeoutError(DomainError):
+    """LLM judge call exceeded the per-call timeout budget (PLAN-0084 A-1 T-A-1-02).
+
+    Raised by CitationJudgeAdapter when asyncio.wait_for fires.
+    The citation-accuracy cron loop catches this and skips the offending pair
+    without crashing the cron task.
+    """
+
+    error_code = "LLM_JUDGE_TIMEOUT"
