@@ -1,13 +1,21 @@
 # PLAN-0079 — TrustScorer Multi-Factor Replacement of `DEFAULT_TRUST_WEIGHTS`
 
 > **PRD**: derived from `/investigate` 2026-05-07 — long-term consistency review (issue A-2)
-> **Status**: stub
+> **Status**: in-progress (Wave A ✅ done 2026-05-07)
 > **Created**: 2026-05-07
 > **Owner**: TBD
 > **Estimated effort**: ~2 dev-days (3 waves, ~9 tasks)
 > **Critical path**: Wave A → Wave B → Wave C
 > **Hard dependencies**: PLAN-0063 W5-3 ≥0.03 NDCG@10 regression gate (120-query golden set) — Wave B merge blocked until eval passes (see §3)
 > **Blocks**: PLAN-0067 W11-2 (manifest no longer carries `trust_weight`); PLAN-0075 W7-3 (L2 tool-selection eval consumes `TrustScorer.score()` output)
+
+## Wave Status
+
+| Wave | Title | Status | Committed |
+|------|-------|--------|-----------|
+| A | Domain: `TrustScorer` + `SOURCE_AUTHORITY` + `extraction_confidence` field + unit tests | ✅ done | 2026-05-07 |
+| B | Replace `DEFAULT_TRUST_WEIGHTS` call sites in `ParallelRetrievalOrchestrator` | pending | — |
+| C | Tunable weights via env vars + eval sweep harness | pending | — |
 
 ---
 
