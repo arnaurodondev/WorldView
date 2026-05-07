@@ -17,7 +17,11 @@ Processes ``provisional_entity_queue`` rows with ``status='pending'``:
   6. UPDATE provisional_entity_queue.status → 'resolved'.
   7. UPDATE relation_evidence_raw to clear entity_provisional flag.
   8. EMIT entity.canonical.created.v1 via outbox.
-  9. EMIT entity.dirtied.v1 via direct Kafka produce.
+  9. EMIT entity.dirtied.v1 via outbox (D-014: changed from fire-and-forget
+     direct Kafka produce to the durable outbox pattern — PLAN-0084 QA fix).
+     One-time entity promotions are now guaranteed to reach the embedding
+     pipeline even if the process crashes between the DB commit and the
+     produce step.
   10. Log to llm_usage_log.
 
 LLM alias collision validation: reject an LLM-generated alias if it maps
@@ -37,6 +41,7 @@ from uuid import UUID
 
 import httpx
 
+from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import OutboxRepository
 from knowledge_graph.infrastructure.metrics.prometheus import (
     s7_provisional_enrichment_failed_total,
     s7_provisional_enrichment_success_total,
@@ -136,12 +141,24 @@ class DirectProducerProtocol(Protocol):
 class ProvisionalEnrichmentWorker:
     """Enriches provisional entities via LLM (Worker 13E).
 
+    D-014 (PLAN-0084 QA fix): ``entity.dirtied.v1`` events are now emitted via
+    the durable outbox pattern (``OutboxRepository.append``) rather than a
+    fire-and-forget direct Kafka produce.  This guarantees that one-time entity
+    promotions always reach the embedding pipeline even if the process crashes
+    between the DB commit and the original produce call.
+
+    ``direct_producer`` is kept as an optional constructor parameter for
+    backward-compatibility with existing call sites and tests, but it is no
+    longer used in the hot path.
+
     Args:
     ----
         session_factory:   Read/write sessionmaker for intelligence_db.
         llm_client:        FallbackChainClient for extraction + embedding.
-        direct_producer:   Direct Kafka producer for entity.dirtied.v1.
-        entity_dirtied_topic: Topic name for entity.dirtied.v1.
+        direct_producer:   Deprecated — no longer used (entity.dirtied.v1 goes
+                           through the outbox).  Accepted to avoid breaking
+                           existing call sites; silently ignored.
+        entity_dirtied_topic: Topic name for entity.dirtied.v1 outbox rows.
         embedding_model_id: Model ID passed to EmbeddingInput (default: bge-large:latest,
                            which produces 1024-dim vectors matching vector(1024) column).
                            Set via KNOWLEDGE_GRAPH_EMBEDDING_MODEL_ID env var.
@@ -190,13 +207,11 @@ class ProvisionalEnrichmentWorker:
         self._read_session_factory: Any = read_session_factory if read_session_factory is not None else session_factory
         self._embed_model_id = embedding_model_id
         self._llm = llm_client
+        # D-014: direct_producer is deprecated — entity.dirtied.v1 now uses the
+        # durable outbox pattern.  The field is kept for backward-compatibility
+        # only; it is no longer called in run().
         self._producer = direct_producer
         self._dirtied_topic = entity_dirtied_topic
-        if direct_producer is None:
-            logger.warning(  # type: ignore[no-any-return]
-                "provisional_enrichment_worker_no_producer",
-                message="direct_producer is None — entity.dirtied.v1 will not be emitted after enrichment",
-            )
         # PLAN-0057 A-5 / F-CRIT-03: optional cost logger.  In practice the
         # FallbackChainClient already calls ``usage_logger.log()`` on every
         # embed/extract attempt — this attribute exists so call-site code can
@@ -296,11 +311,12 @@ FOR UPDATE SKIP LOCKED
                 await session.execute(
                     text("""
 UPDATE provisional_entity_queue
-SET status = 'processing'
+SET status = 'processing',
+    processing_started_at = CAST(:now AS TIMESTAMPTZ)
 WHERE queue_id = :queue_id
   AND status = 'pending'
 """),
-                    {"queue_id": str(queue_id)},
+                    {"queue_id": str(queue_id), "now": _utc_now()},
                 )
             await session.commit()
         # Session released — no DB connection held during LLM calls.
@@ -431,21 +447,34 @@ WHERE queue_id = :queue_id
                     )
                 failed += 1
 
-        # Produce entity.dirtied.v1 AFTER successful DB commit.
-        for dirty_id in entity_ids_to_dirty:
-            if self._producer:
-                try:
-                    self._producer.produce_bytes(
-                        topic=self._dirtied_topic,
-                        key=str(dirty_id).encode(),
-                        value=core._build_dirtied_event(dirty_id),
-                    )
-                except Exception:
-                    logger.warning(  # type: ignore[no-any-return]
-                        "provisional_enrichment_dirtied_emit_failed",
-                        entity_id=str(dirty_id),
-                        exc_info=True,
-                    )
+        # D-014 (PLAN-0084 QA fix): emit entity.dirtied.v1 via the durable outbox
+        # rather than fire-and-forget direct produce.  The outbox guarantees that
+        # one-time entity promotions reach the embedding pipeline even if the
+        # process crashes between the per-row DB commit and this point.
+        #
+        # All dirtied-event rows are inserted in a SINGLE outbox transaction so
+        # the batch is atomic: either all rows are enqueued or none are.
+        if entity_ids_to_dirty:
+            try:
+                async with self._sf() as outbox_session:
+                    outbox_repo = OutboxRepository(outbox_session)
+                    for dirty_id in entity_ids_to_dirty:
+                        await outbox_repo.append(
+                            topic=self._dirtied_topic,
+                            partition_key=str(dirty_id),
+                            payload_avro=core._build_dirtied_event(dirty_id),
+                        )
+                    await outbox_session.commit()
+                logger.info(  # type: ignore[no-any-return]
+                    "provisional_enrichment_dirtied_outbox_enqueued",
+                    count=len(entity_ids_to_dirty),
+                )
+            except Exception:
+                logger.warning(  # type: ignore[no-any-return]
+                    "provisional_enrichment_dirtied_outbox_failed",
+                    count=len(entity_ids_to_dirty),
+                    exc_info=True,
+                )
 
         logger.info(  # type: ignore[no-any-return]
             "provisional_enrichment_worker_complete",
@@ -491,7 +520,7 @@ SET status = 'pending',
                 :max_minutes
             ) || ' minutes')::interval
 WHERE status = 'processing'
-  AND created_at < now() - interval '30 minutes'
+  AND COALESCE(processing_started_at, created_at) < CAST(:now AS TIMESTAMPTZ) - INTERVAL '30 minutes'
 """),
             {
                 "max_retries": self._max_retries,
