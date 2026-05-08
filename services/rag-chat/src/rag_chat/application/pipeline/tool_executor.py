@@ -1,41 +1,54 @@
-"""ToolExecutor — dispatches LLM tool_use blocks to S3Port handlers (PLAN-0066 Wave H T-W10-H-02).
+"""ToolExecutor — dispatches LLM tool_use blocks to S3/S6/S7/S1 Port handlers (PLAN-0066 Wave H, PLAN-0067 Wave W11-2).
 
 Architecture notes:
-- R25: ToolExecutor depends on S3Port (Protocol), never S3Client (infrastructure)
-- R30: ToolExecutor holds NO per-request state (no user_id/tenant_id in __init__)
+- R25: ToolExecutor depends on port Protocols (S3Port, S6Port, S7Port, S1Port), never concrete adapters
+- R30: ToolExecutorFactory holds shared collaborators; ToolExecutor is per-request (has auth)
 - Structlog only (STANDARDS.md §5) — never stdlib logging
-- BP-025: all S3 calls wrapped in asyncio.wait_for(timeout=5.0)
+- BP-025: all upstream calls wrapped in asyncio.wait_for(timeout=N)
 - Tool results truncated to _TOOL_RESULT_MAX_CHARS=4000 to prevent context overflow
 
 Structured logging conventions:
 - tool_executed: success path, carries tool name + latency_ms + items_returned
-- tool_failed: any exception from a handler (error swallowed, None returned)
+- tool_failed: any exception from a handler (error swallowed, [] returned)
 - unknown_tool_name: LLM emitted a tool name not in the registry (hallucination guard)
-- tool_no_data: handler received empty response from S3 (ticker not found / no data)
+- tool_no_data: handler received empty response from upstream (not found / no data)
+- tool_handler_missing_port: handler called but required port is None (graceful degradation)
+- cypher_pattern_rejected: traverse_graph received a disallowed cypher pattern (injection guard)
+
+PLAN-0067 §0 additions:
+- EntityContext: entity scope injected at request time (M-1)
+- ToolCallProvenance: provenance for citation audit (I-6)
+- ToolExecutorFactory: singleton wired in DI container; ToolExecutor is per-request
+
+IMPORTANT — two ToolUseBlock variants:
+- The LOCAL ToolUseBlock (defined here) uses ``tool_use_id`` (string, default "").
+  Existing S3 handlers (get_price_history, get_fundamentals_history) use this.
+- The CANONICAL ToolUseBlock from libs/tools/src/tools/types.py uses ``id``.
+  New handlers in this file accept the LOCAL variant so the existing execute()
+  dispatcher works uniformly. The canonical variant is used by the LLM adapter layer.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import structlog
 
 # Import from libs/tools (must be on PYTHONPATH — added in Dockerfile, BP-181)
 from tools.tool_registry import ToolRegistry  # type: ignore[import-untyped]
 
-from rag_chat.domain.entities.chat import RetrievedItem
+from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType
 
 if TYPE_CHECKING:
-    # S3Port is only used in type annotations (ToolExecutor.__init__ parameter).
-    # Moving it here satisfies TC001/TCH001 (annotation-only import) while
-    # keeping from __future__ import annotations ensuring the annotation is
-    # evaluated lazily at runtime.
-    from rag_chat.application.ports.upstream_clients import S3Port
+    # Port interfaces — annotation-only to satisfy TC001 and maintain R25 compliance.
+    from rag_chat.application.ports.upstream_clients import S1Port, S3Port, S6Port, S7Port
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -48,6 +61,29 @@ _TOOL_RESULT_MAX_CHARS = 4000
 # Prevents runaway tool use if the LLM emits many calls at once.
 _MAX_CONCURRENT_TOOLS = 5
 
+# Allowlist of Cypher relationship type tokens accepted from LLM input.
+# WHY: traverse_graph accepts a cypher_pattern string; we must guard against
+# prompt injection — an adversarial user could inject arbitrary Cypher. We
+# extract relationship type tokens (e.g. INVESTS_IN from [:INVESTS_IN]) and
+# only allow known domain types. Unknown tokens are silently dropped.
+_ALLOWED_CYPHER_REL_TYPES: frozenset[str] = frozenset(
+    {
+        "INVESTS_IN",
+        "BOARD_MEMBER_OF",
+        "SUBSIDIARY_OF",
+        "COMPETES_WITH",
+        "PARTNERSHIP",
+        "ACQUIRED",
+        "FOUNDER_OF",
+        "SUPPLIES_TO",
+        "REGULATES",
+        "LISTED_ON",
+    }
+)
+
+
+# ── Domain helpers ─────────────────────────────────────────────────────────────
+
 
 @dataclass
 class ToolUseBlock:
@@ -58,6 +94,10 @@ class ToolUseBlock:
          "input": {"ticker": "AAPL", "from_date": "...", ...}}
 
     tool_use_id is optional — not all providers set it for the MVP.
+
+    NOTE: this is the LOCAL variant (used throughout ToolExecutor dispatch).
+    The canonical variant in libs/tools/src/tools/types.py uses ``id`` instead
+    of ``tool_use_id``. Both exist because the adapter layer pre-dates PLAN-0067.
     """
 
     name: str
@@ -65,22 +105,137 @@ class ToolUseBlock:
     tool_use_id: str = ""
 
 
-class ToolExecutor:
-    """Executes tool_use blocks emitted by the LLM against S3Port.
+@dataclass
+class EntityContext:
+    """Entity scope injected at request time (PLAN-0067 §0 M-1).
 
-    Design constraints:
-    - No per-request state: __init__ takes only registry + port (R30)
-    - All errors are swallowed and logged; callers receive None on failure
-    - execute_all() uses asyncio.gather for concurrent execution
+    Tool handlers that take entity-scoped queries auto-inject
+    entity_ids=[entity_context.entity_id] so the LLM need not pass UUIDs.
+    Cross-entity tools check entity_context is None and fall back to
+    name-based resolution.
     """
 
-    def __init__(self, registry: ToolRegistry, s3: S3Port) -> None:
+    entity_id: UUID
+    ticker: str
+    name: str
+
+
+@dataclass
+class ToolCallProvenance:
+    """Provenance for citation audit (PLAN-0067 §0 I-6).
+
+    Attached to each RetrievedItem produced via tool-use so downstream
+    citation rendering can link items back to the tool call that produced them.
+    Stored separately from RetrievedItem to avoid polluting the domain entity.
+    """
+
+    tool_name: str
+    tool_input: dict[str, Any]
+    call_id: str
+
+
+# ── Factory ────────────────────────────────────────────────────────────────────
+
+
+class ToolExecutorFactory:
+    """Singleton — wired once into the DI container at app startup.
+
+    Holds all shared collaborators (registry, port references, default timeout).
+    Call for_request() to get a per-request ToolExecutor with auth context bound.
+
+    WHY singleton + per-request split: shared collaborators (HTTP clients, registry)
+    are expensive to construct on every request. Auth context (user_id, tenant_id,
+    internal_jwt) is per-request and must not bleed between requests.
+    """
+
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        s3: S3Port,
+        s6: S6Port | None = None,
+        s7: S7Port | None = None,
+        s1: S1Port | None = None,
+        timeout: float = 5.0,
+    ) -> None:
         self._registry = registry
         self._s3 = s3
+        self._s6 = s6
+        self._s7 = s7
+        self._s1 = s1
+        self._timeout = timeout
 
-    async def execute(self, tool_call: ToolUseBlock) -> RetrievedItem | None:
-        """Execute a single tool call and return a RetrievedItem or None.
+    def for_request(
+        self,
+        *,
+        user_id: UUID | None,
+        tenant_id: UUID | None,
+        internal_jwt: str | None,
+        entity_context: EntityContext | None = None,
+    ) -> ToolExecutor:
+        """Return a per-request ToolExecutor with auth context bound.
 
+        Args:
+            user_id: Resolved from X-Internal-JWT by InternalJWTMiddleware.
+            tenant_id: Resolved from X-Internal-JWT by InternalJWTMiddleware.
+            internal_jwt: Raw JWT string for forwarding to S1 portfolio endpoint.
+            entity_context: Optional entity scope for entity-first queries (M-1).
+        """
+        return ToolExecutor(
+            registry=self._registry,
+            s3=self._s3,
+            s6=self._s6,
+            s7=self._s7,
+            s1=self._s1,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            internal_jwt=internal_jwt,
+            entity_context=entity_context,
+            timeout=self._timeout,
+        )
+
+
+# ── Executor ───────────────────────────────────────────────────────────────────
+
+
+class ToolExecutor:
+    """Executes tool_use blocks emitted by the LLM against upstream port adapters.
+
+    Design constraints:
+    - R25: depends only on port Protocol interfaces (never concrete infra adapters)
+    - All errors are swallowed and logged; callers receive None/[] on failure
+    - execute_all() uses asyncio.gather for concurrent execution
+    - New ports (s6, s7, s1) default to None so existing tests need no changes (R19)
+    """
+
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        s3: S3Port,
+        s6: S6Port | None = None,
+        s7: S7Port | None = None,
+        s1: S1Port | None = None,
+        user_id: UUID | None = None,
+        tenant_id: UUID | None = None,
+        internal_jwt: str | None = None,
+        entity_context: EntityContext | None = None,
+        timeout: float = 5.0,
+    ) -> None:
+        self._registry = registry
+        self._s3 = s3
+        self._s6 = s6
+        self._s7 = s7
+        self._s1 = s1
+        self._user_id = user_id
+        self._tenant_id = tenant_id
+        self._internal_jwt = internal_jwt
+        self._entity_context = entity_context
+        self._timeout = timeout
+
+    async def execute(self, tool_call: ToolUseBlock) -> RetrievedItem | list[RetrievedItem] | None:
+        """Execute a single tool call and return a RetrievedItem, list, or None.
+
+        Multi-result tools (search_documents, get_entity_graph, etc.) return a list.
+        Single-result tools (get_price_history, get_fundamentals_history) return one item.
         Returns None on any error (unknown name, empty data, network failure) so
         the orchestrator can apply the all-tools-failed guard safely.
         """
@@ -92,11 +247,27 @@ class ToolExecutor:
 
         t0 = time.monotonic()
         try:
-            result: RetrievedItem | None
+            result: RetrievedItem | list[RetrievedItem] | None
             if tool_call.name == "get_price_history":
                 result = await self._handle_get_price_history(**tool_call.input)
             elif tool_call.name == "get_fundamentals_history":
                 result = await self._handle_get_fundamentals_history(**tool_call.input)
+            elif tool_call.name == "search_documents":
+                result = await self._handle_search_documents(tool_call, **tool_call.input)
+            elif tool_call.name == "get_entity_graph":
+                result = await self._handle_get_entity_graph(tool_call, **tool_call.input)
+            elif tool_call.name == "traverse_graph":
+                result = await self._handle_traverse_graph(tool_call, **tool_call.input)
+            elif tool_call.name == "search_entity_relations":
+                result = await self._handle_search_entity_relations(tool_call, **tool_call.input)
+            elif tool_call.name == "search_claims":
+                result = await self._handle_search_claims(tool_call, **tool_call.input)
+            elif tool_call.name == "search_events":
+                result = await self._handle_search_events(tool_call, **tool_call.input)
+            elif tool_call.name == "get_contradictions":
+                result = await self._handle_get_contradictions(tool_call, **tool_call.input)
+            elif tool_call.name == "get_portfolio_context":
+                result = await self._handle_get_portfolio_context(tool_call)
             else:
                 # Registry had the spec but we have no handler — shouldn't happen
                 # if build_default_registry() is used; guard logs the gap.
@@ -104,18 +275,19 @@ class ToolExecutor:
                 return None
 
             latency_ms = round((time.monotonic() - t0) * 1000)
+            items_returned = len(result) if isinstance(result, list) else (1 if result is not None else 0)
             log.info(
                 "tool_executed",
                 tool=tool_call.name,
                 latency_ms=latency_ms,
-                items_returned=1 if result is not None else 0,
+                items_returned=items_returned,
             )
             return result
         except Exception as exc:
             log.warning("tool_failed", tool=tool_call.name, error=str(exc))
             return None
 
-    async def execute_all(self, tool_calls: list[ToolUseBlock]) -> list[RetrievedItem | None]:
+    async def execute_all(self, tool_calls: list[ToolUseBlock]) -> list[RetrievedItem | list[RetrievedItem] | None]:
         """Execute all tool calls concurrently, capped at _MAX_CONCURRENT_TOOLS.
 
         WHY asyncio.gather: tool calls are independent — parallel execution
@@ -124,7 +296,34 @@ class ToolExecutor:
         capped = tool_calls[:_MAX_CONCURRENT_TOOLS]
         return list(await asyncio.gather(*[self.execute(tc) for tc in capped]))
 
-    # ── Private handlers ──────────────────────────────────────────────────────
+    # ── Cypher injection guard ────────────────────────────────────────────────
+
+    def _sanitize_cypher_pattern(self, pattern: str | None) -> str | None:
+        """Validate and sanitize a cypher relationship pattern from LLM input.
+
+        Extracts :REL_TYPE tokens from a pattern like '[:INVESTS_IN|:BOARD_MEMBER_OF]'
+        and keeps only tokens that appear in _ALLOWED_CYPHER_REL_TYPES.
+        Returns None if no allowlisted tokens are found (logs a warning).
+
+        WHY: traverse_graph passes the pattern to S7.cypher_traverse(). An
+        adversarial user could inject arbitrary Cypher via this field to exfiltrate
+        data or cause unintended graph mutations. Allowlisting rel types is the
+        minimal guard; the S7 implementation adds further validation.
+        """
+        if pattern is None:
+            return None
+        tokens = re.findall(r":([A-Z_]+)", pattern)
+        allowed = [t for t in tokens if t in _ALLOWED_CYPHER_REL_TYPES]
+        if not allowed:
+            log.warning(
+                "cypher_pattern_rejected",
+                pattern=pattern[:100],
+                reason="no_allowlisted_rel_types",
+            )
+            return None
+        return "[:" + "|:".join(allowed) + "]"
+
+    # ── S3 handlers (price + fundamentals) ───────────────────────────────────
 
     async def _handle_get_price_history(
         self,
@@ -155,7 +354,7 @@ class ToolExecutor:
                 to_date=_to,
                 interval=interval,
             ),
-            timeout=5.0,
+            timeout=self._timeout,
         )
         if not bars:
             log.warning("tool_no_data", tool="get_price_history", ticker=ticker)
@@ -180,7 +379,7 @@ class ToolExecutor:
         """Fetch quarterly fundamentals and format as a markdown table RetrievedItem."""
         data = await asyncio.wait_for(
             self._s3.get_fundamentals_history(ticker=ticker, periods=periods),
-            timeout=5.0,
+            timeout=self._timeout,
         )
         if not data:
             log.warning("tool_no_data", tool="get_fundamentals_history", ticker=ticker)
@@ -194,6 +393,688 @@ class ToolExecutor:
             score=0.88,
             trust_weight=0.90,
         )
+
+    # ── S6 handlers (document search) ────────────────────────────────────────
+
+    async def _handle_search_documents(
+        self,
+        tool_call: ToolUseBlock,
+        query: str,
+        entity_tickers: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        source_types: list[str] | None = None,
+    ) -> list[RetrievedItem]:
+        """Search document corpus via S6 hybrid BM25+ANN retrieval.
+
+        entity_tickers is accepted from the LLM but not yet forwarded to S6 —
+        entity resolution by ticker is PLAN-0078. A TODO comment marks the gap.
+
+        Returns up to 20 RetrievedItem objects, each truncated to _TOOL_RESULT_MAX_CHARS.
+        Returns [] if S6 port is absent or any error occurs (graceful degradation).
+        """
+        if self._s6 is None:
+            log.warning("tool_handler_missing_port", tool="search_documents", port="s6")
+            return []
+
+        # Build provenance record for citation audit (PLAN-0067 §0 I-6)
+        _provenance = ToolCallProvenance(
+            tool_name="search_documents",
+            tool_input=tool_call.input,
+            call_id=tool_call.tool_use_id,
+        )
+
+        # Parse optional date strings into datetime objects (S6 expects datetime | None)
+        from datetime import datetime
+
+        from rag_chat.application.ports.upstream_clients import ChunkSearchRequest
+
+        def _parse_dt(s: str | None) -> datetime | None:
+            if s is None:
+                return None
+            try:
+                return datetime.fromisoformat(s).replace(tzinfo=UTC)
+            except ValueError:
+                log.warning("tool_invalid_date", tool="search_documents", value=s)
+                return None
+
+        request = ChunkSearchRequest(
+            query_text=query,
+            top_k=20,
+            search_type="hybrid",
+            date_from=_parse_dt(date_from),
+            date_to=_parse_dt(date_to),
+            source_types=source_types or [],
+            # TODO(PLAN-0078): pass entity_ids=resolved_entity_ids once ChunkSearchRequest
+            # entity ticker→id resolution is wired. Currently entity_tickers is accepted
+            # from the LLM but silently ignored here.
+        )
+
+        t0 = time.monotonic()
+        try:
+            results = await asyncio.wait_for(
+                self._s6.search_chunks(request),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="search_documents", error=str(e))
+            return []
+
+        items: list[RetrievedItem] = []
+        for result in results[:20]:
+            items.append(
+                RetrievedItem.create(
+                    item_id=f"tool:chunk:{result.chunk_id}",
+                    item_type=ItemType.chunk,
+                    text=result.text[:_TOOL_RESULT_MAX_CHARS],
+                    score=result.score,
+                    trust_weight=0.80,
+                    source_type=result.source_type,
+                    published_at=result.published_at,
+                    citation_meta=CitationMeta(
+                        title=result.title,
+                        url=result.url,
+                        source_name=result.source_name,
+                        published_at=result.published_at,
+                        entity_name=None,
+                    ),
+                )
+            )
+
+        log.info(
+            "tool_executed",
+            tool="search_documents",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            items_returned=len(items),
+        )
+        return items
+
+    # ── S7 graph handlers ─────────────────────────────────────────────────────
+
+    async def _handle_get_entity_graph(
+        self,
+        tool_call: ToolUseBlock,
+        entity_name: str,
+        depth: int = 1,
+        relation_types: list[str] | None = None,
+    ) -> list[RetrievedItem]:
+        """Retrieve egocentric knowledge graph for an entity via S7.
+
+        If entity_context is set (entity-first request), uses entity_context.entity_id
+        directly without name resolution. Otherwise requires entity_context — returns []
+        with a warning if neither is available (name-based entity resolution is PLAN-0078).
+
+        relation_types filtering is accepted from the LLM but not yet forwarded to
+        get_egocentric_graph — the S7 v1 API filters by confidence only.
+        """
+        if self._s7 is None:
+            log.warning("tool_handler_missing_port", tool="get_entity_graph", port="s7")
+            return []
+
+        # Resolve entity_id: use injected context if available
+        entity_id: UUID | None = None
+        if self._entity_context is not None:
+            entity_id = self._entity_context.entity_id
+        else:
+            # Name-based resolution not yet wired (PLAN-0078); log and degrade.
+            log.warning(
+                "tool_entity_unresolved",
+                tool="get_entity_graph",
+                entity_name=entity_name,
+                reason="no_entity_context_and_name_resolution_not_wired",
+            )
+            return []
+
+        t0 = time.monotonic()
+        try:
+            graph = await asyncio.wait_for(
+                self._s7.get_egocentric_graph(
+                    entity_id=entity_id,
+                    min_confidence=0.3,
+                    limit=50 * depth,  # depth 1 → 50 edges, depth 2 → 100
+                ),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_entity_graph", error=str(e))
+            return []
+
+        if not graph.nodes and not graph.edges:
+            log.warning("tool_no_data", tool="get_entity_graph", entity_name=entity_name)
+            return []
+
+        # Format graph as compact text for LLM context injection
+        text = self._format_graph(entity_name, graph)
+
+        item = RetrievedItem.create(
+            item_id=f"tool:graph:{graph.entity_id}",
+            item_type=ItemType.relation,
+            text=text[:_TOOL_RESULT_MAX_CHARS],
+            score=0.85,
+            trust_weight=0.80,
+            citation_meta=CitationMeta(
+                title=f"Knowledge graph: {entity_name}",
+                url=None,
+                source_name="knowledge_graph",
+                published_at=None,
+                entity_name=entity_name,
+            ),
+        )
+        log.info(
+            "tool_executed",
+            tool="get_entity_graph",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            items_returned=1,
+        )
+        return [item]
+
+    async def _handle_traverse_graph(
+        self,
+        tool_call: ToolUseBlock,
+        start_entity: str,
+        target_entity: str | None = None,
+        depth: int = 3,
+        cypher_pattern: str | None = None,
+    ) -> list[RetrievedItem]:
+        """Execute multi-hop Cypher traversal via S7.
+
+        cypher_pattern is sanitized through the allowlist before forwarding to S7
+        to guard against prompt injection (see _sanitize_cypher_pattern).
+        """
+        if self._s7 is None:
+            log.warning("tool_handler_missing_port", tool="traverse_graph", port="s7")
+            return []
+
+        # SECURITY: sanitize cypher pattern before forwarding
+        safe_pattern = self._sanitize_cypher_pattern(cypher_pattern)
+
+        # Build a simple Cypher traversal query
+        # WHY MATCH…RETURN: we pass a minimal traversal pattern to S7; S7 is
+        # responsible for additional query safety at its layer.
+        if target_entity:
+            cypher = (
+                f"MATCH p=(a {{name: $start}})-[r{safe_pattern or ''}*1..{depth}]-"
+                f"(b {{name: $target}}) RETURN p LIMIT 10"
+            )
+            params: dict[str, Any] = {"start": start_entity, "target": target_entity}
+        else:
+            cypher = f"MATCH p=(a {{name: $start}})-[r{safe_pattern or ''}*1..{depth}]-() RETURN p LIMIT 20"
+            params = {"start": start_entity}
+
+        t0 = time.monotonic()
+        try:
+            paths = await asyncio.wait_for(
+                self._s7.cypher_traverse(cypher=cypher, params=params, max_results=20),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="traverse_graph", error=str(e))
+            return []
+
+        if not paths:
+            log.warning("tool_no_data", tool="traverse_graph", start_entity=start_entity)
+            return []
+
+        text = f"Graph traversal: {start_entity}"
+        if target_entity:
+            text += f" → {target_entity}"
+        text += f" (depth {depth})\n"
+        text += "\n".join(str(p) for p in paths[:20])
+
+        item = RetrievedItem.create(
+            item_id=f"tool:traverse:{start_entity}",
+            item_type=ItemType.cypher_path,
+            text=text[:_TOOL_RESULT_MAX_CHARS],
+            score=0.80,
+            trust_weight=0.75,
+            citation_meta=CitationMeta(
+                title=f"Graph traversal: {start_entity}",
+                url=None,
+                source_name="knowledge_graph",
+                published_at=None,
+                entity_name=start_entity,
+            ),
+        )
+        log.info(
+            "tool_executed",
+            tool="traverse_graph",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            items_returned=1,
+        )
+        return [item]
+
+    # ── S7 signal handlers ────────────────────────────────────────────────────
+
+    async def _handle_search_entity_relations(
+        self,
+        tool_call: ToolUseBlock,
+        entity_name: str,
+        relation_type: str | None = None,
+        min_confidence: float = 0.6,
+        limit: int = 15,
+    ) -> list[RetrievedItem]:
+        """Search relation triplets for an entity via S7 ANN relation search.
+
+        S7.search_relations takes an embedding + entity_ids — not a text query.
+        We use entity_context.entity_id when available; otherwise degrade to [].
+        relation_type filtering is accepted from the LLM but not forwarded to
+        search_relations because S7 v1 filters by embedding ANN, not type literal.
+        """
+        if self._s7 is None:
+            log.warning("tool_handler_missing_port", tool="search_entity_relations", port="s7")
+            return []
+
+        entity_id: UUID | None = None
+        if self._entity_context is not None:
+            entity_id = self._entity_context.entity_id
+        else:
+            log.warning(
+                "tool_entity_unresolved",
+                tool="search_entity_relations",
+                entity_name=entity_name,
+                reason="no_entity_context_and_name_resolution_not_wired",
+            )
+            return []
+
+        # Use a zero embedding as placeholder — S7 will fall back to entity_id filter
+        placeholder_embedding: list[float] = [0.0] * 1024
+
+        t0 = time.monotonic()
+        try:
+            relations = await asyncio.wait_for(
+                self._s7.search_relations(
+                    embedding=placeholder_embedding,
+                    entity_ids=[entity_id],
+                    top_k=limit,
+                    min_confidence=min_confidence,
+                ),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="search_entity_relations", error=str(e))
+            return []
+
+        if not relations:
+            log.warning("tool_no_data", tool="search_entity_relations", entity_name=entity_name)
+            return []
+
+        lines = [f"Relations for {entity_name}:"]
+        for r in relations:
+            lines.append(
+                f"  {r.subject} --[{r.relation_type}]--> {r.object} (confidence={r.confidence:.2f}): {r.summary}"
+            )
+
+        text = "\n".join(lines)
+        item = RetrievedItem.create(
+            item_id=f"tool:relations:{entity_id}",
+            item_type=ItemType.relation,
+            text=text[:_TOOL_RESULT_MAX_CHARS],
+            score=0.82,
+            trust_weight=0.80,
+            citation_meta=CitationMeta(
+                title=f"Relations: {entity_name}",
+                url=None,
+                source_name="knowledge_graph",
+                published_at=None,
+                entity_name=entity_name,
+            ),
+        )
+        log.info(
+            "tool_executed",
+            tool="search_entity_relations",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            items_returned=1,
+        )
+        return [item]
+
+    async def _handle_search_claims(
+        self,
+        tool_call: ToolUseBlock,
+        entity_name: str,
+        claim_type: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[RetrievedItem]:
+        """Search analyst claims for an entity via S7.search_claims.
+
+        Returns one RetrievedItem per claim, up to 20. Returns [] on any error.
+        """
+        if self._s7 is None:
+            log.warning("tool_handler_missing_port", tool="search_claims", port="s7")
+            return []
+
+        entity_id: UUID | None = None
+        if self._entity_context is not None:
+            entity_id = self._entity_context.entity_id
+        else:
+            log.warning(
+                "tool_entity_unresolved",
+                tool="search_claims",
+                entity_name=entity_name,
+                reason="no_entity_context_and_name_resolution_not_wired",
+            )
+            return []
+
+        from datetime import datetime
+
+        def _parse_dt(s: str | None) -> datetime | None:
+            if s is None:
+                return None
+            try:
+                return datetime.fromisoformat(s).replace(tzinfo=UTC)
+            except ValueError:
+                return None
+
+        claim_types = [claim_type] if claim_type else None
+
+        t0 = time.monotonic()
+        try:
+            claims = await asyncio.wait_for(
+                self._s7.search_claims(
+                    entity_ids=[entity_id],
+                    claim_types=claim_types,
+                    date_from=_parse_dt(date_from),
+                    date_to=_parse_dt(date_to),
+                    top_k=20,
+                    min_confidence=0.45,
+                ),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="search_claims", error=str(e))
+            return []
+
+        if not claims:
+            log.warning("tool_no_data", tool="search_claims", entity_name=entity_name)
+            return []
+
+        items: list[RetrievedItem] = []
+        for claim in claims:
+            text = (
+                f"[{claim.claim_type}] ({claim.polarity}) "
+                f"{claim.claim_text} "
+                f"(confidence={claim.extraction_confidence:.2f})"
+            )
+            items.append(
+                RetrievedItem.create(
+                    item_id=f"tool:claim:{claim.claim_id}",
+                    item_type=ItemType.claim,
+                    text=text[:_TOOL_RESULT_MAX_CHARS],
+                    score=claim.extraction_confidence,
+                    trust_weight=0.75,
+                    extraction_confidence=claim.extraction_confidence,
+                    citation_meta=CitationMeta(
+                        title=f"Claim: {claim.claim_type}",
+                        url=None,
+                        source_name="knowledge_graph",
+                        published_at=None,
+                        entity_name=entity_name,
+                    ),
+                )
+            )
+
+        log.info(
+            "tool_executed",
+            tool="search_claims",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            items_returned=len(items),
+        )
+        return items
+
+    async def _handle_search_events(
+        self,
+        tool_call: ToolUseBlock,
+        entity_name: str,
+        event_type: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[RetrievedItem]:
+        """Search structured corporate events for an entity via S7.search_events.
+
+        date_from and date_to are forwarded to S7 to enable timeline filtering.
+        Returns [] on any error (graceful degradation).
+        """
+        if self._s7 is None:
+            log.warning("tool_handler_missing_port", tool="search_events", port="s7")
+            return []
+
+        entity_id: UUID | None = None
+        if self._entity_context is not None:
+            entity_id = self._entity_context.entity_id
+        else:
+            log.warning(
+                "tool_entity_unresolved",
+                tool="search_events",
+                entity_name=entity_name,
+                reason="no_entity_context_and_name_resolution_not_wired",
+            )
+            return []
+
+        from datetime import datetime
+
+        def _parse_dt(s: str | None) -> datetime | None:
+            if s is None:
+                return None
+            try:
+                return datetime.fromisoformat(s).replace(tzinfo=UTC)
+            except ValueError:
+                return None
+
+        event_types = [event_type] if event_type else None
+
+        t0 = time.monotonic()
+        try:
+            events = await asyncio.wait_for(
+                self._s7.search_events(
+                    entity_ids=[entity_id],
+                    event_types=event_types,
+                    date_from=_parse_dt(date_from),
+                    date_to=_parse_dt(date_to),
+                    top_k=20,
+                ),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="search_events", error=str(e))
+            return []
+
+        if not events:
+            log.warning("tool_no_data", tool="search_events", entity_name=entity_name)
+            return []
+
+        items: list[RetrievedItem] = []
+        for event in events:
+            text = (
+                f"[{event.event_type}]"
+                + (f" ({event.event_subtype})" if event.event_subtype else "")
+                + (f" on {event.event_date}" if event.event_date else "")
+                + f": {event.event_text}"
+            )
+            items.append(
+                RetrievedItem.create(
+                    item_id=f"tool:event:{event.event_id}",
+                    item_type=ItemType.event,
+                    text=text[:_TOOL_RESULT_MAX_CHARS],
+                    score=event.extraction_confidence,
+                    trust_weight=0.78,
+                    citation_meta=CitationMeta(
+                        title=f"Event: {event.event_type}",
+                        url=None,
+                        source_name="knowledge_graph",
+                        published_at=None,
+                        entity_name=entity_name,
+                    ),
+                )
+            )
+
+        log.info(
+            "tool_executed",
+            tool="search_events",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            items_returned=len(items),
+        )
+        return items
+
+    async def _handle_get_contradictions(
+        self,
+        tool_call: ToolUseBlock,
+        entity_name: str,
+        confidence_threshold: float = 0.5,
+    ) -> list[RetrievedItem]:
+        """Retrieve analyst claim contradictions for an entity via S7.get_contradictions.
+
+        Returns one RetrievedItem per contradiction pair. Returns [] on any error.
+        """
+        if self._s7 is None:
+            log.warning("tool_handler_missing_port", tool="get_contradictions", port="s7")
+            return []
+
+        entity_id: UUID | None = None
+        if self._entity_context is not None:
+            entity_id = self._entity_context.entity_id
+        else:
+            log.warning(
+                "tool_entity_unresolved",
+                tool="get_contradictions",
+                entity_name=entity_name,
+                reason="no_entity_context_and_name_resolution_not_wired",
+            )
+            return []
+
+        t0 = time.monotonic()
+        try:
+            contradictions = await asyncio.wait_for(
+                self._s7.get_contradictions(entity_id=entity_id, top_k=10),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_contradictions", error=str(e))
+            return []
+
+        # Filter by confidence_threshold (S7 doesn't accept threshold param in v1)
+        contradictions = [c for c in contradictions if c.strength >= confidence_threshold]
+
+        if not contradictions:
+            log.warning("tool_no_data", tool="get_contradictions", entity_name=entity_name)
+            return []
+
+        items: list[RetrievedItem] = []
+        for contradiction in contradictions:
+            sides_text = ""
+            for i, side in enumerate(contradiction.sides, 1):
+                sides_text += f"\n  Side {i}: {side}"
+            text = (
+                f"[CONTRADICTION: {contradiction.claim_type}] "
+                f"strength={contradiction.strength:.2f} "
+                f"detected={contradiction.detected_at}" + sides_text
+            )
+            items.append(
+                RetrievedItem.create(
+                    item_id=f"tool:contradiction:{contradiction.claim_type}:{entity_id}",
+                    item_type=ItemType.claim,
+                    text=text[:_TOOL_RESULT_MAX_CHARS],
+                    score=contradiction.strength,
+                    trust_weight=0.70,
+                    citation_meta=CitationMeta(
+                        title=f"Contradiction: {contradiction.claim_type}",
+                        url=None,
+                        source_name="knowledge_graph",
+                        published_at=None,
+                        entity_name=entity_name,
+                    ),
+                )
+            )
+
+        log.info(
+            "tool_executed",
+            tool="get_contradictions",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            items_returned=len(items),
+        )
+        return items
+
+    # ── S1 portfolio handler ──────────────────────────────────────────────────
+
+    async def _handle_get_portfolio_context(
+        self,
+        tool_call: ToolUseBlock,
+    ) -> list[RetrievedItem]:
+        """Retrieve portfolio holdings + watchlist for the authenticated user via S1.
+
+        PRIVACY: log MUST NOT include tickers, values, or holding identifiers.
+        Only holding_count and watchlist_count are logged (safe aggregate metrics).
+
+        Returns [] for anonymous sessions (user_id is None) or on any error.
+        """
+        if self._user_id is None:
+            # Anonymous session — portfolio tool cannot be used without auth
+            log.warning("tool_no_auth", tool="get_portfolio_context", reason="user_id_none")
+            return []
+
+        if self._s1 is None:
+            log.warning("tool_handler_missing_port", tool="get_portfolio_context", port="s1")
+            return []
+
+        if self._tenant_id is None:
+            log.warning("tool_no_auth", tool="get_portfolio_context", reason="tenant_id_none")
+            return []
+
+        t0 = time.monotonic()
+        try:
+            context = await asyncio.wait_for(
+                self._s1.get_portfolio_context(
+                    user_id=self._user_id,
+                    tenant_id=self._tenant_id,
+                    x_internal_token=self._internal_jwt or "",
+                ),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_portfolio_context", error=str(e))
+            return []
+
+        if context is None:
+            log.warning("tool_no_data", tool="get_portfolio_context")
+            return []
+
+        # Format holdings and watchlist as compact text for LLM context injection.
+        # PRIVACY: we format only generic field names; the full context.holdings dicts
+        # may contain sensitive values but they are passed to the LLM, not logged.
+        lines = [f"Portfolio context for user (tenant={self._tenant_id}):"]
+        if context.holdings:
+            lines.append(f"Holdings ({len(context.holdings)} positions):")
+            for h in context.holdings:
+                lines.append(f"  {h}")
+        if context.watchlist:
+            lines.append(f"Watchlist ({len(context.watchlist)} items):")
+            for w in context.watchlist:
+                lines.append(f"  {w}")
+        text = "\n".join(lines)
+
+        # PRIVACY: log only counts — never tickers, quantities, or dollar values
+        log.info(
+            "tool_executed",
+            tool="get_portfolio_context",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            holding_count=len(context.holdings),
+            watchlist_count=len(context.watchlist),
+        )
+        return [
+            RetrievedItem.create(
+                item_id=f"tool:portfolio:{self._user_id}",
+                item_type=ItemType.financial,
+                text=text[:_TOOL_RESULT_MAX_CHARS],
+                score=1.0,  # user's own data — always maximally relevant
+                trust_weight=0.95,
+                citation_meta=CitationMeta(
+                    title="Portfolio context",
+                    url=None,
+                    source_name="portfolio",
+                    published_at=None,
+                    entity_name=None,
+                ),
+            )
+        ]
 
     # ── Formatters ────────────────────────────────────────────────────────────
 
@@ -238,9 +1119,22 @@ class ToolExecutor:
             rows.append(f"| {period_label} | {rev} | {ni} | {eps} | {pe} |")
         return header + "\n".join(rows)
 
+    def _format_graph(self, entity_name: str, graph: Any) -> str:
+        """Format an EgocentricGraph as compact text for LLM context injection."""
+        lines = [f"Knowledge graph: {entity_name} ({len(graph.nodes)} nodes, {len(graph.edges)} edges)"]
+        if graph.nodes:
+            lines.append("Nodes:")
+            for node in graph.nodes[:20]:
+                lines.append(f"  {node}")
+        if graph.edges:
+            lines.append("Edges:")
+            for edge in graph.edges[:30]:
+                lines.append(f"  {edge}")
+        return "\n".join(lines)
+
 
 def build_default_registry() -> ToolRegistry:
-    """Factory: create a ToolRegistry with both temporal tools registered.
+    """Factory: create a ToolRegistry with all 10 tools registered.
 
     Called by api/dependencies.py to wire the ToolExecutor at startup.
     The handlers registered here are placeholder stubs — the actual execution
@@ -326,5 +1220,28 @@ def build_default_registry() -> ToolRegistry:
         ),
         handler=lambda **_: None,
     )
+
+    # PLAN-0067 Wave W11-2: register remaining 8 tools.
+    # Handlers are placeholder stubs — dispatch is inside ToolExecutor.execute().
+    _new_tool_names = [
+        "search_documents",
+        "get_entity_graph",
+        "traverse_graph",
+        "search_entity_relations",
+        "search_claims",
+        "search_events",
+        "get_contradictions",
+        "get_portfolio_context",
+    ]
+    for tool_name in _new_tool_names:
+        registry.register(
+            ToolSpec(
+                name=tool_name,
+                description=f"Tool: {tool_name} (see capability_manifest.yaml for full description)",
+                parameters=[],
+                source_type="mixed",
+            ),
+            handler=lambda **_: None,
+        )
 
     return registry

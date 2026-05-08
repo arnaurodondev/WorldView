@@ -297,7 +297,14 @@ class ChatOrchestratorUseCase:
                 # If every tool call returned None, fall back to classical path.
                 # Never produce a second LLM turn with zero tool context — the LLM
                 # would hallucinate. Use the first_full_text as the final answer.
-                non_none_items: list[RetrievedItem] = [i for i in tool_items if i is not None]
+                # PLAN-0067 W11-2: multi-result tools return list[RetrievedItem]; flatten.
+                _flat_items: list[RetrievedItem] = []
+                for _item in tool_items:
+                    if isinstance(_item, list):
+                        _flat_items.extend(_item)
+                    elif _item is not None:
+                        _flat_items.append(_item)
+                non_none_items: list[RetrievedItem] = _flat_items
                 if not non_none_items:
                     log.warning(
                         "all_tools_failed",

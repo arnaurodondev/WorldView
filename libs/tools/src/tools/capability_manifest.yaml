@@ -24,6 +24,8 @@ tools:
         description: Bar granularity. Default "week".
         required: false
     source_type: ohlcv  # used by TrustScorer — trust_weight NOT stored here (PLAN-0067 §0 A-2)
+    since: "v1"
+    deprecated_at: null
     example_queries:
       - "How has AAPL performed over the last 3 months?"
       - "What was NVDA's price range in Q1 2026?"
@@ -43,6 +45,217 @@ tools:
         description: Number of quarters to return (1-20). Default 8.
         required: false
     source_type: fundamentals  # used by TrustScorer — trust_weight NOT stored here (PLAN-0067 §0 A-2)
+    since: "v1"
+    deprecated_at: null
     example_queries:
       - "Show me MSFT's revenue trend over 8 quarters"
       - "What has AAPL's EPS been over the last 2 years?"
+
+  - name: search_documents
+    description: >
+      Searches the platform's document corpus using hybrid BM25 + ANN embedding search.
+      Returns text excerpts from news articles, SEC filings (10-K, 10-Q, 8-K), earnings
+      call transcripts, and analyst reports. Use for factual questions, news, company
+      announcements, and any question requiring text evidence. This is the primary
+      retrieval tool for unstructured information.
+    parameters:
+      - name: query
+        type: string
+        description: Natural language search query
+        required: true
+      - name: entity_tickers
+        type: array
+        description: List of stock tickers to constrain results (e.g. ["AAPL", "MSFT"])
+        required: false
+      - name: date_from
+        type: date
+        description: Earliest document date (YYYY-MM-DD). Optional.
+        required: false
+      - name: date_to
+        type: date
+        description: Latest document date (YYYY-MM-DD). Optional.
+        required: false
+      - name: source_types
+        type: array
+        description: "Filter by source: ['sec_filing', 'earnings', 'news', 'analyst_report']"
+        required: false
+    source_type: "mixed"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "What risks does AAPL mention in their latest 10-K?"
+      - "What did analysts say about NVDA's data centre revenue?"
+
+  - name: get_entity_graph
+    description: >
+      Retrieves the egocentric knowledge graph for a named entity — the entity's
+      immediate neighbours, relationships, and their summaries. Use when the question
+      asks about connections, subsidiaries, partnerships, board members, or the
+      entity's place in a larger structure. Returns nodes and edges with confidence scores.
+    parameters:
+      - name: entity_name
+        type: string
+        description: Name of the entity (company, person, fund) to build the graph around
+        required: true
+      - name: depth
+        type: integer
+        description: Graph hop depth (1 or 2). Default 1. Use 2 for broader connectivity.
+        required: false
+      - name: relation_types
+        type: array
+        description: "Filter by relation type: ['subsidiary_of', 'board_member_of', 'partnership', 'competitor_of']"
+        required: false
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "What companies is Elon Musk connected to?"
+      - "Who are AAPL's main subsidiaries?"
+
+  - name: traverse_graph
+    description: >
+      Executes a targeted knowledge graph traversal to find multi-hop paths between
+      entities. More powerful than get_entity_graph for finding indirect connections,
+      competitive relationships, or shared investors. Use when the question requires
+      tracing a path or finding how two entities are linked.
+    parameters:
+      - name: start_entity
+        type: string
+        description: Starting entity name
+        required: true
+      - name: target_entity
+        type: string
+        description: Target entity name to find paths to. Optional.
+        required: false
+      - name: depth
+        type: integer
+        description: Maximum path depth (2-4). Default 3.
+        required: false
+      - name: cypher_pattern
+        type: string
+        description: Optional Cypher relationship filter (e.g. "[:INVESTS_IN|:BOARD_MEMBER_OF]")
+        required: false
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "How is Sam Altman connected to Microsoft?"
+      - "Are AAPL and MSFT connected through any shared board members?"
+
+  - name: search_entity_relations
+    description: >
+      Searches for relation triplets involving an entity in the knowledge graph.
+      Returns structured (subject, relation_type, object) triples with confidence scores.
+      Use for listing what is known about an entity's relationships in structured form.
+    parameters:
+      - name: entity_name
+        type: string
+        description: Entity to find relations for
+        required: true
+      - name: relation_type
+        type: string
+        description: "Specific relation type to filter: 'invests_in', 'competes_with', 'acquired', etc."
+        required: false
+      - name: min_confidence
+        type: number
+        description: Minimum confidence threshold (0.0-1.0). Default 0.6.
+        required: false
+      - name: limit
+        type: integer
+        description: Maximum number of relations to return. Default 15.
+        required: false
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "List all companies that Microsoft has acquired"
+
+  - name: search_claims
+    description: >
+      Searches for analyst claims and extracted assertions about an entity. Claims are
+      LLM-extracted structured statements from financial documents (e.g., "AAPL will
+      expand into India"). Use for opinion-type questions, target price questions, or
+      when you need to contrast what analysts are saying.
+    parameters:
+      - name: entity_name
+        type: string
+        description: Entity the claims are about
+        required: true
+      - name: claim_type
+        type: string
+        description: "Type of claim: 'price_target', 'revenue_forecast', 'risk_factor', 'strategic_move'"
+        required: false
+      - name: date_from
+        type: date
+        description: Earliest claim extraction date (YYYY-MM-DD)
+        required: false
+      - name: date_to
+        type: date
+        description: Latest claim extraction date (YYYY-MM-DD)
+        required: false
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "What are analysts saying about AAPL's AI strategy?"
+
+  - name: search_events
+    description: >
+      Retrieves structured corporate events involving an entity — earnings releases,
+      M&A activity, leadership changes, product launches, regulatory filings. Use for
+      timeline or event-based questions.
+    parameters:
+      - name: entity_name
+        type: string
+        description: Entity involved in the events
+        required: true
+      - name: event_type
+        type: string
+        description: "Event type: 'earnings', 'merger', 'acquisition', 'ipo', 'leadership_change', 'product_launch'"
+        required: false
+      - name: date_from
+        type: date
+        description: Earliest event date
+        required: false
+      - name: date_to
+        type: date
+        description: Latest event date
+        required: false
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "When did AAPL last announce a major acquisition?"
+
+  - name: get_contradictions
+    description: >
+      Retrieves cross-source contradictions detected in analyst claims about an entity.
+      Returns pairs of conflicting statements with their strength and sources.
+      Use when the question is about disagreement, uncertainty, or conflicting signals.
+    parameters:
+      - name: entity_name
+        type: string
+        description: Entity to find contradictions for
+        required: true
+      - name: confidence_threshold
+        type: number
+        description: Minimum contradiction strength (0.0-1.0). Default 0.5.
+        required: false
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "Are there conflicting analyst views on TSLA's profitability?"
+
+  - name: get_portfolio_context
+    description: >
+      Retrieves the current user's portfolio holdings and watchlist. Use when the
+      question references the user's own positions, portfolio P&L, or watchlisted stocks.
+      Do NOT call this tool unless the question explicitly references "my portfolio",
+      "my holdings", "my watchlist", or similar personal context.
+    parameters: []
+    source_type: "portfolio"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "How is my portfolio performing today?"
