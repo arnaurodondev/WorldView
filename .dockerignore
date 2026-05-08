@@ -24,6 +24,8 @@
 !libs/ml-clients/src/
 !libs/prompts/pyproject.toml
 !libs/prompts/src/
+!libs/tools/pyproject.toml
+!libs/tools/src/
 
 # ── Service source + build metadata ──────────────────────────────────────────
 !services/*/pyproject.toml
