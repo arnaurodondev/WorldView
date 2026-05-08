@@ -1,0 +1,16 @@
+{
+  "type": "record",
+  "name": "NlpDocumentReady",
+  "namespace": "com.worldview.nlp_pipeline.events",
+  "doc": "Emitted by S6 after a tenant document is fully processed (chunks, embeddings, entity_mentions complete). S4 consumes to set status=READY.",
+  "fields": [
+    {"name": "event_id",       "type": "string", "doc": "UUIDv7"},
+    {"name": "event_type",     "type": "string", "default": "nlp.document.ready"},
+    {"name": "schema_version", "type": "int",    "default": 1},
+    {"name": "occurred_at",    "type": "string", "doc": "ISO-8601 UTC"},
+    {"name": "doc_id",         "type": "string", "doc": "UUIDv7 of the processed document"},
+    {"name": "tenant_id",      "type": "string", "doc": "Owning tenant UUID"},
+    {"name": "chunk_count",    "type": "int",    "doc": "Number of chunks created"},
+    {"name": "word_count",     "type": "int",    "doc": "Total word count of processed document"}
+  ]
+}

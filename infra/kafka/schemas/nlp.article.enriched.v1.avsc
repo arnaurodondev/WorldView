@@ -26,6 +26,12 @@
     {"name": "raw_relations_json", "type": ["null", "string"],     "default": null, "doc": "PLAN-0062 Wave B: JSON-encoded array of raw relation dicts (subject_entity_id, object_entity_id, raw_type, polarity, etc.). Carries the rich payload that feeds knowledge_graph.application.blocks.graph_write.materialize_graph. Stored as a JSON string to keep the Avro envelope flat without needing nested record schemas (KG enriched_consumer parses this back into RawRelation dataclasses)."},
     {"name": "raw_events_json",   "type": ["null", "string"],      "default": null, "doc": "PLAN-0062 Wave B: JSON-encoded array of raw event dicts. See raw_relations_json for rationale."},
     {"name": "raw_claims_json",   "type": ["null", "string"],      "default": null, "doc": "PLAN-0062 Wave B: JSON-encoded array of raw claim dicts. See raw_relations_json for rationale."},
-    {"name": "correlation_id",    "type": ["null", "string"],      "default": null}
+    {"name": "correlation_id",    "type": ["null", "string"],      "default": null},
+    {
+      "name": "tenant_id",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Owning tenant UUID string. Propagated from content.article.stored.v1."
+    }
   ]
 }
