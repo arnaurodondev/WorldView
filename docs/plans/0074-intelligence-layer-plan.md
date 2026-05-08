@@ -3,7 +3,7 @@
 > **PRD**: [docs/specs/0074-intelligence-layer.md](../specs/0074-intelligence-layer.md)
 > **Status**: in-progress
 > **Created**: 2026-05-05
-> **Last revised**: 2026-05-08 (Wave A — DDL migrations 0031-0036 committed)
+> **Last revised**: 2026-05-08 (Wave D — entity intelligence API endpoints committed; Waves A+B+C+D+E1+E2 done)
 > **Owner**: Arnau Rodon
 > **Depends on**:
 > - PLAN-0073 (intelligence_db structured enrichment columns + `relation_type_registry` source fields + `relations.relation_source` — required before Wave A).
@@ -60,7 +60,7 @@ Decompose PRD-0074 into 9 dependency-ordered waves across 5 services (`intellige
 | C | NarrativeGenerationWorker (13D-3) | application | S7 | 1.5d | A |
 | D | Entity Intelligence API Endpoints | API | S7 | 1.0d | C, B |
 | E1 | PathInsightWorker + Seeder | application | S7 | 1.0d | A |
-| E2 | Path Insights API + Lazy LLM Explanation | API | S7 | 1.0d | E1 |
+| E2 | Path Insights API + Lazy LLM Explanation | API | S7 | 1.0d | E1 | ✅ DONE |
 | F | S8 Entity-Context Chat Endpoint | API | S8 | 0.5d | D |
 | G | S9 Proxy Routes for Intelligence | API | S9 | 0.5d | D, E2, F |
 | H | Frontend 3-Column Intelligence Page | frontend | worldview-web | 2.5d | G |
@@ -714,9 +714,9 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 **Tests** (≥8): schemas validate, 404 on missing, source distribution percentages sum ~1.0, confidence trend has up to 90 points, key metrics extracted per entity type (company vs person).
 
 **Acceptance criteria**:
-- [ ] Tests pass; contract test for response shape.
-- [ ] `mean_*` aggregates use NULL-safe SQL (`AVG(...) FILTER (WHERE ... IS NOT NULL)`).
-- [ ] Endpoint NOT yet wired (Wave D-04).
+- [x] Tests pass; contract test for response shape.
+- [x] `mean_*` aggregates use NULL-safe SQL (`AVG(...) FILTER (WHERE ... IS NOT NULL)`).
+- [x] Endpoint wired in Wave D-04.
 
 #### T-D-02: Enhance `GET /entities/{id}/graph` — `confidence_breakdown` + `focus_node` query params
 
@@ -735,8 +735,8 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 **Tests** (≥6): default response unchanged, breakdown fields appear conditionally, 422 on invalid focus_node UUID, focus_edges correct subset.
 
 **Acceptance criteria**:
-- [ ] Tests pass; backward compat verified (existing graph tests still green).
-- [ ] mypy clean — Optional fields properly typed.
+- [x] Tests pass; backward compat verified (existing graph tests still green).
+- [x] mypy clean — Optional fields properly typed.
 
 #### T-D-03: `GET /entities/{id}/narratives` (history) + `POST /entities/{id}/narratives/generate` (manual trigger)
 
@@ -758,8 +758,8 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 **Tests** (≥6): pagination cursor round-trip, manual trigger 202, rate-limit returns 429 with `Retry-After`, second hit within hour blocked.
 
 **Acceptance criteria**:
-- [ ] Tests pass; rate limit value verified by inspecting Valkey key.
-- [ ] All endpoints under `/api/v1/entities/{id}/narratives*`.
+- [x] Tests pass; rate limit value verified by inspecting Valkey key.
+- [x] All endpoints under `/api/v1/entities/{id}/narratives*`.
 
 #### T-D-04: Wire `GET /entities/{id}/intelligence` route + register in OpenAPI
 
@@ -778,16 +778,16 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 **Tests** (≥4): full happy path, 404, 403 across tenants, P95 latency check (skipped in unit, run in `tests/perf/`).
 
 **Acceptance criteria**:
-- [ ] OpenAPI spec exposes new route.
-- [ ] Integration test passes against seeded entity.
+- [x] OpenAPI spec exposes new route.
+- [ ] Integration test passes against seeded entity (deferred to live-stack QA).
 
 ### Validation Gate
 
-- [ ] ≥24 new tests pass.
-- [ ] All routes accessible via uvicorn local run.
-- [ ] mypy + ruff clean.
-- [ ] Existing graph endpoint tests still pass (backward compat).
-- [ ] `docs/services/knowledge-graph.md` updated with all 4 endpoints.
+- [x] ≥24 new tests pass (34 Wave D tests + updated existing test).
+- [x] All routes accessible via uvicorn local run.
+- [x] mypy + ruff clean.
+- [x] Existing graph endpoint tests still pass (backward compat).
+- [x] `docs/services/knowledge-graph.md` updated with all 4 endpoints.
 
 ### Break Impact
 
@@ -990,7 +990,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 ### Tasks
 
-#### T-E2-01: `PathInsightPublic` Pydantic schema + `GetEntityPathsUseCase`
+#### T-E2-01: `PathInsightPublic` Pydantic schema + `GetEntityPathsUseCase` ✅ DONE
 
 **Type**: impl
 **depends_on**: T-E1-02
@@ -1004,7 +1004,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 **Tests** (≥6): filter validation, schema compatibility, empty response when no paths, response sorted by composite_score DESC.
 
-#### T-E2-02: Lazy LLM explanation generation (background task on null read)
+#### T-E2-02: Lazy LLM explanation generation (background task on null read) ✅ DONE
 
 **Type**: impl
 **depends_on**: T-E2-01, T-E1-02
@@ -1023,7 +1023,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 **Tests** (≥5): null explanation triggers task, explanation populated after wait, race tolerated (two concurrent calls both succeed), LLM failure logged but does not crash use case, sanitization applied.
 
-#### T-E2-03: Wire `GET /api/v1/entities/{id}/paths` route
+#### T-E2-03: Wire `GET /api/v1/entities/{id}/paths` route ✅ DONE
 
 **Type**: impl
 **depends_on**: T-E2-02
@@ -1040,10 +1040,10 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 ### Validation Gate
 
-- [ ] ≥16 new tests pass.
-- [ ] Existing E1 tests still pass.
+- [x] ≥16 new tests pass (44 total: 35 unit + 9 contract).
+- [x] Existing E1 tests still pass (1208 unit pass, 4 pre-existing failures unrelated to E2).
 - [ ] Integration test: full E1 → E2 round-trip — entity created → seeder → worker → GET /paths returns insights → second call returns cached explanation.
-- [ ] Documentation: `docs/services/knowledge-graph.md` updated.
+- [x] Documentation: `docs/services/knowledge-graph.md` updated.
 
 ### Break Impact
 
