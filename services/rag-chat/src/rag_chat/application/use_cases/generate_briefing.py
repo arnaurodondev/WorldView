@@ -12,6 +12,7 @@ LLM:        EMAIL_DEEP_BRIEF_PROMPT via LLMProviderChain (collects full stream).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import UTC, datetime
@@ -21,6 +22,7 @@ from uuid import UUID
 import structlog
 
 from rag_chat.application.pipeline.prompts.intent_prompts import EMAIL_DEEP_BRIEF_PROMPT
+from rag_chat.application.ports.brief_archive import BriefArchivePort, NullBriefArchive, UserBriefRecord
 from rag_chat.domain.brief import BriefBullet, BriefCitation, BriefSection
 from rag_chat.domain.errors import RateLimitExceededError
 
@@ -617,11 +619,16 @@ class GenerateBriefingUseCase:
         self,
         llm_chain: LLMProviderChain,
         valkey: ValkeyClient,  # type: ignore[name-defined]
-        context_gatherer: BriefingContextGatherer | None = None,  # NEW — optional
+        context_gatherer: BriefingContextGatherer | None = None,  # optional — degrades gracefully
+        brief_archive: BriefArchivePort | None = None,  # PLAN-0066 Wave B — optional persistence
     ) -> None:
         self._llm_chain = llm_chain
         self._valkey = valkey
         self._context_gatherer = context_gatherer  # None when wired without context gathering
+        # WHY NullBriefArchive default: callers that do not wire a real archive
+        # (e.g. unit tests, email briefing path) continue to work without any
+        # code change. Production wires BriefArchiveRepository via DI.
+        self._brief_archive: BriefArchivePort = brief_archive if brief_archive is not None else NullBriefArchive()
 
     async def execute(
         self,
@@ -946,6 +953,77 @@ class GenerateBriefingUseCase:
         # PLAN-0062-W4: sections (BriefBullet) takes precedence; legacy_sections
         # is only used when the new parser returned no sections.
         legacy_sections = _parse_sections_from_markdown(narrative) if not sections else []
+
+        # ── 8. PLAN-0066 Wave B: fire-and-forget brief persistence ───────────
+        # WHY asyncio.shield: DB failures must NEVER propagate back to the caller
+        # (this is a cache/analytics write, not the primary response path). The
+        # shield ensures that even if the event loop cancels the task, the DB
+        # write attempt is not interrupted mid-flight.
+        # WHY ensure_future (not create_task): ensure_future is available in
+        # Python 3.12 without requiring an explicit running loop reference.
+        # WHY skip persistence on cached returns: the cache-hit path returns
+        # early (before this code), so we only persist genuinely fresh generations.
+        try:
+            _uid = UUID(user_id)
+        except (ValueError, AttributeError):
+            _uid = UUID("00000000-0000-0000-0000-000000000000")
+        try:
+            _tid = UUID(tenant_id)
+        except (ValueError, AttributeError):
+            _tid = UUID("00000000-0000-0000-0000-000000000000")
+
+        # Build sections_json: coerce BriefSection dataclasses → plain dicts.
+        # citations_json: BriefCitation dataclasses → plain dicts using to_dict().
+        # WHY cast to Any: sections is list[BriefSection] and legacy_sections is
+        # list[dict]; mypy cannot unify the types in the conditional. We explicitly
+        # cast to Any and then normalise each entry to dict in the comprehension.
+        _raw_sections: Any = sections if sections else legacy_sections
+        _sections_json: list[dict] = [
+            s.to_dict() if hasattr(s, "to_dict") else (s if isinstance(s, dict) else {}) for s in _raw_sections
+        ]
+        _citations_json: list[dict] = [
+            c.to_dict() if hasattr(c, "to_dict") else (c if isinstance(c, dict) else {}) for c in citations
+        ]
+
+        from common.ids import new_uuid7  # type: ignore[import-untyped]
+        from common.time import utc_now  # type: ignore[import-untyped]
+
+        _record = UserBriefRecord(
+            id=new_uuid7(),
+            user_id=_uid,
+            tenant_id=_tid,
+            brief_type="morning",
+            entity_id=None,
+            generated_at=utc_now(),
+            headline=(lead or narrative or "")[:500],  # WHY [:500]: headline col is Text, but keep it concise
+            lead=lead,
+            sections_json=_sections_json,
+            citations_json=_citations_json,
+            confidence=confidence,
+            source_version="v2",
+        )
+
+        _archive = self._brief_archive
+
+        async def _persist_brief(record: UserBriefRecord) -> None:
+            """Fire-and-forget DB write — exceptions are logged, never raised."""
+            try:
+                await _archive.save(record)
+            except Exception as exc:
+                # WHY warn (not error): persistence failure is non-critical for
+                # the user experience. The brief is already generated; the archive
+                # is best-effort analytics storage.
+                log.warning("brief_persist_failed", error=str(exc))  # type: ignore[no-any-return]
+
+        # asyncio.shield prevents cancellation from interrupting the DB write.
+        # WHY store _task reference: RUF006 — storing the future prevents it from
+        # being garbage-collected before the event loop runs it (Python GC can
+        # collect unreferenced tasks mid-execution on CPython implementations).
+        _task = asyncio.ensure_future(asyncio.shield(_persist_brief(_record)))
+        # Attach a no-op done callback so the task reference is kept alive until
+        # the event loop finalises it — avoids "Task destroyed but it is pending"
+        # warnings in tests and concurrent request scenarios.
+        _task.add_done_callback(lambda _: None)
 
         return {
             # ``content`` keeps the field name expected by the route layer (which

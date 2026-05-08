@@ -1991,6 +1991,30 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+@router.get("/briefings/morning/history")
+async def get_morning_brief_history(request: Request) -> Any:
+    """Proxy GET /api/v1/briefings/morning/history → S8 RAG/Chat service (PLAN-0066 Wave B).
+
+    Requires authentication. Returns paginated history of past morning briefs for
+    the authenticated user. Passes query params (page, page_size) through to S8.
+
+    WHY no timeout guard: history queries are fast DB reads (no LLM call).
+    Network errors still propagate as 5xx FastAPI defaults.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.rag_chat.get(
+        "/api/v1/briefings/morning/history",
+        # WHY pass query params: page + page_size are forwarded unchanged so S8
+        # applies its own Query constraints (page_size capped at 50).
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 # ── Portfolio + Holdings + Transactions (PRD-0028 Wave S9-2) ─────────────────
 
 
