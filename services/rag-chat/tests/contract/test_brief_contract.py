@@ -309,3 +309,10 @@ def test_public_briefing_response_json_round_trip_preserves_nested_brief_data() 
     assert rehydrated.lead == "Tech leads the rally."
     assert rehydrated.confidence == 0.85
     assert rehydrated.narrative == "Markets rose on strong earnings."
+
+    # WHY structural deep-equality pin (QA-PLAN-0083 F-007): the leaf-by-leaf
+    # assertions above catch *renames and value drift* but would not catch a
+    # silently *added* key (e.g. a future to_dict() emitting an extra debug
+    # field). This deep-equality check pins the full nested shape against the
+    # canonical to_dict() output, so any structural drift trips the test.
+    assert rehydrated.sections == [section.to_dict()]
