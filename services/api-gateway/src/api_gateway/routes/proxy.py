@@ -2083,6 +2083,62 @@ async def submit_brief_feedback(request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# ── PLAN-0066 Wave D: chat/discuss + Wave E: create-alert placeholder ─────────
+
+
+@router.post("/briefings/chat/discuss")
+async def discuss_brief(request: Request) -> Any:
+    """Proxy POST /api/v1/briefings/chat/discuss → S8 RAG/Chat service (PLAN-0066 Wave D).
+
+    Requires authentication. Sends a follow-up question about the morning brief
+    to the S8 chat endpoint and streams the LLM response back to the caller.
+
+    WHY forward raw body: the request body contains brief_id and message.  S8
+    validates these via Pydantic; forwarding raw bytes avoids double-deserialisation
+    and keeps S9 as a thin proxy.
+
+    WHY no timeout guard here: the chat route on S8 may stream; httpx will raise
+    TimeoutException if the first chunk does not arrive within the client timeout
+    configured in app.py lifespan (120 s).  FastAPI's default exception handling
+    converts that to a 5xx which is acceptable for a streaming endpoint.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    body = await request.body()
+    resp = await clients.rag_chat.post(
+        "/api/v1/briefings/chat/discuss",
+        content=body,
+        headers={**headers, "Content-Type": "application/json"},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/briefings/{brief_id}/create-alert", status_code=201)
+async def create_brief_alert(brief_id: str, request: Request) -> Any:
+    """Proxy POST /api/v1/briefings/{brief_id}/create-alert → S8 (PLAN-0066 Wave E placeholder).
+
+    Requires authentication. Placeholder route that will be wired to the real S8
+    create-alert endpoint once Wave F ships the S8 side.  Until then, S8 returns
+    404 for this path and we pass that response through unchanged.
+
+    WHY placeholder now: the S9 route must be registered before the frontend
+    ships so that the API surface is stable (no 404 at the gateway level).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    body = await request.body()
+    resp = await clients.rag_chat.post(
+        f"/api/v1/briefings/{brief_id}/create-alert",
+        content=body,
+        headers={**headers, "Content-Type": "application/json"},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 # ── Portfolio + Holdings + Transactions (PRD-0028 Wave S9-2) ─────────────────
 
 
