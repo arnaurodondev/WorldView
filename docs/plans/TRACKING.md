@@ -22,7 +22,7 @@
 | PLAN-0001-D | **S9 API Gateway: External Ingestion + Intelligence Query Proxy**. 2 waves. **Next: Wave 1**. | draft | 0/2 | PLAN-0001-B ✓ | 2026-03-25 |
 | PLAN-0014 | **Claude Code Source Adaptations** — hooks, subagent isolation, memory scopes, S8 RAG pipeline. 6 waves. | pending | 0/6 | none | 2026-04-01 |
 
-| PLAN-0086 | **Multi-Tenant Content Pipeline Isolation & Tenant Document Ingestion** — Avro schema updates, content-store/nlp-pipeline tenant_id migrations, consumer propagation, HNSW filter isolation, S4 tenant upload feature (domain + infra + use cases + API). **Next: Wave A-1 (Avro schemas + ContentSourceType enum + 2 R28 canonical models)**. | draft | 0/10 | none | 2026-05-08 |
+| PLAN-0086 | **Multi-Tenant Content Pipeline Isolation & Tenant Document Ingestion** — Avro schema updates, content-store/nlp-pipeline tenant_id migrations, consumer propagation, HNSW filter isolation, S4 tenant upload feature (domain + infra + use cases + API). Wave C-1 DONE (S5 dedup scoping + CanonicalDocument.tenant_id + S6 Section/Chunk stamping + HNSW/FTS tenant WHERE clause + ChunkSearchRequest.tenant_id + S8 retrieval pass-through + S6Client payload forwarding; 31 new unit tests). **Next: Wave C-2 (Alembic migration — tenant_id column on sections+chunks) or Wave D-1 (S4 tenant upload use case)**. | in-progress | 3/10 | none | 2026-05-08 |
 
 <!-- New plans are appended here by the /plan skill -->
 

@@ -46,7 +46,9 @@ class TestStageARawHash:
         raw_hash, decision = await check_stage_a(b"content", repo)
         assert decision is None
         assert raw_hash == compute_raw_hash(b"content")
-        repo.check_exists.assert_called_once_with("raw_sha256", raw_hash)
+        # PLAN-0086 Wave C-1: check_exists now accepts optional tenant_id kwarg.
+        # Default (no tenant_id passed) → tenant_id=None (public content namespace).
+        repo.check_exists.assert_called_once_with("raw_sha256", raw_hash, tenant_id=None)
 
     async def test_stage_a_duplicate(self) -> None:
         existing_id = UUID("01234567-89ab-cdef-0123-456789abcdef")

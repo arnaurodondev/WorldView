@@ -161,6 +161,12 @@ class ChunkSearchRequest(BaseModel):
     # Both fields default to None → no entity filter (full unfiltered results).
     entity_ids: list[UUID] | None = Field(default=None, max_length=50)
     entity_types: list[str] | None = Field(default=None, max_length=20)
+    # PLAN-0086 Wave C-1: tenant scope for search isolation.
+    # None (default) = public-only chunks (tenant_id IS NULL) — safe default.
+    # Non-None = return public chunks PLUS chunks owned by this tenant UUID.
+    # This field MUST be validated at the API boundary so the tenant filter
+    # is never silently dropped (data leak prevention).
+    tenant_id: str | None = None
 
     @model_validator(mode="after")
     def exactly_one_query(self) -> ChunkSearchRequest:

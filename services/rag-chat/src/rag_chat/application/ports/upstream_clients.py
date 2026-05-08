@@ -43,6 +43,11 @@ class ChunkSearchRequest:
     # AND across the two fields (per PLAN-0078 §3).
     entity_ids: list[UUID] | None = None
     entity_types: list[str] | None = None
+    # PLAN-0086 Wave C-1: tenant scope for search isolation.
+    # None (default) = public-only chunks (tenant_id IS NULL at S6).
+    # Non-None = public chunks OR chunks owned by this tenant.
+    # This field is forwarded verbatim to S6 POST /api/v1/search/chunks.
+    tenant_id: str | None = None
 
 
 @dataclass
