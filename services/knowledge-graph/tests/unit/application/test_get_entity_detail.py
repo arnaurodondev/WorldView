@@ -127,6 +127,7 @@ class TestUseCaseEndToEndWithRealRepo:
                 "A consumer electronics maker.",
                 0.85,
                 None,  # enriched_at
+                None,  # health_score (migration 0031)
             )
         )
         session.execute = AsyncMock(return_value=result_mock)

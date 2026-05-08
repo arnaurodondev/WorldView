@@ -68,12 +68,25 @@ def _entity_summary(row: dict[str, object]) -> EntitySummary:
     )
 
 
-def _relation_response(row: dict[str, object]) -> RelationResponse:
+def _relation_response(
+    row: dict[str, object],
+    confidence_breakdown: bool = False,
+) -> RelationResponse:
+    """Map a relation row dict to RelationResponse.
+
+    When ``confidence_breakdown=True``, the additional Wave B columns
+    (support, corroboration, contradiction, valid_from, valid_to,
+    relation_period_type, strongest_contra_score, latest_contra_at) are
+    extracted from ``confidence_components`` JSONB and the direct columns
+    populated by Wave B workers.  All new fields default to None (BP-148).
+    """
     evidence_count = int(row["evidence_count"])  # type: ignore[call-overload]
     confidence = float(row["confidence"]) if row.get("confidence") is not None else None  # type: ignore[call-overload, arg-type]
     snippets = row.get("evidence_snippets")
     summary = row.get("relation_summary")
-    return RelationResponse(
+
+    # Base fields — always present
+    resp = RelationResponse(
         relation_id=row["relation_id"],  # type: ignore[arg-type]
         subject_entity_id=row["subject_entity_id"],  # type: ignore[arg-type]
         object_entity_id=row["object_entity_id"],  # type: ignore[arg-type]
@@ -88,6 +101,50 @@ def _relation_response(row: dict[str, object]) -> RelationResponse:
         latest_evidence_at=row["latest_evidence_at"],  # type: ignore[arg-type]
         evidence_snippets=list(snippets) if snippets else [],  # type: ignore[arg-type, call-overload]
         relation_summary=str(summary) if summary else None,
+    )
+
+    if not confidence_breakdown:
+        return resp
+
+    # Extract confidence_components JSONB sub-fields (Wave B populated columns)
+    cc = row.get("confidence_components")
+    support: float | None = None
+    corroboration: float | None = None
+    contradiction: float | None = None
+    if isinstance(cc, dict):
+        _sup = cc.get("support")
+        _cor = cc.get("corroboration")
+        _con = cc.get("contradiction")
+        support = float(_sup) if _sup is not None else None
+        corroboration = float(_cor) if _cor is not None else None
+        contradiction = float(_con) if _con is not None else None
+
+    return RelationResponse(
+        relation_id=resp.relation_id,
+        subject_entity_id=resp.subject_entity_id,
+        object_entity_id=resp.object_entity_id,
+        canonical_type=resp.canonical_type,
+        semantic_mode=resp.semantic_mode,
+        decay_class=resp.decay_class,
+        confidence=resp.confidence,
+        confidence_stale=resp.confidence_stale,
+        summary_authority=resp.summary_authority,
+        evidence_count=resp.evidence_count,
+        first_evidence_at=resp.first_evidence_at,
+        latest_evidence_at=resp.latest_evidence_at,
+        evidence_snippets=resp.evidence_snippets,
+        relation_summary=resp.relation_summary,
+        # Wave D T-D-02: confidence breakdown fields
+        support=support,
+        corroboration=corroboration,
+        contradiction=contradiction,
+        valid_from=row.get("valid_from"),  # type: ignore[arg-type]
+        valid_to=row.get("valid_to"),  # type: ignore[arg-type]
+        relation_period_type=str(row["relation_period_type"]) if row.get("relation_period_type") else None,
+        strongest_contra_score=float(row["strongest_contra_score"])  # type: ignore[arg-type]
+        if row.get("strongest_contra_score") is not None
+        else None,
+        latest_contra_at=row.get("latest_contra_at"),  # type: ignore[arg-type]
     )
 
 
@@ -165,6 +222,8 @@ async def get_entity_graph(
     limit: int = Query(default=50, ge=1, le=200),
     evidence_snippets_limit: int = Query(default=3, ge=1, le=10),
     depth: int = Query(default=1, ge=1, le=3),
+    confidence_breakdown: bool = Query(default=False),
+    focus_node: UUID | None = Query(default=None),
 ) -> GraphNeighborhoodResponse:
     """Return the egocentric graph neighbourhood for *entity_id*.
 
@@ -230,10 +289,25 @@ async def get_entity_graph(
     if entity_row is None:
         raise HTTPException(status_code=404, detail="Entity not found")
 
+    # Build relation responses — pass confidence_breakdown flag to populate
+    # optional Wave B columns (support/corroboration/contradiction etc.)
+    built_relations = [_relation_response(r, confidence_breakdown=confidence_breakdown) for r in relation_rows]
+
+    # focus_node: collect edge IDs incident to the specified node for client-side
+    # panel sync.  Only populated when focus_node param is supplied.
+    focus_edges: list[UUID] | None = None
+    if focus_node is not None:
+        focus_edges = [
+            r.relation_id
+            for r in built_relations
+            if r.subject_entity_id == focus_node or r.object_entity_id == focus_node
+        ]
+
     return GraphNeighborhoodResponse(
         center=_entity_summary(entity_row),
-        relations=[_relation_response(r) for r in relation_rows],
+        relations=built_relations,
         entities={k: _entity_summary(v) for k, v in entities_map_data.items()},
+        focus_edges=focus_edges,
     )
 
 
