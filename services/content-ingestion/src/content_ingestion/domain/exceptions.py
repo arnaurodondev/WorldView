@@ -83,3 +83,20 @@ class UploadRateLimitError(DomainError):
     def __init__(self, resets_at: datetime) -> None:
         super().__init__(f"Rate limit exceeded, resets at {resets_at.isoformat()}")
         self.resets_at = resets_at
+
+
+class NotFoundError(DomainError):
+    """Document not found or belongs to a different tenant.
+
+    The error message intentionally does not distinguish "not found" from
+    "wrong tenant" to prevent cross-tenant information leakage.
+    """
+
+
+class AlreadyDeletedError(DomainError):
+    """Document is already in the DELETED state.
+
+    Raised by ``DeleteTenantDocumentUseCase`` when the caller tries to delete
+    a document that has already been soft-deleted.  This prevents the outbox
+    from emitting duplicate ``content.document.deleted.v1`` events.
+    """
