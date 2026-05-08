@@ -262,8 +262,11 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                                 media_type="application/json",
                             )
                     except Exception:
-                        # Fail-open: Valkey unavailability should not block requests.
-                        # JWT signature + expiry remain validated. Log for ops visibility.
+                        # F-S004: fail-open — Valkey unavailability must not block requests.
+                        # JWT signature + expiry remain validated. Counter enables alerting.
+                        from rag_chat.application.metrics.prometheus import rag_jti_check_bypass_total
+
+                        rag_jti_check_bypass_total.inc()
                         logger.warning("jti_check_valkey_unavailable", jti=jti)  # type: ignore[no-any-return]
 
             request.state.tenant_id = payload.get("tenant_id", "")
@@ -275,15 +278,18 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
 
             set_current_jwt(token)
         except jwt.ExpiredSignatureError:
+            # F-S001: opaque external body; structlog preserves internal observability.
+            logger.info("internal_jwt_expired")  # type: ignore[no-any-return]
             return Response(
-                content='{"detail":"Internal JWT expired"}',
+                content='{"detail":"Unauthorized"}',
                 status_code=401,
                 media_type="application/json",
             )
         except jwt.InvalidTokenError as exc:
+            # F-S001: unified external message; debug log for internal diagnostics.
             logger.debug("internal_jwt_invalid", error=str(exc))  # type: ignore[no-any-return]
             return Response(
-                content='{"detail":"Invalid internal JWT"}',
+                content='{"detail":"Unauthorized"}',
                 status_code=401,
                 media_type="application/json",
             )

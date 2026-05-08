@@ -25,6 +25,7 @@ even though both writers committed their ZADD.
 from __future__ import annotations
 
 import time
+import uuid
 from typing import TYPE_CHECKING
 
 import structlog
@@ -39,15 +40,22 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 # ── Atomic record-failure: single Lua script eliminates TOCTOU race ──────────
 # KEYS[1] = failures ZSET key
-# ARGV[1] = now (unix seconds, score+member)
+# ARGV[1] = now (unix seconds, used as ZADD score)
 # ARGV[2] = window cutoff (oldest score to keep)
 # ARGV[3] = window TTL seconds (refreshed on every failure)
+# ARGV[4] = unique suffix — prevents sub-second failures from coalescing.
+#           ZADD members must be unique within a ZSET; if two failures arrive
+#           within the same clock tick (same float from time.time()), the second
+#           ZADD overwrites the first entry instead of adding a new one.
+#           Appending a random hex suffix makes every member unique while keeping
+#           the score as the real timestamp for ZRANGEBYSCORE TTL pruning. (BP-426)
 _RECORD_FAILURE_LUA = """
 local key = KEYS[1]
 local now = ARGV[1]
 local cutoff = ARGV[2]
 local ttl = tonumber(ARGV[3])
-redis.call('ZADD', key, now, now)
+local member = now .. ":" .. ARGV[4]
+redis.call('ZADD', key, now, member)
 redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff)
 local count = redis.call('ZCARD', key)
 redis.call('EXPIRE', key, ttl)
@@ -201,7 +209,7 @@ class SourceCircuitBreaker:
             count_result = await self._valkey.execute_lua_script(
                 _RECORD_FAILURE_LUA,
                 keys=[self._failures_key],
-                args=[str(now), str(cutoff), str(self._window)],
+                args=[str(now), str(cutoff), str(self._window), uuid.uuid4().hex[:8]],
             )
             failure_count = int(count_result)
 

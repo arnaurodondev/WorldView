@@ -307,6 +307,51 @@ async def test_startup_raises_on_jwks_failure() -> None:
         await middleware.startup()
 
 
+async def test_background_refresh_retains_old_key_on_http_error() -> None:
+    """F-T008: _background_refresh retains the old public key on HTTP error; exception does not propagate.
+
+    Regression guard: if the except block accidentally re-raised (or forgot to catch)
+    HTTPStatusError, the background coroutine would crash and no further key refreshes
+    would occur — the middleware would keep using a potentially-expired key with no way
+    to recover without a service restart.
+
+    Strategy: mock asyncio.sleep to raise StopAsyncIteration after the first call so the
+    while-True loop exits after one iteration.  _fetch_public_key raises HTTPStatusError on
+    that iteration.  The loop must catch it, leave _public_key unchanged, and propagate the
+    StopAsyncIteration (test framework catches it here, not the middleware).
+    """
+    from unittest.mock import AsyncMock, patch
+
+    import httpx
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from rag_chat.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
+    from starlette.applications import Starlette
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    old_public_key = private_key.public_key()
+
+    mock_app = Starlette()
+    mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks")
+    mw._public_key = old_public_key
+
+    error_response = httpx.Response(503, content=b"Service Unavailable")
+    http_error = httpx.HTTPStatusError("503", request=httpx.Request("GET", "http://mock/jwks"), response=error_response)
+
+    # sleep raises StopAsyncIteration to break the while True after one iteration
+    with (
+        patch.object(mw, "_fetch_public_key", new=AsyncMock(side_effect=http_error)),
+        patch(
+            "rag_chat.infrastructure.middleware.internal_jwt.asyncio.sleep",
+            new=AsyncMock(side_effect=StopAsyncIteration),
+        ),
+    ):
+        with pytest.raises(StopAsyncIteration):
+            await mw._background_refresh()
+
+    # Key must be unchanged — the HTTP error was caught and swallowed inside the loop
+    assert mw._public_key is old_public_key, "_background_refresh must retain the old public key when a refresh fails"
+
+
 async def test_middleware_passes_through_with_well_formed_jwt_skip_verification() -> None:
     """Well-formed JWT passes through when skip_verification=True and no public key is loaded.
 
