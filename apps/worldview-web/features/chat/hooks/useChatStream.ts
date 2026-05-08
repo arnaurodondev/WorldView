@@ -49,6 +49,12 @@ import type {
   SlashTurn,
   StreamingMessage,
 } from "@/features/chat/lib/types";
+// WHY import from ToolCallIndicator (not defined here):
+// ToolCallState is the view-model type for tool progress — it lives in the
+// component layer so the component file is the single canonical definition.
+// The hook imports from there (not vice versa) because the hook feeds the
+// component, not the other way round.
+import type { ToolCallState } from "@/features/chat/components/ToolCallIndicator";
 
 // ── Public hook contract ──────────────────────────────────────────────────────
 
@@ -94,6 +100,12 @@ export interface UseChatStreamResult {
   chatError: string | null;
   setChatError: (e: string | null) => void;
   isStreaming: boolean;
+  /**
+   * Active tool calls for the current streaming response (PLAN-0067 W11-5).
+   * Each entry tracks one tool's progress: running → ok/empty/error.
+   * Cleared to [] when the stream ends or is cancelled.
+   */
+  activeTools: ToolCallState[];
   /** Trigger the slash-command branch or the SSE LLM call for `question`. */
   send: (question: string) => Promise<void>;
   /** Abort an in-flight stream. Safe to call when nothing is streaming. */
@@ -124,6 +136,12 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
   // `chatError` — surfaced as a destructive banner under the message list.
   // Null when no error or after an explicit clear.
   const [chatError, setChatError] = useState<string | null>(null);
+  // `activeTools` — per-tool progress for the current streaming response.
+  // Populated by `tool_call` SSE events, updated by `tool_result` events,
+  // cleared when the stream ends or is cancelled.
+  // WHY state (not ref): the chat page reads this to pass down to ToolCallIndicator;
+  // we need React to re-render on every tool status change.
+  const [activeTools, setActiveTools] = useState<ToolCallState[]>([]);
 
   // ── Refs ────────────────────────────────────────────────────────────────
   // `abortRef` holds the AbortController for the in-flight request so that
@@ -159,6 +177,10 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
       abortRef.current = null;
     }
     setStreaming(null);
+    // WHY clear here: if the user cancels mid-tool-use, the tool indicators
+    // would stay frozen on screen with spinners. Clearing them on cancel
+    // ensures no stale tool state persists after the stream is aborted.
+    setActiveTools([]);
   }, []);
 
   /**
@@ -334,13 +356,21 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
             pendingEventName = "";
 
             // `done` event: backend signals clean end-of-stream.
+            // WHY clear activeTools here: tools should not linger in the UI
+            // after the answer is fully rendered. The `finalize()` call sets
+            // streaming=null; clearning tools at the same time keeps the two
+            // states in sync (both reset together at stream end).
             if (eventName === "done") {
+              setActiveTools([]);
               finalize();
               return;
             }
 
             // Legacy [DONE] sentinel — backward compat with older backends.
             if (payload === "[DONE]") {
+              // WHY clear here too: same reason as the `done` event handler above.
+              // Both end-of-stream paths must reset tool indicators.
+              setActiveTools([]);
               finalize();
               return;
             }
@@ -348,7 +378,56 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
             try {
               const data = JSON.parse(payload) as Record<string, unknown>;
 
-              if (
+              // ── Tool-use events (PLAN-0067 W11-5) ──────────────────────────
+              // These three event types are emitted by SSEEmitter during the
+              // tool-use phase (before any token chunks arrive). They drive
+              // ToolCallIndicator in the streaming bubble.
+
+              if (eventName === "thinking") {
+                // `thinking` — the LLM is classifying the query and deciding
+                // which tools to invoke. No UI state change needed here; the
+                // typing indicator (shown when streaming.text === "") already
+                // signals "I'm working on it". Future: could set a global
+                // "Thinking..." banner if desired.
+                // WHY no-op: the TypingIndicator already covers the blank-stream
+                // phase. Adding a separate "thinking" indicator would duplicate
+                // the feedback and add visual noise.
+                void data; // suppress "unused" lint warning
+              } else if (eventName === "tool_call") {
+                // `tool_call` — a specific tool has been invoked. The data shape
+                // from S8 SSEEmitter (W11-3):
+                //   { type: "tool_call", tool: string, label: string, input: {}, status: "running" }
+                // We only use `tool`, `label`, and `status` for rendering.
+                const tc = data as { tool?: string; label?: string; status?: string };
+                if (tc.tool && tc.label) {
+                  setActiveTools((prev) => [
+                    // Replace any existing entry for the same tool name (idempotent).
+                    // WHY filter first: the backend could emit duplicate tool_call
+                    // events if the tool is retried; we don't want duplicate rows.
+                    ...prev.filter((t) => t.name !== tc.tool),
+                    {
+                      name: tc.tool as string,
+                      label: tc.label as string,
+                      status: "running",
+                    },
+                  ]);
+                }
+              } else if (eventName === "tool_result") {
+                // `tool_result` — a tool has completed. The data shape from S8:
+                //   { type: "tool_result", tool: string, status: "ok"|"empty"|"error", item_count: number }
+                // We map the status onto the existing ToolCallState entry.
+                const tr = data as { tool?: string; status?: string };
+                if (tr.tool && tr.status) {
+                  const resultStatus = (tr.status as ToolCallState["status"]) ?? "error";
+                  setActiveTools((prev) =>
+                    prev.map((t) =>
+                      t.name === tr.tool
+                        ? { ...t, status: resultStatus }
+                        : t,
+                    ),
+                  );
+                }
+              } else if (
                 eventName === "token" ||
                 (!eventName && ("text" in data || "token" in data))
               ) {
@@ -448,6 +527,9 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     chatError,
     setChatError,
     isStreaming: streaming !== null,
+    // PLAN-0067 W11-5: exposed so the chat page can pass it down to
+    // StreamingBubble → ToolCallIndicator. Empty array when not streaming.
+    activeTools,
     send,
     cancel,
     resetForThread,
