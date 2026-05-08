@@ -6,6 +6,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Computed,
     DateTime,
@@ -216,3 +217,38 @@ class DeadLetterQueueModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class TenantDocumentUploadModel(Base):
+    """ORM model for tenant-owned document uploads.
+
+    PLAN-0086 Wave D-2: Maps the ``tenant_document_uploads`` table introduced in
+    migration 0007.  Every query against this model MUST include a ``tenant_id``
+    predicate — the repository enforces this; the ORM model itself does not.
+
+    The ``status`` column is constrained at the DB level by ``chk_tdu_status``.
+    The ORM default ``"processing"`` mirrors the server_default so in-memory
+    objects reflect the correct value immediately after ``session.add()``.
+    """
+
+    __tablename__ = "tenant_document_uploads"
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    uploaded_by_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    chunk_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # ``default`` mirrors the DB server_default so the ORM row value is correct
+    # immediately after add() without needing a round-trip to Postgres.
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="processing")
+    minio_bronze_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    minio_silver_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

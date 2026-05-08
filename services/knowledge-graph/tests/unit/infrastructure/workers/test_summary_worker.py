@@ -519,6 +519,171 @@ class TestSummaryWorkerAuditMetric:
         ), f"Expected 1 for immutable row with null canonicalized text, got {audit['canonicalized_text_null_count']}"
 
 
+# ---------------------------------------------------------------------------
+# T-B-04: summary_embedding population
+# ---------------------------------------------------------------------------
+
+
+class TestSummaryWorkerEmbedding:
+    """T-B-04: SummaryWorker populates summary_embedding after writing the summary."""
+
+    def test_summary_embedding_populated_by_summary_worker(self) -> None:
+        """After insert_new, embed() is called and update_embedding is called on success."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import EmbeddingOutput, ExtractionOutput  # type: ignore[import-untyped]
+
+        evidence_texts = ["Apple reported strong Q3 earnings."]
+        evidence_rows = [{"evidence_text": t, "canonicalized_evidence_text": None} for t in evidence_texts]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000070"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        # insert_new returns a summary_id UUID-like string.
+        from uuid import UUID
+
+        fake_summary_id = UUID("00000000-0000-0000-0000-000000000099")
+        mock_sum.insert_new = AsyncMock(return_value=fake_summary_id)
+        mock_sum.update_embedding = AsyncMock()
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(
+            return_value=ExtractionOutput(result={"summary": "Apple Q3 beat."}, raw_response="ok", model_id="m")
+        )
+
+        fake_embedding = [0.1] * 1024
+        embedding_port = AsyncMock()
+        embedding_port.embed = AsyncMock(
+            return_value=[EmbeddingOutput(embedding=fake_embedding, model_id="bge-large", dimension=1024)]
+        )
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm, embedding_port=embedding_port)
+            asyncio.run(worker.run())
+
+        # embed() must have been called once.
+        embedding_port.embed.assert_awaited_once()
+        # update_embedding must have been called with the resulting vector.
+        mock_sum.update_embedding.assert_awaited_once()
+        assert mock_sum.update_embedding.await_args is not None
+        ue_kwargs = mock_sum.update_embedding.await_args.kwargs
+        assert ue_kwargs["summary_id"] == fake_summary_id
+        assert ue_kwargs["embedding"] == fake_embedding
+
+    def test_summary_text_truncated_to_1500_chars_for_embedding(self) -> None:
+        """BP-121: summary_text longer than 1500 chars is truncated before embed()."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import EmbeddingOutput, ExtractionOutput  # type: ignore[import-untyped]
+
+        # Generate a summary that is LONGER than 1500 chars.
+        long_summary = "X" * 3000
+        evidence_rows = [{"evidence_text": "Evidence.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000071"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        from uuid import UUID
+
+        fake_summary_id = UUID("00000000-0000-0000-0000-000000000098")
+        mock_sum.insert_new = AsyncMock(return_value=fake_summary_id)
+        mock_sum.update_embedding = AsyncMock()
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(
+            return_value=ExtractionOutput(result={"summary": long_summary}, raw_response="ok", model_id="m")
+        )
+
+        captured_embed_inputs: list = []
+
+        async def _capture_embed(inputs: list) -> list[EmbeddingOutput]:
+            captured_embed_inputs.extend(inputs)
+            return [EmbeddingOutput(embedding=[0.0] * 1024, model_id="bge-large", dimension=1024)]
+
+        embedding_port = AsyncMock()
+        embedding_port.embed = AsyncMock(side_effect=_capture_embed)
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(sf, llm, embedding_port=embedding_port)
+            asyncio.run(worker.run())
+
+        # BP-121: the text passed to embed() must be <= 1500 chars.
+        assert captured_embed_inputs, "embed() was never called"
+        text_sent = captured_embed_inputs[0].text
+        assert len(text_sent) <= 1500, f"Expected embed() to receive at most 1500 chars (BP-121), got {len(text_sent)}"
+
+    def test_summary_embedding_failure_does_not_block_summary(self) -> None:
+        """Embedding failure must be swallowed; insert_new and mark_summary_updated still called."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        evidence_rows = [{"evidence_text": "Some evidence.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000072"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        from uuid import UUID
+
+        fake_summary_id = UUID("00000000-0000-0000-0000-000000000097")
+        mock_sum.insert_new = AsyncMock(return_value=fake_summary_id)
+        mock_sum.update_embedding = AsyncMock()
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(
+            return_value=ExtractionOutput(result={"summary": "Summary text."}, raw_response="ok", model_id="m")
+        )
+
+        # Embedding port raises on every call.
+        embedding_port = AsyncMock()
+        embedding_port.embed = AsyncMock(side_effect=RuntimeError("DeepInfra timeout"))
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            # Must NOT raise — embedding failure is non-fatal.
+            worker = SummaryWorker(sf, llm, embedding_port=embedding_port)
+            asyncio.run(worker.run())
+
+        # The summary WRITE must have completed regardless of embedding failure.
+        mock_sum.insert_new.assert_awaited_once()
+        mock_rel.mark_summary_updated.assert_awaited_once()
+        # update_embedding must NOT be called since embed() raised.
+        mock_sum.update_embedding.assert_not_awaited()
+
+    def test_no_embedding_when_port_is_none(self) -> None:
+        """When embedding_port=None (default), embed() is never called; summary write succeeds."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        evidence_rows = [{"evidence_text": "Evidence.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000073"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        mock_sum.insert_new = AsyncMock(return_value=None)
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(
+            return_value=ExtractionOutput(result={"summary": "Summary."}, raw_response="ok", model_id="m")
+        )
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            # embedding_port defaults to None.
+            worker = SummaryWorker(sf, llm)
+            asyncio.run(worker.run())
+
+        mock_sum.insert_new.assert_awaited_once()
+        mock_rel.mark_summary_updated.assert_awaited_once()
+
+
 class TestSummaryWorkerForceRegen:
     """ARCH-008: summary_worker_force_regen_batch_size skips hash check."""
 
@@ -841,9 +1006,9 @@ class TestSummaryWorkerWaveB1:
         # Phase 1 must open the read factory; the write factory must NOT be
         # touched when there are no stale relations to write.
         assert read_sf.call_count >= 1, "Phase 1 should open at least one read session"
-        assert write_sf.call_count == 0, (
-            "Phase 1-only run must not touch the write factory; " f"got write_sf.call_count={write_sf.call_count}"
-        )
+        assert (
+            write_sf.call_count == 0
+        ), f"Phase 1-only run must not touch the write factory; got write_sf.call_count={write_sf.call_count}"
 
     def test_summary_worker_llm_failure_clears_stale(self) -> None:
         """F-DS-208 (Wave B-1 phase-3 failure path): LLM=None still clears stale flag.
@@ -983,10 +1148,9 @@ class TestSummaryWorkerWaveB1:
 
         # The Phase 4 write session must open AFTER the LLM call returns.
         first_write_open_idx = events.index("write_session_open")
-        assert first_write_open_idx > first_llm_idx, (
-            "Write session opened before the LLM call (Phase 4 should run only "
-            f"after the LLM returns). events={events}"
-        )
+        assert (
+            first_write_open_idx > first_llm_idx
+        ), f"Write session opened before the LLM call (Phase 4 should run only after the LLM returns). events={events}"
 
     def test_summary_worker_for_update_removed(self) -> None:
         """F-DS-201: fetch_stale_summary SQL no longer contains FOR UPDATE.
