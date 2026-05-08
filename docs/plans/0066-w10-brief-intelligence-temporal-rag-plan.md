@@ -117,9 +117,9 @@ User: "What was AAPL's price trend over the last 3 months?"
    → UI shows: "Fetching AAPL price history..."
           ↓
    ToolExecutor.execute(tool_call)
-   → finds instrument_id via S3Port.find_instrument_by_ticker("AAPL")
-   → S3Port.get_ohlcv_range(instrument_id, "2026-02-03", "2026-05-03", "week")
-   → S3 GET /api/v1/instruments/{id}/ohlcv?from=&to=&interval=week
+   → S3Port.get_ohlcv_range(ticker="AAPL", from_date="2026-02-03", to_date="2026-05-03", interval="week")
+   → S3 GET /api/v1/ohlcv/bars?symbol=AAPL&from_date=...&to_date=...&interval=week
+   → S3 resolves AAPL → instrument_id internally (single round-trip)
    → formats as text table RetrievedItem
           ↓
    LLM continues with tool result injected
@@ -151,14 +151,14 @@ Read 2026-05-03.
 | `POST /v1/briefings/chat/discuss` | endpoint | S8+S9 | does not exist | create chat thread seeded with brief context | new route + proxy |
 | `ThreadModel.seed_brief_id` | column | S8 | does not exist | `UUID | NULL` FK to `user_briefs.id` | Alembic 0005 in Wave D |
 | `RetrievalOrchestrator._fetch_brief_seed` | method | S8 | does not exist | injects brief citations as RetrievedItems | new method |
-| `S3Port.get_ohlcv_range` | port method | S8 | does not exist | `(instrument_id, date_from, date_to, interval) -> list[dict]` | extend port |
-| `S3Port.get_fundamentals_history` | port method | S8 | does not exist | `(instrument_id, periods=8) -> list[dict]` | extend port |
-| `S3Client.get_ohlcv_range` | adapter | S8 | does not exist | calls `GET /api/v1/instruments/{id}/ohlcv` | new method |
-| `S3Client.get_fundamentals_history` | adapter | S8 | does not exist | calls `GET /api/v1/instruments/{id}/fundamentals/history` | new method |
-| `GET /api/v1/instruments/{id}/ohlcv` | endpoint | S3 | does not exist (S3 has OHLCV in DB but no range endpoint) | returns list[{date, open, high, low, close, volume}] | new S3 route |
-| `GET /api/v1/instruments/{id}/fundamentals/history` | endpoint | S3 | does not exist | returns list[{period, revenue, eps, pe_ratio, ...}] | new S3 route |
+| `S3Port.get_ohlcv_range` | port method | S8 | does not exist | kw-only: `(*, from_date, to_date, interval, instrument_id=None, ticker=None, isin=None) -> list[dict]` — at least one identifier required | extend port |
+| `S3Port.get_fundamentals_history` | port method | S8 | does not exist | kw-only: `(*, periods=8, instrument_id=None, ticker=None, isin=None) -> list[dict]` — at least one identifier required | extend port |
+| `S3Client.get_ohlcv_range` | adapter | S8 | does not exist | calls `GET /api/v1/ohlcv/bars` with whichever identifier is set (priority: instrument_id > isin > ticker) | new method |
+| `S3Client.get_fundamentals_history` | adapter | S8 | does not exist | calls `GET /api/v1/fundamentals/history` with whichever identifier is set | new method |
+| `GET /api/v1/ohlcv/bars` | endpoint | S3 | does not exist (literal route; `/ohlcv/{id}` + `/range` exist but no interval resampling or multi-identifier support) | accepts `instrument_id`, `symbol`, `isin` query params (at least one); returns bars with interval resampling | new literal route in `routers/ohlcv.py` registered before `/{instrument_id}` catch-all |
+| `GET /api/v1/fundamentals/history` | endpoint | S3 | does not exist | accepts `instrument_id`, `symbol`, `isin`; returns quarterly earnings_history records (N-10 — not fundamentals_records table) | new literal route in `routers/fundamentals.py` |
 | `libs/tools/capability_manifest.yaml` | config | libs | does not exist | YAML tool catalog with 2 temporal tools | new file (Wave H) |
-| `ToolRegistry` | class | libs | does not exist | maps tool names to `ToolSpec` (schema + trust_weight) | new module (Wave H) |
+| `ToolRegistry` | class | libs | does not exist | maps tool names to `ToolSpec` (schema + source_type; trust_weight removed per PLAN-0067 §0 A-2) | new module (Wave H) |
 | `ToolExecutor` | class | S8 | does not exist | executes `tool_use` blocks, calls S3Port methods, returns `RetrievedItem` | new (Wave H) |
 | `ChatOrchestratorUseCase` | use case | S8 | no tool-use loop | include manifest in system prompt; run multi-turn tool loop after initial retrieval | modify (Wave H) |
 | `MorningBriefCard.tsx` | frontend | worldview-web | no diff badge, no feedback, no "Discuss" button, no alert creation | all 4 added | Wave F |
@@ -183,7 +183,7 @@ Read 2026-05-03.
 | D | S8 chat seeding + implicit RAG seed | application | 75 min | B |
 | E | S8 alert pre-fill endpoint + S9 proxies for all new routes | API + gateway | 60 min | C, D |
 | F | Frontend: diff badge + chat seeding button + feedback UI + alert creation | UI | 90 min | E, PLAN-0062-W4 Wave E |
-| G | S3 temporal endpoints (OHLCV range + fundamentals history) | S3 API | 75 min | none (parallel-safe with A–F) |
+| G | S3 temporal endpoints (OHLCV + fundamentals history; accept UUID/ticker/ISIN) | S3 API + S8 port | 90 min | none (parallel-safe with A–F) |
 | H | Temporal RAG integration (intent + extractor + orchestrator) | S8 application | 90 min | G |
 
 ---
@@ -1054,93 +1054,142 @@ Minimum: 3 unit tests.
 
 ### Wave G: S3 Temporal Endpoints
 
-**Goal**: Add two new endpoints to the S3 (market-data) service that expose OHLCV time-series and quarterly fundamentals history, enabling the temporal RAG.
+**Goal**: Add two new endpoints to the S3 (market-data) service that expose OHLCV time-series and quarterly fundamentals history, enabling the temporal RAG. Both endpoints accept any of three instrument identifiers — UUID, ticker symbol, or ISIN — so LLM tool handlers can pass a ticker directly without a pre-resolution round-trip.
 **Depends on**: none (parallel-safe with Waves A–F)
-**Estimated effort**: 75 min
+**Estimated effort**: 90 min
 **Architecture layer**: S3 market-data API
 
 #### Pre-read
-- `services/market-data/src/market_data/api/routers/market.py` — existing OHLCV and fundamentals route patterns
+- `services/market-data/src/market_data/api/routers/ohlcv.py` — existing OHLCV routes (note literal routes `/ohlcv/bulk` registered before `/{instrument_id}` catch-all — follow same ordering)
+- `services/market-data/src/market_data/api/routers/fundamentals.py` — existing fundamentals routes; UUID pattern guard on `{instrument_id}` path param
+- `services/market-data/src/market_data/api/routers/instruments.py` — `GET /instruments/lookup` handler pattern: `InstrumentLookupUseCase.execute(id, isin, symbol)` — reuse this for resolution
+- `services/market-data/src/market_data/application/use_cases/lookup_instrument.py` — `InstrumentLookupUseCase` (already exists; inject via DI)
 - `services/market-data/src/market_data/domain/entities.py` — `Instrument`, `OHLCVBar` entities
 - `services/market-data/src/market_data/infrastructure/db/` — TimescaleDB query patterns for OHLCV
 
+#### Design decision: identifier resolution
+All three identifiers (`instrument_id` UUID, `symbol` ticker, `isin`) are optional query params — none is in the path. At least one must be supplied (422 otherwise). Priority: `instrument_id` > `isin` > `symbol`. Resolution uses `InstrumentLookupUseCase` (already DI-wired in dependencies.py) and raises 404 if the instrument is unknown. This pattern is applied **only to the two new endpoints** — existing endpoints are UUID-path-param only and are not modified (no regression surface).
+
+Route paths are literals registered **before** any `/{instrument_id}` catch-all routes in their respective routers, exactly as `/ohlcv/bulk` is registered before `/{instrument_id}`.
+
 #### Tasks
 
-##### T-W10-G-01: `GET /api/v1/ohlcv/{instrument_id}/bars` — OHLCV bars with interval resampling in S3
+##### T-W10-G-01: `GET /api/v1/ohlcv/bars` — OHLCV bars with interval resampling in S3
 **Type**: impl
 **depends_on**: none
 **blocks**: T-W10-H-01
 **Target files**:
-- `services/market-data/src/market_data/api/routers/ohlcv.py` (modify — all OHLCV routes live here, NOT market.py)
-- `services/market-data/src/market_data/application/use_cases/get_ohlcv_range.py` (new) — `GetOHLCVBarsUseCase` (NEW — created in Wave G)
+- `services/market-data/src/market_data/api/routers/ohlcv.py` (modify — register new literal route **before** `/{instrument_id}` catch-alls)
+- `services/market-data/src/market_data/application/use_cases/get_ohlcv_bars.py` (new) — `GetOHLCVBarsUseCase` (NEW — created in Wave G)
 
-> **ARCH NOTE (N-2/N-3)**: All OHLCV routes live in `routers/ohlcv.py`, not `market.py`. The existing `GET /api/v1/ohlcv/{instrument_id}` endpoint already returns bars with `start`/`end` filters but does NOT resample to week/month intervals. The existing `GET /api/v1/ohlcv/{instrument_id}/range` returns min/max date metadata (not bars). The new endpoint `/bars` adds explicit `from_date`, `to_date`, `interval` params with `time_bucket` resampling. URL scheme must stay consistent with the `ohlcv/` prefix.
+> **ARCH NOTE (N-2/N-3)**: All OHLCV routes live in `routers/ohlcv.py`, not `market.py`. The existing `GET /api/v1/ohlcv/{instrument_id}` returns bars with `start`/`end` filters but does NOT resample to week/month intervals. The new `/bars` endpoint adds interval resampling and accepts any of three identifiers. Register the new route immediately after `/ohlcv/bulk` so the literal path `/bars` is matched before the `/{instrument_id}` catch-all.
 
-> **ARCH NOTE (R25)**: New route in `ohlcv.py` uses `Depends(get_ohlcv_bars_uc)` pattern — never imports repository directly. Use case depends on `IOHLCVRepository` ABC port (see `application/ports/repositories.py`).
+> **ARCH NOTE (R25)**: New route uses `Depends(get_ohlcv_bars_uc)` and `Depends(get_lookup_instrument_uc)` — never imports a repository or use case class directly in the router.
 > **ARCH NOTE (R27)**: Read-only GET endpoint — must use `ReadUoWDep` (read replica session).
 
 **API Spec**:
 ```
-GET /api/v1/ohlcv/{instrument_id}/bars
+GET /api/v1/ohlcv/bars
+  ?instrument_id=<UUID>         # optional — instrument UUID
+  ?symbol=AAPL                  # optional — ticker symbol (e.g. "AAPL", "MSFT.US")
+  ?isin=US0378331005            # optional — 12-char ISIN
+  # At least one of the above three is required (422 if none supplied)
   ?from_date=2026-02-01         # ISO date, required
   ?to_date=2026-05-01           # ISO date, required
   ?interval=day                 # 'day' | 'week' | 'month', default 'day'
   ?max_bars=252                 # cap, default 252 (1 trading year of daily bars)
 
 Response: {
-  instrument_id: str,
-  ticker: str,
+  instrument_id: str,           -- resolved UUID (always present in response)
+  ticker: str,                  -- resolved symbol
   interval: str,
   bars: [{date: str, open: float, high: float, low: float, close: float, volume: int}],
   bar_count: int
 }
+
+Errors:
+  400  — none of instrument_id / symbol / isin supplied
+  404  — instrument not found
+  422  — invalid date range or interval; date range > S3_OHLCV_MAX_DAYS
+```
+
+**Router handler sketch**:
+```python
+# Register BEFORE /{instrument_id} routes
+@router.get("/ohlcv/bars", response_model=OHLCVBarsResponse)
+async def get_ohlcv_bars_flexible(
+    instrument_id: Annotated[UUID | None, Query()] = None,
+    symbol: Annotated[str | None, Query(min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")] = None,
+    isin: Annotated[str | None, Query(min_length=12, max_length=12, pattern=r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")] = None,
+    from_date: date = ...,
+    to_date: date = ...,
+    interval: str = "day",
+    max_bars: int = Query(default=252, ge=1, le=1000),
+    uc: Annotated[GetOHLCVBarsUseCase, Depends(get_ohlcv_bars_uc)] = ...,
+    lookup_uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,
+) -> OHLCVBarsResponse:
+    if instrument_id is None and symbol is None and isin is None:
+        raise HTTPException(status_code=400, detail="At least one of instrument_id, symbol, or isin is required")
+    ...
 ```
 
 **Logic**:
-- Validate `to_date - from_date ≤ S3_OHLCV_MAX_DAYS` (new env var, default 365). Return 422 if exceeded.
-- Resample to `interval` using TimescaleDB `time_bucket` function (already used in `ohlcv_queries.py` — follow that pattern).
-- If `bar_count > max_bars`, truncate to the most recent `max_bars` bars.
-- Auth: existing S3 JWT middleware (same as other S3 endpoints).
+1. **Resolve instrument**: pass `id=str(instrument_id)`, `symbol=symbol`, `isin=isin` to `InstrumentLookupUseCase.execute()`. Priority enforced inside `InstrumentLookupUseCase` (id > isin > symbol). Raise 404 on `InstrumentNotFoundError`.
+2. **Validate date range**: `to_date - from_date ≤ S3_OHLCV_MAX_DAYS` (new env var, default 365). Return 422 if exceeded.
+3. **Query**: pass resolved `instrument_id` (UUID) to `GetOHLCVBarsUseCase.execute()`. Resample to `interval` using TimescaleDB `time_bucket` (follow existing pattern in `ohlcv_queries.py`).
+4. **Truncate**: if `bar_count > max_bars`, keep only the most recent `max_bars` bars.
+5. **Response**: always include `instrument_id` (UUID) and `ticker` (resolved symbol) in response body.
 
 **Tests to write**:
 | Test | What it verifies | Type |
 |---|---|---|
-| `test_ohlcv_range_returns_bars_in_range` | bars outside `from_date`–`to_date` not returned | unit |
-| `test_ohlcv_range_rejects_excessive_date_range` | range > `S3_OHLCV_MAX_DAYS` → 422 | unit |
-| `test_ohlcv_range_weekly_resampling` | `interval=week` → bars grouped by week | unit |
-| `test_ohlcv_range_max_bars_truncation` | `max_bars=5` → only 5 bars returned (most recent) | unit |
+| `test_ohlcv_bars_resolves_by_symbol` | `?symbol=AAPL` → lookup called with symbol; resolved UUID used for query | unit |
+| `test_ohlcv_bars_resolves_by_isin` | `?isin=US0378331005` → lookup called with isin; resolved UUID used | unit |
+| `test_ohlcv_bars_uses_instrument_id_directly` | `?instrument_id=<UUID>` → lookup still called (id priority); no extra resolution | unit |
+| `test_ohlcv_bars_returns_400_if_no_identifier` | no identifier params → 400 | unit |
+| `test_ohlcv_bars_returns_404_if_not_found` | lookup raises `InstrumentNotFoundError` → 404 | unit |
+| `test_ohlcv_bars_returns_bars_in_range` | bars outside `from_date`–`to_date` not returned | unit |
+| `test_ohlcv_bars_rejects_excessive_date_range` | range > `S3_OHLCV_MAX_DAYS` → 422 | unit |
+| `test_ohlcv_bars_weekly_resampling` | `interval=week` → bars grouped by week | unit |
+| `test_ohlcv_bars_max_bars_truncation` | `max_bars=5` → only 5 bars returned (most recent) | unit |
 
-Minimum: 4 unit tests.
+Minimum: 9 unit tests.
 
 **Acceptance criteria**:
+- [ ] Literal route `/ohlcv/bars` registered before `/{instrument_id}` catch-all — no routing collision
 - [ ] `time_bucket` query used for resampling (not application-side aggregation)
+- [ ] Response always includes resolved `instrument_id` (UUID) and `ticker`
 - [ ] Response `bars` ordered `date ASC`
 - [ ] `S3_OHLCV_MAX_DAYS` env var documented in `env/dev/market-data.env.example`
 
 ---
 
-##### T-W10-G-02: `GET /api/v1/fundamentals/{id}/history` — quarterly fundamentals history in S3
+##### T-W10-G-02: `GET /api/v1/fundamentals/history` — quarterly fundamentals history in S3
 **Type**: impl
 **depends_on**: none
 **blocks**: T-W10-H-01
 **Target files**:
-- `services/market-data/src/market_data/api/routers/fundamentals.py` (modify — fundamentals routes live here, NOT market.py)
+- `services/market-data/src/market_data/api/routers/fundamentals.py` (modify — register new literal route **before** `/{instrument_id}` catch-all; note the existing UUID pattern guard on `/{instrument_id}` already prevents literal strings from being swallowed, but register early for clarity)
 - `services/market-data/src/market_data/application/use_cases/get_fundamentals_history.py` (new) — `GetFundamentalsHistoryUseCase` (NEW — created in Wave G)
 
-> **ARCH NOTE (N-10)**: There is no single `fundamentals_records` table. S3 stores fundamentals in per-type tables (income_statement, balance_sheet, earnings_history, etc.), populated by the `FundamentalsRecord` entity. The quarterly history source is `GET /api/v1/fundamentals/{id}/earnings` (the existing `earnings_history` table). The new endpoint aggregates `earnings_history` records ordered by `period_end_date`. Check `IEarningsRepository` in `application/ports/repositories.py` for the correct query method.
+> **ARCH NOTE (N-10)**: There is no single `fundamentals_records` table. S3 stores fundamentals in per-type tables populated by `FundamentalsRecord`. The quarterly history source is the existing `earnings_history` table (same data source as `GET /fundamentals/{id}/earnings`). `GetFundamentalsHistoryUseCase` queries `IEarningsRepository` — check `application/ports/repositories.py` for the correct method.
 > **ARCH NOTE (R25)**: New route uses `Depends(...)` DI — never imports a repository class directly in the router.
 > **ARCH NOTE (R27)**: Read-only — use `ReadUoWDep`.
 
 **API Spec**:
 ```
-GET /api/v1/instruments/{instrument_id}/fundamentals/history
+GET /api/v1/fundamentals/history
+  ?instrument_id=<UUID>         # optional — instrument UUID
+  ?symbol=AAPL                  # optional — ticker symbol
+  ?isin=US0378331005            # optional — 12-char ISIN
+  # At least one of the above three is required (400 if none supplied)
   ?periods=8                    # number of quarters, max 20, default 8
 
 Response: {
-  instrument_id: str,
-  ticker: str,
+  instrument_id: str,           -- resolved UUID (always present)
+  ticker: str,                  -- resolved symbol
   periods: [{
-    period: str,               -- e.g. "Q1 2026"
+    period: str,                -- e.g. "Q1 2026"
     period_end_date: str,
     revenue: float | null,
     gross_profit: float | null,
@@ -1151,22 +1200,53 @@ Response: {
   }],
   period_count: int
 }
+
+Errors:
+  400  — none of instrument_id / symbol / isin supplied
+  404  — instrument not found
+  422  — periods out of range (> 20)
 ```
 
-**Logic**: query the earnings_history records for the instrument (via the `IEarningsRepository` port), select the last `periods` records ordered `period_end_date DESC`, return ordered `ASC`. Fields are nullable; include all 7 fields (null when data absent). Do NOT query a `fundamentals_records` table — that table does not exist (N-10).
+**Router handler sketch** (same identifier-resolution pattern as T-W10-G-01):
+```python
+# Register near top of fundamentals.py (before /{instrument_id} routes)
+@router.get("/fundamentals/history", response_model=FundamentalsHistoryResponse)
+async def get_fundamentals_history_flexible(
+    instrument_id: Annotated[UUID | None, Query()] = None,
+    symbol: Annotated[str | None, Query(min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$")] = None,
+    isin: Annotated[str | None, Query(min_length=12, max_length=12, pattern=r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")] = None,
+    periods: int = Query(default=8, ge=1, le=20),
+    uc: Annotated[GetFundamentalsHistoryUseCase, Depends(get_fundamentals_history_uc)] = ...,
+    lookup_uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,
+) -> FundamentalsHistoryResponse:
+    if instrument_id is None and symbol is None and isin is None:
+        raise HTTPException(status_code=400, detail="At least one of instrument_id, symbol, or isin is required")
+    ...
+```
+
+**Logic**:
+1. **Resolve instrument**: same as T-W10-G-01 — `InstrumentLookupUseCase.execute(id, isin, symbol)`. Raise 404 on `InstrumentNotFoundError`.
+2. **Query**: pass resolved `instrument_id` (UUID) to `GetFundamentalsHistoryUseCase.execute()`. Query `IEarningsRepository` for the last `periods` records ordered `period_end_date DESC`, then return ordered `ASC`. Fields are nullable — include all 7 (null when absent). Do NOT query a `fundamentals_records` table (N-10).
+3. **Response**: always include resolved `instrument_id` and `ticker`.
 
 **Tests to write**:
 | Test | What it verifies | Type |
 |---|---|---|
+| `test_fundamentals_history_resolves_by_symbol` | `?symbol=AAPL` → lookup called; resolved UUID used | unit |
+| `test_fundamentals_history_resolves_by_isin` | `?isin=...` → lookup called with isin | unit |
+| `test_fundamentals_history_returns_400_if_no_identifier` | no identifier params → 400 | unit |
+| `test_fundamentals_history_returns_404_if_not_found` | lookup raises `InstrumentNotFoundError` → 404 | unit |
 | `test_fundamentals_history_returns_n_periods` | `periods=4` → at most 4 period records | unit |
 | `test_fundamentals_history_ordered_asc` | periods returned oldest-first | unit |
-| `test_fundamentals_history_null_fields_omitted_gracefully` | instruments with partial data (no EPS) → null fields present, not absent | unit |
+| `test_fundamentals_history_null_fields_present` | instruments with partial data (no EPS) → null fields in response, not absent | unit |
 
-Minimum: 3 unit tests.
+Minimum: 7 unit tests.
 
 **Acceptance criteria**:
-- [ ] `periods` capped at 20
+- [ ] `periods` capped at 20 (Query constraint, not application logic)
 - [ ] Response includes all 7 financial fields (null when unavailable)
+- [ ] Response always includes resolved `instrument_id` and `ticker`
+- [ ] Literal route registered before `/{instrument_id}` catch-all
 
 ---
 
@@ -1183,57 +1263,104 @@ Add to `S3Port` Protocol (NEW methods — added in Wave G):
 
 > **ARCH NOTE (R25)**: Methods are added to `S3Port` (Protocol in `application/ports/upstream_clients.py`). `S3Client` in `infrastructure/clients/s3_client.py` implements them. Use cases depend on `S3Port`, never on `S3Client` directly.
 
+The port methods accept all three identifiers as keyword-only args. The caller (LLM tool handler) passes whichever it has — typically `ticker` from the LLM output. `S3Client` forwards them as query params; S3 resolves server-side. This eliminates the `find_instrument_by_ticker` pre-resolution call that would otherwise be needed from S8.
+
 ```python
 async def get_ohlcv_range(
-    self, instrument_id: UUID,
-    from_date: date, to_date: date,
-    interval: str = "day"
+    self,
+    *,
+    from_date: date,
+    to_date: date,
+    interval: str = "day",
+    instrument_id: str | None = None,   # UUID string
+    ticker: str | None = None,          # e.g. "AAPL"
+    isin: str | None = None,            # 12-char ISIN
 ) -> list[dict]:
-    """Return OHLCV bars in date range. Empty list on error."""
+    """Return OHLCV bars in date range. At least one of instrument_id/ticker/isin required.
+    Returns [] on any HTTP error (safe degradation). Response includes resolved instrument_id."""
     ...
 
 async def get_fundamentals_history(
-    self, instrument_id: UUID,
-    periods: int = 8
+    self,
+    *,
+    periods: int = 8,
+    instrument_id: str | None = None,
+    ticker: str | None = None,
+    isin: str | None = None,
 ) -> list[dict]:
-    """Return quarterly fundamentals history. Empty list on error."""
+    """Return quarterly fundamentals history. At least one identifier required.
+    Returns [] on any HTTP error (safe degradation)."""
     ...
 ```
 
-`S3Client` implementation calls (N-3/N-11 — URL corrected to match ohlcv router):
-- `GET /api/v1/ohlcv/{id}/bars?from_date={}&to_date={}&interval={interval}`
-- `GET /api/v1/fundamentals/{id}/history?periods={periods}`
+`S3Client` implementation — build query params from whichever identifiers are set:
+```python
+async def get_ohlcv_range(self, *, from_date, to_date, interval="day",
+                          instrument_id=None, ticker=None, isin=None) -> list[dict]:
+    params: dict[str, str] = {
+        "from_date": str(from_date),
+        "to_date": str(to_date),
+        "interval": interval,
+    }
+    if instrument_id:
+        params["instrument_id"] = instrument_id
+    elif isin:
+        params["isin"] = isin
+    elif ticker:
+        params["symbol"] = ticker
+    # S3 enforces at least one — if all None, S3 returns 400 → caught below → []
+    return await self._get("/api/v1/ohlcv/bars", params=params)
 
-Both return `[]` on any HTTP error (safe degradation per port contract).
+async def get_fundamentals_history(self, *, periods=8,
+                                   instrument_id=None, ticker=None, isin=None) -> list[dict]:
+    params: dict[str, str] = {"periods": str(periods)}
+    if instrument_id:
+        params["instrument_id"] = instrument_id
+    elif isin:
+        params["isin"] = isin
+    elif ticker:
+        params["symbol"] = ticker
+    return await self._get("/api/v1/fundamentals/history", params=params)
+```
+
+Both `_get` calls return `[]` on any HTTP error (4xx/5xx) via the existing base client error handling — safe degradation per port contract.
 
 **Tests to write**:
 | Test | What it verifies | Type |
 |---|---|---|
-| `test_s3_get_ohlcv_range_calls_correct_endpoint` | mock HTTP → correct URL constructed | unit |
+| `test_s3_get_ohlcv_range_by_ticker` | `ticker="AAPL"` → `symbol=AAPL` in query params | unit (mock HTTP) |
+| `test_s3_get_ohlcv_range_by_isin` | `isin=...` → `isin=...` in query params | unit (mock HTTP) |
+| `test_s3_get_ohlcv_range_by_instrument_id` | `instrument_id=<UUID>` → `instrument_id=...` in query params | unit (mock HTTP) |
 | `test_s3_get_ohlcv_range_returns_empty_on_404` | HTTP 404 → empty list, no exception | unit |
+| `test_s3_get_ohlcv_range_returns_empty_on_400` | HTTP 400 (no identifier) → empty list, no exception | unit |
+| `test_s3_get_fundamentals_history_by_ticker` | `ticker="MSFT"` → `symbol=MSFT` in query params | unit (mock HTTP) |
 | `test_s3_get_fundamentals_history_parses_periods` | response `periods[]` parsed correctly | unit |
 
-Minimum: 3 unit tests.
+Minimum: 7 unit tests.
 
 **Acceptance criteria**:
 - [ ] Both methods added to `S3Port` Protocol (runtime-checkable)
-- [ ] `S3Client` returns `[]` (not raises) on any error
+- [ ] `S3Client` passes exactly one identifier param (priority: instrument_id > isin > ticker)
+- [ ] `S3Client` returns `[]` (not raises) on any HTTP error
 
 ---
 
 #### Validation Gate — Wave G
 - [ ] `ruff` + `mypy` pass on S3 and S8
-- [ ] 10 new tests pass
-- [ ] Existing S3 tests unaffected (new routes are additive)
+- [ ] 23 new tests pass (9 + 7 + 7)
+- [ ] Existing S3 tests unaffected (new routes are additive; no existing endpoint modified)
+- [ ] `GET /api/v1/ohlcv/bulk` still resolves correctly (literal route ordering not broken by new `/bars` literal)
 
 #### Break Impact — Wave G
 | Broken file | Why | Fix |
 |---|---|---|
-| `services/rag-chat/tests/unit/test_s3_client*.py` | `S3Port` Protocol gains 2 methods — any mock must implement them | add stub methods to mocks |
-| `services/market-data/env/dev/market-data.env.example` | new `S3_OHLCV_MAX_DAYS` env var | add with default 365 |
+| `services/rag-chat/tests/unit/test_s3_client*.py` | `S3Port` Protocol gains 2 methods — any mock must implement them | add stub implementations returning `[]` |
+| `services/market-data/env/dev/market-data.env.example` | new `S3_OHLCV_MAX_DAYS` env var | add with default `365` |
+| `services/market-data/src/market_data/api/dependencies.py` | new `get_ohlcv_bars_uc` + `get_fundamentals_history_uc` DI providers needed | add provider functions (same pattern as existing providers) |
 
 #### Regression Guardrails — Wave G
 - BP-025/026/027 (external I/O): S3Client calls S3 market-data over HTTP; follows existing `_get()` base client pattern with `asyncio.wait_for(timeout=5.0)`.
+- Literal route ordering: `/ohlcv/bars` must appear in the router registration list AFTER `/ohlcv/bulk` but BEFORE `/{instrument_id}`. Confirm with a route-ordering smoke test that `GET /ohlcv/bars?symbol=AAPL...` does not 422 with "Invalid instrument_id format".
 
 ---
 
@@ -1325,9 +1452,7 @@ tools:
         enum: [day, week, month]
         description: Bar granularity. Default "week".
         required: false
-    trust_weight: 0.90
-    example_queries:
-    source_type: ohlcv          # used by TrustScorer (replaces trust_weight — R29)
+    source_type: ohlcv          # used by TrustScorer — trust_weight NOT stored here (PLAN-0067 §0 A-2)
     example_queries:
       - "How has AAPL performed over the last 3 months?"
       - "What was NVDA's price range in Q1 2026?"
@@ -1346,7 +1471,7 @@ tools:
         type: integer
         description: Number of quarters to return (1–20). Default 8.
         required: false
-    trust_weight: 0.90
+    source_type: fundamentals   # used by TrustScorer — trust_weight NOT stored here (PLAN-0067 §0 A-2)
     example_queries:
       - "Show me MSFT's revenue trend over 8 quarters"
       - "What has AAPL's EPS been over the last 2 years?"
@@ -1413,11 +1538,12 @@ Every `execute()` call must emit:
 
 **Handler implementations** (private methods on `ToolExecutor`):
 
+`_TOOL_RESULT_MAX_CHARS = 4000` — class-level constant. Prevents context window overflow when OHLCV data (252 bars × ~50 chars ≈ 12,600 chars) or chunk results are injected into messages.
+
 `_handle_get_price_history(ticker, from_date, to_date, interval="week")`:
-1. `instrument = await self._s3.find_instrument_by_ticker(ticker)` → returns `None` if not found
-2. If `None`: return `None`
-3. `bars = await self._s3.get_ohlcv_range(instrument.id, from_date, to_date, interval)`
-4. Format as markdown table (truncate to `_TOOL_RESULT_MAX_CHARS = 4000` — prevents context window overflow):
+1. `bars = await self._s3.get_ohlcv_range(ticker=ticker, from_date=from_date, to_date=to_date, interval=interval)` — S3Port accepts `ticker=` directly; S3 resolves server-side (Wave G). No pre-resolution call needed.
+2. If `bars` is empty: `log.warning("tool_no_data", tool="get_price_history", ticker=ticker)` and return `None`.
+3. Format as markdown table (truncate to `_TOOL_RESULT_MAX_CHARS`):
    ```
    AAPL price history (weekly, 2026-02-03 → 2026-05-03)
    | Date       | Close  | Volume |
@@ -1425,29 +1551,28 @@ Every `execute()` call must emit:
    | 2026-02-07 | $185.2 | 52M    |
    ...
    ```
-5. Return `RetrievedItem.create(item_id=f"tool:price_history:{ticker}", item_type=ItemType.financial, text=table_text[:_TOOL_RESULT_MAX_CHARS], score=0.88, trust_weight=0.90)` — CRITICAL: field is `text` NOT `content` (N-7); use `.create()` factory (never direct construction — `fusion_score` invariant); `trust_weight=0.90` is a sensible default pending `TrustScorer` wiring (R29)
-
-`_TOOL_RESULT_MAX_CHARS = 4000` — class-level constant. Prevents context window overflow when OHLCV data (252 bars × ~50 chars ≈ 12,600 chars) or chunk results are injected into messages.
+4. Return `RetrievedItem.create(item_id=f"tool:price_history:{ticker}", item_type=ItemType.financial, text=table_text[:_TOOL_RESULT_MAX_CHARS], score=0.88, trust_weight=0.90)` — CRITICAL: field is `text` NOT `content` (N-7); use `.create()` factory (never direct construction — `fusion_score` invariant); `trust_weight=0.90` is a sensible default pending `TrustScorer` wiring (R29).
 
 `_handle_get_fundamentals_history(ticker, periods=8)`:
-1. Resolve ticker → instrument_id
-2. `data = await self._s3.get_fundamentals_history(instrument_id, periods)`
-3. Format as markdown table (Period | Revenue | Gross Profit | Net Income | EPS | P/E)
-4. Return `RetrievedItem.create(item_id=f"tool:fundamentals:{ticker}", item_type=ItemType.financial, text=table_text[:_TOOL_RESULT_MAX_CHARS], score=0.88, trust_weight=0.90)` — same `text` field note (N-7)
+1. `data = await self._s3.get_fundamentals_history(ticker=ticker, periods=periods)` — same single-call pattern; S3 resolves server-side.
+2. If `data` is empty: log warning and return `None`.
+3. Format as markdown table (Period | Revenue | Gross Profit | Net Income | EPS | P/E).
+4. Return `RetrievedItem.create(item_id=f"tool:fundamentals:{ticker}", item_type=ItemType.financial, text=table_text[:_TOOL_RESULT_MAX_CHARS], score=0.88, trust_weight=0.90)` — same `text` field note (N-7).
 
 **Tests to write**:
 | Test | What it verifies | Type |
 |---|---|---|
+| `test_executor_price_history_passes_ticker_to_port` | `ticker="AAPL"` → `s3.get_ohlcv_range` called with `ticker="AAPL"` (no find_instrument_by_ticker call) | unit (mock S3) |
 | `test_executor_price_history_formats_markdown_table` | bars → RetrievedItem text contains markdown table header | unit (mock S3) |
-| `test_executor_returns_none_on_unknown_ticker` | `find_instrument_by_ticker` returns None → `None` returned | unit |
-| `test_executor_returns_none_on_s3_error` | `get_ohlcv_range` raises → `None` returned, no exception | unit |
+| `test_executor_returns_none_on_empty_bars` | `get_ohlcv_range` returns `[]` → `None` returned, warning logged | unit |
+| `test_executor_returns_none_on_s3_error` | `get_ohlcv_range` raises → `None` returned, no exception propagated | unit |
 | `test_executor_execute_all_runs_concurrently` | two tool calls → both handlers called (mock verify) | unit |
 | `test_executor_execute_all_caps_at_5` | 8 tool_calls → only 5 executed | unit |
 | `test_executor_fundamentals_formats_markdown_table` | periods → RetrievedItem with Period column | unit |
 | `test_executor_unknown_tool_name_logs_warning` | unregistered tool name → `log.warning("unknown_tool_name")` emitted, `None` returned | unit |
 | `test_executor_tool_result_truncated_at_max_chars` | formatter produces > 4000 chars → `RetrievedItem.text` ≤ 4000 chars (N-7: field is `text` not `content`) | unit |
 
-Minimum: 8 unit tests.
+Minimum: 9 unit tests.
 
 **Acceptance criteria**:
 - [ ] `execute_all` uses `asyncio.gather` (not sequential)
@@ -1652,6 +1777,6 @@ Before closing this plan session, the following documents should be updated:
 | Document | Update |
 |---|---|
 | `docs/services/rag-chat.md` | New endpoints: `/v1/briefings/morning/history`, `/v1/briefings/morning/diff`, `/v1/briefings/feedback/bullet`, `/v1/briefings/feedback/brief`, `/v1/briefings/chat/discuss`; new DB tables `user_briefs` + `brief_feedback`; Wave H tool-use loop (ToolRegistry, ToolExecutor, capability manifest) |
-| `docs/services/market-data.md` | New endpoints: `/api/v1/instruments/{id}/ohlcv`, `/api/v1/instruments/{id}/fundamentals/history`; new env var `S3_OHLCV_MAX_DAYS` |
+| `docs/services/market-data.md` | New endpoints: `GET /api/v1/ohlcv/{instrument_id}/bars` (N-2/N-3 corrected from instruments URL) and `GET /api/v1/fundamentals/{id}/history` (N-10 — reads earnings_history table); new env var `S3_OHLCV_MAX_DAYS` |
 | `docs/BUG_PATTERNS.md` | Add BP-NEW: "Brief RAG seed context overflow" — if brief citations are too many / snippets too long, they can crowd out other retrieval sources. Cap: 8 items × 400 chars max = mitigated |
 | `RULES.md` | No new rules needed; existing R8/R24/R27 cover all patterns in this plan |

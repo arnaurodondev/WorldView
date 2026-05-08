@@ -6,15 +6,25 @@ from datetime import date
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from market_data.api.dependencies import (
     get_available_timeframes_uc,
+    get_lookup_instrument_uc,
+    get_ohlcv_bars_flexible_uc,
     get_ohlcv_bars_uc,
     get_ohlcv_bulk_uc,
     get_ohlcv_range_uc,
 )
-from market_data.api.schemas.ohlcv import OHLCVBarResponse, OHLCVListResponse, OHLCVRangeResponse
+from market_data.api.schemas.ohlcv import (
+    OHLCVBarResponse,
+    OHLCVBarsResponse,
+    OHLCVFlexibleBar,
+    OHLCVListResponse,
+    OHLCVRangeResponse,
+)
+from market_data.application.use_cases.get_ohlcv_bars_flexible import GetOHLCVBarsFlexibleUseCase
+from market_data.application.use_cases.lookup_instrument import InstrumentLookupUseCase
 from market_data.application.use_cases.query_ohlcv import (
     GetAvailableTimeframesUseCase,
     GetOHLCVBarsUseCase,
@@ -23,6 +33,7 @@ from market_data.application.use_cases.query_ohlcv import (
 )
 from market_data.domain.entities import OHLCVBar
 from market_data.domain.enums import Timeframe
+from market_data.domain.errors import InstrumentNotFoundError
 
 router = APIRouter(tags=["ohlcv"])
 
@@ -62,6 +73,74 @@ def _validate_instrument_id(instrument_id: str) -> str:
 
 
 # IMPORTANT: literal-path routes must come BEFORE {instrument_id} route
+# PLAN-0066 Wave G: temporal RAG endpoint — GET /ohlcv/bars
+@router.get("/ohlcv/bars", response_model=OHLCVBarsResponse)
+async def get_ohlcv_bars_flexible(
+    request: Request,
+    instrument_id: Annotated[UUID | None, Query()] = None,
+    symbol: Annotated[str | None, Query(min_length=1, max_length=20)] = None,
+    isin: Annotated[str | None, Query(min_length=12, max_length=12)] = None,
+    from_date: date = ...,  # type: ignore[assignment]
+    to_date: date = ...,  # type: ignore[assignment]
+    interval: str = Query(default="day", pattern="^(day|week|month)$"),
+    max_bars: int = Query(default=252, ge=1, le=1000),
+    uc: Annotated[GetOHLCVBarsFlexibleUseCase, Depends(get_ohlcv_bars_flexible_uc)] = ...,  # type: ignore[assignment]
+    lookup_uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,  # type: ignore[assignment]
+) -> OHLCVBarsResponse:
+    """Return OHLCV bars for an instrument over a flexible date range (PLAN-0066 Wave G).
+
+    WHY this endpoint: The brief-intelligence and temporal RAG pipelines need a
+    finance-ready endpoint that accepts ticker/isin/UUID identifiers and returns
+    plain float values (not Decimal strings) ordered ASC by date with interval
+    resampling (day/week/month) handled server-side.
+
+    At least one of instrument_id, symbol, or isin is required.
+    from_date and to_date are required query parameters.
+    Date range is capped at MARKET_DATA_OHLCV_MAX_DAYS (default 365).
+    """
+    if instrument_id is None and symbol is None and isin is None:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one of instrument_id, symbol, or isin is required",
+        )
+
+    # Enforce date-range cap from settings
+    settings = request.app.state.settings
+    max_days: int = getattr(settings, "ohlcv_max_days", 365)
+    if (to_date - from_date).days > max_days:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Date range exceeds maximum of {max_days} days",
+        )
+
+    # Resolve to a canonical instrument via InstrumentLookupUseCase (R25)
+    try:
+        result = await lookup_uc.execute(
+            id=str(instrument_id) if instrument_id else None,
+            isin=isin,
+            symbol=symbol,
+        )
+    except InstrumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    instrument = result.instrument
+    data = await uc.execute(
+        instrument_id=UUID(instrument.id),
+        from_date=from_date,
+        to_date=to_date,
+        interval=interval,
+        max_bars=max_bars,
+    )
+
+    return OHLCVBarsResponse(
+        instrument_id=instrument.id,
+        ticker=instrument.symbol,
+        interval=interval,
+        bars=[OHLCVFlexibleBar(**b) for b in data["bars"]],
+        bar_count=data["bar_count"],
+    )
+
+
 @router.get("/ohlcv/bulk", response_model=list[OHLCVListResponse])
 async def get_ohlcv_bulk(
     instrument_ids: Annotated[list[str], Query(max_length=200)] = ...,  # type: ignore[assignment]  # F-SEC-007
