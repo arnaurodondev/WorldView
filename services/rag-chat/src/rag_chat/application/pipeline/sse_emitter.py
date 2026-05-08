@@ -98,3 +98,28 @@ class SSEEmitter:
         frontend close the EventSource immediately and mark the response as finished.
         """
         return {"event": "done", "data": json.dumps({"type": "done"})}
+
+    def emit_tool_call(self, tool_name: str, tool_input: dict) -> dict[str, str]:
+        """Emit a tool_call event before execution starts (PLAN-0066 Wave H T-W10-H-04).
+
+        WHY BEFORE EXECUTE: the frontend can immediately show a spinner
+        "Fetching AAPL price history..." without waiting for the S3 round-trip.
+        The ``status: "running"`` field lets the UI differentiate from the result.
+        """
+        return {
+            "event": "tool_call",
+            "data": json.dumps({"type": "tool_call", "tool": tool_name, "input": tool_input, "status": "running"}),
+        }
+
+    def emit_tool_result(self, tool_name: str, success: bool) -> dict[str, str]:
+        """Emit a tool_result event after execution completes (PLAN-0066 Wave H T-W10-H-04).
+
+        WHY ALWAYS EMITTED: the frontend spinner opened by ``tool_call`` must always
+        have a corresponding close signal. Emitting on both success and failure
+        ensures the UI never hangs in a loading state.
+        """
+        status = "ok" if success else "error"
+        return {
+            "event": "tool_result",
+            "data": json.dumps({"type": "tool_result", "tool": tool_name, "status": status}),
+        }

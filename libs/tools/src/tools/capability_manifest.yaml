@@ -1,0 +1,48 @@
+version: "1"
+tools:
+  - name: get_price_history
+    description: >
+      Fetches OHLCV (open/high/low/close/volume) bar history for a stock ticker
+      over a specified date range. Use when the user asks about price movement,
+      trend, range, or performance over a time period.
+    parameters:
+      - name: ticker
+        type: string
+        description: Stock ticker symbol (e.g. "AAPL")
+        required: true
+      - name: from_date
+        type: date
+        description: Start of date range (YYYY-MM-DD)
+        required: true
+      - name: to_date
+        type: date
+        description: End of date range (YYYY-MM-DD)
+        required: true
+      - name: interval
+        type: string
+        enum: [day, week, month]
+        description: Bar granularity. Default "week".
+        required: false
+    source_type: ohlcv  # used by TrustScorer — trust_weight NOT stored here (PLAN-0067 §0 A-2)
+    example_queries:
+      - "How has AAPL performed over the last 3 months?"
+      - "What was NVDA's price range in Q1 2026?"
+
+  - name: get_fundamentals_history
+    description: >
+      Fetches quarterly fundamental metrics (revenue, gross profit, net income,
+      EPS, P/E ratio, market cap) for a ticker over N periods. Use when the user
+      asks about revenue trends, EPS growth, or multi-quarter financial performance.
+    parameters:
+      - name: ticker
+        type: string
+        description: Stock ticker symbol (e.g. "MSFT")
+        required: true
+      - name: periods
+        type: integer
+        description: Number of quarters to return (1-20). Default 8.
+        required: false
+    source_type: fundamentals  # used by TrustScorer — trust_weight NOT stored here (PLAN-0067 §0 A-2)
+    example_queries:
+      - "Show me MSFT's revenue trend over 8 quarters"
+      - "What has AAPL's EPS been over the last 2 years?"

@@ -2,6 +2,15 @@
 
 Delegates all 13 pipeline steps to ChatPipeline (PLAN-0077 Wave C).
 The class is named ChatOrchestratorUseCase for consistency with other use cases in this layer.
+
+PLAN-0066 Wave H: optional tool-use loop inserted after initial retrieval (steps 11+).
+When _tool_executor is set, the system prompt includes the capability manifest and the
+LLM may emit tool_use JSON blocks. Those blocks trigger ToolExecutor.execute_all() to
+fetch temporal data (OHLCV history, quarterly fundamentals) from S3Port and inject the
+results into the retrieved items before the final LLM turn.
+
+The loop is capped at 2 LLM turns (1 tool round + 1 final answer).
+When _tool_executor is None (default), the classical pipeline is unchanged.
 """
 
 from __future__ import annotations
@@ -27,10 +36,85 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from rag_chat.application.pipeline.chat_pipeline import ChatPipeline
+    from rag_chat.application.pipeline.tool_executor import ToolExecutor, ToolUseBlock
     from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
-    from rag_chat.domain.entities.chat import ChatRequest
+    from rag_chat.domain.entities.chat import ChatRequest, RetrievedItem
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
+
+# Maximum LLM turns in the tool-use loop (1 tool call round + 1 final answer)
+_MAX_TOOL_TURNS = 2
+
+
+def _parse_tool_use_blocks(response_text: str) -> list[ToolUseBlock]:
+    """Parse tool_use JSON blocks from LLM response text.
+
+    The LLM is instructed to emit JSON blocks shaped like:
+        {"type": "tool_use", "name": "get_price_history",
+         "input": {"ticker": "AAPL", "from_date": "2026-02-03", ...}}
+
+    WHY balanced-brace scan: the input field may contain a nested JSON object,
+    so a simple [^{}]* regex fails. We scan for every `{` in the text, extract
+    the balanced brace span, and try json.loads on each candidate object.
+    """
+    # Import here to avoid circular imports at module level
+    from rag_chat.application.pipeline.tool_executor import ToolUseBlock
+
+    blocks: list[ToolUseBlock] = []
+
+    # Walk through the text finding balanced {…} spans
+    i = 0
+    while i < len(response_text):
+        if response_text[i] != "{":
+            i += 1
+            continue
+        # Try to find the matching closing brace
+        depth = 0
+        j = i
+        in_string = False
+        escape_next = False
+        while j < len(response_text):
+            ch = response_text[j]
+            if escape_next:
+                escape_next = False
+                j += 1
+                continue
+            if ch == "\\" and in_string:
+                escape_next = True
+                j += 1
+                continue
+            if ch == '"':
+                in_string = not in_string
+                j += 1
+                continue
+            if not in_string:
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = response_text[i : j + 1]
+                        try:
+                            raw = json.loads(candidate)
+                            if (
+                                isinstance(raw, dict)
+                                and raw.get("type") == "tool_use"
+                                and "name" in raw
+                                and "input" in raw
+                            ):
+                                blocks.append(
+                                    ToolUseBlock(
+                                        name=raw["name"],
+                                        input=raw.get("input", {}),
+                                        tool_use_id=raw.get("id", ""),
+                                    )
+                                )
+                        except (json.JSONDecodeError, KeyError, ValueError):
+                            pass
+                        break
+            j += 1
+        i += 1
+    return blocks
 
 
 def _resolve_model_id(llm_chain: Any, provider_name: str) -> str:
@@ -70,8 +154,17 @@ class ChatOrchestratorUseCase:
     13. Persistence + finalize (Step 13)
     """
 
-    def __init__(self, pipeline: ChatPipeline) -> None:
+    def __init__(
+        self,
+        pipeline: ChatPipeline,
+        tool_executor: ToolExecutor | None = None,
+    ) -> None:
         self._pipeline = pipeline
+        # PLAN-0066 Wave H: optional tool-use executor.
+        # When None, the classical retrieval pipeline is unchanged (default path).
+        # When set, the system prompt includes the capability manifest and the loop
+        # activates on tool_use blocks in the LLM response.
+        self._tool_executor = tool_executor
 
     async def execute_streaming(
         self,
@@ -154,14 +247,114 @@ class ChatOrchestratorUseCase:
             reranked, conversation_history, effective_query, tuple(sub_questions), intent, _type_counts
         )
 
-        # Step 11: LLM streaming with <think> filter
+        # PLAN-0066 Wave H: when tool_executor is active, append the capability manifest
+        # to the prompt so the LLM can emit tool_use JSON blocks at generation time.
+        # WHY append (not prepend): the context block is the most important content;
+        # the manifest is a capability declaration appended as a postscript.
+        if self._tool_executor is not None:
+            prompt = (
+                prompt
+                + "\n\n"
+                + self._tool_executor._registry.to_system_prompt_section()
+                + "\n\nIf you need temporal data (price history or fundamentals), emit a tool_use JSON block. "
+                "Otherwise answer directly using the context above."
+            )
+
+        # Step 11: LLM first turn (with optional tool-use loop)
         full_text = ""
         provider_name = "unknown"
-        async for filtered, raw in p.stream_llm(prompt):
-            full_text += raw
-            if filtered:
-                yield p.emitter.emit_token(filtered)
-        provider_name = p.llm_chain.last_provider_name
+        _tool_loop_active = self._tool_executor is not None
+        _tool_turn_count = 0
+
+        # Collect first LLM response (non-streaming for tool detection; stream if no tools)
+        # WHY: we need the full first response to detect tool_use blocks before streaming
+        # tokens to the client. If no tool blocks are found, we stream from the collected
+        # response. The 2-turn cap (_MAX_TOOL_TURNS) prevents infinite loops.
+        if _tool_loop_active:
+            # First turn: collect full text to detect tool_use blocks
+            first_full_text = ""
+            async for _filtered, raw in p.stream_llm(prompt):
+                first_full_text += raw
+            provider_name = p.llm_chain.last_provider_name
+            _tool_turn_count += 1
+
+            # Detect tool_use blocks in first response
+            tool_calls = _parse_tool_use_blocks(first_full_text)
+
+            if tool_calls:
+                # Emit tool_call SSE events BEFORE executing (T-W10-H-04)
+                for tc in tool_calls:
+                    yield p.emitter.emit_tool_call(tc.name, tc.input)
+
+                # Execute all tool calls concurrently (T-W10-H-02)
+                tool_items = await self._tool_executor.execute_all(tool_calls)  # type: ignore[union-attr]
+
+                # Emit tool_result SSE events AFTER execution (T-W10-H-04)
+                for tc, item in zip(tool_calls, tool_items, strict=False):
+                    yield p.emitter.emit_tool_result(tc.name, item is not None)
+
+                # All-tools-failed guard (PLAN-0066 Wave H §T-W10-H-03):
+                # If every tool call returned None, fall back to classical path.
+                # Never produce a second LLM turn with zero tool context — the LLM
+                # would hallucinate. Use the first_full_text as the final answer.
+                non_none_items: list[RetrievedItem] = [i for i in tool_items if i is not None]
+                if not non_none_items:
+                    log.warning(
+                        "all_tools_failed",
+                        tool_count=len(tool_calls),
+                        query=request.message[:100],
+                    )
+                    # Fall back: treat first_full_text as the final answer (classical context)
+                    full_text = first_full_text
+                elif _tool_turn_count < _MAX_TOOL_TURNS:
+                    # Inject tool results and run second LLM turn
+                    reranked = list(reranked) + non_none_items
+                    _type_counts.update(item.item_type.value for item in non_none_items)
+                    tool_prompt, _contradiction_refs2, _ctx2 = p.build_prompt(
+                        reranked,
+                        conversation_history,
+                        effective_query,
+                        tuple(sub_questions),
+                        intent,
+                        _type_counts,
+                    )
+                    # Append prior LLM exchange so the second turn has context
+                    tool_prompt = tool_prompt + f"\n\nPrevious assistant response:\n{first_full_text}"
+                    second_full_text = ""
+                    async for filtered2, raw2 in p.stream_llm(tool_prompt):
+                        second_full_text += raw2
+                        if filtered2:
+                            yield p.emitter.emit_token(filtered2)
+                    provider_name = p.llm_chain.last_provider_name
+                    _tool_turn_count += 1
+
+                    # Second response: if it still contains tool_use blocks, treat as final
+                    # (2-turn cap enforced — log warning so behavior is observable)
+                    second_tool_calls = _parse_tool_use_blocks(second_full_text)
+                    if second_tool_calls:
+                        log.warning(
+                            "tool_loop_cap_reached",
+                            turn=_tool_turn_count,
+                            blocks_found=len(second_tool_calls),
+                        )
+                    full_text = second_full_text
+                else:
+                    # Cap reached — treat first response as final
+                    full_text = first_full_text
+            else:
+                # No tool_use blocks: stream the first response tokens to client
+                # WHY RE-STREAM: the first turn was collected to check for tools.
+                # Since no tools were called, emit all collected tokens now.
+                if first_full_text:
+                    yield p.emitter.emit_token(first_full_text)
+                full_text = first_full_text
+        else:
+            # Classical path: streaming directly (tool_executor is None)
+            async for filtered, raw in p.stream_llm(prompt):
+                full_text += raw
+                if filtered:
+                    yield p.emitter.emit_token(filtered)
+            provider_name = p.llm_chain.last_provider_name
 
         # Step 12: output processing + citation injection
         answer, citations = p.process_output(full_text, reranked)
