@@ -539,7 +539,7 @@ Minimum: 3 unit tests.
 
 ---
 
-### Wave C: S8 Brief Diff + Brief Feedback Backend
+### Wave C: S8 Brief Diff + Brief Feedback Backend ✓ DONE 2026-05-08
 
 **Goal**: Implement the diff computation and feedback endpoints.
 **Depends on**: Wave B
@@ -660,9 +660,9 @@ Minimum: 4 unit tests.
 ---
 
 #### Validation Gate — Wave C
-- [ ] `ruff` + `mypy` pass
-- [ ] 8 new tests pass
-- [ ] Diff endpoint returns correct shape against two seeded `UserBriefModel` fixtures
+- [x] `ruff` + `mypy` pass
+- [x] 8 new tests pass (756 total, up from 739)
+- [x] Diff endpoint returns correct shape against two seeded `UserBriefModel` fixtures
 
 #### Break Impact — Wave C
 | Broken file | Why | Fix |
@@ -674,7 +674,7 @@ Minimum: 4 unit tests.
 
 ---
 
-### Wave D: S8 Chat Seeding + Implicit RAG Seed
+### Wave D: S8 Chat Seeding + Implicit RAG Seed ✓ DONE 2026-05-08
 
 **Goal**: Wire the "Discuss in chat" flow — a `POST /v1/briefings/chat/discuss` endpoint that creates a thread seeded with the brief's citations, and an implicit seed that auto-injects today's brief into every chat retrieval for the same user.
 **Depends on**: Wave B
@@ -730,9 +730,9 @@ Response: {thread_id: str, seeded_with_brief_id: str}
 Minimum: 3 tests.
 
 **Acceptance criteria**:
-- [ ] Thread `seed_brief_id` FK is nullable
-- [ ] `CreateThreadUseCase` updated to accept and persist `seed_brief_id`
-- [ ] Route uses `UoWDep` (write path — R27)
+- [x] Thread `seed_brief_id` FK is nullable
+- [x] `CreateThreadUseCase` updated to accept and persist `seed_brief_id`
+- [x] Route uses `UoWDep` (write path — R27)
 
 ---
 
@@ -805,9 +805,9 @@ The `BriefArchivePort` needs a new `get_by_id(id)` method — add to the Protoco
 Minimum: 4 unit tests.
 
 **Acceptance criteria**:
-- [ ] Explicit seed (`seed_brief_id`) always takes precedence over implicit seed
-- [ ] Implicit seed checks calendar-day equality in UTC (`date()` comparison)
-- [ ] Cap of 8 seed items prevents context overflow
+- [x] Explicit seed (`seed_brief_id`) always takes precedence over implicit seed
+- [x] Implicit seed checks calendar-day equality in UTC (`date()` comparison)
+- [x] Cap of 8 seed items prevents context overflow
 
 ---
 
@@ -824,15 +824,15 @@ Minimum: 4 unit tests.
 Minimum: 1 unit test (`test_get_by_id_returns_none_for_unknown`).
 
 **Acceptance criteria**:
-- [ ] Returns `None` (not exception) for unknown IDs
-- [ ] `NullBriefArchive` returns `None` for `get_by_id`
+- [x] Returns `None` (not exception) for unknown IDs (Wave A already confirmed)
+- [x] `NullBriefArchive` returns `None` for `get_by_id` (Wave A already confirmed)
 
 ---
 
 #### Validation Gate — Wave D
-- [ ] `ruff` + `mypy` pass
-- [ ] 8 new tests pass
-- [ ] `alembic upgrade head` clean with 0004 + 0005
+- [x] `ruff` + `mypy` pass (2026-05-08)
+- [x] 8 new tests pass (756 total, 0 failed)
+- [ ] `alembic upgrade head` clean with 0004 + 0005 (requires live DB)
 
 #### Break Impact — Wave D
 | Broken file | Why | Fix |

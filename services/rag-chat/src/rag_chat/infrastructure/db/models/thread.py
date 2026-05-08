@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import sqlalchemy as sa
-from sqlalchemy import DateTime, Index, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PgUUID  # noqa: N811
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -57,6 +57,16 @@ class ThreadModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_msg_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # PLAN-0066 Wave D: FK to the brief that seeded this thread (ON DELETE SET NULL).
+    # NULL means the thread was started independently (not from a brief).
+    # WHY nullable: most threads are created without a brief seed. Adding a NOT NULL
+    # column here would require backfilling all existing rows.
+    seed_brief_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("user_briefs.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
     messages: Mapped[list[MessageModel]] = relationship(
         "MessageModel",
         back_populates="thread",

@@ -17,20 +17,33 @@ PLAN-0066 Wave B (T-W10-B-03):
 - GET /api/v1/briefings/morning/history — paginated brief archive.
   Uses BriefArchiveRepositoryDep (read-only session, R27).
   page_size capped at 50 via Query(le=50) to prevent runaway queries.
+
+PLAN-0066 Wave C (T-W10-C-01, T-W10-C-02):
+- GET /api/v1/briefings/morning/diff — text-normalised bullet diff between
+  the two most-recent morning briefs. Uses ReadUoWDep (R27).
+- POST /api/v1/briefings/feedback/bullet — bullet-level reaction (helpful/unhelpful)
+- POST /api/v1/briefings/feedback/brief  - brief-level star rating (1-5)
+  Both POST endpoints use UoWDep (write session) and return 201.
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from rag_chat.api.dependencies import BriefArchiveRepositoryDep
+from rag_chat.api.dependencies import BriefArchiveRepositoryDep, ReadUoWDep, UoWDep
 from rag_chat.api.schemas import PublicBriefingResponse
-from rag_chat.domain.errors import EntityNotFoundError, ProviderUnavailableError, RateLimitExceededError
+from rag_chat.application.use_cases.create_thread import CreateThreadUseCase
+from rag_chat.domain.errors import (
+    BriefNotFoundError,
+    EntityNotFoundError,
+    ProviderUnavailableError,
+    RateLimitExceededError,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["briefings"])
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
@@ -392,4 +405,339 @@ async def get_morning_brief_history(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+# ── PLAN-0066 Wave C: brief diff endpoint ─────────────────────────────────────
+
+
+class DiffBulletSchema(BaseModel):
+    """One bullet that appeared or disappeared between two consecutive briefs.
+
+    WHY separate schema (not reuse DiffBullet dataclass): Pydantic models belong
+    in the API layer (PLAN-0083). The DiffBullet dataclass lives in the use case
+    layer and must not be serialised directly by FastAPI — that would bleed
+    infrastructure knowledge into the application layer.
+    """
+
+    section_title: str
+    text: str
+    citations: list[dict] = []  # — Pydantic field default, not ClassVar
+
+
+class BriefDiffResponse(BaseModel):
+    """Response shape for GET /api/v1/briefings/morning/diff.
+
+    status:
+      "diff_available"    — two briefs found; new/removed bullets populated
+      "no_diff_available" — fewer than 2 briefs; no diff can be computed
+
+    delta_summary: human-readable one-liner for the frontend
+      e.g. "3 new bullets, 1 removed since 2026-05-07"
+    """
+
+    status: str  # Literal["diff_available", "no_diff_available"] enforced by use case
+    today_generated_at: str | None
+    yesterday_generated_at: str | None
+    new_bullets: list[DiffBulletSchema]
+    removed_bullets: list[DiffBulletSchema]
+    changed_sections: list[str]
+    delta_summary: str
+
+
+@router.get("/briefings/morning/diff", response_model=BriefDiffResponse)
+async def get_morning_brief_diff(
+    request: Request,
+    archive: BriefArchiveRepositoryDep,
+    uow: ReadUoWDep,  # — R27: read-only UoW; session lifecycle managed by DI
+) -> BriefDiffResponse:
+    """Return a text-normalised bullet diff between today's and yesterday's morning brief.
+
+    - Fetches the 2 most-recent morning briefs for the authenticated user
+    - Compares bullets section-by-section using lowercase+strip normalisation
+    - Returns new_bullets, removed_bullets, changed_sections, and delta_summary
+
+    WHY ReadUoWDep: this endpoint only reads (via BriefArchiveRepositoryDep which
+    already uses read_factory). R27 mandates ReadUoWDep for read-only routes. The
+    uow argument ensures the read session is properly lifecycle-managed even though
+    the archive dep has its own session — consistent with the history endpoint pattern.
+
+    Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025). Missing
+    user_id in request.state → 401.
+    """
+    from rag_chat.application.use_cases.brief_diff import BriefDiffUseCase
+
+    user_id_str = _extract_user_id(request)
+    tenant_id_str = _extract_tenant_id(request)
+    user_id = _to_uuid(user_id_str)
+    tenant_id = _to_uuid(tenant_id_str)
+
+    # WHY instantiate use case here (not DI): BriefDiffUseCase is stateless and
+    # only needs the archive port. Constructing it in the route keeps the DI wiring
+    # simple — no new Depends() factory needed, consistent with how GenerateBriefingUseCase
+    # is retrieved from app.state in the morning briefing route.
+    uc = BriefDiffUseCase(archive=archive)
+    result = await uc.execute(user_id=user_id, tenant_id=tenant_id)
+
+    log.info(  # type: ignore[no-any-return]
+        "morning_brief_diff_fetched",
+        user_id=user_id_str,
+        status=result.status,
+        new_count=len(result.new_bullets),
+        removed_count=len(result.removed_bullets),
+    )
+
+    return BriefDiffResponse(
+        status=result.status,
+        today_generated_at=result.today_generated_at,
+        yesterday_generated_at=result.yesterday_generated_at,
+        new_bullets=[
+            DiffBulletSchema(
+                section_title=b.section_title,
+                text=b.text,
+                citations=b.citations,
+            )
+            for b in result.new_bullets
+        ],
+        removed_bullets=[
+            DiffBulletSchema(
+                section_title=b.section_title,
+                text=b.text,
+                # WHY no citations on removed_bullets: removed bullets belonged to
+                # yesterday's brief; their source citations are historical and may
+                # no longer be relevant. The use case already strips them.
+            )
+            for b in result.removed_bullets
+        ],
+        changed_sections=result.changed_sections,
+        delta_summary=result.delta_summary,
+    )
+
+
+# ── PLAN-0066 Wave C: brief feedback endpoints ────────────────────────────────
+
+
+class BulletFeedbackRequest(BaseModel):
+    """Request body for POST /api/v1/briefings/feedback/bullet.
+
+    WHY Literal reaction: enforces the allowed set at schema validation time
+    (FastAPI returns 422 automatically for any other value). This is cheaper
+    than a runtime check in the use case and produces a clear error message.
+    """
+
+    brief_id: UUID
+    section_idx: int = Field(ge=0, description="0-based section index")
+    bullet_idx: int = Field(ge=0, description="0-based bullet index within the section")
+    reaction: Literal["helpful", "unhelpful"]
+
+
+class BriefFeedbackRequest(BaseModel):
+    """Request body for POST /api/v1/briefings/feedback/brief.
+
+    reaction is a star rating string "1"-"5" (not int) so the frontend can
+    submit it as a JSON string without integer/string mismatch errors.
+    Literal enforces the allowed values; FastAPI returns 422 for anything else.
+    """
+
+    brief_id: UUID
+    reaction: Literal["1", "2", "3", "4", "5"]
+
+
+class FeedbackResponse(BaseModel):
+    """Response for both feedback POST endpoints.
+
+    id         — UUIDv7 of the newly created feedback row
+    created_at — ISO-8601 UTC timestamp of insertion
+    """
+
+    id: str
+    created_at: str
+
+
+@router.post("/briefings/feedback/bullet", status_code=201, response_model=FeedbackResponse)
+async def submit_bullet_feedback(
+    body: BulletFeedbackRequest,
+    request: Request,
+    uow: UoWDep,
+) -> FeedbackResponse:
+    """Record a user's helpful/unhelpful reaction to a specific morning brief bullet.
+
+    - Validates that brief_id belongs to the authenticated user (IDOR protection)
+    - Inserts a BriefFeedbackModel row with scope='bullet'
+    - Returns the new feedback row's id and created_at
+
+    WHY UoWDep (write): this is a POST endpoint that inserts a row — R27 mandates
+    the write session factory. The UoW commits after the route handler returns.
+
+    Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025).
+    """
+    from rag_chat.application.use_cases.brief_feedback import BriefFeedbackUseCase
+
+    user_id_str = _extract_user_id(request)
+    user_id = _to_uuid(user_id_str)
+
+    uc = BriefFeedbackUseCase(session=uow.session)
+    try:
+        fb_id, created_at = await uc.submit_bullet_feedback(
+            brief_id=body.brief_id,
+            user_id=user_id,
+            section_idx=body.section_idx,
+            bullet_idx=body.bullet_idx,
+            reaction=body.reaction,
+        )
+    except BriefNotFoundError as exc:
+        # WHY 404 (not 403): we intentionally do not distinguish "brief not found"
+        # from "brief found but owned by another user" — both surface as 404 to
+        # prevent IDOR enumeration attacks.
+        raise HTTPException(status_code=404, detail="Brief not found") from exc
+
+    await uow.commit()
+
+    return FeedbackResponse(
+        id=str(fb_id),
+        created_at=created_at.isoformat(),
+    )
+
+
+@router.post("/briefings/feedback/brief", status_code=201, response_model=FeedbackResponse)
+async def submit_brief_feedback(
+    body: BriefFeedbackRequest,
+    request: Request,
+    uow: UoWDep,
+) -> FeedbackResponse:
+    """Record a user's star rating (1-5) for a whole morning brief.
+
+    - Validates that brief_id belongs to the authenticated user (IDOR protection)
+    - Inserts a BriefFeedbackModel row with scope='brief'
+    - Returns the new feedback row's id and created_at
+
+    WHY UoWDep (write): POST endpoint — R27 mandates write session factory.
+
+    Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025).
+    """
+    from rag_chat.application.use_cases.brief_feedback import BriefFeedbackUseCase
+
+    user_id_str = _extract_user_id(request)
+    user_id = _to_uuid(user_id_str)
+
+    uc = BriefFeedbackUseCase(session=uow.session)
+    try:
+        fb_id, created_at = await uc.submit_brief_feedback(
+            brief_id=body.brief_id,
+            user_id=user_id,
+            reaction=body.reaction,
+        )
+    except BriefNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Brief not found") from exc
+
+    await uow.commit()
+
+    return FeedbackResponse(
+        id=str(fb_id),
+        created_at=created_at.isoformat(),
+    )
+
+
+# ── PLAN-0066 Wave D: "Discuss in chat" endpoint ──────────────────────────────
+
+
+class DiscussBriefRequest(BaseModel):
+    """Request body for POST /api/v1/briefings/chat/discuss.
+
+    WHY brief_type with default "morning": the endpoint currently only supports the
+    morning brief (the only persisted brief type). The field is included so the
+    API contract is extensible to entity-level briefs (PRD-0030) without a
+    breaking schema change.
+    """
+
+    brief_type: str = "morning"
+
+
+class DiscussBriefResponse(BaseModel):
+    """Response for POST /api/v1/briefings/chat/discuss.
+
+    WHY both thread_id and seeded_with_brief_id as str: the JSON API contract
+    uses string UUIDs consistently (matching BriefHistoryItem.id). The frontend
+    can display "Started from [brief headline]" by using seeded_with_brief_id
+    to fetch the brief details from GET /api/v1/briefings/morning/history.
+    """
+
+    thread_id: str
+    seeded_with_brief_id: str
+
+
+@router.post("/briefings/chat/discuss", response_model=DiscussBriefResponse, status_code=201)
+async def discuss_brief_in_chat(
+    body: DiscussBriefRequest,
+    request: Request,
+    archive: BriefArchiveRepositoryDep,
+    uow: UoWDep,
+) -> DiscussBriefResponse:
+    """Create a new chat thread pre-seeded with the user's latest brief.
+
+    Flow:
+      1. Fetch the latest brief for this user/tenant/brief_type via archive (R27: read-only).
+      2. If no brief exists → 422 (caller must generate a brief first).
+      3. Create a thread with seed_brief_id set → returns thread_id + brief_id.
+
+    WHY 422 (not 404): the resource class (briefs) exists — the user simply has
+    not yet generated one. 422 signals "your request is valid but pre-conditions
+    are not met" which is more accurate than 404 ("resource not found").
+
+    WHY UoWDep (write): creating a thread is a write operation (R27). The archive
+    read uses BriefArchiveRepositoryDep which internally uses read_factory (R27
+    compliant).
+
+    Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025). Missing
+    user_id in request.state → 401 (same guard as other briefing routes).
+    """
+    user_id_str = _extract_user_id(request)
+    tenant_id_str = _extract_tenant_id(request)
+    user_id = _to_uuid(user_id_str)
+    tenant_id = _to_uuid(tenant_id_str)
+
+    # Fetch the single most-recent brief for this user+tenant+brief_type.
+    # limit=1: we only need the latest; no point fetching more.
+    briefs = await archive.get_latest(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        brief_type=body.brief_type,
+        limit=1,
+    )
+    if not briefs:
+        log.warning(  # type: ignore[no-any-return]
+            "discuss_brief_no_brief_available",
+            user_id=user_id_str,
+            brief_type=body.brief_type,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=f"No {body.brief_type!r} brief available to seed chat — generate a brief first.",
+        )
+
+    brief = briefs[0]
+
+    # Create thread seeded with this brief. title=None → the thread list shows
+    # the first assistant message as the title (existing frontend behaviour).
+    uc = CreateThreadUseCase()
+    thread = await uc.execute(
+        uow,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        title=None,
+        entity_ids=[],
+        seed_brief_id=brief.id,
+    )
+
+    log.info(  # type: ignore[no-any-return]
+        "discuss_brief_thread_created",
+        user_id=user_id_str,
+        brief_id=str(brief.id),
+        thread_id=str(thread.thread_id),
+        brief_type=body.brief_type,
+    )
+
+    return DiscussBriefResponse(
+        thread_id=str(thread.thread_id),
+        seeded_with_brief_id=str(brief.id),
     )

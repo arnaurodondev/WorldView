@@ -2015,6 +2015,74 @@ async def get_morning_brief_history(request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# ── PLAN-0066 Wave C: brief diff + feedback proxies ───────────────────────────
+
+
+@router.get("/briefings/morning/diff")
+async def get_morning_brief_diff(request: Request) -> Any:
+    """Proxy GET /api/v1/briefings/morning/diff → S8 RAG/Chat service (PLAN-0066 Wave C).
+
+    Requires authentication. Returns a text-normalised bullet diff between the
+    two most-recent morning briefs for the authenticated user.
+
+    WHY no timeout guard: diff is a pure read (2-row DB fetch + in-memory compare).
+    Network errors still propagate as 5xx FastAPI defaults.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.rag_chat.get(
+        "/api/v1/briefings/morning/diff",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/briefings/feedback/bullet", status_code=201)
+async def submit_bullet_feedback(request: Request) -> Any:
+    """Proxy POST /api/v1/briefings/feedback/bullet → S8 RAG/Chat service (PLAN-0066 Wave C).
+
+    Requires authentication. Records a helpful/unhelpful reaction to a specific
+    bullet in the authenticated user's morning brief.
+
+    WHY forward raw body: the request body contains brief_id, section_idx,
+    bullet_idx, and reaction. S8 validates these via Pydantic; forwarding the raw
+    bytes avoids double-deserialisation and keeps S9 as a thin proxy.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    body = await request.body()
+    resp = await clients.rag_chat.post(
+        "/api/v1/briefings/feedback/bullet",
+        content=body,
+        headers={**headers, "Content-Type": "application/json"},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/briefings/feedback/brief", status_code=201)
+async def submit_brief_feedback(request: Request) -> Any:
+    """Proxy POST /api/v1/briefings/feedback/brief → S8 RAG/Chat service (PLAN-0066 Wave C).
+
+    Requires authentication. Records a star rating (1-5) for the authenticated
+    user's morning brief.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    body = await request.body()
+    resp = await clients.rag_chat.post(
+        "/api/v1/briefings/feedback/brief",
+        content=body,
+        headers={**headers, "Content-Type": "application/json"},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 # ── Portfolio + Holdings + Transactions (PRD-0028 Wave S9-2) ─────────────────
 
 

@@ -69,6 +69,9 @@ class ConversationThread:
     entity_ids: tuple[UUID, ...] = ()
     messages: tuple[Message, ...] = ()
     archived_at: datetime | None = None
+    # PLAN-0066 Wave D: optional FK to the user_briefs row that seeded this thread.
+    # Set when a thread is created via POST /v1/briefings/chat/discuss; None otherwise.
+    seed_brief_id: UUID | None = None
 
     @property
     def is_active(self) -> bool:

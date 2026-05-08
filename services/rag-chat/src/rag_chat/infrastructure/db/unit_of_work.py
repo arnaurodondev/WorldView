@@ -61,6 +61,22 @@ class RagUnitOfWork:
                 self._session = None
 
     @property
+    def session(self) -> AsyncSession:
+        """Expose the raw AsyncSession for use cases that need direct session access.
+
+        WHY expose session: BriefFeedbackUseCase (PLAN-0066 Wave C) needs a raw
+        AsyncSession to perform a point-lookup ownership check + INSERT, without
+        using the thread/message repository abstractions. Exposing session here
+        follows the same pattern used in many worldview services where a use case
+        needs direct DB access beyond what the typed repositories provide.
+
+        Callers must NOT call commit()/rollback() on the session directly — use
+        uow.commit() / uow.rollback() to keep transaction control in one place.
+        """
+        assert self._session is not None, "RagUnitOfWork not entered"
+        return self._session
+
+    @property
     def threads(self) -> SqlAlchemyThreadRepository:
         assert self._session is not None, "RagUnitOfWork not entered"
         assert self._threads is not None

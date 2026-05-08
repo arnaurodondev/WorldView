@@ -27,6 +27,7 @@ class CreateThreadUseCase:
         tenant_id: UUID,
         title: str | None,
         entity_ids: list[UUID],
+        seed_brief_id: UUID | None = None,
     ) -> ConversationThread:
         now = utc_now()
         thread = ConversationThread(
@@ -39,6 +40,9 @@ class CreateThreadUseCase:
             archived_at=None,
             created_at=now,
             updated_at=now,
+            # PLAN-0066 Wave D: persist the seed brief reference so the
+            # RetrievalOrchestrator can inject brief citations as high-trust items.
+            seed_brief_id=seed_brief_id,
         )
         await uow.threads.create(thread)
         await uow.commit()
