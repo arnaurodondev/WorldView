@@ -17,6 +17,12 @@
     {"name": "title",           "type": ["null", "string"],        "default": null, "doc": "Article title from source"},
     {"name": "published_at",    "type": ["null", "string"],        "default": null, "doc": "ISO-8601 UTC publication date from source"},
     {"name": "is_backfill",     "type": "boolean",                 "default": false, "doc": "True during boot-time backfill"},
-    {"name": "correlation_id",  "type": ["null", "string"],        "default": null}
+    {"name": "correlation_id",  "type": ["null", "string"],        "default": null},
+    {
+      "name": "tenant_id",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Owning tenant UUID string. null = public news visible to all tenants. Set only for tenant-uploaded documents."
+    }
   ]
 }
