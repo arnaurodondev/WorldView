@@ -28,8 +28,13 @@ def _get_unit_test_files() -> list[pathlib.Path]:
 
 
 def _has_module_pytestmark(tree: ast.Module) -> bool:
-    """Check if module has ``pytestmark = ...`` at module level."""
-    for node in ast.walk(tree):
+    """Check for module-level ``pytestmark = ...`` at top level only.
+
+    Uses ``tree.body`` instead of ``ast.walk`` so that a ``pytestmark``
+    assignment inside a nested function or class body does NOT satisfy the
+    requirement (F-A010).
+    """
+    for node in tree.body:  # only top-level module statements
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id == "pytestmark":

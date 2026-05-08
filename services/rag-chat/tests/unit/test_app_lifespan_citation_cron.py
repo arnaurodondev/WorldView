@@ -54,24 +54,6 @@ def test_lifespan_starts_cron_when_enabled() -> None:
     mock_task.add_done_callback.assert_called_once()
 
 
-def test_lifespan_does_not_start_cron_when_disabled() -> None:
-    """When citation_cron_enabled=False, no task is started (flag-controlled rollout L5)."""
-    settings = _make_settings(citation_cron_enabled=False)
-
-    # Simulate the lifespan block that checks the flag
-    app = MagicMock()
-    app.state = MagicMock()
-    app.state.citation_cron_task = None
-
-    # The real lifespan sets citation_cron_task=None first, then only calls
-    # _wire_citation_cron if citation_cron_enabled is True.
-    if settings.citation_cron_enabled:  # type: ignore[truthy-bool]
-        pytest.fail("Should not have started cron")
-
-    # No task set because flag is off
-    assert app.state.citation_cron_task is None
-
-
 def test_lifespan_disabled_does_not_call_start_citation_accuracy_cron() -> None:
     """When citation_cron_enabled=False, start_citation_accuracy_cron must NOT be called.
 
@@ -173,7 +155,6 @@ def test_done_callback_does_not_log_on_cancel() -> None:
     log.critical.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_lifespan_shutdown_cancels_task() -> None:
     """Lifespan teardown cancels the cron task and gathers it."""
     app = MagicMock()

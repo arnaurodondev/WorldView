@@ -19,7 +19,7 @@ from prometheus_client import Counter
 from observability import get_logger  # type: ignore[import-untyped]
 
 _CITATION_CRON_FAIL_COUNTER: Counter = Counter(
-    "citation_accuracy_cron_failures_total",
+    "rag_citation_cron_first_run_failures_total",
     "Total number of citation accuracy cron first-run failures",
 )
 
