@@ -202,9 +202,21 @@ preferable to all-or-nothing for dashboard widgets.
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
-| GET | `/v1/entities/{entity_id}/graph` | Entity relationship graph | Yes |
+| GET | `/v1/entities/{entity_id}` | Entity enrichment detail (description, metadata, data_completeness) | Yes |
+| GET | `/v1/entities/{entity_id}/graph` | Entity relationship graph. Query params: `limit`, `min_confidence`, `semantic_mode`, `confidence_breakdown`, `focus_node` (PLAN-0074 Wave G: `confidence_breakdown` + `focus_node` now forwarded) | Yes |
 | GET | `/v1/entities/{entity_id}/contradictions` | Entity contradictions | Yes |
 | POST | `/v1/entities/similar` | Find similar entities (vector search) | No |
+| GET | `/v1/entities/{entity_id}/intelligence` | Full entity intelligence aggregate (health_score, narrative, confidence_breakdown, key_metrics). Valkey-cached 60 s. Query params: `confidence_breakdown`, `focus_node` (PLAN-0074 Wave G) | Yes |
+| GET | `/v1/entities/{entity_id}/narratives` | Paginated narrative version history. Query params: `limit`, `cursor` (PLAN-0074 Wave G) | Yes |
+| POST | `/v1/entities/{entity_id}/narratives/generate` | Manually trigger narrative generation. Proxy-layer rate limit: 1 req/hr/entity/user via `set_nx` (BP-200). Returns 202. (PLAN-0074 Wave G) | Yes |
+| GET | `/v1/entities/{entity_id}/paths` | Pre-computed multi-hop opportunity paths. Valkey-cached 5 min. Query params: `limit`, `min_score`, `min_hops`, `max_hops` (PLAN-0074 Wave G) | Yes |
+
+### Entity-Context Chat Endpoints (→ S8 RAG-Chat)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| POST | `/v1/chat/entity-context` | Synchronous entity-context chat. Pre-validates `entity_id` (UUID) and `question` (non-empty) before proxying to S8. Error pass-through: 429/400/404/422/503 forwarded. (PLAN-0074 Wave G) | Yes |
+| POST | `/v1/chat/entity-context/stream` | SSE streaming entity-context chat. Same validation as synchronous endpoint; streams chunks with `text/event-stream`. (PLAN-0074 Wave G) | Yes |
 
 ### Portfolio Endpoints (→ S1 Portfolio)
 
