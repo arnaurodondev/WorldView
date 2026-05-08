@@ -47,5 +47,5 @@ class TestMarketDatasetFetchedContract(AvroContractTestBase):
             **self.valid_samples[0],
             "schema_version": "1",
         }
-        with pytest.raises(ValueError):  # fastavro raises ValueError for type mismatches
+        with pytest.raises((ValueError, TypeError)):  # fastavro may raise ValueError or TypeError for type mismatches
             self.assert_invalid_sample_rejected(invalid_sample)
