@@ -215,6 +215,38 @@ class TestMarkProcessed:
         assert result is False, "Valkey-down must fail-open, not block processing"
 
 
+class TestPrometheusCounters:
+    async def test_is_duplicate_connection_error_increments_fallback_counter(self) -> None:
+        """F-T004: ConnectionError in is_duplicate() increments messaging_dedup_valkey_fallback_total."""
+        from messaging.kafka.consumer.dedup import _dedup_valkey_fallback_total
+
+        client = MagicMock(spec=ValkeyClient)
+        client.exists = AsyncMock(side_effect=ConnectionError("valkey down"))
+        prefix = "test:dedup:fallback_counter_test"
+        mixin = _make_mixin(client=client, prefix=prefix)  # type: ignore[arg-type]
+
+        before = _dedup_valkey_fallback_total.labels(consumer_prefix=prefix)._value.get()
+        await mixin.is_duplicate("evt-fallback")
+        after = _dedup_valkey_fallback_total.labels(consumer_prefix=prefix)._value.get()
+
+        assert after - before == 1.0, "fallback counter must be incremented exactly once on ConnectionError"
+
+    async def test_mark_processed_failure_increments_failed_counter(self) -> None:
+        """F-T004: Valkey error in mark_processed() increments messaging_dedup_mark_failed_total."""
+        from messaging.kafka.consumer.dedup import _dedup_mark_failed_total
+
+        client = MagicMock(spec=ValkeyClient)
+        client.set = AsyncMock(side_effect=OSError("connection reset"))
+        prefix = "test:dedup:mark_failed_counter_test"
+        mixin = _make_mixin(client=client, prefix=prefix)  # type: ignore[arg-type]
+
+        before = _dedup_mark_failed_total.labels(consumer_prefix=prefix)._value.get()
+        await mixin.mark_processed("evt-mark-fail")
+        after = _dedup_mark_failed_total.labels(consumer_prefix=prefix)._value.get()
+
+        assert after - before == 1.0, "mark_failed counter must be incremented exactly once on OSError"
+
+
 class TestEdgeCases:
     async def test_concurrent_is_duplicate_returns_consistent_result(self) -> None:
         """Multiple concurrent is_duplicate calls on the same key must all agree."""
