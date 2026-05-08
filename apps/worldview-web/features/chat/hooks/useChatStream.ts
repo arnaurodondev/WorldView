@@ -196,6 +196,12 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     setStreaming(null);
     setChatError(null);
     setLocalMessages([]);
+    // WHY clear activeTools here: if a tool-use stream was in progress when
+    // the user switched threads, the tool spinners would remain frozen in the
+    // UI for the new thread until its own stream started. Clearing them in
+    // resetForThread ensures the new thread always starts with a clean tool
+    // indicator state, matching the post-stream/post-cancel invariant.
+    setActiveTools([]);
   }, []);
 
   /**
@@ -445,16 +451,30 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                 // WHY validate before accepting: the data is from an SSE frame
                 // over a server-controlled stream. A compromised S8 backend could
                 // inject citations with javascript: URLs that CitationList renders
-                // as <a href>. We only accept objects with valid https?:/mailto: URLs.
+                // as <a href>. We accept objects with either:
+                //   (a) a valid https?:/mailto: URL (external news/web sources), OR
+                //   (b) url=null/undefined (knowledge-graph tool results such as
+                //       get_entity_graph, search_claims, get_contradictions, etc.)
+                // WHY allow null URL: KG citations have no hyperlink to follow —
+                // they reference in-platform graph data. Previously filtering them
+                // out caused ALL KG-sourced citations to be silently dropped.
+                // URL-safety enforcement now lives in the rendering layer: the
+                // CitationList component renders KG citations as plain text (no
+                // <a> tag) when url is null/undefined.
                 if (Array.isArray(data)) {
                   pendingCitations = data.filter(
-                    (c): c is NonNullable<Message["citations"]>[number] =>
-                      typeof c === "object" &&
-                      c !== null &&
-                      typeof (c as Record<string, unknown>).url === "string" &&
-                      /^(https?:|mailto:)/i.test(
-                        (c as Record<string, unknown>).url as string,
-                      ),
+                    (c): c is NonNullable<Message["citations"]>[number] => {
+                      if (typeof c !== "object" || c === null) return false;
+                      const url = (c as Record<string, unknown>).url;
+                      // Accept citations without a URL (knowledge-graph sources).
+                      if (url === null || url === undefined) return true;
+                      // For citations that DO have a URL, enforce the safe-protocol
+                      // check to block javascript:/data: injection vectors.
+                      return (
+                        typeof url === "string" &&
+                        /^(https?:|mailto:)/i.test(url)
+                      );
+                    },
                   );
                 }
               } else if (eventName === "error") {
