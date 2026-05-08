@@ -327,14 +327,23 @@ async def test_record_success_does_not_delete_failures_zset() -> None:
 
 
 @pytest.mark.unit
-async def test_gauge_set_to_1_on_open() -> None:
-    """When breaker trips, rag_circuit_breaker_open gauge is set to 1 (T-A-2-04)."""
-    from prometheus_client import REGISTRY
+async def test_gauge_set_to_1_on_open(isolated_registry) -> None:  # type: ignore[no-untyped-def]
+    """When breaker trips, rag_circuit_breaker_open gauge is set to 1 (T-A-2-04).
+
+    isolated_registry is injected so the monkeypatch fires (preventing any newly
+    created metrics from polluting the global REGISTRY). The actual gauge
+    ``rag_circuit_breaker_open`` is a module-level singleton registered at import
+    time; we query it directly via its own ``.collect()`` method rather than
+    walking the REGISTRY (QA-008 / BP-404).
+    """
+    from rag_chat.application.metrics.prometheus import rag_circuit_breaker_open
 
     def _gauge_value(source: str) -> float:
-        for m in REGISTRY.collect():
+        # Query the singleton gauge directly — avoids REGISTRY walk and works
+        # regardless of which registry the gauge was registered with at import.
+        for m in rag_circuit_breaker_open.collect():
             for s in m.samples:
-                if s.name == "rag_circuit_breaker_open" and s.labels.get("source") == source:
+                if s.labels.get("source") == source:
                     return s.value
         return -1.0
 
@@ -349,14 +358,23 @@ async def test_gauge_set_to_1_on_open() -> None:
 
 
 @pytest.mark.unit
-async def test_gauge_set_to_0_on_recovery() -> None:
-    """After record_success(), rag_circuit_breaker_open gauge is set to 0 (T-A-2-04)."""
-    from prometheus_client import REGISTRY
+async def test_gauge_set_to_0_on_recovery(isolated_registry) -> None:  # type: ignore[no-untyped-def]
+    """After record_success(), rag_circuit_breaker_open gauge is set to 0 (T-A-2-04).
+
+    isolated_registry is injected so the monkeypatch fires (preventing any newly
+    created metrics from polluting the global REGISTRY). The actual gauge
+    ``rag_circuit_breaker_open`` is a module-level singleton registered at import
+    time; we query it directly via its own ``.collect()`` method rather than
+    walking the REGISTRY (QA-008 / BP-404).
+    """
+    from rag_chat.application.metrics.prometheus import rag_circuit_breaker_open
 
     def _gauge_value(source: str) -> float:
-        for m in REGISTRY.collect():
+        # Query the singleton gauge directly — avoids REGISTRY walk and works
+        # regardless of which registry the gauge was registered with at import.
+        for m in rag_circuit_breaker_open.collect():
             for s in m.samples:
-                if s.name == "rag_circuit_breaker_open" and s.labels.get("source") == source:
+                if s.labels.get("source") == source:
                     return s.value
         return -1.0
 
