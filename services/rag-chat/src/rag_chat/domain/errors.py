@@ -116,3 +116,16 @@ class LLMJudgeTimeoutError(DomainError):
     """
 
     error_code = "LLM_JUDGE_TIMEOUT"
+
+
+class BriefNotFoundError(DomainError):
+    """Brief not found, or does not belong to the requesting user (PLAN-0066 Wave C).
+
+    Raised by BriefFeedbackUseCase when the caller attempts to post feedback to a
+    brief that either does not exist or belongs to a different user. The API layer
+    converts this to HTTP 404 to prevent IDOR (Insecure Direct Object Reference)
+    leakage — callers must not be told whether the brief exists but is owned by
+    someone else, or simply does not exist at all.
+    """
+
+    error_code = "BRIEF_NOT_FOUND"
