@@ -27,6 +27,44 @@ from rag_chat.domain.brief import BriefBullet, BriefCitation, BriefSection
 __all__ = ["BriefBullet", "BriefCitation", "BriefSection"]
 
 
+def _normalize_legacy_citation_keys(section: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite legacy ``source_id`` citation keys to canonical ``document_id``.
+
+    WHY this helper exists (QA-PLAN-0083 F-001 / Data Platform): when the
+    response model is rehydrated from a Valkey cache blob via
+    ``model_validate_json``, sections come through as plain dicts and the
+    ``BriefCitation.from_dict`` legacy-alias handling is bypassed (we never
+    invoke ``from_dict`` on the cache-read path). If a cached blob still
+    contains ``source_id`` keys (theoretically possible during a long
+    rolling deploy from pre-PLAN-0062-W4 code), they would leak through to
+    the wire response. This walker converts ``source_id → document_id`` on
+    every citation so the API response contract is uniform regardless of
+    cache vintage.
+
+    Behaviour: if BOTH ``document_id`` and ``source_id`` are present, the
+    canonical ``document_id`` wins (matching ``BriefCitation.from_dict``);
+    the legacy key is dropped from the output dict.
+    """
+    bullets = section.get("bullets")
+    if not isinstance(bullets, list):
+        return section
+    for bullet in bullets:
+        if not isinstance(bullet, dict):
+            continue
+        cits = bullet.get("citations")
+        if not isinstance(cits, list):
+            continue
+        for cit in cits:
+            if not isinstance(cit, dict):
+                continue
+            if "source_id" in cit:
+                # Canonical key wins if both are present; otherwise promote.
+                if "document_id" not in cit:
+                    cit["document_id"] = cit["source_id"]
+                del cit["source_id"]
+    return section
+
+
 def _coerce_sections_to_dicts(value: Any) -> list[dict[str, Any]]:
     """Normalise ``sections`` input to ``list[dict]`` for JSON serialisation.
 
@@ -35,6 +73,11 @@ def _coerce_sections_to_dicts(value: Any) -> list[dict[str, Any]]:
     ``list[dict]`` so JSON round-trip via ``model_dump_json`` / ``model_validate_json``
     keeps working. This validator accepts EITHER dataclass instances or plain
     dicts (cache reads come back as dicts after JSON parse) and emits dicts.
+
+    Legacy alias normalisation: dict-shaped entries pass through
+    ``_normalize_legacy_citation_keys`` so any cached blob that still carries
+    ``source_id`` (pre-PLAN-0062-W4 vintage) is rewritten to ``document_id``
+    before reaching the wire (QA-PLAN-0083 F-001 / Data Platform).
     """
     if value is None:
         return []
@@ -45,8 +88,9 @@ def _coerce_sections_to_dicts(value: Any) -> list[dict[str, Any]]:
             # PLAN-0083 §3 Pattern 1 (preferred over arbitrary_types_allowed).
             out.append(item.to_dict())
         elif isinstance(item, dict):
-            # Already a dict (e.g. legacy parser output, cache read) — keep as-is.
-            out.append(item)
+            # Already a dict (e.g. legacy parser output, cache read) — normalise
+            # citation keys before passing through.
+            out.append(_normalize_legacy_citation_keys(item))
         else:
             raise TypeError(f"sections entries must be BriefSection or dict, got {type(item).__name__}")
     return out
