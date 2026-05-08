@@ -1146,6 +1146,249 @@ def test_migration_0011_alias_norm_stage2_index_exists(conn: sa.engine.Connectio
     assert "is_active" in row
 
 
+# ── PLAN-0074 Wave A: intelligence layer DDL migrations 0031-0036 ──────────────
+
+
+def test_entity_narrative_versions_table_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0031 creates entity_narrative_versions with all required columns."""
+    result = conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'entity_narrative_versions' ORDER BY ordinal_position"
+        )
+    )
+    columns = {row[0] for row in result}
+    required = {
+        "version_id",
+        "entity_id",
+        "tenant_id",
+        "narrative_text",
+        "model_id",
+        "generation_reason",
+        "input_snapshot",
+        "generated_at",
+        "is_current",
+        "word_count",
+        "quality_score",
+    }
+    missing = required - columns
+    assert not missing, f"entity_narrative_versions missing columns: {missing}"
+
+
+def test_entity_narrative_versions_partial_unique_index(conn: sa.engine.Connection) -> None:
+    """Migration 0031 creates partial UNIQUE index uq_entity_narrative_current."""
+    result = conn.execute(text("SELECT indexdef FROM pg_indexes WHERE indexname = 'uq_entity_narrative_current'"))
+    row = result.scalar_one_or_none()
+    assert row is not None, "uq_entity_narrative_current index missing"
+    assert "is_current" in row, f"Partial predicate missing from index definition: {row}"
+
+
+def test_canonical_entities_narrative_pointer_columns(conn: sa.engine.Connection) -> None:
+    """Migration 0031 adds current_narrative_version_id and health_score to canonical_entities."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, is_nullable FROM information_schema.columns "
+            "WHERE table_name = 'canonical_entities' "
+            "  AND column_name IN ('current_narrative_version_id', 'health_score') "
+            "ORDER BY column_name"
+        )
+    )
+    rows = {row[0]: row[1] for row in result}
+    assert "current_narrative_version_id" in rows, "current_narrative_version_id missing from canonical_entities"
+    assert rows["current_narrative_version_id"] == "YES", "current_narrative_version_id must be nullable"
+    assert "health_score" in rows, "health_score missing from canonical_entities"
+    assert rows["health_score"] == "YES", "health_score must be nullable"
+
+
+def test_path_insight_jobs_table_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0032 creates path_insight_jobs with required columns."""
+    result = conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'path_insight_jobs' ORDER BY ordinal_position"
+        )
+    )
+    columns = {row[0] for row in result}
+    required = {
+        "job_id",
+        "entity_id",
+        "tenant_id",
+        "status",
+        "claimed_by",
+        "claimed_at",
+        "completed_at",
+        "paths_found",
+        "error_text",
+        "retry_count",
+    }
+    missing = required - columns
+    assert not missing, f"path_insight_jobs missing columns: {missing}"
+
+
+def test_path_insight_jobs_unique_active_index(conn: sa.engine.Connection) -> None:
+    """Migration 0032 creates partial UNIQUE index preventing 2 active jobs per entity."""
+    result = conn.execute(text("SELECT indexdef FROM pg_indexes WHERE indexname = 'uq_path_insight_jobs_active'"))
+    row = result.scalar_one_or_none()
+    assert row is not None, "uq_path_insight_jobs_active index missing"
+    assert "entity_id" in row, f"entity_id missing from index: {row}"
+    assert "pending" in row or "running" in row, f"Partial predicate missing from index: {row}"
+
+
+def test_path_insights_table_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0032 creates path_insights with all required columns."""
+    result = conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'path_insights' ORDER BY ordinal_position"
+        )
+    )
+    columns = {row[0] for row in result}
+    required = {
+        "insight_id",
+        "anchor_entity_id",
+        "tenant_id",
+        "path_nodes",
+        "path_edges",
+        "hop_count",
+        "harmonic_score",
+        "diversity_score",
+        "surprise_score",
+        "template_match",
+        "composite_score",
+        "llm_explanation",
+        "explanation_model",
+        "computed_at",
+        "explanation_at",
+    }
+    missing = required - columns
+    assert not missing, f"path_insights missing columns: {missing}"
+
+
+def test_relations_contra_active_index_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0033 creates idx_relations_contra_active partial index."""
+    result = conn.execute(text("SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_relations_contra_active'"))
+    row = result.scalar_one_or_none()
+    assert row is not None, "idx_relations_contra_active index missing"
+    assert "strongest_contra_score" in row or "contra" in row.lower(), f"Partial predicate missing from index: {row}"
+
+
+def test_relations_active_period_index_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0033 creates idx_relations_active_period partial index."""
+    result = conn.execute(text("SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_relations_active_period'"))
+    row = result.scalar_one_or_none()
+    assert row is not None, "idx_relations_active_period index missing"
+    assert "valid_to IS NULL" in row or "ongoing" in row.lower(), f"Partial predicate missing: {row}"
+
+
+def test_relations_period_type_check_constraint(conn: sa.engine.Connection) -> None:
+    """Migration 0033 adds CHECK constraint on relation_period_type."""
+    result = conn.execute(
+        text(
+            "SELECT conname FROM pg_constraint "
+            "WHERE conrelid = 'relations'::regclass AND conname = 'chk_relation_period_type'"
+        )
+    )
+    assert result.fetchone() is not None, "chk_relation_period_type constraint missing from relations"
+
+
+def test_relation_summaries_hnsw_index_has_correct_predicate(conn: sa.engine.Connection) -> None:
+    """Migration 0034 ensures idx_relation_summary_emb_hnsw has correct partial predicate."""
+    result = conn.execute(text("SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_relation_summary_emb_hnsw'"))
+    row = result.scalar_one_or_none()
+    assert row is not None, "idx_relation_summary_emb_hnsw index missing"
+    assert "is_current" in row, f"is_current condition missing from index: {row}"
+    assert "summary_embedding IS NOT NULL" in row, f"NOT NULL condition missing from index: {row}"
+
+
+def test_relation_evidence_raw_source_columns_exist(conn: sa.engine.Connection) -> None:
+    """Migration 0035 adds source_name and source_type to relation_evidence_raw."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, is_nullable FROM information_schema.columns "
+            "WHERE table_name = 'relation_evidence_raw' "
+            "  AND column_name IN ('source_name', 'source_type') "
+            "ORDER BY column_name"
+        )
+    )
+    rows = {row[0]: row[1] for row in result}
+    assert "source_name" in rows, "source_name column missing from relation_evidence_raw"
+    assert rows["source_name"] == "YES", "source_name must be nullable"
+    assert "source_type" in rows, "source_type column missing from relation_evidence_raw"
+    assert rows["source_type"] == "YES", "source_type must be nullable"
+
+
+def test_relation_evidence_source_diversity_index_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0035 creates idx_relation_evidence_source_diversity partial index."""
+    result = conn.execute(
+        text("SELECT indexdef FROM pg_indexes " "WHERE indexname = 'idx_relation_evidence_source_diversity'")
+    )
+    row = result.scalar_one_or_none()
+    assert row is not None, "idx_relation_evidence_source_diversity index missing"
+    assert "processed" in row, f"processed partial predicate missing from index: {row}"
+
+
+def test_path_templates_table_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0036 creates path_templates table with all required columns."""
+    result = conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'path_templates' ORDER BY ordinal_position"
+        )
+    )
+    columns = {row[0] for row in result}
+    required = {
+        "template_id",
+        "template_name",
+        "entity_type_sequence",
+        "relation_type_sequence",
+        "description",
+        "enabled",
+        "created_at",
+    }
+    missing = required - columns
+    assert not missing, f"path_templates missing columns: {missing}"
+
+
+def test_path_templates_seeded(conn: sa.engine.Connection) -> None:
+    """Migration 0036 seeds 3 enabled templates."""
+    result = conn.execute(text("SELECT COUNT(*) FROM path_templates WHERE enabled = TRUE"))
+    count = result.scalar()
+    assert count >= 3, f"Expected >= 3 enabled path_templates, got {count}"
+
+
+def test_path_templates_seed_names(conn: sa.engine.Connection) -> None:
+    """Migration 0036 seeds the 3 expected template names."""
+    result = conn.execute(
+        text(
+            "SELECT template_name FROM path_templates "
+            "WHERE template_name IN ('supply_chain_3hop', 'financial_holding_chain', 'sector_supply_chain') "
+            "ORDER BY template_name"
+        )
+    )
+    names = {row[0] for row in result}
+    assert names == {
+        "supply_chain_3hop",
+        "financial_holding_chain",
+        "sector_supply_chain",
+    }, f"Unexpected seed template names: {names}"
+
+
+def test_path_templates_sequences_are_jsonb_arrays(conn: sa.engine.Connection) -> None:
+    """Migration 0036 seed rows have entity_type_sequence and relation_type_sequence as JSON arrays."""
+    result = conn.execute(
+        text(
+            "SELECT template_name, jsonb_typeof(entity_type_sequence), jsonb_typeof(relation_type_sequence) "
+            "FROM path_templates"
+        )
+    )
+    for name, ets_type, rts_type in result:
+        assert ets_type == "array", f"{name}.entity_type_sequence is not a JSON array (got {ets_type})"
+        assert rts_type == "array", f"{name}.relation_type_sequence is not a JSON array (got {rts_type})"
+
+
+# ── Original test (must stay last) ───────────────────────────────────────────
+
+
 def test_seed_canonicals_downgrade_purges_f_crit_10(conn: sa.engine.Connection) -> None:
     """F-MINOR-04 follow-up: verify the migration 0009 downgrade SQL
     (DELETE WHERE metadata->>'seed_source' = 'F-CRIT-10') actually purges
