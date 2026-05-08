@@ -264,6 +264,12 @@ class PublicBriefingResponse(BaseModel):
     BriefingResponse. Both default to safe values for backward compatibility.
     """
 
+    # PLAN-0066 Wave F: expose the DB id of the persisted brief so the frontend
+    # can use it in feedback and alert-prefill POST requests. Optional because
+    # cached responses generated before the archive write-path was wired (Wave A)
+    # won't have this field. The frontend guards on ``brief_id is not None`` before
+    # rendering feedback widgets.
+    id: str | None = None
     narrative: str
     risk_summary: dict[str, Any] = {}
     citations: list[dict[str, Any]] = []

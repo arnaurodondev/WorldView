@@ -1382,6 +1382,10 @@ export interface BriefBullet {
 
 /** Response from GET /api/v1/briefings/* — matches S8 PublicBriefingResponse */
 export interface BriefingResponse {
+  // PLAN-0066 Wave F: the DB id of the persisted brief (UUID string).
+  // Optional because older cached responses and non-archived briefs won't have it.
+  // Used by BulletFeedback, BriefRating, and BriefEntityPill to POST with brief_id.
+  id?: string | null;
   // WHY narrative (not content): S8's PublicBriefingResponse schema uses the field
   // name "narrative" — the internal BriefingResponse model uses "narrative" as well.
   // The route handler maps execute_public_morning()'s "content" key → "narrative"
@@ -1447,6 +1451,65 @@ export interface BriefSection {
   // W4+ responses: array of BriefBullet objects (each with ≥1 citation).
   // Pre-W4 cached responses: NOT served (v2 cache key forces regeneration).
   bullets: BriefBullet[];
+}
+
+// ── Brief History + Diff (PLAN-0066 Wave F) ───────────────────────────────
+
+/**
+ * BriefHistoryItem — a lightweight summary of one past morning brief.
+ * Returned by GET /api/v1/briefings/morning/history.
+ *
+ * WHY no sections/bullets: history list shows headline + lead only.
+ * Full structured content is fetched per-brief when the user requests it.
+ */
+export interface BriefHistoryItem {
+  id: string;
+  generated_at: string;
+  headline: string;
+  lead: string | null;
+  confidence: number;
+}
+
+/**
+ * BriefDiffBullet — one bullet that appeared or disappeared between briefs.
+ * citations is `unknown[]` because the backend's DiffBullet dataclass uses
+ * a raw `list[dict]` — the frontend only needs the `text` field for display.
+ */
+export interface BriefDiffBullet {
+  section_title: string;
+  text: string;
+  citations: unknown[];
+}
+
+/**
+ * BriefDiffResponse — result of GET /api/v1/briefings/morning/diff.
+ *
+ * status:
+ *   "diff_available"    — two briefs found; new_bullets/removed_bullets populated
+ *   "no_diff_available" — fewer than 2 briefs; nothing to compare
+ *
+ * WHY delta_summary as human-readable string: the backend already formats it
+ * (e.g. "3 new bullets, 1 removed since 2026-05-07") — the frontend just renders it.
+ */
+export interface BriefDiffResponse {
+  status: "diff_available" | "no_diff_available";
+  today_generated_at: string | null;
+  yesterday_generated_at: string | null;
+  new_bullets: BriefDiffBullet[];
+  removed_bullets: BriefDiffBullet[];
+  changed_sections: string[];
+  delta_summary: string;
+}
+
+/**
+ * BriefAlertPrefillResponse — result of POST /api/v1/briefings/{id}/create-alert.
+ * Contains pre-filled fields for opening the alert creation drawer from a brief bullet.
+ */
+export interface BriefAlertPrefillResponse {
+  entity_id: string | null;
+  entity_name: string | null;
+  suggested_alert_type: string;
+  context_snippet: string;
 }
 
 // ── Market Heatmap ────────────────────────────────────────────────────────

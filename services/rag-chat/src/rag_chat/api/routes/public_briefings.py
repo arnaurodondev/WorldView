@@ -741,3 +741,129 @@ async def discuss_brief_in_chat(
         thread_id=str(thread.thread_id),
         seeded_with_brief_id=str(brief.id),
     )
+
+
+# ── PLAN-0066 Wave F: alert pre-fill endpoint ─────────────────────────────────
+
+
+class CreateAlertPrefillRequest(BaseModel):
+    """Request body for POST /api/v1/briefings/{brief_id}/create-alert.
+
+    WHY section_idx + bullet_idx (not bullet_id): BriefBullet objects do not have
+    stable IDs — they are position-keyed within sections_json. This matches the
+    same convention used by POST /api/v1/briefings/feedback/bullet (Wave C).
+
+    WHY entity_id optional: the frontend may already know the entity_id from the
+    BriefCitation, or may pass None and let the backend extract it from the citation
+    embedded in the bullet's sections_json.
+    """
+
+    section_idx: int = Field(ge=0, description="0-based section index in sections_json")
+    bullet_idx: int = Field(ge=0, description="0-based bullet index within the section")
+    entity_id: str | None = None
+
+
+class CreateAlertPrefillResponse(BaseModel):
+    """Response for POST /api/v1/briefings/{brief_id}/create-alert.
+
+    Provides pre-filled context for opening the AlertCreateDrawer on the frontend.
+
+    WHY context_snippet (not full bullet text): 200 characters is enough to show
+    the trader which bullet triggered the alert creation, without sending the full
+    brief over the wire again.
+
+    WHY suggested_alert_type = "NEWS": the morning brief is news-driven; the most
+    natural alert for a brief entity is a NEWS alert (notify on new articles). Future
+    waves can inspect bullet content and suggest EARNINGS or PRICE alerts contextually.
+    """
+
+    entity_id: str | None
+    entity_name: str | None
+    suggested_alert_type: str
+    context_snippet: str
+
+
+@router.post("/briefings/{brief_id}/create-alert", response_model=CreateAlertPrefillResponse)
+async def get_alert_prefill(
+    brief_id: UUID,
+    body: CreateAlertPrefillRequest,
+    request: Request,
+    archive: BriefArchiveRepositoryDep,
+) -> CreateAlertPrefillResponse:
+    """Return pre-filled alert context from a specific brief bullet.
+
+    Flow:
+      1. Fetch the brief by ID from the archive.
+      2. Verify the brief belongs to the authenticated user (IDOR guard).
+      3. Index into sections_json[section_idx].bullets[bullet_idx] to get the bullet.
+      4. Extract entity_id + entity_name from the bullet's citations if not provided.
+      5. Return pre-filled context for the AlertCreateDrawer.
+
+    WHY ReadUoWDep not needed: BriefArchiveRepositoryDep already wraps a read-only
+    session (R27). The archive.get_by_id() call is the only DB operation — no write.
+
+    WHY 404 on ownership mismatch (not 403): intentional IDOR defence — we do not
+    distinguish "not found" from "found but not yours" (see submit_bullet_feedback
+    for the same pattern and rationale).
+
+    Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025).
+    """
+    user_id_str = _extract_user_id(request)
+    user_id = _to_uuid(user_id_str)
+
+    brief = await archive.get_by_id(brief_id)
+    if brief is None or brief.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Brief not found")
+
+    # ── Extract bullet context from sections_json ─────────────────────────────
+    # sections_json is a list[dict] stored as JSONB in the DB. Each dict has the
+    # shape: {"title": str, "bullets": [{"text": str, "citations": [...]}]}.
+    # IndexError / KeyError → bad section_idx/bullet_idx → 404.
+    try:
+        section = brief.sections_json[body.section_idx]
+        bullets: list[dict] = section.get("bullets", [])
+        bullet: dict = bullets[body.bullet_idx]
+        # WHY [:200]: context_snippet is a preview — truncate to 200 chars to keep
+        # the response small and avoid sending a full paragraph as "context".
+        context_snippet: str = bullet.get("text", "")[:200]
+        citations: list[dict] = bullet.get("citations", [])
+    except (IndexError, KeyError, TypeError) as exc:
+        # WHY 404 (not 422): if section_idx/bullet_idx are out of range, the brief
+        # bullet the user referenced no longer matches what is stored — treat as
+        # "resource not found" rather than "invalid request body".
+        raise HTTPException(
+            status_code=404,
+            detail=f"Bullet at section_idx={body.section_idx}, bullet_idx={body.bullet_idx} not found in brief",
+        ) from exc
+
+    # ── Resolve entity_id + entity_name from citations if not provided ────────
+    # WHY prefer body.entity_id: the frontend may pass the entity_id it already
+    # knows from the BriefCitation object; use it directly if present.
+    # WHY fall back to citations[0]: the first citation in the bullet is the most
+    # relevant source document — its document_id is the best entity proxy available.
+    resolved_entity_id: str | None = body.entity_id
+    resolved_entity_name: str | None = None
+
+    if not resolved_entity_id and citations:
+        first_citation = citations[0]
+        resolved_entity_id = first_citation.get("document_id")
+        # WHY title as entity_name: the citation title is the article/event name,
+        # not the entity name. This is a best-effort approximation until the brief
+        # schema surfaces entity names explicitly in a future wave.
+        resolved_entity_name = first_citation.get("title")
+
+    log.info(  # type: ignore[no-any-return]
+        "alert_prefill_fetched",
+        user_id=user_id_str,
+        brief_id=str(brief_id),
+        section_idx=body.section_idx,
+        bullet_idx=body.bullet_idx,
+        entity_id=resolved_entity_id,
+    )
+
+    return CreateAlertPrefillResponse(
+        entity_id=resolved_entity_id,
+        entity_name=resolved_entity_name,
+        suggested_alert_type="NEWS",
+        context_snippet=context_snippet,
+    )

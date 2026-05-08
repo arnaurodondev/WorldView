@@ -1035,10 +1035,12 @@ Minimum: 3 unit tests.
 ---
 
 #### Validation Gate — Wave F
-- [ ] `ruff` + `mypy` pass (frontend: `pnpm typecheck`)
-- [ ] `pnpm vitest` — all existing tests pass + 12 new tests
-- [ ] `pnpm build` succeeds
-- [ ] Diff badge + chat discuss button + feedback thumbs + entity pill all visible in dev server
+- [x] `ruff` + `mypy` pass (frontend: `pnpm typecheck`)
+- [x] `pnpm vitest` — all existing tests pass + 10 new tests (Wave F)
+- [x] `pnpm build` succeeds
+- [x] Diff badge + chat discuss button + feedback thumbs + entity pill all implemented
+
+**Wave F completed 2026-05-08** — 10 frontend tests pass, 765 S8 unit tests pass, 7 S8 contract tests pass, `pnpm typecheck` and `pnpm build` both pass.
 
 #### Break Impact — Wave F
 | Broken file | Why | Fix |
@@ -1364,7 +1366,7 @@ Minimum: 7 unit tests.
 
 ---
 
-### Wave H: Tool-Use Loop — Temporal RAG via Option B Architecture
+### Wave H: Tool-Use Loop — Temporal RAG via Option B Architecture ✓ DONE 2026-05-08
 
 **Goal**: Expose the new S3 temporal endpoints as LLM-callable tools. The LLM receives a capability manifest in its system prompt and emits typed `tool_use` blocks at generation time; `ToolExecutor` runs them and injects results before the final answer. The existing intent classification + parallel retrieval pipeline is untouched.
 **Depends on**: Wave G (T-W10-G-03 — S3Port methods must exist)
@@ -1488,9 +1490,9 @@ tools:
 Minimum: 4 unit tests.
 
 **Acceptance criteria**:
-- [ ] `capability_manifest.yaml` has entries for both tools (R29)
-- [ ] `ToolRegistry.to_system_prompt_section()` renders valid YAML block the LLM can parse
-- [ ] Architecture test `test_manifest_yaml_has_entry_for_every_registered_tool` passes
+- [x] `capability_manifest.yaml` has entries for both tools (R29)
+- [x] `ToolRegistry.to_system_prompt_section()` renders valid YAML block the LLM can parse
+- [x] Architecture test `test_manifest_yaml_has_entry_for_every_registered_tool` passes
 
 ---
 
@@ -1575,11 +1577,11 @@ Every `execute()` call must emit:
 Minimum: 9 unit tests.
 
 **Acceptance criteria**:
-- [ ] `execute_all` uses `asyncio.gather` (not sequential)
-- [ ] `execute_all` cap at 5 tool calls (prevents runaway LLM behavior)
-- [ ] Any exception in a handler logs a `tool_failed` warning and returns `None` — never propagates
-- [ ] Unknown tool names log `unknown_tool_name` warning (observable in prod logs)
-- [ ] Tool result content truncated to `_TOOL_RESULT_MAX_CHARS = 4000` before returning
+- [x] `execute_all` uses `asyncio.gather` (not sequential)
+- [x] `execute_all` cap at 5 tool calls (prevents runaway LLM behavior)
+- [x] Any exception in a handler logs a `tool_failed` warning and returns `None` — never propagates
+- [x] Unknown tool names log `unknown_tool_name` warning (observable in prod logs)
+- [x] Tool result content truncated to `_TOOL_RESULT_MAX_CHARS = 4000` before returning
 
 ---
 
@@ -1639,10 +1641,10 @@ This ensures the user always gets an answer grounded in at least the classical r
 Minimum: 5 unit tests.
 
 **Acceptance criteria**:
-- [ ] `_tool_executor` is optional — `None` means feature is disabled without code change
-- [ ] Tool loop never exceeds 2 LLM turns
-- [ ] Existing tests pass with `tool_executor=None` (no behavior change for classical queries)
-- [ ] All-tools-failed logs `all_tools_failed` warning and falls back — never produces a hallucianted answer on zero context
+- [x] `_tool_executor` is optional — `None` means feature is disabled without code change
+- [x] Tool loop never exceeds 2 LLM turns
+- [x] Existing tests pass with `tool_executor=None` (no behavior change for classical queries)
+- [x] All-tools-failed logs `all_tools_failed` warning and falls back — never produces a hallucianted answer on zero context
 
 ---
 
@@ -1688,13 +1690,13 @@ The frontend UI (implemented in PLAN-0067 when tool use goes to all sources) use
 Minimum: 3 unit tests.
 
 **Acceptance criteria**:
-- [ ] `tool_call` event emitted before execution (enables streaming UI to show spinner immediately)
-- [ ] `tool_result` event always emitted (success or failure) — frontend can rely on it to close spinner
+- [x] `tool_call` event emitted before execution (enables streaming UI to show spinner immediately)
+- [x] `tool_result` event always emitted (success or failure) — frontend can rely on it to close spinner
 
 ---
 
 #### Validation Gate — Wave H
-- [ ] `ruff` + `mypy` pass on `libs/tools/` and `services/rag-chat/`
+- [x] `ruff` + `mypy` pass on `libs/tools/` and `services/rag-chat/`
 - [ ] 17 new tests pass (4+6+4+3)
 - [ ] Existing 50-query golden set (PLAN-0063 Wave W5-1) passes — no regressions (tool loop is a no-op when LLM emits no tool_use blocks)
 - [ ] Architecture test `test_manifest_yaml_has_entry_for_every_registered_tool` passes

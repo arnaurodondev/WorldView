@@ -56,6 +56,11 @@ import remarkGfm from "remark-gfm";
 // needs to decide WHEN to show the structured view (sections non-empty) vs the
 // markdown fallback (sections empty or absent).
 import { StructuredBrief } from "@/components/brief/StructuredBrief";
+// PLAN-0066 Wave F: diff badge (amber pill), "Discuss in Chat" button (hook),
+// and brief-level rating widget all added to the card.
+import { BriefDiffBadge } from "@/features/dashboard/components/BriefDiffBadge";
+import { BriefRating } from "@/features/dashboard/components/BriefRating";
+import { useBriefChatSeed } from "@/features/dashboard/hooks/useBriefChatSeed";
 
 // QA-iter1: hoist remark plugins to module scope. Inline `[remarkGfm]`
 // passed as a prop creates a NEW array reference on every render, which
@@ -129,6 +134,9 @@ const CHIP_TITLE_MAX = 60;
 export function MorningBriefCard() {
   const { accessToken } = useAuth();
   const [expanded, setExpanded] = useState(false);
+  // PLAN-0066 Wave F T-W10-F-02: "Discuss in Chat" button hook.
+  // The hook returns a `discuss` callback + loading/error state.
+  const { discuss, loading: discussLoading, error: discussError } = useBriefChatSeed(accessToken ?? undefined);
 
   // WHY useQuery: TanStack Query handles caching, refetching, error retries,
   // and deduplication automatically. The queryKey ensures the cache is keyed
@@ -314,8 +322,32 @@ export function MorningBriefCard() {
           Morning Briefing
         </span>
 
-        {/* Right side: stale badge + refresh + Read more / show less */}
-        <div className="flex w-[100px] shrink-0 items-center justify-end gap-1">
+        {/* Right side: diff badge + discuss button + stale badge + refresh + Read more / show less */}
+        {/* WHY diff badge in header: at-a-glance freshness signal without expanding */}
+        {/* WHY discuss button in header: always visible; doesn't require expanding the brief */}
+        <div className="flex w-[200px] shrink-0 items-center justify-end gap-1">
+          {/* PLAN-0066 Wave F T-W10-F-01: diff badge — amber pill showing new bullets */}
+          {/* WHY brief.id ?? generated_at as briefId: prefer the DB id (PLAN-0066 Wave A
+              adds it to PublicBriefingResponse). Fall back to generated_at so the diff
+              cache is still invalidated when a new brief is generated (new timestamp),
+              even for cached responses that don't yet carry the id field. */}
+          <BriefDiffBadge
+            token={accessToken ?? undefined}
+            briefId={brief.id ?? brief.generated_at}
+          />
+
+          {/* PLAN-0066 Wave F T-W10-F-02: "Discuss in Chat" button */}
+          {/* WHY only when not loading: avoids showing "Discuss" during the POST */}
+          <button
+            onClick={() => void discuss()}
+            disabled={discussLoading}
+            title={discussError ?? "Open a chat thread seeded with this brief"}
+            aria-label="Discuss this brief in chat"
+            className="text-[9px] text-primary hover:text-primary/80 disabled:text-[hsl(var(--disabled-foreground))] transition-colors whitespace-nowrap"
+          >
+            {discussLoading ? "Opening…" : "Discuss"}
+          </button>
+
           {isStale && (
             <>
               <span className="text-[9px] text-warning">stale</span>
@@ -414,11 +446,15 @@ export function MorningBriefCard() {
             // section — satisfying the PLAN-0049 T-D-4-06 E2E assertion that
             // "EITHER ≥1 brief-section OR a brief-narrative is rendered after
             // expansion". The marker set is a superset of the old inline markers.
+            // PLAN-0066 Wave F T-W10-F-03: briefId + token for BulletFeedback.
+            // briefId is optional — null/undefined suppresses feedback widgets.
             <StructuredBrief
               lead={brief.lead}
               sections={brief.sections}
               confidence={brief.confidence}
               variant="full"
+              briefId={brief.id ?? undefined}
+              token={accessToken ?? undefined}
             />
           ) : (
             // ── Expanded view (fallback): brief.narrative as raw markdown ──
@@ -447,6 +483,17 @@ export function MorningBriefCard() {
               the user can jump to the underlying article without expanding
               the brief first. Hidden when there are no article citations to
               avoid an empty row of chrome. */}
+          {/* PLAN-0066 Wave F T-W10-F-03: BriefRating — 5-star rating shown in expanded view.
+              WHY only when expanded: the rating widget is a post-read action (the trader
+              rates AFTER reading the full brief). Showing it in the collapsed view would
+              prompt rating without context. WHY brief.id guard: feedback requires the DB id
+              to POST to /api/v1/briefings/feedback/brief. Without it, BriefRating is hidden. */}
+          {expanded && brief.id && (
+            <div className="mt-2 border-t border-border/40 pt-2">
+              <BriefRating token={accessToken ?? undefined} briefId={brief.id} />
+            </div>
+          )}
+
           {topStories.length > 0 && (
             <div
               className="mt-1.5 flex flex-wrap gap-1 border-t border-border/40 pt-1.5"
