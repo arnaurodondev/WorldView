@@ -292,3 +292,6 @@ class CanonicalEntity:
     description: str | None = None
     data_completeness: float | None = None
     enriched_at: datetime | None = None
+    # Added by migration 0031 (Wave A — NarrativeGenerationWorker health score).
+    # Optional for backward-compat with rows created before the migration ran.
+    health_score: float | None = None

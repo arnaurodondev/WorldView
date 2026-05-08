@@ -94,7 +94,8 @@ WHERE entity_id = ANY(:ids)
         result = await self._session.execute(
             text("""
 SELECT entity_id, canonical_name, entity_type, ticker, isin, exchange,
-       metadata, enrichment_attempts, description, data_completeness, enriched_at
+       metadata, enrichment_attempts, description, data_completeness, enriched_at,
+       health_score
 FROM canonical_entities
 WHERE entity_id = :entity_id
 """),
@@ -115,6 +116,7 @@ WHERE entity_id = :entity_id
             description=row[8],
             data_completeness=float(row[9]) if row[9] is not None else None,
             enriched_at=row[10],
+            health_score=float(row[11]) if row[11] is not None else None,
         )
 
     async def find_by_name_and_type(self, canonical_name: str, entity_type: str) -> UUID | None:
