@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     eodhd_api_key: SecretStr = SecretStr("")
     eodhd_base_url: str = "https://eodhd.com"
 
+    # PLAN-0066 Wave G: maximum date range (in days) for GET /api/v1/ohlcv/bars.
+    # Callers requesting more than this span receive HTTP 422.
+    # Env var: MARKET_DATA_OHLCV_MAX_DAYS (or S3_OHLCV_MAX_DAYS is not supported —
+    # this service uses the MARKET_DATA_ prefix from env_prefix).
+    ohlcv_max_days: int = 365
+
     # Intraday resampling source timeframe (BP-254 — must be config-driven, not hardcoded).
     # Valid values: "1m", "5m", "15m", "1h". Changing this migrates the entire
     # ResampledOHLCVUseCase + IntradayResamplingConsumer pipeline to the new finest

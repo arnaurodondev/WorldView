@@ -7,7 +7,7 @@ callers must never receive an exception from these interfaces (R9 safe degradati
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
@@ -238,6 +238,38 @@ class S3Port(Protocol):
 
     async def find_instrument_by_ticker(self, ticker: str) -> UUID | None:
         """Resolve a ticker symbol to its canonical instrument UUID."""
+        ...
+
+    async def get_ohlcv_range(
+        self,
+        *,
+        from_date: date,
+        to_date: date,
+        interval: str = "day",
+        instrument_id: str | None = None,
+        ticker: str | None = None,
+        isin: str | None = None,
+    ) -> list[dict]:
+        """Return OHLCV bars for a date range via GET /api/v1/ohlcv/bars.
+
+        Returns ``[]`` on any HTTP or network error (R9 safe degradation).
+        At least one of instrument_id, ticker, or isin should be provided.
+        """
+        ...
+
+    async def get_fundamentals_history(
+        self,
+        *,
+        periods: int = 8,
+        instrument_id: str | None = None,
+        ticker: str | None = None,
+        isin: str | None = None,
+    ) -> list[dict]:
+        """Return quarterly earnings-based fundamentals via GET /api/v1/fundamentals/history.
+
+        Returns ``[]`` on any HTTP or network error (R9 safe degradation).
+        At least one of instrument_id, ticker, or isin should be provided.
+        """
         ...
 
 

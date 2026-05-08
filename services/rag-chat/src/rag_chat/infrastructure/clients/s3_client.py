@@ -6,11 +6,13 @@ Endpoints:
   GET  /api/v1/quotes/{id}                   -> latest price quote
   GET  /api/v1/instruments/symbol/{ticker}   -> ticker -> instrument UUID
   POST /api/v1/quotes/batch                  -> batch price quotes
+  GET  /api/v1/ohlcv/bars                    -> OHLCV bars (PLAN-0066 Wave G)
+  GET  /api/v1/fundamentals/history          -> quarterly history (PLAN-0066 Wave G)
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 from rag_chat.application.models.briefing_context import QuoteSummary
@@ -74,6 +76,73 @@ class S3Client(BaseUpstreamClient):
             return _UUID(str(instrument_id))
         except (ValueError, AttributeError):
             return None
+
+    async def get_ohlcv_range(
+        self,
+        *,
+        from_date: date,
+        to_date: date,
+        interval: str = "day",
+        instrument_id: str | None = None,
+        ticker: str | None = None,
+        isin: str | None = None,
+    ) -> list[dict]:
+        """GET /api/v1/ohlcv/bars → list of OHLCV bar dicts (PLAN-0066 Wave G).
+
+        WHY: The temporal RAG pipeline needs OHLCV bars for context enrichment
+        (price trend, support/resistance levels) alongside news retrieval.
+        Safe degradation: returns [] on any HTTP or network error (R9).
+
+        Identifier priority: instrument_id > isin > ticker (mirrors S3 lookup).
+        """
+        # Build query params — S3 /ohlcv/bars uses "symbol" for ticker
+        params: dict[str, str] = {
+            "from_date": str(from_date),
+            "to_date": str(to_date),
+            "interval": interval,
+        }
+        if instrument_id:
+            params["instrument_id"] = instrument_id
+        elif isin:
+            params["isin"] = isin
+        elif ticker:
+            params["symbol"] = ticker
+
+        result = await self._get("/api/v1/ohlcv/bars", params=params)
+        if isinstance(result, dict):
+            bars = result.get("bars", [])
+            return bars if isinstance(bars, list) else []
+        return []
+
+    async def get_fundamentals_history(
+        self,
+        *,
+        periods: int = 8,
+        instrument_id: str | None = None,
+        ticker: str | None = None,
+        isin: str | None = None,
+    ) -> list[dict]:
+        """GET /api/v1/fundamentals/history → list of period dicts (PLAN-0066 Wave G).
+
+        WHY: The temporal RAG pipeline needs quarterly earnings/revenue trends
+        for instrument context (growth trajectory, EPS beats/misses).
+        Safe degradation: returns [] on any HTTP or network error (R9).
+
+        Identifier priority: instrument_id > isin > ticker.
+        """
+        params: dict[str, str] = {"periods": str(periods)}
+        if instrument_id:
+            params["instrument_id"] = instrument_id
+        elif isin:
+            params["isin"] = isin
+        elif ticker:
+            params["symbol"] = ticker
+
+        result = await self._get("/api/v1/fundamentals/history", params=params)
+        if isinstance(result, dict):
+            periods_data = result.get("periods", [])
+            return periods_data if isinstance(periods_data, list) else []
+        return []
 
     async def get_batch_quotes(self, instrument_ids: list[str]) -> dict[str, QuoteSummary]:
         """POST /api/v1/quotes/batch -> dict of instrument_id -> QuoteSummary.

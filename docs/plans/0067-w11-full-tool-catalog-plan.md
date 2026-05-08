@@ -152,7 +152,7 @@ Read 2026-05-03.
 | `ToolCallIndicator` | component | worldview-web | does not exist | spinner + tool label, consumed from SSE `tool_call` events | new |
 | `useChatStream` | hook | worldview-web | no `tool_call`/`tool_result` event handling | consume new SSE events, expose `activeTools: string[]` state | modify |
 
-**No DB migrations, Kafka topics, or Avro schema changes** — this plan is pure application-layer + frontend.
+**No Kafka topics or Avro schema changes.** One DB migration: `0009_extend_llm_usage_log_tool_tracking.py` (4 nullable columns — see §0 I-2 and T-W11-3-02). This plan is otherwise pure application-layer + frontend.
 
 ---
 

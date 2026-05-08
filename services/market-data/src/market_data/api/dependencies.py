@@ -11,6 +11,8 @@ from market_data.application.ports.uow import ReadOnlyUnitOfWork, UnitOfWork
 
 if TYPE_CHECKING:
     from market_data.application.ports.cache import QuoteCachePort, ScreenFieldsCachePort
+    from market_data.application.use_cases.get_fundamentals_history import GetFundamentalsHistoryUseCase
+    from market_data.application.use_cases.get_ohlcv_bars_flexible import GetOHLCVBarsFlexibleUseCase
     from market_data.application.use_cases.get_period_movers import GetPeriodMoversUseCase
     from market_data.application.use_cases.get_sector_returns import GetSectorReturnsUseCase
     from market_data.application.use_cases.lookup_instrument import InstrumentLookupUseCase
@@ -200,6 +202,21 @@ def get_ohlcv_range_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetOH
     from market_data.application.use_cases.query_ohlcv import GetOHLCVRangeUseCase
 
     return GetOHLCVRangeUseCase(uow)
+
+
+# ── PLAN-0066 Wave G: temporal endpoint deps ──────────────────────────────────
+
+
+def get_ohlcv_bars_flexible_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetOHLCVBarsFlexibleUseCase:
+    from market_data.application.use_cases.get_ohlcv_bars_flexible import GetOHLCVBarsFlexibleUseCase
+
+    return GetOHLCVBarsFlexibleUseCase(uow)
+
+
+def get_fundamentals_history_uc(uow: ReadOnlyUnitOfWork = Depends(get_read_uow)) -> GetFundamentalsHistoryUseCase:
+    from market_data.application.use_cases.get_fundamentals_history import GetFundamentalsHistoryUseCase
+
+    return GetFundamentalsHistoryUseCase(uow)
 
 
 # ── Fundamentals use case deps ────────────────────────────────────────────────

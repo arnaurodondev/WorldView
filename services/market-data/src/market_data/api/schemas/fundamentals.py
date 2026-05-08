@@ -64,3 +64,34 @@ class FundamentalsSnapshotResponse(BaseModel):
     credit_rating: str | None = None
     # Timestamp of the last backfill run that produced this row
     updated_at: str | None = None
+
+
+# ── PLAN-0066 Wave G: temporal RAG endpoint schemas ────────────────────────────
+
+
+class FundamentalsHistoryPeriod(BaseModel):
+    """One reporting period in the fundamentals history response.
+
+    WHY nullable fields: not all EODHD earnings records carry income-statement
+    data (earnings_history section contains EPS/surprise; revenue/gross_profit/
+    net_income come from the income_statement section joined on period_end).
+    pe_ratio and market_cap are TTM figures from the highlights snapshot.
+    """
+
+    period: str  # human-readable label, e.g. "Q1 2026"
+    period_end_date: str  # "YYYY-MM-DD"
+    revenue: float | None = None
+    gross_profit: float | None = None
+    net_income: float | None = None
+    eps: float | None = None
+    pe_ratio: float | None = None
+    market_cap: float | None = None
+
+
+class FundamentalsHistoryResponse(BaseModel):
+    """Response for GET /api/v1/fundamentals/history (temporal RAG PLAN-0066 Wave G)."""
+
+    instrument_id: str
+    ticker: str
+    periods: list[FundamentalsHistoryPeriod]
+    period_count: int
