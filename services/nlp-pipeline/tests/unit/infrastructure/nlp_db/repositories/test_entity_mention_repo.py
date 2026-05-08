@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 from uuid import UUID
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 pytestmark = pytest.mark.unit
 
@@ -69,7 +70,10 @@ async def test_entity_mention_add_uses_on_conflict_do_nothing() -> None:
     assert len(executed) == 1
     stmt = executed[0]
     assert isinstance(stmt, PgInsert), "add() must use pg_insert (dialect-level ON CONFLICT DO NOTHING)"
-    assert stmt._post_values_clause is not None, "ON CONFLICT DO NOTHING clause must be present"
+    compiled = stmt.compile(dialect=postgresql.dialect())
+    sql_text = str(compiled)
+    assert "ON CONFLICT" in sql_text
+    assert "DO NOTHING" in sql_text
 
 
 @pytest.mark.asyncio
