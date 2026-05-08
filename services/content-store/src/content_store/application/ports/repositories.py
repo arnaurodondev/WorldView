@@ -69,10 +69,16 @@ class DedupHashRepositoryPort(ABC):
     """Port for deduplication hash lookups and insertions (Stage A + B)."""
 
     @abstractmethod
-    async def check_exists(self, hash_type: str, hash_value: str) -> UUID | None: ...
+    async def check_exists(self, hash_type: str, hash_value: str, tenant_id: UUID | None = None) -> UUID | None: ...
 
     @abstractmethod
-    async def insert_pair(self, doc_id: UUID, raw_hash: str, normalized_hash: str) -> None: ...
+    async def insert_pair(
+        self,
+        doc_id: UUID,
+        raw_hash: str,
+        normalized_hash: str,
+        tenant_id: UUID | None = None,
+    ) -> None: ...
 
 
 class MinHashRepositoryPort(ABC):

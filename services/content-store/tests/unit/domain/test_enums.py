@@ -39,7 +39,8 @@ class TestDocumentStatus:
 
 class TestSourceType:
     def test_all_sources(self) -> None:
-        expected = {"eodhd", "sec_edgar", "finnhub", "newsapi", "manual", "polymarket"}
+        # tenant_upload added in PLAN-0086 Wave A-1 for multi-tenant private content
+        expected = {"eodhd", "sec_edgar", "finnhub", "newsapi", "manual", "polymarket", "tenant_upload"}
         assert {v.value for v in SourceType} == expected
 
 
