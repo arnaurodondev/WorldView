@@ -1,9 +1,9 @@
 # PLAN-0066 — W10 Brief Intelligence + Temporal RAG
 
 > **PRD**: PRD-0034 §3 FR-T1-1 extensions + nlsql-reference NL-SQL investigation 2026-05-03
-> **Status**: draft
+> **Status**: complete
 > **Created**: 2026-05-03
-> **Last revised**: 2026-05-07 (BP-405 name verification + architecture compliance pass)
+> **Last revised**: 2026-05-08 (QA complete — all 8 waves done; R25 fix: BriefFeedbackPort + BriefFeedbackRepository extracted; 765 rag-chat unit + 656 arch PASS)
 > **Owner agent**: Staff engineer / TPM
 > **Estimated effort**: ~5 dev-days (8 waves, 28 tasks)
 > **Critical path**: Wave A → Wave B → Wave C ∥ Wave D ∥ Wave E → Wave F (frontend) → Wave G → Wave H
