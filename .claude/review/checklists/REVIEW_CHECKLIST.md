@@ -41,6 +41,11 @@
 - [ ] **All storage steps have skip-if-exists (D-008)**: if `_store_bronze` has an `exists()` guard, `_store_canonical` and any other storage steps must have the same guard — partial guards break retry idempotency (BP-048)
 - [ ] **Use case wired in `app.py` lifespan**: if a new use case updates a Prometheus metric, launches a cron, or returns a computed value, grep for at least one caller in `app.py` / `lifespan` / `_wire_*`; a use case with no caller is silently dead (BP-412)
 - [ ] **Cache has a refresh loop**: if a new class has a `refresh()` method or a startup-populated cache, search for either a `_refresh_loop()` background task or a Kafka invalidation consumer; startup-only population goes stale after first fill (BP-414)
+- [ ] **ValkeyDedupMixin — no hand-rolled is_duplicate/mark_processed**: if a `BaseKafkaConsumer` subclass overrides `is_duplicate` or `mark_processed` with direct Valkey calls, verify try/except wrapping on every Valkey call; better: migrate to `ValkeyDedupMixin` (BP-421, HR-050)
+- [ ] **Valkey cache swap uses Lua not MULTI/EXEC**: if code uses `pipeline(transaction=True)` with `pipe.delete(key)` + `pipe.sadd(key, ...)` on the same key, require a Lua script for true server-side atomicity — MULTI/EXEC can wipe the key on network drop (BP-422, HR-051)
+- [ ] **Retry loop uses exponential backoff**: any `while True` loop with `except Exception: await asyncio.sleep(CONSTANT)` must be replaced with `min(2**failures × base, ceiling)` backoff + Prometheus counter; fixed-interval loops cause log spam on sustained outages (BP-423, HR-052)
+- [ ] **ON CONFLICT assertions check compiled SQL**: test assertions for `INSERT … ON CONFLICT DO NOTHING` must check compiled SQL text for `"ON CONFLICT"` and `"DO NOTHING"` strings, not the private `_post_values_clause` attribute (QA-007, STANDARDS.md §20.7)
+- [ ] **Prometheus tests use isolated_registry fixture**: any test that asserts on Prometheus gauge/counter values must use an `isolated_registry` fixture, not the global `REGISTRY` singleton (BP-425, STANDARDS.md §20.6)
 
 ## 4b. Unit of Work / Transaction Integrity (R26)
 

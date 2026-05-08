@@ -2454,3 +2454,89 @@ Known cross-agent regression patterns to watch for:
 | Agent A renames a constant; Agent B's new code references the old name | `NameError`/`ImportError` after merge |
 | Agent A changes a `side_effect` list; Agent B adds a call expecting the old list order | `StopIteration` or `AssertionError` after merge |
 | Agent A adds a migration; Agent B adds a conflicting migration with the same version number | Alembic `MultipleHeads` error |
+
+---
+
+## 20. Testing Layer Design Rules
+
+Derived from systemic failure patterns discovered in QA passes (PLAN-0084 Wave 6, 2026-05-07).
+Each rule below is numbered TI-20.N for traceability.
+
+### 20.1: Test Marker Consistency (TI-20.1)
+All `tests/unit/**/*.py` files MUST use module-level `pytestmark = pytest.mark.unit`.
+Per-function `@pytest.mark.unit` decorators are redundant and cause unreliable test selection
+with `pytest -m unit`.
+**Enforcement**: Architecture test `test_pytest_marker_enforcement.py` scans all unit test files
+via AST and rejects per-function markers.
+
+### 20.2: Parametrized Configuration Coverage (TI-20.2)
+When a function or class accepts a finite set of valid inputs (skip-paths, retry counts, TTL
+options, enum values), tests MUST exercise all variants — not just the most common one.
+Single-case tests hide typos and drift silently.
+**Example**: JWT middleware skip-paths defines 5 paths + 3 prefixes; ALL 8 must be tested.
+
+### 20.3: Pure Function Edge-Case Testing (TI-20.3)
+Every function with conditional logic that depends on time, boundaries, or state MUST have
+parametrized unit tests covering all branches, including boundary transitions.
+**Tool**: `@pytest.mark.parametrize` with explicit (input, expected) tuples.
+**Example**: `_next_sunday_03_utc()` needs 6 boundary cases: before Sunday, same-day before
+03:00, same-day at 03:00, same-day after 03:00, week boundary, month boundary.
+
+### 20.4: Mock Provider Partial Failure Injection (TI-20.4)
+Any code that uses a Valkey pipeline or Kafka batch operation MUST have a test that injects
+a failure mid-operation (e.g. pipeline `execute()` raises after DEL is processed). Verify
+graceful degradation — no crash, no corrupted state, appropriate warning log.
+
+### 20.5: Consumer Dedup Strategy Visibility (TI-20.5)
+Every `BaseKafkaConsumer` subclass MUST explicitly declare its dedup strategy as a class-level
+comment or docstring:
+- `ValkeyDedupMixin`: inherits is_duplicate/mark_processed automatically.
+- `DbAtomicDedup`: uses `INSERT … ON CONFLICT DO NOTHING`; `is_duplicate` and `mark_processed`
+  are explicit no-ops; allowlist entry required.
+- `None`: no dedup; consumer is idempotent by another means; allowlist entry required.
+**Rationale**: Hidden dedup assumptions cause data duplication bugs when consumers are copied as
+templates.
+
+### 20.6: Prometheus Registry Isolation (TI-20.6)
+All Prometheus metric tests MUST use an `isolated_registry` fixture that monkeypatches
+`prometheus_client.REGISTRY` with a fresh `CollectorRegistry` per test. Never read from the
+global `REGISTRY` in test assertions.
+**Pattern**:
+```python
+@pytest.fixture
+def isolated_registry(monkeypatch):
+    from prometheus_client import CollectorRegistry
+    import prometheus_client
+    registry = CollectorRegistry()
+    monkeypatch.setattr(prometheus_client, "REGISTRY", registry)
+    return registry
+```
+Place this fixture in `services/<service>/tests/unit/conftest.py` for each service with metric tests.
+
+### 20.7: SQLAlchemy ON CONFLICT Verification (TI-20.7)
+All `INSERT … ON CONFLICT DO NOTHING` repository methods MUST have an integration test that:
+1. First insert: `rowcount == 1`.
+2. Duplicate insert: `rowcount == 0`.
+3. Compiled SQL text contains both `"ON CONFLICT"` and `"DO NOTHING"` (not checked via
+   private `_post_values_clause` attribute).
+**Why**: `_post_values_clause is not None` also passes for `RETURNING` clauses. The compiled
+SQL string is the authoritative check.
+
+### 20.8: Exponential Backoff and Async Timing (TI-20.8)
+All retry loops MUST have a test that mocks `asyncio.sleep`, records the actual durations
+passed to it, and asserts the exponential progression (e.g. 60, 120, 240, max 300).
+Fixed-interval retries (`asyncio.sleep(CONSTANT)`) MUST be replaced with exponential backoff
+before merging. See BP-423 for the anti-pattern.
+
+### 20.9: Documentation Enforcement (TI-20.9)
+`.claude-context.md` files MUST stay in sync with code. Each new endpoint, Kafka topic, port
+interface, or config field added to a service MUST be reflected in the context file in the
+same commit.
+**Automation** (target PLAN-0085): CI gate extracts HTTP endpoint patterns from
+`.claude-context.md` and verifies their presence in service source files via grep.
+
+### 20.10: Parameter Ambiguity Prevention (TI-20.10)
+No function or method may accept two names for the same parameter concept (e.g. both `ttl`
+and `ex` for expiry duration). Use the upstream convention (Redis-native `ex`, not custom
+`ttl`). If a legacy alias exists, deprecate it with a `warnings.warn` and remove it in the
+next major version.
