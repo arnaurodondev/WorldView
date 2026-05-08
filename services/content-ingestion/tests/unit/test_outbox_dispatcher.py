@@ -54,3 +54,56 @@ class TestContentIngestionOutboxDispatcher:
             result = dispatcher.get_serializer("content.article.raw.v1")
 
         assert result is fake_serializer
+
+    # ── PLAN-0086 Wave E-2: content.document.deleted.v1 topic registration ─────
+
+    def test_deleted_topic_registered_in_value_serializer(self) -> None:
+        """content.document.deleted.v1 must be in OutboxEventValueSerializer.
+
+        T-E-2-02: Validates that _get_value_serializer() passes the deletion
+        topic to OutboxEventValueSerializer so that dispatching a
+        content.document.deleted.v1 outbox event does not raise KeyError.
+
+        Strategy: patch _build_schema_registry_client and build_avro_serializer
+        to avoid real network I/O, capture the topic_map passed to
+        OutboxEventValueSerializer, then assert the key is present.
+
+        SchemaRegistryClient is imported inside _build_schema_registry_client
+        (deferred import) — we patch _build_schema_registry_client directly
+        instead of patching the module-level attribute.
+        """
+        settings = self._make_settings()
+        dispatcher = ContentIngestionOutboxDispatcher(settings=settings, session_factory=MagicMock())
+
+        # Capture the topic_map dict passed to OutboxEventValueSerializer.
+        captured_topic_map: dict = {}
+
+        class _CapturingSerializer:
+            """Records the topic_map keys passed at construction."""
+
+            def __init__(self, topic_map: dict) -> None:
+                captured_topic_map.update(topic_map)
+                # Do not call super().__init__ -- the instance won't be used.
+
+        with (
+            patch.object(dispatcher, "_build_schema_registry_client", return_value=MagicMock()),
+            patch(
+                "content_ingestion.infrastructure.messaging.outbox.dispatcher.build_avro_serializer",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "content_ingestion.infrastructure.messaging.outbox.dispatcher.OutboxEventValueSerializer",
+                side_effect=_CapturingSerializer,
+            ),
+        ):
+            try:
+                dispatcher._get_value_serializer()
+            except Exception:  # noqa: S110
+                # _CapturingSerializer.__init__ records the topics before the
+                # dispatcher stores the result; any downstream error is fine.
+                pass
+
+        assert "content.document.deleted.v1" in captured_topic_map, (
+            "OutboxEventValueSerializer must include 'content.document.deleted.v1' "
+            "so that deletion events can be dispatched without KeyError."
+        )

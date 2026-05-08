@@ -99,10 +99,17 @@ class ContentIngestionOutboxDispatcher(BaseOutboxDispatcher):
                 schema_str=prediction_schema_str, registry=registry, config=ser_config
             )
 
+            # PLAN-0086 Wave E-2: add serializer for the tenant document deleted event.
+            # The topic name matches the outbox ``topic`` column written by
+            # ``DeleteTenantDocumentUseCase``.
+            deleted_schema_str = json.dumps(json.loads((_SCHEMA_DIR / "content.document.deleted.v1.avsc").read_text()))
+            deleted_ser = build_avro_serializer(schema_str=deleted_schema_str, registry=registry, config=ser_config)
+
             self._value_serializer = OutboxEventValueSerializer(
                 {
                     "content.article.raw.v1": article_ser,
                     "market.prediction.snapshot": prediction_ser,
+                    "content.document.deleted.v1": deleted_ser,
                 }
             )
         return self._value_serializer
