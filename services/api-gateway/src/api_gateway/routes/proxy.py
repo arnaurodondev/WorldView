@@ -3388,3 +3388,140 @@ async def feedback_patch_beta_enrollment(request: Request) -> Response:
         headers={"Content-Type": "application/json", **headers},
     )
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Tenant Document Management (PLAN-0086 Wave E-2) ───────────────────────────
+#
+# These routes proxy tenant document upload/list/get/delete to S4
+# (content-ingestion service).  All four require authentication — documents are
+# tenant-scoped and must never be accessible to unauthenticated callers.
+#
+# Header forwarding strategy:
+# - X-Internal-JWT: issued by _auth_headers(); carries user_id, tenant_id, role.
+# - X-Tenant-ID / X-User-ID: forwarded explicitly for S4's header-based dep
+#   extractors (tenant_id_dep / user_id_dep in documents.py).
+#
+# The upload route uses httpx multipart forwarding: the file bytes are read from
+# the incoming request and re-sent as a multipart/form-data body to S4.  httpx
+# handles the boundary header automatically when ``files=`` is used.
+
+
+def _document_headers(request: Request) -> dict[str, str]:
+    """Build headers for S4 document requests.
+
+    Extends _auth_headers() with X-Tenant-ID and X-User-ID so S4's
+    header-based dependency extractors receive the tenant/user identity
+    in addition to the internal JWT payload.
+
+    WHY explicit headers: S4's documents router defines Depends(tenant_id_dep)
+    and Depends(user_id_dep) which first try X-Tenant-ID / X-User-ID headers,
+    then fall back to request.state (populated by InternalJWTMiddleware).
+    Forwarding both is belt-and-suspenders and makes the S4 dep resolution
+    independent of whether S4's own middleware ran.
+    """
+    headers = _auth_headers(request)
+    user = getattr(request.state, "user", None) or {}
+    if isinstance(user, dict):
+        tenant_id = user.get("tenant_id", "")
+        user_id = user.get("user_id", "") or user.get("sub", "")
+        if tenant_id:
+            headers["X-Tenant-ID"] = tenant_id
+        if user_id:
+            headers["X-User-ID"] = user_id
+    return headers
+
+
+@router.post("/documents/upload", status_code=202)
+async def upload_document_proxy(request: Request) -> Response:
+    """Proxy POST /v1/documents/upload → S4 POST /api/v1/documents/upload.
+
+    PLAN-0086 Wave E-2: Tenant document upload.
+
+    The multipart file is forwarded by reading the raw body and passing it
+    through with the original Content-Type header (which includes the boundary
+    parameter).  This avoids parsing and re-encoding the multipart data at the
+    gateway layer.
+
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # Read raw multipart body — pass it through verbatim to S4.
+    # The Content-Type header (multipart/form-data; boundary=...) MUST be
+    # forwarded unchanged so S4 can decode the boundary.
+    body = await request.body()
+    content_type = request.headers.get("Content-Type", "")
+    headers = _document_headers(request)
+
+    clients = _clients(request)
+    resp = await clients.content_ingestion.post(
+        "/api/v1/documents/upload",
+        content=body,
+        headers={"Content-Type": content_type, **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/documents/{doc_id}")
+async def get_document_proxy(doc_id: str, request: Request) -> Response:
+    """Proxy GET /v1/documents/{doc_id} → S4 GET /api/v1/documents/{doc_id}.
+
+    PLAN-0086 Wave E-2: Fetch a single tenant document status.
+
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _document_headers(request)
+    clients = _clients(request)
+    resp = await clients.content_ingestion.get(
+        f"/api/v1/documents/{doc_id}",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/documents")
+async def list_documents_proxy(request: Request) -> Response:
+    """Proxy GET /v1/documents → S4 GET /api/v1/documents.
+
+    PLAN-0086 Wave E-2: Paginated list of tenant documents.
+
+    Forwards all query params (status, limit, cursor) to S4 unchanged.
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _document_headers(request)
+    clients = _clients(request)
+    # Forward all query params (status filter, limit, cursor) to S4 as-is.
+    resp = await clients.content_ingestion.get(
+        "/api/v1/documents",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.delete("/documents/{doc_id}", status_code=200)
+async def delete_document_proxy(doc_id: str, request: Request) -> Response:
+    """Proxy DELETE /v1/documents/{doc_id} → S4 DELETE /api/v1/documents/{doc_id}.
+
+    PLAN-0086 Wave E-2: Soft-delete a tenant document.
+
+    Returns 200 with body (BP-064: never 204) — S4 returns the same.
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _document_headers(request)
+    clients = _clients(request)
+    resp = await clients.content_ingestion.delete(
+        f"/api/v1/documents/{doc_id}",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
