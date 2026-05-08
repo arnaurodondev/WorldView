@@ -474,6 +474,24 @@ class TestParsEventDate:
         assert result is not None
         assert result.tzinfo == UTC
 
+    def test_space_separated_date_string(self) -> None:
+        """F-T007: EU-locale EODHD dates use space separator instead of 'T' ('2026-04-30 12:15:00').
+
+        The normalizer replaces the first space with 'T' so the string becomes ISO-8601
+        before fromisoformat() is called.  Without this, fromisoformat() raises ValueError
+        on Python < 3.11 and the event is silently skipped.
+        """
+        from knowledge_graph.infrastructure.messaging.consumers.economic_events_dataset_consumer import (
+            _parse_event_date,
+        )
+
+        result = _parse_event_date("2026-04-30 12:15:00")
+        assert result is not None, "Space-separated EU date must be parsed, not skipped"
+        assert result.year == 2026
+        assert result.month == 4
+        assert result.day == 30
+        assert result.tzinfo == UTC
+
 
 # ── Test: missing country entity ──────────────────────────────────────────────
 

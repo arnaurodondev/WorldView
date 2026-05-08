@@ -135,6 +135,16 @@ class ValkeyDedupMixin:
         - Valkey unreachable / command error → logs
           ``dedup.valkey_check_failed`` at WARNING level and returns ``False``.
 
+        Throughput amplification warning (F-DS012)
+        ------------------------------------------
+        During a Valkey outage, every message bypasses the dedup check and is
+        delivered to ``process_message`` — including any that were already processed
+        and whose dedup keys expired during the outage.  In a high-throughput burst
+        this can amplify consumer CPU load by up to 100x.  Monitor the
+        ``messaging_dedup_valkey_fallback_total`` counter and alert when it spikes;
+        that counter is incremented every time this fallback path is taken.  Consider
+        pausing the consumer group if the counter rate exceeds a safe threshold.
+
         Args:
             event_id: Opaque event identifier from the Kafka message envelope.
                       Must not contain PII — it is stored as-is in Valkey.
@@ -174,6 +184,13 @@ class ValkeyDedupMixin:
           The mark failure is non-fatal: the consumer already committed the DB
           transaction, so the downstream write is durable.  A repeated delivery
           will simply reprocess the message — idempotent writes ensure safety.
+
+        Observability (F-DS012)
+        -----------------------
+        Write failures increment ``messaging_dedup_mark_failed_total``.  A sustained
+        non-zero rate means dedup keys are not being persisted and re-delivery of
+        the same ``event_id`` will cause double-processing.  Alert when this counter
+        rate exceeds zero in production.
 
         Args:
             event_id: Opaque event identifier from the Kafka message envelope.

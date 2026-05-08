@@ -163,3 +163,10 @@ rag_circuit_breaker_open = Gauge(
     "1 if circuit breaker is open for the labelled source, 0 otherwise.",
     ["source"],
 )
+
+# ── Security (F-S004) ─────────────────────────────────────────────────────────
+
+rag_jti_check_bypass_total = Counter(
+    "rag_jti_check_bypass_total",
+    "Number of JTI replay checks bypassed due to Valkey unavailability (fail-open). Alert threshold: >0 in production.",
+)
