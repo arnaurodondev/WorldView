@@ -7,12 +7,12 @@
 
 | Plan ID | Title & Next Wave | Status | Waves | Blocking On | Updated |
 |---------|-------------------|--------|-------|-------------|---------|
-| PLAN-0074 | **Intelligence Layer** — Worker 13D activation, NarrativeGenerationWorker, entity intelligence APIs, PathInsightWorker, S8 entity-context chat, S9 proxy, frontend 3-col page. Waves A+B+C+D+E1+E2+F done. **Next: Wave G (S9 proxy routes for entity intelligence)**. | in-progress | 7/9 | none | 2026-05-08 |
+| PLAN-0074 | **Intelligence Layer** — Worker 13D activation, NarrativeGenerationWorker, entity intelligence APIs, PathInsightWorker, S8 entity-context chat, S9 proxy, frontend 3-col page. Waves A+B+C+D+E1+E2+F+G done. **Next: Wave H (frontend 3-col Intelligence page)**. | in-progress | 8/9 | none | 2026-05-08 |
 | PLAN-0075 | **Answer Quality Eval (L2-L4)** — routing_observations + chat_feedback tables, 👍/👎 UI chips + S9 endpoint, L2 tool-selection eval, L3 answer-quality LLM-judge, L4 operational gates, calibration. **Next: W7-1 (schema + write-hook)**. | stub | 0/6 | PLAN-0067 ✓ PLAN-0063 W5-1 ✓ | 2026-05-05 |
 | PLAN-0064 | **Full-Text Search with Entity Facets** — keystone L1 search across articles + EDGAR + transcripts, reuses tsv_english GIN. 5 waves. **Next: Wave 1 (schemas/contracts/types)**. | draft | 0/5 | PLAN-0063 W5-2 ✓ | 2026-05-03 |
 | PLAN-0082 | **Action Tools** — get_alerts + create_alert tools, user-confirmation SSE surface (pending_action → action_executed), 30-attempt adversarial expansion. **Next: Wave 1**. | stub | 0/3 | PLAN-0067 W11-4 ✓ | 2026-05-07 |
 | PLAN-0071 | **Institutional UI Uplift** — adversarial second-pass. Phases 1–5 done. Phase 6/6.5 (density sprint: sidebar h-9→h-7, news ArticleRow, p-4→p-2 sweep, TopBar). Phase 7 blocked on backend. **Next: Phase 6.5 (density sprint)**. | in-progress | 5/9 phases | Phase 7 needs S3 price-stream SSE | 2026-05-05 |
-| PLAN-0080 | **Intelligence-Layer LLM Tools** — registers PLAN-0074 endpoints (get_entity_narrative, get_entity_paths, get_entity_health, get_entity_intelligence) in tool catalog. Manifest v2. **Next: Wave 1 (after PLAN-0074 Wave G)**. | stub | 0/1 | PLAN-0074 Wave G | 2026-05-07 |
+| PLAN-0080 | **Intelligence-Layer LLM Tools** — registers PLAN-0074 endpoints (get_entity_narrative, get_entity_paths, get_entity_health, get_entity_intelligence) in tool catalog. Manifest v2. **Next: Wave 1 (PLAN-0074 Wave G ✓ — unblocked)**. | stub | 0/1 | none | 2026-05-08 |
 | PLAN-0081 | **Catalog Tools** — 6 tools (get_morning_brief, compare_entities, screen_universe, get_market_movers, get_economic_calendar, get_earnings_calendar). Manifest v3. **Next: Wave 1 (after PLAN-0080)**. | stub | 0/2 | PLAN-0080 | 2026-05-07 |
 | PLAN-0024 | **Production Deployment** — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions. **Next: Wave A-3**. | in-progress | 3/6 | none | 2026-04-11 |
 | PLAN-0063 | **W5 — Retrieval Substrate + L1 Eval** — W5-1..W5-5 done; W5-6 (ingestion bench) and W5-7 (contextual retrieval experiment) remain. **Next: W5-6 (ingestion bench, parallel after W5-2 ✓); W5-7 gated on ≥80% query labelling**. | in-progress | 5/7 | W5-7 gated on labelling | 2026-05-07 |
@@ -87,10 +87,10 @@ PLAN-0071 Phase 6/6.5 (UI density)      ←— ongoing, no new deps
 PLAN-0024 A-3..A-5 (Prod Deployment)    ←— no deps
 ```
 
-### Tier 2 — Unblocked after PLAN-0074 Wave G
+### Tier 2 — Unblocked (PLAN-0074 Wave G ✓)
 
 ```
-PLAN-0080 (Intelligence LLM Tools, 1 wave)
+PLAN-0080 (Intelligence LLM Tools, 1 wave)  ←— PLAN-0074 Wave G complete
 ```
 
 ### Tier 3 — After PLAN-0080 completes

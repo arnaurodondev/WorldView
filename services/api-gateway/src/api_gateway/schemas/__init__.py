@@ -11,6 +11,7 @@ cause validation errors in production.
 from api_gateway.schemas.alerts import AlertResponse
 from api_gateway.schemas.common import Meta
 from api_gateway.schemas.dashboard import DashboardSnapshotResponse
+from api_gateway.schemas.entity_chat import EntityContextChatRequest
 from api_gateway.schemas.fundamentals import (
     EarningsCalendarResponse,
     EarningsEvent,
@@ -23,7 +24,16 @@ from api_gateway.schemas.instruments import (
     OHLCVResponse,
     QuoteResponse,
 )
+from api_gateway.schemas.intelligence import (
+    ConfidenceBreakdownPublic,
+    ConfidenceTrendPoint,
+    EntityIntelligencePublic,
+    NarrativeVersionPublic,
+    SourceSharePublic,
+)
+from api_gateway.schemas.narratives import NarrativeListResponse, NarrativeTriggerResponse
 from api_gateway.schemas.news import NewsArticle, NewsTopResponse
+from api_gateway.schemas.paths import EntityPathsResponse, PathEdgePublic, PathInsightPublic, PathNodePublic
 from api_gateway.schemas.portfolios import PortfolioBundleResponse, PortfolioResponse
 from api_gateway.schemas.prediction_markets import (
     PredictionMarket,
@@ -34,17 +44,28 @@ from api_gateway.schemas.watchlists import WatchlistResponse
 
 __all__ = [
     "AlertResponse",
+    "ConfidenceBreakdownPublic",
+    "ConfidenceTrendPoint",
     "DashboardSnapshotResponse",
     "EarningsCalendarResponse",
     "EarningsEvent",
+    "EntityContextChatRequest",
+    "EntityIntelligencePublic",
+    "EntityPathsResponse",
     "FundamentalsRecord",
     "FundamentalsResponse",
     "InstrumentSearchResult",
     "Meta",
+    "NarrativeListResponse",
+    "NarrativeTriggerResponse",
+    "NarrativeVersionPublic",
     "NewsArticle",
     "NewsTopResponse",
     "OHLCVBar",
     "OHLCVResponse",
+    "PathEdgePublic",
+    "PathInsightPublic",
+    "PathNodePublic",
     "PortfolioBundleResponse",
     "PortfolioResponse",
     "PredictionMarket",
@@ -52,5 +73,6 @@ __all__ = [
     "QuoteResponse",
     "ScreenerResponse",
     "ScreenerResultItem",
+    "SourceSharePublic",
     "WatchlistResponse",
 ]
