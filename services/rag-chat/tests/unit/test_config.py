@@ -118,8 +118,8 @@ def test_skip_verification_blocked_in_production(monkeypatch: pytest.MonkeyPatch
 
     from rag_chat.config import Settings
 
-    # S-005: message now mentions "protected environments" (staging + production)
-    with pytest.raises(ValidationError, match="MUST NOT be enabled in protected environments"):
+    # S-005: message mentions "outside safe environments" (F-007)
+    with pytest.raises(ValidationError, match="MUST NOT be enabled outside safe environments"):
         Settings(
             database_url="postgresql+asyncpg://test:test@localhost:5432/test_rag_db",
             s1_internal_token="test-token",
