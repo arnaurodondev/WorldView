@@ -24,6 +24,7 @@ class ContentSourceType(StrEnum):
     NEWSAPI = "newsapi"
     MANUAL = "manual"
     POLYMARKET = "polymarket"
+    TENANT_UPLOAD = "tenant_upload"
 
 
 class IngestionTaskStatus(StrEnum):

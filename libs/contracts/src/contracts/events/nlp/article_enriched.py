@@ -61,6 +61,7 @@ class CanonicalNlpArticleEnriched:
     raw_events_json: str | None = None
     raw_claims_json: str | None = None
     correlation_id: str | None = None
+    tenant_id: str | None = None
     event_type: str = field(default="nlp.article.enriched")
     schema_version: int = field(default=1)
 
@@ -89,6 +90,7 @@ class CanonicalNlpArticleEnriched:
             raw_events_json=(str(d["raw_events_json"]) if d.get("raw_events_json") is not None else None),
             raw_claims_json=(str(d["raw_claims_json"]) if d.get("raw_claims_json") is not None else None),
             correlation_id=(str(d["correlation_id"]) if d.get("correlation_id") is not None else None),
+            tenant_id=(str(d["tenant_id"]) if d.get("tenant_id") is not None else None),
             event_type=str(d.get("event_type", "nlp.article.enriched")),
             schema_version=int(d.get("schema_version", 1)),
         )
@@ -119,6 +121,7 @@ class CanonicalNlpArticleEnriched:
             "raw_events_json": self.raw_events_json,
             "raw_claims_json": self.raw_claims_json,
             "correlation_id": self.correlation_id,
+            "tenant_id": self.tenant_id,
         }
 
 
