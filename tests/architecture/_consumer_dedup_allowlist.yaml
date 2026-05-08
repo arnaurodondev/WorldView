@@ -59,22 +59,6 @@ allowlist:
     granted_at: "2026-05-07"
 
   # ── knowledge-graph ───────────────────────────────────────────────────────
-  - class_name: MacroIndicatorDatasetConsumer
-    module_path: services.knowledge-graph.src.knowledge_graph.infrastructure.messaging.consumers.macro_indicator_dataset_consumer
-    justification: >
-      Hand-rolled Valkey dedup: implements _dedup_prefix + exists()/setex() pattern
-      identical to ValkeyDedupMixin. Pre-dates the mixin; migration to ValkeyDedupMixin
-      is outside PLAN-0084 B-2/B-3 scope. Scheduled for follow-up cleanup.
-    granted_at: "2026-05-07"
-
-  - class_name: EconomicEventsDatasetConsumer
-    module_path: services.knowledge-graph.src.knowledge_graph.infrastructure.messaging.consumers.economic_events_dataset_consumer
-    justification: >
-      Hand-rolled Valkey dedup: implements _dedup_prefix + exists()/setex() pattern
-      identical to ValkeyDedupMixin. Pre-dates the mixin; migration to ValkeyDedupMixin
-      is outside PLAN-0084 B-2/B-3 scope. Scheduled for follow-up cleanup.
-    granted_at: "2026-05-07"
-
   - class_name: InstrumentDiscoveredConsumer
     module_path: services.knowledge-graph.src.knowledge_graph.infrastructure.messaging.consumers.instrument_discovered_consumer
     justification: >
@@ -94,14 +78,6 @@ allowlist:
 
   - class_name: StructuredEnrichmentConsumer
     module_path: services.knowledge-graph.src.knowledge_graph.infrastructure.messaging.consumers.structured_enrichment_consumer
-    justification: >
-      Hand-rolled Valkey dedup: implements _dedup_prefix + exists()/setex() pattern
-      identical to ValkeyDedupMixin. Pre-dates the mixin; migration to ValkeyDedupMixin
-      is outside PLAN-0084 B-2/B-3 scope. Scheduled for follow-up cleanup.
-    granted_at: "2026-05-07"
-
-  - class_name: EarningsCalendarDatasetConsumer
-    module_path: services.knowledge-graph.src.knowledge_graph.infrastructure.messaging.consumers.earnings_calendar_dataset_consumer
     justification: >
       Hand-rolled Valkey dedup: implements _dedup_prefix + exists()/setex() pattern
       identical to ValkeyDedupMixin. Pre-dates the mixin; migration to ValkeyDedupMixin

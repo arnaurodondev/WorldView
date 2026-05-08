@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
@@ -46,6 +46,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from messaging.topics import ENTITY_DIRTIED as _ENTITY_DIRTIED_TOPIC  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
@@ -128,7 +129,7 @@ class _NoOpUoW:
         pass
 
 
-class MacroIndicatorDatasetConsumer(BaseKafkaConsumer[None]):
+class MacroIndicatorDatasetConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     """Consumer 13D-7: Enrich country entity metadata with macro indicator data.
 
     Replaces the former APScheduler-based MacroIndicatorWorker.  Instead of
@@ -156,6 +157,12 @@ class MacroIndicatorDatasetConsumer(BaseKafkaConsumer[None]):
 
     """
 
+    # ValkeyDedupMixin: 7-day TTL covers the longest polling interval in the
+    # system to prevent dedup-key expiry causing re-delivered offsets to be
+    # processed twice.
+    _dedup_prefix: str = "kg:dedup:macro_indicator_dataset_consumer"
+    _dedup_ttl_seconds: ClassVar[int] = 7 * 86400
+
     def __init__(
         self,
         config: ConsumerConfig,
@@ -172,7 +179,6 @@ class MacroIndicatorDatasetConsumer(BaseKafkaConsumer[None]):
         self._producer = direct_producer
         self._dirtied_topic = entity_dirtied_topic
         self._dedup_client = dedup_client
-        self._dedup_prefix = f"kg:macro:{config.group_id}"
 
     # ------------------------------------------------------------------
     # Core processing
@@ -348,25 +354,6 @@ class MacroIndicatorDatasetConsumer(BaseKafkaConsumer[None]):
                 error=str(exc),
             )
             raise
-
-    # ------------------------------------------------------------------
-    # Idempotency
-    # ------------------------------------------------------------------
-
-    async def is_duplicate(self, event_id: str) -> bool:
-        if self._dedup_client is None:
-            return False
-        key = f"{self._dedup_prefix}:{event_id}"
-        return bool(await self._dedup_client.exists(key))
-
-    async def mark_processed(self, event_id: str) -> None:
-        if self._dedup_client is None:
-            return
-        key = f"{self._dedup_prefix}:{event_id}"
-        # TTL = 7 days (604,800 s) — covers the longest polling interval in the
-        # system to prevent dedup-key expiry causing re-delivered offsets to be
-        # processed twice.
-        await self._dedup_client.set(key, "1", ex=7 * 86400)
 
     # ------------------------------------------------------------------
     # Failure tracking
