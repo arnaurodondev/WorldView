@@ -170,3 +170,24 @@ rag_jti_check_bypass_total = Counter(
     "rag_jti_check_bypass_total",
     "Number of JTI replay checks bypassed due to Valkey unavailability (fail-open). Alert threshold: >0 in production.",
 )
+
+# ── Tool-use metrics (PLAN-0067 W11-3) ───────────────────────────────────────
+
+rag_tool_call_total = Counter(
+    "rag_tool_call_total",
+    "Number of tool calls executed in the tool-use path",
+    ["tool_name", "status"],  # status: "ok" | "empty" | "error"
+)
+
+rag_tool_call_latency_seconds = Histogram(
+    "rag_tool_call_latency_seconds",
+    "Tool call execution latency in seconds",
+    ["tool_name"],
+    buckets=[0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+)
+
+rag_tool_use_first_turn_latency_seconds = Histogram(
+    "rag_tool_use_first_turn_latency_seconds",
+    "Latency of the first LLM turn (blocking, non-streaming) in the tool-use path",
+    buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
+)

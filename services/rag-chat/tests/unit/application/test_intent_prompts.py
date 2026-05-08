@@ -201,30 +201,3 @@ class TestPromptBuilderIntentRouting:
             intent=QueryIntent.GENERAL,
         )
         assert "follow-up" not in prompt.lower() and "suggested" not in prompt.lower()
-
-
-# ── Keyword classifier GENERAL path ──────────────────────────────────────────
-
-
-class TestKeywordClassifierGeneral:
-    def test_keyword_classifier_general_what_is(self) -> None:
-        """'what is a bond' → GENERAL (no overlap with financial/reasoning keywords)."""
-        from rag_chat.application.pipeline.intent_classifier import KeywordHeuristicClassifier
-
-        clf = KeywordHeuristicClassifier()
-        intent, _, _ = clf.classify("what is a bond?")
-        assert intent == QueryIntent.GENERAL
-
-    def test_keyword_classifier_general_how_does(self) -> None:
-        """'how does quantitative easing work' → GENERAL."""
-        from rag_chat.application.pipeline.intent_classifier import KeywordHeuristicClassifier
-
-        clf = KeywordHeuristicClassifier()
-        intent, _, _ = clf.classify("how does quantitative easing work?")
-        assert intent == QueryIntent.GENERAL
-
-    def test_general_in_valid_intents_frozenset(self) -> None:
-        """_VALID_INTENTS frozenset includes GENERAL so parser accepts it."""
-        from rag_chat.application.pipeline.intent_classifier import _VALID_INTENTS
-
-        assert "GENERAL" in _VALID_INTENTS

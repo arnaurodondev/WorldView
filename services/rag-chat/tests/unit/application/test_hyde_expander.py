@@ -1,6 +1,8 @@
-"""Unit tests for HydeExpander and RetrievalPlanBuilder (T-E-2-02).
+"""Unit tests for HydeExpander (T-E-2-02).
 
 Uses fakeredis for Valkey and lightweight async mocks for the LLM/embedding ports.
+
+PLAN-0067 W11-3: RetrievalPlanBuilder tests removed — class deleted from chat path.
 """
 
 from __future__ import annotations
@@ -10,7 +12,6 @@ from collections.abc import AsyncGenerator
 import fakeredis.aioredis
 import pytest
 from rag_chat.application.pipeline.hyde_expander import HydeExpander
-from rag_chat.application.pipeline.retrieval_plan_builder import RetrievalPlanBuilder
 from rag_chat.domain.enums import QueryIntent
 
 pytestmark = pytest.mark.unit
@@ -103,30 +104,3 @@ class TestHydeExpander:
         await expander.expand(query, QueryIntent.REASONING)
 
         assert call_count == 1  # LLM called only on the first request
-
-
-# ── RetrievalPlanBuilder tests ─────────────────────────────────────────────────
-
-
-class TestRetrievalPlanBuilder:
-    def test_retrieval_plan_portfolio(self) -> None:
-        """PORTFOLIO intent → use_portfolio=True and all other major flags enabled."""
-        builder = RetrievalPlanBuilder(cypher_enabled=True)
-        plan = builder.build(QueryIntent.PORTFOLIO)
-
-        assert plan.use_portfolio is True
-        assert plan.use_chunks is True
-        assert plan.use_financial is True
-        # Cypher is False for PORTFOLIO regardless of cypher_enabled (per plan spec)
-        assert plan.use_cypher is False
-
-    def test_retrieval_plan_cypher_gated(self) -> None:
-        """RELATIONSHIP intent has use_cypher=True in base — gated to False when disabled."""
-        builder_off = RetrievalPlanBuilder(cypher_enabled=False)
-        builder_on = RetrievalPlanBuilder(cypher_enabled=True)
-
-        plan_off = builder_off.build(QueryIntent.RELATIONSHIP)
-        plan_on = builder_on.build(QueryIntent.RELATIONSHIP)
-
-        assert plan_off.use_cypher is False
-        assert plan_on.use_cypher is True

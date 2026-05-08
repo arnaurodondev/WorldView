@@ -402,17 +402,17 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
 
     from rag_chat.application.pipeline.chat_pipeline import ChatPipeline
 
+    # PLAN-0067 W11-3: classifier/plan_builder/retrieval removed from ChatPipeline.
+    # The tool-use path replaces static intent → retrieval dispatch. These collaborators
+    # are still used by RetrieveOnlyUseCase (eval harness), wired below.
     pipeline = ChatPipeline(
         validator=_validator,
         rate_limiter=RateLimiter(valkey=valkey_client, limit=settings.rate_limit_per_tenant),
         cache=CompletionCache(valkey=valkey_client),
         get_thread=GetThreadUseCase(),
         s6_client=s6,
-        classifier=classifier,
-        plan_builder=_plan_builder,
         hyde=_hyde,
         embedder=embedding_client,
-        retrieval=_retrieval,
         graph_enricher=GraphEnricher(),
         fusion=FusionPipeline(),
         reranker=reranker,
