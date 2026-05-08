@@ -1721,6 +1721,31 @@ services:
       retries: 3
       start_period: 30s
 
+  # PLAN-0074 Wave E1 — PathInsightWorker: multi-hop path discovery + scoring.
+  # Horizontally scalable: each replica generates a unique instance UUID at
+  # startup (or use KNOWLEDGE_GRAPH_PATH_INSIGHT_WORKER_INSTANCE_ID to pin it).
+  # Runs as a standalone long-lived process (R22) — no port binding required.
+  knowledge-graph-path-insight-worker:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      knowledge-graph:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.workers.path_insight_worker_main"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   # ── Alert (S10) — migrate + API + dispatcher + 2 consumers ──────────────────
   alert-migrate:
     build:
