@@ -2,6 +2,9 @@
 
 Uses sse-starlette conventions: each emit method returns a dict with
 "event" and "data" keys, suitable for direct use with EventSourceResponse.
+
+PLAN-0067 W11-3: added emit_thinking, updated emit_tool_call (label field,
+new input_summary param), updated emit_tool_result (item_count param).
 """
 
 from __future__ import annotations
@@ -12,6 +15,23 @@ from uuid import UUID
 
 if TYPE_CHECKING:
     from rag_chat.domain.entities.conversation import Citation, ContradictionRef
+
+# ── Tool label map ─────────────────────────────────────────────────────────────
+# Maps tool names (from capability_manifest.yaml) to human-readable UI labels.
+# WHY here: the SSEEmitter is the only layer that emits tool_call events, so
+# co-locating the label map avoids a separate lookup on every call site.
+_TOOL_LABELS: dict[str, str] = {
+    "search_documents": "Searching documents...",
+    "get_entity_graph": "Building entity map...",
+    "traverse_graph": "Traversing knowledge graph...",
+    "search_entity_relations": "Mapping relationships...",
+    "search_claims": "Checking analyst claims...",
+    "search_events": "Looking up corporate events...",
+    "get_contradictions": "Detecting contradictions...",
+    "get_portfolio_context": "Loading portfolio context...",
+    "get_price_history": "Fetching price history...",
+    "get_fundamentals_history": "Fetching fundamentals...",
+}
 
 
 class SSEEmitter:
@@ -99,27 +119,87 @@ class SSEEmitter:
         """
         return {"event": "done", "data": json.dumps({"type": "done"})}
 
-    def emit_tool_call(self, tool_name: str, tool_input: dict) -> dict[str, str]:
+    def emit_thinking(self, stage: str = "tool_classification") -> dict[str, str]:
+        """Emitted immediately when the first-turn LLM call starts (PLAN-0067 §0 I-1).
+
+        WHY: non-streaming first turn adds ~600ms latency vs classical path. This event
+        shows the user activity before the first token arrives — the frontend can show
+        a pulsing "Thinking..." indicator immediately instead of a blank stream.
+
+        Args:
+            stage: identifies which sub-step the service is in. Defaults to
+                   "tool_classification" (the only stage in the W11-3 path).
+                   Future waves may add "entity_resolution", "reranking", etc.
+        """
+        return {"event": "thinking", "data": json.dumps({"stage": stage})}
+
+    def emit_tool_call(
+        self,
+        tool_name: str,
+        input_summary: dict,  # type: ignore[type-arg]
+        status: str = "running",
+    ) -> dict[str, str]:
         """Emit a tool_call event before execution starts (PLAN-0066 Wave H T-W10-H-04).
+
+        Updated in PLAN-0067 W11-3: added ``label`` field (user-friendly string) and
+        renamed ``tool_input`` → ``input_summary`` (safe subset, no PII).
 
         WHY BEFORE EXECUTE: the frontend can immediately show a spinner
         "Fetching AAPL price history..." without waiting for the S3 round-trip.
         The ``status: "running"`` field lets the UI differentiate from the result.
+
+        WHY label: raw tool names ("get_price_history") are not user-friendly. The
+        label ("Fetching price history...") is displayed in the chat UI while the
+        tool executes.
+
+        Args:
+            tool_name:     Internal tool name (from capability_manifest.yaml).
+            input_summary: Safe subset of the tool input, no PII. Displayed in UI.
+            status:        Current tool status. Defaults to "running".
         """
+        label = _TOOL_LABELS.get(tool_name, f"{tool_name}...")
         return {
             "event": "tool_call",
-            "data": json.dumps({"type": "tool_call", "tool": tool_name, "input": tool_input, "status": "running"}),
+            "data": json.dumps(
+                {
+                    "type": "tool_call",
+                    "tool": tool_name,
+                    "label": label,
+                    "input": input_summary,
+                    "status": status,
+                }
+            ),
         }
 
-    def emit_tool_result(self, tool_name: str, success: bool) -> dict[str, str]:
+    def emit_tool_result(
+        self,
+        tool_name: str,
+        status: str,  # "ok" | "error" | "empty"
+        item_count: int = 0,
+    ) -> dict[str, str]:
         """Emit a tool_result event after execution completes (PLAN-0066 Wave H T-W10-H-04).
+
+        Updated in PLAN-0067 W11-3: changed ``success: bool`` → ``status: str`` to
+        support a third "empty" state (tool executed but returned no items), and added
+        ``item_count`` so the frontend can show "Found 5 results" inline.
 
         WHY ALWAYS EMITTED: the frontend spinner opened by ``tool_call`` must always
         have a corresponding close signal. Emitting on both success and failure
         ensures the UI never hangs in a loading state.
+
+        Args:
+            tool_name:  Internal tool name matching the prior emit_tool_call.
+            status:     "ok" | "error" | "empty". "empty" = tool ran but returned 0 items.
+            item_count: Number of items returned by the tool (0 on error/empty).
         """
-        status = "ok" if success else "error"
         return {
             "event": "tool_result",
-            "data": json.dumps({"type": "tool_result", "tool": tool_name, "status": status}),
+            "data": json.dumps(
+                {
+                    "type": "tool_result",
+                    "tool": tool_name,
+                    "status": status,
+                    "item_count": item_count,
+                }
+            ),
         }

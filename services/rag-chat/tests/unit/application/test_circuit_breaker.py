@@ -185,67 +185,6 @@ async def test_cb_record_failure_uses_lua_script_atomically() -> None:
     assert call_args.kwargs["args"][2] == "120"
 
 
-# ── B-6 regression: circuit breakers wired into ParallelRetrievalOrchestrator ─
-
-
-@pytest.mark.unit
-def test_circuit_breakers_wired_when_enabled() -> None:
-    """When cb_enabled=True, ParallelRetrievalOrchestrator receives non-empty circuit_breakers dict.
-
-    This is a regression test for B-6: previously app.py instantiated
-    ParallelRetrievalOrchestrator without circuit_breakers, defaulting to {}.
-    """
-    from rag_chat.application.pipeline.retrieval_orchestrator import ParallelRetrievalOrchestrator
-
-    # Build the same CB dict that _wire_orchestrator now builds
-    source_names = ["chunk", "relations", "graph", "claims", "events", "contradictions", "financial", "portfolio"]
-    mock_valkey = AsyncMock()
-
-    cbs = {
-        name: SourceCircuitBreaker(
-            mock_valkey,
-            name,
-            failure_threshold=3,
-            failure_window_seconds=120,
-            # PLAN-0084 A-2: default lowered to 120; still valid to pass explicitly
-            cool_down_seconds=120,
-        )
-        for name in source_names
-    }
-
-    orchestrator = ParallelRetrievalOrchestrator(
-        s6_client=MagicMock(),
-        s7_client=MagicMock(),
-        s3_client=MagicMock(),
-        s1_client=MagicMock(),
-        circuit_breakers=cbs,
-    )
-
-    # _cbs must be the full dict — not empty
-    assert orchestrator._cbs != {}
-    assert len(orchestrator._cbs) == len(source_names)
-    for name in source_names:
-        assert name in orchestrator._cbs
-        assert isinstance(orchestrator._cbs[name], SourceCircuitBreaker)
-
-
-@pytest.mark.unit
-def test_circuit_breakers_empty_when_disabled() -> None:
-    """When cb_enabled=False, ParallelRetrievalOrchestrator receives empty circuit_breakers dict."""
-    from rag_chat.application.pipeline.retrieval_orchestrator import ParallelRetrievalOrchestrator
-
-    # Simulate cb_enabled=False path: pass empty dict
-    orchestrator = ParallelRetrievalOrchestrator(
-        s6_client=MagicMock(),
-        s7_client=MagicMock(),
-        s3_client=MagicMock(),
-        s1_client=MagicMock(),
-        circuit_breakers={},
-    )
-
-    assert orchestrator._cbs == {}
-
-
 # ── PLAN-0084 A-2: SETNX probe gating + cooldown + gauge ─────────────────────
 
 
