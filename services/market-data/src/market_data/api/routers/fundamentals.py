@@ -7,18 +7,29 @@ Fundamentals records are stored per instrument in the DB.
 from __future__ import annotations
 
 from typing import Annotated, Any
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
-from market_data.api.dependencies import get_fundamentals_section_uc, get_fundamentals_snapshot_uc
+from market_data.api.dependencies import (
+    get_fundamentals_history_uc,
+    get_fundamentals_section_uc,
+    get_fundamentals_snapshot_uc,
+    get_lookup_instrument_uc,
+)
 from market_data.api.schemas.fundamentals import (
+    FundamentalsHistoryPeriod,
+    FundamentalsHistoryResponse,
     FundamentalsRecordResponse,
     FundamentalsResponse,
     FundamentalsSnapshotResponse,
 )
+from market_data.application.use_cases.get_fundamentals_history import GetFundamentalsHistoryUseCase
+from market_data.application.use_cases.lookup_instrument import InstrumentLookupUseCase
 from market_data.application.use_cases.query_fundamentals import GetFundamentalsSectionUseCase
 from market_data.domain.entities import FundamentalsRecord
 from market_data.domain.enums import FundamentalsSection
+from market_data.domain.errors import InstrumentNotFoundError
 
 router = APIRouter(tags=["fundamentals"])
 
@@ -50,6 +61,58 @@ def _to_record_response(record: FundamentalsRecord) -> FundamentalsRecordRespons
         data=record.data,
         source=record.source,
         ingested_at=record.ingested_at,
+    )
+
+
+# IMPORTANT: literal-path routes MUST be registered before /{instrument_id} catch-all routes.
+# PLAN-0066 Wave G: temporal RAG endpoint — GET /fundamentals/history
+@router.get("/fundamentals/history", response_model=FundamentalsHistoryResponse)
+async def get_fundamentals_history(
+    instrument_id: Annotated[UUID | None, Query()] = None,
+    symbol: Annotated[str | None, Query(min_length=1, max_length=20)] = None,
+    isin: Annotated[str | None, Query(min_length=12, max_length=12)] = None,
+    periods: int = Query(default=8, ge=1, le=40),
+    uc: Annotated[GetFundamentalsHistoryUseCase, Depends(get_fundamentals_history_uc)] = ...,  # type: ignore[assignment]
+    lookup_uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,  # type: ignore[assignment]
+) -> FundamentalsHistoryResponse:
+    """Return earnings-based quarterly fundamentals history (PLAN-0066 Wave G).
+
+    WHY this endpoint: The brief-intelligence and temporal RAG pipelines need
+    per-quarter EPS, revenue, and key valuation metrics without the full
+    FundamentalsResponse envelope (which requires a known instrument UUID and
+    returns raw JSONB records rather than typed period data).
+
+    At least one of instrument_id, symbol, or isin is required.
+    ``periods`` controls how many reporting periods are returned (newest-first
+    slice, then re-sorted ASC for the response).
+    """
+    if instrument_id is None and symbol is None and isin is None:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one of instrument_id, symbol, or isin is required",
+        )
+
+    # Resolve instrument (R25: use case, not direct repo call)
+    try:
+        result = await lookup_uc.execute(
+            id=str(instrument_id) if instrument_id else None,
+            isin=isin,
+            symbol=symbol,
+        )
+    except InstrumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    instrument = result.instrument
+    data = await uc.execute(
+        instrument_id=UUID(instrument.id),
+        periods=periods,
+    )
+
+    return FundamentalsHistoryResponse(
+        instrument_id=instrument.id,
+        ticker=instrument.symbol,
+        periods=[FundamentalsHistoryPeriod(**p) for p in data["periods"]],
+        period_count=data["period_count"],
     )
 
 
