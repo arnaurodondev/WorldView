@@ -169,6 +169,11 @@ class Settings(BaseSettings):
     # Defaults to same host as market_data_base_url (no separate internal port).
     market_data_internal_url: str = "http://market-data:8003"
 
+    # Worker 13D-3: Narrative generation LLM model (PRD-0074 Wave C)
+    # Uses Meta-Llama-3.1-8B-Instruct (confirmed available on this DeepInfra account).
+    # Falls back to template-v1 when llm_client is None or model call fails.
+    narrative_llm_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+
     # Worker 13J — Structured Enrichment (PRD-0073)
     #
     # DEPRECATED FIELDS REMOVED (PLAN-0073 cleanup, F-A04 / F-S08):
@@ -232,6 +237,16 @@ class Settings(BaseSettings):
     #             keep the row in the queue.
     provisional_enrichment_base_retry_minutes: int = 2
     provisional_enrichment_max_retry_minutes: int = 1440
+
+    # Path Insight Worker (PLAN-0074 Wave E1)
+    # Model ID for Wave E2 LLM explanations (stored but not used in E1).
+    path_insight_explanation_model_id: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+    # Stable worker instance ID — overridable via env var for testing and to ensure
+    # disjoint SKIP LOCKED sets when running multiple containers.
+    # Default: generated at process start (uuid4 as string, overridden at startup).
+    path_insight_worker_instance_id: str = ""
+    # APScheduler cron for PathInsightSeeder (default: 02:30 UTC daily).
+    path_insight_seeder_cron: str = "30 2 * * *"
 
     @model_validator(mode="after")
     def _validate_startup(self) -> Settings:
