@@ -2540,3 +2540,87 @@ No function or method may accept two names for the same parameter concept (e.g. 
 and `ex` for expiry duration). Use the upstream convention (Redis-native `ex`, not custom
 `ttl`). If a legacy alias exists, deprecate it with a `warnings.warn` and remove it in the
 next major version.
+
+---
+
+## 21. Multi-Tenancy Standards
+
+### 21.1: Tenant Attribution Model
+
+The platform uses **logical multi-tenancy**: shared database cluster, with `tenant_id` column
+filtering at query time. Two classes of data exist:
+
+| Class | Tenant-scoped? | Examples |
+|-------|----------------|---------|
+| **User data** | YES — must have `tenant_id` in every table | portfolios, holdings, watchlists, threads, messages, entity_mentions |
+| **Global reference data** | NO — shared across all tenants | canonical_entities, relations, market data (OHLCV, fundamentals), instruments |
+
+**Rule**: When in doubt, ask "Does this data differ between Tenant A and Tenant B?" If yes,
+it needs `tenant_id`. If it is a publicly-known fact (an entity, a price, a market event),
+it is global reference data.
+
+### 21.2: Avro Schema Tenant Field Rule
+
+All Avro event schemas for **user-attributable events** (content pipeline, NLP pipeline,
+intelligence pipeline, RAG, portfolio, alert) MUST include:
+
+```json
+{"name": "tenant_id", "type": ["null", "string"], "default": null}
+```
+
+Using `["null", "string"]` with `"default": null` satisfies R5 (forward compatibility — adding
+a nullable field with a default is always a non-breaking change).
+
+**Exceptions** (schemas that intentionally omit `tenant_id`):
+- `market.dataset.fetched.avsc` — global market data, not tenant-attributable
+- `market.instrument.*.avsc` — global instrument registry
+- `market.prediction.v1.avsc` — global prediction markets
+
+Verification:
+```bash
+for schema in infra/kafka/schemas/*.avsc; do
+  if ! grep -q '"tenant_id"' "$schema"; then echo "CHECK: $schema"; fi
+done
+```
+
+### 21.3: Vector/HNSW Search Tenant Filter
+
+Any query using `cosine_distance`, `l2_distance`, or `max_inner_product` against a table
+that has a `tenant_id` column MUST include:
+```sql
+AND (tenant_id = :tenant_id OR tenant_id IS NULL)
+```
+
+The `IS NULL` clause handles legacy rows ingested before the column was added. Without this
+filter, the similarity search returns top-K results globally — the highest-impact multi-tenant
+data breach vector (HR-053).
+
+### 21.4: Kafka Consumer Dedup Key Tenant Namespace
+
+When Avro events carry `tenant_id`, all `ValkeyDedupMixin` subclasses MUST incorporate
+`tenant_id` in the dedup key. Override `is_duplicate` / `mark_processed` to use:
+```python
+key = f"{self._dedup_prefix}:{tenant_id}:{event_id}"
+```
+Or extract `tenant_id` from the event in `extract_event_id()` and embed it in the returned
+string:
+```python
+def extract_event_id(self, payload: dict) -> str:
+    return f"{payload.get('tenant_id', 'system')}:{payload['event_id']}"
+```
+
+### 21.5: Rate Limiting Key Tenant Namespace
+
+Valkey rate limit keys for authenticated endpoints must be scoped per (tenant, user):
+```python
+key = f"rl:v1:user:{tenant_id}:{user_id}"
+```
+Not per user alone — a user could belong to multiple tenants and consume quota across tenant
+boundaries.
+
+### 21.6: MinIO Object Key Tenant Convention
+
+The `KeyBuilder` does not include a tenant segment. To ensure tenant isolation, the
+`resource_id` component MUST derive from a tenant-scoped entity ID (e.g., `doc_id` from the
+`documents` table after the `tenant_id` column is added). Do not use globally-scoped IDs
+(instrument tickers, schema version strings) as `resource_id` for tenant-attributable objects.
