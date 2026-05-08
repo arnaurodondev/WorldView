@@ -695,3 +695,79 @@ occurrence. Must be justified in a code comment. See BP-418.
 grep -n "direct_producer\|DirectProducer\|producer\.produce" services/ -r --include="*.py" | \
   grep -v "outbox\|test_"
 ```
+
+---
+
+### HR-050: `BaseKafkaConsumer` Subclass With Hand-Rolled `is_duplicate`/`mark_processed` and No try/except on Valkey Calls
+
+**Pattern** (RED):
+```python
+class MyConsumer(BaseKafkaConsumer[None]):
+    async def is_duplicate(self, event_id: str) -> bool:
+        key = f"{self._dedup_prefix}:{event_id}"
+        return bool(await self._dedup_client.exists(key))  # ← NO try/except
+```
+
+**Risk**: Any Valkey outage causes `ConnectionError` to propagate through `_handle_message()`,
+stalling the consumer. If `mark_processed()` crashes after the DB commit succeeds, the message
+is treated as a failure and re-delivered — producing a duplicate if downstream writes are not
+idempotent.
+**Action**: Migrate to `ValkeyDedupMixin` which wraps all Valkey calls in try/except with
+fail-open semantics. Architecture test `CONSUMER-DEDUP-001` enforces this. See BP-421.
+**Grep pattern**:
+```bash
+grep -n "async def is_duplicate\|async def mark_processed" services/ -r --include="*.py" | \
+  grep -v "dedup.py\|test_"
+```
+
+---
+
+### HR-051: Redis `pipeline(transaction=True)` Where DEL and Bulk-Write Target the Same Key
+
+**Pattern** (RED):
+```python
+async with self._client.pipeline(transaction=True) as pipe:
+    pipe.delete(self._key)          # ← if network drops here, key is wiped
+    pipe.sadd(self._key, *values)
+    await pipe.execute()
+```
+
+**Risk**: MULTI/EXEC is atomic on the server once EXEC is processed. If the network drops
+between server-side DEL and client-side EXEC, the key is wiped and SADD never runs. The
+except block logs a warning; the cache is empty until the next successful refresh.
+**Action**: Replace with a Lua script via `ValkeyClient.execute_lua_script()` for true
+server-side atomicity. See BP-422.
+**Grep pattern**:
+```bash
+# Find DEL followed by bulk-write to same key inside pipeline blocks
+grep -n "pipe\.delete\|pipe\.sadd\|pipe\.hset" services/ -r --include="*.py" | \
+  grep -v "test_"
+```
+
+---
+
+### HR-052: Background `while True` Loop With Fixed `asyncio.sleep` on Exception
+
+**Pattern** (YELLOW):
+```python
+while True:
+    try:
+        await asyncio.sleep(self._interval_s)
+        await self.refresh()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.warning("refresh_loop_error", exc_info=True)
+        await asyncio.sleep(60)   # ← fixed, not exponential
+```
+
+**Risk**: During a sustained outage, this emits O(duration/60) identical warning tracebacks
+with no indication of how many failures have accumulated. No alerting surface.
+**Action**: Replace with exponential backoff (`min(2**failures * base, ceiling)`) and add a
+Prometheus counter for consecutive failures. See BP-423.
+**Grep pattern**:
+```bash
+# Find fixed sleep in except blocks inside while True loops
+grep -n "asyncio.sleep" services/ -r --include="*.py" | \
+  grep -A2 "except" | grep "sleep([0-9]"
+```
