@@ -825,3 +825,39 @@ for schema in infra/kafka/schemas/*.avsc; do
   if ! grep -q '"tenant_id"' "$schema"; then echo "MISSING: $schema"; fi
 done
 ```
+
+---
+
+### HR-055: `from fastapi import …, Field, …` — Pydantic Symbol in FastAPI Import
+
+**Pattern** (RED):
+```python
+# BAD — Field is a pydantic symbol, not fastapi
+from fastapi import APIRouter, Field, HTTPException
+from pydantic import BaseModel
+```
+
+**Risk**: `Field` does not exist in `fastapi.__init__`. The import fails at module load time
+with `ImportError: cannot import name 'Field' from 'fastapi'`. Because FastAPI route modules
+are imported when the app starts, this error makes the entire service unbootable — Docker
+containers crash on start, all tests fail to collect, all HTTP traffic 5xxs.
+
+The mistake is easy to make when a developer adds a Pydantic-validation field
+(`Field(ge=0, max_length=N, …)`) to an existing route module: the route's existing line
+already imports from fastapi, and reflex appends `Field` there instead of crossing to the
+pydantic import line below.
+
+**Correct**:
+```python
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+```
+
+**Detection**:
+```bash
+rg "from fastapi import.*\bField\b" services/ libs/
+```
+Must return nothing. A pre-commit hook for this exact pattern is high-value (prevention is
+cheap, the failure mode is catastrophic).
+
+**Compounding**: BP-428 documents the same pattern with bug-history references.
