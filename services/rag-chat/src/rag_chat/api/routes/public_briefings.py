@@ -572,11 +572,12 @@ async def submit_bullet_feedback(
     Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025).
     """
     from rag_chat.application.use_cases.brief_feedback import BriefFeedbackUseCase
+    from rag_chat.infrastructure.db.repositories.brief_feedback_repository import BriefFeedbackRepository
 
     user_id_str = _extract_user_id(request)
     user_id = _to_uuid(user_id_str)
 
-    uc = BriefFeedbackUseCase(session=uow.session)
+    uc = BriefFeedbackUseCase(feedback=BriefFeedbackRepository(session=uow.session))
     try:
         fb_id, created_at = await uc.submit_bullet_feedback(
             brief_id=body.brief_id,
@@ -616,11 +617,12 @@ async def submit_brief_feedback(
     Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025).
     """
     from rag_chat.application.use_cases.brief_feedback import BriefFeedbackUseCase
+    from rag_chat.infrastructure.db.repositories.brief_feedback_repository import BriefFeedbackRepository
 
     user_id_str = _extract_user_id(request)
     user_id = _to_uuid(user_id_str)
 
-    uc = BriefFeedbackUseCase(session=uow.session)
+    uc = BriefFeedbackUseCase(feedback=BriefFeedbackRepository(session=uow.session))
     try:
         fb_id, created_at = await uc.submit_brief_feedback(
             brief_id=body.brief_id,
