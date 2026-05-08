@@ -50,10 +50,16 @@ class RelationEvidenceRepository(RelationEvidenceRepositoryPort):
         entity_provisional: bool = False,
         provisional_queue_id: UUID | None = None,
         evidence_text: str | None = None,
+        source_name: str | None = None,
+        source_type: str | None = None,
     ) -> UUID:
         """Insert a row into ``relation_evidence_raw`` (hot-path staging).
 
         IMPORTANT: ``partition_key`` is STORED — not included in INSERT.
+
+        T-B-03: ``source_name`` and ``source_type`` are NULL-safe new columns
+        added by migration MIG-EVIDENCE-SOURCE (Wave A T-A-05).  Both default to
+        NULL when not provided.
         """
         result = await self._session.execute(
             text("""
@@ -62,13 +68,13 @@ INSERT INTO relation_evidence_raw (
     claim_id, chunk_id, source_document_id,
     extraction_confidence, source_trust_weight,
     evidence_date, is_backfill, entity_provisional, provisional_queue_id,
-    evidence_text
+    evidence_text, source_name, source_type
 ) VALUES (
     :subject_entity_id, :object_entity_id, :canonical_type, :polarity,
     :claim_id, :chunk_id, :source_document_id,
     :extraction_confidence, :source_trust_weight,
     :evidence_date, :is_backfill, :entity_provisional, :provisional_queue_id,
-    :evidence_text
+    :evidence_text, :source_name, :source_type
 )
 RETURNING raw_id
 """),
@@ -87,10 +93,35 @@ RETURNING raw_id
                 "entity_provisional": entity_provisional,
                 "provisional_queue_id": str(provisional_queue_id) if provisional_queue_id else None,
                 "evidence_text": evidence_text,
+                "source_name": source_name,
+                "source_type": source_type,
             },
         )
         row = result.fetchone()
         return UUID(str(row[0]))  # type: ignore[index]
+
+    async def lookup_source_metadata(
+        self,
+        source_document_id: UUID,
+    ) -> tuple[str | None, str | None]:
+        """Fetch (source_name, source_type) from document_source_metadata (T-B-03 fallback).
+
+        Returns (None, None) when no matching row exists.  NULL-safe — both
+        columns may be absent from the metadata table.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT source_name, source_type
+FROM document_source_metadata
+WHERE document_id = :doc_id
+LIMIT 1
+"""),
+            {"doc_id": str(source_document_id)},
+        )
+        row = result.fetchone()
+        if row is None:
+            return None, None
+        return row[0], row[1]
 
     async def insert_immutable(
         self,
@@ -353,6 +384,38 @@ ORDER  BY relation_id, rn
             rid = UUID(str(row[0]))
             out.setdefault(rid, []).append(str(row[1]))
         return out
+
+    async def get_earliest_evidence_date(
+        self,
+        subject_entity_id: UUID,
+        object_entity_id: UUID,
+        canonical_type: str,
+    ) -> datetime | None:
+        """Return the earliest evidence_date for a triple (T-B-01 valid_from source).
+
+        Only considers rows that have been processed (processed=true) to avoid
+        using evidence that has not yet been verified by the confidence worker.
+        Returns None when no processed evidence exists for the triple.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT MIN(evidence_date)
+FROM relation_evidence_raw
+WHERE subject_entity_id = :subject
+  AND object_entity_id  = :object
+  AND canonical_type    = :ctype
+  AND processed         = true
+"""),
+            {
+                "subject": str(subject_entity_id),
+                "object": str(object_entity_id),
+                "ctype": canonical_type,
+            },
+        )
+        row = result.fetchone()
+        if row is None or row[0] is None:
+            return None
+        return row[0]  # type: ignore[return-value, no-any-return]
 
     async def mark_processed(self, raw_ids: list[UUID], processed_at: datetime) -> None:
         """Mark a batch of raw evidence rows as processed."""

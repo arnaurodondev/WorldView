@@ -231,11 +231,35 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                     message="incoming relations missing evidence_text — NLP extraction gap",
                 )
 
+        # T-B-03: resolve source_name + source_type for evidence row provenance.
+        # Preferred source: canonical event payload fields.
+        # Fallback: JOIN document_source_metadata on source_document_id.
+        source_name: str | None = value.get("source_name")
+        source_type_str: str | None = value.get("source_type")
+
         async with self._sf() as session:
             registry_repo = RelationTypeRegistryRepository(session)
             outbox_repo = OutboxRepository(session)
             relation_repo = RelationRepository(session)
             evidence_repo = RelationEvidenceRepository(session)
+
+            # T-B-03 fallback: query document_source_metadata when the event
+            # payload did not carry source_name (i.e. it is absent or None).
+            if source_name is None:
+                try:
+                    source_name, source_type_str = await evidence_repo.lookup_source_metadata(doc_id)  # type: ignore[attr-defined]
+                    if source_name is None and source_type_str is None:
+                        logger.warning(  # type: ignore[no-any-return]
+                            "evidence_source_metadata_missing",
+                            doc_id=str(doc_id),
+                            message="No source_name/source_type in event payload or document_source_metadata",
+                        )
+                except Exception:
+                    logger.warning(  # type: ignore[no-any-return]
+                        "evidence_source_metadata_lookup_failed",
+                        doc_id=str(doc_id),
+                        exc_info=True,
+                    )
 
             # ----------------------------------------------------------
             # Block 11: Canonicalize all relation types
@@ -305,6 +329,9 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 outbox_repo=outbox_repo,
                 correlation_id=correlation_id,
                 extraction_model_id=extraction_model_id,
+                # T-B-03: propagate resolved source metadata into evidence rows.
+                source_name=source_name,
+                source_type_metadata=source_type_str,
             )
 
             # ----------------------------------------------------------

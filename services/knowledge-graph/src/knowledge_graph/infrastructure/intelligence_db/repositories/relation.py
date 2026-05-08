@@ -249,6 +249,60 @@ LIMIT :limit
             for r in rows
         ]
 
+    async def update_contra_columns(
+        self,
+        relation_id: UUID,
+        strongest_contra_score: float,
+        contra_count_by_type: dict[str, object],
+        latest_contra_at: object,
+    ) -> None:
+        """Persist aggregated contradiction stats on the relation (T-B-02)."""
+        import json
+
+        await self._session.execute(
+            text("""
+UPDATE relations SET
+    strongest_contra_score = :strongest,
+    contra_count_by_type   = :count_by_type::jsonb,
+    latest_contra_at       = :latest_at
+WHERE relation_id = :relation_id
+"""),
+            {
+                "relation_id": str(relation_id),
+                "strongest": strongest_contra_score,
+                "count_by_type": json.dumps(contra_count_by_type),
+                "latest_at": latest_contra_at,
+            },
+        )
+
+    async def invalidate_relation(
+        self,
+        relation_id: UUID,
+        valid_to: object,
+        valid_to_confidence: float,
+        valid_to_source: str,
+    ) -> None:
+        """Soft-close a relation when contradiction drives confidence below threshold (T-B-02).
+
+        Sets ``valid_to``, ``valid_to_confidence``, and ``valid_to_source`` in a
+        single UPDATE.  No Kafka event emitted — deferred to follow-up plan.
+        """
+        await self._session.execute(
+            text("""
+UPDATE relations SET
+    valid_to            = :valid_to,
+    valid_to_confidence = :valid_to_confidence,
+    valid_to_source     = :valid_to_source
+WHERE relation_id = :relation_id
+"""),
+            {
+                "relation_id": str(relation_id),
+                "valid_to": valid_to,
+                "valid_to_confidence": valid_to_confidence,
+                "valid_to_source": valid_to_source,
+            },
+        )
+
     async def mark_summary_updated(self, relation_id: UUID) -> None:
         """Clear ``summary_stale`` after a new summary has been generated."""
         await self._session.execute(
@@ -280,6 +334,38 @@ LIMIT :limit
             }
             for r in rows
         ]
+
+    async def get_valid_to(self, relation_id: UUID) -> object | None:
+        """Fetch the ``valid_to`` column for a relation (T-B-01 period-type derivation)."""
+        result = await self._session.execute(
+            text("SELECT valid_to FROM relations WHERE relation_id = :relation_id"),
+            {"relation_id": str(relation_id)},
+        )
+        row = result.fetchone()
+        if row is None:
+            return None
+        return row[0]  # type: ignore[no-any-return]
+
+    async def update_valid_from_and_period_type(
+        self,
+        relation_id: UUID,
+        valid_from: datetime,
+        relation_period_type: str,
+    ) -> None:
+        """Persist ``valid_from`` and ``relation_period_type`` derived from evidence (T-B-01)."""
+        await self._session.execute(
+            text("""
+UPDATE relations
+SET valid_from = :valid_from,
+    relation_period_type = :relation_period_type
+WHERE relation_id = :relation_id
+"""),
+            {
+                "relation_id": str(relation_id),
+                "valid_from": valid_from,
+                "relation_period_type": relation_period_type,
+            },
+        )
 
     async def mark_confidence_updated(
         self,

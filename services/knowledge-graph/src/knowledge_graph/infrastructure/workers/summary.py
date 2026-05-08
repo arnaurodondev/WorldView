@@ -36,6 +36,7 @@ from common.time import utc_now  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
+    from ml_clients.protocols import EmbeddingClient  # type: ignore[import-untyped]
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
@@ -45,6 +46,10 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 _BATCH_LIMIT = 20
 _EVIDENCE_LIMIT = 10
 _PROMPT_TEMPLATE_ID = "00000000-0000-0000-0000-000000000001"  # seeded in prompt_templates
+
+# BP-121: BGE-large has a 512-token context window (~1500 chars) — truncate
+# summary text before embedding to avoid GGML runtime crashes.
+_MAX_EMBED_CHARS = 1500
 
 
 class SummaryWorker:
@@ -75,6 +80,7 @@ class SummaryWorker:
         llm_client: FallbackChainClient,
         force_regen_batch_size: int = 0,
         read_session_factory: Any = None,
+        embedding_port: EmbeddingClient | None = None,
     ) -> None:
         self._sf = session_factory
         # DEF-018 / Wave B-1: route Phase 1 + Phase 2 reads through the read
@@ -84,6 +90,9 @@ class SummaryWorker:
         self._read_session_factory: Any = read_session_factory if read_session_factory is not None else session_factory
         self._llm = llm_client
         self._force_regen_batch_size = force_regen_batch_size
+        # T-B-04: optional embedding port for summary_embedding population.
+        # When None, embedding is skipped (does not block summary write).
+        self._embedding_port = embedding_port
 
     async def run(self) -> None:
         """Generate summaries for stale relations.
@@ -278,11 +287,12 @@ class SummaryWorker:
             # ── Phase 3 (write): WRITE session per row ──────────────────────
             # QA-fix §2.1: per-relation try/except — Phase 4 commit failure
             # must not abort the remaining batch.
+            new_summary_id: UUID | None = None
             try:
                 async with self._sf() as session:
                     summary_repo = RelationSummaryRepository(session)
                     rel_repo = RelationRepository(session)
-                    await summary_repo.insert_new(
+                    new_summary_id = await summary_repo.insert_new(
                         relation_id=relation_id,  # type: ignore[arg-type]
                         summary_text=summary_text,
                         evidence_count=len(evidence_texts),
@@ -303,6 +313,18 @@ class SummaryWorker:
                     error=str(exc),
                 )
 
+            # ── Phase 4 (embedding): populate summary_embedding (T-B-04) ────
+            # Runs OUTSIDE the write session — the embedding call can take
+            # several seconds and must not hold a DB connection open (DS-001).
+            # On any failure: log and continue; the NULL embedding is not fatal
+            # (Worker 13F will back-fill missing embeddings in a future wave).
+            if new_summary_id is not None and self._embedding_port is not None:
+                await self._embed_and_persist_summary(
+                    summary_id=new_summary_id,
+                    summary_text=summary_text,
+                    relation_id=relation_id,
+                )
+
         logger.info(  # type: ignore[no-any-return]
             "summary_worker_complete",
             stale_relations=batch_size,
@@ -317,6 +339,67 @@ class SummaryWorker:
             phase2_llm_calls=phase2_llm_calls,
             phase3_written_count=phase3_written_count,
         )
+
+    async def _embed_and_persist_summary(
+        self,
+        summary_id: UUID,
+        summary_text: str,
+        relation_id: Any,
+    ) -> None:
+        """Compute and store the summary_embedding for a freshly written summary row.
+
+        T-B-04 requirements:
+        - BP-121 guard: truncate summary_text to _MAX_EMBED_CHARS before calling
+          the embedding port to prevent BGE-large GGML context-overflow crashes.
+        - On any embedding failure: log ``summary_embedding_skip`` and return
+          without raising — the summary write is already committed and must not
+          be rolled back.
+        - The UPDATE is committed in its own short-lived WRITE session.
+        """
+        from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]
+
+        from knowledge_graph.infrastructure.intelligence_db.repositories.relation_summary import (
+            RelationSummaryRepository,
+        )
+
+        # BP-121: truncate to prevent BERT 512-token overflow in BGE-large.
+        embed_text = summary_text[:_MAX_EMBED_CHARS]
+
+        try:
+            outputs = await self._embedding_port.embed(  # type: ignore[union-attr]
+                [EmbeddingInput(text=embed_text, model_id="summary-embed-v1")]
+            )
+            if not outputs:
+                raise ValueError("empty embedding output")
+            embedding = outputs[0].embedding
+            model_id = outputs[0].model_id
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "summary_embedding_skip",
+                summary_id=str(summary_id),
+                relation_id=str(relation_id),
+                error=str(exc),
+                message="Embedding failed; summary_embedding left NULL",
+            )
+            return
+
+        try:
+            async with self._sf() as session:
+                summary_repo = RelationSummaryRepository(session)
+                await summary_repo.update_embedding(
+                    summary_id=summary_id,
+                    embedding=embedding,
+                    model_id=model_id,
+                    embedded_at=utc_now(),  # type: ignore[no-any-return]
+                )
+                await session.commit()
+        except Exception as exc:
+            logger.warning(  # type: ignore[no-any-return]
+                "summary_embedding_persist_failed",
+                summary_id=str(summary_id),
+                relation_id=str(relation_id),
+                error=str(exc),
+            )
 
     async def _generate_summary(
         self,
