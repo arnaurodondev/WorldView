@@ -337,3 +337,95 @@ class TestFromDictToDict:
         assert isinstance(out["bullets"][0], dict)
         assert isinstance(out["bullets"][0]["citations"], list)
         assert isinstance(out["bullets"][0]["citations"][0], dict)
+
+    # ── /fix-bug additions: close deferred QA-PLAN-0083 MINOR findings ───────
+
+    def test_bullet_text_at_exactly_1_char_accepted(self) -> None:
+        """Boundary acceptance: BriefBullet.text len==1 is the min and must be accepted.
+
+        WHY (QA-PLAN-0083 F-001 QA): the rejection of len==0 is tested in
+        ``test_text_min_length_1`` but the at-boundary acceptance was untested,
+        leaving a symmetric gap. A future tightening to ``len <= 1`` would
+        silently break legitimate one-char bullets without this assertion.
+        """
+        b = BriefBullet(text="x", citations=[BriefCitation(document_id="d1", snippet="s")])
+        assert b.text == "x"
+
+    def test_bullet_post_init_rejects_raw_dict_in_citations(self) -> None:
+        """Passing a raw dict (not a BriefCitation) in citations raises ValueError.
+
+        WHY (QA-PLAN-0083 F-003): __post_init__ has an isinstance(c, BriefCitation)
+        guard that rejects the legacy v1 cache shape. Test it directly so the
+        guard isn't only exercised indirectly via the section-level analog.
+        """
+        with pytest.raises(ValueError, match="BriefCitation instances"):
+            BriefBullet(text="t", citations=[{"document_id": "d1", "snippet": "s"}])  # type: ignore[list-item]
+
+    def test_bullet_from_dict_missing_text_raises_value_error(self) -> None:
+        """Missing required 'text' key raises ValueError (not KeyError).
+
+        WHY (QA-PLAN-0083 F-004): BriefCitation.from_dict raises ValueError for
+        missing required keys; harmonized to ValueError across all from_dict
+        classmethods so callers can use a single ``except ValueError`` for any
+        malformed cached payload.
+        """
+        with pytest.raises(ValueError, match="text"):
+            BriefBullet.from_dict({"citations": [{"document_id": "d1", "snippet": "s"}]})
+
+    def test_section_from_dict_missing_title_raises_value_error(self) -> None:
+        """Missing required 'title' key raises ValueError (not KeyError).
+
+        WHY (QA-PLAN-0083 F-004): consistency with the other from_dict methods.
+        """
+        with pytest.raises(ValueError, match="title"):
+            BriefSection.from_dict({"bullets": []})
+
+    def test_citation_from_dict_missing_snippet_raises_value_error(self) -> None:
+        """Missing required 'snippet' key raises ValueError (not implicit KeyError).
+
+        WHY (QA-PLAN-0083 F-004): we previously let ``data["snippet"]`` raise
+        KeyError; now we raise ValueError explicitly for consistency.
+        """
+        with pytest.raises(ValueError, match="snippet"):
+            BriefCitation.from_dict({"document_id": "d1"})
+
+    def test_citation_from_dict_extra_keys_silently_ignored(self) -> None:
+        """Unknown keys in the input dict are silently ignored.
+
+        WHY (QA-PLAN-0083 F-005): forward-compatibility contract — a future
+        cache blob with extra fields must not break older readers. This pins
+        the current behaviour so a future strict-construction refactor can't
+        silently break old caches.
+        """
+        c = BriefCitation.from_dict(
+            {
+                "document_id": "d1",
+                "snippet": "s",
+                "future_field": 42,
+                "another": "ignored",
+            }
+        )
+        assert c.document_id == "d1"
+        assert c.snippet == "s"
+
+    def test_citation_from_dict_empty_string_document_id_does_not_fall_through(self) -> None:
+        """Explicit document_id='' is rejected — does NOT silently fall back to source_id.
+
+        WHY (QA-PLAN-0083 F-006): the previous truthiness-based ``or`` fallback
+        meant ``{"document_id": "", "source_id": "real"}`` would silently use
+        ``source_id``, masking data corruption where the canonical key was
+        present but blank. Explicit-key precedence + non-empty validation
+        rejects this.
+        """
+        with pytest.raises(ValueError, match="non-empty document_id"):
+            BriefCitation.from_dict({"document_id": "", "source_id": "real", "snippet": "s"})
+
+    def test_citation_from_dict_falls_through_to_source_id_only_when_key_absent(self) -> None:
+        """Falls back to source_id only when document_id key is absent (not present-but-empty).
+
+        WHY (QA-PLAN-0083 F-006): explicit-key precedence — ``"document_id"
+        in data`` decides whether the fallback applies. This is the path
+        legitimate legacy callers depend on (no document_id key at all).
+        """
+        c = BriefCitation.from_dict({"source_id": "legacy-d1", "snippet": "s"})
+        assert c.document_id == "legacy-d1"

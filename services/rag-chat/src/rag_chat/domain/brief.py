@@ -74,10 +74,22 @@ class BriefCitation:
         ``model_config = ConfigDict(populate_by_name=True)`` which let callers
         send either ``document_id`` or the legacy ``source_id``. We preserve
         that read-path tolerance here so older cached payloads keep deserialising.
+
+        WHY explicit-key precedence (QA-PLAN-0083 F-006): we use ``"document_id"
+        in data`` rather than truthiness so that an explicit ``document_id=""``
+        is *kept* (and rejected downstream) instead of silently falling back to
+        ``source_id``. Truthiness-fallback could mask data corruption where the
+        canonical key is present but blank.
         """
-        document_id = data.get("document_id") or data.get("source_id")
-        if document_id is None:
-            raise ValueError("BriefCitation requires document_id (or legacy source_id)")
+        document_id = data["document_id"] if "document_id" in data else data.get("source_id")
+        if document_id is None or document_id == "":
+            raise ValueError("BriefCitation requires non-empty document_id (or legacy source_id)")
+        if "snippet" not in data:
+            # WHY ValueError (not the implicit KeyError that ``data["snippet"]``
+            # would raise): QA-PLAN-0083 F-004 — harmonize error type across all
+            # three from_dict classmethods so callers can ``except ValueError``
+            # uniformly.
+            raise ValueError("BriefCitation requires snippet")
         return cls(
             document_id=str(document_id),
             snippet=data["snippet"],
@@ -139,6 +151,11 @@ class BriefBullet:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> BriefBullet:
+        # WHY ValueError on missing key (QA-PLAN-0083 F-004): harmonize with
+        # BriefCitation.from_dict which already raises ValueError; lets callers
+        # use a single ``except ValueError`` for malformed cached payloads.
+        if "text" not in data:
+            raise ValueError("BriefBullet requires text")
         raw_cits = data.get("citations") or []
         cits = [c if isinstance(c, BriefCitation) else BriefCitation.from_dict(c) for c in raw_cits]
         return cls(text=data["text"], citations=cits)
@@ -186,6 +203,9 @@ class BriefSection:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> BriefSection:
+        # WHY ValueError on missing key (QA-PLAN-0083 F-004): consistency.
+        if "title" not in data:
+            raise ValueError("BriefSection requires title")
         raw_bullets = data.get("bullets") or []
         bullets = [b if isinstance(b, BriefBullet) else BriefBullet.from_dict(b) for b in raw_bullets]
         return cls(title=data["title"], bullets=bullets)

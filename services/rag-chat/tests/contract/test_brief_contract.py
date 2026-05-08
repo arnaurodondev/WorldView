@@ -316,3 +316,57 @@ def test_public_briefing_response_json_round_trip_preserves_nested_brief_data() 
     # field). This deep-equality check pins the full nested shape against the
     # canonical to_dict() output, so any structural drift trips the test.
     assert rehydrated.sections == [section.to_dict()]
+
+
+def test_legacy_source_id_in_cached_blob_is_normalized_on_read() -> None:
+    """Legacy ``source_id`` keys in cached citation dicts are rewritten to ``document_id``.
+
+    WHY THIS TEST (QA-PLAN-0083 Data Platform F-001): the production cache-read
+    path uses ``model_validate_json`` which goes through the field_validator,
+    NOT through ``BriefCitation.from_dict``. Without an explicit normalisation
+    step in the validator, a cached blob written by pre-PLAN-0062-W4 code that
+    still contained the legacy ``source_id`` key would leak through to the wire
+    response unchanged. The validator now walks nested dicts and rewrites
+    ``source_id → document_id`` so the API contract is uniform regardless of
+    cache vintage.
+    """
+    # Simulate a legacy-shaped cache blob (would have been written by code that
+    # used Pydantic's populate_by_name=True alias on BriefCitation pre-W4).
+    legacy_blob = {
+        "narrative": "Markets up.",
+        "risk_summary": {},
+        "generated_at": "2026-05-08T00:00:00+00:00",
+        "sections": [
+            {
+                "title": "Overview",
+                "bullets": [
+                    {
+                        "text": "Tech rallied.",
+                        "citations": [
+                            # Pure legacy: source_id only.
+                            {"source_id": "legacy-1", "snippet": "s1", "source_type": "article"},
+                            # Both keys present: canonical wins, legacy dropped.
+                            {
+                                "document_id": "canonical-2",
+                                "source_id": "ignore-2",
+                                "snippet": "s2",
+                                "source_type": "article",
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+
+    import json
+
+    rehydrated = PublicBriefingResponse.model_validate_json(json.dumps(legacy_blob))
+
+    cits = rehydrated.sections[0]["bullets"][0]["citations"]
+    # Legacy-only citation: source_id promoted to document_id, source_id removed.
+    assert cits[0]["document_id"] == "legacy-1"
+    assert "source_id" not in cits[0]
+    # Both-keys citation: canonical wins, legacy dropped.
+    assert cits[1]["document_id"] == "canonical-2"
+    assert "source_id" not in cits[1]
