@@ -1,0 +1,14 @@
+{
+  "type": "record",
+  "name": "ContentDocumentDeleted",
+  "namespace": "com.worldview.content_ingestion.events",
+  "doc": "Emitted by S4 when a tenant document is soft-deleted. S6 consumes this to remove chunks, sections, and entity_mentions.",
+  "fields": [
+    {"name": "event_id",       "type": "string", "doc": "UUIDv7"},
+    {"name": "event_type",     "type": "string", "default": "content.document.deleted"},
+    {"name": "schema_version", "type": "int",    "default": 1},
+    {"name": "occurred_at",    "type": "string", "doc": "ISO-8601 UTC"},
+    {"name": "doc_id",         "type": "string", "doc": "UUIDv7 of the deleted document"},
+    {"name": "tenant_id",      "type": "string", "doc": "Owning tenant UUID — always set for deletions"}
+  ]
+}

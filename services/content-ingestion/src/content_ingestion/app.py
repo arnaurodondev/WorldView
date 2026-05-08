@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from content_ingestion.api.routes import admin, dlq, health, internal
+from content_ingestion.api.routes import admin, dlq, documents, health, internal
 from content_ingestion.config import Settings
 from content_ingestion.infrastructure.db.session import _build_factories
 from content_ingestion.infrastructure.db.unit_of_work import SqlaReadOnlyUnitOfWork, SqlaUnitOfWork
@@ -256,4 +256,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(admin.router)
     app.include_router(dlq.router)
     app.include_router(internal.router)
+    app.include_router(documents.router)
     return app
