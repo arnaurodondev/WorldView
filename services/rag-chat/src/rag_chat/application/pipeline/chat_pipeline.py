@@ -163,18 +163,25 @@ class ChatPipeline:
     cache: CompletionCache
     get_thread: GetThreadUseCase
     s6_client: S6Port
-    # Both OllamaIntentClassifier and DeepInfraIntentClassifier satisfy IntentClassifierPort
-    classifier: IntentClassifierPort
-    plan_builder: RetrievalPlanBuilder
     hyde: HydeExpander
     embedder: EmbeddingPort
-    retrieval: ParallelRetrievalOrchestrator
     graph_enricher: GraphEnricher
     fusion: FusionPipeline
     # BGEReranker | DeepInfraReranker | CohereReranker — all expose .rerank()
     reranker: Any
     llm_chain: LLMProviderChain
     persistence: ChatPersistenceUseCase
+
+    # ── Classical-path collaborators (optional after PLAN-0067 W11-3) ─────────
+    # IntentClassifier, RetrievalPlanBuilder, ParallelRetrievalOrchestrator are
+    # no longer used by ChatOrchestratorUseCase (tool-use path replaced them).
+    # They remain here for RetrieveOnlyUseCase compatibility and are None by
+    # default for the chat pipeline.  Dataclass field ordering: fields with
+    # defaults must come after fields without defaults.
+    # Both OllamaIntentClassifier and DeepInfraIntentClassifier satisfy IntentClassifierPort
+    classifier: IntentClassifierPort | None = None  # type: ignore[assignment]
+    plan_builder: RetrievalPlanBuilder | None = None  # type: ignore[assignment]
+    retrieval: ParallelRetrievalOrchestrator | None = None  # type: ignore[assignment]
 
     # ── Stateless helper fields (default-instantiated) ────────────────────────
     # These hold no per-request state; constructing them here avoids
@@ -282,6 +289,12 @@ class ChatPipeline:
         Converts history messages to dicts (role/content) before passing to
         the classifier. Returns (intent, sub_questions, rephrased, plan).
         """
+        # PLAN-0067 W11-3: classifier and plan_builder are optional on ChatPipeline.
+        # classify_and_plan() is only called by RetrieveOnlyUseCase (eval harness);
+        # ChatOrchestratorUseCase uses the tool-use path and does not call this method.
+        if self.classifier is None or self.plan_builder is None:
+            raise RuntimeError("classify_and_plan() requires classifier and plan_builder (not set on this pipeline)")
+
         # Convert Message domain objects → plain dicts for the classifier API.
         # The classifier expects [{"role": "user"|"assistant", "content": "..."}].
         history_dicts = [{"role": m.role.value, "content": m.content} for m in history]
@@ -336,6 +349,10 @@ class ChatPipeline:
 
         After retrieval, emits rag_retrieval_items histogram metric per source type.
         """
+        # PLAN-0067 W11-3: retrieval is optional on ChatPipeline (eval harness only).
+        if self.retrieval is None:
+            raise RuntimeError("retrieve() requires retrieval orchestrator (not set on this pipeline)")
+
         raw_items = await self.retrieval.retrieve(plan, resolved_query, request, embedding)
 
         # Record per-source-type item counts for the dashboard retrieval breakdown.
