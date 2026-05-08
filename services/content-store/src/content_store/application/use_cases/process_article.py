@@ -58,6 +58,9 @@ class RawArticleEvent:
     title: str | None
     published_at: str | None
     is_backfill: bool
+    # tenant_id propagated from content.article.raw.v1 (PLAN-0086 Wave A-1)
+    # None = public/global news; non-None = private tenant content
+    tenant_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -352,4 +355,7 @@ def _build_stored_payload(doc: CanonicalDocument, article: RawArticleEvent) -> d
         "published_at": article.published_at,
         "is_backfill": doc.is_backfill,
         "correlation_id": None,
+        # Propagated from the raw event (PLAN-0086 Wave A-1).
+        # None = public/global news; UUID string = tenant-private content.
+        "tenant_id": article.tenant_id,
     }

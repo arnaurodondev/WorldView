@@ -44,8 +44,9 @@ class DocumentModel(Base):
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)  # uniqueness enforced via partial indexes
     normalized_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    tenant_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="stored", server_default=text("'stored'"))
     dedup_result: Mapped[str] = mapped_column(
         String(30), nullable=False, default="unique", server_default=text("'unique'")
@@ -81,10 +82,13 @@ class DedupHashModel(Base):
     )
     hash_type: Mapped[str] = mapped_column(String(30), nullable=False)
     hash_value: Mapped[str] = mapped_column(String(64), nullable=False)
+    tenant_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (
-        UniqueConstraint("hash_type", "hash_value", name="uq_dedup_hashes_type_value"),
+        # UniqueConstraint removed — replaced by partial indexes in migration 0005
+        # (uq_dedup_hashes_global and uq_dedup_hashes_tenant) so global and
+        # per-tenant hash spaces coexist without collision.
         Index("idx_dedup_hashes_lookup", "hash_type", "hash_value"),
     )
 
