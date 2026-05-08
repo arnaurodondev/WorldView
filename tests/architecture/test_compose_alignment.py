@@ -53,6 +53,13 @@ COMPOSE_BASELINE: dict[tuple[str, str], str] = {
     ("knowledge-graph", "structured_enrichment_consumer_main"): (
         "Add KG structured-enrichment consumer container — follow-up plan (PRD-0073)"
     ),
+    # PLAN-0086 Wave F-1: new consumers added; compose containers follow in Wave F-2
+    ("nlp-pipeline", "document_deletion_consumer_main"): (
+        "Add S6 document-deletion consumer container — PLAN-0086 Wave F-2"
+    ),
+    ("content-ingestion", "document_ready_consumer_main"): (
+        "Add S4 document-ready consumer container — PLAN-0086 Wave F-2"
+    ),
 }
 
 
