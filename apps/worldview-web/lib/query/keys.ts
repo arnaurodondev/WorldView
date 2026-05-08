@@ -304,6 +304,23 @@ export const qk = {
       ["feedback", "nps-aggregate", days] as const,
   },
 
+  // ── Briefing (PLAN-0066 Wave F) ─────────────────────────────────────────
+  // WHY a separate top-level domain: briefing queries (diff, history) are
+  // independent of the dashboard.morningBrief key which is keyed to the
+  // gateway.getMorningBrief() call. Having a dedicated briefing.* namespace
+  // lets us invalidate diff/history caches separately after feedback mutations.
+  briefing: {
+    all: ["briefing"] as const,
+    diff: (briefId?: string) =>
+      briefId
+        ? (["briefing", "diff", briefId] as const)
+        : (["briefing", "diff"] as const),
+    history: (params?: Readonly<Record<string, unknown>>) =>
+      params
+        ? (["briefing", "history", params] as const)
+        : (["briefing", "history"] as const),
+  },
+
   // ── User ─────────────────────────────────────────────────────────────────
   user: {
     all: ["user"] as const,
