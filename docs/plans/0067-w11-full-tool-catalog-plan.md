@@ -1,8 +1,8 @@
 # PLAN-0067 — W11 Full Tool Catalog: Embedding Search + Graph Traversal as LLM Tools
 
-> **Status**: draft
+> **Status**: completed
 > **Created**: 2026-05-03
-> **Last revised**: 2026-05-07 (BP-405 name-verification + architecture compliance audit)
+> **Last revised**: 2026-05-08 (all 5 waves complete — QA pending)
 > **Owner agent**: Staff engineer / TPM
 > **Estimated effort**: ~6 dev-days (5 waves: W11-1..W11-5; ~32 tasks)
 > **Critical path**: W11-1 → W11-2 → W11-3 → W11-4 ∥ W11-5 (frontend)
