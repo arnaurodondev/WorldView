@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
@@ -57,6 +57,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
@@ -178,7 +179,7 @@ class _NoOpUoW:
         pass
 
 
-class EarningsCalendarDatasetConsumer(BaseKafkaConsumer[None]):
+class EarningsCalendarDatasetConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     """Consumer 13D-9: Ingest earnings calendar events from market.dataset.fetched.
 
     Mirrors EconomicEventsDatasetConsumer pattern. Receives pre-fetched Finnhub
@@ -200,6 +201,11 @@ class EarningsCalendarDatasetConsumer(BaseKafkaConsumer[None]):
 
     """
 
+    # ValkeyDedupMixin: 7-day TTL covers two polling cycles and prevents
+    # duplicate processing on restart for weekly earnings calendar ingestion.
+    _dedup_prefix: str = "kg:dedup:earnings_calendar_dataset_consumer"
+    _dedup_ttl_seconds: ClassVar[int] = 7 * 86400
+
     def __init__(
         self,
         config: ConsumerConfig,
@@ -212,7 +218,6 @@ class EarningsCalendarDatasetConsumer(BaseKafkaConsumer[None]):
         self._sf = session_factory
         self._storage = storage_client
         self._dedup_client = dedup_client
-        self._dedup_prefix = f"kg:earnings_calendar:{config.group_id}"
 
     # ------------------------------------------------------------------
     # Core processing
@@ -483,24 +488,6 @@ class EarningsCalendarDatasetConsumer(BaseKafkaConsumer[None]):
                 error=str(exc),
             )
             raise
-
-    # ------------------------------------------------------------------
-    # Idempotency
-    # ------------------------------------------------------------------
-
-    async def is_duplicate(self, event_id: str) -> bool:
-        if self._dedup_client is None:
-            return False
-        key = f"{self._dedup_prefix}:{event_id}"
-        return bool(await self._dedup_client.exists(key))
-
-    async def mark_processed(self, event_id: str) -> None:
-        if self._dedup_client is None:
-            return
-        key = f"{self._dedup_prefix}:{event_id}"
-        # TTL = 7 days — earnings calendars are polled weekly; 7 days covers
-        # two polling cycles and prevents duplicate processing on restart.
-        await self._dedup_client.set(key, "1", ex=7 * 86400)
 
     # ------------------------------------------------------------------
     # Failure tracking
