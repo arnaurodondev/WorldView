@@ -19,11 +19,15 @@ COPY libs/prompts/pyproject.toml /build/libs/prompts/pyproject.toml
 COPY libs/prompts/src /build/libs/prompts/src
 COPY libs/contracts/pyproject.toml /build/libs/contracts/pyproject.toml
 COPY libs/contracts/src /build/libs/contracts/src
+COPY libs/tools/pyproject.toml /build/libs/tools/pyproject.toml
+COPY libs/tools/src /build/libs/tools/src
 
 COPY services/rag-chat/pyproject.toml /build/services/rag-chat/pyproject.toml
 COPY services/rag-chat/src /build/services/rag-chat/src
 
 # Non-editable install with uv cache mount for faster rebuilds
+# BP-181: all libs (including libs/tools) must be listed here — missing lib
+# causes ModuleNotFoundError at startup
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv /app/.venv && \
     uv pip install --python /app/.venv \
@@ -33,6 +37,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         /build/libs/ml-clients \
         /build/libs/prompts \
         /build/libs/contracts \
+        /build/libs/tools \
         /build/services/rag-chat
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────

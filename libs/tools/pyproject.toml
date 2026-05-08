@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tools"
+version = "0.1.0"
+description = "Tool registry and spec for LLM tool-use loop (PLAN-0066 Wave H)"
+requires-python = ">=3.11,<3.13"
+dependencies = ["pyyaml"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9",
+    "pytest-asyncio>=0.23,<1",
+    "ruff>=0.4,<1",
+    "mypy>=1.10,<2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tools"]
+
+[[tool.mypy.overrides]]
+module = ["yaml.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra -q --strict-markers"
+markers = [
+    "unit: fast isolated unit tests",
+    "integration: tests requiring external infra",
+]

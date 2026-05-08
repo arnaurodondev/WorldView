@@ -101,6 +101,27 @@ async def get_brief_archive_dep(request: Request) -> AsyncGenerator[BriefArchive
 BriefArchiveRepositoryDep = Annotated[Any, Depends(get_brief_archive_dep)]
 
 
+def get_tool_executor(request: Request) -> Any:
+    """Return a ToolExecutor wired with the default registry and S3Port (PLAN-0066 Wave H T-W10-H-05).
+
+    WHY lazy import: R25 compliance — api/dependencies.py must not import from
+    infrastructure/ at module level. The concrete S3Client and ToolExecutor are
+    resolved only at request time.
+
+    WHY get from app.state: the S3 adapter is constructed once at app startup
+    (in app.py lifespan) and stored on request.app.state, consistent with how
+    all other upstream clients are accessed (e.g. app.state.s3_client).
+    """
+    from rag_chat.application.pipeline.tool_executor import (
+        ToolExecutor,
+        build_default_registry,
+    )
+
+    s3_client = request.app.state.s3_client
+    registry = build_default_registry()
+    return ToolExecutor(registry=registry, s3=s3_client)
+
+
 def make_write_uow(request: Request) -> Any:
     """Return a context-manager that yields a write-capable RagUnitOfWork.
 
