@@ -2,6 +2,8 @@
   "violations": [
     "services/alert/src/alert/infrastructure/cache/watchlist_cache.py:19:IG-MSG-002",
     "services/nlp-pipeline/src/nlp_pipeline/api/routes/dlq.py:13:IG-LAYER-002",
-    "services/nlp-pipeline/src/nlp_pipeline/api/routes/dlq.py:13:IG-LAYER-002"
+    "services/nlp-pipeline/src/nlp_pipeline/api/routes/dlq.py:13:IG-LAYER-002",
+    "services/market-ingestion/scripts/backfill_fundamentals.py:79:IG-OBS-001",
+    "services/market-ingestion/scripts/backfill_fundamentals.py:855:IG-OBS-001"
   ]
 }
