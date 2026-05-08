@@ -1,7 +1,15 @@
-"""Unit tests for PLAN-0066 Wave B proxy route: GET /v1/briefings/morning/history.
+"""Unit tests for PLAN-0066 Wave B/C/D/E proxy routes for morning-brief endpoints.
 
-Tests verify:
-  - Authenticated request is forwarded to S8 (rag-chat) with query params
+Waves covered:
+  Wave B — GET /v1/briefings/morning/history
+  Wave C — GET /v1/briefings/morning/diff
+            POST /v1/briefings/feedback/bullet
+            POST /v1/briefings/feedback/brief
+  Wave D — POST /v1/briefings/chat/discuss
+  Wave E — POST /v1/briefings/{brief_id}/create-alert (placeholder)
+
+All tests verify:
+  - Authenticated request is forwarded to S8 (rag-chat) with the correct path
   - Unauthenticated request → 401 (gateway auth guard fires before downstream call)
 
 Uses the shared conftest fixtures (app, authed_app, authed_mock_clients) which
@@ -94,3 +102,231 @@ async def test_proxy_brief_history_requires_auth(app, mock_clients) -> None:
     assert resp.status_code == 401
     # S8 must NOT be called — auth should fail at the gateway before proxying
     mock_clients.rag_chat.get.assert_not_called()
+
+
+# ── T-W10-C-01: proxy brief diff passthrough ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_proxy_brief_diff_passthrough(authed_app, authed_mock_clients) -> None:
+    """GET /v1/briefings/morning/diff → S8 rag-chat forwarded.
+
+    WHY: the gateway must forward the diff request to S8 which performs a 2-row
+    DB fetch and in-memory compare.  No query params are required.
+    """
+    diff_body = b'{"added": [], "removed": [], "unchanged": []}'
+    authed_mock_clients.rag_chat.get = AsyncMock(
+        return_value=_mock_response(200, diff_body),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            "/v1/briefings/morning/diff",
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+
+    authed_mock_clients.rag_chat.get.assert_called_once()
+    call_args = authed_mock_clients.rag_chat.get.call_args
+    # WHY positional: proxy calls clients.rag_chat.get(path, headers=...)
+    path_arg = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
+    assert "/api/v1/briefings/morning/diff" in path_arg
+
+
+@pytest.mark.asyncio
+async def test_proxy_brief_diff_requires_auth(app, mock_clients) -> None:
+    """GET /v1/briefings/morning/diff without auth → 401; S8 never called."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/v1/briefings/morning/diff")
+
+    assert resp.status_code == 401
+    mock_clients.rag_chat.get.assert_not_called()
+
+
+# ── T-W10-C-02: proxy feedback/bullet passthrough ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_proxy_brief_feedback_bullet(authed_app, authed_mock_clients) -> None:
+    """POST /v1/briefings/feedback/bullet → S8 rag-chat forwarded with JSON body.
+
+    WHY: the gateway must forward the raw body bytes to S8 so S8 can validate
+    brief_id, section_idx, bullet_idx, and reaction via Pydantic.
+    """
+    req_body = b'{"brief_id": "br-1", "section_idx": 0, "bullet_idx": 1, "reaction": "helpful"}'
+    authed_mock_clients.rag_chat.post = AsyncMock(
+        return_value=_mock_response(201, b'{"id": "fb-1"}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/briefings/feedback/bullet",
+            content=req_body,
+            headers={
+                "Authorization": f"Bearer {_make_jwt()}",
+                "Content-Type": "application/json",
+            },
+        )
+
+    # WHY 201 from the mock: S8 returns 201 Created on successful feedback write;
+    # the gateway passes the upstream status code through unchanged.
+    assert resp.status_code == 201
+
+    authed_mock_clients.rag_chat.post.assert_called_once()
+    call_args = authed_mock_clients.rag_chat.post.call_args
+    path_arg = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
+    assert "/api/v1/briefings/feedback/bullet" in path_arg
+
+
+@pytest.mark.asyncio
+async def test_proxy_brief_feedback_bullet_requires_auth(app, mock_clients) -> None:
+    """POST /v1/briefings/feedback/bullet without auth → 401; S8 never called."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/briefings/feedback/bullet",
+            content=b"{}",
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 401
+    mock_clients.rag_chat.post.assert_not_called()
+
+
+# ── T-W10-C-03: proxy feedback/brief passthrough ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_proxy_brief_feedback_brief_passthrough(authed_app, authed_mock_clients) -> None:
+    """POST /v1/briefings/feedback/brief → S8 rag-chat forwarded with JSON body.
+
+    WHY: star-rating feedback (1-5) must reach S8 so it can persist the rating
+    and adjust LLM prompt weights over time.
+    """
+    req_body = b'{"brief_id": "br-1", "rating": 4}'
+    authed_mock_clients.rag_chat.post = AsyncMock(
+        return_value=_mock_response(201, b'{"id": "fb-2"}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/briefings/feedback/brief",
+            content=req_body,
+            headers={
+                "Authorization": f"Bearer {_make_jwt()}",
+                "Content-Type": "application/json",
+            },
+        )
+
+    assert resp.status_code == 201
+
+    authed_mock_clients.rag_chat.post.assert_called_once()
+    call_args = authed_mock_clients.rag_chat.post.call_args
+    path_arg = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
+    assert "/api/v1/briefings/feedback/brief" in path_arg
+
+
+# ── T-W10-D-01: proxy chat/discuss passthrough ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_proxy_brief_discuss(authed_app, authed_mock_clients) -> None:
+    """POST /v1/briefings/chat/discuss → S8 rag-chat forwarded with JSON body.
+
+    WHY: follow-up chat questions are forwarded to S8 which runs an LLM completion;
+    S9 acts as a thin proxy and must not modify or buffer the body.
+    """
+    req_body = b'{"brief_id": "br-1", "message": "Why is NVDA down?"}'
+    authed_mock_clients.rag_chat.post = AsyncMock(
+        return_value=_mock_response(200, b'{"reply": "Because of macro concerns."}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/briefings/chat/discuss",
+            content=req_body,
+            headers={
+                "Authorization": f"Bearer {_make_jwt()}",
+                "Content-Type": "application/json",
+            },
+        )
+
+    assert resp.status_code == 200
+
+    authed_mock_clients.rag_chat.post.assert_called_once()
+    call_args = authed_mock_clients.rag_chat.post.call_args
+    path_arg = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
+    assert "/api/v1/briefings/chat/discuss" in path_arg
+
+
+@pytest.mark.asyncio
+async def test_proxy_brief_discuss_requires_auth(app, mock_clients) -> None:
+    """POST /v1/briefings/chat/discuss without auth → 401; S8 never called."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/briefings/chat/discuss",
+            content=b"{}",
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 401
+    mock_clients.rag_chat.post.assert_not_called()
+
+
+# ── T-W10-E-01: proxy {brief_id}/create-alert placeholder passthrough ─────────
+
+
+@pytest.mark.asyncio
+async def test_proxy_brief_create_alert_passthrough(authed_app, authed_mock_clients) -> None:
+    """POST /v1/briefings/{brief_id}/create-alert → S8 rag-chat forwarded.
+
+    WHY: the placeholder route must be registered at S9 so the API surface is
+    stable before Wave F ships the real S8 implementation.  S8 currently returns
+    404 for this path; S9 passes that through unchanged.
+    """
+    brief_id = "br-abc123"
+    # Simulate S8 returning 404 until Wave F ships the real endpoint
+    authed_mock_clients.rag_chat.post = AsyncMock(
+        return_value=_mock_response(404, b'{"detail": "Not implemented yet"}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            f"/v1/briefings/{brief_id}/create-alert",
+            content=b'{"ticker": "NVDA"}',
+            headers={
+                "Authorization": f"Bearer {_make_jwt()}",
+                "Content-Type": "application/json",
+            },
+        )
+
+    # WHY 404: S8 placeholder returns 404; S9 passes status through unchanged
+    assert resp.status_code == 404
+
+    authed_mock_clients.rag_chat.post.assert_called_once()
+    call_args = authed_mock_clients.rag_chat.post.call_args
+    path_arg = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
+    assert f"/api/v1/briefings/{brief_id}/create-alert" in path_arg
+
+
+@pytest.mark.asyncio
+async def test_proxy_brief_create_alert_requires_auth(app, mock_clients) -> None:
+    """POST /v1/briefings/{brief_id}/create-alert without auth → 401; S8 never called."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/briefings/br-1/create-alert",
+            content=b"{}",
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 401
+    mock_clients.rag_chat.post.assert_not_called()
