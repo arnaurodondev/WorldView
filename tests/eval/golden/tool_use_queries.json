@@ -1,0 +1,143 @@
+[
+  {
+    "id": "tq-001",
+    "query": "What risks does Apple mention in their latest 10-K?",
+    "expected_tools": ["search_documents"],
+    "expected_source_types": ["sec_filing"],
+    "min_retrieved_items": 1,
+    "label": "factual_lookup"
+  },
+  {
+    "id": "tq-002",
+    "query": "How is Sam Altman connected to Microsoft?",
+    "expected_tools": ["traverse_graph", "get_entity_graph"],
+    "min_retrieved_items": 1,
+    "label": "relationship"
+  },
+  {
+    "id": "tq-003",
+    "query": "What are conflicting analyst views on Tesla's profitability?",
+    "expected_tools": ["search_claims", "get_contradictions"],
+    "min_retrieved_items": 1,
+    "label": "signal_intel"
+  },
+  {
+    "id": "tq-004",
+    "query": "How has Apple's revenue trended over 8 quarters?",
+    "expected_tools": ["get_fundamentals_history"],
+    "min_retrieved_items": 1,
+    "label": "temporal"
+  },
+  {
+    "id": "tq-005",
+    "query": "What did analysts say about NVDA's data centre revenue this year?",
+    "expected_tools": ["search_documents"],
+    "min_retrieved_items": 1,
+    "label": "factual_lookup"
+  },
+  {
+    "id": "tq-006",
+    "query": "Who are Apple's main subsidiaries and board members?",
+    "expected_tools": ["get_entity_graph"],
+    "min_retrieved_items": 1,
+    "label": "relationship"
+  },
+  {
+    "id": "tq-007",
+    "query": "What events happened at Google in 2025?",
+    "expected_tools": ["search_events"],
+    "min_retrieved_items": 1,
+    "label": "signal_intel"
+  },
+  {
+    "id": "tq-008",
+    "query": "What is the investment chain between SoftBank and ARM?",
+    "expected_tools": ["traverse_graph"],
+    "min_retrieved_items": 1,
+    "label": "relationship"
+  },
+  {
+    "id": "tq-009",
+    "query": "What is AAPL's stock price trend over the last 3 months?",
+    "expected_tools": ["get_price_history"],
+    "min_retrieved_items": 1,
+    "label": "temporal"
+  },
+  {
+    "id": "tq-010",
+    "query": "What strategic claims are analysts making about Microsoft's AI strategy?",
+    "expected_tools": ["search_claims"],
+    "min_retrieved_items": 1,
+    "label": "signal_intel"
+  },
+  {
+    "id": "tq-011",
+    "query": "What SEC filings has Tesla submitted this year?",
+    "expected_tools": ["search_documents"],
+    "min_retrieved_items": 1,
+    "label": "factual_lookup"
+  },
+  {
+    "id": "tq-012",
+    "query": "What companies compete with NVIDIA in the GPU market?",
+    "expected_tools": ["search_entity_relations", "get_entity_graph"],
+    "min_retrieved_items": 1,
+    "label": "relationship"
+  },
+  {
+    "id": "tq-013",
+    "query": "What did Apple's latest earnings call say about iPhone sales?",
+    "expected_tools": ["search_documents"],
+    "min_retrieved_items": 1,
+    "label": "factual_lookup"
+  },
+  {
+    "id": "tq-014",
+    "query": "Are there contradictions between analysts about Amazon's profitability?",
+    "expected_tools": ["get_contradictions"],
+    "min_retrieved_items": 1,
+    "label": "signal_intel"
+  },
+  {
+    "id": "tq-015",
+    "query": "How is my portfolio performing today?",
+    "expected_tools": ["get_portfolio_context"],
+    "min_retrieved_items": 1,
+    "label": "portfolio"
+  },
+  {
+    "id": "tq-016",
+    "query": "What leadership changes happened at Meta in 2025?",
+    "expected_tools": ["search_events"],
+    "min_retrieved_items": 1,
+    "label": "signal_intel"
+  },
+  {
+    "id": "tq-017",
+    "query": "What is Microsoft's gross profit trend over the last 2 years?",
+    "expected_tools": ["get_fundamentals_history"],
+    "min_retrieved_items": 1,
+    "label": "temporal"
+  },
+  {
+    "id": "tq-018",
+    "query": "What relationships does Elon Musk have in the knowledge graph?",
+    "expected_tools": ["search_entity_relations", "get_entity_graph"],
+    "min_retrieved_items": 1,
+    "label": "relationship"
+  },
+  {
+    "id": "tq-019",
+    "query": "What risk factors does Amazon mention in their 10-K filings?",
+    "expected_tools": ["search_documents"],
+    "min_retrieved_items": 1,
+    "label": "factual_lookup"
+  },
+  {
+    "id": "tq-020",
+    "query": "Which of my holdings have the highest exposure to AI?",
+    "expected_tools": ["get_portfolio_context", "search_documents"],
+    "min_retrieved_items": 1,
+    "label": "portfolio"
+  }
+]
