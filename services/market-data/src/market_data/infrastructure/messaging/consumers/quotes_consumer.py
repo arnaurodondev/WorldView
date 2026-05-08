@@ -58,6 +58,8 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
     at least named, even when the mixin is not used.
     """
 
+    # Dedup strategy: DB-atomic (INSERT ... ON CONFLICT DO NOTHING per BP-035).
+    # ValkeyDedupMixin intentionally NOT used — see is_duplicate / mark_processed overrides.
     _dedup_prefix = "market-data:dedup:quotes_consumer"
     _dedup_ttl_seconds = 86400
 

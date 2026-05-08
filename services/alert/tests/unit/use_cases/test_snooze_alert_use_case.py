@@ -15,6 +15,8 @@ from alert.application.use_cases.snooze_alert import MAX_SNOOZE_DAYS, SnoozeAler
 from alert.domain.entities import Alert
 from alert.domain.enums import AlertSeverity, AlertType
 
+pytestmark = pytest.mark.unit
+
 
 def _make_alert(tenant_id: UUID | None) -> Alert:
     return Alert(

@@ -17,6 +17,8 @@ from nlp_pipeline.infrastructure.nlp_db.repositories.entity_mention import (
     EntityMentionRepository,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()

@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 import pytest
 from market_ingestion.application.services.provider_routing_cache import ProviderRoutingCache
 
+pytestmark = pytest.mark.unit
+
 
 def _make_settings(**overrides: str) -> MagicMock:
     """Build a mock Settings with default routing config fields.

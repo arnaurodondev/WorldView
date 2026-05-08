@@ -13,7 +13,10 @@ PLAN-0063 W5-2 / FR-T1-2.
 
 from __future__ import annotations
 
+import pytest
 from nlp_pipeline.infrastructure.nlp_db.models import ChunkModel
+
+pytestmark = pytest.mark.unit
 
 
 def test_chunk_model_does_not_declare_tsv_columns() -> None:

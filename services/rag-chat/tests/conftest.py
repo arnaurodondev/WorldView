@@ -9,12 +9,16 @@ The default ``client`` fixture injects a system JWT via X-Internal-JWT header (B
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 
 import jwt as _jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 from rag_chat.app import create_app
 from rag_chat.infrastructure.config.settings import RagChatSettings
+
+if TYPE_CHECKING:
+    from prometheus_client import CollectorRegistry
 
 
 def _make_system_jwt() -> str:
@@ -70,3 +74,18 @@ async def unauthenticated_client(app):  # type: ignore[return]
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+@pytest.fixture
+def isolated_registry(monkeypatch: pytest.MonkeyPatch) -> CollectorRegistry:
+    """Provide an isolated Prometheus CollectorRegistry for tests.
+
+    QA-008 (BP-425): tests that assert on Prometheus metrics must use an isolated
+    registry to prevent cross-test gauge contamination from the shared global REGISTRY.
+    """
+    import prometheus_client
+    from prometheus_client import CollectorRegistry
+
+    registry = CollectorRegistry()
+    monkeypatch.setattr(prometheus_client, "REGISTRY", registry)
+    return registry

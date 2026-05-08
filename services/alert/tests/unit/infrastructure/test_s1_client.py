@@ -9,6 +9,8 @@ import pytest
 from alert.config import Settings
 from alert.infrastructure.clients.s1_client import S1Client, WatcherInfo
 
+pytestmark = pytest.mark.unit
+
 
 def _settings(**overrides: object) -> Settings:
     defaults = {

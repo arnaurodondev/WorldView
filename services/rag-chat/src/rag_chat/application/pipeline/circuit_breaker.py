@@ -147,6 +147,12 @@ class SourceCircuitBreaker:
         that already did ZADD but hasn't called ZCARD yet, causing the failure
         count to start from scratch instead of the correct value.
 
+        # NOTE: The failures ZSET is intentionally NOT deleted on success. It expires
+        # naturally via its TTL (failure_window_seconds). Old failures in the window can
+        # cause the breaker to re-open quickly after recovery if new failures occur within
+        # the same window. This is intentional — it avoids a concurrent-write race and
+        # provides a "cooling off" period after recovery.
+
         Best-effort — Valkey errors are swallowed.
         """
         try:

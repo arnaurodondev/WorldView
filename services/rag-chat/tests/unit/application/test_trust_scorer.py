@@ -10,6 +10,8 @@ from rag_chat.application.pipeline.trust_scorer import _DEFAULT_CORROBORATION, T
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem, compute_recency_score
 from rag_chat.domain.enums import ItemType
 
+pytestmark = pytest.mark.unit
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 

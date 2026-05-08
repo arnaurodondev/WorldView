@@ -23,6 +23,8 @@ from httpx import ASGITransport, AsyncClient
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+pytestmark = pytest.mark.unit
+
 # ── Setup helpers ─────────────────────────────────────────────────────────────
 
 

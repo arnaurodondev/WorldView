@@ -24,6 +24,8 @@ from market_ingestion.application.use_cases.execute_task import (
 from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.infrastructure.adapters.providers.registry import ProviderRegistry
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

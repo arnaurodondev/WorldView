@@ -8,6 +8,8 @@ import pytest
 from rag_chat.domain.errors import ProviderUnavailableError
 from rag_chat.infrastructure.llm.provider_chain import LLMProviderChain
 
+pytestmark = pytest.mark.unit
+
 
 def _make_provider(name: str, chunks: list[str] | None = None, *, fail: bool = False) -> MagicMock:
     """Create a mock LLM provider."""

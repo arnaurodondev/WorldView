@@ -12,6 +12,8 @@ from nlp_pipeline.domain.enums import (
     WindowType,
 )
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.unit
 class TestMentionClass:

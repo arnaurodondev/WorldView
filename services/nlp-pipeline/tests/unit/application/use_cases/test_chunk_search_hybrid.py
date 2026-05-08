@@ -15,6 +15,8 @@ from nlp_pipeline.application.use_cases.enhanced_chunk_search import (
     EnhancedChunkSearchUseCase,
 )
 
+pytestmark = pytest.mark.unit
+
 _DUMMY_VEC = [0.1] * 1024
 
 

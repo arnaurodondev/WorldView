@@ -188,10 +188,13 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 request.state.tenant_id = payload.get("tenant_id", "")
                 request.state.user_id = payload.get("sub", "")
                 request.state.role = payload.get("role", "")
-            except jwt.DecodeError:
-                request.state.tenant_id = ""
-                request.state.user_id = ""
-                request.state.role = ""
+            except jwt.DecodeError as exc:
+                logger.warning("internal_jwt_malformed_skip_verification", error=str(exc))  # type: ignore[no-any-return]
+                return Response(
+                    content='{"detail":"Malformed JWT"}',
+                    status_code=401,
+                    media_type="application/json",
+                )
             from rag_chat.infrastructure.clients.auth_context import set_current_jwt
 
             set_current_jwt(token)

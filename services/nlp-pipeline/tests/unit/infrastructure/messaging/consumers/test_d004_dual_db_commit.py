@@ -26,6 +26,8 @@ from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
 )
 from structlog.testing import capture_logs
 
+pytestmark = pytest.mark.unit
+
 # ── Shared helpers ───────────────────────────────────────────────────────────
 
 

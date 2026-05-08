@@ -9,6 +9,8 @@ from rag_chat.application.pipeline.output_processor import OutputProcessor
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType
 
+pytestmark = pytest.mark.unit
+
 
 def _item(item_id: str = "chunk-1", score: float = 0.85) -> RetrievedItem:
     return RetrievedItem.create(

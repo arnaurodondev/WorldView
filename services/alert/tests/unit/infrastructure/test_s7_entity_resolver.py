@@ -20,6 +20,8 @@ import httpx
 import pytest
 from alert.infrastructure.clients.s7_entity_resolver import S7EntityResolver
 
+pytestmark = pytest.mark.unit
+
 
 def _settings_stub(jwt: str = "fake.jwt", ttl: int = 900) -> MagicMock:
     """Return a Settings-like stub with only the fields the resolver reads."""

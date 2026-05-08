@@ -17,6 +17,8 @@ from market_ingestion.application.use_cases.daily_budget_tracker import DailyBud
 from market_ingestion.domain.entities.provider_budget import ProviderBudget
 from market_ingestion.domain.enums import Provider
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

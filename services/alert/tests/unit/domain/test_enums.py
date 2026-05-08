@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 from alert.domain.enums import AlertSeverity, AlertType, DeliveryChannel, DeliveryStatus, DLQStatus, OutboxStatus
 
+pytestmark = pytest.mark.unit
+
 
 class TestAlertSeverity:
     @pytest.mark.unit

@@ -10,6 +10,8 @@ from rag_chat.application.pipeline.prompt_builder import PromptBuilder
 from rag_chat.domain.entities.conversation import Message
 from rag_chat.domain.enums import MessageRole
 
+pytestmark = pytest.mark.unit
+
 
 def _no_contradictions() -> MagicMock:
     block = MagicMock()

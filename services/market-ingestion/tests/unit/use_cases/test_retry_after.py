@@ -21,6 +21,8 @@ from market_ingestion.infrastructure.adapters.providers.eodhd import (
     _parse_retry_after,
 )
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # _parse_retry_after unit tests
 # ---------------------------------------------------------------------------

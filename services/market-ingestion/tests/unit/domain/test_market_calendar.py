@@ -7,6 +7,8 @@ from datetime import UTC, date, datetime
 import pytest
 from market_ingestion.domain.market_calendar import MarketCalendar
 
+pytestmark = pytest.mark.unit
+
 _CAL = MarketCalendar()
 
 

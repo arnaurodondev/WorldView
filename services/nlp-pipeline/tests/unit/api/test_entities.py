@@ -16,6 +16,8 @@ from nlp_pipeline.api.dependencies import get_entity_mention_repo, get_entity_re
 from nlp_pipeline.api.routes.entities import router
 from nlp_pipeline.application.use_cases.query_entity_resolver import EntityResolutionResult
 
+pytestmark = pytest.mark.unit
+
 _ENTITY_ID = uuid.UUID("018f1e2a-0000-7000-8000-000000000002")
 _DOC_ID_1 = uuid.UUID("018f1e2b-0001-7000-8000-000000000001")
 _DOC_ID_2 = uuid.UUID("018f1e2b-0002-7000-8000-000000000002")

@@ -14,6 +14,8 @@ from __future__ import annotations
 import pytest
 from alert.infrastructure.email.template import render_digest_email
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

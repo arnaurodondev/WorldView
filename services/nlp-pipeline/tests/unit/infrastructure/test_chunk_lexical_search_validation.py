@@ -13,6 +13,8 @@ from __future__ import annotations
 import pytest
 from nlp_pipeline.infrastructure.nlp_db.repositories.chunk_search import ChunkANNRepository
 
+pytestmark = pytest.mark.unit
+
 
 async def test_lexical_search_section_granularity_raises_value_error() -> None:
     """``granularity='section'`` is unsupported in W5 — raises ValueError."""

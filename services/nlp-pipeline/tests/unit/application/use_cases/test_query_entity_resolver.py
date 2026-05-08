@@ -12,6 +12,8 @@ from nlp_pipeline.application.use_cases.query_entity_resolver import (
     _normalize,
 )
 
+pytestmark = pytest.mark.unit
+
 _ENTITY_ID = uuid.UUID("018f1e2a-0000-7000-8000-000000000001")
 _ENTITY_DATA = {
     "canonical_name": "Apple Inc",

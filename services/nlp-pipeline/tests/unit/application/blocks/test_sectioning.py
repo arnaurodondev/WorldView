@@ -13,6 +13,8 @@ from nlp_pipeline.application.blocks.sectioning import (
     section_document,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _doc_id() -> uuid.UUID:
     return uuid.uuid4()

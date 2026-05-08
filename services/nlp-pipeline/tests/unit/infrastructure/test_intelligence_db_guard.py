@@ -9,6 +9,8 @@ from nlp_pipeline.infrastructure.intelligence_db.session import (
     create_intelligence_session_factory,
 )
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.unit
 class TestAlembicGuard:

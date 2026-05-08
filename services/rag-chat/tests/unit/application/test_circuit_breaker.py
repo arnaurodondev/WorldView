@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from rag_chat.application.pipeline.circuit_breaker import SourceCircuitBreaker
 
+pytestmark = pytest.mark.unit
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 

@@ -32,6 +32,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.unit
 class TestClaimExtractedProducerRemoved:

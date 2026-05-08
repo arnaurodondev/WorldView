@@ -16,6 +16,8 @@ from rag_chat.infrastructure.db.repositories.llm_usage_log import (
     RagChatUsageLogRepository,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()

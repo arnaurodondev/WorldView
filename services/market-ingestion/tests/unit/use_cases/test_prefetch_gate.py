@@ -22,6 +22,8 @@ from market_ingestion.domain.entities.watermark import Watermark
 from market_ingestion.domain.enums import BackfillStatus, DatasetType, Provider
 from market_ingestion.domain.errors import ProviderRateLimited
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Watermark domain entity — last_success_at field
 # ---------------------------------------------------------------------------

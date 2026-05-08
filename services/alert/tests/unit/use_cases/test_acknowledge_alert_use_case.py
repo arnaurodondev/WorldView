@@ -15,6 +15,8 @@ from alert.application.use_cases.acknowledge_alert import AcknowledgeAlertUseCas
 from alert.domain.entities import Alert
 from alert.domain.enums import AlertSeverity, AlertType
 
+pytestmark = pytest.mark.unit
+
 
 def _make_alert(
     *,
