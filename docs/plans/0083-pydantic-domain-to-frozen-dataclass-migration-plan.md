@@ -1,13 +1,25 @@
 # PLAN-0083 — Pydantic-Domain → Frozen-Dataclass Migration
 
 > **PRD**: derived from `/investigate` 2026-05-07 — issue I-8 (domain-entity convention drift)
-> **Status**: stub
+> **Status**: completed
 > **Created**: 2026-05-07
-> **Last revised**: 2026-05-07 (BP-405 name-verification + architecture compliance audit)
+> **Last revised**: 2026-05-08 (Wave A implementation + orchestrated QA)
 > **Owner**: TBD
 > **Estimated effort**: ~1 dev-day (single wave)
 > **Hard dependencies**: none (standalone refactor — no upstream plan dependencies)
 > **Blocks**: none
+
+---
+
+## Wave A ✅
+**Status**: **DONE** — 2026-05-08 · 710 tests pass (was 698 baseline; +12 new from_dict/to_dict + JSON round-trip) · ruff + mypy clean
+
+Implementation summary:
+- `services/rag-chat/src/rag_chat/domain/brief.py`: 3 classes converted to `@dataclass(frozen=True, kw_only=True)`; `__post_init__` validation parity for all `Field(...)` constraints; `from_dict` / `to_dict` on each class. `BriefCitation.from_dict` accepts both `document_id` and legacy `source_id`; `to_dict` always emits canonical `document_id`. No `pydantic` import remains.
+- `services/rag-chat/src/rag_chat/api/schemas.py`: `BriefingResponse.sections` and `PublicBriefingResponse.sections` redeclared as `list[dict[str, Any]]` with a `field_validator(mode="before")` (`_coerce_sections_to_dicts`) that converts `BriefSection` instances via `.to_dict()` (Pattern 1 from §3). Preserves `model_dump_json` / `model_validate_json` round-trip used by Valkey cache in `public_briefings.py`.
+- Tests: `tests/unit/api/test_schemas_brief.py` `ValidationError` → `ValueError` for the 3 migrated classes; new `TestFromDictToDict` class with 12 tests covering canonical/legacy `from_dict`, `to_dict` emission contract, nested round-trip, deep dict conversion. `tests/contract/test_brief_contract.py` added `test_public_briefing_response_json_round_trip_preserves_nested_brief_data` covering the production cache path.
+
+Orchestration: subagent implemented Wave A → main-session QA agent reviewed (1 NOTE downgrade after grep-verifying no `BriefCitation(source_id=...)` callers, 2 IMPROVEMENT items: `from_dict`/`to_dict` test gaps + JSON round-trip test) → fix subagent added 13 new tests.
 
 ---
 

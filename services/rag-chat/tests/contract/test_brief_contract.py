@@ -168,12 +168,15 @@ def test_every_bullet_has_at_least_one_citation(claims_fixture: list[dict]) -> N
         ctx = _build_mock_ctx(entry)
         ctx_cits = _materialize_brief_citations(ctx)
         resp = _make_brief_response(entry["claim"], ctx_cits)
+        # WHY dict access: PLAN-0083 — PublicBriefingResponse.sections is now
+        # list[dict[str, Any]] (BriefSection.to_dict() output). Bullets and
+        # citations are nested dicts, not domain objects on the response model.
         for sec in resp.sections:
-            # WHY isinstance check: legacy fallback returns list[dict], not list[BriefBullet]
-            for bullet in sec.bullets:
-                if isinstance(bullet, BriefBullet):
-                    if not bullet.citations:
-                        violations.append(f"Uncited bullet: '{bullet.text[:40]}' in section '{sec.title}'")
+            for bullet in sec.get("bullets", []):
+                if not bullet.get("citations"):
+                    violations.append(
+                        f"Uncited bullet: '{bullet.get('text', '')[:40]}' in section '{sec.get('title', '')}'"
+                    )
 
     assert not violations, f"{len(violations)} uncited bullets found:\n" + "\n".join(violations[:5])
 
@@ -220,9 +223,89 @@ def test_stale_v1_shape_at_v2_cache_key_falls_through() -> None:
     This test simulates what happens when someone attempts to construct a BriefSection
     with legacy string bullets after PLAN-0062-W4.
     """
-    # Simulating stale v1 section data (string bullets) being passed to new schema
-    with pytest.raises(ValidationError):
+    # Simulating stale v1 section data (string bullets) being passed to new schema.
+    # WHY ValueError: PLAN-0083 — BriefSection is now a frozen dataclass; the
+    # runtime type guard in __post_init__ raises ValueError when bullets are
+    # not BriefBullet instances (the v1 string-bullet shape).
+    with pytest.raises(ValueError):
         BriefSection(
             title="Legacy Section",
             bullets=["String bullet 1", "String bullet 2"],  # type: ignore[list-item]
         )
+
+
+def test_public_briefing_response_json_round_trip_preserves_nested_brief_data() -> None:
+    """Full JSON round-trip through PublicBriefingResponse preserves nested data.
+
+    WHY THIS TEST (PLAN-0083 Wave A I-2): the production Valkey cache path in
+    ``services/rag-chat/src/rag_chat/api/routes/public_briefings.py`` calls
+    ``resp.model_dump_json()`` to write to cache and
+    ``PublicBriefingResponse.model_validate_json(blob)`` on read. If the
+    BriefSection -> dict coercion path drops or mistypes any nested field, the
+    cache layer silently corrupts the response. This test pins the full
+    serialise -> deserialise cycle for a non-trivial nested payload.
+    """
+    section = BriefSection(
+        title="Market Overview",
+        bullets=[
+            BriefBullet(
+                text="Tech sector rallied 2% on strong earnings.",
+                citations=[
+                    BriefCitation(
+                        document_id="doc-1",
+                        snippet="AAPL beat consensus by 8%.",
+                        url="https://reuters.com/aapl-q4",
+                        source_type="article",
+                        title="Apple Q4 Earnings",
+                    ),
+                    BriefCitation(
+                        document_id="doc-2",
+                        snippet="MSFT cloud revenue +29% YoY.",
+                        source_type="article",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    original = PublicBriefingResponse(
+        narrative="Markets rose on strong earnings.",
+        risk_summary={},
+        generated_at="2026-05-08T00:00:00+00:00",
+        sections=[section],
+        lead="Tech leads the rally.",
+        confidence=0.85,
+    )
+
+    # WHY model_dump_json (not model_dump): exactly mirrors the cache writer.
+    serialized = original.model_dump_json()
+    rehydrated = PublicBriefingResponse.model_validate_json(serialized)
+
+    # sections is list[dict] on the response model (PLAN-0083 schema choice).
+    assert isinstance(rehydrated.sections, list)
+    assert len(rehydrated.sections) == 1
+    sec0 = rehydrated.sections[0]
+    assert isinstance(sec0, dict)
+    assert sec0["title"] == "Market Overview"
+
+    bullets = sec0["bullets"]
+    assert isinstance(bullets, list) and len(bullets) == 1
+    b0 = bullets[0]
+    assert b0["text"] == "Tech sector rallied 2% on strong earnings."
+
+    cits = b0["citations"]
+    assert isinstance(cits, list) and len(cits) == 2
+    assert cits[0]["document_id"] == "doc-1"
+    assert cits[0]["snippet"] == "AAPL beat consensus by 8%."
+    assert cits[0]["url"] == "https://reuters.com/aapl-q4"
+    assert cits[0]["source_type"] == "article"
+    assert cits[0]["title"] == "Apple Q4 Earnings"
+    # WHY assert legacy alias absent: to_dict must never emit source_id; if it
+    # leaks back in, downstream consumers will start reading the legacy key.
+    assert "source_id" not in cits[0]
+    assert cits[1]["document_id"] == "doc-2"
+
+    # Top-level scalars survive the round-trip too.
+    assert rehydrated.lead == "Tech leads the rally."
+    assert rehydrated.confidence == 0.85
+    assert rehydrated.narrative == "Markets rose on strong earnings."

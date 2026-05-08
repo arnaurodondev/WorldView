@@ -6,16 +6,51 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # WHY import from domain: BriefCitation/BriefBullet/BriefSection are domain
 # value objects used by the application-layer use case (generate_briefing.py).
 # Defining them here would force the use case to import from api (LAYER-APP-
 # ISOLATION violation). We re-export them so API routes that use them in
 # BriefingResponse/PublicBriefingResponse continue to work unchanged.
+#
+# PLAN-0083 Wave A: BriefCitation/BriefBullet/BriefSection are now frozen
+# dataclasses (not Pydantic models). Pydantic response models below declare
+# ``sections`` as ``list[dict[str, Any]]`` and use a ``field_validator`` to
+# coerce dataclass instances to dicts via ``to_dict()`` (Pattern 1 in
+# PLAN-0083 §3 — preferred over arbitrary_types_allowed metaclass tricks).
+# This keeps ``model_dump_json()`` / ``model_validate_json()`` working as
+# JSON-only round-trips, which is the path used by the Valkey cache writer
+# and reader in routes/public_briefings.py.
 from rag_chat.domain.brief import BriefBullet, BriefCitation, BriefSection
 
 __all__ = ["BriefBullet", "BriefCitation", "BriefSection"]
+
+
+def _coerce_sections_to_dicts(value: Any) -> list[dict[str, Any]]:
+    """Normalise ``sections`` input to ``list[dict]`` for JSON serialisation.
+
+    WHY this helper: callers historically construct ``BriefingResponse(sections=[BriefSection(...)])``
+    passing dataclass instances. After PLAN-0083, the response model stores
+    ``list[dict]`` so JSON round-trip via ``model_dump_json`` / ``model_validate_json``
+    keeps working. This validator accepts EITHER dataclass instances or plain
+    dicts (cache reads come back as dicts after JSON parse) and emits dicts.
+    """
+    if value is None:
+        return []
+    out: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, BriefSection):
+            # WHY to_dict: domain dataclass → JSON-serialisable dict per
+            # PLAN-0083 §3 Pattern 1 (preferred over arbitrary_types_allowed).
+            out.append(item.to_dict())
+        elif isinstance(item, dict):
+            # Already a dict (e.g. legacy parser output, cache read) — keep as-is.
+            out.append(item)
+        else:
+            raise TypeError(f"sections entries must be BriefSection or dict, got {type(item).__name__}")
+    return out
+
 
 # ── Request schemas ───────────────────────────────────────────────────────────
 
@@ -147,7 +182,10 @@ class BriefingResponse(BaseModel):
     # summary block. The frontend handles `summary == null` by falling back to
     # showing a clamp-3 of the narrative — safe degradation across rollouts.
     summary: str | None = None
-    sections: list[BriefSection] = Field(default_factory=list)
+    # WHY list[dict[str, Any]] (not list[BriefSection]): BriefSection is now a
+    # frozen dataclass (PLAN-0083). The field_validator below converts dataclass
+    # instances to dicts on construction so JSON round-trip stays clean.
+    sections: list[dict[str, Any]] = Field(default_factory=list)
     # WHY ge=0 le=1: confidence is a probability — clamped to [0.0, 1.0] by the
     # formula. default=1.0 means "fully cited" which is the safe fallback for
     # callers that don't populate this field (no citation badge shown).
@@ -155,6 +193,13 @@ class BriefingResponse(BaseModel):
     # WHY max_length=1000: v3.0 prompt allows 1-3 sentences; on high-activity
     # days or large portfolios three dense sentences can approach 600 chars.
     lead: str | None = Field(default=None, max_length=1000)
+
+    # WHY mode="before": runs prior to Pydantic's own list validation so we can
+    # accept dataclass instances passed in from the use case layer.
+    @field_validator("sections", mode="before")
+    @classmethod
+    def _validate_sections(cls, v: Any) -> list[dict[str, Any]]:
+        return _coerce_sections_to_dicts(v)
 
 
 # ── Public briefing schemas (PLAN-0029 T-2-01) ───────────────────────────────
@@ -185,10 +230,16 @@ class PublicBriefingResponse(BaseModel):
     # before v2.2 will lack this field. The frontend treats None as "no two-tier
     # output available — render clamp-3 of narrative as before".
     summary: str | None = None
-    sections: list[BriefSection] = Field(default_factory=list)
+    # WHY list[dict[str, Any]]: see BriefingResponse.sections comment above.
+    sections: list[dict[str, Any]] = Field(default_factory=list)
     # WHY default=1.0: safe fallback; no amber warning badge shown when all
     # cached briefs lack this field after the first deploy.
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     # WHY max_length=1000: mirrors BriefingResponse.lead — 1-3 sentences fit
     # comfortably within 1000 chars even on dense financial-domain prose.
     lead: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("sections", mode="before")
+    @classmethod
+    def _validate_sections(cls, v: Any) -> list[dict[str, Any]]:
+        return _coerce_sections_to_dicts(v)
