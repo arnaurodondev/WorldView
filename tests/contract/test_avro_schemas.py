@@ -22,7 +22,8 @@ ENVELOPE_FIELDS = {"event_id", "event_type", "schema_version", "occurred_at"}
 EXPECTED_FIELD_COUNTS: dict[str, int] = {
     "content.article.raw.v1": 14,
     "content.article.stored.v1": 15,
-    "nlp.article.enriched.v1": 20,
+    # PLAN-0084: added raw_relations_json, raw_events_json, raw_claims_json + correlation_id
+    "nlp.article.enriched.v1": 23,
     "nlp.signal.detected.v1": 14,
     "graph.state.changed.v1": 12,
     "intelligence.contradiction.v1": 12,
