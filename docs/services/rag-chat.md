@@ -81,7 +81,13 @@ older callers only read `narrative` while newer surfaces render the
     "generated_at": str,           # ISO-8601 UTC
     "summary": str | None,         # PLAN-0048 — 1–2 sentence headline (collapsed view)
     "headline": str | None,        # PLAN-0049 T-A-1-04 — top-card title (≤240 chars)
-    "sections": list[BriefSection] # PLAN-0049 T-A-1-04 — see below
+    "sections": list[dict]         # PLAN-0049 T-A-1-04 — see BriefSection shape below.
+                                   # PLAN-0083 (2026-05-08): the API model declares
+                                   # this as list[dict[str, Any]] so JSON round-trip
+                                   # via Valkey cache is symmetric. Domain code
+                                   # constructs `BriefSection` frozen dataclasses;
+                                   # a Pydantic field_validator converts them via
+                                   # .to_dict() at response-construction time.
 }
 
 # PublicBriefingResponse (GET /api/v1/briefings/...)
