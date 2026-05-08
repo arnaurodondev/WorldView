@@ -16,6 +16,8 @@ from alert.infrastructure.clients.s8_client import BriefingClientError, S8Briefi
 from alert.infrastructure.email.scheduler import EmailScheduler
 from alert.infrastructure.email.template import render_digest_email
 
+pytestmark = pytest.mark.unit
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 _USER_ID = UUID("01912345-6789-7abc-8def-0123456789ab")

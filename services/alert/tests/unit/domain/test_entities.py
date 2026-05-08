@@ -8,6 +8,8 @@ import pytest
 from alert.domain.entities import Alert, AlertDelivery, DeadLetterEntry, OutboxEvent, PendingAlert, SeverityThresholds
 from alert.domain.enums import AlertSeverity, AlertType, DeliveryChannel, DeliveryStatus, DLQStatus, OutboxStatus
 
+pytestmark = pytest.mark.unit
+
 
 class TestSeverityThresholds:
     @pytest.mark.unit

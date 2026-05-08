@@ -12,6 +12,8 @@ from alert.infrastructure.messaging.outbox.dispatcher import AlertOutboxDispatch
 
 from common.time import utc_now  # type: ignore[import-untyped]
 
+pytestmark = pytest.mark.unit
+
 
 def _make_outbox_event(**kwargs: object) -> OutboxEvent:
     return OutboxEvent(

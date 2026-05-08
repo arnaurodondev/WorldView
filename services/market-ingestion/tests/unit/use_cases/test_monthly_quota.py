@@ -21,6 +21,8 @@ from messaging.eodhd_quota.quota_service import (
     QuotaStatus,
 )
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

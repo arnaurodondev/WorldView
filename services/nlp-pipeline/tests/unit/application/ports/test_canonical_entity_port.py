@@ -17,6 +17,8 @@ from uuid import UUID
 import pytest
 from nlp_pipeline.application.ports.canonical_entity import CanonicalEntityPort
 
+pytestmark = pytest.mark.unit
+
 # ── Shared test IDs ───────────────────────────────────────────────────────────
 
 _ENTITY_ID = uuid.UUID("018f1e2a-0000-7000-8000-000000000020")

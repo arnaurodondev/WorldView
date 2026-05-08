@@ -90,11 +90,10 @@ def test_lifespan_disabled_does_not_call_start_citation_accuracy_cron() -> None:
     with patch(
         "rag_chat.infrastructure.jobs.citation_accuracy_cron.start_citation_accuracy_cron",
     ) as mock_start:
-        # The lifespan only calls _wire_citation_cron when enabled
-        if settings.citation_cron_enabled:  # type: ignore[truthy-bool]
-            from rag_chat.app import _wire_citation_cron  # type: ignore[attr-defined]
+        from rag_chat.app import _wire_citation_cron  # type: ignore[attr-defined]
 
-            _wire_citation_cron(app, settings, read_factory, log)
+        # Always call _wire_citation_cron; the function itself must respect the setting
+        _wire_citation_cron(app, settings, read_factory, log)
 
         mock_start.assert_not_called(), "start_citation_accuracy_cron must NOT be called when disabled"
 

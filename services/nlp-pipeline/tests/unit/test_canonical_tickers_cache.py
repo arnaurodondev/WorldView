@@ -20,6 +20,8 @@ from nlp_pipeline.infrastructure.cache.canonical_tickers_cache import (
     CanonicalTickersCache,
 )
 
+pytestmark = pytest.mark.unit
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 

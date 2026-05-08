@@ -7,6 +7,8 @@ import asyncio
 import pytest
 from nlp_pipeline.infrastructure.backpressure.controller import BackpressureController
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.unit
 class TestBackpressureController:

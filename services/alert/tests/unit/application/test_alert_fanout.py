@@ -21,6 +21,8 @@ from alert.domain.entities import Alert
 from alert.domain.enums import AlertSeverity, AlertType
 from alert.infrastructure.clients.s1_client import WatcherInfo
 
+pytestmark = pytest.mark.unit
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 _ENTITY_ID = str(uuid4())

@@ -21,6 +21,8 @@ from alert.application.use_cases.alert_fanout import (
 )
 from alert.domain.enums import AlertSeverity, AlertType
 
+pytestmark = pytest.mark.unit
+
 # ─────────────────────────────────────────────────────────────────────────────
 # _compose_alert_title — deterministic, no I/O
 # ─────────────────────────────────────────────────────────────────────────────

@@ -8,6 +8,8 @@ from unittest.mock import patch
 import pytest
 from market_ingestion.domain.entities.polling_policy import PollingPolicy
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.unit()
 def test_post_market_only_policy_skips_during_market_hours() -> None:

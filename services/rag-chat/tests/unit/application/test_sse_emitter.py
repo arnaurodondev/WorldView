@@ -9,6 +9,8 @@ from uuid import uuid4
 import pytest
 from rag_chat.application.pipeline.sse_emitter import SSEEmitter
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture
 def emitter() -> SSEEmitter:

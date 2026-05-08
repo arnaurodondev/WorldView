@@ -14,6 +14,8 @@ from alert.application.use_cases.email_preferences import (
 )
 from alert.domain.entities import EmailPreference
 
+pytestmark = pytest.mark.unit
+
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 _USER_ID = UUID("01912345-6789-7abc-8def-0123456789ab")

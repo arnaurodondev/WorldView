@@ -22,6 +22,8 @@ from ml_clients.errors import FatalError, RetryableError  # type: ignore[import-
 from nlp_pipeline.api.routes.embed import router
 from nlp_pipeline.config import Settings
 
+pytestmark = pytest.mark.unit
+
 
 def _make_app(settings: Settings | None = None, embedding_client: Any = None) -> FastAPI:
     """Build a minimal FastAPI app with the embed router, mock settings, and mock embedding client."""

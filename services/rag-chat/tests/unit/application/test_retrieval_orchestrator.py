@@ -18,6 +18,8 @@ from rag_chat.domain.entities.chat import (
 )
 from rag_chat.domain.enums import ItemType, QueryIntent
 
+pytestmark = pytest.mark.unit
+
 
 def _make_plan(
     *,

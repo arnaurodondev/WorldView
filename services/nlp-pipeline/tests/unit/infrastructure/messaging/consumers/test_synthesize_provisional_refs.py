@@ -18,6 +18,8 @@ from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
     synthesize_provisional_refs,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _make_mention(text: str, *, resolved: bool = False, queued: bool = False) -> EntityMention:
     m = EntityMention(

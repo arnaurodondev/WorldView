@@ -29,6 +29,8 @@ from nlp_pipeline.application.blocks.suppression import ProcessingPath
 from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome
 from nlp_pipeline.domain.models import Chunk, EntityMention
 
+pytestmark = pytest.mark.unit
+
 
 def _make_chunk(text: str, doc_id: uuid.UUID | None = None, section_id: uuid.UUID | None = None) -> Chunk:
     d = doc_id or uuid.uuid4()

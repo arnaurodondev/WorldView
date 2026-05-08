@@ -13,6 +13,8 @@ from nlp_pipeline.infrastructure.nlp_db.repositories.chunk_search import (
     _build_entity_mention_filter,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class TestBuildEntityMentionFilter:
     @pytest.mark.unit

@@ -17,6 +17,8 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from nlp_pipeline.api.routes.health import router
 
+pytestmark = pytest.mark.unit
+
 
 def _make_app(
     *,

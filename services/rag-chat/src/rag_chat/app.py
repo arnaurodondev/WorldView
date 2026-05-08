@@ -497,6 +497,11 @@ def _wire_citation_cron(
     R23: ``SqlAlchemyMessageRepository`` receives the *read_factory* (read replica
     session maker) because ``sample_recent_with_citations`` is read-only.
     """
+    # QA-003: The function checks the flag itself so callers don't need to guard.
+    # This avoids the trivial test anti-pattern: `if flag: call(); assert_not_called()`.
+    if not settings.citation_cron_enabled:
+        return
+
     from rag_chat.application.use_cases.score_citation_accuracy import ScoreCitationAccuracyUseCase
     from rag_chat.infrastructure.db.repositories.message_repository import SqlAlchemyMessageRepository
     from rag_chat.infrastructure.jobs.citation_accuracy_cron import start_citation_accuracy_cron

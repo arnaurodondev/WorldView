@@ -18,6 +18,8 @@ from knowledge_graph.infrastructure.intelligence_db.repositories.llm_usage_log i
 )
 from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
 
+pytestmark = pytest.mark.unit
+
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()

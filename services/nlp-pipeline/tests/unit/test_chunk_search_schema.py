@@ -12,6 +12,8 @@ import pytest
 from nlp_pipeline.api.schemas import ChunkSearchRequest
 from pydantic import ValidationError
 
+pytestmark = pytest.mark.unit
+
 # A 1024-dim dummy vector — the schema requires exactly 1024 floats.
 _DUMMY_VEC = [0.1] * 1024
 

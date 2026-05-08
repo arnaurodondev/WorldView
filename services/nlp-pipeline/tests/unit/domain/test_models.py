@@ -25,6 +25,8 @@ from nlp_pipeline.domain.models import (
     SignalEvent,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _uuid() -> uuid.UUID:
     return uuid.uuid4()
