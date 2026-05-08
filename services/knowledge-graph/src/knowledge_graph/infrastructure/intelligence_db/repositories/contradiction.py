@@ -192,6 +192,70 @@ LIMIT :limit
             for r in rows
         ]
 
+    async def aggregate_contra_stats_for_active_links(
+        self,
+        window_days: int = _CONTRADICTION_WINDOW_DAYS,
+    ) -> list[dict[str, object]]:
+        """Aggregate contradiction stats per relation for active links (T-B-02).
+
+        Joins ``relation_contradiction_links`` → ``relation_evidence_raw`` →
+        ``relations`` to resolve the relation_id.  Aggregates:
+          - MAX(strength) AS strongest_contra_score
+          - jsonb_object_agg(contradiction_type, count) AS contra_count_by_type
+          - MAX(detected_at) AS latest_contra_at
+
+        Returns one row per relation that has at least one active contradiction
+        link within the detection window.  Also returns the relation's current
+        ``confidence`` column so the caller can check the invalidation threshold.
+        """
+        result = await self._session.execute(
+            text("""
+SELECT
+    r.relation_id,
+    MAX(rcl.strength)                                           AS strongest_contra_score,
+    jsonb_object_agg(rcl.contradiction_type, type_counts.cnt)  AS contra_count_by_type,
+    MAX(rcl.detected_at)                                        AS latest_contra_at,
+    r.confidence                                                AS current_confidence
+FROM relation_contradiction_links rcl
+JOIN relation_evidence_raw rer ON rer.raw_id = rcl.relation_evidence_id
+JOIN relations r
+  ON  r.subject_entity_id = rer.subject_entity_id
+  AND r.object_entity_id  = rer.object_entity_id
+  AND r.canonical_type    = rer.canonical_type
+JOIN (
+    SELECT
+        r2.relation_id,
+        rcl2.contradiction_type,
+        COUNT(*) AS cnt
+    FROM relation_contradiction_links rcl2
+    JOIN relation_evidence_raw rer2 ON rer2.raw_id = rcl2.relation_evidence_id
+    JOIN relations r2
+      ON  r2.subject_entity_id = rer2.subject_entity_id
+      AND r2.object_entity_id  = rer2.object_entity_id
+      AND r2.canonical_type    = rer2.canonical_type
+    WHERE rcl2.invalidated_at IS NULL
+      AND rcl2.detected_at >= now() - make_interval(days => :window_days)
+    GROUP BY r2.relation_id, rcl2.contradiction_type
+) type_counts ON type_counts.relation_id = r.relation_id
+              AND type_counts.contradiction_type = rcl.contradiction_type
+WHERE rcl.invalidated_at IS NULL
+  AND rcl.detected_at >= now() - make_interval(days => :window_days)
+GROUP BY r.relation_id, r.confidence
+"""),
+            {"window_days": window_days},
+        )
+        rows = result.fetchall()
+        return [
+            {
+                "relation_id": UUID(str(r[0])),
+                "strongest_contra_score": float(r[1]),
+                "contra_count_by_type": dict(r[2]) if r[2] else {},
+                "latest_contra_at": r[3],
+                "current_confidence": float(r[4]) if r[4] is not None else None,
+            }
+            for r in rows
+        ]
+
     async def link_exists(
         self,
         relation_evidence_id: UUID,
