@@ -30,7 +30,8 @@ Lifecycle
   before the first message is processed, then launches ``_refresh_loop()``
   as a background asyncio task.
 * ``refresh()`` re-reads the source of truth and atomically replaces the SET
-  contents via a MULTI/EXEC transaction (DEL + SADD in one round-trip).
+  contents via a Lua script (DEL + SADD as a single server-side atomic op,
+  C-2 / BP-422).
   Failure is logged and the existing (possibly stale) SET is left untouched
   — never wipe the cache on a transient source error.
 * ``_refresh_loop()`` runs forever, sleeping ``_refresh_interval_s`` seconds
@@ -60,6 +61,8 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING, Protocol
 
+from prometheus_client import Counter
+
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -72,6 +75,25 @@ logger = log
 
 _VALKEY_UNAVAILABLE_MSG = "valkey_unavailable"
 _DEFAULT_KEY = "nlp:v1:canonical_tickers"
+
+# Lua script for atomic DEL + SADD swap (C-2 / BP-422).
+# MULTI/EXEC (pipeline transaction=True) is vulnerable to partial failure on
+# network drops between DEL and SADD — a disconnect after DEL but before SADD
+# permanently wipes the cache until the next successful refresh.  A Lua script
+# runs atomically on the server side with no interleaving from other clients,
+# which eliminates that window.  Returns SCARD (int) of the new SET.
+_ATOMIC_TICKER_SWAP = """
+redis.call('DEL', KEYS[1])
+if #ARGV > 0 then
+    redis.call('SADD', KEYS[1], unpack(ARGV))
+end
+return redis.call('SCARD', KEYS[1])
+"""
+
+_REFRESH_FAILURE_COUNTER: Counter = Counter(
+    "canonical_tickers_refresh_failures_total",
+    "Total number of canonical tickers cache refresh failures",
+)
 
 
 class CanonicalTickerSource(Protocol):
@@ -95,9 +117,9 @@ class CanonicalTickersCache:
     the rare-token analyzer keeps making progress on a degraded signal
     rather than failing the whole pipeline.
 
-    The atomic swap in ``refresh()`` uses MULTI/EXEC (``transaction=True``)
-    so concurrent ``is_known_ticker`` callers never observe an empty SET
-    between the DEL and the SADD.
+    The atomic swap in ``refresh()`` uses a server-side Lua script so
+    concurrent ``is_known_ticker`` callers never observe an empty SET
+    between the DEL and the SADD (C-2 / BP-422).
     """
 
     def __init__(
@@ -174,15 +196,21 @@ class CanonicalTickersCache:
         * ``asyncio.CancelledError`` is re-raised immediately so the task can
           be cancelled cleanly by ``close()``.
         * All other exceptions are swallowed after logging a warning; the loop
-          then sleeps 60 seconds before the next attempt so a persistent Valkey
-          outage cannot spin-loop the CPU.
+          then applies exponential back-off (C-3 / BP-423): ``min(2^n * 60, 300)``
+          seconds where *n* is the number of consecutive failures.  This reduces
+          log spam during sustained Valkey outages while still recovering quickly
+          after the first failure (60 s) and capping at 5 minutes.
+        * ``_REFRESH_FAILURE_COUNTER`` is incremented on every failure so ops
+          dashboards can alert on sustained outages.
         * The sleep comes FIRST so the initial warm-up from ``startup()``
           is not redundantly repeated on the first tick.
         """
+        consecutive_failures = 0
         while True:
             try:
                 await asyncio.sleep(self._refresh_interval_s)
                 count = await self.refresh()
+                consecutive_failures = 0
                 log.info(  # type: ignore[no-any-return]
                     "canonical_tickers.refresh_loop_tick",
                     count=count,
@@ -190,13 +218,16 @@ class CanonicalTickersCache:
             except asyncio.CancelledError:
                 raise  # propagate so the task terminates cleanly
             except Exception:
-                # Transient error (Valkey blip, source DB down, etc.).
-                # Log + back-off rather than crashing the loop.
+                consecutive_failures += 1
+                _REFRESH_FAILURE_COUNTER.inc()
+                backoff = min(2**consecutive_failures * 60, 300)
                 log.warning(  # type: ignore[no-any-return]
                     "canonical_tickers.refresh_loop_error",
                     exc_info=True,
+                    consecutive_failures=consecutive_failures,
+                    backoff_s=backoff,
                 )
-                await asyncio.sleep(60)
+                await asyncio.sleep(backoff)
 
     def start_loop(self) -> asyncio.Task[None]:
         """Create and return the background refresh task.
@@ -212,25 +243,18 @@ class CanonicalTickersCache:
     async def refresh(self) -> int:
         """Re-read the source of truth and atomically replace the SET.
 
-        Uses MULTI/EXEC (``transaction=True``) so the DEL and SADD execute
-        as a single atomic unit — concurrent ``is_known_ticker`` callers
-        cannot observe an empty SET between the two operations.
+        Uses a server-side Lua script (``_ATOMIC_TICKER_SWAP``) so the DEL
+        and SADD execute as a single atomic unit — concurrent
+        ``is_known_ticker`` callers cannot observe an empty SET between the
+        two operations.  This replaces the previous MULTI/EXEC pipeline
+        approach (C-2 / BP-422): a MULTI/EXEC was vulnerable to permanent
+        cache wipe if the connection dropped between DEL and SADD.
 
-        Returns the size of the new SET. A source-side error is logged and
-        the existing SET is left untouched; the caller can detect this by
-        observing that the returned count is 0 AND a warning was logged
-        (the zero-source case is also legal — see the
-        ``test_startup_does_not_raise_on_empty_source`` unit test).
-
-        Implementation note on the pipeline API
-        ----------------------------------------
-        ``_client`` is a raw ``redis.asyncio.Redis`` instance. Its
-        ``.pipeline(transaction=True)`` returns a ``Pipeline`` that wraps
-        commands in MULTI/EXEC when ``execute()`` is called. Unlike the
-        ``ValkeyClient`` wrapper (which exposes an async-context-manager
-        ``pipeline()``), the raw redis object returns the pipeline
-        synchronously and it must be used as an async context manager via
-        ``async with self._client.pipeline(transaction=True) as pipe``.
+        Returns the SCARD of the new SET (as reported by the Lua script). A
+        source-side error is logged and the existing SET is left untouched;
+        the caller can detect this by observing that the returned count is 0
+        AND a warning was logged (the zero-source case is also legal — see
+        the ``test_startup_does_not_raise_on_empty_source`` unit test).
         """
         try:
             tickers = await self._source.fetch_all_tickers()
@@ -262,13 +286,20 @@ class CanonicalTickersCache:
             return 0
 
         try:
-            # Atomic swap via MULTI/EXEC. DEL + SADD execute as a single
-            # transaction so concurrent ``is_known_ticker`` callers cannot
-            # observe an empty SET between the two commands (F-X03 fix).
-            async with self._client.pipeline(transaction=True) as pipe:  # type: ignore[misc]
-                pipe.delete(self._key)
-                pipe.sadd(self._key, *normalised)
-                await pipe.execute()
+            # Atomic swap via Lua script (C-2 / BP-422).  A MULTI/EXEC pipeline
+            # is vulnerable to partial failure: if the connection drops after
+            # DEL but before SADD the cache is permanently empty until the next
+            # successful refresh.  The Lua script runs atomically on the server
+            # so concurrent ``is_known_ticker`` callers never observe an empty
+            # SET between the DEL and the SADD.
+            count = int(
+                await self._client.eval(  # type: ignore[misc]
+                    _ATOMIC_TICKER_SWAP,
+                    1,  # number of KEYS
+                    self._key,
+                    *normalised,
+                )
+            )
         except Exception as exc:
             log.warning(  # type: ignore[no-any-return]
                 _VALKEY_UNAVAILABLE_MSG,
@@ -279,9 +310,9 @@ class CanonicalTickersCache:
 
         log.info(  # type: ignore[no-any-return]
             "canonical_tickers_cache.refreshed",
-            count=len(normalised),
+            count=count,
         )
-        return len(normalised)
+        return count
 
     # ── Read API ─────────────────────────────────────────────────────────────
 
