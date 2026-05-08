@@ -7,7 +7,7 @@
 
 | Plan ID | Title & Next Wave | Status | Waves | Blocking On | Updated |
 |---------|-------------------|--------|-------|-------------|---------|
-| PLAN-0074 | **Intelligence Layer** — Worker 13D activation, NarrativeGenerationWorker, entity intelligence APIs, PathInsightWorker, S8 entity-context chat, S9 proxy, frontend 3-col page. **Next: Wave A (migrations)**. | draft | 0/15 | none | 2026-05-07 |
+| PLAN-0074 | **Intelligence Layer** — Worker 13D activation, NarrativeGenerationWorker, entity intelligence APIs, PathInsightWorker, S8 entity-context chat, S9 proxy, frontend 3-col page. Wave A done (migrations 0031-0036). **Next: Wave B (activate schema in workers)**. | in-progress | 1/9 | none | 2026-05-08 |
 | PLAN-0075 | **Answer Quality Eval (L2-L4)** — routing_observations + chat_feedback tables, 👍/👎 UI chips + S9 endpoint, L2 tool-selection eval, L3 answer-quality LLM-judge, L4 operational gates, calibration. **Next: W7-1 (schema + write-hook)**. | stub | 0/6 | PLAN-0067 ✓ PLAN-0063 W5-1 ✓ | 2026-05-05 |
 | PLAN-0064 | **Full-Text Search with Entity Facets** — keystone L1 search across articles + EDGAR + transcripts, reuses tsv_english GIN. 5 waves. **Next: Wave 1 (schemas/contracts/types)**. | draft | 0/5 | PLAN-0063 W5-2 ✓ | 2026-05-03 |
 | PLAN-0082 | **Action Tools** — get_alerts + create_alert tools, user-confirmation SSE surface (pending_action → action_executed), 30-attempt adversarial expansion. **Next: Wave 1**. | stub | 0/3 | PLAN-0067 W11-4 ✓ | 2026-05-07 |
@@ -21,6 +21,8 @@
 | PLAN-0058 | **Retrieval & KG Strategic Uplift** — Wave B2 (extended entity seeding ~2000 entities); Waves C/D/E superseded by PLAN-0063; Waves F/G/H still pending (entity_summaries, AGE Cypher activation, ontology enforcement). **Next: Wave B2 (entity seeding)**. | draft | 0/4 remaining | PLAN-0063 W5-3 ✓ for F/G/H | 2026-04-30 |
 | PLAN-0001-D | **S9 API Gateway: External Ingestion + Intelligence Query Proxy**. 2 waves. **Next: Wave 1**. | draft | 0/2 | PLAN-0001-B ✓ | 2026-03-25 |
 | PLAN-0014 | **Claude Code Source Adaptations** — hooks, subagent isolation, memory scopes, S8 RAG pipeline. 6 waves. | pending | 0/6 | none | 2026-04-01 |
+
+| PLAN-0086 | **Multi-Tenant Content Pipeline Isolation & Tenant Document Ingestion** — Avro schema updates, content-store/nlp-pipeline tenant_id migrations, consumer propagation, HNSW filter isolation, S4 tenant upload feature (domain + infra + use cases + API). **Next: Wave A-1 (Avro schemas + ContentSourceType enum + 2 R28 canonical models)**. | draft | 0/10 | none | 2026-05-08 |
 
 <!-- New plans are appended here by the /plan skill -->
 
