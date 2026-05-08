@@ -248,6 +248,132 @@ async def chat_stream(request: Request) -> Any:
     return StreamingResponse(_stream_body(), media_type="text/event-stream")
 
 
+@router.post("/chat/entity-context", summary="Entity-context chat (PLAN-0074 Wave G)")
+async def chat_entity_context(request: Request) -> Any:
+    """Proxy POST /v1/chat/entity-context → S8 RAG-Chat (synchronous).
+
+    Loads entity intelligence from S7 inside S8, prepends a grounding system
+    prompt, and returns the full answer once the LLM completes.
+
+    Pre-proxy validations at S9 (before the S8 round-trip):
+      - entity_id must be a valid UUID — 422 if not.
+      - question must be non-empty — 400 if blank.
+
+    Rate limit: 30 req/min/user via the shared RateLimitMiddleware (standard
+    authenticated bucket).  No additional per-route rate limit is applied here
+    because entity-context calls are more expensive (invoke LLM) and the
+    standard 300/min global bucket is already sufficient to prevent abuse.
+
+    No caching: each answer is dynamic (entity intelligence + user question).
+
+    WHY forward raw body to S8: S8 applies its own Pydantic validation
+    (including bleach HTML-strip on question).  Double-parsing at S9 would
+    require importing S8 schemas (violates R14) and would be redundant.  We
+    do a lightweight check on entity_id and question here, then pass bytes.
+
+    Error pass-through: 429 / 400 / 404 / 422 / 503 from S8 are forwarded
+    unchanged so the frontend sees the correct error semantics.
+
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # Read body once — httpx needs raw bytes; we also inspect for validation.
+    import json as _json
+
+    body = await request.body()
+
+    # ── Lightweight pre-proxy validation ─────────────────────────────────────
+    # WHY parse here: we need to inspect entity_id (UUID validation) and
+    # question (non-empty check) before sending a network request to S8.
+    # A bad entity_id would cause S8 to return 422 after a round-trip; we
+    # catch it early to give a faster, cheaper response.
+    try:
+        payload = _json.loads(body)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="Invalid JSON body")  # noqa: B904
+
+    # Validate entity_id is a UUID.
+    entity_id_raw = payload.get("entity_id")
+    if entity_id_raw is None:
+        raise HTTPException(status_code=422, detail="entity_id is required")
+    try:
+        _uuid.UUID(str(entity_id_raw))
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=422, detail="entity_id must be a valid UUID")  # noqa: B904
+
+    # Validate question is non-empty.
+    question_raw = payload.get("question", "")
+    if not str(question_raw).strip():
+        raise HTTPException(status_code=400, detail="question cannot be empty")
+
+    # ── Proxy to S8 ─────────────────────────────────────────────────────────
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    resp = await clients.rag_chat.post(
+        "/api/v1/chat/entity-context",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/chat/entity-context/stream", summary="SSE entity-context chat (PLAN-0074 Wave G)")
+async def chat_entity_context_stream(request: Request) -> Any:
+    """Proxy POST /v1/chat/entity-context/stream → S8 RAG-Chat (SSE streaming).
+
+    Same pre-proxy validation as /chat/entity-context (entity_id UUID check,
+    non-empty question), then streams S8 SSE chunks back without buffering.
+
+    WHY separate streaming endpoint: SSE requires chunked-transfer encoding;
+    the synchronous endpoint buffers the full response.  The frontend chooses
+    between the two based on whether it wants progressive rendering.
+
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    import json as _json
+
+    body = await request.body()
+
+    # Lightweight pre-proxy validation (mirrors non-streaming endpoint).
+    try:
+        payload = _json.loads(body)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="Invalid JSON body")  # noqa: B904
+
+    entity_id_raw = payload.get("entity_id")
+    if entity_id_raw is None:
+        raise HTTPException(status_code=422, detail="entity_id is required")
+    try:
+        _uuid.UUID(str(entity_id_raw))
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=422, detail="entity_id must be a valid UUID")  # noqa: B904
+
+    question_raw = payload.get("question", "")
+    if not str(question_raw).strip():
+        raise HTTPException(status_code=400, detail="question cannot be empty")
+
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    async def _stream_body() -> AsyncIterator[bytes]:
+        async with clients.rag_chat.stream(
+            "POST",
+            "/api/v1/chat/entity-context/stream",
+            content=body,
+            headers={"Content-Type": "application/json", **headers},
+        ) as resp:
+            async for chunk in resp.aiter_bytes():
+                yield chunk
+
+    return StreamingResponse(_stream_body(), media_type="text/event-stream")
+
+
 # ── Threads ───────────────────────────────────────────────
 
 
@@ -1794,6 +1920,8 @@ async def get_entity_graph(
     entity_id: str,
     request: Request,
     limit: int = Query(default=40, ge=1, le=50),
+    confidence_breakdown: bool = Query(default=False),
+    focus_node: str | None = Query(default=None),
 ) -> Any:
     """Proxy GET /api/v1/entities/{entity_id}/graph → S7 Knowledge Graph.
 
@@ -1823,6 +1951,9 @@ async def get_entity_graph(
     expects EntityGraph {entity_id, nodes, edges}. _transform_graph_response()
     bridges the mismatch at the BFF layer so neither S7 nor the frontend needs
     to change.
+
+    PLAN-0074 Wave G: ``confidence_breakdown`` and ``focus_node`` are now
+    forwarded to S7 (Wave D additions — previously silently ignored).
     """
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1838,6 +1969,11 @@ async def get_entity_graph(
         s7_params["min_confidence"] = raw_params["min_confidence"]
     if "semantic_mode" in raw_params:
         s7_params["semantic_mode"] = raw_params["semantic_mode"]
+    # PLAN-0074 Wave G: forward confidence_breakdown and focus_node (Wave D additions).
+    if confidence_breakdown:
+        s7_params["confidence_breakdown"] = "true"
+    if focus_node is not None:
+        s7_params["focus_node"] = focus_node
 
     resp = await clients.knowledge_graph.get(
         f"/api/v1/entities/{entity_id}/graph",
@@ -1872,6 +2008,265 @@ async def get_entity_contradictions(entity_id: str, request: Request) -> Any:
         f"/api/v1/entities/{entity_id}/contradictions",
         headers=headers,
     )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+# ── Entity Intelligence, Narratives, Paths (PLAN-0074 Wave G) ────────────────
+#
+# All 5 new routes proxy to S7 Knowledge Graph or S8 RAG-Chat.
+# Cache keys follow the pattern: <resource>:<tenant_id>:<entity_id>[:<params_hash>]
+# BP-200: rate limiting uses set_nx(key, val, ex=N) — NOT set(..., nx=True).
+# BP-235: httpx clients are configured with explicit Timeout(N) in app.py lifespan.
+
+
+@router.get(
+    "/entities/{entity_id}/intelligence",
+    summary="Entity intelligence aggregate (PLAN-0074 Wave G)",
+)
+async def get_entity_intelligence(
+    entity_id: UUID,
+    request: Request,
+    confidence_breakdown: bool = Query(default=False),
+    focus_node: str | None = Query(default=None),
+) -> Any:
+    """Proxy GET /api/v1/entities/{entity_id}/intelligence → S7 Knowledge Graph.
+
+    Returns the full entity intelligence aggregate: health score, current
+    narrative, confidence breakdown, key metrics, and data completeness.
+
+    Caching strategy:
+      - Cache key: ``intel:<tenant_id>:<entity_id>`` (60 s TTL).
+      - On hit: return cached JSON directly, skipping the S7 round-trip.
+      - On miss: proxy to S7, cache the 200 response, return to caller.
+      - Non-2xx responses are never cached (transient errors should not be
+        cached; 404 means entity missing — may change soon).
+      - Fail-open: Valkey errors are silently swallowed; the request
+        proceeds to S7 as if the cache were empty.
+
+    WHY cache at 60 s: intelligence aggregates are computed nightly by the
+    KG scheduler; they don't change within a session.  60 s is a safe window
+    that avoids thundering-herd on the Intelligence Tab's initial load while
+    still refreshing quickly enough for dev/debug cycles.
+
+    Requires authentication.  Forward ``confidence_breakdown`` and
+    ``focus_node`` query params to S7 (Wave D additions).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    user = request.state.user
+    tenant_id: str = str(user.get("tenant_id", ""))
+    cache_key = f"intel:{tenant_id}:{entity_id}"
+    valkey = getattr(request.app.state, "valkey", None)
+
+    # ── Cache hit check ─────────────────────────────────────────────────────
+    if valkey is not None:
+        try:
+            cached = await valkey.get(cache_key)
+            if cached is not None:
+                return Response(content=cached, status_code=200, media_type="application/json")
+        except Exception:
+            # Fail-open: Valkey error must not block the request.
+            logger.warning("intelligence_cache_read_failed", entity_id=str(entity_id))
+
+    # ── Proxy to S7 ─────────────────────────────────────────────────────────
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    # Forward only the known S7 query params; strip unknown ones.
+    s7_params: dict[str, str] = {}
+    if confidence_breakdown:
+        s7_params["confidence_breakdown"] = "true"
+    if focus_node is not None:
+        s7_params["focus_node"] = focus_node
+
+    resp = await clients.knowledge_graph.get(
+        f"/api/v1/entities/{entity_id}/intelligence",
+        params=s7_params if s7_params else None,
+        headers=headers,
+    )
+
+    # ── Cache store (only 2xx) ───────────────────────────────────────────────
+    if resp.status_code < 400 and valkey is not None:
+        try:
+            # WHY ex= (not ttl=): aligns with the ValkeyClient.set() signature.
+            await valkey.set(cache_key, resp.content.decode(), ex=60)
+        except Exception:
+            # Fail-open: caching is best-effort.
+            logger.warning("intelligence_cache_write_failed", entity_id=str(entity_id))
+
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get(
+    "/entities/{entity_id}/narratives",
+    summary="Paginated narrative version history (PLAN-0074 Wave G)",
+)
+async def get_entity_narratives(
+    entity_id: UUID,
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    cursor: str | None = Query(default=None),
+) -> Any:
+    """Proxy GET /api/v1/entities/{entity_id}/narratives → S7 Knowledge Graph.
+
+    Returns paginated narrative version history for an entity, newest first.
+    Supply ``cursor`` from the previous response's ``next_cursor`` field to
+    page forward.  No caching — paginated endpoints change frequently.
+
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    params: dict[str, str | int] = {"limit": limit}
+    if cursor is not None:
+        params["cursor"] = cursor
+
+    resp = await clients.knowledge_graph.get(
+        f"/api/v1/entities/{entity_id}/narratives",
+        params=params,
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post(
+    "/entities/{entity_id}/narratives/generate",
+    status_code=202,
+    summary="Manually trigger narrative generation (PLAN-0074 Wave G)",
+)
+async def trigger_entity_narrative_generation(
+    entity_id: UUID,
+    request: Request,
+) -> Any:
+    """Proxy POST /api/v1/entities/{entity_id}/narratives/generate → S7.
+
+    Rate-limited to one request per entity+tenant+user per hour at the S9
+    proxy layer (in addition to the identical rate limit enforced by S7).
+
+    Why rate-limit at S9 too: defence-in-depth.  An unauthenticated attacker
+    who somehow reaches S7 directly is blocked there, but authenticated callers
+    who hammer the gateway are stopped here before the request even reaches S7.
+
+    Rate-limit key: ``narrative_gen_proxy:<tenant_id>:<entity_id>:<user_id>``
+    BP-200: uses set_nx(key, "1", ex=3600) — NOT set(..., nx=True).
+
+    On 429: returns ``Retry-After: 3600`` header.
+    On Valkey unavailable: proxy proceeds without rate limiting (fail-open).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    user = request.state.user
+    tenant_id: str = str(user.get("tenant_id", ""))
+    user_id: str = str(user.get("user_id") or user.get("sub", "anonymous"))
+
+    # ── Proxy-layer rate limit (BP-200) ─────────────────────────────────────
+    valkey = getattr(request.app.state, "valkey", None)
+    if valkey is not None:
+        rl_key = f"narrative_gen_proxy:{tenant_id}:{entity_id}:{user_id}"
+        try:
+            allowed = await valkey.set_nx(rl_key, "1", ex=3600)
+            if not allowed:
+                # Key already existed → rate limit hit.
+                raise HTTPException(
+                    status_code=429,
+                    detail="Rate limit: one manual generation per hour.",
+                    headers={"Retry-After": "3600"},
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            # Fail-open: Valkey error → allow the request through.
+            logger.warning("narrative_gen_proxy_rl_failed", entity_id=str(entity_id))
+
+    # ── Proxy to S7 ─────────────────────────────────────────────────────────
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.knowledge_graph.post(
+        f"/api/v1/entities/{entity_id}/narratives/generate",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get(
+    "/entities/{entity_id}/paths",
+    summary="Multi-hop opportunity paths for an entity (PLAN-0074 Wave G)",
+)
+async def get_entity_paths(
+    entity_id: UUID,
+    request: Request,
+    limit: int = Query(default=10, ge=1, le=50),
+    min_score: float = Query(default=0.3, ge=0.0, le=1.0),
+    min_hops: int = Query(default=2, ge=2, le=5),
+    max_hops: int = Query(default=5, ge=2, le=5),
+) -> Any:
+    """Proxy GET /api/v1/entities/{entity_id}/paths → S7 Knowledge Graph.
+
+    Returns top-N pre-computed multi-hop opportunity paths originating from
+    the entity, ordered by composite_score descending.
+
+    Caching strategy (5-minute TTL):
+      - Cache key: ``paths:<tenant_id>:<entity_id>:<limit>:<min_score>:<min_hops>:<max_hops>``
+      - Paths are recomputed nightly by the KG scheduler; 5 min is safe.
+      - Non-2xx responses are never cached.
+      - Fail-open on Valkey errors.
+
+    Query param validation mirrors S7: 422 if min_hops > max_hops.
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # Validate hop range here for a clean 422 (S7 also validates).
+    if min_hops > max_hops:
+        raise HTTPException(
+            status_code=422,
+            detail=f"min_hops ({min_hops}) must be <= max_hops ({max_hops})",
+        )
+
+    user = request.state.user
+    tenant_id: str = str(user.get("tenant_id", ""))
+    # Build a deterministic cache key from all query params.
+    cache_key = f"paths:{tenant_id}:{entity_id}:{limit}:{min_score}:{min_hops}:{max_hops}"
+    valkey = getattr(request.app.state, "valkey", None)
+
+    # ── Cache hit ────────────────────────────────────────────────────────────
+    if valkey is not None:
+        try:
+            cached = await valkey.get(cache_key)
+            if cached is not None:
+                return Response(content=cached, status_code=200, media_type="application/json")
+        except Exception:
+            logger.warning("paths_cache_read_failed", entity_id=str(entity_id))
+
+    # ── Proxy to S7 ─────────────────────────────────────────────────────────
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    resp = await clients.knowledge_graph.get(
+        f"/api/v1/entities/{entity_id}/paths",
+        params={
+            "limit": limit,
+            "min_score": min_score,
+            "min_hops": min_hops,
+            "max_hops": max_hops,
+        },
+        headers=headers,
+    )
+
+    # ── Cache store (5 min — paths change nightly) ───────────────────────────
+    if resp.status_code < 400 and valkey is not None:
+        try:
+            await valkey.set(cache_key, resp.content.decode(), ex=300)
+        except Exception:
+            logger.warning("paths_cache_write_failed", entity_id=str(entity_id))
+
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 

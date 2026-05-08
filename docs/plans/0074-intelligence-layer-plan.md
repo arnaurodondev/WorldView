@@ -1150,7 +1150,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 ---
 
-# Wave G — S9 Proxy Routes for Intelligence
+# Wave G — S9 Proxy Routes for Intelligence ✅ DONE
 
 **Goal**: Expose all 5 new endpoints (4 entity-intelligence + 1 entity chat) through the S9 API gateway with auth, rate-limiting, and request-tracing forwarding.
 **Depends on**: Wave D (T-D-02/03/04), Wave E2 (T-E2-03), Wave F (T-F-02).
@@ -1165,24 +1165,24 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 ### Tasks
 
-#### T-G-01: Pydantic public schemas mirrored in S9
+#### T-G-01: Pydantic public schemas mirrored in S9 ✅ DONE
 
 **Type**: impl
 **depends_on**: T-D-01, T-E2-01
 **blocks**: T-G-02, T-G-03, T-G-04
-**Target files**: `services/api-gateway/src/api_gateway/api/schemas/intelligence.py`, `paths.py`, `narratives.py`, `entity_chat.py`, contract tests.
+**Target files**: `services/api-gateway/src/api_gateway/schemas/intelligence.py`, `schemas/paths.py`, `schemas/narratives.py`, `schemas/entity_chat.py`; tests at `tests/unit/api/schemas/test_intelligence_schemas.py`.
 **PRD reference**: §6.1–6.6
 
 **What to build**: Re-declare public schemas (or re-export from `libs/contracts` if shared). Contract test asserts S9 schema = S7 schema field-by-field.
 
 **Tests** (≥4): one per schema, asserts shape match.
 
-#### T-G-02: Proxy routes — `GET /entities/{id}/intelligence`, `GET /entities/{id}/narratives`, `POST /entities/{id}/narratives/generate`, `GET /entities/{id}/graph` enhancement
+#### T-G-02: Proxy routes — `GET /entities/{id}/intelligence`, `GET /entities/{id}/narratives`, `POST /entities/{id}/narratives/generate`, `GET /entities/{id}/graph` enhancement ✅ DONE
 
 **Type**: impl
 **depends_on**: T-G-01, T-D-02, T-D-03, T-D-04
 **blocks**: T-H-01
-**Target files**: `services/api-gateway/src/api_gateway/api/routers/entities.py` (extend), tests.
+**Target files**: `services/api-gateway/src/api_gateway/routes/proxy.py` (extended); tests at `tests/unit/api/routers/test_intelligence_proxy.py`.
 **PRD reference**: §6.1, §6.3, §6.4, §6.6
 
 **Logic & Behavior**:
@@ -1194,7 +1194,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 **Tests** (≥10): each route returns 200 happy path, 401/403/404/429, cache hit on second call, rate limit headers correct, query params forwarded.
 
-#### T-G-03: Proxy route — `GET /entities/{id}/paths`
+#### T-G-03: Proxy route — `GET /entities/{id}/paths` ✅ DONE
 
 **Type**: impl
 **depends_on**: T-G-01, T-E2-03
@@ -1206,7 +1206,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 **Tests** (≥4): happy path, query param forwarding, cache hit, 422 on invalid params.
 
-#### T-G-04: Proxy route — `POST /chat/entity-context` (SSE pass-through)
+#### T-G-04: Proxy route — `POST /chat/entity-context` (SSE pass-through) ✅ DONE
 
 **Type**: impl
 **depends_on**: T-G-01, T-F-02
