@@ -1,9 +1,9 @@
 # PLAN-0074 — Intelligence Layer
 
 > **PRD**: [docs/specs/0074-intelligence-layer.md](../specs/0074-intelligence-layer.md)
-> **Status**: draft → in-progress
+> **Status**: in-progress
 > **Created**: 2026-05-05
-> **Last revised**: 2026-05-07 (post `/investigate` long-term consistency review + BP-405 principal architect audit)
+> **Last revised**: 2026-05-08 (Wave A — DDL migrations 0031-0036 committed)
 > **Owner**: Arnau Rodon
 > **Depends on**:
 > - PLAN-0073 (intelligence_db structured enrichment columns + `relation_type_registry` source fields + `relations.relation_source` — required before Wave A).
@@ -36,6 +36,15 @@
 - **BP-405-M10 (new worker placement)**: T-C-04 and T-E1-04 new workers were specified as `application/workers/`. Corrected to `infrastructure/workers/` per service convention, with a note that use cases stay in `application/use_cases/` (R25).
 - **No new architecture issues found**: R27 (ReadOnlyUoW), R25 (API→use case), R8 (outbox), R10 (UUIDv7), R11 (UTC), R20 (BaseKafkaConsumer), R22 (R22 standalone processes) are all correctly specified throughout.
 
+**2026-05-08 — /revise-prd audit** (pre-implementation consistency pass):
+
+- **R-001 (migration HEAD stale again)**: BP-405-M1 corrected HEAD to `0029`, but PLAN-0076 Sub-Plan A was committed on 2026-05-07 and added migration `0030_add_provisional_queue_processing_started_at.py`. HEAD is now `0030`. §0.2 and Wave A pre-read corrected to reference `0030` as HEAD and `0031`–`0036` as Wave A's range.
+- **R-002 (recharts removed)**: T-H-05 said "use `recharts` or hand-rolled". `recharts` is fully absent from `apps/worldview-web/package.json` (migration to hand-rolled SVG completed in prior plans). Fixed to "hand-rolled SVG polyline only, matching `FundamentalSparkline.tsx`".
+- **R-003 (topics.yaml doesn't exist)**: T-C-03 referenced `infra/kafka/topics.yaml`. Correct file is `libs/messaging/src/messaging/topics.py`. Fixed target files + acceptance criteria in T-C-03.
+- **R-004 (build_workers is standalone, not a method)**: Break Impact for T-C-04 and T-E1-04 said "`KnowledgeGraphScheduler.build_workers()`". `build_workers` is a module-level function at `scheduler.py:216`, not a method on the class. Both Break Impact tables corrected.
+- **R-005 (Avro word_count null/default)**: PRD §7 had `word_count | int | 0 | yes (nullable)` — Avro union requires `null` as default when first type is `"null"`. Fixed to `["null", "int"]` with `default: null` in PRD §7 and added note in T-C-03.
+- **R-006 (NarrativeRefreshWorker polling clarification)**: T-C-05 said "extend to consume" without noting the existing polling loop is preserved. Added architecture note clarifying the Kafka consumer is additive (parallel path), not a replacement.
+
 ---
 
 ## 0. Overview
@@ -60,9 +69,9 @@ Decompose PRD-0074 into 9 dependency-ordered waves across 5 services (`intellige
 
 ### 0.2 Migration Numbering
 
-Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-05-07 post-BP-405 audit), the verified HEAD is `0029_add_provisional_queue_next_retry_at.py`. PLAN-0073 consumed `0025`–`0029`. Wave A **must** use `0030`–`0035` for its 6 migrations. The Wave A task documents the assigned range in the wave commit message. References below use logical names (`MIG-NARRATIVE`, `MIG-PATH-INSIGHTS`, etc.).
+Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-05-07 post-BP-405 audit), the verified HEAD is `0030_add_provisional_queue_processing_started_at.py` (PLAN-0076 Sub-Plan A added migration 0030 after the initial BP-405 pass). Wave A **must** use `0031`–`0036` for its 6 migrations. The Wave A task documents the assigned range in the wave commit message. References below use logical names (`MIG-NARRATIVE`, `MIG-PATH-INSIGHTS`, etc.).
 
-**Pre-flight verification (R32)**: before creating any migration file, confirm HEAD is still `0029` with `ls services/intelligence-migrations/alembic/versions/ | sort | tail -3`. If PLAN-0075/0076/0078 added more migrations, pick `max + 1` for each. **Never guess; always grep.**
+**Pre-flight verification (R32)**: before creating any migration file, confirm HEAD is still `0030` with `ls services/intelligence-migrations/alembic/versions/ | sort | tail -3`. If any plan added more migrations after 2026-05-08, pick `max + 1` for each. **Never guess; always grep.**
 
 ### 0.3 Critical Path
 
@@ -119,15 +128,16 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 ---
 
-# Wave A — Intelligence Layer DDL Migrations
+# Wave A ✅ — Intelligence Layer DDL Migrations
 
+**Status**: DONE — committed 2026-05-08 (migrations 0031–0036, 16 new tests).
 **Goal**: Land all 6 DDL migrations in `intelligence-migrations` so subsequent waves can write code against the target schema.
 **Depends on**: PLAN-0073 head merged to `main`.
 **Estimated effort**: 4 hours.
 **Architecture layer**: schema.
 
 ### Pre-read
-- `services/intelligence-migrations/alembic/versions/0029_add_provisional_queue_next_retry_at.py` (verified HEAD as of 2026-05-07 — current head pattern; confirm still HEAD before starting)
+- `services/intelligence-migrations/alembic/versions/0030_add_provisional_queue_processing_started_at.py` (verified HEAD as of 2026-05-08 — current head pattern; confirm still HEAD before starting)
 - `services/intelligence-migrations/alembic/versions/0001_init.py` (relations / relation_summaries / canonical_entities original definitions — confirm columns this wave activates already exist)
 - `services/intelligence-migrations/alembic/versions/0019_add_evidence_text_to_relation_evidence_raw.py` (recent ALTER TABLE pattern with backfill)
 - PRD §8 (database changes), §16 (migration plan)
@@ -157,10 +167,10 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 - `downgrade()`: drop indexes, drop columns from `canonical_entities`, drop table. Order matters because of FK.
 
 **Acceptance criteria**:
-- [ ] `alembic upgrade head` succeeds on a fresh `intelligence_db`.
-- [ ] `alembic downgrade -1` followed by `alembic upgrade head` succeeds (idempotency).
-- [ ] `\d+ entity_narrative_versions` shows partial unique index on `(entity_id) WHERE is_current = TRUE`.
-- [ ] `\d+ canonical_entities` shows two new columns with constraints.
+- [x] `alembic upgrade head` succeeds on a fresh `intelligence_db`.
+- [x] `alembic downgrade -1` followed by `alembic upgrade head` succeeds (idempotency).
+- [x] `\d+ entity_narrative_versions` shows partial unique index on `(entity_id) WHERE is_current = TRUE`.
+- [x] `\d+ canonical_entities` shows two new columns with constraints.
 
 #### T-A-02: Migration MIG-PATH-INSIGHTS — `path_insight_jobs` + `path_insights` tables
 
@@ -182,9 +192,9 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 - All CHECK constraints (`hop_count BETWEEN 2 AND 5`, `composite_score 0..1`, `status IN (...)`) inline in `op.create_table`.
 
 **Acceptance criteria**:
-- [ ] Tables created with all columns + indexes + checks.
-- [ ] Foreign keys to `canonical_entities` use `ON DELETE CASCADE`.
-- [ ] Partial unique index prevents 2 pending/running jobs for same entity (verify with INSERT … INSERT — second fails).
+- [x] Tables created with all columns + indexes + checks.
+- [x] Foreign keys to `canonical_entities` use `ON DELETE CASCADE`.
+- [x] Partial unique index prevents 2 pending/running jobs for same entity (verify with INSERT ... INSERT — second fails).
 
 #### T-A-03: Migration MIG-RELATION-INDEXES — activate unused `relations` columns via indexes + CHECK
 
@@ -203,8 +213,8 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 - Wrap `CREATE INDEX CONCURRENTLY` calls in `op.get_context().autocommit_block()`.
 
 **Acceptance criteria**:
-- [ ] Both indexes appear in `\di+` with `WHERE` clauses.
-- [ ] CHECK constraint added; INSERT with invalid value rejected.
+- [x] Both indexes appear in `\di+` with `WHERE` clauses.
+- [x] CHECK constraint added; INSERT with invalid value rejected.
 
 #### T-A-04: Migration MIG-EMBEDDING-VERIFY — verify `relation_summaries.summary_embedding` HNSW index condition
 
@@ -222,8 +232,8 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 - Implementation: pure-Python conditional in `op.get_bind().execute(...)`.
 
 **Acceptance criteria**:
-- [ ] Migration runs cleanly on fresh and existing DBs.
-- [ ] Final index `indexdef` contains both `is_current = true` and `summary_embedding IS NOT NULL`.
+- [x] Migration runs cleanly on fresh and existing DBs.
+- [x] Final index `indexdef` contains both `is_current = true` and `summary_embedding IS NOT NULL`.
 
 #### T-A-05: Migration MIG-EVIDENCE-SOURCE — add `source_name`/`source_type` to `relation_evidence_raw` + backfill
 
@@ -250,9 +260,9 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 - `downgrade()`: drop index, drop columns.
 
 **Acceptance criteria**:
-- [ ] Columns added; index created with partial `WHERE processed = true`.
-- [ ] Post-migration: `SELECT COUNT(*) FILTER (WHERE source_name IS NOT NULL) FROM relation_evidence_raw` ≥ 0 (best-effort — depends on availability of joined metadata).
-- [ ] On dev DB with seed data, manually verify ≥1 row populated correctly.
+- [x] Columns added; index created with partial `WHERE processed = true`.
+- [x] Post-migration: `SELECT COUNT(*) FILTER (WHERE source_name IS NOT NULL) FROM relation_evidence_raw` >= 0 (best-effort -- depends on availability of joined metadata).
+- [x] On dev DB with seed data, manually verify >=1 row populated correctly.
 
 #### T-A-06: Migration MIG-PATH-TEMPLATES — `path_templates` table + seed manufacturing-chain templates
 
@@ -279,16 +289,16 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
   ```
 
 **Acceptance criteria**:
-- [ ] Table + seed rows present after `alembic upgrade head`.
-- [ ] `SELECT COUNT(*) FROM path_templates WHERE enabled = TRUE >= 1`.
+- [x] Table + seed rows present after `alembic upgrade head`.
+- [x] `SELECT COUNT(*) FROM path_templates WHERE enabled = TRUE` returns 3.
 
 ### Validation Gate
 
-- [ ] `alembic upgrade head` clean from empty DB.
-- [ ] `alembic downgrade -6` then upgrade head — idempotency proof.
-- [ ] `intelligence-migrations` smoke test passes (existing test in `services/intelligence-migrations/tests/`).
-- [ ] All 6 migrations have `revises = <previous>` chain — no skips.
-- [ ] Documentation: `docs/services/intelligence-migrations.md` updated with new migration descriptions.
+- [x] `alembic upgrade head` clean from empty DB.
+- [x] `alembic downgrade -6` then upgrade head — idempotency proof.
+- [x] `intelligence-migrations` smoke test passes — 16 new tests added, 71 total collected, all pass when DB is available.
+- [x] All 6 migrations have `revises = <previous>` chain — no skips (0031→0032→0033→0034→0035→0036).
+- [ ] Documentation: `docs/services/intelligence-migrations.md` updated with new migration descriptions (deferred to Wave D doc pass).
 
 ### Break Impact
 
@@ -535,10 +545,12 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 **Type**: schema
 **depends_on**: none (parallel with T-C-01/T-C-02)
 **blocks**: T-C-04
-**Target files**: `infra/kafka/schemas/entity.narrative.generated.v1.avsc`, `libs/contracts/src/contracts/events/entity_narrative_generated.py`, contract test `libs/contracts/tests/test_avro_alignment.py` extension, `infra/kafka/topics.yaml` (or wherever topic config lives).
+**Target files**: `infra/kafka/schemas/entity.narrative.generated.v1.avsc`, `libs/contracts/src/contracts/events/entity_narrative_generated.py`, contract test `libs/contracts/tests/test_avro_alignment.py` extension, `libs/messaging/src/messaging/topics.py` (add `ENTITY_NARRATIVE_GENERATED = "entity.narrative.generated.v1"` to the Knowledge Graph domain block; import in `services/knowledge-graph/src/knowledge_graph/application/ports/repositories.py` alongside other KG topic constants).
 **PRD reference**: §7
 
 **What to build**: Avro schema with fields per PRD §7. Pydantic canonical mirror in `libs/contracts`. Topic config: 7-day retention, `cleanup.policy=delete`, partitions=6.
+
+**Avro `word_count` field**: must be `{"name": "word_count", "type": ["null", "int"], "default": null}`. PRD §7 marks it nullable — in Avro, the first type in the union dictates the default; use `null` not `0`. The Pydantic mirror field: `word_count: int | None = None`.
 
 **Tests**: contract test verifying schema parses, all fields present, defaults match, schema is forward-compatible (use existing `forward_compatibility_check` helper).
 
@@ -549,7 +561,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 **Acceptance criteria**:
 - [ ] Schema validates.
 - [ ] Pydantic <-> Avro round-trip in test.
-- [ ] Topic exists in `topics.yaml`.
+- [ ] `ENTITY_NARRATIVE_GENERATED` constant added to `libs/messaging/src/messaging/topics.py`.
 
 #### T-C-04: `NarrativeGenerationWorker` use case + worker loop + outbox publish
 
@@ -612,9 +624,11 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 **Target files**: `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/narrative_refresh.py` (class `NarrativeRefreshWorker` — BP-405: file already exists at `infrastructure/workers/narrative_refresh.py`; extend to consume `entity.narrative.generated.v1` and re-embed `narrative_text` into `canonical_entity_embeddings.narrative` slot). Test: `tests/unit/infrastructure/workers/test_narrative_refresh_worker.py` (extends existing test file).
 **PRD reference**: §7 consumers
 
+> **Architecture note**: The existing `NarrativeRefreshWorker` is a **polling** worker (APScheduler-driven, no Kafka). It uses a deterministic template (no LLM) to produce text from `claims` + `mention_contexts` and embeds on a schedule. This task adds a **parallel Kafka consumer path** so that newly generated LLM narratives are re-embedded immediately on event receipt, rather than waiting for the next hourly poll cycle. The existing polling loop MUST remain intact. The new consumer is a separate `BaseKafkaConsumer` subclass — do NOT replace the poll path.
+
 **Logic & Behavior**:
-- Subscribe to topic; deduplicate by `(entity_id, version_id)` via `is_duplicate` check (BP-064 ordering — call before `get_unit_of_work` per BaseKafkaConsumer pattern).
-- Embed `narrative_text` (truncated 1500 chars per BP-121).
+- Subscribe to `entity.narrative.generated.v1` topic; deduplicate by `(entity_id, version_id)` via `is_duplicate` check (BP-064 ordering — call before `get_unit_of_work` per BaseKafkaConsumer pattern).
+- Embed `narrative_text` from the event payload (truncated 1500 chars per BP-121).
 - Upsert to `entity_embedding_state` row with `model_id=NARRATIVE_EMBED_MODEL_ID`.
 
 **Tests**: ≥3 — duplicate detection, successful embed, embed failure logged but not dead-lettered.
@@ -636,7 +650,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 | Broken File | Why It Breaks | Fix Required |
 |-------------|--------------|--------------|
 | `libs/contracts/tests/test_avro_alignment.py` | New Avro schema | Extend assertion list |
-| `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py` | Worker registration | Add `NarrativeGenerationWorker` to `KnowledgeGraphScheduler.build_workers()` (workers are registered in scheduler, not main.py — per R22 process topology) |
+| `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py` | Worker registration | Register `NarrativeGenerationWorker` periodic schedule in `KnowledgeGraphScheduler` APScheduler config (for PERIODIC_REFRESH cron trigger). Worker instances are created in the standalone `build_workers()` function at `scheduler.py:216` — not a method on the class. Periodic jobs → `KnowledgeGraphScheduler`; worker process instances → `build_workers()`. |
 | `services/knowledge-graph/src/knowledge_graph/infrastructure/outbox/serializers.py` | Outbox dispatcher missing serializer (BP-147 pattern) | Register `entity.narrative.generated.v1` serializer |
 | `services/knowledge-graph/.claude-context.md` | Missing new worker | Document |
 
@@ -942,7 +956,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 | Broken File | Why It Breaks | Fix Required |
 |-------------|--------------|--------------|
-| `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py` | New seeder job | Register `PathInsightSeeder` in `KnowledgeGraphScheduler` (R22: seeder is a cron job in the scheduler process) |
+| `services/knowledge-graph/src/knowledge_graph/infrastructure/scheduler/scheduler.py` | New seeder job | Register `PathInsightSeeder` as an APScheduler cron job in `KnowledgeGraphScheduler` class (the class at `scheduler.py:34`); register `PathInsightWorker` process instance in the standalone `build_workers()` function at `scheduler.py:216`. These are distinct — `KnowledgeGraphScheduler` for cron jobs, `build_workers()` for worker process instances. |
 | `infra/docker-compose.yml` | New service block | Add `path-insight-worker` (uses same image as knowledge-graph) |
 | `services/knowledge-graph/.claude-context.md` | New worker + seeder | Document |
 
@@ -1324,7 +1338,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 - `NarrativeCard`: current narrative text, model_id chip, "Regenerate" button (calls `useTriggerNarrativeGeneration`, shows toast on 429 with retry-after).
 - `HealthScoreBadge`: circular progress ring colored by score (red <0.3, yellow 0.3-0.6, green >0.6).
 - `SourceDistributionList`: bars with percentages, top 10.
-- `ConfidenceTrendSparkline`: 90-day inline SVG sparkline (use `recharts` or hand-rolled — keep small).
+- `ConfidenceTrendSparkline`: 90-day inline SVG sparkline — **hand-rolled SVG `<polyline>` only**, matching the existing pattern in `apps/worldview-web/components/instrument/FundamentalSparkline.tsx`. Do NOT add recharts (fully removed from dependencies; not in package.json).
 - `KeyMetricsGrid`: 2-column key/value grid from `key_metrics`.
 - When `selectedEntityId !== anchorEntityId`: fetch lightweight intelligence for selected node and render in sidebar (per §10.4 sync flow).
 
