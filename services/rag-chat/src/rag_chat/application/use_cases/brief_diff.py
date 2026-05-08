@@ -179,7 +179,7 @@ class BriefDiffUseCase:
         n_new = len(new_bullets)
         n_removed = len(removed_bullets)
         yesterday_date = yesterday.generated_at.strftime("%Y-%m-%d")
-        delta = f"{n_new} new bullet{'s' if n_new != 1 else ''}, " f"{n_removed} removed since {yesterday_date}"
+        delta = f"{n_new} new bullet{'s' if n_new != 1 else ''}, {n_removed} removed since {yesterday_date}"
 
         log.info(  # type: ignore[no-any-return]
             "brief_diff_computed",
