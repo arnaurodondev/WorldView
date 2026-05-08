@@ -41,6 +41,10 @@ import { CitationBar } from "@/components/chat/CitationBar";
 import type { Message } from "@/types/api";
 import { CitationList } from "./CitationList";
 import type { StreamingMessage } from "../lib/types";
+// PLAN-0067 W11-5: ToolCallIndicator shows per-tool progress spinners during
+// the tool-use phase (before token chunks arrive). Imported here because
+// StreamingBubble owns the "in-flight assistant response" visual region.
+import { ToolCallIndicator, type ToolCallState } from "./ToolCallIndicator";
 
 /**
  * TypingIndicator — animated three-dot bubble shown while SSE stream is
@@ -159,8 +163,27 @@ export function MessageBubble({ message }: { message: Message }) {
  * partials. Rendering through MarkdownContent gives consistent typography
  * with the final message. Trade-off: partial markdown sometimes flickers
  * (e.g. "**bo" before "**bold**" closes), which is acceptable.
+ *
+ * PLAN-0067 W11-5 ADDS:
+ * - `activeTools` prop — passed down from the chat page via useChatStream.
+ * - Renders <ToolCallIndicator> ABOVE the streaming text so users see tool
+ *   activity before the answer starts flowing.
+ *
+ * WHY ABOVE (not below): during the tool-use phase, `streaming.text` is empty
+ * and only tool indicators are visible. Placing indicators above means they
+ * never "jump" position when the first token arrives — they simply fade out
+ * (cleared on done) while text appears below them.
  */
-export function StreamingBubble({ streaming }: { streaming: StreamingMessage }) {
+interface StreamingBubbleProps {
+  streaming: StreamingMessage;
+  /**
+   * Active tool calls from useChatStream.activeTools.
+   * Empty array (default) when the response is a plain non-tool-use answer.
+   */
+  activeTools?: ToolCallState[];
+}
+
+export function StreamingBubble({ streaming, activeTools = [] }: StreamingBubbleProps) {
   return (
     <div className="flex flex-col items-start gap-1">
       <div className="flex max-w-[70%] items-end gap-2">
@@ -172,6 +195,15 @@ export function StreamingBubble({ streaming }: { streaming: StreamingMessage }) 
         {/* WHY text-[11px] leading-[1.5] + size="compact": streaming bubble must
             match the final settled MessageBubble density — same 11px terminal rule. */}
         <div className="rounded-[2px] bg-muted px-4 py-3 text-[11px] leading-[1.5]">
+          {/*
+           * Tool call indicators appear ABOVE the streaming text.
+           * WHY: the tool-use phase precedes token generation. If we placed
+           * indicators below, they'd appear below blank space when text is
+           * empty — confusing visual layout.
+           * ToolCallIndicator returns null when activeTools is empty, so there
+           * is no visual impact on non-tool-use responses.
+           */}
+          <ToolCallIndicator tools={activeTools} />
           <LazyMarkdownContent size="compact">{streaming.text}</LazyMarkdownContent>
           {streaming.active && (
             // WHY no animate-pulse: terminal mandate — static cursor still reads as "streaming".
