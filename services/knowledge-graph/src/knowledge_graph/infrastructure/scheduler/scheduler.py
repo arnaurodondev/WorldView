@@ -167,6 +167,33 @@ class KnowledgeGraphScheduler:
             coalesce=True,
         )
 
+        # Worker 13D-3: weekly narrative generation PERIODIC_REFRESH at 03:00 UTC
+        # every Sunday (PRD-0074 §13.3).  INITIAL and MANUAL_TRIGGER are triggered
+        # by direct calls to NarrativeGenerationWorker.run_batch (no cron needed).
+        fn_13d3 = self._resolve_job("narrative_generation")
+        self._scheduler.add_job(
+            fn_13d3,
+            "cron",
+            hour=3,
+            minute=0,
+            day_of_week="sun",
+            id="worker_13d3_narrative_generation",
+            max_instances=1,
+            coalesce=True,
+        )
+
+        # PathInsightSeeder: nightly at 02:30 UTC (PLAN-0074 Wave E1).
+        fn_seeder = self._resolve_job("path_insight_seeder")
+        self._scheduler.add_job(
+            fn_seeder,
+            "cron",
+            hour=2,
+            minute=30,
+            id="worker_path_insight_seeder",
+            max_instances=1,
+            coalesce=True,
+        )
+
     def _resolve_job(self, name: str) -> Any:
         """Return the real worker.run if available, otherwise a no-op stub."""
         worker = self._workers.get(name)
@@ -244,11 +271,13 @@ def build_workers(
         Dict mapping scheduler job names to worker instances.
 
     """
+    from knowledge_graph.application.use_cases.generate_narrative import GenerateNarrativeUseCase
     from knowledge_graph.infrastructure.workers.confidence import ConfidenceWorker
     from knowledge_graph.infrastructure.workers.contradiction_batch import ContradictionBatchWorker
     from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
     from knowledge_graph.infrastructure.workers.embedding_refresh import EmbeddingRefreshWorker
     from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+    from knowledge_graph.infrastructure.workers.narrative_generation_worker import NarrativeGenerationWorker
     from knowledge_graph.infrastructure.workers.narrative_refresh import NarrativeRefreshWorker
     from knowledge_graph.infrastructure.workers.partitions import MonthlyPartitionWorker
     from knowledge_graph.infrastructure.workers.provisional_enrichment import ProvisionalEnrichmentWorker
@@ -292,6 +321,17 @@ def build_workers(
         valkey_client,
         read_session_factory=_read_factory,
     )
+
+    # Worker 13D-3: NarrativeGenerationWorker is registered unconditionally so the
+    # scheduler stub keeps working even when llm_client is None.  The use case
+    # falls back to the template-v1 generator when the LLM is unavailable.
+    _narrative_use_case = GenerateNarrativeUseCase(
+        write_session_factory=write_session_factory,
+        read_session_factory=_read_factory,
+        narrative_llm_model_id=getattr(settings, "narrative_llm_model_id", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
+        llm_client=llm_client,  # may be None — use case falls back to template-v1
+    )
+    workers["narrative_generation"] = NarrativeGenerationWorker(use_case=_narrative_use_case)
 
     if llm_client is not None:
         description_client = _build_description_client(settings, valkey_client)
@@ -381,7 +421,33 @@ def build_workers(
             },
         )
 
+    # PLAN-0074 Wave E1: PathInsightSeeder — registered unconditionally so the
+    # scheduler cron stub works even when AGE is not fully configured.
+    # The seeder only needs the DB session factory (no LLM dependency).
+    _add_path_insight_workers(workers, settings, write_session_factory)
+
     return workers
+
+
+def _add_path_insight_workers(
+    workers: dict[str, Any],
+    settings: Settings,
+    write_session_factory: Any,
+) -> None:
+    """Wire PathInsightSeeder into the workers dict (PLAN-0074 Wave E1).
+
+    PathInsightWorker runs as a standalone process (docker-compose
+    ``path-insight-worker`` service) — it is NOT registered here as a
+    scheduler cron job because it runs continuously rather than on a
+    fixed interval.  Only the seeder gets a scheduler entry.
+    """
+    from knowledge_graph.infrastructure.workers.path_insight_seeder import PathInsightSeeder
+
+    seeder = PathInsightSeeder(write_session_factory)
+    # The scheduler calls ``worker.run()`` via ``_resolve_job``, so we
+    # wrap the seeder with a run() alias pointing to seed_hub_entities.
+    seeder.run = seeder.seed_hub_entities  # type: ignore[attr-defined]
+    workers["path_insight_seeder"] = seeder
 
 
 def build_market_data_signer(settings: Settings) -> Any:
@@ -441,7 +507,7 @@ def build_market_data_signer(settings: Settings) -> Any:
             from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
             private_key = load_pem_private_key(private_key_pem.encode(), password=None)
-            return jwt.encode(payload, private_key, algorithm="RS256")  # type: ignore[no-any-return]
+            return jwt.encode(payload, private_key, algorithm="RS256")  # type: ignore[no-any-return, arg-type]
 
         # F-P2-06: warn periodically (not once) so a long-running consumer
         # whose bootstrap log has rolled away still surfaces the dev-key

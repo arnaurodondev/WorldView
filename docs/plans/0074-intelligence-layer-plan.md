@@ -316,8 +316,9 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 ---
 
-# Wave B — Activate Schema Elements in Workers
+# Wave B ✅ — Activate Schema Elements in Workers
 
+**Status**: DONE — committed 2026-05-08 (T-B-01 through T-B-04, 17 new tests across 4 test files).
 **Goal**: Make the unused/under-populated columns activated in Wave A actually carry data, and start populating `relation_evidence_raw.source_name/source_type` at insert time.
 **Depends on**: Wave A.
 **Estimated effort**: 4 hours.
@@ -359,9 +360,9 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 | `test_relation_period_type_ongoing` | `valid_to IS NULL` ⇒ `ONGOING` (default) |
 
 **Acceptance criteria**:
-- [ ] All 4 unit tests pass.
+- [x] All 4 unit tests pass (5 tests written: added `test_point_in_time_boundary_exactly_7_days`).
 - [ ] Integration test: run worker on fixture relation with 3 evidence rows → `valid_from = earliest`.
-- [ ] Existing `ConfidenceWorker` tests in `tests/unit/infrastructure/workers/test_confidence_worker.py` still pass.
+- [x] Existing `ConfidenceWorker` tests in `tests/unit/infrastructure/workers/test_confidence_worker.py` still pass.
 
 #### T-B-02: Populate contra columns in ContradictionBatchWorker
 
@@ -386,7 +387,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 | `test_contra_count_by_type_aggregates_correctly` | JSONB has `{type: count}` shape |
 
 **Acceptance criteria**:
-- [ ] 3 unit tests pass + existing tests pass.
+- [x] 5 unit tests pass (added: `test_no_links_inserted_skips_aggregation`, `test_relation_not_invalidated_when_confidence_at_threshold`).
 - [ ] Integration test verifies invalidation path.
 
 #### T-B-03: Populate `source_name`/`source_type` at insert in KG evidence consumer
@@ -412,7 +413,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 | `test_source_name_null_when_metadata_missing` | Both missing ⇒ NULL + warning logged |
 
 **Acceptance criteria**:
-- [ ] 3 unit tests pass.
+- [x] 3 unit tests pass.
 - [ ] `source_name_null_rate` metric registered (Wave-D wiring).
 
 #### T-B-04: Populate `summary_embedding` in SummaryWorker
@@ -439,16 +440,16 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 | `test_summary_embedding_failure_does_not_block_summary` | Embed exception ⇒ summary still UPSERTed, embedding NULL |
 
 **Acceptance criteria**:
-- [ ] 3 unit tests pass.
+- [x] 4 unit tests pass (added `test_no_embedding_when_port_is_none`).
 - [ ] Integration test: HNSW index on `summary_embedding` returns at least 1 result for a vector similarity query post-run.
 
 ### Validation Gate
 
-- [ ] `ruff check` clean on changed files.
-- [ ] `mypy` clean on `knowledge_graph.infrastructure.workers` and `knowledge_graph.infrastructure.messaging.consumers` (BP-405: correct namespaces).
-- [ ] All new + existing worker unit tests pass (target: ≥10 new tests).
+- [x] `ruff check` clean on changed files.
+- [x] `mypy` clean on `knowledge_graph.infrastructure.workers` and `knowledge_graph.infrastructure.messaging.consumers` (BP-405: correct namespaces).
+- [x] All new + existing worker unit tests pass (17 new tests, 1038 total pass).
 - [ ] Integration test: `pytest tests/integration/workers/` green.
-- [ ] No naive datetimes (R7); all UoW transactions commit/rollback explicitly.
+- [x] No naive datetimes (R7); all UoW transactions commit/rollback explicitly.
 
 ### Break Impact
 
@@ -468,7 +469,9 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 ---
 
-# Wave C — NarrativeGenerationWorker (13D-3)
+# Wave C — NarrativeGenerationWorker (13D-3) ✅ DONE
+
+**Status**: DONE — committed 2026-05-08 (T-C-01 through T-C-05, 46 new tests).
 
 **Goal**: Implement the worker that generates entity narratives, the domain entity + repository, the new Avro topic, and the idempotency check. After this wave the data exists; Wave D exposes it via API.
 **Depends on**: Wave A (T-A-01 for table; topic registration is independent).
@@ -805,7 +808,9 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 ---
 
-# Wave E1 — PathInsightWorker + Seeder
+# Wave E1 — PathInsightWorker + Seeder ✅ DONE
+
+**Status**: DONE — committed 2026-05-08 (T-E1-01 through T-E1-04, 77 new tests).
 
 **Goal**: Build the horizontally-scalable claim-based worker that pre-computes scored multi-hop paths anchored on hub entities, plus the nightly seeder that enqueues hub entities for processing.
 **Depends on**: Wave A (T-A-02 path tables, T-A-06 path templates).
