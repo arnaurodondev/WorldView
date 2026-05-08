@@ -71,13 +71,16 @@ class _FakePipeline:
 
 class _FakeValkey:
     """In-memory stand-in for the subset of ``redis.asyncio.Redis`` the cache
-    uses (``sadd``, ``sismember``, ``delete``, ``pipeline``).
+    uses (``sadd``, ``sismember``, ``delete``, ``pipeline``, ``eval``).
 
     Behaves like a Valkey SET with case-sensitive uppercase membership — the
     cache normalises to upper-case before write, so the fake stays simple.
 
     Records the most recently created ``_FakePipeline`` in ``last_pipeline``
     so tests can inspect whether ``transaction=True`` was passed.
+
+    ``eval()`` simulates the ``_ATOMIC_TICKER_SWAP`` Lua script (DEL + SADD)
+    added in C-2 / BP-422 when the cache migrated from MULTI/EXEC to Lua.
     """
 
     def __init__(self) -> None:
@@ -106,6 +109,35 @@ class _FakeValkey:
         pipe = _FakePipeline(self, transaction=transaction)
         self.last_pipeline = pipe
         return pipe
+
+    async def eval(self, script: str, numkeys: int, *keys_and_args: str) -> int:
+        """Simulate the ``_ATOMIC_TICKER_SWAP`` Lua script: DEL key then SADD key *args.
+
+        The production Lua script takes 1 KEYS entry and N ARGV entries:
+          KEYS[1]  = the Valkey SET key (keys_and_args[0])
+          ARGV[1…N] = the ticker symbols to add (keys_and_args[1:])
+
+        Execution mirrors the Lua:
+          1. DEL KEYS[1]                  → wipes the current set contents
+          2. SADD KEYS[1] ARGV[1..N]      → (skipped when ARGV is empty)
+          3. return SCARD KEYS[1]         → returns the new member count
+        """
+        # The first ``numkeys`` positional args are KEYS; the rest are ARGV.
+        # Our Lua script always uses exactly 1 key, so keys_and_args[0] is it.
+        # We ignore the key name because _FakeValkey uses a single shared _set
+        # (all key parameters are intentionally discarded in the other methods).
+        _key = keys_and_args[0]  # — key name unused (single-set fake)
+        args = keys_and_args[numkeys:]  # ARGV portion: tickers to write
+
+        # Step 1: DEL — wipe the current set contents.
+        self._set.clear()
+
+        # Step 2: SADD — populate with the new ticker symbols (skip if empty).
+        for ticker in args:
+            self._set.add(ticker)
+
+        # Step 3: SCARD — return the new cardinality.
+        return len(self._set)
 
 
 def _make_source(tickers: list[str]) -> MagicMock:
@@ -203,23 +235,41 @@ async def test_is_known_ticker_handles_blank_input() -> None:
 # ── T-C-1-02: Atomic DEL+SADD swap (F-X03 fix) ──────────────────────────────
 
 
-async def test_refresh_uses_transaction_mode() -> None:
-    """refresh() must call pipeline(transaction=True) — F-X03 fix.
+async def test_refresh_uses_lua_atomic_swap() -> None:
+    """refresh() must use the Lua atomic swap (eval), not MULTI/EXEC pipeline.
 
-    Verifies that the atomic swap path passes ``transaction=True`` to the
-    redis pipeline so DEL + SADD are wrapped in a MULTI/EXEC block.
+    C-2 / BP-422: the cache migrated from ``pipeline(transaction=True)`` to a
+    server-side Lua script so a dropped connection between DEL and SADD cannot
+    leave the cache permanently empty.  This test verifies that ``eval()`` is
+    called exactly once per refresh and that both the DEL and SADD logic is
+    present in the script body.
     """
     valkey = _FakeValkey()
     cache = CanonicalTickersCache(  # type: ignore[arg-type]
         client=valkey, source=_make_source(["AAPL", "TSLA"])
     )
 
-    count = await cache.refresh()
-    assert count == 2
+    # Record calls to eval() so we can inspect the script that was passed.
+    eval_calls: list[dict[str, object]] = []
+    original_eval = valkey.eval
 
-    # The fake records the last pipeline; assert transaction=True was passed.
-    assert valkey.last_pipeline is not None
-    assert valkey.last_pipeline.transaction is True
+    async def _recording_eval(script: str, numkeys: int, *args: str) -> int:
+        eval_calls.append({"script": script, "numkeys": numkeys, "args": args})
+        return await original_eval(script, numkeys, *args)
+
+    valkey.eval = _recording_eval  # type: ignore[method-assign]
+
+    count = await cache.refresh()
+
+    assert count == 2, f"Expected 2 tickers, got {count}"
+    assert len(eval_calls) == 1, f"eval() should be called exactly once, got {len(eval_calls)}"
+
+    script_body = eval_calls[0]["script"]
+    assert isinstance(script_body, str)
+    # Verify the Lua script body contains both the DEL and SADD operations
+    # that constitute the atomic swap (C-2 / BP-422).
+    assert "DEL" in script_body, "Lua script must contain DEL"
+    assert "SADD" in script_body, "Lua script must contain SADD"
 
 
 async def test_concurrent_is_known_ticker_during_refresh() -> None:
@@ -475,6 +525,79 @@ async def test_close_noop_before_startup() -> None:
     )
     # Should not raise even though startup() was never called.
     await cache.close()
+
+
+# ── T-C-1-04: Exponential backoff sequence (F-T005) ─────────────────────────
+
+
+async def test_refresh_loop_exponential_backoff_sequence() -> None:
+    """_refresh_loop() must apply exponential backoff on consecutive failures.
+
+    Backoff formula (C-3 / BP-423): ``min(2**n * 60, 300)`` where *n* is the
+    count of consecutive failures (incremented BEFORE computing backoff).
+
+    Expected sequence for n=1,2,3: 120 s, 240 s, 300 s (capped).
+
+    Strategy
+    --------
+    * Use ``refresh_interval_s=1`` so the normal per-tick sleep is minimal
+      and does not dominate the captured sequence.
+    * Patch ``asyncio.sleep`` in the cache module namespace to record every
+      sleep value; raise ``CancelledError`` after the 6th sleep call so the
+      loop exits without needing a real timeout.
+    * Patch ``cache.refresh`` to always raise ``ConnectionError`` so the loop
+      always takes the failure branch.
+    * Extract only the backoff sleeps (values != normal interval) and assert
+      the first three are 120, 240, 300.
+    """
+    valkey = _FakeValkey()
+    # Use a distinctly non-backoff interval (1 s) so we can separate the
+    # normal-tick sleeps from the backoff sleeps in the recorded sequence.
+    cache = CanonicalTickersCache(  # type: ignore[arg-type]
+        client=valkey, source=_make_source([]), refresh_interval_s=1
+    )
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        # Stop after enough data to verify 3 backoff values.
+        if len(sleep_calls) >= 6:
+            raise asyncio.CancelledError()
+
+    async def _failing_refresh() -> int:
+        raise ConnectionError("Valkey down for backoff test")
+
+    target = "nlp_pipeline.infrastructure.cache.canonical_tickers_cache.asyncio.sleep"
+    with patch(target, side_effect=_fake_sleep):
+        cache.refresh = _failing_refresh  # type: ignore[method-assign]
+
+        task = asyncio.create_task(cache._refresh_loop())
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except (TimeoutError, asyncio.CancelledError):
+            pass
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+    # Separate normal-tick sleeps (== 1 s) from backoff sleeps (!= 1 s).
+    normal_interval = float(cache._refresh_interval_s)
+    backoff_sleeps = [s for s in sleep_calls if s != normal_interval]
+
+    assert len(backoff_sleeps) >= 3, (
+        f"Expected ≥3 backoff sleep values, got {backoff_sleeps!r} " f"(full sequence: {sleep_calls!r})"
+    )
+    # n=1: min(2^1 * 60, 300) = 120
+    assert backoff_sleeps[0] == pytest.approx(120), f"n=1 backoff should be 120 s, got {backoff_sleeps[0]}"
+    # n=2: min(2^2 * 60, 300) = 240
+    assert backoff_sleeps[1] == pytest.approx(240), f"n=2 backoff should be 240 s, got {backoff_sleeps[1]}"
+    # n=3: min(2^3 * 60, 300) = 300 (capped)
+    assert backoff_sleeps[2] == pytest.approx(300), f"n=3 backoff should be 300 s (capped), got {backoff_sleeps[2]}"
 
 
 # Pytest marker: this module's tests run under asyncio_mode=auto (no decorator
