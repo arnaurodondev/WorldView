@@ -137,6 +137,32 @@ class TestBriefSectionWithBullets:
         with pytest.raises(ValueError):
             BriefSection(title="Risks", bullets=bullets)
 
+    def test_bullets_at_exactly_8_accepted(self) -> None:
+        """Boundary acceptance: 8 bullets (the max) must be accepted."""
+        # WHY pin the upper boundary: QA-PLAN-0083 F-002 — without this assertion a
+        # future off-by-one tightening of the cap (e.g. >= 8 instead of > 8) would
+        # silently break legitimate 8-bullet sections.
+        bullets = [self._bullet() for _ in range(8)]
+        sec = BriefSection(title="Risks", bullets=bullets)
+        assert len(sec.bullets) == 8
+
+    def test_section_title_at_exactly_120_chars_accepted(self) -> None:
+        """Boundary acceptance: title of exactly max_length=120 must be accepted."""
+        # WHY this test exists: QA-PLAN-0083 F-002 found that the title max_length=120
+        # constraint had ZERO test coverage after the Pydantic→dataclass migration.
+        # Both boundary directions are now pinned.
+        title = "x" * 120
+        sec = BriefSection(title=title, bullets=[self._bullet()])
+        assert len(sec.title) == 120
+
+    def test_section_title_above_120_chars_rejected(self) -> None:
+        """title of length 121 must raise ValueError (max_length=120 enforced in __post_init__)."""
+        # WHY ValueError (not ValidationError): PLAN-0083 — BriefSection is now a
+        # frozen dataclass; constraint enforcement moved from Pydantic Field to
+        # __post_init__.
+        with pytest.raises(ValueError):
+            BriefSection(title="x" * 121, bullets=[self._bullet()])
+
 
 # ── PublicBriefingResponse new additive fields ────────────────────────────────
 
