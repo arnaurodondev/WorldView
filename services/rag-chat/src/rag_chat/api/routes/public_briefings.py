@@ -12,16 +12,23 @@ PLAN-0062-W4 (T-W4-C-01):
               "briefing:instrument:v2:{entity_id}:{user_id}".
 - confidence and lead from the use case result are propagated into the
   response and logged for observability.
+
+PLAN-0066 Wave B (T-W10-B-03):
+- GET /api/v1/briefings/morning/history — paginated brief archive.
+  Uses BriefArchiveRepositoryDep (read-only session, R27).
+  page_size capped at 50 via Query(le=50) to prevent runaway queries.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel
 
+from rag_chat.api.dependencies import BriefArchiveRepositoryDep
 from rag_chat.api.schemas import PublicBriefingResponse
 from rag_chat.domain.errors import EntityNotFoundError, ProviderUnavailableError, RateLimitExceededError
 
@@ -30,6 +37,38 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 # Cache TTL: 24 hours — briefings are expensive (LLM call) and stable within a day.
 _CACHE_TTL = 86400
+
+
+# ── PLAN-0066 Wave B: history response schemas ────────────────────────────────
+
+
+class BriefHistoryItem(BaseModel):
+    """One entry in the brief history list — a lightweight summary of a past brief.
+
+    WHY id as str (not UUID): the JSON API contract uses string UUIDs; the
+    frontend converts to UUID if needed. Keeping str here avoids the Pydantic
+    UUID→string serialisation edge-cases in older clients.
+    """
+
+    id: str
+    generated_at: str  # ISO-8601 string — consistent with existing brief response shapes
+    headline: str
+    lead: str | None = None
+    confidence: float
+
+
+class BriefHistoryResponse(BaseModel):
+    """Paginated response for GET /api/v1/briefings/morning/history.
+
+    WHY include total + page + page_size: callers need all three to implement
+    pagination UI (know when last page is reached, display "page N of M").
+    Matches the standard worldview pagination contract used by screener + thread list.
+    """
+
+    items: list[BriefHistoryItem]
+    total: int
+    page: int
+    page_size: int
 
 
 def _get_briefing_uc(request: Request) -> Any:
@@ -287,3 +326,70 @@ async def get_instrument_briefing(entity_id: str, request: Request) -> PublicBri
             log.warning("briefing_cache_write_failed", error=str(e), key=cache_key)  # type: ignore[no-any-return]
 
     return instr_resp
+
+
+# ── PLAN-0066 Wave B: brief history endpoint ──────────────────────────────────
+
+
+@router.get("/briefings/morning/history", response_model=BriefHistoryResponse)
+async def get_morning_brief_history(
+    request: Request,
+    archive: BriefArchiveRepositoryDep,
+    page: Annotated[int, Query(ge=0)] = 0,
+    page_size: Annotated[int, Query(ge=1, le=50)] = 10,
+) -> BriefHistoryResponse:
+    """Return paginated history of past morning briefs for the authenticated user.
+
+    WHY ReadUoWDep (read-only): this endpoint never writes — R27 mandates that
+    read-only routes use the read replica session factory. BriefArchiveRepositoryDep
+    is already wired to read_factory (see api/dependencies.py).
+
+    WHY page_size capped at 50: prevents runaway queries; the frontend history
+    panel shows at most 30 items, so 50 is a safe upper bound with room for
+    future page-size expansion.
+
+    Auth: InternalJWTMiddleware enforces X-Internal-JWT (PRD-0025). Missing
+    user_id in request.state → 401 (same guard as other briefing routes).
+    """
+    user_id_str = _extract_user_id(request)
+    tenant_id_str = _extract_tenant_id(request)
+    user_id = _to_uuid(user_id_str)
+    tenant_id = _to_uuid(tenant_id_str)
+
+    records, total = await archive.get_history(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        brief_type="morning",
+        page=page,
+        page_size=page_size,
+    )
+
+    items = [
+        BriefHistoryItem(
+            id=str(r.id),
+            # WHY isoformat(): generated_at is a UTC-aware datetime (R11);
+            # isoformat() produces a stable string like "2026-05-08T12:00:00+00:00"
+            # that the frontend can parse with new Date().
+            generated_at=r.generated_at.isoformat(),
+            headline=r.headline,
+            lead=r.lead,
+            confidence=r.confidence,
+        )
+        for r in records
+    ]
+
+    log.info(  # type: ignore[no-any-return]
+        "morning_brief_history_fetched",
+        user_id=user_id_str,
+        page=page,
+        page_size=page_size,
+        total=total,
+        returned=len(items),
+    )
+
+    return BriefHistoryResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+    )

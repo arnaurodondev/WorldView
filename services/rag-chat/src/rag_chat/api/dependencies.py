@@ -18,6 +18,7 @@ from fastapi import Depends, HTTPException, Request
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+    from rag_chat.infrastructure.db.repositories.brief_archive_repository import BriefArchiveRepository
     from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
 
 
@@ -65,6 +66,39 @@ async def get_auth_context(request: Request) -> tuple[UUID, UUID]:
 UoWDep = Annotated[Any, Depends(get_uow)]
 ReadUoWDep = Annotated[Any, Depends(get_read_uow)]
 AuthContextDep = Annotated[tuple[UUID, UUID], Depends(get_auth_context)]
+
+
+async def get_brief_archive_dep(request: Request) -> AsyncGenerator[BriefArchiveRepository, None]:  # type: ignore[type-arg]
+    """Yield a BriefArchiveRepository backed by a read-only session (R27).
+
+    WHY read-only factory: GET /v1/briefings/morning/history only reads rows —
+    it never mutates. R27 mandates ReadUoWDep for read-only routes so that
+    reads go to the replica and do not contend with write transactions.
+
+    WHY infrastructure import inside function body: preserves R25 compliance —
+    the module-level dependencies.py imports only from the application layer.
+    The concrete BriefArchiveRepository is only resolved at request time via
+    the Depends() call, keeping the import lazy and the dependency arrow correct.
+
+    WHY direct session_factory (not RagUnitOfWork): RagUnitOfWork does not
+    expose a public .session property — it wires thread/message repositories
+    internally. The brief archive repository needs a raw AsyncSession, which
+    we create directly from the read_factory. The session is closed in the
+    finally block (same lifetime management as the UoW __aexit__).
+    """
+    from rag_chat.infrastructure.db.repositories.brief_archive_repository import (
+        BriefArchiveRepository as _BriefArchiveRepository,
+    )
+
+    # WHY read_factory: R27 — history endpoint is read-only.
+    session = request.app.state.read_factory()
+    try:
+        yield _BriefArchiveRepository(session=session)
+    finally:
+        await session.close()
+
+
+BriefArchiveRepositoryDep = Annotated[Any, Depends(get_brief_archive_dep)]
 
 
 def make_write_uow(request: Request) -> Any:
