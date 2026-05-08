@@ -14,8 +14,11 @@ from __future__ import annotations
 import os
 from typing import Literal
 
+import structlog
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 
 class Settings(BaseSettings):
@@ -150,24 +153,37 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_startup(self) -> Settings:
-        """Validate startup invariants: F-007 (skip_verification) + F-014 (whitespace coercion).
+        """Validate startup invariants: F-007/F-S005 (skip_verification) + F-014 (whitespace coercion).
 
         DEF-028: Use case-insensitive APP_ENV comparison so "Production", "PRODUCTION",
         and "prod" all trigger the guard — prevents bypassing the check via env var casing.
-        S-005: staging and stage added to the protected-envs set so skip_verification
-        is rejected in staging too (same attack surface as production).
+        F-S005: Inverted from denylist to allowlist — only explicitly permitted dev/test
+        environments may skip JWT signature verification; any unrecognised APP_ENV value
+        (including blank) that is NOT in the safe set will be rejected, preventing the
+        original bypass where APP_ENV="" silently passed the denylist.
         """
-        # S-005: extend the protected envs set to include staging — skip_verification
-        # MUST NOT be enabled anywhere that real user data or real tokens are in play.
-        _protected_envs: frozenset[str] = frozenset({"production", "prod", "staging", "stage"})
+        # F-S005: Allowlist of environments where skip_verification is permitted.
+        # Only these well-known dev/test envs may bypass JWT signature checks.
+        # "" is included so local dev with no APP_ENV set still works, but triggers
+        # a LOUD WARNING below (operator must verify this is intentional).
+        _safe_envs: frozenset[str] = frozenset({"development", "dev", "test", "ci", "local", ""})
 
-        # F-007: internal_jwt_skip_verification=True MUST NOT be used in production/staging.
+        # F-007: internal_jwt_skip_verification=True MUST NOT be used outside safe environments.
         # Prevents accidentally deploying with signature verification disabled.
         _app_env = os.environ.get("APP_ENV", "").strip().lower()
-        if self.internal_jwt_skip_verification and _app_env in _protected_envs:
+        if self.internal_jwt_skip_verification and _app_env not in _safe_envs:
             raise ValueError(
-                f"internal_jwt_skip_verification MUST NOT be enabled in protected environments "
-                f"(APP_ENV={_app_env!r} is in {sorted(_protected_envs)})"
+                f"internal_jwt_skip_verification MUST NOT be enabled outside safe environments "
+                f"(APP_ENV={_app_env!r} is not in {sorted(_safe_envs)})"
+            )
+
+        # F-S005: Emit a LOUD WARNING when APP_ENV is unset and skip_verification is on.
+        # An unset APP_ENV could indicate a misconfigured production container — ensure
+        # the operator notices by logging at CRITICAL level.
+        if self.internal_jwt_skip_verification and _app_env == "":
+            _log.critical(  # type: ignore[no-any-return]
+                "SECURITY: internal_jwt_skip_verification=True with APP_ENV unset. "
+                "Ensure this is intentional for local development only."
             )
 
         # F-014: Coerce whitespace-only database_url_read to None — functionally empty

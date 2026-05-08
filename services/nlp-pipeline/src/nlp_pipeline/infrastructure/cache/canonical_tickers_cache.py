@@ -306,7 +306,7 @@ class CanonicalTickersCache:
                 operation="refresh",
                 error=str(exc),
             )
-            return 0
+            raise  # let _refresh_loop handle backoff (F-DS009)
 
         log.info(  # type: ignore[no-any-return]
             "canonical_tickers_cache.refreshed",
