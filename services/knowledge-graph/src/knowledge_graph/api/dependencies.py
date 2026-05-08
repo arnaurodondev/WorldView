@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 from collections.abc import AsyncGenerator
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,7 @@ from knowledge_graph.application.ports.temporal_event_repository import Temporal
 from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeighborhoodUseCase
 from knowledge_graph.application.use_cases.dlq_admin import DLQAdminUseCase
 from knowledge_graph.application.use_cases.get_entity_detail import GetEntityDetailUseCase
+from knowledge_graph.application.use_cases.get_entity_intelligence import GetEntityIntelligenceUseCase
 
 # ── Database sessions ─────────────────────────────────────────────────────────
 
@@ -259,3 +261,89 @@ def get_entity_detail_uc(
 
 
 GetEntityDetailUseCaseDep = Annotated[GetEntityDetailUseCase, Depends(get_entity_detail_uc)]
+
+
+# ── Entity intelligence use case (PRD-0074 Wave D) ────────────────────────────
+
+
+def get_entity_intelligence_uc(
+    session: ReadOnlyDbSessionDep,
+) -> GetEntityIntelligenceUseCase:
+    """Build GetEntityIntelligenceUseCase bound to the current read-only session.
+
+    All infrastructure imports are deferred inside this factory (R25).
+    API routes annotate their parameters with GetEntityIntelligenceUseCaseDep.
+    """
+    from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+        CanonicalEntityRepository,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.intelligence_aggregates_repository import (
+        IntelligenceAggregatesRepository,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.narrative_repository import (
+        NarrativeRepository,
+    )
+
+    return GetEntityIntelligenceUseCase(
+        entity_repo=CanonicalEntityRepository(session),
+        narrative_repo=NarrativeRepository(session),
+        aggregates_repo=IntelligenceAggregatesRepository(session),
+    )
+
+
+GetEntityIntelligenceUseCaseDep = Annotated[GetEntityIntelligenceUseCase, Depends(get_entity_intelligence_uc)]
+
+
+# ── Path Insights (PLAN-0074 Wave E2) ─────────────────────────────────────────
+# R25: All infrastructure wiring happens here — routers import only the Dep alias.
+# R27: list_by_anchor is a read-only query → ReadOnlyDbSessionDep.
+# The PathExplanationService write-session is provided via app.state (set at
+# startup), NOT via a per-request session, so this factory is read-only.
+
+
+def get_entity_paths_uc(
+    session: ReadOnlyDbSessionDep,
+    request: Request,
+) -> GetEntityPathsUseCase_:
+    """Build GetEntityPathsUseCase bound to the current read-only session.
+
+    ``PathExplanationService`` is pulled from ``app.state`` so it can hold a
+    write-session factory.  When the app state has no ``path_explanation_service``
+    attribute (tests, dev) explanation generation is silently skipped.
+    """
+    from knowledge_graph.application.services.path_explanation_service import PathExplanationService
+    from knowledge_graph.application.use_cases.get_entity_paths import GetEntityPathsUseCase
+    from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+        CanonicalEntityRepository,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.path_insight_repository import (
+        PathInsightRepository,
+    )
+
+    repo = PathInsightRepository(session)
+
+    # Optional — None when not wired at startup (tests, dev, no LLM configured).
+    explanation_service: PathExplanationService | None = getattr(request.app.state, "path_explanation_service", None)
+
+    # Entity existence check callable — R27: uses the same read-only session.
+    # Injected into the use case so the router stays R25 compliant (no infra import).
+    canonical_repo = CanonicalEntityRepository(session)
+
+    async def _entity_exists(entity_id: UUID) -> bool:
+        entity = await canonical_repo.get_by_id(entity_id)
+        return entity is not None
+
+    return GetEntityPathsUseCase(
+        path_insight_repo=repo,
+        explanation_service=explanation_service,
+        entity_exists_fn=_entity_exists,
+    )
+
+
+# Import the concrete type for the Annotated alias — deferred to avoid a
+# circular import at module load time (dependencies ← use_cases ← schemas).
+from knowledge_graph.application.use_cases.get_entity_paths import (  # noqa: E402
+    GetEntityPathsUseCase as GetEntityPathsUseCase_,
+)
+
+GetEntityPathsUseCaseDep = Annotated[GetEntityPathsUseCase_, Depends(get_entity_paths_uc)]

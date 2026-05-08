@@ -39,6 +39,8 @@ from knowledge_graph.api import (
     events,
     health,
     internal_costs,
+    narratives,  # PRD-0074 Wave D: narrative history + manual trigger
+    paths,  # PLAN-0074 Wave E2: path insights API
     routes,
     search,
     temporal_events,
@@ -231,11 +233,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(routes.router)
     app.include_router(claims.router)
     app.include_router(entities.router)
+    app.include_router(entities._internal_router)  # type: ignore[attr-defined]  # PRD-0074 Wave D internal intelligence route
     app.include_router(events.router)
     app.include_router(search.router)
     app.include_router(temporal_events.router)
     app.include_router(cypher.router)
     app.include_router(dlq.router)
     app.include_router(internal_costs.router)
+    app.include_router(paths.router)  # PLAN-0074 Wave E2 — path insights
+    app.include_router(narratives.router)  # PRD-0074 Wave D — narrative history + manual trigger
 
     return app

@@ -2,6 +2,8 @@
 
   GET /api/v1/entities/{entity_id}
   GET /api/v1/entities/{entity_id}/contradictions
+  GET /api/v1/entities/{entity_id}/intelligence
+  GET /internal/v1/entities/{entity_id}/intelligence  (S8 → S7 service-to-service)
   POST /api/v1/entities/similar
 
 Read-only endpoints.  Uses the read-replica session (R27).
@@ -17,6 +19,7 @@ from knowledge_graph.api.dependencies import (
     EntityContradictionsRepoDep,
     FindSimilarEntitiesReposDep,
     GetEntityDetailUseCaseDep,
+    GetEntityIntelligenceUseCaseDep,
 )
 from knowledge_graph.api.schemas import (
     ContradictionDetailResponse,
@@ -27,6 +30,7 @@ from knowledge_graph.api.schemas import (
     SimilarEntitiesResponse,
     SimilarEntityResultItem,
 )
+from knowledge_graph.api.schemas_intelligence import EntityIntelligencePublic
 from knowledge_graph.application.use_cases.contradiction_lookup import (
     EntityContradictionsUseCase,
 )
@@ -168,3 +172,67 @@ async def find_similar_entities(
         ],
         total=len(results),
     )
+
+
+# ── Entity intelligence (PRD-0074 Wave D) ─────────────────────────────────────
+
+
+async def _get_intelligence(
+    entity_id: UUID,
+    uc: GetEntityIntelligenceUseCaseDep,
+) -> EntityIntelligencePublic:
+    """Shared logic for public and internal entity intelligence endpoints."""
+    result = await uc.execute(entity_id=entity_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return result
+
+
+@router.get(
+    "/entities/{entity_id}/intelligence",
+    response_model=EntityIntelligencePublic,
+    summary="Aggregated entity intelligence — narrative, confidence breakdown, metrics",
+)
+async def get_entity_intelligence(
+    entity_id: UUID,
+    uc: GetEntityIntelligenceUseCaseDep,
+) -> EntityIntelligencePublic:
+    """Return aggregated intelligence for a canonical entity.
+
+    Includes:
+    - Current narrative (if generated)
+    - Confidence breakdown: avg support/corroboration/contradiction, source distribution, 90-day trend
+    - key_metrics: entity-type-specific fields from metadata JSONB
+    - data_completeness: fraction of expected metadata fields populated
+
+    - 200: intelligence assembled (confidence fields may be null if no evidence yet)
+    - 404: entity does not exist
+    - 422: invalid UUID format
+
+    Uses ReadOnlyDbSessionDep (R27 — read-only throughout).
+    """
+    return await _get_intelligence(entity_id, uc)
+
+
+# ── Internal route (S8 → S7 service-to-service) ───────────────────────────────
+# Same logic, dedicated prefix so it can be blocked at the public API gateway.
+# Wave G will add the S9 proxy that exposes this to external clients.
+
+_internal_router = APIRouter(prefix="/internal/v1", tags=["internal", "entities"])
+
+
+@_internal_router.get(
+    "/entities/{entity_id}/intelligence",
+    response_model=EntityIntelligencePublic,
+    summary="[Internal] Entity intelligence for S8 rag-chat consumption",
+)
+async def get_entity_intelligence_internal(
+    entity_id: UUID,
+    uc: GetEntityIntelligenceUseCaseDep,
+) -> EntityIntelligencePublic:
+    """Internal-only route: identical to the public intelligence endpoint.
+
+    Accessed by S8 (rag-chat) to enrich chat responses with entity context.
+    Wave G will add the S9 gateway proxy to expose it externally.
+    """
+    return await _get_intelligence(entity_id, uc)
