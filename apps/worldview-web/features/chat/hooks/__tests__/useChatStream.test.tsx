@@ -431,4 +431,195 @@ describe("useChatStream", () => {
     const init = fetchMock.mock.calls[0][1];
     expect(JSON.parse(init.body as string).thread_id).toBe(newId);
   });
+
+  // ── PLAN-0067 W11-5: tool-use SSE events ─────────────────────────────────
+
+  it("tool_call SSE event adds a running entry to activeTools", async () => {
+    // WHY: when S8 starts a tool call it emits an SSE frame:
+    //   event: tool_call\ndata: {"type":"tool_call","tool":"search_documents","label":"Searching documents...","input":{},"status":"running"}\n
+    // The hook should add a ToolCallState{status:"running"} to activeTools.
+    const frames = [
+      'event: tool_call\ndata: {"type":"tool_call","tool":"search_documents","label":"Searching documents...","input":{},"status":"running"}\n',
+      "data: [DONE]\n",
+    ];
+    const { reader } = makeReader(frames);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: { getReader: () => reader },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    await act(async () => {
+      await result.current.send("What are analysts saying about AAPL?");
+    });
+
+    // After [DONE]: activeTools is cleared (stream complete).
+    // WHY: tools should not linger in the UI after the answer is rendered.
+    expect(result.current.activeTools).toHaveLength(0);
+
+    // We can't observe the mid-stream state in a single awaited send().
+    // The clearing-on-done behaviour is verified; the adding behaviour is
+    // covered by the "tool_result updates status" test which uses the
+    // abortable reader to pause mid-stream.
+    expect(result.current.streaming).toBeNull();
+  });
+
+  it("tool_call event mid-stream: activeTools has running entry before done", async () => {
+    // WHY: we need to OBSERVE the running state before [DONE] clears it.
+    // Use the abortable reader so we can pause between frames.
+    const ar = makeAbortableReader();
+    const fetchMock = vi.fn().mockImplementation((_url, init: RequestInit) => {
+      init.signal?.addEventListener("abort", () => ar.controller.abort());
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => ar.reader },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    let sendPromise!: Promise<void>;
+    act(() => {
+      sendPromise = result.current.send("research question");
+    });
+
+    // Push the tool_call frame.
+    await act(async () => {
+      ar.pushChunk(
+        'event: tool_call\ndata: {"type":"tool_call","tool":"search_documents","label":"Searching documents...","input":{},"status":"running"}\n',
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // NOW we can assert the mid-stream state: tool should be running.
+    await waitFor(() => {
+      expect(result.current.activeTools).toHaveLength(1);
+    });
+    expect(result.current.activeTools[0]).toMatchObject({
+      name: "search_documents",
+      label: "Searching documents...",
+      status: "running",
+    });
+
+    // Finish cleanly.
+    await act(async () => {
+      ar.pushChunk("data: [DONE]\n");
+      ar.finish();
+      await sendPromise;
+    });
+  });
+
+  it("tool_result SSE event updates the matching tool status", async () => {
+    // WHY: when a tool completes, S8 emits tool_result with status "ok"|"empty"|"error".
+    // The hook must find the matching entry in activeTools and update its status.
+    const ar = makeAbortableReader();
+    const fetchMock = vi.fn().mockImplementation((_url, init: RequestInit) => {
+      init.signal?.addEventListener("abort", () => ar.controller.abort());
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => ar.reader },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    let sendPromise!: Promise<void>;
+    act(() => {
+      sendPromise = result.current.send("question");
+    });
+
+    // Push tool_call (sets status=running).
+    await act(async () => {
+      ar.pushChunk(
+        'event: tool_call\ndata: {"type":"tool_call","tool":"search_documents","label":"Searching documents...","input":{},"status":"running"}\n',
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTools).toHaveLength(1);
+      expect(result.current.activeTools[0].status).toBe("running");
+    });
+
+    // Push tool_result (transitions status → "ok").
+    await act(async () => {
+      ar.pushChunk(
+        'event: tool_result\ndata: {"type":"tool_result","tool":"search_documents","status":"ok","item_count":5}\n',
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTools[0].status).toBe("ok");
+    });
+
+    // Finish.
+    await act(async () => {
+      ar.pushChunk("data: [DONE]\n");
+      ar.finish();
+      await sendPromise;
+    });
+  });
+
+  it("done event clears activeTools", async () => {
+    // WHY: the done event should reset activeTools so indicators vanish once
+    // the answer is rendered. Uses the abortable reader to verify pre-done state.
+    const ar = makeAbortableReader();
+    const fetchMock = vi.fn().mockImplementation((_url, init: RequestInit) => {
+      init.signal?.addEventListener("abort", () => ar.controller.abort());
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        body: { getReader: () => ar.reader },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { args } = makeArgs();
+    const { result } = renderHook(() => useChatStream(args));
+
+    let sendPromise!: Promise<void>;
+    act(() => {
+      sendPromise = result.current.send("question");
+    });
+
+    // Add a running tool.
+    await act(async () => {
+      ar.pushChunk(
+        'event: tool_call\ndata: {"type":"tool_call","tool":"query_temporal","label":"Querying timeline...","input":{},"status":"running"}\n',
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTools).toHaveLength(1);
+    });
+
+    // Send done — should clear tools.
+    await act(async () => {
+      ar.pushChunk("data: [DONE]\n");
+      ar.finish();
+      await sendPromise;
+    });
+
+    expect(result.current.activeTools).toHaveLength(0);
+  });
 });

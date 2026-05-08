@@ -222,6 +222,9 @@ export default function ChatPage() {
     streaming,
     chatError,
     isStreaming,
+    // PLAN-0067 W11-5: activeTools drives the ToolCallIndicator inside StreamingBubble.
+    // Populated by tool_call SSE events, cleared on done/cancel.
+    activeTools,
     send,
     cancel: handleCancelStream,
     resetForThread,
@@ -813,7 +816,10 @@ export default function ChatPage() {
 
                 {/* In-flight SSE stream */}
                 {streaming && streaming.text ? (
-                  <StreamingBubble streaming={streaming} />
+                  // Pass activeTools so ToolCallIndicator renders above the streaming text.
+                  // WHY: during multi-tool responses the tool indicators appear first,
+                  // then text flows in below them once S8 starts generating.
+                  <StreamingBubble streaming={streaming} activeTools={activeTools} />
                 ) : streaming ? (
                   <TypingIndicator />
                 ) : null}
