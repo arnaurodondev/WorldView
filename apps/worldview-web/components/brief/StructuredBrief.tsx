@@ -51,6 +51,10 @@ import {
   getCitationSourceId,
   getCitationDomain,
 } from "./citation-link";
+// PLAN-0066 Wave F T-W10-F-03: BulletFeedback provides per-bullet thumbs up/down.
+// Dynamic import not needed — BulletFeedback is small and renders only when briefId
+// is present. The parent (MorningBriefCard) is already "use client".
+import { BulletFeedback } from "@/features/dashboard/components/BulletFeedback";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -102,6 +106,21 @@ export interface StructuredBriefProps {
    * override margin, padding, or background for its grid cell.
    */
   className?: string;
+
+  /**
+   * PLAN-0066 Wave F: DB id of the persisted brief.
+   * When provided, BulletFeedback widgets (thumbs up/down) are rendered on hover
+   * for each bullet. When absent, no feedback widgets are shown.
+   * WHY optional: instrument briefs, cached responses, and legacy contexts where
+   * a brief ID is not available still render correctly without feedback widgets.
+   */
+  briefId?: string | null;
+
+  /**
+   * PLAN-0066 Wave F: auth token for the BulletFeedback POST.
+   * Passed from the parent that owns useAuth(). Only used when briefId is present.
+   */
+  token?: string;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -284,6 +303,8 @@ export function StructuredBrief({
   confidence,
   variant = "full",
   className = "",
+  briefId,
+  token,
 }: StructuredBriefProps) {
   // ── Confidence badge ─────────────────────────────────────────────────────
   // WHY only in "full": compact and inline variants are space-constrained —
@@ -346,7 +367,10 @@ export function StructuredBrief({
             <BriefSectionBlock
               key={`${sec.title}-${i}`}
               section={sec}
+              sectionIdx={i}
               variant={variant}
+              briefId={briefId}
+              token={token}
             />
           ))}
         </div>
@@ -366,10 +390,16 @@ export function StructuredBrief({
  */
 function BriefSectionBlock({
   section,
+  sectionIdx,
   variant,
+  briefId,
+  token,
 }: {
   section: BriefSection;
+  sectionIdx: number;
   variant: StructuredBriefVariant;
+  briefId?: string | null;
+  token?: string;
 }) {
   const headingClass =
     variant === "full"
@@ -394,7 +424,11 @@ function BriefSectionBlock({
           <BriefBulletItem
             key={j}
             bullet={bullet}
+            bulletIdx={j}
+            sectionIdx={sectionIdx}
             variant={variant}
+            briefId={briefId}
+            token={token}
           />
         ))}
       </ul>
@@ -418,10 +452,18 @@ function BriefSectionBlock({
  */
 function BriefBulletItem({
   bullet,
+  bulletIdx,
+  sectionIdx,
   variant,
+  briefId,
+  token,
 }: {
   bullet: BriefBullet;
+  bulletIdx: number;
+  sectionIdx: number;
   variant: StructuredBriefVariant;
+  briefId?: string | null;
+  token?: string;
 }) {
   const bulletClass =
     variant === "full"
@@ -434,8 +476,26 @@ function BriefBulletItem({
   const citations = bullet.citations ?? [];
 
   return (
-    <li className={bulletClass}>
-      <span>{bullet.text}</span>
+    // WHY "group": enables the BulletFeedback hover reveal via Tailwind's
+    // "group-hover:opacity-100" pattern. Without "group" on the parent <li>,
+    // the opacity-0 BulletFeedback would never become visible on hover.
+    <li className={`${bulletClass} group`}>
+      <span>
+        {bullet.text}
+        {/* PLAN-0066 Wave F T-W10-F-03: thumbs up/down feedback on hover.
+            WHY only in "full" + briefId: compact/inline variants are space-constrained
+            (workspace panels, chat bubbles) where feedback buttons are intrusive.
+            briefId is required to POST the feedback — without it we have no brief
+            to attach the reaction to. */}
+        {variant === "full" && briefId && token && (
+          <BulletFeedback
+            token={token}
+            briefId={briefId}
+            sectionIdx={sectionIdx}
+            bulletIdx={bulletIdx}
+          />
+        )}
+      </span>
       {/* WHY only in "full": citation chips add height — suppress in compact */}
       {variant === "full" && citations.length > 0 && (
         <CitationChips citations={citations} />
