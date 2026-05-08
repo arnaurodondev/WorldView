@@ -8,7 +8,7 @@ Architecture rules enforced here:
 
 Pipeline for POST /api/v1/chat/entity-context:
   1. Load entity context via EntityContextLoaderPort (parallel S7 HTTP calls).
-  2. Build entity-scoped system-prompt prefix.
+  2. Build entity-scoped system-prompt prefix from S7 intelligence data.
   3. If is_empty=True (S7 unavailable): use generic prompt without entity context.
   4. Compose prefixed question and delegate to ChatOrchestratorUseCase.execute_streaming.
   5. Yield SSE events from the underlying orchestrator unchanged.
@@ -16,6 +16,7 @@ Pipeline for POST /api/v1/chat/entity-context:
 
 from __future__ import annotations
 
+import json
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -66,6 +67,8 @@ def _build_system_prompt_prefix(ctx: EntityChatContext) -> str:
     context window must accommodate the prefix + conversation history + the LLM's
     answer buffer. 2000 chars of prefix + ~500 chars of question fits comfortably
     within most 8k-token windows.
+
+    Returns "" when ctx.is_empty=True so callers can detect the fallback path.
     """
     if ctx.is_empty:
         # Fallback: no entity context available — use generic prompt.
@@ -92,7 +95,7 @@ def _build_system_prompt_prefix(ctx: EntityChatContext) -> str:
             rel_type = _sanitize_entity_name(str(rel.get("relation_type", "")))
             target = _sanitize_entity_name(str(rel.get("target_name", "")))
             conf = rel.get("confidence", 0.0)
-            lines.append(f"  - {rel_type} → {target} (confidence: {conf:.2f})")
+            lines.append(f"  - {rel_type} -> {target} (confidence: {conf:.2f})")
 
     lines.append("")
     lines.append(f"Answer based on this entity context. Stay focused on {safe_name}.")
@@ -135,17 +138,16 @@ class EntityContextChatUseCase:
         """Run entity-context chat pipeline, yielding SSE events.
 
         Args:
-            entity_id:            UUID of the entity to load context for.
-            question:             User question (already HTML-stripped and validated
-                                  by the calling route via EntityContextChatRequest).
-            tenant_id:            Tenant UUID from the auth context.
-            user_id:              User UUID from the auth context.
-            jwt_token:            X-Internal-JWT forwarded from the incoming request.
-            thread_id:            Optional existing conversation thread UUID.
-            include_graph_context: When True, loads the graph endpoint in parallel.
-                                  When False, skips the graph call (used by callers
-                                  that only want narrative context).
-            uow:                  Write-capable unit of work for chat persistence.
+            entity_id:             UUID of the entity to load context for.
+            question:              User question (already HTML-stripped and validated
+                                   by the calling route via EntityContextChatRequest).
+            tenant_id:             Tenant UUID from the auth context.
+            user_id:               User UUID from the auth context.
+            jwt_token:             X-Internal-JWT forwarded from the incoming request.
+            thread_id:             Optional existing conversation thread UUID.
+            include_graph_context: When True, loads graph endpoint in parallel.
+                                   Currently forwarded to the loader (future use).
+            uow:                   Write-capable unit of work for chat persistence.
 
         Yields:
             SSE event dicts in the same format as ChatOrchestratorUseCase.execute_streaming
@@ -168,7 +170,7 @@ class EntityContextChatUseCase:
         )
 
         # Step 2: Build system-prompt prefix.
-        # Returns "" when is_empty=True → generic prompt path.
+        # Returns "" when is_empty=True (fallback path — S7 unavailable).
         prefix = _build_system_prompt_prefix(ctx)
 
         # Step 3: Compose prefixed question for the orchestrator.
@@ -176,85 +178,18 @@ class EntityContextChatUseCase:
         # ChatOrchestratorUseCase builds the system prompt internally from the
         # tool registry's to_system_prompt_section(); we prepend the entity context
         # to the user question so the LLM sees it as grounding context BEFORE
-        # answering.  This is the minimal-invasive integration — it does not
-        # require modifying ChatOrchestratorUseCase or ChatPipeline.
-        # Fallback: no entity context (prefix="") — pass question unchanged.
+        # answering. Minimal-invasive — no changes to ChatOrchestratorUseCase.
         prefixed_question = f"{prefix}\n\n[USER QUESTION]\n{question}" if prefix else question
 
         # Step 4: Build a ChatRequest and delegate to the existing orchestrator.
-        # WHY import inside function: R25 — domain entities are in the domain
-        # layer; we import lazily here to avoid module-level circular imports
-        # that could arise if this use case file is imported early.
+        # WHY lazy import inside method: R25 compliance. Domain entities live in the
+        # domain layer; lazy import avoids module-level circular import risks.
         from rag_chat.domain.entities.chat import ChatContext, ChatRequest
 
         chat_req = ChatRequest(
             message=prefixed_question,
-            # WHY entity_id in entity_ids: this scopes the tool executor's
-            # search_documents tool to chunks mentioning this entity (PLAN-0078).
-            context=ChatContext(entity_ids=(entity_id,)),
-            tenant_id=tenant_id,
-            user_id=user_id,
-            thread_id=thread_id,
-        )
-
-        # Step 5: Stream events from the orchestrator unchanged.
-        # The orchestrator drives the full tool-use pipeline (input validation,
-        # rate limit, entity resolution, tool calls, LLM turns, persistence).
-        async for event in self._orchestrator.execute_streaming(chat_req, uow):
-            yield event
-
-    async def _stream_for_sync(
-        self,
-        entity_id: UUID,
-        question: str,
-        tenant_id: UUID,
-        user_id: UUID,
-        jwt_token: str,
-        thread_id: UUID | None,
-        include_graph_context: bool,
-        uow: RagUnitOfWorkPort,
-    ) -> AsyncGenerator[dict[str, str], None]:
-        """Alias of execute_streaming for the sync wrapper below."""
-        # Step 1: Load entity context from S7.
-        # is_empty=True on any S7 failure — never raises from the loader.
-        ctx: EntityChatContext = await self._loader.load(
-            entity_id=entity_id,
-            tenant_id=tenant_id,
-            jwt_token=jwt_token,
-        )
-
-        log.info(  # type: ignore[no-any-return]
-            "entity_context_chat_start",
-            entity_id=str(entity_id),
-            is_empty=ctx.is_empty,
-            has_narrative=bool(ctx.narrative_text),
-            relation_count=len(ctx.top_relations),
-        )
-
-        # Step 2: Build system-prompt prefix.
-        # Returns "" when is_empty=True → generic prompt path.
-        prefix = _build_system_prompt_prefix(ctx)
-
-        # Step 3: Compose prefixed question for the orchestrator.
-        # WHY prepend prefix as part of the user message (not a system message):
-        # ChatOrchestratorUseCase builds the system prompt internally from the
-        # tool registry's to_system_prompt_section(); we prepend the entity context
-        # to the user question so the LLM sees it as grounding context BEFORE
-        # answering.  This is the minimal-invasive integration — it does not
-        # require modifying ChatOrchestratorUseCase or ChatPipeline.
-        # Fallback: no entity context (prefix="") — pass question unchanged.
-        prefixed_question = f"{prefix}\n\n[USER QUESTION]\n{question}" if prefix else question
-
-        # Step 4: Build a ChatRequest and delegate to the existing orchestrator.
-        # WHY import inside function: R25 — domain entities are in the domain
-        # layer; we import lazily here to avoid module-level circular imports
-        # that could arise if this use case file is imported early.
-        from rag_chat.domain.entities.chat import ChatContext, ChatRequest
-
-        chat_req = ChatRequest(
-            message=prefixed_question,
-            # WHY entity_id in entity_ids: this scopes the tool executor's
-            # search_documents tool to chunks mentioning this entity (PLAN-0078).
+            # WHY entity_id in entity_ids: scopes the search_documents tool
+            # (PLAN-0078 entity_mentions filter) to chunks referencing this entity.
             context=ChatContext(entity_ids=(entity_id,)),
             tenant_id=tenant_id,
             user_id=user_id,
@@ -281,24 +216,22 @@ class EntityContextChatUseCase:
         """Synchronous wrapper — collects all SSE events and returns final answer.
 
         Used by POST /api/v1/chat/entity-context (sync variant).
-        Delegates to _stream() and collects token/citations/metadata events.
+        Delegates to execute_streaming() and collects token/citations/metadata events.
         """
-        import json
-
         answer = ""
         citations: list[Any] = []
         contradictions: list[Any] = []
         metadata: dict[str, Any] = {}
 
-        async for event in self._stream_for_sync(
-            entity_id,
-            question,
-            tenant_id,
-            user_id,
-            jwt_token,
-            thread_id,
-            include_graph_context,
-            uow,
+        async for event in self.execute_streaming(
+            entity_id=entity_id,
+            question=question,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            jwt_token=jwt_token,
+            thread_id=thread_id,
+            include_graph_context=include_graph_context,
+            uow=uow,
         ):
             event_type = event.get("event", "")
             data = json.loads(event.get("data", "{}"))
@@ -312,7 +245,8 @@ class EntityContextChatUseCase:
                 metadata = data
 
         # WHY process_output call: strips any residual <think> blocks
-        # accumulated from the streaming token events.
+        # accumulated from the streaming token events (safety net in addition
+        # to the streaming filter in ChatPipeline.stream_llm).
         answer = self._orchestrator._pipeline.process_output(answer, [])[0]
 
         return {
