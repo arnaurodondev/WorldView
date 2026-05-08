@@ -149,6 +149,9 @@ class EnhancedChunkSearchUseCase:
         search_type: str = "ann",
         entity_ids: list[UUID] | None = None,
         entity_types: list[str] | None = None,
+        # PLAN-0086 Wave C-1: tenant scope for search isolation.
+        # None = public-only (tenant_id IS NULL). Non-None = public + tenant chunks.
+        tenant_id: str | None = None,
     ) -> tuple[list[EnrichedChunkResult], int, str]:
         """Execute enriched chunk search.
 
@@ -184,6 +187,7 @@ class EnhancedChunkSearchUseCase:
                 source_types=source_types,
                 entity_ids=entity_ids,
                 entity_types=entity_types,
+                tenant_id=tenant_id,
             )
         if search_type == "lexical":
             return await self._execute_lexical(
@@ -196,6 +200,7 @@ class EnhancedChunkSearchUseCase:
                 source_types=source_types,
                 entity_ids=entity_ids,
                 entity_types=entity_types,
+                tenant_id=tenant_id,
             )
         if search_type == "hybrid":
             return await self._execute_hybrid(
@@ -210,6 +215,7 @@ class EnhancedChunkSearchUseCase:
                 source_types=source_types,
                 entity_ids=entity_ids,
                 entity_types=entity_types,
+                tenant_id=tenant_id,
             )
         raise ValueError(f"unknown search_type: {search_type!r}")
 
@@ -229,6 +235,7 @@ class EnhancedChunkSearchUseCase:
         source_types: list[str] | None,
         entity_ids: list[UUID] | None = None,
         entity_types: list[str] | None = None,
+        tenant_id: str | None = None,
     ) -> tuple[list[EnrichedChunkResult], int, str]:
         """Vector ANN path — original B-3 behaviour."""
         vec, embedding_model = await self._resolve_embedding(query_text, query_embedding)
@@ -243,6 +250,7 @@ class EnhancedChunkSearchUseCase:
             source_types=source_types or [],
             entity_ids=entity_ids,
             entity_types=entity_types,
+            tenant_id=tenant_id,
         )
 
         if not raw_results:
@@ -263,6 +271,7 @@ class EnhancedChunkSearchUseCase:
         source_types: list[str] | None,
         entity_ids: list[UUID] | None = None,
         entity_types: list[str] | None = None,
+        tenant_id: str | None = None,
     ) -> tuple[list[EnrichedChunkResult], int, str]:
         """Postgres FTS path — used by the eval harness and lexical-only debug.
 
@@ -279,6 +288,7 @@ class EnhancedChunkSearchUseCase:
             source_types=source_types or None,
             entity_ids=entity_ids,
             entity_types=entity_types,
+            tenant_id=tenant_id,
         )
         if not raw_rows:
             return [], total, "lexical-only"
@@ -305,6 +315,7 @@ class EnhancedChunkSearchUseCase:
         source_types: list[str] | None,
         entity_ids: list[UUID] | None = None,
         entity_types: list[str] | None = None,
+        tenant_id: str | None = None,
     ) -> tuple[list[EnrichedChunkResult], int, str]:
         """Hybrid ANN + lexical path with RRF + adaptive boost (L9)."""
         # Short-query fallback: 1-2 token FTS queries are too noisy.
@@ -325,6 +336,7 @@ class EnhancedChunkSearchUseCase:
                 source_types=source_types,
                 entity_ids=entity_ids,
                 entity_types=entity_types,
+                tenant_id=tenant_id,
             )
 
         # BP-NEW-ASYNCSESSION (this commit): the two legs are run SEQUENTIALLY,
@@ -351,6 +363,7 @@ class EnhancedChunkSearchUseCase:
             source_types=source_types,
             entity_ids=entity_ids,
             entity_types=entity_types,
+            tenant_id=tenant_id,
         )
         (lex_results, lex_total, _lex_model) = await self._execute_lexical(
             query_text=query_text,
@@ -362,6 +375,7 @@ class EnhancedChunkSearchUseCase:
             source_types=source_types,
             entity_ids=entity_ids,
             entity_types=entity_types,
+            tenant_id=tenant_id,
         )
 
         # Adaptive boost: when the query has identifier-style rare tokens,

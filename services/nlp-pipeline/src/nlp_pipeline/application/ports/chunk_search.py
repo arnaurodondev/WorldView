@@ -42,6 +42,10 @@ class ChunkSearchPort(ABC):
         source_types: list[str] | None,
         entity_ids: list[UUID] | None = None,
         entity_types: list[str] | None = None,
+        # PLAN-0086 Wave C-1: tenant scope filter.
+        # None = public-only chunks (tenant_id IS NULL).
+        # Non-None = public chunks OR chunks owned by this tenant.
+        tenant_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Run HNSW ANN search; return (results, total_searched)."""
         ...
@@ -60,6 +64,10 @@ class ChunkSearchPort(ABC):
         source_types: list[str] | None = None,
         entity_ids: list[UUID] | None = None,
         entity_types: list[str] | None = None,
+        # PLAN-0086 Wave C-1: tenant scope filter.
+        # None = public-only chunks (tenant_id IS NULL).
+        # Non-None = public chunks OR chunks owned by this tenant.
+        tenant_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Run Postgres full-text search; return (results, total_searched).
 

@@ -33,6 +33,10 @@ class Section:
     title: str | None = None
     speaker: str | None = None  # transcripts only
     token_count: int | None = None
+    # PLAN-0086 Wave C-1: tenant isolation — None = public/global content;
+    # non-None = private tenant content. Stamped by the article consumer from
+    # the Kafka event envelope so every section row carries the tenant scope.
+    tenant_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,10 @@ class Chunk:
     #   char_end (int), gliner_score (float), raw_text (str).
     # Only mentions with gliner_score >= settings.gliner_mention_floor are stored.
     entity_mentions: list[dict] = field(default_factory=list)
+    # PLAN-0086 Wave C-1: tenant isolation — None = public/global content;
+    # non-None = private tenant content. Stamped by the article consumer from
+    # the Kafka event envelope so every chunk row carries the tenant scope.
+    tenant_id: UUID | None = None
 
 
 @dataclass

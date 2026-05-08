@@ -92,6 +92,7 @@ async def check_stage_b(
     url: str,
     cleaned_text: str,
     dedup_repo: DedupHashRepositoryPort,
+    tenant_id: UUID | None = None,
 ) -> tuple[str, DeduplicationDecision | None]:
     """Run Stage B dedup: normalized hash check.
 
@@ -99,6 +100,8 @@ async def check_stage_b(
         url: Original article URL.
         cleaned_text: Cleaned/normalized text content.
         dedup_repo: Repository for hash lookups.
+        tenant_id: PLAN-0086 Wave C-1 — scope the dedup check to the given tenant
+            namespace. None = global public content space.
 
     Returns:
         Tuple of (normalized_hash, decision_or_None). If decision is not None,
@@ -110,6 +113,7 @@ async def check_stage_b(
     existing_doc_id: UUID | None = await dedup_repo.check_exists(
         "normalized_sha256",
         normalized_hash,
+        tenant_id=tenant_id,
     )
 
     if existing_doc_id is not None:

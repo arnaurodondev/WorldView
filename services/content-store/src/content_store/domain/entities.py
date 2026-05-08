@@ -117,6 +117,9 @@ class CanonicalDocument:
     language: str = "en"
     corroborates_doc_id: UUID | None = None
     is_backfill: bool = False
+    # PLAN-0086 Wave C-1: tenant isolation — None = public/global news;
+    # non-None = private tenant content uploaded via TENANT_UPLOAD source.
+    tenant_id: UUID | None = None
 
 
 # ── MinHash signature ──────────────────────────────────────────────────────────

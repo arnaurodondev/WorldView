@@ -40,6 +40,9 @@ class DocumentRepository(DocumentRepositoryPort):
                 ingested_at=doc.ingested_at,
                 content_hash=doc.content_hash,
                 normalized_hash=doc.normalized_hash,
+                # PLAN-0086 Wave C-1: persist tenant_id so documents table supports
+                # per-tenant isolation. NULL = public/global content.
+                tenant_id=doc.tenant_id,
                 status=doc.status,
                 dedup_result=doc.dedup_result,
                 minio_silver_key=doc.minio_silver_key,

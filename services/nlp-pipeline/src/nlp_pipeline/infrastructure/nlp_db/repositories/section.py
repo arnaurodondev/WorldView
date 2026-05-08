@@ -33,6 +33,8 @@ class SectionRepository:
                 char_start=section.char_start,
                 char_end=section.char_end,
                 token_count=section.token_count,
+                # PLAN-0086 Wave C-1: tenant isolation — NULL = public/global content.
+                tenant_id=section.tenant_id,
             )
             .on_conflict_do_nothing(index_elements=["section_id"])
         )

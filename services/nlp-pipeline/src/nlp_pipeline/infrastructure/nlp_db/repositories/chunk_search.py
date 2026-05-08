@@ -81,11 +81,14 @@ class ChunkANNRepository(ChunkSearchPort):
         source_types: list[str] | None = None,
         entity_ids: list[UUID] | None = None,
         entity_types: list[str] | None = None,
+        tenant_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Run HNSW ANN query; return (results, total_searched).
 
         *embedding* must be a float list of length 1024.
         *total_searched* is the approximate count of indexed embeddings queried.
+        PLAN-0086 Wave C-1: when tenant_id is None only public chunks (IS NULL)
+        are returned. When non-None, public + tenant-owned chunks are returned.
         """
         results: list[dict[str, Any]] = []
         total_searched = 0
@@ -100,6 +103,7 @@ class ChunkANNRepository(ChunkSearchPort):
                 source_types=source_types or [],
                 entity_ids=entity_ids,
                 entity_types=entity_types,
+                tenant_id=tenant_id,
             )
             results.extend(chunk_rows)
             total_searched += chunk_total
@@ -133,6 +137,7 @@ class ChunkANNRepository(ChunkSearchPort):
         source_types: list[str],
         entity_ids: list[UUID] | None = None,
         entity_types: list[str] | None = None,
+        tenant_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         vec_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
@@ -156,6 +161,17 @@ class ChunkANNRepository(ChunkSearchPort):
         if entity_ids or entity_types:
             where_clauses.append(_build_entity_mention_filter(params, entity_ids, entity_types))
 
+        # PLAN-0086 Wave C-1: tenant_id filter — CRITICAL security boundary.
+        # None = public-only: return only chunks with tenant_id IS NULL.
+        # Non-None = tenant context: return public chunks OR chunks for this tenant.
+        # This prevents data leakage between tenants. BP-180 CAST guards used for
+        # nullable params to avoid asyncpg AmbiguousParameterError.
+        if tenant_id is not None:
+            params["tenant_id_str"] = tenant_id
+            where_clauses.append("(c.tenant_id IS NULL OR c.tenant_id = CAST(:tenant_id_str AS UUID))")
+        else:
+            where_clauses.append("c.tenant_id IS NULL")
+
         where_sql = " AND ".join(where_clauses)
 
         meta_join = "LEFT JOIN document_source_metadata dsm ON dsm.doc_id = c.doc_id"
@@ -168,6 +184,7 @@ class ChunkANNRepository(ChunkSearchPort):
                 c.section_id,
                 c.heading_path,
                 c.chunk_text_key,
+                c.document_title,
                 s.section_type,
                 1 - (ce.embedding <=> cast(:vec AS vector)) AS score
             FROM chunk_embeddings ce
@@ -195,6 +212,8 @@ class ChunkANNRepository(ChunkSearchPort):
                 "section_type": row.section_type,
                 "heading_path": row.heading_path,
                 "chunk_text_key": row.chunk_text_key,
+                # PLAN-0086 Wave C-1: expose document_title for RAG citation assembly.
+                "document_title": row.document_title,
             }
             for row in rows
         ]
@@ -289,6 +308,7 @@ class ChunkANNRepository(ChunkSearchPort):
         source_types: list[str] | None = None,
         entity_ids: list[UUID] | None = None,
         entity_types: list[str] | None = None,
+        tenant_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Run a Postgres full-text search over the chunks table (PLAN-0063 W5-2).
 
@@ -371,6 +391,15 @@ class ChunkANNRepository(ChunkSearchPort):
         if entity_ids or entity_types:
             entity_filter_sql = "AND " + _build_entity_mention_filter(params, entity_ids, entity_types)
 
+        # PLAN-0086 Wave C-1: tenant_id filter — CRITICAL security boundary.
+        # None = public-only: return only chunks with tenant_id IS NULL.
+        # Non-None = public + tenant chunks. BP-180 CAST guard prevents asyncpg error.
+        if tenant_id is not None:
+            params["tenant_id_str"] = tenant_id
+            tenant_filter_sql = "AND (c.tenant_id IS NULL OR c.tenant_id = CAST(:tenant_id_str AS UUID))"
+        else:
+            tenant_filter_sql = "AND c.tenant_id IS NULL"
+
         # Use a CTE so we can reuse the result set for COUNT and SELECT without
         # re-running the (relatively cheap, but not free) GIN match twice
         # against arbitrarily large filter sets.
@@ -383,6 +412,7 @@ class ChunkANNRepository(ChunkSearchPort):
                     c.heading_path,
                     c.chunk_text_key,
                     c.chunk_text,
+                    c.document_title,
                     s.section_type,
                     {score_sql} AS score
                 FROM chunks c
@@ -392,9 +422,10 @@ class ChunkANNRepository(ChunkSearchPort):
                   AND {date_filter}
                   AND {source_filter}
                   {entity_filter_sql}
+                  {tenant_filter_sql}
             )
             SELECT chunk_id, doc_id, section_id, heading_path, chunk_text_key,
-                   chunk_text, section_type, score
+                   chunk_text, document_title, section_type, score
             FROM matched
             WHERE score >= :min_score
             ORDER BY score DESC
@@ -425,6 +456,8 @@ class ChunkANNRepository(ChunkSearchPort):
                 "heading_path": row.heading_path,
                 "chunk_text_key": row.chunk_text_key,
                 "chunk_text": row.chunk_text,
+                # PLAN-0086 Wave C-1: expose document_title for RAG citations.
+                "document_title": row.document_title,
             }
             for row in rows
         ]
@@ -442,6 +475,7 @@ class ChunkANNRepository(ChunkSearchPort):
               AND {date_filter}
               AND {source_filter}
               {entity_filter_sql}
+              {tenant_filter_sql}
               AND {score_sql} >= :min_score
             """
         count_result = await self._session.execute(text(count_sql), params)

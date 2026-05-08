@@ -82,6 +82,8 @@ class StubChunkSearchPort(ChunkSearchPort):
         source_types: list[str] | None,
         entity_ids: list[UUID] | None = None,
         entity_types: list[str] | None = None,
+        # PLAN-0086 Wave C-1: tenant scope filter.
+        tenant_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         self.ann_search_calls += 1
         return [self._ann_result], 100
@@ -99,6 +101,8 @@ class StubChunkSearchPort(ChunkSearchPort):
         source_types: list[str] | None,
         entity_ids: list[UUID] | None = None,
         entity_types: list[str] | None = None,
+        # PLAN-0086 Wave C-1: tenant scope filter.
+        tenant_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         self.lexical_search_calls += 1
         return [], 0
@@ -147,6 +151,7 @@ class TestChunkSearchPortContract:
                 source_types: list[str] | None,
                 entity_ids: list[UUID] | None = None,
                 entity_types: list[str] | None = None,
+                tenant_id: str | None = None,
             ) -> tuple[list[dict[str, Any]], int]:
                 return [], 0
 

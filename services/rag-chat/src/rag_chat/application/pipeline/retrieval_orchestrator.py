@@ -124,7 +124,14 @@ class ParallelRetrievalOrchestrator:
         tasks: list[Any] = []
 
         if plan.use_chunks:
-            tasks.append(self._with_cb("chunk", self._fetch_chunks(resolved_query, plan, query_embedding)))
+            # PLAN-0086 Wave C-1: forward tenant_id so S6 only returns chunks
+            # visible to this tenant (public + tenant-private). Prevents data leak.
+            _tenant_id_str = str(request.tenant_id) if request.tenant_id else None
+            tasks.append(
+                self._with_cb(
+                    "chunk", self._fetch_chunks(resolved_query, plan, query_embedding, tenant_id=_tenant_id_str)
+                )
+            )
         if plan.use_relations and query_embedding:
             tasks.append(self._with_cb("relations", self._fetch_relations(query_embedding, entity_ids)))
         elif plan.use_relations and not query_embedding:
@@ -230,6 +237,8 @@ class ParallelRetrievalOrchestrator:
         resolved_query: ResolvedQuery,
         plan: RetrievalPlan,
         query_embedding: list[float] | None,
+        *,
+        tenant_id: str | None = None,
     ) -> list[RetrievedItem]:
         from rag_chat.application.ports.upstream_clients import ChunkSearchRequest
 
@@ -259,6 +268,9 @@ class ParallelRetrievalOrchestrator:
             date_from=_date_to_dt(plan.date_filter.start) if plan.date_filter else None,
             date_to=_date_to_dt(plan.date_filter.end) if plan.date_filter else None,
             search_type=_search_type,
+            # PLAN-0086 Wave C-1: forward tenant_id to S6 for isolation.
+            # None = public-only; non-None = public + tenant-private chunks.
+            tenant_id=tenant_id,
         )
         results = await asyncio.wait_for(self._s6.search_chunks(req), timeout=self._timeout)
         if not results:

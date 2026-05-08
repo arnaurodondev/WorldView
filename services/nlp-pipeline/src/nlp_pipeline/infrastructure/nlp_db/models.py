@@ -34,6 +34,8 @@ class SectionModel(Base):
     char_start: Mapped[int] = mapped_column(Integer, nullable=False)
     char_end: Mapped[int] = mapped_column(Integer, nullable=False)
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # PLAN-0086 Wave B-2: tenant isolation — nullable so legacy rows work with IS NULL fallback
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -93,6 +95,10 @@ class ChunkModel(Base):
     # column on ``chunks``, not that table.  Always empty ([]) until the
     # article consumer or backfill script populates it.
     entity_mentions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    # PLAN-0086 Wave B-2: tenant isolation — nullable so legacy rows work with IS NULL fallback
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    # PLAN-0086 Wave B-2: denormalised document title for RAG citations (avoids cross-service lookup)
+    document_title: Mapped[str | None] = mapped_column(sa.String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
