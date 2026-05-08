@@ -128,6 +128,10 @@ _NLP_SIGNAL_DETECTED_SCHEMA_PATH = get_schema_path("nlp.signal.detected.v1.avsc"
 # The schema lives alongside all other Avro schemas in the infra/kafka/schemas/ dir.
 _TEMPORAL_EVENT_SCHEMA_PATH = get_schema_path("intelligence.temporal_event.v1.avsc")
 
+# PLAN-0086 Wave F-1: schema path for the nlp.document.ready.v1 outbox event.
+# Emitted after tenant documents are fully processed so S4 can mark them READY.
+_NLP_DOCUMENT_READY_SCHEMA_PATH = get_schema_path("nlp.document.ready.v1.avsc")
+
 # Block 13E: event_type values produced by Block 10 deep extraction that
 # represent a temporal / macro-geopolitical scope requiring S7 KG linking.
 # Any event whose event_type is NOT in this set is skipped by _emit_temporal_events.
@@ -352,6 +356,11 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
 
         # ── Block 3: Sectioning (pure) ────────────────────────────────────────
         text = await self._download_article(minio_key)
+        # PLAN-0086 Wave F-1: compute word_count early so it is available for
+        # the nlp.document.ready.v1 outbox event emitted at the end of the
+        # pipeline for tenant documents.  Split on whitespace — consistent with
+        # the word_count stored on the upload row by the S4 use case.
+        _pipeline_word_count: int = len(text.split())
         sections = section_document(doc_id, text, source_type)
 
         # PLAN-0086 Wave C-1: stamp tenant_id on every section so the sections
@@ -750,6 +759,24 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                         outbox_repo=outbox_repo,
                         settings=self._settings,
                     )
+
+            # PLAN-0086 Wave F-1 (T-F-1-03): emit nlp.document.ready.v1 for
+            # tenant documents.  This event is consumed by S4 to transition the
+            # upload row to status=READY and store pipeline output counts.
+            # Condition: tenant_id is not None (platform articles have no tenant).
+            # Must be inside the nlp_session transaction so the outbox row is
+            # committed atomically with all NLP artifacts above — if commit()
+            # fails the event is never enqueued and S4 never marks the upload as
+            # ready, leaving it in PROCESSING status (visible via the S4 API).
+            if tenant_id is not None:
+                await _enqueue_document_ready(
+                    outbox_repo=outbox_repo,
+                    settings=self._settings,
+                    doc_id=doc_id,
+                    tenant_id=tenant_id,
+                    chunk_count=len(chunks),
+                    word_count=_pipeline_word_count,
+                )
 
             # ── D-004: Commit NLP FIRST, then intel ──────────────────────────
             # If nlp_session.commit() fails, intel_session rolls back
@@ -1774,6 +1801,47 @@ async def _emit_temporal_events(
             confidence=confidence,
             exposed_entity_count=len(exposed_entities),
         )
+
+
+async def _enqueue_document_ready(
+    *,
+    outbox_repo: OutboxRepository,
+    settings: Any,
+    doc_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    chunk_count: int,
+    word_count: int,
+) -> None:
+    """Write nlp.document.ready.v1 event to the outbox for a tenant document.
+
+    PLAN-0086 Wave F-1 (T-F-1-03): called inside the nlp_session transaction
+    so the event is committed atomically with all NLP artifacts (sections,
+    chunks, entity_mentions).  S4 ``DocumentReadyConsumer`` receives this
+    event and calls ``TenantDocumentUploadRepository.set_ready()``.
+
+    event_id uses a deterministic UUID5 derived from (doc_id, "document_ready_v1")
+    so Kafka replays of the same doc produce the same outbox PK, and the
+    INSERT ON CONFLICT DO NOTHING guard deduplicates them at the outbox level.
+    """
+    event_id = uuid.UUID(uuid5_from_parts(str(doc_id), "document_ready_v1"))
+    payload: dict[str, Any] = {
+        "event_id": str(event_id),
+        "event_type": "nlp.document.ready",
+        "schema_version": 1,
+        "occurred_at": common.time.utc_now().isoformat(),
+        "doc_id": str(doc_id),
+        "tenant_id": str(tenant_id),
+        "chunk_count": chunk_count,
+        "word_count": word_count,
+    }
+    payload_bytes = serialize_confluent_avro(_NLP_DOCUMENT_READY_SCHEMA_PATH, payload)
+    await outbox_repo.add(
+        topic="nlp.document.ready.v1",
+        partition_key=str(tenant_id),
+        payload_avro=payload_bytes,
+        # Deterministic event_id: ON CONFLICT DO NOTHING deduplicates replays.
+        event_id=event_id,
+    )
 
 
 def _is_valid_uuid(s: str) -> bool:
