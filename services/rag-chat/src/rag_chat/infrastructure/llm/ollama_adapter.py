@@ -1,7 +1,12 @@
-"""Ollama LLM streaming adapter - emergency fallback (T-F-3-01).
+"""Ollama LLM streaming adapter - emergency fallback (T-F-3-01, W11-1).
 
 Last-resort provider using the local Ollama instance.
 Model: deepseek-r1:32b (or configured completion model).
+
+NOTE: Ollama does not support OpenAI-compatible function calling.
+chat_with_tools() and stream_chat() raise NotImplementedError so that
+LLMProviderChain skips this adapter and falls back to DeepInfra/OpenRouter
+when tool-use is required.
 """
 
 from __future__ import annotations
@@ -13,6 +18,8 @@ import httpx
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+    from tools.types import LLMToolResponse  # type: ignore[import-untyped]
 import structlog
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
@@ -75,6 +82,45 @@ class OllamaCompletionAdapter:
                         break
                 except (json.JSONDecodeError, KeyError):
                     continue
+
+    # ------------------------------------------------------------------
+    # Structured chat / function calling — NOT SUPPORTED (W11-1)
+    # ------------------------------------------------------------------
+
+    async def chat_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        *,
+        max_tokens: int = 1024,
+        temperature: float = 0.2,
+    ) -> LLMToolResponse:
+        """Not implemented — Ollama does not support OpenAI function calling.
+
+        WHY raise not return: LLMProviderChain catches NotImplementedError and
+        skips this adapter, falling back to DeepInfra or OpenRouter which do
+        support the function-calling API.
+        """
+        raise NotImplementedError(
+            "Ollama function calling not supported — use DeepInfra or OpenRouter for tool-use path"
+        )
+
+    async def stream_chat(
+        self,
+        messages: list[dict],
+        *,
+        max_tokens: int = 1024,
+        temperature: float = 0.2,
+    ) -> AsyncIterator[str]:
+        """Not implemented — delegate to stream() after collapsing messages to a prompt.
+
+        WHY raise: for the tool-use path the orchestrator always calls stream_chat()
+        on the chain, not on Ollama directly.  Raising ensures the chain correctly
+        skips Ollama and uses a capable provider.
+        """
+        raise NotImplementedError(
+            "Ollama function calling not supported — use DeepInfra or OpenRouter for tool-use path"
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()

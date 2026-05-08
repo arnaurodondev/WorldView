@@ -20,16 +20,22 @@ import asyncio
 import time
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 # Import from libs/tools (must be on PYTHONPATH — added in Dockerfile, BP-181)
 from tools.tool_registry import ToolRegistry  # type: ignore[import-untyped]
 
-from rag_chat.application.ports.upstream_clients import S3Port  # noqa: TCH001
 from rag_chat.domain.entities.chat import RetrievedItem
 from rag_chat.domain.enums import ItemType
+
+if TYPE_CHECKING:
+    # S3Port is only used in type annotations (ToolExecutor.__init__ parameter).
+    # Moving it here satisfies TC001/TCH001 (annotation-only import) while
+    # keeping from __future__ import annotations ensuring the annotation is
+    # evaluated lazily at runtime.
+    from rag_chat.application.ports.upstream_clients import S3Port
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
