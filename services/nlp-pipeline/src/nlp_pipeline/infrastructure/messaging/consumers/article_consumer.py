@@ -354,6 +354,12 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         text = await self._download_article(minio_key)
         sections = section_document(doc_id, text, source_type)
 
+        # PLAN-0086 Wave C-1: stamp tenant_id on every section so the sections
+        # table supports per-tenant isolation. Section is a frozen dataclass so
+        # we use dataclasses.replace to produce new objects without mutation.
+        if tenant_id is not None:
+            sections = [dataclasses.replace(s, tenant_id=tenant_id) for s in sections]
+
         # ── Block 4: NER (ML, outside DB transaction) ─────────────────────────
         mentions, stats = await run_ner_block(
             doc_id=doc_id,
@@ -459,6 +465,10 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                     chunk,
                     title_denorm=doc_title,
                     section_heading_denorm=section_heading_by_id.get(chunk.section_id),
+                    # PLAN-0086 Wave C-1: stamp tenant_id on every chunk so the
+                    # chunks table supports per-tenant isolation. Chunk is a frozen
+                    # dataclass — dataclasses.replace creates a new instance.
+                    tenant_id=tenant_id,
                 )
                 for chunk in chunks
             ]

@@ -52,6 +52,9 @@ async def search_chunks(
         # PLAN-0078 Wave C: entity filter params from the Pydantic schema.
         entity_ids=body.entity_ids,
         entity_types=body.entity_types,
+        # PLAN-0086 Wave C-1: tenant scope filter — prevents data leakage between tenants.
+        # body.tenant_id is None by default (public-only); set by internal callers (S8).
+        tenant_id=body.tenant_id,
     )
 
     _log.info(  # type: ignore[no-any-return]

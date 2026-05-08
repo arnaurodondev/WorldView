@@ -173,11 +173,18 @@ class ProcessArticleUseCase:
         cleaned_text = clean(article_bytes, content_type)
         word_count = len(cleaned_text.split()) if cleaned_text else 0
 
+        # PLAN-0086 Wave C-1: convert raw tenant_id string from the Avro event
+        # into a UUID for scoped dedup lookups and document storage.
+        # None means public/global content — dedup hash lookups use the global namespace.
+        tenant_id_uuid: UUID | None = UUID(article.tenant_id) if article.tenant_id else None
+
         # 3. Stage A: exact raw hash
         # Use the content_hash from the event (computed by S4 from original bytes).
         # This ensures consistent deduplication across the S4→S5 pipeline boundary,
         # independent of the bronze envelope format.
-        raw_hash, stage_a_decision = await check_stage_a(article.content_hash, self._dedup_repo)
+        raw_hash, stage_a_decision = await check_stage_a(
+            article.content_hash, self._dedup_repo, tenant_id=tenant_id_uuid
+        )
         if stage_a_decision is not None:
             log.info("stage_a_duplicate", matched=str(stage_a_decision.matched_doc_id))
             return ProcessingSummary(
@@ -189,7 +196,9 @@ class ProcessArticleUseCase:
 
         # 4. Stage B: normalized hash
         url = article.source_url or ""
-        normalized_hash, stage_b_decision = await check_stage_b(url, cleaned_text, self._dedup_repo)
+        normalized_hash, stage_b_decision = await check_stage_b(
+            url, cleaned_text, self._dedup_repo, tenant_id=tenant_id_uuid
+        )
         if stage_b_decision is not None:
             log.info("stage_b_duplicate", matched=str(stage_b_decision.matched_doc_id))
             return ProcessingSummary(
@@ -255,6 +264,8 @@ class ProcessArticleUseCase:
             word_count=word_count,
             is_backfill=article.is_backfill,
             corroborates_doc_id=decision.matched_doc_id if decision.outcome == DedupOutcome.CORROBORATING else None,
+            # PLAN-0086 Wave C-1: propagate tenant scope to stored document.
+            tenant_id=tenant_id_uuid,
         )
 
         # Write to MinIO silver via injected port
@@ -264,7 +275,9 @@ class ProcessArticleUseCase:
         # DB writes: document + dedup hashes + minhash + outbox
         # (transaction managed by the calling consumer)
         await self._document_repo.create(doc)
-        await self._dedup_repo.insert_pair(doc_id, raw_hash, normalized_hash)
+        # PLAN-0086 Wave C-1: scope dedup hash pairs by tenant so that the same
+        # article hash is allowed to exist independently under different tenants.
+        await self._dedup_repo.insert_pair(doc_id, raw_hash, normalized_hash, tenant_id=tenant_id_uuid)
 
         sig_entity = MinHashSignature(
             id=common.ids.new_uuid7(),

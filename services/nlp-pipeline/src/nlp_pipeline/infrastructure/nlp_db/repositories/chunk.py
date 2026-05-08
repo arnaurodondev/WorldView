@@ -47,6 +47,11 @@ class ChunkRepository:
                 chunk_text=chunk.text,
                 # PLAN-0078 Wave B: persist GLiNER mention metadata for GIN filtering.
                 entity_mentions=chunk.entity_mentions,
+                # PLAN-0086 Wave C-1: tenant isolation — NULL = public/global content.
+                tenant_id=chunk.tenant_id,
+                # PLAN-0086 Wave C-1: denormalised document title for RAG citations;
+                # truncated to 512 chars to match the DB column length constraint.
+                document_title=chunk.title_denorm[:512] if chunk.title_denorm else None,
             )
             .on_conflict_do_nothing(index_elements=["chunk_id"])
         )

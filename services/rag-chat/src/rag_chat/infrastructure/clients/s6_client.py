@@ -85,6 +85,10 @@ class S6Client(BaseUpstreamClient):
             payload["entity_ids"] = [str(eid) for eid in request.entity_ids]
         if request.entity_types:
             payload["entity_types"] = request.entity_types
+        # PLAN-0086 Wave C-1: forward tenant_id to S6 for per-tenant chunk isolation.
+        # None is not sent so S6 defaults to public-only (safe default behaviour).
+        if request.tenant_id is not None:
+            payload["tenant_id"] = request.tenant_id
 
         raw = await self._post("/api/v1/search/chunks", payload)
         results_raw: list[dict] = raw.get("results", [])

@@ -126,6 +126,9 @@ def _parse_raw_event(value: dict[str, Any]) -> RawArticleEvent:
         title=value.get("title"),
         published_at=value.get("published_at"),
         is_backfill=bool(value.get("is_backfill", False)),
+        # PLAN-0086 Wave C-1: propagate tenant_id from the Avro event envelope.
+        # None = public/global news; non-None = private tenant content.
+        tenant_id=value.get("tenant_id") or None,
     )
 
 

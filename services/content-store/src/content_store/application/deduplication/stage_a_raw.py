@@ -33,6 +33,7 @@ def compute_raw_hash(raw_bytes: bytes) -> str:
 async def check_stage_a(
     raw_bytes_or_hash: bytes | str,
     dedup_repo: DedupHashRepositoryPort,
+    tenant_id: UUID | None = None,
 ) -> tuple[str, DeduplicationDecision | None]:
     """Run Stage A dedup: exact raw hash check.
 
@@ -41,13 +42,15 @@ async def check_stage_a(
             Pass a pre-computed hash (e.g. from the event's content_hash) to maintain
             consistency with the upstream S4 service across the pipeline boundary.
         dedup_repo: Repository for hash lookups.
+        tenant_id: PLAN-0086 Wave C-1 — scope the dedup check to the given tenant
+            namespace. None = global public content space.
 
     Returns:
         Tuple of (raw_hash, decision_or_None). If decision is not None,
         the article is a duplicate and should be suppressed.
     """
     raw_hash = raw_bytes_or_hash if isinstance(raw_bytes_or_hash, str) else compute_raw_hash(raw_bytes_or_hash)
-    existing_doc_id: UUID | None = await dedup_repo.check_exists("raw_sha256", raw_hash)
+    existing_doc_id: UUID | None = await dedup_repo.check_exists("raw_sha256", raw_hash, tenant_id=tenant_id)
 
     if existing_doc_id is not None:
         return raw_hash, DeduplicationDecision(
