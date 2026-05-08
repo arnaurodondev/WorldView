@@ -61,7 +61,7 @@ Decompose PRD-0074 into 9 dependency-ordered waves across 5 services (`intellige
 | D | Entity Intelligence API Endpoints | API | S7 | 1.0d | C, B |
 | E1 | PathInsightWorker + Seeder | application | S7 | 1.0d | A |
 | E2 | Path Insights API + Lazy LLM Explanation | API | S7 | 1.0d | E1 | ✅ DONE |
-| F | S8 Entity-Context Chat Endpoint | API | S8 | 0.5d | D |
+| F | S8 Entity-Context Chat Endpoint | API | S8 | 0.5d | D | ✅ DONE |
 | G | S9 Proxy Routes for Intelligence | API | S9 | 0.5d | D, E2, F |
 | H | Frontend 3-Column Intelligence Page | frontend | worldview-web | 2.5d | G |
 
@@ -1062,7 +1062,9 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 ---
 
-# Wave F — S8 Entity-Context Chat Endpoint
+# Wave F — S8 Entity-Context Chat Endpoint ✅ DONE
+
+**Status**: DONE — committed 2026-05-08 (T-F-01 + T-F-02, 26 new tests, 797 total). BP-435 (sse_starlette AppStatus event loop leak) also fixed in tests/conftest.py.
 
 **Goal**: Add entity-scoped chat endpoint to S8 rag-chat that pre-loads entity context (narrative + top relations + health) into the system prompt, then streams via SSE using existing RAG pipeline.
 **Depends on**: Wave D (T-D-01 — S8 calls `GET /internal/v1/entities/{id}/intelligence`).
@@ -1099,7 +1101,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 **Tests** (≥5): parallel call concurrency, timeout enforced (BP-235), 404 from S7 → returns empty + logs warning, 5xx retried once, both endpoints called with same JWT.
 
 **Acceptance criteria**:
-- [ ] Tests pass; mock httpx via `respx`.
+- [x] Tests pass; mock httpx via `pytest_httpx` (respx not used — httpx mock fixture used instead).
 
 #### T-F-02: `EntityContextChatUseCase` + `POST /api/v1/chat/entity-context`
 
@@ -1122,15 +1124,15 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 **Tests** (≥6): system prompt contains narrative text, RAG filtered by entity_id, SSE stream well-formed (token + done events), HTML-stripped question, fallback path used when context load returns empty, 1-token streaming works.
 
 **Acceptance criteria**:
-- [ ] Tests pass.
-- [ ] Endpoint conforms to existing SSE format.
+- [x] Tests pass.
+- [x] Endpoint conforms to existing SSE format.
 
 ### Validation Gate
 
-- [ ] ≥11 new tests pass.
-- [ ] mypy + ruff clean.
-- [ ] Existing chat endpoint tests still pass.
-- [ ] `docs/services/rag-chat.md` updated.
+- [x] 26 new tests pass (7 client + 13 use-case + 6 route; 797 total).
+- [x] mypy + ruff clean.
+- [x] Existing chat endpoint tests still pass.
+- [x] `docs/services/rag-chat.md` updated.
 
 ### Break Impact
 
