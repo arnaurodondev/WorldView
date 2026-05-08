@@ -19,6 +19,7 @@ from rag_chat.application.metrics.prometheus import (
     rag_source_contribution_total,
 )
 from rag_chat.application.pipeline.trust_scorer import TrustScorer
+from rag_chat.application.ports.brief_archive import NullBriefArchive
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType, QueryIntent
 
@@ -33,6 +34,7 @@ _ANN_ONLY_INTENTS: frozenset[QueryIntent] = frozenset({QueryIntent.SIGNAL_INTEL,
 
 if TYPE_CHECKING:
     from rag_chat.application.pipeline.circuit_breaker import SourceCircuitBreaker
+    from rag_chat.application.ports.brief_archive import BriefArchivePort
     from rag_chat.application.ports.upstream_clients import (
         S1Port,
         S3Port,
@@ -72,6 +74,7 @@ class ParallelRetrievalOrchestrator:
         s1_internal_token: str = "",
         circuit_breakers: dict[str, SourceCircuitBreaker] | None = None,
         trust_scorer: TrustScorer | None = None,
+        archive: BriefArchivePort | None = None,
     ) -> None:
         self._s6 = s6_client
         self._s7 = s7_client
@@ -82,6 +85,10 @@ class ParallelRetrievalOrchestrator:
         self._cbs = circuit_breakers or {}
         # TODO: run eval gate (PLAN-0063 §3, 120-query golden set, ≥0.03 NDCG@10)
         self._trust_scorer = trust_scorer or TrustScorer()
+        # PLAN-0066 Wave D: optional brief archive for implicit/explicit brief seeding.
+        # Defaults to NullBriefArchive so existing tests that don't supply an archive
+        # continue to work without changes (safe degradation — no brief items injected).
+        self._archive: BriefArchivePort = archive or NullBriefArchive()
 
     async def retrieve(
         self,
@@ -89,13 +96,30 @@ class ParallelRetrievalOrchestrator:
         resolved_query: ResolvedQuery,
         request: ChatRequest,
         query_embedding: list[float] | None = None,
+        seed_brief_id: UUID | None = None,
     ) -> list[RetrievedItem]:
         """Run all enabled retrieval steps in parallel.
 
         Returns a flat list of RetrievedItem from all successful tasks.
         Tasks that time out or raise return empty lists (safe degradation).
+
+        PLAN-0066 Wave D: brief citations are injected FIRST (prepended) so they
+        appear at the top of the context window before other retrieved items.
+        Explicit seed (seed_brief_id set) takes priority over implicit same-day
+        seed. NullBriefArchive is a safe fallback when archive is not configured.
         """
         entity_ids: list[UUID] = [e.entity_id for e in resolved_query.resolved_entities]
+
+        # ── PLAN-0066 Wave D: brief seed injection (pre-retrieval, high-trust) ──
+        # _fetch_brief_seed runs BEFORE other tasks so brief citations are prepended
+        # to the final item list. It is NOT wrapped in _with_cb — it reads from the
+        # local DB (not an upstream service) and has its own error-swallowing try/except.
+        brief_seed_items = await _fetch_brief_seed(
+            self._archive,
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+            seed_brief_id=seed_brief_id,
+        )
 
         tasks: list[Any] = []
 
@@ -145,7 +169,7 @@ class ParallelRetrievalOrchestrator:
             elif isinstance(r, list):
                 items.extend(r)
 
-        if not items:
+        if not items and not brief_seed_items:
             log.warning(  # type: ignore[no-any-return]
                 "retrieval_empty_result",
                 tasks_scheduled=len(tasks),
@@ -156,13 +180,16 @@ class ParallelRetrievalOrchestrator:
         else:
             log.info(  # type: ignore[no-any-return]
                 "retrieval_complete",
-                items_retrieved=len(items),
+                items_retrieved=len(items) + len(brief_seed_items),
+                brief_seed_items=len(brief_seed_items),
                 tasks_scheduled=len(tasks),
                 failed_tasks=failed_count,
                 entity_ids_count=len(entity_ids),
             )
 
-        return items
+        # PLAN-0066 Wave D: prepend brief_seed_items so high-trust brief citations
+        # appear first in the context window. LLM context is front-loaded.
+        return brief_seed_items + items
 
     # ── Circuit breaker wrapper ──────────────────────────────────────────────
 
@@ -573,6 +600,88 @@ class ParallelRetrievalOrchestrator:
                 )
             )
         return items
+
+
+# ── PLAN-0066 Wave D: brief seed helpers ──────────────────────────────────────
+
+_MAX_BRIEF_SEED_ITEMS = 8  # cap to prevent context overflow
+
+
+def _is_same_day(generated_at: datetime) -> bool:
+    """Return True if generated_at is on today's UTC date.
+
+    WHY utc_now() not datetime.today(): R11 mandates UTC-only timestamps.
+    datetime.today() returns local time which breaks at UTC boundaries
+    (e.g. a brief generated at 23:50 UTC would appear to be from "yesterday"
+    in a UTC+1 timezone if checked with local time).
+    """
+    from common.time import utc_now  # type: ignore[import-untyped]
+
+    return generated_at.date() == utc_now().date()
+
+
+async def _fetch_brief_seed(
+    archive: BriefArchivePort,
+    user_id: UUID,
+    tenant_id: UUID,
+    seed_brief_id: UUID | None = None,
+) -> list[RetrievedItem]:
+    """Inject brief citations as high-trust RetrievedItems.
+
+    Two modes:
+      Explicit: seed_brief_id provided → fetch that specific brief (e.g. from
+                POST /v1/briefings/chat/discuss which sets thread.seed_brief_id).
+      Implicit: seed_brief_id=None → fetch the latest brief and inject only if
+                it was generated today (same UTC date). Prevents yesterday's
+                brief from polluting queries that don't need it.
+
+    WHY cap at _MAX_BRIEF_SEED_ITEMS (8): briefs can have many citations. Injecting
+    all of them would crowd out other retrieval results in the context window.
+    8 items ≈ 2-3 KB of context which is a reasonable budget for brief context.
+
+    WHY score=0.95 / trust_weight=0.95: brief citations are high-trust (sourced from
+    a curated, LLM-generated brief) and should rank near the top of the context
+    fusion. 0.95 is below 1.0 to allow genuinely higher-scored items to take
+    precedence (e.g. very recent news chunks).
+
+    Errors are swallowed — this is a non-critical enrichment path. If the archive
+    is unavailable, retrieval continues normally without brief citations.
+    """
+    try:
+        if seed_brief_id is not None:
+            brief = await archive.get_by_id(seed_brief_id)
+        else:
+            briefs = await archive.get_latest(user_id, tenant_id, "morning", limit=1)
+            brief = briefs[0] if briefs and _is_same_day(briefs[0].generated_at) else None
+
+        if brief is None or not brief.citations_json:
+            return []
+
+        return [
+            RetrievedItem.create(
+                item_id=f"brief_seed:{brief.id}:{c.get('document_id', i)}",
+                item_type=ItemType.chunk,
+                text=c.get("snippet", c.get("title", "")),
+                score=0.95,
+                trust_weight=0.95,
+                citation_meta=CitationMeta(
+                    title=c.get("title"),
+                    url=c.get("url"),
+                    source_name="Morning Brief",
+                    published_at=None,
+                    entity_name=None,
+                ),
+            )
+            for i, c in enumerate(brief.citations_json[:_MAX_BRIEF_SEED_ITEMS])
+            if c.get("snippet") or c.get("title")  # skip empty citations
+        ]
+    except Exception as exc:
+        log.warning(  # type: ignore[no-any-return]
+            "retrieval_brief_seed_failed",
+            error=str(exc),
+            seed_brief_id=str(seed_brief_id) if seed_brief_id else None,
+        )
+        return []
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

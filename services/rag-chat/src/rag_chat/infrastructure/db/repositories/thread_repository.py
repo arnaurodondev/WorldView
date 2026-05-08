@@ -62,6 +62,9 @@ class SqlAlchemyThreadRepository(ThreadRepository):
             updated_at=thread.updated_at,
             last_msg_at=None,
             archived_at=thread.archived_at,
+            # PLAN-0066 Wave D: propagate seed_brief_id to the ORM model row.
+            # None for threads created without a brief seed (the common case).
+            seed_brief_id=thread.seed_brief_id,
         )
 
     # ── ORM → Domain ─────────────────────────────────────────────────────────
