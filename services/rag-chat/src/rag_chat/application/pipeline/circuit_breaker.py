@@ -25,11 +25,11 @@ even though both writers committed their ZADD.
 from __future__ import annotations
 
 import time
-import uuid
 from typing import TYPE_CHECKING
 
 import structlog
 
+from common.ids import new_uuid7
 from rag_chat.application.metrics.prometheus import rag_circuit_breaker_open
 
 if TYPE_CHECKING:
@@ -209,7 +209,11 @@ class SourceCircuitBreaker:
             count_result = await self._valkey.execute_lua_script(
                 _RECORD_FAILURE_LUA,
                 keys=[self._failures_key],
-                args=[str(now), str(cutoff), str(self._window), uuid.uuid4().hex[:8]],
+                # WHY new_uuid7().hex[:8]: 8-char unique suffix to deduplicate ZSET
+                # entries when two failures land in the same millisecond. UUIDv7 per
+                # R10 (IG-COMMON-001 forbids uuid4() in src/); the time-prefix part
+                # is irrelevant here since we only use the hex tail for uniqueness.
+                args=[str(now), str(cutoff), str(self._window), new_uuid7().hex[:8]],
             )
             failure_count = int(count_result)
 
