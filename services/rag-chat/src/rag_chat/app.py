@@ -419,7 +419,25 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         llm_chain=llm_chain,
         persistence=ChatPersistenceUseCase(),
     )
-    orchestrator = ChatOrchestratorUseCase(pipeline=pipeline)
+
+    # BUG-1 FIX: Wire ToolExecutorFactory with all upstream ports so the 8 new
+    # tool handlers (search_documents, get_entity_graph, traverse_graph, etc.)
+    # execute against real S6/S7/S1 adapters instead of returning [] silently.
+    # The s6/s7/s3/s1 instances are created above in this function scope.
+    from rag_chat.application.pipeline.tool_executor import ToolExecutorFactory, build_default_registry
+
+    tool_registry = build_default_registry()
+    tool_executor_factory = ToolExecutorFactory(
+        registry=tool_registry,
+        s3=s3,
+        s6=s6,
+        s7=s7,
+        s1=s1,
+        timeout=settings.upstream_timeout_seconds,
+    )
+    app.state.tool_executor_factory = tool_executor_factory  # expose for tests / health checks
+
+    orchestrator = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=tool_executor_factory)
     app.state.chat_orchestrator = orchestrator
     app.state.chat_pipeline = pipeline  # expose for PLAN-0074 Wave F + PLAN-0067 W11-3
     app.state.llm_chain = llm_chain

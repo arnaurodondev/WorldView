@@ -417,11 +417,16 @@ class ToolExecutor:
             log.warning("tool_handler_missing_port", tool="search_documents", port="s6")
             return []
 
+        # BUG-2 FIX: ToolUseBlock from libs/tools/types.py uses `.id`; the LOCAL
+        # ToolUseBlock (defined in this file) uses `.tool_use_id`.  Use getattr
+        # with fallback to handle both variants without breaking existing tests.
+        _call_id = getattr(tool_call, "id", None) or getattr(tool_call, "tool_use_id", "") or ""
+
         # Build provenance record for citation audit (PLAN-0067 §0 I-6)
         _provenance = ToolCallProvenance(
             tool_name="search_documents",
             tool_input=tool_call.input,
-            call_id=tool_call.tool_use_id,
+            call_id=_call_id,
         )
 
         # Parse optional date strings into datetime objects (S6 expects datetime | None)
@@ -450,7 +455,6 @@ class ToolExecutor:
             # from the LLM but silently ignored here.
         )
 
-        t0 = time.monotonic()
         try:
             results = await asyncio.wait_for(
                 self._s6.search_chunks(request),
@@ -481,12 +485,9 @@ class ToolExecutor:
                 )
             )
 
-        log.info(
-            "tool_executed",
-            tool="search_documents",
-            latency_ms=round((time.monotonic() - t0) * 1000),
-            items_returned=len(items),
-        )
+        # BUG-5 FIX: do NOT emit tool_executed here — the outer execute() dispatcher
+        # already emits tool_executed after the handler returns.  Double-logging this
+        # event produced two identical log lines per search_documents call.
         return items
 
     # ── S7 graph handlers ─────────────────────────────────────────────────────
@@ -585,21 +586,56 @@ class ToolExecutor:
             log.warning("tool_handler_missing_port", tool="traverse_graph", port="s7")
             return []
 
+        # BUG-4 FIX: clamp LLM-supplied depth to [1, 4] before interpolating into
+        # the traversal params.  An unclamped depth=100 causes expensive graph
+        # scans and could be used to DoS the knowledge-graph service.
+        raw_depth = int(depth)
+        clamped_depth = min(max(raw_depth, 1), 4)
+        if clamped_depth != raw_depth:
+            log.warning(
+                "traverse_depth_clamped",
+                requested=raw_depth,
+                clamped=clamped_depth,
+            )
+
         # SECURITY: sanitize cypher pattern before forwarding
         safe_pattern = self._sanitize_cypher_pattern(cypher_pattern)
 
-        # Build a simple Cypher traversal query
-        # WHY MATCH…RETURN: we pass a minimal traversal pattern to S7; S7 is
-        # responsible for additional query safety at its layer.
+        # BUG-3 FIX: S7Client.cypher_traverse() reads params.get("id", "") to get
+        # the anchor entity UUID for the /api/v1/graph/cypher/neighborhood endpoint.
+        # The old code passed {"start": ..., "target": ...} which was silently ignored,
+        # causing the traversal to always return [] (entity_id="").
+        #
+        # Resolution:
+        # - When entity_context is available, use entity_context.entity_id as "id".
+        # - When entity_context is absent, we cannot resolve start_entity to a UUID
+        #   without an S6/S7 lookup — degrade gracefully to [] (PLAN-0078 will add
+        #   name-based resolution).
+        #
+        # The cypher string is still passed but S7 currently ignores it (the S7
+        # neighborhood endpoint uses max_hops/min_confidence instead).  It is kept
+        # for forward-compatibility when S7 adds full Cypher execution.
+        if self._entity_context is not None:
+            entity_id_str = str(self._entity_context.entity_id)
+        else:
+            log.warning(
+                "tool_entity_unresolved",
+                tool="traverse_graph",
+                start_entity=start_entity,
+                reason="no_entity_context_and_name_resolution_not_wired",
+            )
+            return []
+
         if target_entity:
             cypher = (
-                f"MATCH p=(a {{name: $start}})-[r{safe_pattern or ''}*1..{depth}]-"
+                f"MATCH p=(a {{name: $start}})-[r{safe_pattern or ''}*1..{clamped_depth}]-"
                 f"(b {{name: $target}}) RETURN p LIMIT 10"
             )
-            params: dict[str, Any] = {"start": start_entity, "target": target_entity}
         else:
-            cypher = f"MATCH p=(a {{name: $start}})-[r{safe_pattern or ''}*1..{depth}]-() RETURN p LIMIT 20"
-            params = {"start": start_entity}
+            cypher = f"MATCH p=(a {{name: $start}})-[r{safe_pattern or ''}*1..{clamped_depth}]-() RETURN p LIMIT 20"
+
+        # Pass entity_id under "id" key as expected by S7Client.cypher_traverse()
+        params: dict[str, Any] = {"id": entity_id_str}
 
         t0 = time.monotonic()
         try:
@@ -618,7 +654,7 @@ class ToolExecutor:
         text = f"Graph traversal: {start_entity}"
         if target_entity:
             text += f" → {target_entity}"
-        text += f" (depth {depth})\n"
+        text += f" (depth {clamped_depth})\n"
         text += "\n".join(str(p) for p in paths[:20])
 
         item = RetrievedItem.create(
