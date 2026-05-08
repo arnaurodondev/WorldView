@@ -380,7 +380,14 @@ class ValkeyClient:
         try:
             return await self._redis.ping()  # type: ignore[no-any-return]
         except Exception:
-            logger.warning("valkey_ping_failed", url=self._config.url)
+            # F-S010: Do not log self._config.url — it may contain a password
+            # (redis://:password@host:port/db). Log safe components only.
+            logger.warning(
+                "valkey_ping_failed",
+                host=self._config.host,
+                port=self._config.port,
+                db=self._config.db,
+            )
             return False
 
     async def close(self) -> None:

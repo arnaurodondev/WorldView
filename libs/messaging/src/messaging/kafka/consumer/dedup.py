@@ -44,8 +44,19 @@ try:
         "Number of times dedup check failed open due to Valkey error",
         ["consumer_prefix"],
     )
+    # F-DS011: Parallel counter for mark_processed failures (write side).
+    # is_duplicate failures are already tracked; without this counter, a
+    # sustained Valkey write outage is invisible on dashboards — dedup keys
+    # are never written, so every re-delivery of the same event_id passes
+    # the duplicate check and triggers double-processing.
+    _dedup_mark_failed_total = _prom.Counter(
+        "messaging_dedup_mark_failed_total",
+        "Number of times mark_processed() failed to write to Valkey",
+        ["consumer_prefix"],
+    )
 except ImportError:
     _dedup_valkey_fallback_total = None  # type: ignore[assignment]
+    _dedup_mark_failed_total = None  # type: ignore[assignment]
 
 
 class ValkeyDedupMixin:
@@ -173,6 +184,11 @@ class ValkeyDedupMixin:
         try:
             await self._dedup_client.set(key, "1", ex=self._dedup_ttl_seconds)
         except Exception:
+            # F-DS011: increment mark-failed counter before logging so the metric is
+            # always recorded even if the logger call raises (defensive ordering,
+            # same convention as the is_duplicate fallback counter above).
+            if _dedup_mark_failed_total is not None:
+                _dedup_mark_failed_total.labels(consumer_prefix=self._dedup_prefix).inc()
             logger.warning(  # type: ignore[no-any-return]
                 "dedup.valkey_mark_failed",
                 event_id=event_id,

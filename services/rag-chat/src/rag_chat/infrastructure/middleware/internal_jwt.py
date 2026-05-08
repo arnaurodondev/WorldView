@@ -185,6 +185,17 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             )
             try:
                 payload = jwt.decode(token, options={"verify_signature": False})
+                # F-S002: Validate required claims even in skip_verification mode.
+                # A structurally valid but claim-free JWT must not pass through —
+                # empty sub+tenant_id means no identity context, which causes
+                # silent multi-tenant isolation failures downstream.
+                if not payload.get("sub") and not payload.get("tenant_id"):
+                    logger.warning("internal_jwt_missing_claims_skip_verification")  # type: ignore[no-any-return]
+                    return Response(
+                        content='{"detail":"Malformed JWT: missing required claims"}',
+                        status_code=401,
+                        media_type="application/json",
+                    )
                 request.state.tenant_id = payload.get("tenant_id", "")
                 request.state.user_id = payload.get("sub", "")
                 request.state.role = payload.get("role", "")
