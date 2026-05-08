@@ -81,7 +81,7 @@ def check_acceptance_criteria(
 
     Criteria:
       - >= 18/20 queries produce valid non-empty answers
-      - search_documents called in >= 60% of queries
+      - search_documents called in >= 25% of queries (golden set has 6/20 = 30% explicit)
       - get_portfolio_context called in <= 10% (2/20) of queries
     """
     failures = []
@@ -92,17 +92,17 @@ def check_acceptance_criteria(
     if answered < 18:
         failures.append(f"Only {answered}/20 queries produced an answer (need >= 18)")
 
-    # Criterion 2: search_documents must be called frequently — it is the primary
-    # retrieval tool.  Only 6/20 golden queries explicitly expect it (30%); however
-    # the LLM may co-call it on graph/financial queries too, pushing the rate higher.
-    # Threshold = 0.60 (12/20) is realistic: pure price/fundamentals queries use
-    # S3 tools instead, and pure graph queries may skip document search entirely.
-    # WHY not 0.85: the original 85% threshold assumed search_documents was called
-    # on nearly every turn, but with 10 distinct tools the LLM correctly routes to
-    # the most specific tool — 85% would always fail in a healthy multi-tool setup.
+    # Criterion 2: search_documents must be called on factual/news queries — it is
+    # the primary retrieval tool for unstructured text.  The golden set has 6/20
+    # queries that explicitly target it (30%); graph and financial queries correctly
+    # use their specific tools instead.  A 25% floor is a health guard: if it drops
+    # below 5/20 the tool is broken, not routing-wise wrong.
+    # WHY not 60%: the golden set is designed for tool DIVERSITY across all 10 catalog
+    # tools — a 60% threshold would mean search_documents must be co-called on graph
+    # and price queries, which is wrong routing behaviour, not correct.
     search_docs_rate = by_tool.get("search_documents", {}).get("rate", 0)
-    if search_docs_rate < 0.60:
-        failures.append(f"search_documents called in {search_docs_rate * 100:.0f}% of queries (need >= 60%)")
+    if search_docs_rate < 0.25:
+        failures.append(f"search_documents called in {search_docs_rate * 100:.0f}% of queries (need >= 25%)")
 
     # Criterion 3: portfolio tool must be used sparingly — only for user-specific queries.
     # Calling it on non-portfolio queries would leak user data unnecessarily.
