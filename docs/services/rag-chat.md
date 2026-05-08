@@ -1,14 +1,14 @@
 # RAG / Chat Service
 
 > **Owner**: Chat domain · **Database**: `rag_db` (owned) · **Port**: 8008
-> **Status**: In-progress (PLAN-0015 Wave G-1 complete)
+> **Status**: PLAN-0067 W11 (Full Tool Catalog) COMPLETE
 
 ---
 
 ## Mission & Boundaries
 
-**Owns**: Query rewriting, intent classification, hybrid retrieval orchestration
-(vector + KG + SQL), result fusion, reranking, context assembly, prompt building,
+**Owns**: Query rewriting, tool-use chat pipeline, 10-tool catalog, SSE streaming
+(vector + KG + SQL tools), result injection, context assembly, prompt building,
 LLM provider fallback, streaming response delivery, citation injection, response caching.
 
 **Never does**: Store data persistently (stateless orchestrator for knowledge), generate embeddings
@@ -125,7 +125,10 @@ unchanged — R11: never break wire format.
 
 | Event | Payload |
 |-------|---------|
-| `status` | `{"step": "loading_context" \| "entity_resolution" \| "intent_classification" \| "query_expansion" \| "parallel_retrieval" \| "ranking_evidence"}` |
+| `thinking` | `{"stage": str}` — emitted before first LLM call; shows pulsing indicator in UI |
+| `status` | `{"step": "loading_context" \| "entity_resolution" \| "query_expansion"}` |
+| `tool_call` | `{"type": "tool_call", "tool": str, "label": str, "input": dict, "status": "running"}` — emitted before each tool executes |
+| `tool_result` | `{"type": "tool_result", "tool": str, "status": "ok" \| "error" \| "empty", "item_count": int}` — emitted after each tool completes |
 | `token` | `{"text": "..."}` — streamed LLM output chunk |
 | `citations` | `[{ref, id, title, url, source, published_at}]` |
 | `contradictions` | `[...]` |
@@ -134,32 +137,40 @@ unchanged — R11: never break wire format.
 
 ---
 
-## RAG Pipeline (13 Steps)
+## Chat Pipeline (Tool-Use Architecture)
+
+**PLAN-0067 replaced the classical 13-step pipeline with a tool-use loop. Tool-use is the ONLY path — there is no feature flag and no fallback to the classical pipeline.**
 
 ```
-Input → [0] Validate → [1] Cache check → [2] Rate limit → [3] Load history
-      → [4] Entity resolution (S6) → [5] Intent + plan
-      → [6] HyDE expansion + embedding → [7] Parallel retrieval (5A-5I)
-      → [8] Graph enrichment + fusion → [9] BGE reranking
-      → [10] Contradiction detection + context assembly
-      → [11] Prompt build → [12] LLM streaming → [13] Output processing + citation injection + persist
+Input → Validate → Cache check → Rate limit → Load history → Release UoW
+      → emit_thinking(stage)
+      → LLM first turn (chat_with_tools, tool catalog injected as schema)
+      → for each tool_call in response:
+            emit_tool_call(tool_name, input_summary, status="running")
+            execute tool → inject result into context
+            emit_tool_result(tool_name, status="ok"|"error"|"empty", item_count)
+      → [all-tools-failed guard — prevents second LLM turn with zero context]
+      → LLM second turn (stream_chat) → emit token events
+      → Output processing + citation injection
+      → Re-acquire UoW → persist thread + message
 ```
 
-### Parallel Retrieval Steps (5A-5I)
+### Tool Catalog (10 tools — `libs/tools/src/tools/capability_manifest.yaml`)
 
-| Step | Source | Description |
+| Tool | Target | Description |
 |------|--------|-------------|
-| 5A | S6 | Vector chunk search (top-20) |
-| 5B | S7 | Relation search by embedding (top-15) |
-| 5C | S7 | Egocentric graph per entity (up to 3 entities) |
-| 5D | S7 | Claims search (date-filtered, top-15) |
-| 5E | S7 | Event search (date-filtered, top-10) |
-| 5F | S7 | Contradiction fetch per entity |
-| 5G | S3 | Financial highlights + quotes per ticker |
-| 5H | S1 | Portfolio context for PORTFOLIO intent |
-| 5I | S7 | Cypher traversal (if cypher_enabled) |
+| `get_price_history` | S3 | OHLCV price data for a ticker |
+| `get_fundamentals_history` | S3 | Quarterly financial metrics |
+| `search_documents` | S6 | Hybrid BM25+ANN full-text search (primary text retrieval) |
+| `get_entity_graph` | S7 | Egocentric graph for an entity |
+| `traverse_graph` | S7 | Multi-hop path finding (Cypher injection guard active) |
+| `search_entity_relations` | S7 | Relation triplets between entities |
+| `search_claims` | S7 | Analyst claims, date-filtered |
+| `search_events` | S7 | Corporate events, date-filtered |
+| `get_contradictions` | S7 | Cross-source contradiction pairs |
+| `get_portfolio_context` | S1 | User portfolio holdings |
 
-All steps run concurrently via `asyncio.gather` with 5s per-task timeout. Failures return empty lists (safe degradation).
+All tool executions are independent; failures return empty results (safe degradation). The all-tools-failed guard prevents the second LLM turn from being called with zero context — the orchestrator short-circuits to a fallback answer in that case.
 
 ---
 
@@ -244,23 +255,22 @@ services/rag-chat/src/rag_chat/
 │   │   ├── completion_cache.py  # Valkey 24h response cache
 │   │   └── rate_limiter.py      # Sliding-window rate limiter
 │   ├── pipeline/
-│   │   ├── intent_classifier.py      # Ollama Qwen 2.5:3b 7-way intent
+│   │   ├── tool_executor.py          # ToolExecutorFactory, EntityContext, ToolCallProvenance; 8 handlers; Cypher injection guard (_ALLOWED_CYPHER_REL_TYPES)
 │   │   ├── hyde_expander.py          # HyDE hypothesis + embedding
-│   │   ├── retrieval_plan_builder.py # Map intent → retrieval flags
-│   │   ├── retrieval_orchestrator.py # asyncio.gather parallel retrieval
 │   │   ├── fusion.py                 # GraphEnricher + FusionPipeline
 │   │   ├── reranker.py               # BGE reranker via Ollama
 │   │   ├── context_assembler.py      # Numbered context blocks
 │   │   ├── prompt_builder.py         # Full prompt assembly
 │   │   ├── output_processor.py       # Strip think/reasoning, citations
-│   │   └── sse_emitter.py            # SSE event builders
+│   │   └── sse_emitter.py            # SSE event builders (emit_thinking, emit_tool_call, emit_tool_result)
 │   ├── ports/
 │   │   ├── upstream_clients.py       # S1Port, S3Port, S6Port, S7Port
+│   │   ├── llm_provider.py           # LlmChatProvider Protocol (chat_with_tools + stream_chat) alongside LlmStreamProvider
 │   │   └── embedding.py             # EmbeddingPort
 │   ├── security/
 │   │   └── input_validator.py        # PII + injection detection
 │   └── use_cases/
-│       ├── chat_orchestrator.py      # 13-step pipeline coordinator
+│       ├── chat_orchestrator.py      # Tool-use loop coordinator (max 2 LLM turns; all-tools-failed guard)
 │       ├── get_thread.py
 │       ├── list_threads.py
 │       ├── delete_thread.py
@@ -307,7 +317,6 @@ services/rag-chat/src/rag_chat/
 | `RAG_CHAT_OLLAMA_CLASSIFICATION_MODEL` | `qwen3:0.6b` | No | |
 | `RAG_CHAT_OLLAMA_RERANKER_MODEL` | `bge-reranker-v2-m3` | No | |
 | `RAG_CHAT_S1_INTERNAL_TOKEN` | — | Yes | Portfolio service auth |
-| `RAG_CHAT_CYPHER_ENABLED` | `false` | No | Enable Cypher retrieval |
 | `RAG_CHAT_RATE_LIMIT_PER_TENANT` | `10` | No | Requests/minute |
 | `RAG_CHAT_UPSTREAM_TIMEOUT_SECONDS` | `5.0` | No | Per retrieval task |
 
@@ -335,6 +344,9 @@ services/rag-chat/src/rag_chat/
 | `rag_citation_accuracy` | gauge | — |
 | `rag_citation_accuracy_call_failures_total` | counter | `reason` |
 | `rag_circuit_breaker_open` | gauge | `source` |
+| `rag_tool_call_total` | counter | `tool_name`, `status` |
+| `rag_tool_call_latency_seconds` | histogram | `tool_name` |
+| `rag_tool_use_first_turn_latency_seconds` | histogram | — |
 
 #### Retrieval Quality Metrics (PLAN-0063 W5-5)
 
@@ -503,12 +515,12 @@ transitively isolated.
 
 ### RAG Retrieval Scoping
 
-RAG retrieval (Steps 5A–5I) queries globally shared data (articles, entities,
-relations, claims, events from S3/S5/S6/S7). This is by design — news and
+RAG tool calls query globally shared data (articles, entities,
+relations, claims, events from S1/S3/S6/S7). This is by design — news and
 market intelligence are not tenant-specific. Tenant isolation applies only to:
 
 - **Chat thread context**: which thread the response is persisted to (tenant-scoped)
-- **Portfolio context (Step 5H)**: scoped by S1's `user_id` check on portfolio data
+- **Portfolio context (`get_portfolio_context` tool)**: scoped by S1's `user_id` check on portfolio data
 - **Conversation history**: loaded from the tenant-scoped thread
 
 ### Security Notes
