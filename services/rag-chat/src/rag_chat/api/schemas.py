@@ -99,6 +99,50 @@ def _coerce_sections_to_dicts(value: Any) -> list[dict[str, Any]]:
 # ── Request schemas ───────────────────────────────────────────────────────────
 
 
+class EntityContextChatRequest(BaseModel):
+    """Request body for POST /api/v1/chat/entity-context (PLAN-0074 Wave F).
+
+    R14: This endpoint is proxied by S9 in Wave G — frontend never calls S8 directly.
+    """
+
+    entity_id: UUID
+    question: str = Field(..., min_length=1, max_length=2000)
+    conversation_id: UUID | None = None  # WHY alias: maps to thread_id in ChatRequest
+    include_graph_context: bool = True
+
+    @field_validator("question", mode="before")
+    @classmethod
+    def _strip_html_and_validate(cls, v: Any) -> str:
+        """Strip all HTML tags, validate length, raise on empty.
+
+        §12: HTML strip via bleach.clean() is applied here (API layer) so the
+        use case always receives clean text. This mirrors the InputValidator
+        behaviour for the standard /api/v1/chat endpoint (Wave E-1).
+        bleach is already a declared dependency of this service (pyproject.toml).
+        """
+        import bleach  # type: ignore[import-untyped]
+
+        stripped: str = str(bleach.clean(str(v), tags=[], strip=True)).strip()
+        if not stripped:
+            raise ValueError("question cannot be empty")
+        if len(stripped) > 2000:
+            raise ValueError("question exceeds 2000 characters")
+        return stripped
+
+
+class EntityContextChatResponse(BaseModel):
+    """Synchronous response from POST /api/v1/chat/entity-context."""
+
+    answer: str
+    citations: list[dict[str, Any]] = []
+    contradictions: list[dict[str, Any]] = []
+    thread_id: str | None = None
+    message_id: str | None = None
+    intent: str | None = None
+    provider: str | None = None
+    latency_ms: int | None = None
+
+
 class CreateThreadRequest(BaseModel):
     title: str | None = Field(None, max_length=200)
     entity_ids: list[UUID] = Field(default=[], max_length=5)

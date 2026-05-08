@@ -23,8 +23,10 @@ LLM provider fallback, streaming response delivery, citation injection, response
 | GET | `/healthz` | Liveness | — |
 | GET | `/readyz` | Readiness (rag_db + Valkey) | — |
 | GET | `/metrics` | Prometheus | — |
-| POST | `/api/v1/chat` | Sync chat completion | X-Tenant-Id + X-User-Id |
-| POST | `/api/v1/chat/stream` | SSE streaming chat | X-Tenant-Id + X-User-Id |
+| POST | `/api/v1/chat` | Sync chat completion | X-Internal-JWT |
+| POST | `/api/v1/chat/stream` | SSE streaming chat | X-Internal-JWT |
+| POST | `/api/v1/chat/entity-context` | Entity-scoped sync chat (PLAN-0074 Wave F) — loads S7 intelligence context, prefixes system prompt with entity narrative/metrics/graph, delegates to chat pipeline | X-Internal-JWT |
+| POST | `/api/v1/chat/entity-context/stream` | Entity-scoped SSE streaming chat (PLAN-0074 Wave F) — same as above but yields SSE events | X-Internal-JWT |
 | POST | `/api/v1/threads` | Create conversation thread | X-Tenant-Id + X-User-Id |
 | GET | `/api/v1/threads` | List threads (paginated) | X-Tenant-Id + X-User-Id |
 | GET | `/api/v1/threads/{thread_id}` | Get thread with messages | X-Tenant-Id + X-User-Id |
@@ -63,6 +65,38 @@ LLM provider fallback, streaming response delivery, citation injection, response
     "latency_ms": int
 }
 ```
+
+### EntityContextChatRequest / EntityContextChatResponse (PLAN-0074 Wave F)
+
+```python
+# EntityContextChatRequest (POST /api/v1/chat/entity-context{,/stream})
+{
+    "entity_id": UUID,              # S7 entity to load intelligence context for
+    "question": str,                # User question (1–2000 chars; HTML tags stripped)
+    "conversation_id": UUID | None, # Continue existing conversation thread
+    "include_graph_context": bool   # Default True — load egocentric graph for relations
+}
+
+# EntityContextChatResponse (POST /api/v1/chat/entity-context — synchronous)
+# Same shape as ChatResponse; the entity context is injected into the system prompt,
+# not surfaced in the response body.
+{
+    "answer": str,
+    "citations": list,
+    "contradictions": list,
+    "thread_id": UUID | None,
+    "message_id": UUID | None,
+    "intent": str,
+    "provider": str,
+    "latency_ms": int
+}
+```
+
+**Entity context pipeline (PLAN-0074 Wave F)**:
+1. `EntityContextClient` makes parallel HTTP calls to S7 `/internal/v1/entities/{id}/intelligence` + `/api/v1/entities/{id}/graph?depth=1&limit=5` (BP-235: `httpx.Timeout(5.0)`, retry 5xx once).
+2. On S7 failure: `EntityChatContext(is_empty=True)` — question passed through unchanged to the regular pipeline.
+3. On S7 success: `_build_system_prompt_prefix(ctx)` injects entity name, type, narrative, health score, data completeness, and top-5 relations before the user question (max 2000 chars prefix).
+4. `entity_id` is added to `ChatRequest.context.entity_ids` so `search_documents` scopes retrieval to chunks referencing that entity (PLAN-0078 entity filter).
 
 ### BriefingResponse / PublicBriefingResponse (PLAN-0049 T-A-1-04)
 

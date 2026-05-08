@@ -104,6 +104,14 @@ class Settings(BaseSettings):
     # S-004: SecretStr prevents the token from appearing in logs, repr(), or __str__.
     s1_internal_token: SecretStr = SecretStr("")  # RAG_CHAT_S1_INTERNAL_TOKEN
 
+    # ── Knowledge Graph internal URL (PLAN-0074 Wave F) ──────────────────────
+    # Used by EntityContextClient to load entity intelligence context.
+    # WHY separate from s7_base_url: EntityContextClient calls /internal/v1/...
+    # endpoints that use the same S7 service; separating allows routing to a
+    # different host (e.g. internal VPC DNS) without affecting the existing
+    # s7_client calls used by the retrieval pipeline.
+    kg_internal_base_url: str = "http://knowledge-graph:8007"  # RAG_CHAT_KG_INTERNAL_BASE_URL
+
     # ── Feature flags ─────────────────────────────────────────────────────────
     cypher_enabled: bool = False
 

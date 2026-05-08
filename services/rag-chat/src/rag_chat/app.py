@@ -113,6 +113,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 7. Build and wire the GenerateBriefingUseCase
     _wire_briefing_uc(app, settings, valkey_client)
 
+    # 7b. Build and wire EntityContextChatUseCase (PLAN-0074 Wave F)
+    _wire_entity_context_uc(app, settings)
+
     # 8. Citation-accuracy cron (PLAN-0084 A-1 T-A-1-05)
     # Only starts when RAG_CHAT_CITATION_CRON_ENABLED=true (L5: flag-controlled rollout).
     # Uses read_factory (R23: read-only use case → ReadOnlyUnitOfWork equivalent).
@@ -493,6 +496,30 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
         llm_chain=app.state.llm_chain,  # same chain as ChatOrchestratorUseCase
         valkey=valkey_client,
         context_gatherer=context_gatherer,
+    )
+
+
+def _wire_entity_context_uc(app: FastAPI, settings: RagChatSettings) -> None:
+    """Build and attach EntityContextChatUseCase to app.state (PLAN-0074 Wave F).
+
+    Creates an EntityContextClient pointed at S7 (kg_internal_base_url) and
+    injects it plus the existing chat orchestrator into EntityContextChatUseCase.
+
+    WHY separate function: follows the same pattern as _wire_briefing_uc — keeps
+    lifespan() clean and each wiring concern isolated in its own function.
+
+    WHY reuse app.state.chat_orchestrator: EntityContextChatUseCase delegates the
+    full tool-use pipeline to the existing orchestrator. Creating a second orchestrator
+    would duplicate all LLM provider, reranker, and S6/S7 client instances.
+    """
+    from rag_chat.application.use_cases.run_entity_context_chat import EntityContextChatUseCase
+    from rag_chat.infrastructure.clients.entity_context_client import EntityContextClient
+
+    entity_context_client = EntityContextClient(base_url=settings.kg_internal_base_url)
+
+    app.state.entity_context_chat_uc = EntityContextChatUseCase(
+        entity_context_loader=entity_context_client,
+        chat_orchestrator=app.state.chat_orchestrator,
     )
 
 

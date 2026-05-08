@@ -4,6 +4,12 @@ Unit tests use the full app created by create_app() with InternalJWTMiddleware i
 ``internal_jwt_skip_verification=True`` is set so that when public_key is None (JWKS server
 not running in unit tests), the middleware still decodes tokens without signature verification.
 The default ``client`` fixture injects a system JWT via X-Internal-JWT header (BP-134 fix).
+
+BP-435 (2026-05-08): sse_starlette AppStatus.should_exit_event is a class-level singleton
+that stores an anyio.Event() bound to the first event loop that calls it. Subsequent tests
+that run on a different asyncio event loop raise RuntimeError("bound to a different event
+loop"). Fix: reset AppStatus.should_exit_event to None before each test so it is
+lazily re-created on the current test's event loop.
 """
 
 from __future__ import annotations
@@ -19,6 +25,28 @@ from rag_chat.infrastructure.config.settings import RagChatSettings
 
 if TYPE_CHECKING:
     from prometheus_client import CollectorRegistry
+
+
+@pytest.fixture(autouse=True)
+def _reset_sse_starlette_app_status() -> None:
+    """Reset sse_starlette AppStatus.should_exit_event before each test.
+
+    WHY: AppStatus.should_exit_event is a class-level singleton that is lazily
+    initialised to anyio.Event() the first time an SSE stream awaits disconnect.
+    Once bound to an event loop it cannot be used in a different event loop.
+    pytest-asyncio creates a NEW function-scoped event loop for each async test,
+    so the stale event from the previous test raises:
+      RuntimeError: <asyncio.locks.Event object> is bound to a different event loop
+    Resetting to None before each test forces lazy re-creation on the current loop.
+    (BP-435)
+    """
+    try:
+        from sse_starlette.sse import AppStatus
+
+        AppStatus.should_exit_event = None
+        AppStatus.should_exit = False
+    except ImportError:
+        pass  # sse_starlette not installed; nothing to reset
 
 
 def _make_system_jwt() -> str:
