@@ -12,6 +12,8 @@ from nlp_pipeline.infrastructure.nlp_db.repositories.document_source_metadata im
     SQLAlchemyDocumentSourceMetadataRepository,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()

@@ -14,6 +14,8 @@ import pytest
 from alert.application.use_cases.list_alert_history import MAX_LIMIT, ListAlertHistoryUseCase
 from alert.domain.enums import AlertSeverity
 
+pytestmark = pytest.mark.unit
+
 
 def _make_uc() -> tuple[ListAlertHistoryUseCase, AsyncMock]:
     repo = AsyncMock()

@@ -23,6 +23,8 @@ from alert.application.use_cases.pending_alerts import (
 from alert.domain.entities import Alert, PendingAlert
 from alert.domain.enums import AlertSeverity, AlertType
 
+pytestmark = pytest.mark.unit
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 

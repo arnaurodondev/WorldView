@@ -25,6 +25,8 @@ from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.domain.errors import ProviderRateLimited
 from market_ingestion.infrastructure.adapters.circuit_breaker import ValkeyCircuitBreaker
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers: mock Valkey client backed by an in-memory dict
 # ---------------------------------------------------------------------------

@@ -11,6 +11,8 @@ from alert.domain.entities import Alert
 from alert.domain.enums import AlertSeverity, AlertType
 from alert.infrastructure.db.repositories.alert import AlertRepository
 
+pytestmark = pytest.mark.unit
+
 
 def _make_alert(*, tenant_id: UUID | None = None) -> Alert:
     return Alert(

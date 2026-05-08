@@ -39,6 +39,33 @@ async def test_middleware_rejects_missing_jwt() -> None:
     assert resp.status_code == 401
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        # _SKIP_PATHS entries (exact matches)
+        "/health",
+        "/healthz",
+        "/ready",
+        "/readyz",
+        "/internal/v1/health",
+        # _SKIP_PREFIXES entries (prefix matches — /metrics/* and /readyz/*)
+        "/metrics",
+        "/metrics/prometheus",
+    ],
+)
+async def test_skip_paths_bypass_jwt(path: str) -> None:
+    """Paths in _SKIP_PATHS or matching _SKIP_PREFIXES bypass JWT validation (no 401)."""
+    app = create_app(_SETTINGS)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(path)
+    # Middleware skips these paths; response must not be 401 (JWT rejection).
+    # Route may return 200, 404, or 405, but NOT 401 from the middleware.
+    assert resp.status_code != 401, (
+        f"Path {path!r} should bypass JWT validation but got 401. "
+        "Check _SKIP_PATHS and _SKIP_PREFIXES in internal_jwt.py."
+    )
+
+
 async def test_middleware_skips_health_path() -> None:
     """GET /healthz passes without X-Internal-JWT (health path is exempt)."""
     app = create_app(_SETTINGS)

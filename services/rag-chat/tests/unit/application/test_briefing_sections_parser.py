@@ -18,6 +18,8 @@ import pytest
 from rag_chat.api.schemas import BriefBullet, BriefCitation, BriefSection
 from rag_chat.application.use_cases.generate_briefing import _parse_sections_from_markdown
 
+pytestmark = pytest.mark.unit
+
 
 def _adapt_legacy_section(s: dict) -> dict:  # type: ignore[type-arg]
     """Convert a legacy {title, bullets: list[str]} dict to a BriefSection-valid dict.

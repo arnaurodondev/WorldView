@@ -23,6 +23,8 @@ from nlp_pipeline.application.use_cases.enhanced_chunk_search import (
     EnhancedChunkSearchUseCase,
 )
 
+pytestmark = pytest.mark.unit
+
 # ── Shared test IDs ───────────────────────────────────────────────────────────
 
 _CHUNK_ID = uuid.UUID("018f1e2a-0000-7000-8000-000000000010")

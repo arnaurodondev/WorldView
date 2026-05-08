@@ -15,6 +15,8 @@ from alert.infrastructure.email import (
     build_email_provider,
 )
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

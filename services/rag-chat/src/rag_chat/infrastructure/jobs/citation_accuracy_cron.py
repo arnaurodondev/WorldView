@@ -14,7 +14,14 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from prometheus_client import Counter
+
 from observability import get_logger  # type: ignore[import-untyped]
+
+_CITATION_CRON_FAIL_COUNTER: Counter = Counter(
+    "citation_accuracy_cron_failures_total",
+    "Total number of citation accuracy cron first-run failures",
+)
 
 if TYPE_CHECKING:
     from rag_chat.application.use_cases.score_citation_accuracy import ScoreCitationAccuracyUseCase
@@ -44,8 +51,12 @@ async def _run_citation_accuracy_cron(use_case: ScoreCitationAccuracyUseCase) ->
     try:
         mean = await use_case.execute()
         log.info("citation_accuracy_cron_first_run", mean=round(mean, 4))  # type: ignore[no-any-return]
+    except asyncio.CancelledError:
+        log.info("citation_accuracy_cron_shutdown_gracefully")  # type: ignore[no-any-return]
+        raise
     except Exception as exc:
-        log.warning("citation_accuracy_cron_first_run_failed", error=str(exc))  # type: ignore[no-any-return]
+        _CITATION_CRON_FAIL_COUNTER.inc()
+        log.error("citation_accuracy_cron_first_run_failed", error=str(exc))  # type: ignore[no-any-return]
 
     while True:
         next_run = _next_sunday_03_utc()
@@ -59,6 +70,9 @@ async def _run_citation_accuracy_cron(use_case: ScoreCitationAccuracyUseCase) ->
         try:
             mean = await use_case.execute()
             log.info("citation_accuracy_cron_run", mean=round(mean, 4))  # type: ignore[no-any-return]
+        except asyncio.CancelledError:
+            log.info("citation_accuracy_cron_shutdown_gracefully")  # type: ignore[no-any-return]
+            raise
         except Exception as exc:
             log.warning("citation_accuracy_cron_run_failed", error=str(exc))  # type: ignore[no-any-return]
 

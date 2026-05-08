@@ -20,6 +20,8 @@ from nlp_pipeline.application.blocks.ner import (
 from nlp_pipeline.domain.enums import MentionClass
 from nlp_pipeline.domain.models import EntityMention, Section
 
+pytestmark = pytest.mark.unit
+
 
 def _make_section(text: str, char_start: int = 0) -> Section:
     return Section(

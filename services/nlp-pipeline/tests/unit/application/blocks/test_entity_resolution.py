@@ -23,6 +23,8 @@ from nlp_pipeline.application.blocks.entity_resolution import (
 from nlp_pipeline.domain.enums import MentionClass, ResolutionOutcome
 from nlp_pipeline.domain.models import EntityMention, MentionResolution
 
+pytestmark = pytest.mark.unit
+
 
 def _make_mention(text: str, mention_class: MentionClass = MentionClass.ORGANIZATION) -> EntityMention:
     return EntityMention(

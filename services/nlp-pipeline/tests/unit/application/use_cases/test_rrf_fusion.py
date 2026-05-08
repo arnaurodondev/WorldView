@@ -13,6 +13,8 @@ import math
 import pytest
 from nlp_pipeline.application.use_cases._rrf import DEFAULT_K, reciprocal_rank_fuse
 
+pytestmark = pytest.mark.unit
+
 
 def test_rrf_single_list_preserves_order() -> None:
     """A single ranking → identical order in the output (no fusion to do)."""

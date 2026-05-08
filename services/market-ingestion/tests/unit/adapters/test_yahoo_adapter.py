@@ -21,6 +21,8 @@ from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.domain.errors import ProviderUnavailable
 from market_ingestion.infrastructure.adapters.providers.yahoo import YahooFinanceProviderAdapter
 
+pytestmark = pytest.mark.unit
+
 # Fixed date range reused across multiple tests.
 _START = datetime(2024, 1, 1, tzinfo=UTC)
 _END = datetime(2024, 3, 1, tzinfo=UTC)

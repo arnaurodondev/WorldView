@@ -21,6 +21,8 @@ from rag_chat.domain.entities.chat import (
 )
 from rag_chat.domain.enums import QueryIntent
 
+pytestmark = pytest.mark.unit
+
 # ── Test fixtures (kept local to this file so the parent test_retrieval_*
 # module can stay focused on the parallel-execution semantics) ───────────────
 

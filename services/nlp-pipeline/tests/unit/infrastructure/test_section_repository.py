@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from nlp_pipeline.infrastructure.nlp_db.repositories.section import SectionRepository
 
+pytestmark = pytest.mark.unit
+
 
 def _make_section(section_id: uuid.UUID | None = None, doc_id: uuid.UUID | None = None) -> MagicMock:
     s = MagicMock()

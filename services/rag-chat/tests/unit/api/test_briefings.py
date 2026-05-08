@@ -135,12 +135,11 @@ async def test_briefing_missing_jwt_401(settings: RagChatSettings) -> None:
 
 
 async def test_briefing_malformed_jwt_unit_mode(settings: RagChatSettings) -> None:
-    """D-005 (unit mode): Malformed JWT with skip_verification=True -> 200.
+    """D-005 / SEC-005 (unit mode): Malformed JWT with skip_verification=True -> 401.
 
-    With skip_verification=True and no public key, the middleware's DecodeError path
-    passes through with empty state. The briefing route does not check state (it accepts
-    body-provided user_id/tenant_id), so mock UC returns 200.
-    Real enforcement is tested in test_internal_jwt_middleware.py with skip_verification=False.
+    SEC-005: even with skip_verification=True, a JWT that fails PyJWT's DecodeError
+    (e.g. random bytes) must return 401, not pass through with empty state.
+    This prevents forged garbage tokens from being silently accepted.
     """
     app = _make_app(settings)
     transport = ASGITransport(app=app)
@@ -150,8 +149,9 @@ async def test_briefing_malformed_jwt_unit_mode(settings: RagChatSettings) -> No
             json=_VALID_BODY,
             headers={"X-Internal-JWT": "not.a.jwt"},
         )
-    # Unit mode (skip_verification=True): DecodeError -> empty state -> route processes -> 200
-    assert resp.status_code == 200
+    # SEC-005: DecodeError -> 401 Malformed JWT (even in skip_verification mode)
+    assert resp.status_code == 401
+    assert "Malformed" in resp.json().get("detail", "")
 
 
 async def test_briefing_malformed_jwt_integration_mode() -> None:

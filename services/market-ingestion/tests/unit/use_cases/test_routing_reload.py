@@ -12,6 +12,8 @@ from unittest.mock import MagicMock
 import pytest
 from market_ingestion.application.use_cases.routing_reload import RoutingReloadUseCase
 
+pytestmark = pytest.mark.unit
+
 
 def _make_cache(slot_count: int = 5) -> MagicMock:
     """Build a mock ProviderRoutingCache that returns *slot_count* on load."""

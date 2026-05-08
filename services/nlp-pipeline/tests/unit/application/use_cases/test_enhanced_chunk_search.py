@@ -14,6 +14,8 @@ from nlp_pipeline.application.use_cases.enhanced_chunk_search import (
     _embed_cache_key,
 )
 
+pytestmark = pytest.mark.unit
+
 _CHUNK_ID = uuid.UUID("018f1e2a-0000-7000-8000-000000000010")
 _DOC_ID = uuid.UUID("018f1e2a-0000-7000-8000-000000000011")
 _SECTION_ID = uuid.UUID("018f1e2a-0000-7000-8000-000000000012")

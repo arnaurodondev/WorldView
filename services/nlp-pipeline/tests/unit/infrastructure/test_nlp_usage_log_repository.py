@@ -17,6 +17,8 @@ from nlp_pipeline.infrastructure.nlp_db.repositories.llm_usage_log import (
     NlpUsageLogRepository,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _make_session() -> AsyncMock:
     session = AsyncMock()

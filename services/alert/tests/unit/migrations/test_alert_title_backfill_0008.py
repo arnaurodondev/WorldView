@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 _MIGRATION = Path(__file__).resolve().parents[3] / "alembic" / "versions" / "0008_backfill_alert_titles.py"
 
 

@@ -32,6 +32,8 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 from backfill_fundamentals import _safe_float, derive_fundamentals_snapshot
 
+pytestmark = pytest.mark.unit
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 

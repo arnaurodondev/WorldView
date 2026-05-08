@@ -19,6 +19,8 @@ from uuid import uuid4
 import pytest
 from alert.scripts.backfill_alert_titles import _derive_for_row
 
+pytestmark = pytest.mark.unit
+
 
 def _make_row(
     *,

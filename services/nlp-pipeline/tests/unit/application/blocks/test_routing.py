@@ -21,6 +21,8 @@ from nlp_pipeline.application.blocks.routing import (
 from nlp_pipeline.domain.enums import MentionClass, RoutingTier
 from nlp_pipeline.domain.models import EntityMention
 
+pytestmark = pytest.mark.unit
+
 
 def _now() -> datetime:
     return datetime.now(tz=UTC)

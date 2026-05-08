@@ -26,6 +26,8 @@ from alert.domain.entities import Alert, PendingAlert
 from alert.domain.enums import AlertSeverity, AlertType
 from httpx import ASGITransport, AsyncClient
 
+pytestmark = pytest.mark.unit
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 from market_ingestion.domain.entities.symbol_tier import SymbolTier, TierLevel
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.unit()
 def test_symbol_tier_default_is_t2() -> None:

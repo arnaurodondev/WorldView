@@ -12,6 +12,8 @@ import pytest
 from pydantic import ValidationError
 from rag_chat.api.schemas import BriefBullet, BriefCitation, BriefSection, PublicBriefingResponse
 
+pytestmark = pytest.mark.unit
+
 # ── BriefCitation tests ───────────────────────────────────────────────────────
 
 

@@ -9,6 +9,8 @@ from rag_chat.application.pipeline.reranker import BGEReranker, CohereReranker
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType
 
+pytestmark = pytest.mark.unit
+
 
 def _item(item_id: str, score: float = 0.70, trust: float = 0.80) -> RetrievedItem:
     return RetrievedItem.create(

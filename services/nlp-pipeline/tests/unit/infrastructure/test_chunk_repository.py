@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from nlp_pipeline.infrastructure.nlp_db.repositories.chunk import ChunkRepository
 
+pytestmark = pytest.mark.unit
+
 
 def _make_chunk(chunk_id: uuid.UUID | None = None, text_key: str | None = None) -> MagicMock:
     c = MagicMock()

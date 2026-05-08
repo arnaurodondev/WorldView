@@ -13,6 +13,8 @@ from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.entities.conversation import ContradictionRef
 from rag_chat.domain.enums import ItemType
 
+pytestmark = pytest.mark.unit
+
 
 def _item(
     item_id: str = "id-1",

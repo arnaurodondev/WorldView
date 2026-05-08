@@ -6,7 +6,10 @@ get a `RareTokenAnalysis` out, and never need a Valkey or DB fixture.
 
 from __future__ import annotations
 
+import pytest
 from nlp_pipeline.application.blocks.rare_token import analyze
+
+pytestmark = pytest.mark.unit
 
 
 def test_analyze_detects_prd_id() -> None:

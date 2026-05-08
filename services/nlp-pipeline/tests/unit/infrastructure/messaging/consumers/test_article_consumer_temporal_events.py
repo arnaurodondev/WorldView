@@ -19,6 +19,8 @@ from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
     _normalize_temporal_events_for_emit,
 )
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

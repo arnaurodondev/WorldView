@@ -11,6 +11,8 @@ from rag_chat.application.pipeline.fusion import FusionPipeline, GraphEnricher
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType
 
+pytestmark = pytest.mark.unit
+
 
 def _item(
     *,

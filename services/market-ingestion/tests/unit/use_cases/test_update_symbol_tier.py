@@ -9,6 +9,8 @@ import pytest
 from market_ingestion.application.use_cases.update_symbol_tier import UpdateSymbolTierUseCase
 from market_ingestion.domain.entities.symbol_tier import SymbolTier, TierLevel
 
+pytestmark = pytest.mark.unit
+
 
 def _make_uow(existing: SymbolTier | None = None) -> Any:
     """Build a minimal fake UnitOfWork with a symbol_tiers stub."""

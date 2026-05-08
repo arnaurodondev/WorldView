@@ -9,6 +9,8 @@ import pytest
 from alert.domain.email_provider import EmailProvider, EmailProviderError
 from alert.domain.entities import EmailPreference
 
+pytestmark = pytest.mark.unit
+
 
 class TestEmailPreference:
     """Tests for EmailPreference construction and invariant enforcement."""

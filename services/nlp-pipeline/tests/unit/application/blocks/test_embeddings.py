@@ -15,6 +15,8 @@ from nlp_pipeline.application.blocks.embeddings import (
 from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
 from nlp_pipeline.domain.models import Section
 
+pytestmark = pytest.mark.unit
+
 
 def _make_section(text: str, section_index: int = 0, speaker: str | None = None) -> Section:
     doc_id = uuid.uuid4()

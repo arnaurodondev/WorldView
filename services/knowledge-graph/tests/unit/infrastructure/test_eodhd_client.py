@@ -9,6 +9,8 @@ import sys
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.unit
 def test_eodhd_client_raises_import_error() -> None:

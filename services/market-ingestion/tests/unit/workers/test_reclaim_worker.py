@@ -20,6 +20,8 @@ from market_ingestion.domain.entities.ingestion_task import IngestionTask
 from market_ingestion.domain.enums import DatasetType, IngestionTaskStatus, Provider
 from market_ingestion.infrastructure.workers.reclaim_worker import PrimaryProviderReclaimWorker
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -11,6 +11,8 @@ from nlp_pipeline.infrastructure.storage.chunk_text_store import (
     _build_key,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _make_storage(
     put_side_effect: Exception | None = None,
