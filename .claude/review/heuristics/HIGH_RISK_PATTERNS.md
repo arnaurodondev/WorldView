@@ -771,3 +771,57 @@ Prometheus counter for consecutive failures. See BP-423.
 grep -n "asyncio.sleep" services/ -r --include="*.py" | \
   grep -A2 "except" | grep "sleep([0-9]"
 ```
+
+### HR-053: Vector Search / HNSW Query Without Tenant Filter
+
+**Pattern** (RED):
+```python
+# BAD — returns top-K chunks from ALL tenants
+results = await session.execute(
+    select(Chunk)
+    .order_by(Chunk.embedding.cosine_distance(query_vec))
+    .limit(k)
+)
+```
+
+**Risk**: Cross-tenant data leak via semantic similarity search. A user of Tenant B can receive
+document chunks ingested by Tenant A if the content overlaps semantically. This is the
+highest-impact multi-tenant breach vector because it bypasses all API-layer tenant checks —
+the HNSW index is globally ordered by cosine similarity with no knowledge of tenancy.
+**Action**: Add `WHERE tenant_id = :tid OR tenant_id IS NULL` to all chunk/embedding queries.
+Ensure the `chunks` table has a `tenant_id` column and `CREATE INDEX ON chunks(tenant_id)`.
+Do NOT rely on application-layer filtering after the query — the index must be scoped at query time.
+See: GAP-2 in `docs/audits/2026-05-07-investigate-multi-tenant-gaps.md`.
+**Grep pattern**:
+```bash
+# Find HNSW/cosine distance queries missing tenant_id filter
+grep -rn "cosine_distance\|l2_distance\|max_inner_product" services/ --include="*.py" | \
+  xargs -I{} sh -c 'grep -L "tenant_id" $(echo {} | cut -d: -f1)' 2>/dev/null
+```
+
+### HR-054: Avro Schema for User-Attributable Event Without `tenant_id` Field
+
+**Pattern** (YELLOW):
+```json
+// BAD — no tenant routing possible
+{"name": "content.article.raw.v1", "fields": [
+  {"name": "event_id", "type": "string"},
+  ...
+  // no tenant_id field
+]}
+```
+
+**Risk**: Kafka consumers processing user-attributable events (content, NLP, intelligence pipeline)
+have no tenant routing context. They cannot write `tenant_id` to destination tables because the
+event carries no tenant information. Any table downstream of this event will be globally scoped.
+**Action**: Add `{"name": "tenant_id", "type": ["null", "string"], "default": null}` to all
+user-attributable event schemas. Market data and instrument schemas are global reference data
+and may omit `tenant_id`. Rule R5 (forward compatibility) is satisfied by using `"default": null`.
+See: GAP-4 in `docs/audits/2026-05-07-investigate-multi-tenant-gaps.md`.
+**Grep pattern**:
+```bash
+# Find Avro schemas missing tenant_id (market data schemas are expected to be absent)
+for schema in infra/kafka/schemas/*.avsc; do
+  if ! grep -q '"tenant_id"' "$schema"; then echo "MISSING: $schema"; fi
+done
+```

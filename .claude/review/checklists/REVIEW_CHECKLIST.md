@@ -46,6 +46,8 @@
 - [ ] **Retry loop uses exponential backoff**: any `while True` loop with `except Exception: await asyncio.sleep(CONSTANT)` must be replaced with `min(2**failures × base, ceiling)` backoff + Prometheus counter; fixed-interval loops cause log spam on sustained outages (BP-423, HR-052)
 - [ ] **ON CONFLICT assertions check compiled SQL**: test assertions for `INSERT … ON CONFLICT DO NOTHING` must check compiled SQL text for `"ON CONFLICT"` and `"DO NOTHING"` strings, not the private `_post_values_clause` attribute (QA-007, STANDARDS.md §20.7)
 - [ ] **Prometheus tests use isolated_registry fixture**: any test that asserts on Prometheus gauge/counter values must use an `isolated_registry` fixture, not the global `REGISTRY` singleton (BP-425, STANDARDS.md §20.6)
+- [ ] **New Kafka consumer writing to a shared table: does the Avro schema carry tenant_id?** — If the event schema has no `tenant_id` field, the consumer cannot populate it in the destination table; the data becomes globally scoped and leaks across tenants. All user-attributable events must carry `{"name": "tenant_id", "type": ["null", "string"], "default": null}`. Market data / instrument discovery events are excluded (global reference data). (HR-054)
+- [ ] **Vector/HNSW search query: is it filtered by tenant_id?** — Any `cosine_distance`, `l2_distance`, or `max_inner_product` query against a table that has a `tenant_id` column MUST include `WHERE tenant_id = :tid OR tenant_id IS NULL`. Missing this filter causes cross-tenant data leaks via semantic similarity. (HR-053)
 
 ## 4b. Unit of Work / Transaction Integrity (R26)
 
