@@ -31,6 +31,10 @@ _TOOL_LABELS: dict[str, str] = {
     "get_portfolio_context": "Loading portfolio context...",
     "get_price_history": "Fetching price history...",
     "get_fundamentals_history": "Fetching fundamentals...",
+    "get_entity_narrative": "Loading narrative...",
+    "get_entity_paths": "Tracing entity paths...",
+    "get_entity_health": "Computing health score...",
+    "get_entity_intelligence": "Loading intelligence bundle...",
 }
 
 

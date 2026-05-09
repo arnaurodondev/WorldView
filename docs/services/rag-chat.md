@@ -1,7 +1,7 @@
 # RAG / Chat Service
 
 > **Owner**: Chat domain · **Database**: `rag_db` (owned) · **Port**: 8008
-> **Status**: PLAN-0067 W11 (Full Tool Catalog) COMPLETE
+> **Status**: PLAN-0080 Wave A (Intelligence-Layer LLM Tools) COMPLETE — 14 tools total (v2 manifest)
 
 ---
 
@@ -189,20 +189,26 @@ Input → Validate → Cache check → Rate limit → Load history → Release U
       → Re-acquire UoW → persist thread + message
 ```
 
-### Tool Catalog (10 tools — `libs/tools/src/tools/capability_manifest.yaml`)
+### Tool Catalog (14 tools — `libs/tools/src/tools/capability_manifest.yaml` v2)
 
-| Tool | Target | Description |
-|------|--------|-------------|
-| `get_price_history` | S3 | OHLCV price data for a ticker |
-| `get_fundamentals_history` | S3 | Quarterly financial metrics |
-| `search_documents` | S6 | Hybrid BM25+ANN full-text search (primary text retrieval) |
-| `get_entity_graph` | S7 | Egocentric graph for an entity |
-| `traverse_graph` | S7 | Multi-hop path finding (Cypher injection guard active) |
-| `search_entity_relations` | S7 | Relation triplets between entities |
-| `search_claims` | S7 | Analyst claims, date-filtered |
-| `search_events` | S7 | Corporate events, date-filtered |
-| `get_contradictions` | S7 | Cross-source contradiction pairs |
-| `get_portfolio_context` | S1 | User portfolio holdings |
+| Tool | Target | Description | Since |
+|------|--------|-------------|-------|
+| `get_price_history` | S3 | OHLCV price data for a ticker | v1 |
+| `get_fundamentals_history` | S3 | Quarterly financial metrics | v1 |
+| `search_documents` | S6 | Hybrid BM25+ANN full-text search (primary text retrieval) | v1 |
+| `get_entity_graph` | S7 | Egocentric graph for an entity | v1 |
+| `traverse_graph` | S7 | Multi-hop path finding (Cypher injection guard active) | v1 |
+| `search_entity_relations` | S7 | Relation triplets between entities | v1 |
+| `search_claims` | S7 | Analyst claims, date-filtered | v1 |
+| `search_events` | S7 | Corporate events, date-filtered | v1 |
+| `get_contradictions` | S7 | Cross-source contradiction pairs | v1 |
+| `get_portfolio_context` | S1 | User portfolio holdings | v1 |
+| `get_entity_narrative` | S9→S7 | LLM-generated entity narrative (markdown); high-authority (trust_weight=0.88). Endpoint: `GET /api/v1/entities/{id}/narratives` | v2 |
+| `get_entity_paths` | S9→S7 | Top-N pre-computed multi-hop relationship paths, composite_score-ranked. Endpoint: `GET /api/v1/entities/{id}/paths` | v2 |
+| `get_entity_health` | S9→S7 | Entity health score, key metrics, source distribution (extracted from intelligence bundle). Endpoint: `GET /api/v1/entities/{id}/intelligence` | v2 |
+| `get_entity_intelligence` | S9→S7 | Full intelligence bundle: narrative + paths + health + relations summary. Single call for "tell me everything about X". Endpoint: `GET /api/v1/entities/{id}/intelligence` | v2 |
+
+**v2 intelligence tools (PLAN-0080 Wave A)**: all 4 call S9-proxied endpoints (R14/R7 compliance — never S7 directly). All respect `EntityContext` scope: when the executor is bound to an entity via `ToolExecutorFactory.for_request(entity_context=...)`, the `entity_id` is auto-injected and LLM-supplied values are silently overridden (M-1 enforcement).
 
 All tool executions are independent; failures return empty results (safe degradation). The all-tools-failed guard prevents the second LLM turn from being called with zero context — the orchestrator short-circuits to a fallback answer in that case.
 

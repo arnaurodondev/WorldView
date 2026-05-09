@@ -10,9 +10,9 @@
 | PLAN-0074 | **Intelligence Layer** — Worker 13D activation, NarrativeGenerationWorker, entity intelligence APIs, PathInsightWorker, S8 entity-context chat, S9 proxy, frontend 3-col page. All waves (A+B+C+D+E1+E2+F+G+H) done. | completed | 9/9 | none | 2026-05-08 |
 | PLAN-0075 | **Answer Quality Eval (L2-L4)** — routing_observations + chat_feedback tables, 👍/👎 UI chips + S9 endpoint, L2 tool-selection eval, L3 answer-quality LLM-judge, L4 operational gates, calibration. **Next: W7-1 (schema + write-hook)**. | stub | 0/6 | PLAN-0067 ✓ PLAN-0063 W5-1 ✓ | 2026-05-05 |
 | PLAN-0064 | **Full-Text Search with Entity Facets** — keystone L1 search across articles + EDGAR + transcripts, reuses tsv_english GIN. 5 waves. **Next: Wave 1 (schemas/contracts/types)**. | draft | 0/5 | PLAN-0063 W5-2 ✓ | 2026-05-03 |
-| PLAN-0082 | **Action Tools** — get_alerts + create_alert tools, user-confirmation SSE surface (pending_action → action_executed), 30-attempt adversarial expansion. **Next: Wave 1**. | stub | 0/3 | PLAN-0067 W11-4 ✓ | 2026-05-07 |
+| PLAN-0082 | **Action Tools** — get_alerts + create_alert tools, user-confirmation SSE surface (pending_action → action_executed), 30-attempt adversarial expansion. `alert.created.v1` Avro schema + `CanonicalAlertCreated` canonical model + 11 contract tests pre-implemented (2026-05-09). **Next: Wave 1 (after PLAN-0081 ✓)**. | stub | 0/3 | PLAN-0080 ✓, PLAN-0081 ✓ | 2026-05-09 |
 | PLAN-0071 | **Institutional UI Uplift** — adversarial second-pass. Phases 1–5 done. Phase 6/6.5 (density sprint: sidebar h-9→h-7, news ArticleRow, p-4→p-2 sweep, TopBar). Phase 7 blocked on backend. **Next: Phase 6.5 (density sprint)**. | in-progress | 5/9 phases | Phase 7 needs S3 price-stream SSE | 2026-05-05 |
-| PLAN-0080 | **Intelligence-Layer LLM Tools** — registers PLAN-0074 endpoints (get_entity_narrative, get_entity_paths, get_entity_health, get_entity_intelligence) in tool catalog. Manifest v2. **Next: Wave 1 (PLAN-0074 Wave G ✓ — unblocked)**. | stub | 0/1 | none | 2026-05-08 |
+| PLAN-0080 | **Intelligence-Layer LLM Tools** — COMPLETE. Wave A implemented: 4 new tools in manifest v2 (get_entity_narrative, get_entity_paths, get_entity_health, get_entity_intelligence), S7IntelligencePort Protocol, S7IntelligenceClient adapter (S9-proxied, R14/R7 compliant), EntityContext enforcement (M-1), architecture test (test_tool_manifest_sync.py, R29), 33 unit + 4 arch tests PASS. 2026-05-09. | completed | 1/1 | none | 2026-05-09 |
 | PLAN-0081 | **Catalog Tools** — 6 tools (get_morning_brief, compare_entities, screen_universe, get_market_movers, get_economic_calendar, get_earnings_calendar). Manifest v3. **Next: Wave 1 (after PLAN-0080)**. | stub | 0/2 | PLAN-0080 | 2026-05-07 |
 | PLAN-0024 | **Production Deployment** — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions. **Next: Wave A-3**. | in-progress | 3/6 | none | 2026-04-11 |
 | PLAN-0063 | **W5 — Retrieval Substrate + L1 Eval** — W5-1..W5-5 done; W5-6 (ingestion bench) and W5-7 (contextual retrieval experiment) remain. **Next: W5-6 (ingestion bench, parallel after W5-2 ✓); W5-7 gated on ≥80% query labelling**. | in-progress | 5/7 | W5-7 gated on labelling | 2026-05-07 |
@@ -82,7 +82,6 @@
 PLAN-0074 (Intelligence Layer, 15 waves)  ←— highest impact; unblocks PLAN-0080/0081
 PLAN-0064 (Full-Text Search, 5 waves)    ←— deps: PLAN-0063 W5-2 ✓
 PLAN-0075 W7-1/W7-2 (schema + UI chips) ←— deps: PLAN-0067 ✓, PLAN-0063 W5-1 ✓
-PLAN-0082 (Action Tools, 3 waves)        ←— deps: PLAN-0067 W11-4 ✓
 PLAN-0071 Phase 6/6.5 (UI density)      ←— ongoing, no new deps
 PLAN-0024 A-3..A-5 (Prod Deployment)    ←— no deps
 ```
@@ -99,7 +98,13 @@ PLAN-0080 (Intelligence LLM Tools, 1 wave)  ←— PLAN-0074 Wave G complete
 PLAN-0081 (Catalog Tools, 2 waves)
 ```
 
-### Tier 4 — After PLAN-0075 W7-1/W7-2
+### Tier 4 — After PLAN-0081 completes
+
+```
+PLAN-0082 (Action Tools, 3 waves)        ←— deps: PLAN-0080 ✓, PLAN-0081 ✓ (manifest v2/v3 conventions; create_alert safety gate)
+```
+
+### Tier 5 — After PLAN-0075 W7-1/W7-2
 
 ```
 PLAN-0075 W7-3 → W7-4 → W7-5 → W7-6  (L2 → L3 → L4 eval → calibration)
@@ -130,6 +135,8 @@ PLAN-0074 Wave A → B → C → D → G
 PLAN-0080 (1 wave)
     ↓
 PLAN-0081 (2 waves)
+    ↓
+PLAN-0082 (3 waves — action tools + confirmation UX)
 ```
 
 ## Completed Plans
@@ -137,7 +144,7 @@ PLAN-0081 (2 waves)
 | Plan ID | Title | PRD | Completed | Waves | QA |
 |---------|-------|-----|-----------|-------|----|
 | PLAN-0067 | W11 — Full Tool Catalog: Embedding Search + Graph Traversal as LLM Tools. W11-1: `ToolCallBatch`/`LLMToolResponse` types + `LlmChatProvider` protocol + `chat_with_tools`/`stream_chat` on all adapters. W11-2: 8 new tools in manifest (search_documents, get_entity_graph, traverse_graph, search_entity_relations, search_claims, search_events, get_contradictions, get_portfolio_context) + `ToolExecutorFactory` + `EntityContext` + `ToolCallProvenance` + all handlers. W11-3: `ChatOrchestratorUseCase` full tool-use migration (only path), hard-deleted IntentClassifier/RetrievalPlanBuilder/ParallelRetrievalOrchestrator, `emit_thinking` + updated SSEEmitter, Alembic 0006 `llm_usage_log` tool tracking, metrics. W11-4: 20-query golden eval JSON + eval_tool_use.py harness (search_docs ≥25% threshold) + 6 integration tests. W11-5: `ToolCallIndicator` component + `useChatStream` activeTools state + StreamingBubble wiring. 783 rag-chat + 658 arch + 1837 frontend PASS. Post-QA fixes: ToolExecutorFactory DI wiring, ToolCallProvenance id/tool_use_id, traverse_graph params, depth cap, .dockerignore libs/tools allowlist. Docker rebuild + smoke test: PASS. | PLAN-0066 Wave H + /investigate 2026-05-07 | 2026-05-08 | 5/5 | QA PASS 2026-05-08 — 783 rag-chat + 658 arch + 1837 frontend; Docker build + /healthz smoke PASS; eval harness threshold corrected to 25% (golden set: 6/20 = 30% search_documents is correct multi-tool routing) |
-| PLAN-0084 | W5-5b — Operating-Table Hardening (PLAN-0063 close-out): citation cron wiring, circuit-breaker SETNX probe, ValkeyDedupMixin migration, CanonicalTickersCache refresh, port ABCs, CI gate flip, boost sweep infra. 9 waves, 36 tasks. | docs/audits/2026-05-07-qa-plan-0063-report.md | 2026-05-07 | 15/15 | QA PASS 2026-05-07 (Wave 6 + Wave 7) — all 36 tasks done; BP-421..425 fixed |
+| PLAN-0084 | W5-5b — Operating-Table Hardening (PLAN-0063 close-out): citation cron wiring, circuit-breaker SETNX probe, ValkeyDedupMixin migration, CanonicalTickersCache refresh, port ABCs, CI gate flip, boost sweep. 15 waves, 48 tasks. | docs/audits/2026-05-07-qa-plan-0063-report.md | 2026-05-07 | 14/15 | 14 waves DONE (QA PASS 2026-05-07 Wave 6+7; E-3 gate enabled commit e39c298a; BP-421..425 fixed). G-1 (boost sweep) pending: labelling gate met 88.3% (106/120) on 2026-05-09 — run `make dev` then `python scripts/eval_retrieval.py --mode hybrid_boost_sweep ...` to complete. |
 | PLAN-0078 | Chunk Entity-Filter + GLiNER Mention Storage — chunks.entity_mentions JSONB, GLiNER mention persistence, entity_ids/entity_types filter on chunk search, rag-chat port extension. 4 waves. | derived from /investigate 2026-05-07 | 2026-05-07 | 4/4 | 757 nlp-pipeline + 662 rag-chat unit tests PASS; ruff + mypy clean |
 | PLAN-0069 | UI Professional Polish — Bloomberg-Grade Terminal Hardening. Font sizes, icons, consumer spinner, Bloomberg violations. 4 waves, 23 tasks. | investigation-2026-05-03 | 2026-05-04 | 4/4 | QA PASS 2026-05-04 — all 4 waves confirmed; 14 follow-up violations fixed |
 | PLAN-0066 | W10 — Brief Intelligence + Temporal RAG (8 waves: user_briefs persistence, diff/feedback endpoints, chat seeding, S9 proxies, frontend diff badge + discuss button + feedback, tool-use temporal RAG). | PRD-0034 §3 FR-T1-1 extensions | 2026-05-08 | 8/8 | QA PASS 2026-05-08 — all 8 waves complete, architecture clean |

@@ -139,5 +139,40 @@
     "expected_tools": ["get_portfolio_context", "search_documents"],
     "min_retrieved_items": 1,
     "label": "portfolio"
+  },
+  {
+    "id": "tq-intel-001",
+    "query": "Give me a summary of what's been happening with Apple",
+    "expected_tools": ["get_entity_narrative", "get_entity_intelligence"],
+    "min_retrieved_items": 1,
+    "label": "intelligence_narrative"
+  },
+  {
+    "id": "tq-intel-002",
+    "query": "Tell me everything about NVDA",
+    "expected_tools": ["get_entity_intelligence"],
+    "min_retrieved_items": 1,
+    "label": "intelligence_bundle"
+  },
+  {
+    "id": "tq-intel-003",
+    "query": "What are the most significant connections in Apple's network?",
+    "expected_tools": ["get_entity_paths"],
+    "min_retrieved_items": 1,
+    "label": "intelligence_paths"
+  },
+  {
+    "id": "tq-intel-004",
+    "query": "How confident are we in the data on Tesla?",
+    "expected_tools": ["get_entity_health"],
+    "min_retrieved_items": 1,
+    "label": "intelligence_health"
+  },
+  {
+    "id": "tq-intel-005",
+    "query": "What's the latest narrative on Microsoft?",
+    "expected_tools": ["get_entity_narrative"],
+    "min_retrieved_items": 1,
+    "label": "intelligence_narrative"
   }
 ]
