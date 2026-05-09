@@ -342,17 +342,17 @@ export function PredictionMarketsWidget() {
             const yesProbColor = yesPct > 60 ? "text-positive" : yesPct < 40 ? "text-muted-foreground" : "text-muted-foreground";
             const noProbColor = noPct > 60 ? "text-negative" : "text-muted-foreground";
 
-            // WHY prefer market.url: API returns the Polymarket URL directly.
-            // WHY market_slug fallback: PLAN-0043 B-2 added market_slug to the DB
-            // (e.g. "will-gdp-exceed-2pct-q3-2026"). Polymarket uses event slugs in
-            // canonical URLs: polymarket.com/event/{slug}. This gives a real page
-            // rather than the generic homepage — traders land on the exact market.
-            // WHY title-search last resort: if both url and market_slug are absent
-            // (e.g. legacy rows), a title search on Polymarket finds the market
-            // better than a silent no-op or homepage redirect.
+            // WHY title-search default (density bundle 2026-05-09): the historic
+            // ``/event/{slug}`` URL returned 404 for many markets because
+            // Polymarket's canonical paths split ``/event/`` (grouped) vs
+            // ``/market/`` (single binary) and the slug we receive from the
+            // Gamma ``markets`` payload doesn't reliably match either path.
+            // The ``/markets?_q=`` search URL ALWAYS resolves to a working
+            // results page no matter the slug shape — so we use it as the
+            // first-class link target and only fall back to the explicit
+            // ``url`` if S3 supplied one (legacy / future correct slugs).
             const marketUrl = market.url
-              || (market.market_slug ? `https://polymarket.com/event/${market.market_slug}` : null)
-              || `https://polymarket.com/markets?q=${encodeURIComponent(market.title)}`;
+              || `https://polymarket.com/markets?_q=${encodeURIComponent(market.title)}`;
 
             function handleMarketClick() {
               // Open in new tab — trader reads market context alongside the terminal.
