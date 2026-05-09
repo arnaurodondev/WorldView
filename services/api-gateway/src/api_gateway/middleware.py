@@ -106,6 +106,7 @@ class OIDCAuthMiddleware(BaseHTTPMiddleware):
                             token,
                             pub_key,
                             algorithms=["RS256"],
+                            audience="worldview-internal",
                             options={"require": ["iss", "sub", "exp"]},
                         )
                         if payload.get("iss") == "worldview-gateway":
