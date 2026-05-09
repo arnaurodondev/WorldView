@@ -1,7 +1,7 @@
 # PLAN-0082 — Action Tools (Alerts) + Prompt-Injection Safety Hardening
 
 > **PRD**: derived from `/investigate` 2026-05-07 — issues A-4, I-7
-> **Status**: Wave A done (2026-05-09)
+> **Status**: Wave A done (2026-05-09); Wave B done (2026-05-09)
 > **Created**: 2026-05-07
 > **Last revised**: 2026-05-09 (revise-prd pass: R-001 stale BP-405 entries; R-002 TRACKING.md deps; R-003 missing arch test; R-004 Wave B frontend task; R-005 alert.created.v1 Avro schema spec; R-006 manifest version convention)
 > **Owner**: TBD
@@ -65,7 +65,7 @@ Items tagged **NEW** do not exist yet and will be created by the indicated plan/
 | Wave | Title | Layer | Effort | Status |
 |------|-------|-------|--------|--------|
 | A | `get_alerts` tool: `S10Port` Protocol (NEW), S10 HTTP client adapter (NEW), handler wrapping `GET /v1/alerts/pending`, manifest entry (`since` value follows PLAN-0080/0081 convention — see §4), 5 eval queries | S8 | 4 hours | **DONE 2026-05-09** (commit: feat(rag-chat): PLAN-0082 Wave A) |
-| B | `alert.created.v1` Avro schema (NEW — `infra/kafka/schemas/alert.created.v1.avsc`) + `CanonicalAlertCreated` canonical model (NEW — `libs/contracts/src/contracts/events/alert/alert_created.py`) + contract tests (NEW — `libs/contracts/tests/test_events_alert_created.py`) [**already implemented in revise-prd pass**] + `CreateAlertUseCase` in S10 (NEW) + `POST /api/v1/alerts` S10 endpoint (NEW — writes Alert row + outbox event in single transaction per R8, emitting `alert.created.v1`) + S9 proxy `POST /v1/alerts` (NEW) + `create_alert` tool handler in S8 via `S10Port` with **explicit confirmation flow**: SSE `pending_action` event (NEW) → user clicks Approve/Reject in UI → SSE `action_executed` (NEW) or `action_rejected` (NEW) → tool result returned to LLM. `SSEEmitter` extended with 3 new emit methods (NEW). `ActionConfirmModal.tsx` (NEW — `apps/worldview-web/features/chat/components/ActionConfirmModal.tsx`) wires Approve/Reject buttons to the SSE flow. | S8 + S10 + S9 + frontend | 1.5 dev-days (frontend modal included) |
+| B | `alert.created.v1` Avro schema (NEW — `infra/kafka/schemas/alert.created.v1.avsc`) + `CanonicalAlertCreated` canonical model (NEW — `libs/contracts/src/contracts/events/alert/alert_created.py`) + contract tests (NEW — `libs/contracts/tests/test_events_alert_created.py`) [**already implemented in revise-prd pass**] + `CreateAlertUseCase` in S10 (NEW) + `POST /api/v1/alerts` S10 endpoint (NEW — writes Alert row + outbox event in single transaction per R8, emitting `alert.created.v1`) + S9 proxy `POST /v1/alerts` (NEW) + `create_alert` tool handler in S8 via `S10Port` with **explicit confirmation flow**: SSE `pending_action` event (NEW) → user clicks Approve/Reject in UI → SSE `action_executed` (NEW) or `action_rejected` (NEW) → tool result returned to LLM. `SSEEmitter` extended with 3 new emit methods (NEW). `ActionConfirmModal.tsx` (NEW — `apps/worldview-web/features/chat/components/ActionConfirmModal.tsx`) wires Approve/Reject buttons to the SSE flow. | S8 + S10 + S9 + frontend | 1.5 dev-days (frontend modal included) | **DONE 2026-05-09** |
 | C | Comprehensive adversarial-eval expansion (build on PLAN-0067 W11-4): 30 prompt-injection attempts targeting `create_alert` specifically — cross-user creation, malformed thresholds, DoS via mass creation, tenant-bypass, system-prompt extraction, indirect injection via entity names, role confusion | tests | 6 hours |
 
 ## 4. Hard Constraints

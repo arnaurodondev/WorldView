@@ -663,6 +663,10 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     // PLAN-0067 W11-5: exposed so the chat page can pass it down to
     // StreamingBubble → ToolCallIndicator. Empty array when not streaming.
     activeTools,
+    // PLAN-0082 Wave B: pending write-action confirmation (create_alert, etc.).
+    // The chat page reads this to render ActionConfirmModal when non-null.
+    pendingAction,
+    clearPendingAction,
     send,
     cancel,
     resetForThread,
