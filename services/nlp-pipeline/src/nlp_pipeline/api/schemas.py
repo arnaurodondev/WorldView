@@ -342,14 +342,6 @@ class SearchDocumentResult(BaseModel):
     score: float
     entity_hits: list[UUID] = Field(default_factory=list)
 
-    @field_validator("snippet")
-    @classmethod
-    def _no_html_in_snippet(cls, v: str | None) -> str | None:
-        """Reject snippets containing HTML tags — frontend renders <mark> from match_offsets."""
-        if v is not None and ("<" in v or ">" in v):
-            raise ValueError("snippet must be plain text — no HTML tags")
-        return v
-
     @field_validator("match_offsets")
     @classmethod
     def _validate_offsets(cls, v: list[tuple[int, int]]) -> list[tuple[int, int]]:

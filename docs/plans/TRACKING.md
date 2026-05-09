@@ -20,6 +20,7 @@
 | PLAN-0014 | **Claude Code Source Adaptations** — hooks, subagent isolation, memory scopes, S8 RAG pipeline. 6 waves. | pending | 0/6 | none | 2026-04-01 |
 
 | PLAN-0086 | **Multi-Tenant Content Pipeline Isolation & Tenant Document Ingestion** — COMPLETE. All 10 implementation waves + 5-agent QA pass + 8-issue bug fix commit (ab29049b). Critical fixes: pipeline trigger gap (outbox event in upload use case), _search_sections tenant filter (HR-053 CRIT-1), X-Tenant-ID header precedence, deterministic delete event_id, set_failed port/repo, Docker Compose container for deletion consumer. 844 content-ingestion + 844 nlp-pipeline unit tests pass. BP-432..434 added. | completed | 10/10 | none | 2026-05-08 |
+| PLAN-0087 | **Pre-Demo QA Execution Program** — End-to-end validation of PLAN-0062…PLAN-0086 over 40h with 3 hard gates (G1 audit-exit, G2 fix-exit, G3 demo-ready), 10-agent parallel audit, 4 fix batches, 6 pre-flagged subagent slots (PLAN-0087-A..F). Demo at 2026-05-11 (hedge fund director). PRD: [PRD-0087](../specs/0087-pre-demo-qa-program.md). **Next: Wave A (pre-flight)**. | draft | 0/11 | none | 2026-05-09 |
 
 <!-- New plans are appended here by the /plan skill -->
 

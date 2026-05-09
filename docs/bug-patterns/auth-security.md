@@ -2,7 +2,7 @@
 
 > **Category**: auth-security
 > **Description**: JWT/OIDC middleware, SSRF, XSS, injection attacks, tenant isolation, CSP headers, auth bypass, RS256/HS256
-> **Count**: 31 patterns
+> **Count**: 32 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -1053,3 +1053,77 @@ inp = ExtractionInput(
 **Prevention**: Any variable sourced from external data (article text, user input, web scrapes) that enters an LLM prompt MUST be truncated and wrapped in a structural delimiter before being passed to the prompt builder.
 
 **Regression test**: `tests/unit/infrastructure/workers/test_provisional_enrichment_core.py::TestContextSnippetInjectionGuard`
+
+---
+
+## BP-NEW-004 — PyJWT 2.x raises `InvalidAudienceError` when `audience=` is omitted from `jwt.decode()` and JWT carries an `aud` claim
+
+**Date discovered**: 2026-05-09
+**Services affected**: `content-store`, `market-ingestion` (any service running `InternalJWTMiddleware` that calls `jwt.decode()` without `audience=`)
+
+### Symptom
+
+All authenticated requests to a backend service return **401 "Invalid internal JWT"** even when the token was freshly issued by S9 (api-gateway) with a valid RS256 signature and no expiry. The debug log shows:
+
+```
+internal_jwt_invalid  error='Signature verification failed'
+# OR (more precisely in PyJWT ≥ 2.4):
+internal_jwt_invalid  error='Invalid audience'
+```
+
+Direct `jwt.decode()` calls on the same token inside the api-gateway container succeed — confirming the private key and signature are correct.
+
+### Root cause
+
+PyJWT 2.x changed the behaviour of `jwt.decode()` regarding audience validation:
+
+- **If `audience=` is NOT passed AND the JWT has an `aud` claim** → PyJWT raises `InvalidAudienceError` ("Invalid audience").
+- **If `audience=` IS passed** → PyJWT validates `aud` matches the expected value.
+- **If `audience=` is NOT passed AND the JWT has NO `aud` claim** → decodes successfully (no error).
+
+S9 issues JWTs with `aud="worldview-internal"`. A backend service that calls:
+
+```python
+payload = jwt.decode(token, public_key, algorithms=["RS256"], issuer="worldview-gateway")
+# Missing: audience="worldview-internal"
+```
+
+will raise `InvalidAudienceError` on every request, because the token carries `aud` but the decoder wasn't told what audience to expect.
+
+### Correct implementation pattern
+
+```python
+payload = jwt.decode(
+    token,
+    public_key,
+    algorithms=["RS256"],
+    issuer="worldview-gateway",
+    audience="worldview-internal",          # ← REQUIRED: matches aud claim in token
+    options={"require": ["sub", "tenant_id", "role", "exp", "iss", "aud"]},
+)
+```
+
+### How to detect
+
+In any `InternalJWTMiddleware`, grep for:
+
+```bash
+grep -n "jwt.decode" services/*/src/*/infrastructure/middleware/internal_jwt.py
+# Look for calls missing audience= on the same line or nearby
+```
+
+### Unit test fix
+
+Test fixtures that mint JWTs for `InternalJWTMiddleware` unit tests **must include** `"aud": "worldview-internal"` in the payload. Tests that were written before the `audience=` fix was applied will fail with `Token is missing the "aud" claim` because the `options={"require": [..., "aud"]}` check fires first.
+
+```python
+# WRONG — missing aud claim
+token = jwt.encode({"sub": "u1", "iss": "worldview-gateway", "exp": ...}, key, algorithm="RS256")
+
+# CORRECT
+token = jwt.encode({"sub": "u1", "iss": "worldview-gateway", "aud": "worldview-internal", "exp": ...}, key, algorithm="RS256")
+```
+
+### Prevention
+
+When adding `InternalJWTMiddleware` to a new service, copy from the nlp-pipeline reference implementation — it includes all required fields: `issuer=`, `audience=`, and `options={"require": [..., "aud"]}`. Never copy from an older service without checking both parameters are present.
