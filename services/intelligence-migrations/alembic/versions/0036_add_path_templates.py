@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import json
 
-import sqlalchemy as sa
 from alembic import op
 
 revision = "0036"
@@ -73,39 +72,33 @@ CREATE TABLE path_templates (
     # -------------------------------------------------------------------------
     # 2. Seed 3 manufacturing-chain templates
     # ON CONFLICT DO NOTHING makes re-application idempotent.
+    #
+    # NOTE (BP-420): The original migration used sa.text() with :param::jsonb
+    # cast notation which causes a psycopg2 SyntaxError — the psycopg2 driver
+    # interprets `:param::jsonb` as a double-colon cast after a bindparam, but
+    # the `::` triggers a parse error when combined with `%(param)s` style
+    # parameters that SQLAlchemy uses with psycopg2.  Fix: inline the JSON
+    # literals directly as string-interpolated SQL (safe here because all
+    # values are compile-time constants defined in this migration file, never
+    # user input).  CAST(...AS jsonb) is used instead of `::jsonb` to avoid
+    # any double-colon parsing ambiguity.
     # -------------------------------------------------------------------------
-    bind = op.get_bind()
-    bind.execute(
-        sa.text("""
+    ets_supply = json.dumps(["company", "company", "company"])
+    rts_supply = json.dumps(["SUPPLIES_TO|MANUFACTURES_FOR", "SUPPLIES_TO|MANUFACTURES_FOR"])
+    ets_holding = json.dumps(["company", "company", "person"])
+    rts_holding = json.dumps(["OWNS|ACQUIRED", "EMPLOYED_BY|LEADS"])
+    ets_sector = json.dumps(["company", "company", "company"])
+    rts_sector = json.dumps(["COMPETES_WITH|PARTNERS_WITH", "SUPPLIES_TO|DISTRIBUTES_FOR"])
+
+    op.execute(f"""
 INSERT INTO path_templates
     (template_id, template_name, entity_type_sequence, relation_type_sequence, description, enabled)
 VALUES
-    (:id1, :name1, :ets1::jsonb, :rts1::jsonb, :desc1, TRUE),
-    (:id2, :name2, :ets2::jsonb, :rts2::jsonb, :desc2, TRUE),
-    (:id3, :name3, :ets3::jsonb, :rts3::jsonb, :desc3, TRUE)
+    ('{_SEED_SUPPLY_CHAIN_3HOP}',    'supply_chain_3hop',       CAST('{ets_supply}'  AS jsonb), CAST('{rts_supply}'  AS jsonb), 'Three-company manufacturing supply chain',  TRUE),
+    ('{_SEED_FINANCIAL_HOLDING}',    'financial_holding_chain', CAST('{ets_holding}' AS jsonb), CAST('{rts_holding}' AS jsonb), 'Financial holding with key executive',       TRUE),
+    ('{_SEED_SECTOR_SUPPLY_CHAIN}',  'sector_supply_chain',     CAST('{ets_sector}'  AS jsonb), CAST('{rts_sector}'  AS jsonb), 'Sector-level supply chain',                  TRUE)
 ON CONFLICT (template_name) DO NOTHING
-"""),
-        {
-            # Template 1: Three-hop manufacturing supply chain
-            "id1": _SEED_SUPPLY_CHAIN_3HOP,
-            "name1": "supply_chain_3hop",
-            "ets1": json.dumps(["company", "company", "company"]),
-            "rts1": json.dumps(["SUPPLIES_TO|MANUFACTURES_FOR", "SUPPLIES_TO|MANUFACTURES_FOR"]),
-            "desc1": "Three-company manufacturing supply chain",
-            # Template 2: Financial holding with key executive
-            "id2": _SEED_FINANCIAL_HOLDING,
-            "name2": "financial_holding_chain",
-            "ets2": json.dumps(["company", "company", "person"]),
-            "rts2": json.dumps(["OWNS|ACQUIRED", "EMPLOYED_BY|LEADS"]),
-            "desc2": "Financial holding with key executive",
-            # Template 3: Sector-level supply chain via competition + distribution
-            "id3": _SEED_SECTOR_SUPPLY_CHAIN,
-            "name3": "sector_supply_chain",
-            "ets3": json.dumps(["company", "company", "company"]),
-            "rts3": json.dumps(["COMPETES_WITH|PARTNERS_WITH", "SUPPLIES_TO|DISTRIBUTES_FOR"]),
-            "desc3": "Sector-level supply chain",
-        },
-    )
+""")
 
 
 def downgrade() -> None:
