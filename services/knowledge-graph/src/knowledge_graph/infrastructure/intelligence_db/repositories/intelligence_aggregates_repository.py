@@ -151,26 +151,35 @@ ORDER BY es.cnt DESC
     ) -> list[dict[str, Any]]:
         """Return a daily confidence trend over the last *days* days.
 
-        Aggregates AVG(confidence_score) per day from relation_evidence_raw,
+        Aggregates AVG(extraction_confidence) per day from relation_evidence_raw,
         filtered to evidence linked to relations touching entity_id.
 
-        Returns list of dicts with keys:
-            date (datetime.date), avg_confidence (float)
+        D-R3-001 (PLAN-0087, 2026-05-09): the previous query referenced
+        `confidence_score` (does not exist) AND filtered via `relation_id IN
+        (SELECT relation_id FROM relations ...)` (relation_evidence_raw has no
+        relation_id column — same gotcha as get_source_distribution).
+        Both fixed in one go: use `extraction_confidence` (the actual scalar)
+        and join on the raw triple (subject_entity_id, object_entity_id,
+        canonical_type), matching the existing get_source_distribution shape.
         """
         result = await self._session.execute(
             text("""
+WITH evidence_in_window AS (
+    SELECT rer.evidence_date, rer.extraction_confidence
+    FROM relation_evidence_raw rer
+    JOIN relations r
+      ON  r.subject_entity_id = rer.subject_entity_id
+      AND r.object_entity_id  = rer.object_entity_id
+      AND r.canonical_type    = rer.canonical_type
+    WHERE (r.subject_entity_id = CAST(:entity_id AS uuid)
+           OR r.object_entity_id = CAST(:entity_id AS uuid))
+      AND r.valid_to IS NULL
+      AND rer.evidence_date >= NOW() - INTERVAL '1 day' * :days
+)
 SELECT
     date_trunc('day', evidence_date)::date AS d,
-    AVG(confidence_score)::float           AS avg_confidence
-FROM relation_evidence_raw
-WHERE relation_id IN (
-    SELECT relation_id
-    FROM relations
-    WHERE (subject_entity_id = CAST(:entity_id AS uuid)
-           OR object_entity_id = CAST(:entity_id AS uuid))
-      AND valid_to IS NULL
-)
-  AND evidence_date >= NOW() - INTERVAL '1 day' * :days
+    AVG(extraction_confidence)::float       AS avg_confidence
+FROM evidence_in_window
 GROUP BY d
 ORDER BY d
 """),
