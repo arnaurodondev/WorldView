@@ -50,6 +50,13 @@ class CanonicalNlpArticleEnriched:
     chunk_count: int
     mention_count: int
     resolved_entity_ids: tuple[str, ...] = ()
+    # D-INIT-6 (2026-05-09): added so evidence-row provenance flows producer→consumer
+    # in the event payload itself.  KG enriched_consumer used to fall back to a query
+    # against ``document_source_metadata`` (an nlp_db table) from its intelligence_db
+    # session pool — that lookup was both an R7 cross-service-DB violation and a
+    # guaranteed UndefinedTableError because the table only lives in nlp_db.
+    # Nullable + default None keeps the schema forward-compatible (R5).
+    source_name: str | None = None
     published_at: str | None = None
     is_backfill: bool = False
     relation_count: int = 0
@@ -79,6 +86,9 @@ class CanonicalNlpArticleEnriched:
             chunk_count=int(d["chunk_count"]),
             mention_count=int(d["mention_count"]),
             resolved_entity_ids=tuple(str(e) for e in d.get("resolved_entity_ids", []) or []),
+            # D-INIT-6: source_name is optional on the wire (Avro default=null) and on
+            # legacy events that pre-date the field; cast only when actually present.
+            source_name=(str(d["source_name"]) if d.get("source_name") is not None else None),
             published_at=(str(d["published_at"]) if d.get("published_at") is not None else None),
             is_backfill=bool(d.get("is_backfill", False)),
             relation_count=int(d.get("relation_count", 0)),
@@ -104,6 +114,9 @@ class CanonicalNlpArticleEnriched:
             "occurred_at": self.occurred_at,
             "doc_id": self.doc_id,
             "source_type": self.source_type,
+            # D-INIT-6: emit source_name even when None so the Avro union picks the
+            # null branch rather than complaining about a missing field.
+            "source_name": self.source_name,
             "published_at": self.published_at,
             "is_backfill": self.is_backfill,
             "routing_tier": self.routing_tier,

@@ -81,6 +81,43 @@ class TestSchemaAlignment:
                 return
         pytest.fail("event_type missing from schema")
 
+    # D-INIT-6 (2026-05-09): forward-compat regression — source_name MUST be a
+    # nullable string with default null so older consumers can still process the
+    # event after the field is added (the canonical R5 pattern).
+    def test_source_name_is_nullable_with_null_default(self) -> None:
+        schema = _load_schema()
+        for f in schema["fields"]:
+            if f["name"] == "source_name":
+                # Avro union ["null", "string"] is the only forward-compatible pattern
+                # for adding a string field to an existing schema.
+                assert isinstance(f["type"], list)
+                assert "null" in f["type"]
+                assert "string" in f["type"]
+                # Default MUST be the JSON null literal (Python None) so producers
+                # can omit the field entirely on legacy code paths.
+                assert f.get("default", "MISSING") is None
+                return
+        pytest.fail("source_name field missing from schema")
+
+    def test_source_name_round_trip_through_canonical(self) -> None:
+        """Producer→consumer round-trip preserves source_name (D-INIT-6 regression)."""
+        original = _sample(source_name="Reuters")
+        d = original.to_dict()
+        # Ensure the dict carries source_name explicitly — the KG consumer reads
+        # ``value.get("source_name")`` directly off the deserialized payload.
+        assert d["source_name"] == "Reuters"
+        round_tripped = CanonicalNlpArticleEnriched.from_dict(d)
+        assert round_tripped.source_name == "Reuters"
+
+    def test_source_name_defaults_to_none_when_omitted(self) -> None:
+        """Legacy producers that don't set source_name end up with None on consume."""
+        original = _sample()  # no source_name override
+        assert original.source_name is None
+        d = original.to_dict()
+        assert d["source_name"] is None
+        round_tripped = CanonicalNlpArticleEnriched.from_dict(d)
+        assert round_tripped.source_name is None
+
 
 class TestRoundTrip:
     def test_from_dict_to_dict_preserves_payload(self) -> None:
