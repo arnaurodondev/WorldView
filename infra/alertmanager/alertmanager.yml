@@ -39,17 +39,23 @@ receivers:
     # for the alertmanager container.  If the env var is empty the slack_configs
     # block is still valid YAML; Alertmanager will fail to POST but will not crash
     # (it logs the error and continues delivering via email).
-    slack_configs:
-      - api_url: "${SLACK_WEBHOOK_URL}"
-        channel: "#alerts-critical"
-        send_resolved: true
-        title: "[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}"
-        text: >-
-          {{ range .Alerts }}
-          *Alert:* {{ .Annotations.summary }}
-          *Severity:* {{ .Labels.severity }}
-          *Job:* {{ .Labels.job }}
-          {{ end }}
+    # PLAN-0087 (2026-05-09): Alertmanager does not expand ${SLACK_WEBHOOK_URL}
+    # at runtime, so an unset env var was loaded literally as the URL and the
+    # config-loader rejected the file ("unsupported scheme"), crashing the
+    # container.  Slack delivery is opt-in: uncomment the block below AND set
+    # SLACK_WEBHOOK_URL when you want it.  Email delivery via the receiver
+    # above continues to work without Slack.
+    # slack_configs:
+    #   - api_url: "https://hooks.slack.com/services/T_XXX/B_XXX/XXX"
+    #     channel: "#alerts-critical"
+    #     send_resolved: true
+    #     title: "[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}"
+    #     text: >-
+    #       {{ range .Alerts }}
+    #       *Alert:* {{ .Annotations.summary }}
+    #       *Severity:* {{ .Labels.severity }}
+    #       *Job:* {{ .Labels.job }}
+    #       {{ end }}
 
 inhibit_rules:
   # Suppress all lower-severity alerts when ServiceDown fires for the same job
