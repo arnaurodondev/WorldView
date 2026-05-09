@@ -1,4 +1,4 @@
-version: "3"
+version: "4"
 tools:
   - name: get_price_history
     description: >
@@ -479,3 +479,17 @@ tools:
     example_queries:
       - "What companies are reporting earnings this week?"
       - "When does Apple next report earnings?"
+
+  - name: get_alerts
+    description: >
+      Retrieves the user's active (pending) alerts — price alerts, signal alerts,
+      and watchlist triggers. Use when the user asks "show me my alerts", "what
+      alerts do I have", or "are there any active alerts for my portfolio".
+    parameters: []
+    source_type: "alert"
+    since: "v4"
+    deprecated_at: null
+    requires_confirmation: false
+    example_queries:
+      - "Show me my active alerts"
+      - "What alerts do I have set up?"
