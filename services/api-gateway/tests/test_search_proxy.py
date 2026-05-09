@@ -1,4 +1,4 @@
-"""Unit tests for PLAN-0064 Wave 4 — GET /v1/search document search proxy.
+"""Unit tests for PLAN-0064 Wave 4/6 — GET /v1/search, POST /v1/search/relations, POST /v1/claims/search.
 
 Tests coverage:
   - 401 when no JWT (guard fires before downstream call)
@@ -291,3 +291,153 @@ async def test_search_proxy_global_rate_limit_active(authed_app, authed_mock_cli
     assert resp.status_code not in (403, 404)
     # Rate-limiting Valkey incr() should have been called — confirms middleware ran.
     authed_app.state.valkey.incr.assert_called()
+
+
+# ── T-W6-6-01: POST /v1/search/relations proxy (PLAN-0064 Wave 6) ────────────
+
+
+@pytest.mark.asyncio
+async def test_search_relations_401_without_jwt(app, mock_clients) -> None:
+    """POST /v1/search/relations without a Bearer token must return 401."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/search/relations",
+            json={"query_embedding": [0.1, 0.2], "entity_ids": [], "top_k": 10},
+        )
+
+    assert resp.status_code == 401
+    mock_clients.knowledge_graph.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_relations_200_proxies_response(authed_app, authed_mock_clients) -> None:
+    """POST /v1/search/relations with valid JWT → response proxied from S7."""
+    s7_body = json.dumps({"relations": [], "total": 0}).encode()
+    authed_mock_clients.knowledge_graph.post = AsyncMock(
+        return_value=_mock_response(200, s7_body),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/search/relations",
+            json={"query_embedding": [0.1, 0.2], "entity_ids": [], "top_k": 10},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 0
+    authed_mock_clients.knowledge_graph.post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_search_relations_forwards_auth_headers(authed_app, authed_mock_clients) -> None:
+    """search_relations must forward X-Internal-JWT to S7 via _auth_headers."""
+    authed_mock_clients.knowledge_graph.post = AsyncMock(
+        return_value=_mock_response(200, b'{"relations":[],"total":0}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/v1/search/relations",
+            json={"query_embedding": [], "entity_ids": []},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    call_kwargs = authed_mock_clients.knowledge_graph.post.call_args[1]
+    assert "headers" in call_kwargs, "S7 call must include headers= argument"
+
+
+@pytest.mark.asyncio
+async def test_search_relations_propagates_s7_error(authed_app, authed_mock_clients) -> None:
+    """search_relations proxies non-200 S7 responses unchanged."""
+    authed_mock_clients.knowledge_graph.post = AsyncMock(
+        return_value=_mock_response(503, b'{"detail":"S7 unavailable"}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/search/relations",
+            json={"query_embedding": [], "entity_ids": []},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 503
+
+
+# ── T-W6-6-02: POST /v1/claims/search proxy (PLAN-0064 Wave 6) ───────────────
+
+
+@pytest.mark.asyncio
+async def test_search_claims_401_without_jwt(app, mock_clients) -> None:
+    """POST /v1/claims/search without a Bearer token must return 401."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/claims/search",
+            json={"entity_ids": [], "top_k": 20},
+        )
+
+    assert resp.status_code == 401
+    mock_clients.knowledge_graph.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_claims_200_proxies_response(authed_app, authed_mock_clients) -> None:
+    """POST /v1/claims/search with valid JWT → response proxied from S7."""
+    s7_body = json.dumps({"claims": [], "total": 0}).encode()
+    authed_mock_clients.knowledge_graph.post = AsyncMock(
+        return_value=_mock_response(200, s7_body),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/claims/search",
+            json={"entity_ids": [], "top_k": 20},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 0
+    authed_mock_clients.knowledge_graph.post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_search_claims_forwards_auth_headers(authed_app, authed_mock_clients) -> None:
+    """search_claims must forward X-Internal-JWT to S7 via _auth_headers."""
+    authed_mock_clients.knowledge_graph.post = AsyncMock(
+        return_value=_mock_response(200, b'{"claims":[],"total":0}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/v1/claims/search",
+            json={"entity_ids": []},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    call_kwargs = authed_mock_clients.knowledge_graph.post.call_args[1]
+    assert "headers" in call_kwargs, "S7 call must include headers= argument"
+
+
+@pytest.mark.asyncio
+async def test_search_claims_propagates_s7_error(authed_app, authed_mock_clients) -> None:
+    """search_claims proxies non-200 S7 responses unchanged."""
+    authed_mock_clients.knowledge_graph.post = AsyncMock(
+        return_value=_mock_response(503, b'{"detail":"S7 unavailable"}'),
+    )
+
+    transport = ASGITransport(app=authed_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/v1/claims/search",
+            json={"entity_ids": []},
+            headers={"Authorization": f"Bearer {_make_jwt()}"},
+        )
+
+    assert resp.status_code == 503

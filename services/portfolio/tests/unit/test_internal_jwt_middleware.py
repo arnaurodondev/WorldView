@@ -30,6 +30,7 @@ def _make_token(
     tenant_id: str = "tenant-abc",
     role: str = "user",
     iss: str = "worldview-gateway",
+    aud: str = "worldview-internal",
     exp_offset: int = 3600,
 ) -> str:
     payload = {
@@ -37,6 +38,7 @@ def _make_token(
         "tenant_id": tenant_id,
         "role": role,
         "iss": iss,
+        "aud": aud,
         "exp": int(time.time()) + exp_offset,
     }
     return jwt.encode(payload, private_key, algorithm="RS256")
