@@ -1,9 +1,9 @@
 # PLAN-0081 — Catalog Tools (Briefs, Compare, Screen, Movers, Calendars)
 
 > **PRD**: derived from `/investigate` 2026-05-07 — issue A-4 (full Bloomberg-grade tool catalog)
-> **Status**: Wave A complete
+> **Status**: completed
 > **Created**: 2026-05-07
-> **Last revised**: 2026-05-09 (Wave A implementation complete)
+> **Last revised**: 2026-05-09
 > **Owner**: TBD
 > **Estimated effort**: ~3 dev-days (2 waves, ~14 tasks)
 > **Hard dependencies**:
@@ -66,7 +66,7 @@ Items tagged **NEW** do not exist yet and will be created by the indicated plan/
 | Wave | Title | Layer | Status |
 |------|-------|-------|--------|
 | A | Manifest entries (6 tools, `since: v3`); `S3BriefPort` Protocol port extension (NEW — Wave A) for screener/movers/calendars (POST screener + 3 GETs); 6 handlers; add `s3_brief: S3BriefPort \| None = None` to `ToolExecutorFactory.__init__()` and DI wiring in `app.py`; add 6 tool names to `build_default_registry()` `_catalog_tool_names` list; tests; 10 golden-eval queries | libs + S8 | ✅ **DONE — 2026-05-09 · 31 tests pass · ruff + mypy clean** |
-| B | Cross-tool composition test: query "compare AAPL and MSFT and show me the top movers" forces multi-tool LLM behaviour | tests | pending |
+| B | Cross-tool composition test: query "compare AAPL and MSFT and show me the top movers" forces multi-tool LLM behaviour | tests | ✅ **DONE — 2026-05-09 · 5 tests pass · ruff + mypy clean** |
 
 ## 4. Hard Constraints
 
