@@ -1917,7 +1917,7 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
 
 @router.get("/entities/{entity_id}/graph")
 async def get_entity_graph(
-    entity_id: str,
+    entity_id: UUID,  # WHY UUID not str: enforces 422 on malformed values before any downstream call
     request: Request,
     limit: int = Query(default=40, ge=1, le=50),
     confidence_breakdown: bool = Query(default=False),

@@ -55,13 +55,17 @@ class TestPathScorer:
         assert result < 0.8
 
     def test_diversity_score_zero_when_all_same_type(self) -> None:
-        """All same entity type → diversity_score = 0."""
+        """All same entity type → diversity_score = 0.
+
+        DP-PLAN-0074-01 fix: anchor node (index 0) is excluded from the type
+        count, so for 3 nodes all "company" with hop_count=2:
+          traversed_types = ("company", "company"), max_count=2, 1-2/2=0.0
+        (no negative values — clamped to max(0.0, ...)).
+        """
         from knowledge_graph.application.services.path_scorer import _diversity_score
 
         result = _diversity_score(("company", "company", "company"), hop_count=2)
-        # max_count = 3, hop_count = 2 → 1 - 3/2 < 0 → clamped at domain level (formula)
-        # Actually: 1 - 3/2 = -0.5. The formula can go negative for very uniform paths.
-        assert result == 1.0 - (3 / 2)  # formula preserves sign
+        assert result == 0.0
 
     def test_diversity_score_one_when_all_different(self) -> None:
         """All different entity types → diversity_score approaches 1 - 1/hop_count."""
@@ -107,7 +111,9 @@ class TestPathScorer:
         # Only one path → surprise = 1 - 1/1 = 0
         insight = scorer.score(raw, [raw])
         h = _harmonic((0.8, 0.7))
-        d = 1.0 - (3 / 2)  # max_count=3, hop_count=2
+        # DP-PLAN-0074-01 fix: anchor excluded → traversed=("company","company"),
+        # max_count=2, hop_count=2 → d = max(0.0, 1-2/2) = 0.0
+        d = 0.0
         s = 0.0  # only 1 path, same signature
         expected_composite = round(min(h * 0.4 + d * 0.35 + s * 0.25, 1.0), 6)
         assert abs(insight.composite_score - expected_composite) < 1e-5

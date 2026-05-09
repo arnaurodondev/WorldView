@@ -151,6 +151,14 @@ def _make_use_case(
         llm = None  # forces template-v1 path — no retry loop needed
         retry_delays = ()
 
+    # Build mock repo *classes* (callables that return the mock instances).
+    # Pass them as narrative_repo_class / outbox_repo_class so the use case
+    # never imports from infrastructure/ (R12 / LAYER-BOUNDARY rule).
+    # Using MagicMock(return_value=...) lets the use case call the class with
+    # a session arg and get back the pre-built mock repo instance.
+    narr_repo_cls = MagicMock(return_value=narrative_repo_mock)
+    outbox_repo_cls = MagicMock(return_value=outbox_repo_mock)
+
     uc = GenerateNarrativeUseCase(
         write_session_factory=write_sf,
         read_session_factory=read_sf,
@@ -158,14 +166,14 @@ def _make_use_case(
         outbox_schema_path=outbox_schema_path,
         retry_delays=retry_delays,
         llm_client=llm,
+        narrative_repo_class=narr_repo_cls,
+        outbox_repo_class=outbox_repo_cls,
     )
     return uc, write_sf, read_sf, narrative_repo_mock, outbox_repo_mock
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
-_NARRATIVE_REPO = "knowledge_graph.infrastructure.intelligence_db.repositories.narrative_repository.NarrativeRepository"
-_OUTBOX_REPO = "knowledge_graph.infrastructure.intelligence_db.repositories.outbox.OutboxRepository"
 _SANITIZE = "prompts.knowledge.alias.sanitize_description"
 _SERIALIZE = "messaging.kafka.serialization_utils.serialize_confluent_avro"
 
@@ -186,14 +194,12 @@ class TestNarrativeIdempotency:
         )
 
         ctx = _make_entity_ctx()
-        uc, write_sf, read_sf, narr_repo, outbox_repo = _make_use_case(
+        uc, _write_sf, _read_sf, narr_repo, outbox_repo = _make_use_case(
             entity_ctx=ctx,
             existing_version=existing,
         )
 
         with (
-            patch(_NARRATIVE_REPO, return_value=narr_repo),
-            patch(_OUTBOX_REPO, return_value=outbox_repo),
             patch(_SANITIZE, side_effect=lambda x: x),
             patch(_SERIALIZE, return_value=b"avro_bytes"),
         ):
@@ -222,11 +228,9 @@ class TestNarrativePersistence:
     def test_narrative_version_insert_sets_is_current(self) -> None:
         """New snapshot → insert_and_promote called exactly once."""
         ctx = _make_entity_ctx()
-        uc, write_sf, read_sf, narr_repo, outbox_repo = _make_use_case(entity_ctx=ctx)
+        uc, _write_sf, _read_sf, narr_repo, _outbox_repo = _make_use_case(entity_ctx=ctx)
 
         with (
-            patch(_NARRATIVE_REPO, return_value=narr_repo),
-            patch(_OUTBOX_REPO, return_value=outbox_repo),
             patch(_SANITIZE, side_effect=lambda x: x),
             patch(_SERIALIZE, return_value=b"avro_bytes"),
         ):
@@ -242,11 +246,9 @@ class TestNarrativePersistence:
     def test_narrative_generation_publishes_outbox_event(self) -> None:
         """outbox.append must be called with the narrative topic."""
         ctx = _make_entity_ctx()
-        uc, write_sf, read_sf, narr_repo, outbox_repo = _make_use_case(entity_ctx=ctx)
+        uc, _write_sf, _read_sf, _narr_repo, outbox_repo = _make_use_case(entity_ctx=ctx)
 
         with (
-            patch(_NARRATIVE_REPO, return_value=narr_repo),
-            patch(_OUTBOX_REPO, return_value=outbox_repo),
             patch(_SANITIZE, side_effect=lambda x: x),
             patch(_SERIALIZE, return_value=b"avro_bytes"),
         ):
@@ -262,14 +264,12 @@ class TestNarrativePersistence:
         ctx = _make_entity_ctx()
         # LLM returns a text with a known word count
         llm_text = "This is a test narrative with exactly eight words here."  # 10 words
-        uc, write_sf, read_sf, narr_repo, outbox_repo = _make_use_case(
+        uc, _write_sf, _read_sf, narr_repo, _outbox_repo = _make_use_case(
             entity_ctx=ctx,
             llm_text=llm_text,
         )
 
         with (
-            patch(_NARRATIVE_REPO, return_value=narr_repo),
-            patch(_OUTBOX_REPO, return_value=outbox_repo),
             patch(_SANITIZE, side_effect=lambda x: x),
             patch(_SERIALIZE, return_value=b"avro_bytes"),
         ):
@@ -285,7 +285,7 @@ class TestNarrativeMetrics:
         from knowledge_graph.application.use_cases import generate_narrative as _mod
 
         ctx = _make_entity_ctx()
-        uc, write_sf, read_sf, narr_repo, outbox_repo = _make_use_case(entity_ctx=ctx)
+        uc, _write_sf, _read_sf, _narr_repo, _outbox_repo = _make_use_case(entity_ctx=ctx)
 
         counter_mock = MagicMock()
         histogram_mock = MagicMock()
@@ -293,8 +293,6 @@ class TestNarrativeMetrics:
         with (
             patch.object(_mod, "_narrative_total", counter_mock),
             patch.object(_mod, "_narrative_duration", histogram_mock),
-            patch(_NARRATIVE_REPO, return_value=narr_repo),
-            patch(_OUTBOX_REPO, return_value=outbox_repo),
             patch(_SANITIZE, side_effect=lambda x: x),
             patch(_SERIALIZE, return_value=b"avro_bytes"),
         ):
@@ -352,14 +350,12 @@ class TestNarrativeLLMFallback:
     def test_narrative_llm_failure_falls_back_to_template_v1(self) -> None:
         """LLM raising an exception on all retries → model_id becomes 'template-v1'."""
         ctx = _make_entity_ctx()
-        uc, write_sf, read_sf, narr_repo, outbox_repo = _make_use_case(
+        uc, _write_sf, _read_sf, narr_repo, _outbox_repo = _make_use_case(
             entity_ctx=ctx,
             llm_error=RuntimeError("LLM provider unavailable"),
         )
 
         with (
-            patch(_NARRATIVE_REPO, return_value=narr_repo),
-            patch(_OUTBOX_REPO, return_value=outbox_repo),
             patch(_SANITIZE, side_effect=lambda x: x),
             patch(_SERIALIZE, return_value=b"avro_bytes"),
         ):
@@ -373,11 +369,9 @@ class TestNarrativeLLMFallback:
         """llm_client=None (no LLM configured) → always uses template-v1."""
         ctx = _make_entity_ctx()
         # _make_use_case passes llm=None when llm_text and llm_error are both None
-        uc, write_sf, read_sf, narr_repo, outbox_repo = _make_use_case(entity_ctx=ctx)
+        uc, _write_sf, _read_sf, narr_repo, _outbox_repo = _make_use_case(entity_ctx=ctx)
 
         with (
-            patch(_NARRATIVE_REPO, return_value=narr_repo),
-            patch(_OUTBOX_REPO, return_value=outbox_repo),
             patch(_SANITIZE, side_effect=lambda x: x),
             patch(_SERIALIZE, return_value=b"avro_bytes"),
         ):
@@ -394,7 +388,7 @@ class TestNarrativeSanitization:
         """sanitize_description is called for entity name and entity type."""
         ctx = _make_entity_ctx()
         llm_text = "B" * 100  # valid LLM response
-        uc, write_sf, read_sf, narr_repo, outbox_repo = _make_use_case(
+        uc, _write_sf, _read_sf, _narr_repo, _outbox_repo = _make_use_case(
             entity_ctx=ctx,
             llm_text=llm_text,
         )
@@ -406,8 +400,6 @@ class TestNarrativeSanitization:
             return val
 
         with (
-            patch(_NARRATIVE_REPO, return_value=narr_repo),
-            patch(_OUTBOX_REPO, return_value=outbox_repo),
             patch(_SANITIZE, side_effect=_track_sanitize),
             patch(_SERIALIZE, return_value=b"avro_bytes"),
         ):
@@ -421,13 +413,11 @@ class TestNarrativeConcurrentInsert:
     def test_narrative_concurrent_insert_handles_partial_unique_violation(self) -> None:
         """DB unique constraint violation from insert_and_promote propagates to caller."""
         ctx = _make_entity_ctx()
-        uc, write_sf, read_sf, narr_repo, outbox_repo = _make_use_case(entity_ctx=ctx)
+        uc, _write_sf, _read_sf, narr_repo, _outbox_repo = _make_use_case(entity_ctx=ctx)
 
         narr_repo.insert_and_promote = AsyncMock(side_effect=Exception("UniqueViolation: entity_id already current"))
 
         with (
-            patch(_NARRATIVE_REPO, return_value=narr_repo),
-            patch(_OUTBOX_REPO, return_value=outbox_repo),
             patch(_SANITIZE, side_effect=lambda x: x),
             patch(_SERIALIZE, return_value=b"avro_bytes"),
         ):

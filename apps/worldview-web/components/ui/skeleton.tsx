@@ -18,6 +18,10 @@ function Skeleton({
 }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
+      // WHY data-slot="skeleton": shadcn/ui v5+ convention — allows tests and
+      // parent components to select all skeleton placeholders with
+      // [data-slot="skeleton"] without relying on fragile className matching.
+      data-slot="skeleton"
       className={cn(
         // WHY no animate-pulse: Bloomberg terminals use STATIC skeleton bars — no movement.
         // Finance users interpret animation as "something is happening" (streaming, thinking).

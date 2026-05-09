@@ -18,6 +18,7 @@ from knowledge_graph.application.use_cases.cypher_neighborhood import CypherNeig
 from knowledge_graph.application.use_cases.dlq_admin import DLQAdminUseCase
 from knowledge_graph.application.use_cases.get_entity_detail import GetEntityDetailUseCase
 from knowledge_graph.application.use_cases.get_entity_intelligence import GetEntityIntelligenceUseCase
+from knowledge_graph.application.use_cases.list_narrative_versions import ListNarrativeVersionsUseCase
 
 # ── Database sessions ─────────────────────────────────────────────────────────
 
@@ -292,6 +293,29 @@ def get_entity_intelligence_uc(
 
 
 GetEntityIntelligenceUseCaseDep = Annotated[GetEntityIntelligenceUseCase, Depends(get_entity_intelligence_uc)]
+
+
+# ── Narrative version history (PRD-0074 Wave C) ───────────────────────────────
+# R25: NarrativeRepository wired here, not in the router.
+# R27: list_versions is read-only → ReadOnlyDbSessionDep.
+
+
+def get_list_narrative_versions_uc(
+    session: ReadOnlyDbSessionDep,
+) -> ListNarrativeVersionsUseCase:
+    """Build ListNarrativeVersionsUseCase bound to the current read-only session.
+
+    Wires NarrativeRepository here (dependencies.py) so the narratives.py
+    router never imports from infrastructure/ (R25).
+    """
+    from knowledge_graph.infrastructure.intelligence_db.repositories.narrative_repository import (
+        NarrativeRepository,
+    )
+
+    return ListNarrativeVersionsUseCase(NarrativeRepository(session))
+
+
+ListNarrativeVersionsUseCaseDep = Annotated[ListNarrativeVersionsUseCase, Depends(get_list_narrative_versions_uc)]
 
 
 # ── Path Insights (PLAN-0074 Wave E2) ─────────────────────────────────────────

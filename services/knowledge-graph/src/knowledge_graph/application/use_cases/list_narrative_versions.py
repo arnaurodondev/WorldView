@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 if TYPE_CHECKING:
-    from knowledge_graph.api.schemas_intelligence import NarrativeVersionListResponse
+    from knowledge_graph.domain.narrative import EntityNarrativeVersion
     from knowledge_graph.infrastructure.intelligence_db.repositories.narrative_repository import (
         NarrativeRepository,
     )
@@ -32,39 +32,19 @@ class ListNarrativeVersionsUseCase:
         tenant_id: UUID | None = None,
         limit: int = 20,
         cursor: str | None = None,
-    ) -> NarrativeVersionListResponse:
+    ) -> tuple[list[EntityNarrativeVersion], str | None]:
         """Return paginated narrative versions, newest first.
 
         Delegates to NarrativeRepository.list_versions which uses keyset
         pagination on (generated_at DESC, version_id).
 
-        Returns NarrativeVersionListResponse with versions + next_cursor.
+        Returns a tuple of (versions, next_cursor).  The API layer is
+        responsible for mapping domain types to the wire-format response schema
+        (R12 — application layer must not import from api/).
         """
-        from knowledge_graph.api.schemas_intelligence import (
-            NarrativeVersionListResponse,
-            NarrativeVersionPublic,
-        )
-
-        versions, next_cursor = await self._narrative_repo.list_versions(
+        return await self._narrative_repo.list_versions(
             entity_id=entity_id,
             tenant_id=tenant_id,
             limit=limit,
             cursor=cursor,
-        )
-
-        return NarrativeVersionListResponse(
-            entity_id=entity_id,
-            versions=[
-                NarrativeVersionPublic(
-                    version_id=v.version_id,
-                    narrative_text=v.narrative_text,
-                    model_id=v.model_id,
-                    generation_reason=v.generation_reason.value,
-                    generated_at=v.generated_at,
-                    word_count=v.word_count,
-                    quality_score=v.quality_score,
-                )
-                for v in versions
-            ],
-            next_cursor=next_cursor,
         )

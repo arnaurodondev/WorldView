@@ -60,6 +60,10 @@ COMPOSE_BASELINE: dict[tuple[str, str], str] = {
     ("content-ingestion", "document_ready_consumer_main"): (
         "Add S4 document-ready consumer container — PLAN-0086 Wave F-2"
     ),
+    # PLAN-0074 Wave B: narrative refresh consumer added; compose container follows in Wave H
+    ("knowledge-graph", "narrative_refresh_consumer_main"): (
+        "Add KG narrative-refresh consumer container — PLAN-0074 Wave H"
+    ),
 }
 
 

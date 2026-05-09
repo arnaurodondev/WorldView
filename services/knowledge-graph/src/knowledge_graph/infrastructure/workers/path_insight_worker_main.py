@@ -20,8 +20,9 @@ import asyncio
 import contextlib
 import signal
 import sys
-from uuid import UUID, uuid4
+from uuid import UUID
 
+from common.ids import new_uuid7  # type: ignore[import-untyped]
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -43,7 +44,7 @@ async def main() -> None:
 
     # Determine stable instance UUID (env-overridable for testing).
     raw_instance_id = settings.path_insight_worker_instance_id  # type: ignore[attr-defined]
-    instance_uuid: UUID = UUID(raw_instance_id) if raw_instance_id else uuid4()
+    instance_uuid: UUID = UUID(raw_instance_id) if raw_instance_id else new_uuid7()
     log.info("path_insight_worker_instance", instance_uuid=str(instance_uuid))
 
     stop_event = asyncio.Event()
