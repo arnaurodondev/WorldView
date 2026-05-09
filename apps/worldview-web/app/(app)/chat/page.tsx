@@ -701,7 +701,10 @@ export default function ChatPage() {
             (label + description) mirrors Bloomberg COMMAND BAR prompt
             style — short imperative, then scope clarification. */}
         {!activeThreadId && (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-background p-4 text-center">
+          // WHY p-3 (was p-4): the empty-state welcome is rendered inside an
+          // already-bounded panel; 12px padding keeps the welcome text close
+          // to the surrounding panel chrome instead of floating in 16px ports.
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-background p-3 text-center">
             <div className="space-y-1">
               <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.10em] text-muted-foreground">
                 Analyst Intelligence

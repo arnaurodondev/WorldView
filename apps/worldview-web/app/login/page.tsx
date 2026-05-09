@@ -261,7 +261,9 @@ function LoginContent() {
         {error && (
           <div
             role="alert"
-            className="rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+            // WHY rounded-[2px] (was rounded-md=6px): Terminal Dark uses 2px
+            // for all corner radii; 6px reads as a consumer-app pattern.
+            className="rounded-[2px] border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive"
           >
             {error}
           </div>
@@ -288,7 +290,12 @@ function LoginContent() {
               onClick={() => void handleDevLogin()}
               disabled={isDevLoggingIn}
               variant="outline"
-              className="w-full border-amber-500/50 text-amber-500 hover:bg-amber-500/10"
+              // WHY border-warning + text-warning (was off-palette amber-500):
+              // --warning is the Terminal Dark amber token; using it keeps the
+              // dev-login affordance aligned with the rest of the warning UI
+              // language (stale badges, attention chips). Same visual hue,
+              // managed via design token instead of a stale Tailwind shorthand.
+              className="w-full border-warning/50 text-warning hover:bg-warning/10"
               size="lg"
             >
               {isDevLoggingIn ? "Signing in…" : "Dev Login (no Zitadel)"}

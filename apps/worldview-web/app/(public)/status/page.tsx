@@ -67,15 +67,19 @@ async function fetchUptimeData(): Promise<UptimePayload> {
 /** Icon for the current monitor status. */
 function StatusIcon({ status }: { status: MonitorStatus }) {
   // WHY icons alongside color: color alone fails WCAG SC 1.4.1 (color not sole means)
+  // WHY design tokens (was off-palette green-500/amber-500/red-500/zinc-500):
+  // the public status page predates the Terminal Dark migration; switching to
+  // semantic tokens (positive/warning/negative/muted-foreground) keeps it in
+  // step with the rest of the platform and removes hard-coded Tailwind shorthand.
   switch (status) {
     case 2:
-      return <CheckCircle2 className="h-4 w-4 text-green-500" aria-hidden />;
+      return <CheckCircle2 className="h-4 w-4 text-positive" aria-hidden />;
     case 8:
-      return <AlertTriangle className="h-4 w-4 text-amber-500" aria-hidden />;
+      return <AlertTriangle className="h-4 w-4 text-warning" aria-hidden />;
     case 9:
-      return <XCircle className="h-4 w-4 text-red-500" aria-hidden />;
+      return <XCircle className="h-4 w-4 text-negative" aria-hidden />;
     default:
-      return <PauseCircle className="h-4 w-4 text-zinc-500" aria-hidden />;
+      return <PauseCircle className="h-4 w-4 text-muted-foreground" aria-hidden />;
   }
 }
 
@@ -98,8 +102,11 @@ function DayStrip({ buckets }: { buckets: MonitorSummary["daily_buckets"] }) {
           title={`${bucket.date}: ${bucket.up ? "up" : "down"}`}
           aria-label={`${bucket.date} ${bucket.up ? "up" : "down"}`}
           className={[
-            "h-5 w-1.5 rounded-sm",
-            bucket.up ? "bg-green-500/80" : "bg-red-500/80",
+            // WHY rounded-[2px] (not rounded-sm): Terminal Dark uniform 2px corner.
+            // WHY bg-positive/bg-negative tokens (was off-palette green-500/red-500):
+            // the up/down day cells follow the global price-up/price-down semantic.
+            "h-5 w-1.5 rounded-[2px]",
+            bucket.up ? "bg-positive/80" : "bg-negative/80",
           ].join(" ")}
         />
       ))}
@@ -136,7 +143,10 @@ function MonitorPill({ monitor }: { monitor: MonitorSummary }) {
       </div>
 
       {/* 30-day uptime % */}
-      <div className="mt-1.5 text-right text-[11px] text-muted-foreground">
+      {/* WHY font-mono + tabular-nums: per Terminal Dark numeric-display rule,
+          all numbers use IBM Plex Mono with tabular-nums to prevent jitter
+          when the value updates (e.g. 99.97% → 99.98%). */}
+      <div className="mt-1.5 text-right font-mono text-[11px] tabular-nums text-muted-foreground">
         {parseFloat(monitor.custom_uptime_ratio).toFixed(2)}% uptime (30d)
       </div>
     </div>
@@ -164,12 +174,16 @@ function IncidentBanner({ incidents }: { incidents: Incident[] }) {
     <div role="alert" aria-live="assertive" className="mb-6 space-y-2">
       {activeIncidents.map((inc, i) => {
         // Map severity to a background color
+        // WHY tokens (was off-palette red-950/amber-950/blue-950): semantic
+        // mapping — critical → destructive (red), warn → warning (amber),
+        // info → primary (yellow). The /10 + /40 alpha steps preserve the
+        // subtle banner background + visible border style.
         const bg =
           inc.severity === "critical"
-            ? "bg-red-950/50 border-red-500/40"
+            ? "bg-destructive/10 border-destructive/40"
             : inc.severity === "warn"
-              ? "bg-amber-950/50 border-amber-500/40"
-              : "bg-blue-950/50 border-blue-500/40";
+              ? "bg-warning/10 border-warning/40"
+              : "bg-primary/10 border-primary/40";
         const icon =
           inc.severity === "critical" ? "🔴" : inc.severity === "warn" ? "🟡" : "🔵";
 

@@ -40,7 +40,10 @@ export function BriefDiffPanel({ diff, onClose }: BriefDiffPanelProps) {
     // separation between the badge button and the panel content.
     // WHY w-72: wide enough to read bullet text without being as wide as the card.
     <div
-      className="z-10 mt-1 w-72 rounded-md border border-border bg-card p-3 text-[11px] shadow-md"
+      // WHY rounded-[2px] (was rounded-md=6px): the Terminal Dark scale
+      // collapses all corner radii to 2px for the institutional sharp look.
+      // 6px reads as a consumer-app pattern.
+      className="z-10 mt-1 w-72 rounded-[2px] border border-border bg-card p-3 text-[11px] shadow-md"
       data-testid="brief-diff-panel"
     >
       {/* ── Delta summary ───────────────────────────────────────────────── */}
@@ -62,16 +65,20 @@ export function BriefDiffPanel({ diff, onClose }: BriefDiffPanelProps) {
       {/* ── New bullets ─────────────────────────────────────────────────── */}
       {hasNew && (
         <div className="mb-2">
-          <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-green-400/70">
+          {/* WHY text-positive (was off-palette text-green-400): --positive
+              is the Terminal Dark institutional green; mirroring price-up
+              colour keeps "new" semantics consistent. */}
+          <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-positive/70">
             New
           </p>
           <ul className="m-0 list-none space-y-0.5 p-0">
             {diff.new_bullets.map((bullet: BriefDiffBullet, i: number) => (
               <li
                 key={`new-${i}`}
-                // WHY text-green-400: standard diff convention — green = addition.
-                // Consistent with git diff and Bloomberg event feed colour language.
-                className="flex gap-1 leading-snug text-green-400"
+                // WHY text-positive (was text-green-400): standard diff convention —
+                // green = addition; the design token resolves to the institutional
+                // green (#00D26A) and matches Bloomberg event feed colour language.
+                className="flex gap-1 leading-snug text-positive"
               >
                 {/* WHY "+" prefix: explicit diff marker makes the semantic clear
                     even without colour (accessible for colour-blind users). */}

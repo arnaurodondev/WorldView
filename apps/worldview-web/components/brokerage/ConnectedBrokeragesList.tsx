@@ -220,18 +220,19 @@ function ConnectionRow({ connection }: ConnectionRowProps) {
         <div className="flex items-center gap-2">
 
           {/* Sync Now — only for active/error connections.
-              WHY outline with blue tint (not ghost): it's the primary action on an
+              WHY outline with primary tint (not ghost): it's the primary action on an
               active connection row. Ghost blends with the background; the subtle
-              blue tint makes it scannable as "the thing to click for data freshness". */}
+              primary tint makes it scannable as "the thing to click for data freshness". */}
           {canSync && (
             <Button
               variant="outline"
               size="sm"
-              className="h-7 gap-1.5 px-2.5 text-xs"
-              // WHY inline style for primary blue: Tailwind's `border-primary` and
-              // `text-primary` reference the CSS variable, which correctly resolves
-              // to #0EA5E9 without hardcoding the value in className.
-              style={{ borderColor: "rgba(14,165,233,0.4)", color: "#0EA5E9" }}
+              // WHY border-primary/40 + text-primary (was inline #0EA5E9 hex):
+              // the old #0EA5E9 was the retired Midnight Pro accent; the
+              // Terminal Dark `--primary` is now Bloomberg yellow (#FFD60A).
+              // Using the token means the button is visually anchored to the
+              // platform's CTA palette, not a stale hex literal.
+              className="h-7 gap-1.5 border-primary/40 px-2.5 text-xs text-primary"
               onClick={handleSync}
               disabled={syncPending}
               title="Trigger an immediate transaction sync"
@@ -311,7 +312,10 @@ function ConnectionRow({ connection }: ConnectionRowProps) {
       {connection.status === "error" && (
         <p className="px-2 text-[11px] text-muted-foreground">
           Connection failed —{" "}
-          <span style={{ color: "#0EA5E9" }}>Sync Now</span> to retry, or{" "}
+          {/* WHY text-primary (was inline #0EA5E9): same token migration —
+              the recovery hint references the Sync Now action, which now
+              uses the primary token. */}
+          <span className="text-primary">Sync Now</span> to retry, or{" "}
           <span className="text-destructive">Disconnect</span> and reconnect with fresh credentials.
         </p>
       )}

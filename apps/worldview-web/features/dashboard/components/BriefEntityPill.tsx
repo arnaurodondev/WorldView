@@ -102,10 +102,12 @@ export function BriefEntityPill({
         onMouseEnter={() => setShowMenu(true)}
         onMouseLeave={() => setShowMenu(false)}
         aria-label={`Entity: ${entityName}. Hover for actions.`}
-        // WHY text-blue-400 + hover:bg-blue-400/10: blue is the "entity/instrument
-        // link" colour throughout the terminal (same as citation chips → instrument
-        // deep-links in InstrumentBriefPanel). Keeps colour language consistent.
-        className="rounded px-0.5 text-[10px] text-blue-400 hover:bg-blue-400/10 transition-colors cursor-pointer"
+        // WHY text-primary + hover:bg-primary/10 (was off-palette text-blue-400):
+        // --primary is the Terminal Dark CTA colour (Bloomberg yellow), used
+        // throughout the terminal for clickable entity/instrument deep-links.
+        // The retired blue-400 came from the Midnight Pro accent; the token
+        // unifies pill colour with citation chips and instrument links.
+        className="rounded-[2px] px-0.5 text-[10px] text-primary hover:bg-primary/10 transition-colors cursor-pointer"
       >
         {entityName}
       </button>
@@ -127,7 +129,11 @@ export function BriefEntityPill({
             disabled={loading}
             className="w-full whitespace-nowrap rounded px-2 py-1 text-left text-[11px] text-foreground hover:bg-accent transition-colors disabled:text-[hsl(var(--disabled-foreground))]"
           >
-            {loading ? "Loading..." : `Create Alert for ${entityName}`}
+            {/* WHY ellipsis char (Loading…) not three dots (Loading...):
+                consistent with the rest of the terminal which uses U+2026
+                — mixing ASCII triple-dot and ellipsis char looks unkempt
+                and the visible width differs across font weights. */}
+            {loading ? "Loading…" : `Create Alert for ${entityName}`}
           </button>
         </span>
       )}

@@ -54,7 +54,11 @@ import { Slider } from "@/components/ui/slider";
 // canonical types (currency/regulator/location/…) in default grey.
 import { ENTITY_TYPE_COLOR_MAP } from "@/lib/entity-types";
 
-const NODE_DEFAULT_COLOR = "#6B7585";
+// WHY a hex literal (not a Tailwind class): sigma renders nodes to a WebGL
+// canvas and reads the `color` attribute as a hex/rgb string — CSS classes
+// never reach the canvas. The literal mirrors `--muted-foreground` (#83838A)
+// from globals.css; if the token shifts, audit this constant manually.
+const NODE_DEFAULT_COLOR = "#83838A";
 
 // ── Filter pill types (PLAN-0059 Wave H-4) ───────────────────────────────────
 // WHY "as const": gives a tuple literal type so RelationFilter is narrowly typed
@@ -327,7 +331,10 @@ function GraphLoader({ data, centerEntityId, layout }: GraphLoaderProps) {
             // WHY min 0.5px: very low weight edges still need to be visible.
             // Multiplied by 2 so weight=1.0 edges appear as 2px lines.
             size: Math.max(0.5, edge.weight * 2),
-            color: "#1A2030", // muted (#1A2030) — dim edge color (highlighted on hover via GraphEvents)
+            // WHY hex literal (not token): sigma's WebGL renderer reads
+            // hex strings on the node/edge data. #18181B mirrors --muted
+            // (the elevated surface tone) from Terminal Dark globals.css.
+            color: "#18181B",
           });
         }
       }
@@ -428,7 +435,7 @@ function FilterController({ activeRelFilter, minWeight, searchQuery }: FilterCon
 
       // ── nodeReducer ──────────────────────────────────────────────────────────
       // Called by sigma for every node before rendering. We dim non-matching
-      // nodes by setting their color to near-invisible (#1A2030 ≈ background).
+      // nodes by setting their color to near-invisible (matches the canvas bg).
       // WHY NOT hidden:true for non-matching nodes: hiding nodes that have edges
       // would cause sigma to error (dangling edge endpoints). Dimming keeps the
       // graph structure visible while making non-matches recede to background.
@@ -437,9 +444,11 @@ function FilterController({ activeRelFilter, minWeight, searchQuery }: FilterCon
 
         const label = (data.label as string ?? "").toLowerCase();
         if (!label.includes(searchQuery.toLowerCase())) {
-          // WHY #1A2030: the graph background color — makes unmatched nodes
-          // nearly invisible without fully hiding them (avoids dangling-edge errors).
-          return { ...data, color: "#1A2030", labelColor: "#1A2030" };
+          // WHY #09090B (Terminal Dark --background): the graph canvas background
+          // — using the token's hex makes unmatched nodes nearly invisible without
+          // fully hiding them (avoids dangling-edge errors). Sigma reads hex from
+          // node attrs, so the literal is required here.
+          return { ...data, color: "#09090B", labelColor: "#09090B" };
         }
         return data;
       },
@@ -489,7 +498,12 @@ function EdgeTooltipPanel({ tooltip }: { tooltip: EdgeTooltip }) {
       <p className="text-xs font-medium uppercase tracking-wider text-foreground">
         {displayLabel}
       </p>
-      <p className="mt-0.5 text-[10px] text-muted-foreground">
+      {/* WHY tabular-nums: the weight is a numeric value rendered to 2dp.
+          tabular-nums prevents horizontal jitter as the tooltip refreshes
+          across hovered edges with different weights — required by the
+          Terminal Dark numeric-display rule (font-mono + tabular-nums for
+          all numbers). */}
+      <p className="mt-0.5 font-mono text-[10px] tabular-nums text-muted-foreground">
         Strength: {tooltip.weight.toFixed(2)}
       </p>
     </div>
@@ -641,7 +655,7 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
 
         {/* ── Node search input ──────────────────────────────────────────────── */}
         {/* WHY search dims (not hides): hiding nodes that have edges causes sigma
-            to error on dangling endpoints. Dimming to #1A2030 (graph background)
+            to error on dangling endpoints. Dimming to the graph background hue
             keeps graph topology intact while directing analyst attention. */}
         <input
           value={searchQuery}
@@ -688,11 +702,11 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
       {/* ── Graph canvas container ────────────────────────────────────────────── */}
       <div
         ref={containerRef}
-        className="relative h-[460px] overflow-hidden rounded-[2px] border border-border/40"
-        // WHY inline style for background: Tailwind's bg-[#0A0E14] would work but
-        // this makes the dark graph background explicit and visually consistent with
-        // the rest of the dark theme (#0A0E14 is the app background token).
-        style={{ background: "#0A0E14" }}
+        // WHY bg-background (was inline #0A0E14): the retired Bloomberg Dark
+        // background hex; the Terminal Dark `--background` token now resolves
+        // to #09090B and the graph wrapper inherits the canonical app surface
+        // color via the Tailwind utility — no inline hex required on the div.
+        className="relative h-[460px] overflow-hidden rounded-[2px] border border-border/40 bg-background"
       >
         <SigmaContainer
           className="h-full w-full"
@@ -708,7 +722,10 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
             // direct neighbors (size=10) and center (size=20) get labels.
             // Avoids text clutter for dense depth=2 graphs.
             labelRenderedSizeThreshold: 8,
-            labelColor: { color: "#6B7585" },
+            // WHY hex literal #83838A: sigma's `labelColor.color` setting is read
+            // by its WebGL pipeline; CSS classes never reach it. The hex mirrors
+            // --muted-foreground from globals.css (Terminal Dark zinc-500.5).
+            labelColor: { color: "#83838A" },
             labelFont: "IBM Plex Mono, monospace",
             labelSize: 10,
             labelWeight: "500",
@@ -721,7 +738,11 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
             // or when the component is conditionally rendered.
             allowInvalidContainer: true,
           }}
-          style={{ background: "#0A0E14" }}
+          // WHY inline style with var(...): SigmaContainer accepts inline
+          // style only — applying bg-background to it doesn't reliably reach
+          // the inner canvas. Using the CSS variable keeps a single source
+          // of truth for the Terminal Dark --background hue.
+          style={{ background: "hsl(var(--background))" }}
         >
           {/* GraphLoader builds the graphology graph and passes it to sigma.
               layout prop controls FA2 vs degree-tier positioning. */}
