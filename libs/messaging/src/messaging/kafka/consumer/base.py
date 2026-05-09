@@ -108,12 +108,15 @@ class ConsumerConfig:
     def to_dict(self) -> dict[str, Any]:
         """Return Confluent-compatible consumer config dict.
 
-        Note (PLAN-0087 D-P3-006): previously this method dropped
-        ``max_poll_records`` and ``partition_assignment_strategy``, so the
-        rdkafka defaults (500 records / range assignor) silently won.  Both
-        keys are now passed through; the cooperative-sticky default prevents
-        the partial-assignment wedge observed on
-        ``nlp-pipeline-group`` and the KG dataset consumer groups.
+        Note (PLAN-0087 D-P3-006 + 2026-05-09 follow-up): the cooperative-sticky
+        assignor IS passed through so the rebalance behaviour fix lands.
+        ``max.poll.records`` is NOT a librdkafka config key (that property is
+        Java/Spring Kafka only); passing it crashes ``Consumer(...)`` with
+        ``KafkaError{code=_INVALID_ARG, str="No such configuration property"}``.
+        Keep it on the dataclass for documentation/typing but DROP it from the
+        rdkafka config payload.  Equivalent throughput tuning on librdkafka
+        is via ``fetch.message.max.bytes`` / ``queued.max.messages.kbytes``,
+        not record count.
         """
         return {
             "bootstrap.servers": self.bootstrap_servers,
@@ -123,7 +126,6 @@ class ConsumerConfig:
             "session.timeout.ms": self.session_timeout_ms,
             "heartbeat.interval.ms": self.heartbeat_interval_ms,
             "max.poll.interval.ms": self.max_poll_interval_ms,
-            "max.poll.records": self.max_poll_records,
             "partition.assignment.strategy": self.partition_assignment_strategy,
         }
 

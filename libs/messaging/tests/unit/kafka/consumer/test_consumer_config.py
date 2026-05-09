@@ -87,14 +87,20 @@ class TestConsumerConfigToDict:
         assert "partition.assignment.strategy" in d
         assert d["partition.assignment.strategy"] == "cooperative-sticky"
 
-    def test_to_dict_includes_max_poll_records(self) -> None:
-        """``max.poll.records`` was previously omitted, so the configured
-        value was silently ignored.  This pins the propagation."""
-
+    def test_to_dict_does_not_include_max_poll_records(self) -> None:
+        """PLAN-0087 follow-up (2026-05-09): ``max.poll.records`` is a
+        Java/Spring Kafka config key, NOT librdkafka. Passing it to
+        ``confluent_kafka.Consumer(...)`` crashes the consumer with
+        ``KafkaError{_INVALID_ARG, "No such configuration property:
+        max.poll.records"}``.  The dataclass keeps the field for
+        documentation/typing parity with prior callers, but to_dict()
+        MUST NOT emit it. Equivalent throughput tuning is via
+        ``fetch.message.max.bytes`` / ``queued.max.messages.kbytes``.
+        """
         cfg = ConsumerConfig(max_poll_records=42)
         d = cfg.to_dict()
 
-        assert d["max.poll.records"] == 42
+        assert "max.poll.records" not in d
 
     def test_to_dict_round_trips_overridden_strategy(self) -> None:
         """Allow tests / experimental setups to override the assignor —
