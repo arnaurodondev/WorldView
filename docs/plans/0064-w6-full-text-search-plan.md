@@ -5,7 +5,7 @@ prd_section: §3 FR-T1-3 + §6 Workstream W6 + §8 AD-1
 title: "W6 — Full-Text Search with Entity Facets (Tier 1, FR-T1-3)"
 status: draft
 created: 2026-05-03
-updated: 2026-05-03
+updated: 2026-05-09
 plans: 1
 waves: 5
 tasks: 15
@@ -15,7 +15,7 @@ tasks: 15
 
 > **Scope**: PRD-0034 Workstream W6 only. The keystone L1 feature: a search route across articles + EDGAR filings (transcripts deferred — see §0 Known Limitations) with entity facets sourced from KG resolution.
 >
-> **Out of scope** (other plans): retrieval/RAG hybrid search inside the AI pipeline (W5 / PLAN-0063 — supersedes PLAN-0060 Sub-Plan B), structured AI brief (W4), WebSocket quote stream (W7), RLS + Stripe (W8), observability (W9). This plan deliberately reuses W5's `chunks.tsv` GIN index rather than building a parallel one.
+> **Out of scope** (other plans): retrieval/RAG hybrid search inside the AI pipeline (W5 / PLAN-0063 — supersedes PLAN-0060 Sub-Plan B), structured AI brief (W4), WebSocket quote stream (W7), RLS + Stripe (W8), observability (W9). This plan deliberately reuses W5's `chunks.tsv_english` GIN index (`ix_chunks_tsv_english_gin`) rather than building a parallel one.
 
 ---
 
@@ -23,8 +23,8 @@ tasks: 15
 
 These decisions were taken at the inter-plan boundary review on 2026-05-03 and are **frozen** for PLAN-0064:
 
-1. **`chunks.tsv` ownership** — owned by **PLAN-0063 Wave W5-2** (alembic migration `0017_add_chunks_tsv_gin.py`). PLAN-0060 Sub-Plan B was superseded by PLAN-0063 on 2026-05-03 (TRACKING.md lines 32, 35). PLAN-0064 does not redefine the column or the index — it **reuses** them.
-2. **FTS GIN index name** — `ix_chunks_tsv_gin` (SQLAlchemy `ix_` convention). All `EXPLAIN ANALYZE` assertions and Prometheus checks reference this exact name.
+1. **`chunks.tsv_english` / `chunks.tsv_simple` ownership** — owned by **PLAN-0063 Wave W5-2** (alembic migration `0017_add_chunks_tsv_english_gin.py`). PLAN-0060 Sub-Plan B was superseded by PLAN-0063 on 2026-05-03 (TRACKING.md lines 32, 35). PLAN-0064 does not redefine the columns or the indexes — it **reuses** them. **SHIPPED**: migration 0017 is live (alembic head is now `0019_add_tenant_id_to_chunks_sections`; index `ix_chunks_tsv_english_gin` confirmed in prod as of 2026-05-06).
+2. **FTS GIN index name** — `ix_chunks_tsv_english_gin` (SQLAlchemy `ix_` convention). All `EXPLAIN ANALYZE` assertions and Prometheus checks reference this exact name.
 3. **FTS tsquery parser** — `websearch_to_tsquery` (handles user-facing query syntax including quoted phrases and OR / `-` operators). PLAN-0064 SQL **does NOT use** `plainto_tsquery`. `websearch_to_tsquery` does the same input-escaping job (no string concat, no injection vector) while supporting richer operator semantics suited to a public search box.
 4. **`documents.tsv` is NOT added** — PLAN-0064 aggregates chunks → document at query time; this supersedes PLAN-0063 §0's earlier expectation that W6 would add `documents.tsv`. PLAN-0063 §0 should be amended to reflect this resolution (cross-plan note).
 
@@ -33,8 +33,8 @@ These decisions were taken at the inter-plan boundary review on 2026-05-03 and a
 | Claim | Adjusted state | Reason |
 |-------|----------------|--------|
 | R27 (read replica for read-only use case) | **NOT CLAIMED** for this plan. nlp-pipeline currently has a single pool — there is no `ReadOnlyUnitOfWork` / `ReadUoWDep` abstraction in S6. For MVP a single-pool read is acceptable. Tracked as a follow-up (§15). | `grep -rn "ReadOnlyUnitOfWork" services/nlp-pipeline/src/` returns zero hits. The repo abstraction does not exist; pretending it does would silently mis-route to the writer pool. |
-| Per-day per-tenant rate limit on `/v1/search` | **NOT CLAIMED**. The existing `RateLimitMiddleware` is global per-user, per-minute (default 100/60s). PLAN-0064 relies on this existing global limit. A per-route, per-tenant, per-day limiter is deferred to PLAN-0065 (W8) where it joins tier/quota work. | `services/api-gateway/src/api_gateway/middleware.py:298-410` has no per-route or per-bucket configuration; absorbing the refactor into W6 would balloon scope. |
-| `canonical_entities` JOIN inside the search query | **REMOVED**. `canonical_entities` lives in `intelligence_db` (S6/S7 shared), not `nlp_db`. PLAN-0064 fetches entity names via S7 batch HTTP (`POST /internal/v1/entities/batch`), symmetric to the existing S5 batch hop for document titles. | `services/nlp-pipeline/alembic/versions/*` does not create a `canonical_entities` table or view in nlp_db. No `entity_canonical_consumer.py` exists in S6. The view assumed by the initial draft is fictional. |
+| Per-day per-tenant rate limit on `/v1/search` | **NOT CLAIMED**. The existing `RateLimitMiddleware` is global per-user, per-minute (default 100/60s). PLAN-0064 relies on this existing global limit. A per-route, per-tenant, per-day limiter is deferred to the W8 RLS+Tier+Stripe plan (no plan ID yet — W8 plan not yet authored). **Note**: PLAN-0065 is W9 observability (complete 2026-05-04), NOT W8. | `services/api-gateway/src/api_gateway/middleware.py:298-410` has no per-route or per-bucket configuration; absorbing the refactor into W6 would balloon scope. |
+| `canonical_entities` JOIN inside the search query | **REMOVED**. `canonical_entities` lives in `intelligence_db` (S6/S7 shared), not `nlp_db`. PLAN-0064 fetches entity names via S7 batch HTTP (`POST /api/v1/entities/batch`), symmetric to the existing S5 batch hop for document titles. | `services/nlp-pipeline/alembic/versions/*` does not create a `canonical_entities` table or view in nlp_db. No `entity_canonical_consumer.py` exists in S6. The view assumed by the initial draft is fictional. |
 
 ### Known Limitations (documented up front)
 
@@ -49,13 +49,13 @@ These decisions were taken at the inter-plan boundary review on 2026-05-03 and a
 
 | Check | Result | Note |
 |-------|--------|------|
-| No unresolved BLOCKING OQs in §14 | **PASS** | OQ-1..OQ-4 are not blockers for this workstream (lane / pricing / beta-list / cull-scope are W3/W8 concerns). OQ-7 (search route exact query params) and OQ-11 (Postgres vs Algolia) are DEFERRED — this plan resolves both with concrete decisions captured in §3. |
+| No unresolved BLOCKING OQs in §14 | **PASS** | OQ-1..OQ-4 are not blockers for this workstream. OQ-7 and OQ-11 **RESOLVED** — both resolved in §3 (AD-W6-5 + AD-W6-2). |
 | External API field verification | **PASS** | W6 touches only internal data; no external API contract dependency. |
-| Cross-plan conflict scan | **PASS_WITH_NOTE** | PLAN-0063 (W5 hybrid retrieval, supersedes PLAN-0060 Sub-Plan B) adds `chunks.tsv` GIN in its Wave W5-2 (alembic 0017). This plan **reuses** that index. **Hard dependency**: PLAN-0063 Wave W5-2 must ship before this plan's Wave 3 (search query engine). PLAN-0055 (universe expansion / W2) must ship before Wave 4 acceptance can pass (we need ≥1 hit for any S&P 500 ticker in entity-facet queries). |
-| PRD recency | **PASS** | PRD-0034 created 2026-05-02; today is 2026-05-03. |
-| Architecture compliance | **PASS_WITH_NOTE** | Owner is S6 nlp-pipeline. R7 honoured (no cross-service DB; entity names fetched via S7 batch HTTP, document titles via S5 batch HTTP; S9 proxies to S6 via HTTP). R24 honoured (intelligence_db DDL only via intelligence-migrations; the GIN index lives in S6's `nlp_db` and is owned by PLAN-0063 W5-2). R25 honoured (S6 API uses use cases). **R27 NOT claimed** — see §0 Architecture Compliance Adjustments (S6 has no `ReadOnlyUnitOfWork`; tracked as follow-up in §15). |
+| Cross-plan conflict scan | **PASS** | PLAN-0063 Wave W5-2 **SHIPPED** (2026-05-06); alembic 0017 live; `ix_chunks_tsv_english_gin` + `ix_chunks_tsv_simple_gin` confirmed. Hard dependency for Wave 3 is **already met**. PLAN-0055 (universe expansion / W2) must ship before Wave 5 acceptance (≥1 entity-facet hit for any S&P 500 ticker). |
+| PRD recency | **PASS** | PRD-0034 revised 2026-05-09 (revise-prd audit); plan revised 2026-05-09. |
+| Architecture compliance | **PASS_WITH_NOTE** | Owner is S6 nlp-pipeline. R7 honoured (entity names via `POST /api/v1/entities/batch` to S7; document titles via `POST /api/v1/documents/batch` to S5; S9 proxies to S6 via HTTP). R24 honoured (GIN index in `nlp_db` owned by PLAN-0063 W5-2). R25 honoured (S6 API uses use cases). **R27 NOT claimed** — see §0 Architecture Compliance Adjustments. |
 
-**Decision**: PASS. Plan can be authored. Wave 3 is gated on PLAN-0063 Wave W5-2 completion.
+**Decision**: PASS. Plan is ready for `/implement`. Wave 3 dependency (PLAN-0063 W5-2) is already met. `/implement PLAN-0064 Wave 1` can start immediately.
 
 ---
 
@@ -65,13 +65,13 @@ These decisions were taken at the inter-plan boundary review on 2026-05-03 and a
 |-----------|------|---------|--------------------------|
 | W1 KG remediation | PLAN-0057 (complete) + PLAN-0060 Sub-Plan A | KG seeding, F-CRIT-07 fix, entity_mentions persistence | **Producer dependency**. We read entity_mentions; if it's empty, entity facets return zero. PLAN-0057 SHIP 2026-05-01 unblocks us. |
 | W4 structured AI brief | PLAN-0062 (forthcoming) | rag-chat, S9 brief endpoint, frontend brief renderer | **No file overlap**. Both surface citations but to different endpoints. |
-| W5 hybrid retrieval | **PLAN-0063** (supersedes PLAN-0060 Sub-Plan B) | adds `chunks.tsv` + GIN (alembic 0017, index `ix_chunks_tsv_gin`); adds `search_type=hybrid` to existing internal `/api/v1/search/chunks` (S6) | **Hard dependency**. We reuse the same `chunks.tsv` GIN index. We add a *new* user-facing route `/api/v1/search/documents` which aggregates chunks → documents. We do not modify `/search/chunks`. |
-| W8 RLS + tier + Stripe | PLAN-0065 (forthcoming) | per-tier rate limits, Stripe webhooks, RLS hardening | **Soft dependency**. Per-tenant per-day rate limits for search live in W8, not here. PLAN-0064 relies on the existing global per-user-per-minute limit only. |
-| W9 stability + observability | PLAN-0066 (forthcoming) | Sentry, status page, BP-302 redeploy | **No overlap**. We add `s6_search_*` Prometheus metrics in our own scope. |
+| W5 hybrid retrieval | **PLAN-0063** (supersedes PLAN-0060 Sub-Plan B) | adds `chunks.tsv_english` + `chunks.tsv_simple` + GINs (alembic 0017, indexes `ix_chunks_tsv_english_gin` + `ix_chunks_tsv_simple_gin`); adds `search_type=hybrid` to existing internal `/api/v1/search/chunks` (S6). **SHIPPED 2026-05-06** | **Dependency MET**. We reuse `ix_chunks_tsv_english_gin`. We add a *new* user-facing route `/api/v1/search/documents` which aggregates chunks → documents. We do not modify `/search/chunks`. |
+| W8 RLS + tier + Stripe | **TBD** (plan not yet authored; note: PLAN-0065 is W9 observability — complete) | per-tier rate limits, Stripe webhooks, RLS hardening | **Soft dependency**. Per-tenant per-day rate limits for search live in W8, not here. PLAN-0064 relies on the existing global per-user-per-minute limit only. |
+| W9 stability + observability | **PLAN-0065** (complete 2026-05-04) | Sentry, status page, BP-302 redeploy | **DONE**. We add `s6_search_*` Prometheus metrics in our own scope. |
 
 **Hard ordering constraint**:
 ```
-PLAN-0063 Wave W5-2 (chunks.tsv + GIN, alembic 0017)  ──►  PLAN-0064 Wave 3 (search query engine)
+PLAN-0063 Wave W5-2 (tsv_english/tsv_simple GINs, alembic 0017)  ──►  PLAN-0064 Wave 3 (search query engine) [DEPENDENCY MET — 0017 shipped 2026-05-06]
 PLAN-0055/0057 (universe + KG)                        ──►  PLAN-0064 Wave 5 (acceptance: ≥1 entity-facet hit per S&P 500 ticker)
 ```
 
@@ -87,7 +87,7 @@ If PLAN-0063 Wave W5-2 slips, we can land PLAN-0064 Waves 1, 2, 4, 5 (schema-onl
 
 **Rationale**:
 - Entity facets require joining text matches to `entity_mentions` and `chunk_entity_mentions`, both of which live in `nlp_db` (S6's database). Putting search in S5 forces a cross-service join (R9 violation).
-- `chunks.tsv` GIN index (PLAN-0063 Wave W5-2, alembic 0017, index `ix_chunks_tsv_gin`) already lives in `nlp_db.chunks`. Reusing it from S5 is impossible without breaking R9.
+- `chunks.tsv_english` GIN index (PLAN-0063 Wave W5-2, alembic 0017, index `ix_chunks_tsv_english_gin`) already lives in `nlp_db.chunks`. Reusing it from S5 is impossible without breaking R9.
 - A separate `search-service` is premature — it doubles operational surface for one query route.
 - S6 already exposes `/api/v1/search/chunks` (internal, used by S8). Adding `/api/v1/search/documents` (public-via-S9, used by frontend) is a natural sibling.
 
@@ -95,7 +95,7 @@ If PLAN-0063 Wave W5-2 slips, we can land PLAN-0064 Waves 1, 2, 4, 5 (schema-onl
 
 ### AD-W6-2: Postgres `tsvector` + GIN, not Algolia / Typesense
 
-**Decision** (resolves OQ-11): Use Postgres `tsvector` with GIN index, reusing the `chunks.tsv` column added by PLAN-0063 Wave W5-2 (index name `ix_chunks_tsv_gin`).
+**Decision** (resolves OQ-11): Use Postgres `tsvector` with GIN index, reusing the `chunks.tsv_english` column added by PLAN-0063 Wave W5-2 (index name `ix_chunks_tsv_english_gin`). **SHIPPED** — index is live.
 
 **Rationale**:
 - Cost: Algolia $1/1000 records-month; ~50K documents = ~$50/month for one feature. Postgres is $0 incremental.
@@ -107,16 +107,16 @@ If PLAN-0063 Wave W5-2 slips, we can land PLAN-0064 Waves 1, 2, 4, 5 (schema-onl
 
 ### AD-W6-3: Aggregate chunks → document, do not index documents independently
 
-**Decision**: Search results are **documents**, but the underlying tsvector lookup happens on `chunks.tsv` and is grouped/aggregated up to the document level. We do **not** add a `documents.tsv` column on the S5 `documents` table.
+**Decision**: Search results are **documents**, but the underlying tsvector lookup happens on `chunks.tsv_english` and is grouped/aggregated up to the document level. We do **not** add a `documents.tsv` column on the S5 `documents` table.
 
 **Rationale**:
 - Document body text only lives in MinIO silver, not in any Postgres column. Adding a `documents.tsv` would require extracting text into Postgres — a net-new sync pipeline.
 - Chunks already contain the full text (segmented). Aggregating `MAX(ts_rank_cd(...))` per `doc_id` gives a defensible per-document score.
-- Reuses the PLAN-0063 W5-2 GIN index `ix_chunks_tsv_gin` — zero new index maintenance.
+- Reuses the PLAN-0063 W5-2 GIN index `ix_chunks_tsv_english_gin` (live since 2026-05-06) — zero new index maintenance.
 
 **Cross-DB strategy** (resolves the `canonical_entities` location question):
 - **Document titles**: fetched from S5 via `POST /api/v1/documents/batch` (existing endpoint — `services/content-store/src/content_store/api/documents.py:18`).
-- **Entity names**: fetched from S7 via `POST /internal/v1/entities/batch` (entity-canonical service — `canonical_entities` lives in `intelligence_db`, not `nlp_db`). This is symmetric to the S5 hop.
+- **Entity names**: fetched from S7 via `POST /api/v1/entities/batch` (entity-canonical service — `canonical_entities` lives in `intelligence_db`, not `nlp_db`). This is symmetric to the S5 hop.
 - The search SQL (Wave 2) does **not** join `canonical_entities`. It returns `(doc_id, score, snippet)` and `(entity_id, count)` only; the use case enriches both via the two batch HTTP calls in parallel (`asyncio.gather`).
 - Both calls honour R7 (no cross-service DB) and R9 (no cross-DB joins).
 
@@ -137,7 +137,7 @@ If PLAN-0063 Wave W5-2 slips, we can land PLAN-0064 Waves 1, 2, 4, 5 (schema-onl
 
 **Tenancy**: All searched content is global (not tenant-scoped). The route does not require RLS. W8 RLS work does not affect this route.
 
-**Per-tenant per-day quota deferred**: Tracked as a follow-up in §15 to land in PLAN-0065 (W8) where it joins tier and Stripe quota work. The PRD §4 NFR "100 search/day" target is therefore aspirational for this plan; the immediate, enforced limit is the existing global 100/min/user.
+**Per-tenant per-day quota deferred**: Tracked as a follow-up in §15 to land in the W8 RLS+Stripe plan (TBD — no plan ID yet; PLAN-0065 is W9 observability, already complete) where it joins tier and Stripe quota work. The PRD §4 NFR "100 search/day" target is therefore aspirational for this plan; the immediate, enforced limit is the existing global 100/min/user.
 
 ### AD-W6-5: Query parameter design (resolves OQ-7) — revised 2026-05-03 per Sam-alignment audit
 
@@ -168,7 +168,7 @@ Response shape defined in Wave 1 task T-W6-1-02.
 
 | PRD Reference | Type | Service | Actual Current State (read from code) | PRD Expected State | Delta |
 |--------------|------|---------|---------------------------------------|--------------------|-------|
-| `chunks.tsv` | DB column / GIN | S6 `nlp_db.chunks` | does not exist (alembic head `0016`) | exists with GIN index `ix_chunks_tsv_gin`; **PLAN-0063 Wave W5-2 owns this** (alembic 0017) | none in this plan — depends on PLAN-0063 W5-2 |
+| `chunks.tsv_english` + `chunks.tsv_simple` | DB column / GIN | S6 `nlp_db.chunks` | **SHIPPED** — alembic 0017 live (current head: `0019_add_tenant_id_to_chunks_sections`); GIN indexes `ix_chunks_tsv_english_gin` + `ix_chunks_tsv_simple_gin` confirmed in prod 2026-05-06 | exists with GIN index `ix_chunks_tsv_english_gin`; **PLAN-0063 Wave W5-2 owns this** (alembic 0017) | none in this plan — hard dependency is MET |
 | `entity_mentions(doc_id, resolved_entity_id)` | DB column + index | S6 `nlp_db` | exists; index `idx_entity_mentions_resolved` exists (alembic 0001) | unchanged | none |
 | `documents` (S5) | DB table | S5 `content_store_db` | exists with `doc_id, source_type, source_url, title, published_at, ingested_at, content_hash, normalized_hash, status, dedup_result, minio_silver_key, word_count, language, corroborates_doc_id, is_backfill` | unchanged | none |
 | `POST /api/v1/documents/batch` | endpoint | S5 | exists, returns `title, url, source_type, published_at, source_name, word_count` | unchanged — we'll consume this | none |
@@ -183,12 +183,12 @@ Response shape defined in Wave 1 task T-W6-1-02.
 | `chunks` table — `doc_id` foreign key | column | S6 | exists | unchanged | none |
 | `transcripts` ingestion path | code | S4/S5 | EDGAR ingested as articles (`source_type='sec_edgar'`); transcripts not currently ingested; `transcript` is **not** a value of `ContentSourceType` enum (`libs/contracts/src/contracts/enums.py`) | PRD says "when available" | **scope note**: search supports `news` + `sec_edgar` only. `transcript` is **omitted from the source_type enum** (see §0 Known Limitations) until ingestion ships. Acceptance criterion adjusted accordingly. |
 | `isomorphic-dompurify` (or `dompurify`) | npm dep | `apps/worldview-web/package.json` | **not installed** (verified 2026-05-03) | required IF snippet HTML rendering had been chosen | **not needed** — AD-W6-3 chose plain-text + offsets, so DOMPurify is unnecessary. Removed from cross-cutting concerns. |
-| `RateLimitMiddleware` per-route per-tenant per-day | api-gateway middleware | S9 | **does not exist** — middleware is global per-user-per-minute (`max_requests=100, window_seconds=60`); no per-route or per-bucket hooks | required IF per-day per-tenant limit had been added in this plan | **not needed** — AD-W6-4 defers this work to PLAN-0065 (W8). |
+| `RateLimitMiddleware` per-route per-tenant per-day | api-gateway middleware | S9 | **does not exist** — middleware is global per-user-per-minute (`max_requests=100, window_seconds=60`); no per-route or per-bucket hooks | required IF per-day per-tenant limit had been added in this plan | **not needed** — AD-W6-4 defers this work to the W8 RLS+Stripe plan (TBD — no plan ID yet; PLAN-0065 is W9 observability, already complete). |
 | `ReadOnlyUnitOfWork` / `ReadUoWDep` in nlp-pipeline | infra | S6 | **does not exist** (`grep -rn "ReadOnlyUnitOfWork" services/nlp-pipeline/src/` returns 0 hits) | required IF R27 had been claimed | **not needed** — §0 Architecture Compliance Adjustments dropped the R27 claim for MVP. |
-| `canonical_entities` in `nlp_db` | DB table/view | S6 | **does not exist** in nlp_db; lives in `intelligence_db` (S6/S7 shared); accessed by S6 via separate pool at `services/nlp-pipeline/src/nlp_pipeline/infrastructure/intelligence_db/repositories/canonical_entity.py` | (initial draft assumed a view in nlp_db — incorrect) | use S7 batch HTTP `POST /internal/v1/entities/batch` instead — see AD-W6-3 |
-| S7 batch entities endpoint | endpoint | S7 entity-canonical-service | `POST /internal/v1/entities/batch` exists per existing contracts | needed for entity-name lookup | new client wrapper added in Wave 2 |
+| `canonical_entities` in `nlp_db` | DB table/view | S6 | **does not exist** in nlp_db; lives in `intelligence_db` (S6/S7 shared); accessed by S6 via separate pool at `services/nlp-pipeline/src/nlp_pipeline/infrastructure/intelligence_db/repositories/canonical_entity.py` | (initial draft assumed a view in nlp_db — incorrect) | use S7 batch HTTP `POST /api/v1/entities/batch` instead — see AD-W6-3 |
+| S7 batch entities endpoint | endpoint | S7 entity-canonical-service | `POST /api/v1/entities/batch` exists per existing contracts | needed for entity-name lookup | new client wrapper added in Wave 2 |
 
-**Critical baseline note**: `chunks.tsv` is **not yet** in `nlp_db`. This plan must not duplicate the migration. Wave 1 Task T-W6-1-01 explicitly checks the alembic head before proceeding and either confirms PLAN-0063 has shipped Wave W5-2 (alembic head ≥ `0017`) or fails the wave with a wait-state.
+**Critical baseline note**: `chunks.tsv_english` is **live** in `nlp_db` (alembic head `0019`; PLAN-0063 W5-2 shipped 2026-05-06). This plan must not duplicate the migration. Wave 1 Task T-W6-1-01 can skip the alembic-head gate check — the dependency is met. Implementers should still verify `ix_chunks_tsv_english_gin` exists before starting Wave 3 (`\d chunks` in psql).
 
 ---
 
@@ -202,7 +202,7 @@ Wave 1: Schema + Contracts (parallelisable with Wave 4 frontend skeleton)
                     └─► Wave 5: Integration / Acceptance / Docs
 ```
 
-Estimated total effort: **3.5 dev-days** (PRD says 4 — minor compression because chunks.tsv is reused, not built).
+Estimated total effort: **3.5 dev-days** (PRD says 4 — minor compression because `chunks.tsv_english` GIN is already live, not built here).
 
 Critical path: Wave 1 → Wave 2 → Wave 3 → Wave 4 → Wave 5.
 Parallelism opportunity: Wave 1 task T-W6-1-04 (frontend types) can start in parallel with T-W6-1-01..03 (backend schemas).
@@ -237,7 +237,7 @@ Parallelism opportunity: Wave 1 task T-W6-1-04 (frontend types) can start in par
   - `date_from: datetime | None = None` — interpreted as UTC; if naive, raise `ValueError`.
   - `date_to: datetime | None = None`
   - `page: int = Field(default=1, ge=1, le=40)`
-  - `page_size: int = Field(default=25, ge=1, le=50)`
+  - `page_size: int = Field(default=25, ge=1, le=100)` — **max bumped from 50 → 100 per Sam-alignment audit (§3 AD-W6-5); surface 25/50/100 chips in frontend**
   - **Invariants**: `date_from <= date_to` if both set (validator); use case raises `DomainError` otherwise.
 - **`SearchDocumentResult(BaseModel)`** — single hit.
   - `doc_id: UUID`
@@ -247,7 +247,7 @@ Parallelism opportunity: Wave 1 task T-W6-1-04 (frontend types) can start in par
   - `published_at: datetime | None`
   - `snippet: str | None` — top-ranked chunk fragment as **plain text** (no HTML), ≤300 chars. Null when `ts_headline` generation fails.
   - `match_offsets: list[tuple[int, int]]` — list of `(start, end)` character offsets within `snippet` marking matches. Frontend renders `<mark>` from these via React-safe rendering (no `dangerouslySetInnerHTML`). Empty list when snippet is null.
-  - `score: float` — `MAX(ts_rank_cd(tsv, websearch_to_tsquery('english', :q)))` aggregated per doc.
+  - `score: float` — `MAX(ts_rank_cd(tsv_english, websearch_to_tsquery('english', :q)))` aggregated per doc.
   - `entity_hits: list[UUID]` — resolved entity IDs that matched the entity facet (for highlight UI).
 - **`SearchDocumentsFacet(BaseModel)`** — entity facet sidebar item.
   - `entity_id: UUID`
@@ -268,7 +268,7 @@ Parallelism opportunity: Wave 1 task T-W6-1-04 (frontend types) can start in par
 |------|------------------|
 | `test_request_q_required_min_length_1` | q="" raises `ValidationError` |
 | `test_request_q_max_length_500` | q with 501 chars raises |
-| `test_request_page_size_clamped_to_50` | page_size=51 raises |
+| `test_request_page_size_clamped_to_100` | page_size=101 raises (max is 100 per Sam-alignment audit) |
 | `test_request_page_max_40` | page=41 raises |
 | `test_request_date_range_inverted_rejected` | date_from > date_to raises |
 | `test_request_naive_datetime_rejected` | tz-naive datetime raises |
@@ -394,7 +394,7 @@ Minimum 5 tests.
 | `apps/worldview-web/lib/gateway.ts` (shim) | If we accidentally re-export from the wrong place after PLAN-0059 E-1 split | Add export only via `lib/api/search.ts`, never directly in `gateway.ts` |
 
 ### Wave 1 Regression Guardrails
-- **BP-019** (DDL must match ORM): N/A — no DDL in this wave (chunks.tsv comes from PLAN-0063 W5-2).
+- **BP-019** (DDL must match ORM): N/A — no DDL in this wave (`chunks.tsv_english` and `ix_chunks_tsv_english_gin` come from PLAN-0063 W5-2, already shipped).
 - **BP-064** (FastAPI 204 status): use 501 + dict, never 501 + None.
 - **BP-127** (pre-commit ruff drift): run `uvx ruff format --check` *file-mode* on staged Python files before commit.
 - **BP-205-equivalent** (untyped frontend): every new TS field has an explicit type — no `any`.
@@ -453,12 +453,12 @@ WITH ranked_chunks AS (
     SELECT
         c.doc_id,
         c.chunk_id,
-        ts_rank_cd(c.tsv, websearch_to_tsquery('english', $1)) AS rank,
-        ts_headline('english', c.chunk_text_key,
+        ts_rank_cd(c.tsv_english, websearch_to_tsquery('english', $1)) AS rank,
+        ts_headline('english', c.chunk_text,
                     websearch_to_tsquery('english', $1),
                     'MaxFragments=1, MaxWords=40, MinWords=15, ShortWord=3, StartSel=E''\x02'', StopSel=E''\x03''') AS snippet_marked
     FROM chunks c
-    WHERE c.tsv @@ websearch_to_tsquery('english', $1)
+    WHERE c.tsv_english @@ websearch_to_tsquery('english', $1)
 ),
 top_chunk_per_doc AS (
     SELECT DISTINCT ON (rc.doc_id)
@@ -580,7 +580,7 @@ Minimum 13 unit tests + 3 integration tests (real Postgres testcontainer).
 
 **Acceptance criteria**:
 - [ ] All 16 tests pass.
-- [ ] `EXPLAIN ANALYZE` of search query against seeded test DB shows `Bitmap Index Scan on ix_chunks_tsv_gin` AND a `Hash Join` on `document_source_metadata` (never `Nested Loop`) — asserted in integration test.
+- [ ] `EXPLAIN ANALYZE` of search query against seeded test DB shows `Bitmap Index Scan on ix_chunks_tsv_english_gin` AND a `Hash Join` on `document_source_metadata` (never `Nested Loop`) — asserted in integration test.
 - [ ] mypy + ruff clean.
 - [ ] Source SQL contains no `canonical_entities` reference (grep assertion in test).
 
@@ -648,7 +648,7 @@ Minimum 12 tests.
 - `services/nlp-pipeline/alembic/versions/0002_add_document_source_metadata.py` — confirm `document_source_metadata(doc_id, source_type, published_at, ingested_at)` shape
 - `services/nlp-pipeline/src/nlp_pipeline/infrastructure/intelligence_db/repositories/canonical_entity.py` — existing intelligence_db pool pattern (do NOT use this — listed for context only; we use S7 HTTP instead)
 - `services/content-store/src/content_store/api/documents.py` — S5 batch endpoint contract
-- S7 entity-canonical batch endpoint contract — read existing API spec for `POST /internal/v1/entities/batch`
+- S7 entity-canonical batch endpoint contract — read existing API spec for `POST /api/v1/entities/batch`
 - `services/nlp-pipeline/src/nlp_pipeline/clients/` (if exists) — existing S5/S7 client patterns; otherwise add minimal clients in this task
 - `services/api-gateway/src/api_gateway/routes/proxy.py:74` (`_system_headers` precedent) — used by S6 clients to mint a system JWT for internal calls
 - `docs/audits/2026-04-23-local-bring-up-remediation-report.md` — BP-180 (CAST asyncpg pattern)
@@ -656,7 +656,7 @@ Minimum 12 tests.
 ### Wave 2 Validation Gate
 - [ ] ruff + mypy clean
 - [ ] ≥28 new unit tests + ≥3 integration tests pass
-- [ ] Integration test asserts GIN index used (`EXPLAIN ANALYZE` contains `Bitmap Index Scan on ix_chunks_tsv_gin`) AND `Hash Join` on `document_source_metadata` (never `Nested Loop` per filter)
+- [ ] Integration test asserts GIN index used (`EXPLAIN ANALYZE` contains `Bitmap Index Scan on ix_chunks_tsv_english_gin`) AND `Hash Join` on `document_source_metadata` (never `Nested Loop` per filter)
 - [ ] grep assertion: source SQL contains zero `canonical_entities` references
 - [ ] Architecture test (R25 use-case-only) passes
 - [ ] No `print` / stdlib logging — structlog only
@@ -667,7 +667,7 @@ Minimum 12 tests.
 | `services/nlp-pipeline/src/nlp_pipeline/app.py` startup | New repository + S5 + S7 clients need wiring | Add `app.state.document_search_repo`, `app.state.s5_batch_client`, `app.state.s7_batch_client` to lifespan; add to readiness probe |
 | `services/nlp-pipeline/tests/conftest.py` | New test fixtures needed for repo + 2 clients | Add `document_search_repo` fixture wrapping a pg testcontainer + httpx mock fixtures for S5/S7 |
 | `services/nlp-pipeline/src/nlp_pipeline/clients/s5_client.py` (may not exist) | Use case depends on it | If not present, create a thin httpx async client in this wave |
-| `services/nlp-pipeline/src/nlp_pipeline/clients/s7_client.py` (likely not present) | Use case depends on it | Create a thin httpx async client; mints internal JWT via existing `_system_headers` pattern; targets `POST /internal/v1/entities/batch` |
+| `services/nlp-pipeline/src/nlp_pipeline/clients/s7_client.py` (likely not present) | Use case depends on it | Create a thin httpx async client; mints internal JWT via existing `_system_headers` pattern; targets `POST /api/v1/entities/batch` |
 
 ### Wave 2 Regression Guardrails
 - **BP-180** (asyncpg AmbiguousParameterError on nullable params): every nullable filter must use `CAST($N AS uuid[]) IS NULL OR ...` style.
@@ -684,7 +684,7 @@ Minimum 12 tests.
 ## 8. Wave 3 — API Route, Metrics Wiring, S6 End-to-End
 
 **Goal**: Replace the 501 placeholder with the real handler, instrument metrics, and ship the search endpoint inside S6 with full integration tests.
-**Depends on**: Wave 1, Wave 2, **PLAN-0063 Wave W5-2 (`chunks.tsv` GIN index `ix_chunks_tsv_gin` live; alembic head ≥ 0017)**
+**Depends on**: Wave 1, Wave 2. **PLAN-0063 Wave W5-2 dependency MET** — `chunks.tsv_english` GIN index `ix_chunks_tsv_english_gin` is live (alembic 0017 shipped 2026-05-06; current head is 0019).
 **Estimated effort**: 60–90 min
 **Architecture layer**: API + integration
 
@@ -735,7 +735,7 @@ Minimum 7 tests.
 #### T-W6-3-02: Integration tests against real seeded data
 
 **Type**: test
-**depends_on**: T-W6-3-01, **PLAN-0063 Wave W5-2 (chunks.tsv GIN `ix_chunks_tsv_gin` must be live)**
+**depends_on**: T-W6-3-01. **PLAN-0063 W5-2 dependency MET** — GIN `ix_chunks_tsv_english_gin` live since 2026-05-06.
 **blocks**: T-W6-5-01
 **Target files**:
 - `services/nlp-pipeline/tests/integration/test_search_documents_e2e.py` (new)
@@ -751,7 +751,7 @@ Minimum 7 tests.
 | `test_search_pagination_consistent` | 30 hits, page=1+page=2 → 25+5, no overlap |
 | `test_search_facets_top_25_capped` | seed 30 distinct entities, response.facets.length == 25 |
 | `test_search_p95_latency_under_500ms_end_to_end` | seed 1k chunks, run search 50× including S5+S7 batch hops (mocked at 100ms each) → p95 < 500ms (PRD §4 NFR). Latency budget breakdown: tsvector + facets SQL ≤ 250ms; S5 batch hop ≤ 100ms (parallel with S7); S7 batch hop ≤ 100ms (parallel with S5); snippet post-processing + serialisation ≤ 50ms. |
-| `test_search_explain_uses_gin_and_hash_join` | `EXPLAIN ANALYZE` plan contains `Bitmap Index Scan on ix_chunks_tsv_gin` AND `Hash Join` on `document_source_metadata`; never `Nested Loop` per filter |
+| `test_search_explain_uses_gin_and_hash_join` | `EXPLAIN ANALYZE` plan contains `Bitmap Index Scan on ix_chunks_tsv_english_gin` AND `Hash Join` on `document_source_metadata`; never `Nested Loop` per filter |
 | `test_search_special_chars_in_query_no_500` | `q="C:\\windows&|!"` → 200 |
 
 Minimum 9 integration tests.
@@ -760,10 +760,10 @@ Minimum 9 integration tests.
 
 | Hop | Budget | Notes |
 |-----|--------|-------|
-| `tsvector` search SQL (Query 1 + Query 2) | ≤ 200 ms | bitmap-index scan via `ix_chunks_tsv_gin` + hash join on `document_source_metadata` |
+| `tsvector` search SQL (Query 1 + Query 2) | ≤ 200 ms | bitmap-index scan via `ix_chunks_tsv_english_gin` + hash join on `document_source_metadata` |
 | Facets SQL (Query 3) | ≤ 50 ms | only runs when result set is non-empty |
 | S5 `POST /api/v1/documents/batch` | ≤ 100 ms | parallel with S7 via `asyncio.gather` |
-| S7 `POST /internal/v1/entities/batch` | ≤ 100 ms | parallel with S5 |
+| S7 `POST /api/v1/entities/batch` | ≤ 100 ms | parallel with S5 |
 | Snippet post-processing + serialisation | ≤ 50 ms | pure Python, in-memory |
 | **Total p95 target** | **≤ 500 ms** | (S5/S7 are parallel, so contribute max not sum: 100 ms not 200 ms) |
 
@@ -777,13 +777,13 @@ If the integration test misses the target, the fallback options are: (a) reduce 
 
 ### Wave 3 Pre-read
 - `services/nlp-pipeline/src/nlp_pipeline/api/routes/search.py` — existing route style for reference
-- PLAN-0063 Wave W5-2 commit (verify `chunks.tsv` and `ix_chunks_tsv_gin` are live before starting Wave 3)
+- PLAN-0063 Wave W5-2 **SHIPPED** (alembic 0017 live). Verify `ix_chunks_tsv_english_gin` exists (`\d chunks` in psql) before starting Wave 3 as a sanity check.
 
 ### Wave 3 Validation Gate
 - [ ] ruff + mypy clean
 - [ ] All Wave 3 tests pass (≥15)
 - [ ] All Wave 1 contract tests still green (501→200 assertion update)
-- [ ] PLAN-0063 Wave W5-2 confirmed shipped (alembic head ≥ `0017`; index `ix_chunks_tsv_gin` exists in `nlp_db`)
+- [x] PLAN-0063 Wave W5-2 confirmed shipped (alembic head `0019` ≥ `0017`; index `ix_chunks_tsv_english_gin` live since 2026-05-06)
 - [ ] Manual smoke: `curl` against running S6 returns valid JSON
 
 ### Wave 3 Break Impact
@@ -828,7 +828,7 @@ If the integration test misses the target, the fallback options are: (a) reduce 
 - `GET /v1/search` on S9 forwarding to S6 `/api/v1/search/documents`.
 - Authenticated via existing OIDC middleware (logged-in users only). For unauthenticated callers, return 401 (anonymous searching is out of scope; landing page may stub it later).
 - The S9 → S6 hop **must mint a system JWT** via `_system_headers(request)` (precedent: `services/api-gateway/src/api_gateway/routes/proxy.py:74` — already used by `/v1/news/relevant` and `/v1/search/instruments`). S6 routes are protected by `InternalJWTMiddleware`; without `X-Internal-JWT` the call returns 401.
-- Rate limiting: relies on the **existing global** `RateLimitMiddleware` (per-user, per-minute, default 100/60s). No per-route, per-tenant, or per-day bucket is added in this plan — that work is deferred to PLAN-0065 (W8) where it joins tier and Stripe quota machinery (see §0 Architecture Compliance Adjustments and §15 Follow-ups).
+- Rate limiting: relies on the **existing global** `RateLimitMiddleware` (per-user, per-minute, default 100/60s). No per-route, per-tenant, or per-day bucket is added in this plan — that work is deferred to the W8 RLS+Stripe plan (TBD — no plan ID yet; PLAN-0065 is W9 observability, already complete) where it joins tier and Stripe quota machinery (see §0 Architecture Compliance Adjustments and §15 Follow-ups).
 - Forward all query params verbatim; do not modify q.
 - Response: stream the JSON body straight through (no transformation).
 - Errors: 502 on downstream timeout, 503 if S6 returns 503, otherwise propagate status.
@@ -1181,11 +1181,11 @@ If none of these patterns have already fired during implementation, an explicit 
 |---------|--------|
 | Avro schema changes | None |
 | Kafka topic changes | None |
-| DB migrations | None in this plan (chunks.tsv + GIN `ix_chunks_tsv_gin` come from PLAN-0063 W5-2) |
+| DB migrations | None in this plan (`chunks.tsv_english` + GIN `ix_chunks_tsv_english_gin` come from PLAN-0063 W5-2, shipped 2026-05-06) |
 | Outbox pattern | N/A — read-only feature |
 | Idempotency | N/A — read-only |
 | Auth | Existing OIDC middleware on S9 + InternalJWTMiddleware on S6; S9 → S6 uses `_system_headers` precedent to mint `X-Internal-JWT` |
-| Rate limiting | **No new bucket added.** Relies on existing global `RateLimitMiddleware` (per-user, per-minute). Per-tenant per-day deferred to PLAN-0065 (W8). |
+| Rate limiting | **No new bucket added.** Relies on existing global `RateLimitMiddleware` (per-user, per-minute). Per-tenant per-day deferred to the W8 RLS+Stripe plan (TBD — no plan ID yet; PLAN-0065 is W9 observability, already complete). |
 | Documentation | T-W6-5-02 covers nlp-pipeline + api-gateway + worldview-web docs + MASTER_PLAN |
 | Frontend security | Snippet rendered as React JSX `<mark>` from `match_offsets` (no HTML on the wire, no `dangerouslySetInnerHTML`, no DOMPurify needed); nuqs for URL state |
 | Observability | 3 new Prometheus series; existing structlog patterns |
@@ -1202,12 +1202,12 @@ Wave 1 → Wave 2 → Wave 3 → Wave 4 → Wave 5 (linear).
 Highest-leverage parallelism: T-W6-1-04 (frontend types) can start as soon as T-W6-1-01 lands the Pydantic spec.
 
 ### Highest risk
-**Wave 3** is the riskiest. It depends on PLAN-0063 Wave W5-2 (chunks.tsv + GIN `ix_chunks_tsv_gin`). If that slips, this plan must wait. Mitigation: verify alembic head ≥ 0017 at the start of Wave 3 and abort early if not.
+**Wave 3** was the riskiest. Its PLAN-0063 W5-2 dependency is now **MET** (`chunks.tsv_english` GIN `ix_chunks_tsv_english_gin` live since 2026-05-06). Residual risk: latency NFR at MVP scale (see secondary risks below).
 
 ### Secondary risks
 - **Latency NFR (≤500ms p95)**: untested at MVP scale, and the budget now includes two parallel batch HTTP hops (S5 + S7). Mitigation: T-W6-3-02 includes a synthetic 1k-chunk latency assertion with mocked S5/S7 at 100ms each; the latency budget table in Wave 3 makes per-hop allotments explicit. T-W6-5-01 retests against ≥10K chunks. If p95 misses, options: (a) reduce default page_size to 10; (b) tighten LIMIT in CTE; (c) split facets into a separate `/v1/search/facets` endpoint with a higher latency budget; (d) escalate to /investigate.
 - **Empty entity facets**: if W1 has not seeded enough canonicals (PLAN-0057 SHIP closed but ongoing seeding), facets may be sparse. Mitigation: T-W6-5-01 documents coverage gap rather than failing.
-- **S7 batch endpoint absence or instability**: the use case depends on `POST /internal/v1/entities/batch` being available and within latency budget. Mitigation: pre-read in Wave 2 confirms endpoint presence; client wraps `httpx.Timeout(2.0)` so a slow S7 cannot stall the request; if S7 returns partial data, facets fall back to `name=str(entity_id)` and log WARN.
+- **S7 batch endpoint absence or instability**: the use case depends on `POST /api/v1/entities/batch` being available and within latency budget. Mitigation: pre-read in Wave 2 confirms endpoint presence; client wraps `httpx.Timeout(2.0)` so a slow S7 cannot stall the request; if S7 returns partial data, facets fall back to `name=str(entity_id)` and log WARN.
 - **Per-day rate limit gap**: PRD §4 NFR table mentions "100 search/day"; the existing middleware enforces only per-minute limits. Mitigation: documented as deferred work (PLAN-0065 / W8); for MVP the 100/min/user limit is sufficient.
 
 ### Rollback strategy
@@ -1223,9 +1223,9 @@ Plan is fully revertable via `git revert` of each wave commit. No destructive mi
 
 | ID | Question | Severity | Resolution |
 |----|---------|----------|-----------------|
-| OQ-W6-A | Where does `canonical_entities` live for the facet query? | **RESOLVED** | `intelligence_db`, accessed via S7 batch HTTP (`POST /internal/v1/entities/batch`). No JOIN inside `nlp_db`. See AD-W6-3 + Wave 2 T-W6-2-03. |
+| OQ-W6-A | Where does `canonical_entities` live for the facet query? | **RESOLVED** | `intelligence_db`, accessed via S7 batch HTTP (`POST /api/v1/entities/batch`). No JOIN inside `nlp_db`. See AD-W6-3 + Wave 2 T-W6-2-03. |
 | OQ-W6-B | Is anonymous (no-JWT) search desired for the public landing page? | LOW | Currently rejected as 401 in T-W6-4-01. Easy to flip to system JWT later if product wants it. |
-| OQ-W6-C | Per-tenant per-day search rate limit | **DEFERRED** | Not added in this plan; existing global per-user-per-minute is enforced. Tracked in §15 follow-ups for PLAN-0065 (W8). |
+| OQ-W6-C | Per-tenant per-day search rate limit | **DEFERRED** | Not added in this plan; existing global per-user-per-minute is enforced. Tracked in §15 follow-ups for the W8 RLS+Stripe plan (TBD — no plan ID yet; PLAN-0065 is W9 observability, already complete). |
 | OQ-W6-D | Are transcripts ever ingested in MVP scope? | **RESOLVED** | No. `transcript` is removed from the `source_type` enum until ingestion ships. See §0 Known Limitations. |
 | OQ-W6-E | Should highlighted snippet be HTML (`<mark>`) or plain text? | **RESOLVED** | Plain text + `match_offsets`. Frontend renders `<mark>` via React JSX (no `dangerouslySetInnerHTML`, no DOMPurify). See AD-W6-3 snippet contract. |
 | OQ-W6-F | Should the S5 hop fields move into `document_source_metadata` to avoid a roundtrip? | LOW | Considered; rejected for MVP. Adding `title` / `source_url` to nlp_db would require a sync pipeline. The S5 batch hop is cheap (parallel with S7) and keeps the source-of-truth in S5. |
@@ -1251,10 +1251,10 @@ PRD's 4 dev-day estimate is honoured. ~0.5 day saved by reusing PLAN-0063's GIN 
 
 ## 15. Recommended Execution Order
 
-1. Verify PLAN-0063 Wave W5-2 status. If shipped (alembic head ≥ 0017, index `ix_chunks_tsv_gin` exists), proceed.
-2. `/implement PLAN-0064 Wave 1` — schema/contracts/types (parallel-safe).
+1. ~~Verify PLAN-0063 Wave W5-2 status~~ **DONE** — alembic 0017 shipped 2026-05-06; `ix_chunks_tsv_english_gin` live. Sanity-check: `\d chunks` in psql confirms index.
+2. `/implement PLAN-0064 Wave 1` — schema/contracts/types (parallel-safe). Can start immediately.
 3. `/implement PLAN-0064 Wave 2` — repo + use case + S5 + S7 clients + snippet helper.
-4. **Gate**: confirm PLAN-0063 Wave W5-2 alembic shipped and `ix_chunks_tsv_gin` exists.
+4. ~~**Gate**: confirm PLAN-0063 Wave W5-2 alembic shipped~~ — **already met**.
 5. `/implement PLAN-0064 Wave 3` — route + integration.
 6. `/implement PLAN-0064 Wave 4` — S9 + frontend.
 7. **Gate**: confirm PLAN-0055 has populated S&P 500 universe.
@@ -1269,8 +1269,8 @@ These items were considered during the 2026-05-03 audit and intentionally pushed
 
 | Item | Why deferred | Owner / next plan |
 |------|--------------|-------------------|
-| Per-route, per-tenant, per-day rate limit on `/v1/search` (`100 search/day` from PRD §4 NFR) | Requires extending `RateLimitMiddleware` with rule-table, tenant key, and 24h window — 0.5–1 dev-day cross-cutting work. Belongs alongside W8 tier/quota machinery. | PLAN-0065 (W8) |
-| `ReadOnlyUnitOfWork` / read-replica abstraction in nlp-pipeline | nlp-pipeline currently has a single pool. Building a read-replica abstraction is its own architectural change. Acceptable for MVP. | TBD — track in PLAN-0066 (W9) or a dedicated R27 retrofit plan |
+| Per-route, per-tenant, per-day rate limit on `/v1/search` (`100 search/day` from PRD §4 NFR) | Requires extending `RateLimitMiddleware` with rule-table, tenant key, and 24h window — 0.5–1 dev-day cross-cutting work. Belongs alongside W8 tier/quota machinery. | the W8 RLS+Stripe plan (TBD — no plan ID yet; PLAN-0065 is W9 observability, already complete) |
+| `ReadOnlyUnitOfWork` / read-replica abstraction in nlp-pipeline | nlp-pipeline currently has a single pool. Building a read-replica abstraction is its own architectural change. Acceptable for MVP. | TBD — dedicated R27 retrofit plan (note: PLAN-0066 is W10 Brief Intelligence, already complete) |
 | `transcript` source_type | Awaiting ingestion. When transcripts ship, add the enum value and update T-W6-1-01 / T-W6-3-02. | Future content-ingestion work |
 | Move `title` + `source_url` into `document_source_metadata` to remove the S5 batch hop | Would require a sync pipeline; latency budget already accommodates the hop; not worth the complexity for MVP. | Re-evaluate at v1.1 if latency missed |
 | Fuzzy / typo-tolerant matching | Trade-off accepted in AD-W6-2. | v1.1 |

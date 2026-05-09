@@ -2,6 +2,8 @@
 """Seed script: inserts synthetic eval corpus into nlp_db (document_source_metadata / sections / chunks / chunk_embeddings).
 
 Run: python3 scripts/seed-eval-corpus.py
+     python3 scripts/seed-eval-corpus.py --corpus-only   # skip CORPUS/LEGACY_CORPUS, seed only from corpus file
+
 Env vars:
   OLLAMA_URL  - default http://localhost:11434
   EVAL_DB_URL - default postgresql://postgres:postgres@localhost:5432/nlp_db
@@ -9,7 +11,10 @@ Env vars:
 
 from __future__ import annotations
 
+import argparse
+import json
 import os
+import pathlib
 import time
 import uuid
 
@@ -5688,7 +5693,179 @@ def _seed_legacy_corpus(conn: psycopg2.connection) -> None:
     print(f"[seed-eval-corpus] Legacy corpus seeded ({len(LEGACY_CORPUS)} rows).")
 
 
+# ---------------------------------------------------------------------------
+# Corpus-file seeder — reads tests/eval/corpus/documents.jsonl and upserts
+# every entry into the DB without calling Ollama.  Embedding is deferred:
+# each chunk is queued in ``embedding_pending`` for the EmbeddingRetryWorker.
+#
+# The corpus file is the source-of-truth for ALL 536 golden-set chunk IDs:
+#   - 138 UUIDv5  — synthetic legacy chunks (already seeded by LEGACY_CORPUS)
+#   - 29  UUIDv7  — internal-doc uploads already in the DB
+#   - 369 UUIDv7  — news articles from Apr-May 2026 (lost in corpus wipe)
+#
+# Running this function is always safe: every INSERT uses ON CONFLICT DO NOTHING.
+# ---------------------------------------------------------------------------
+
+# Resolve path relative to this script's location so it works from any cwd.
+_CORPUS_FILE = pathlib.Path(__file__).resolve().parent.parent / "tests" / "eval" / "corpus" / "documents.jsonl"
+
+
+def seed_from_corpus_file(conn: psycopg2.connection) -> None:
+    """Read tests/eval/corpus/documents.jsonl and upsert all entries into the DB.
+
+    For each chunk_id that does not yet exist in the ``chunks`` table the
+    function:
+      1. Upserts the parent document record in ``document_source_metadata``.
+      2. Upserts the section record in ``sections``.
+      3. Upserts the chunk record in ``chunks``.
+      4. Inserts a row into ``embedding_pending`` so the EmbeddingRetryWorker
+         picks it up asynchronously — no Ollama call happens here.
+
+    Chunks that already exist are skipped via ON CONFLICT DO NOTHING on every
+    INSERT, making this function fully idempotent.
+    """
+    if not _CORPUS_FILE.exists():
+        print(f"[seed-eval-corpus] WARNING: corpus file not found at {_CORPUS_FILE} — skipping")
+        return
+
+    print(f"[seed-eval-corpus] Reading corpus file: {_CORPUS_FILE}")
+    entries: list[dict] = []
+    with _CORPUS_FILE.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                entries.append(json.loads(line))
+
+    print(f"[seed-eval-corpus] Seeding {len(entries)} corpus entries (no embeddings — deferred to worker)...")
+
+    cur = conn.cursor()
+    inserted = 0
+    skipped = 0
+
+    for _idx, entry in enumerate(entries):
+        chunk_id: str = entry["chunk_id"]
+        doc_id: str = entry["doc_id"]
+        section_id: str = entry["section_id"]
+        chunk_text: str = entry.get("chunk_text", "")
+        title_denorm: str = entry.get("title_denorm", "") or ""
+        section_heading: str = entry.get("section_heading_denorm", "") or ""
+        source_type: str = entry.get("source_type", "unknown")
+        source_name: str | None = entry.get("source_name") or None
+        published_at: str | None = entry.get("published_at") or None
+        doc_title: str = entry.get("doc_title", "") or title_denorm
+
+        # Skip if chunk already exists — fast path avoids redundant doc/section work.
+        cur.execute("SELECT 1 FROM chunks WHERE chunk_id = %s", (chunk_id,))
+        if cur.fetchone():
+            skipped += 1
+            continue
+
+        # 1. Upsert document_source_metadata
+        cur.execute(
+            """
+            INSERT INTO document_source_metadata
+                (doc_id, title, url, published_at, source_name, source_type, word_count)
+            VALUES (%s, %s, NULL, %s, %s, %s, %s)
+            ON CONFLICT (doc_id) DO NOTHING
+            """,
+            (
+                doc_id,
+                doc_title,
+                published_at,
+                source_name,
+                source_type,
+                len(chunk_text.split()),
+            ),
+        )
+
+        # 2. Upsert section
+        cur.execute(
+            """
+            INSERT INTO sections
+                (section_id, doc_id, section_index, section_type, title, char_start, char_end, token_count)
+            VALUES (%s, %s, 0, 'body', NULL, 0, %s, %s)
+            ON CONFLICT (section_id) DO NOTHING
+            """,
+            (section_id, doc_id, len(chunk_text), len(chunk_text) // 4),
+        )
+
+        # 3. Upsert chunk
+        cur.execute(
+            """
+            INSERT INTO chunks
+                (chunk_id, doc_id, section_id, chunk_index, char_start, char_end, token_count,
+                 title_denorm, section_heading_denorm, chunk_text, entity_mentions)
+            VALUES (%s, %s, %s, %s, 0, %s, %s, %s, %s, %s, '[]')
+            ON CONFLICT (chunk_id) DO NOTHING
+            """,
+            (
+                chunk_id,
+                doc_id,
+                section_id,
+                entry.get("chunk_index", 0),
+                len(chunk_text),
+                len(chunk_text) // 4,
+                title_denorm,
+                section_heading or None,
+                chunk_text,
+            ),
+        )
+
+        # 4. Queue for embedding — EmbeddingRetryWorker picks this up; we do NOT
+        #    call Ollama here so this seed function works with no ML services running.
+        #    embedding_pending has no unique constraint on chunk_id (its PK is
+        #    pending_id), so we guard against duplicates with an existence check.
+        cur.execute(
+            "SELECT 1 FROM embedding_pending WHERE chunk_id = %s LIMIT 1",
+            (chunk_id,),
+        )
+        if not cur.fetchone():
+            cur.execute(
+                """
+                INSERT INTO embedding_pending
+                    (doc_id, section_id, chunk_id, embedding_text, retry_count, next_retry_at, created_at)
+                VALUES (%s, %s, %s, %s, 0, NOW(), NOW())
+                """,
+                (doc_id, section_id, chunk_id, chunk_text[:2000]),
+            )
+
+        inserted += 1
+
+        # Commit in batches to avoid long-running transactions.
+        if (inserted % 50) == 0:
+            conn.commit()
+            print(f"  Committed {inserted} new rows (skipped {skipped} existing)...")
+
+    conn.commit()
+    cur.close()
+    print(
+        f"[seed-eval-corpus] Corpus file seeded: {inserted} new rows inserted, "
+        f"{skipped} already-existing rows skipped."
+    )
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Seed eval corpus into nlp_db")
+    parser.add_argument(
+        "--corpus-only",
+        action="store_true",
+        help="Seed only from tests/eval/corpus/documents.jsonl (skip CORPUS and LEGACY_CORPUS)",
+    )
+    args = parser.parse_args()
+
+    print("[seed-eval-corpus] Connecting to database...")
+    conn = psycopg2.connect(EVAL_DB_URL)
+    conn.autocommit = False
+
+    if args.corpus_only:
+        # Fast path: no Ollama required, no embedding computed inline.
+        print("[seed-eval-corpus] --corpus-only mode: seeding from corpus file only.")
+        seed_from_corpus_file(conn)
+        conn.close()
+        print("[seed-eval-corpus] Done.")
+        return
+
+    # Full mode: embed CORPUS + LEGACY_CORPUS via Ollama, then seed corpus file.
     print(f"[seed-eval-corpus] Inserting {len(CORPUS)} chunks...")
 
     print("[seed-eval-corpus] Computing embeddings via Ollama bge-large...")
@@ -5703,9 +5880,6 @@ def main() -> None:
         )
         embeddings.extend(get_embeddings_batch([e["text"] for e in batch]))
 
-    print("[seed-eval-corpus] Connecting to database...")
-    conn = psycopg2.connect(EVAL_DB_URL)
-    conn.autocommit = False
     cur = conn.cursor()
 
     for idx, (entry, embedding) in enumerate(zip(CORPUS, embeddings, strict=False)):
@@ -5722,6 +5896,11 @@ def main() -> None:
     conn.commit()
     cur.close()
     _seed_legacy_corpus(conn)
+
+    # Seed the corpus file last — covers the 369 news chunks lost in the corpus
+    # wipe that neither CORPUS nor LEGACY_CORPUS contains.
+    seed_from_corpus_file(conn)
+
     conn.close()
     print("[seed-eval-corpus] Done. Corpus seeded successfully.")
 
