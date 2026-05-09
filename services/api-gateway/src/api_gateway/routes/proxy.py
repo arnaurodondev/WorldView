@@ -2011,6 +2011,48 @@ async def get_entity_contradictions(entity_id: str, request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+@router.post("/search/relations")
+async def search_relations(request: Request) -> Any:
+    """Proxy POST /api/v1/search/relations → S7 Knowledge Graph.
+
+    ANN search over relation summaries using a query embedding.
+    Returns relations ordered by cosine similarity (most similar first).
+    Auth required. Forwards X-Internal-JWT to S7.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.knowledge_graph.post(
+        "/api/v1/search/relations",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.post("/claims/search")
+async def search_claims(request: Request) -> Any:
+    """Proxy POST /api/v1/claims/search → S7 Knowledge Graph.
+
+    Search analyst claims for a set of entities with optional filters.
+    Returns claims ordered by extraction_confidence DESC.
+    Auth required. Forwards X-Internal-JWT to S7.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.knowledge_graph.post(
+        "/api/v1/claims/search",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 # ── Entity Intelligence, Narratives, Paths (PLAN-0074 Wave G) ────────────────
 #
 # All 5 new routes proxy to S7 Knowledge Graph or S8 RAG-Chat.

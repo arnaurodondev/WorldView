@@ -1,10 +1,11 @@
 # PRD-0034 — MVP Launch Readiness Program
 
 > **Document type**: Launch program meta-PRD (multi-workstream charter, not a single-feature PRD).
-> **Date**: 2026-05-02
+> **Date**: 2026-05-02 — **Revised 2026-05-09** (revise-prd audit: W6 plan-target corrected, workstream owner decisions locked, OQ-7/OQ-11 resolved, plan-number cascade fixed, security mitigation updated).
 > **Status**: draft
 > **Author**: Strategic investigation 2026-05-02 (synthesis of QA reports 2026-04-25..2026-05-01, PRD-0031 enhancement investigations, PLAN-0058 retrieval uplift, PLAN-0059 institutional remediation, ALERT_ENHANCEMENT_STRATEGY.md)
 > **Supersedes**: nothing. **Consumes**: PLAN-0058 (retrieval+KG), PLAN-0059 (frontend institutional), partial ALERT_ENHANCEMENT_STRATEGY.md.
+> **Workstream plan status** (2026-05-09): W4 → PLAN-0062 W4 + PLAN-0066 (complete); W5 → PLAN-0063 (in-progress 5/7); W6 → PLAN-0064 (draft 0/5); W9 → PLAN-0065 (complete); W1/W2/W3/W7/W8/W10 → plan TBD or partial.
 > **Auto-mode notice**: Phase-1 interactive Q&A was skipped. Open assumptions are listed in §14 with explicit BLOCKING / DEFERRED classification. **§14 BLOCKING items must be answered by the user before any /plan or /implement work begins.**
 
 ---
@@ -75,7 +76,7 @@ Organised by tier. Tier numbers map directly to launch sprint priority.
 
 | FR-T1-3 | Full-text search across articles + filings + transcripts with entity facets |
 |---|---|
-| | New search route `/search?q=...&entity=...&scope=...&source_type=...&date_from=...&date_preset=...`. Backed by Postgres `tsvector` over articles + EDGAR filings (transcripts deferred — see PLAN-0064 §0 Known Limitations). Entity facet sidebar populated from KG resolution and **pinned to the authenticated user's watchlist + portfolio at the top** (Sam-persona §2: ≤20 active tickers — default scope is `watchlist` when non-empty). **Ranking** blends `ts_rank_cd × source_weight × recency_decay` so EDGAR filings outrank tied-relevance news (revised 2026-05-03 per Sam-alignment audit; previously pure `ts_rank_cd` surfaced low-authority blogs). **Saved searches** with "what's new since" unread badges (PLAN-0064 T-W6-4-04) — required for the Sam-persona retention surface; free tier 5, Pro tier 50. **Snippet popover** (PLAN-0064 T-W6-4-05) lets Sam verify a hit without leaving the results page (AlphaSense/Sentieo pattern). Acceptance: search latency p95 ≤500ms (including watchlist-scope branch with 100 entity_ids); entity facet returns ≥1 hit for any S&P 500 ticker; result list uses cursor-based infinite scroll with a 25/50/100 page-size selector; zero-result state surfaces "Recent activity on TICKER" + "Broaden filters" CTA when entity-resolved. |
+| | New search route `GET /v1/search?q=...&entity_id=...&scope=...&source_type=...&date_from=...&date_to=...&date_preset=...&page=...&page_size=...` (S9 proxy to S6 nlp-pipeline). **Architecture locked 2026-05-03 (PLAN-0064)**: backed by Postgres `websearch_to_tsquery` over `chunks.tsv_english` GIN index (`ix_chunks_tsv_english_gin`, owned by PLAN-0063 W5-2). Transcripts deferred — `transcript` omitted from `source_type` enum until ingestion ships (PLAN-0064 §0 Known Limitations). Entity facet sidebar populated from KG resolution and **pinned to the authenticated user's watchlist + portfolio at the top** (Sam-persona §2: ≤20 active tickers — default scope is `watchlist` when non-empty). **Ranking** blends `ts_rank_cd × source_weight × recency_decay` so EDGAR filings outrank tied-relevance news (revised 2026-05-03 per Sam-alignment audit; previously pure `ts_rank_cd` surfaced low-authority blogs). **Saved searches** with "what's new since" unread badges (PLAN-0064 T-W6-4-04) — required for the Sam-persona retention surface; free tier 5, Pro tier 50. **Snippet popover** (PLAN-0064 T-W6-4-05) lets Sam verify a hit without leaving the results page (AlphaSense/Sentieo pattern). Acceptance: search latency p95 ≤500ms (including watchlist-scope branch with 100 entity_ids); entity facet returns ≥1 hit for any S&P 500 ticker; result list uses cursor-based infinite scroll with a 25/50/**100** page-size selector (max `page_size=100`, bumped from 50 per Sam-alignment audit, PLAN-0064 §3 AD-W6-5); zero-result state surfaces "Recent activity on TICKER" + "Broaden filters" CTA when entity-resolved. |
 
 ### Tier 2 — Trust and Feel
 
@@ -159,19 +160,19 @@ This PRD does not produce a single implementation plan. It produces **9 workstre
 **Owner**: rag-chat + ml-clients. **Consumes**: PLAN-0058 Waves C+D. **Estimate**: 5 dev-days. **/plan target**: existing `0058-retrieval-and-kg-strategic-uplift-plan.md` Waves C+D (already detailed).
 
 ### Workstream W6 — Full-Text Search with Entity Facets (Tier 1, FR-T1-3)
-**Owner**: content-store (S5) or new `search-service` shim + S9 + worldview-web. **Outputs**: tsvector indexes, search route, entity facet sidebar. **Estimate**: 4 dev-days. **/plan target**: `0063-full-text-search-plan.md`. **Needs follow-up detailed PRD** — this is the L1 keystone feature and warrants full schema/endpoint specification.
+**Owner**: nlp-pipeline (S6) + api-gateway (S9) + worldview-web. **Decision locked 2026-05-03 (PLAN-0064 §3 AD-W6-1)**: search lives in S6, not S5 or a new service, because entity facets require joining to `entity_mentions` which lives in `nlp_db`. **Outputs**: `GET /api/v1/search/documents` (S6) + `GET /v1/search` (S9 proxy) + `/search` Next.js page with entity facet sidebar. Reuses `chunks.tsv_english` GIN index `ix_chunks_tsv_english_gin` added by **PLAN-0063 Wave W5-2** (alembic 0017) — no new index maintenance. **Estimate**: 3.5–4 dev-days. **/plan target**: `0064-w6-full-text-search-plan.md` (PLAN-0064, authored 2026-05-03, draft 0/5 waves done). No further follow-up PRD required — PLAN-0064 §3 resolves OQ-7 (query params) and OQ-11 (Postgres vs Algolia) with concrete architecture decisions. See §14 OQ-7 and OQ-11 below.
 
 ### Workstream W7 — WebSocket Quote Stream (Tier 2, FR-T2-1)
-**Owner**: market-data (S2) + S9 + worldview-web. **Outputs**: Kafka producer fan-out from Alpaca WS + S9 WS proxy + 4 frontend subscription points. **Estimate**: 3 dev-days. **/plan target**: `0064-quote-stream-plan.md`. **Needs follow-up detailed PRD** — Avro schema for `market.quote.live.v1`, partition strategy, WS auth, reconnect/backpressure semantics.
+**Owner**: market-data (S2) + S9 + worldview-web. **Outputs**: Kafka producer fan-out from Alpaca WS + S9 WS proxy + 4 frontend subscription points. **Estimate**: 3 dev-days. **/plan target**: TBD (plan number not yet assigned). **Needs follow-up detailed PRD** — Avro schema for `market.quote.live.v1`, partition strategy, WS auth, reconnect/backpressure semantics.
 
 ### Workstream W8 — Multi-Tenant + Tier Gate + Stripe (Tier 2, FR-T2-2)
-**Owner**: cross-cutting (every service with user data) + S9 + worldview-web. **Consumes**: PRD-0002 (multi-tenant SaaS foundation, draft) + PRD-0025 (auth foundation, shipped). **Estimate**: 5 dev-days. **/plan target**: `0065-rls-tier-stripe-plan.md`. **Needs follow-up detailed PRD** — RLS policy per table, free/Pro feature matrix, Stripe webhook design, tenant provisioning flow.
+**Owner**: cross-cutting (every service with user data) + S9 + worldview-web. **Consumes**: PRD-0002 (multi-tenant SaaS foundation, draft) + PRD-0025 (auth foundation, shipped). **Estimate**: 5 dev-days. **/plan target**: TBD (plan number not yet assigned). **Needs follow-up detailed PRD** — RLS policy per table, free/Pro feature matrix, Stripe webhook design, tenant provisioning flow. Note: PLAN-0086 (Multi-Tenant Content Pipeline Isolation) completed 2026-05-08 covers content-pipeline tenant isolation but NOT the user-facing RLS + tier gate + Stripe subscription work described here.
 
 ### Workstream W9 — Visible Regression Cleanup + Observability (Tier 2+3, FR-T2-3, FR-T3-1)
-**Owner**: cross-cutting. **Outputs**: redeploy + offset reset, CSS fix, Sentry integration, UptimeRobot, status page. **Estimate**: 1.5 dev-days. **/plan target**: `0066-mvp-stability-observability-plan.md`.
+**Owner**: cross-cutting. **Outputs**: redeploy + offset reset, CSS fix, Sentry integration, UptimeRobot, status page. **Estimate**: 1.5 dev-days. **/plan target**: `0065-w9-regression-cleanup-observability-plan.md` (**PLAN-0065, completed 2026-05-04**). All 5 waves done. Sentry wired to all 10 backends + worldview-web. Status page live at `/status`. UptimeRobot + Grafana error-observability dashboard pending live deploy.
 
 ### Workstream W10 — Alert Explanation Field Only (Tier 3, FR-T3-2)
-**Owner**: alert-service (S10) + rag-chat (S8) + worldview-web. **Outputs**: `explanation` column on `alerts` table; `GenerateAlertExplanationUseCase`; frontend rendering. **Estimate**: 1.5 dev-days. **/plan target**: inline in W9 or standalone `0067-alert-explanation-plan.md`.
+**Owner**: alert-service (S10) + rag-chat (S8) + worldview-web. **Outputs**: `explanation` column on `alerts` table; `GenerateAlertExplanationUseCase`; frontend rendering. **Estimate**: 1.5 dev-days. **/plan target**: TBD (plan number not yet assigned). Note: PLAN-0066 (W10 Brief Intelligence + Temporal RAG, completed 2026-05-08) and PLAN-0067 (W11 Full Tool Catalog, completed 2026-05-08) use plan IDs that were originally reserved in this workstream list — the alert-explanation plan will use a new ID when authored.
 
 ## 7. Dependency Graph and Sprint Calendar
 
@@ -197,8 +198,8 @@ If a week slips, cut from Tier 3 (W10, observability extras) first, never from T
 ### AD-1: This is a launch program, not a single feature
 **Decision**: PRD-0034 stays at the meta-PRD level. Each workstream that needs a detailed entity/schema spec produces its own follow-up PRD-0035..PRD-0040 before its `/plan` runs.
 **Rationale**: A single 100KB PRD covering 9 workstreams produces a 9-wave plan with shallow detail per wave. Splitting at workstream boundaries keeps each detailed PRD focused on one consistent domain.
-**Workstreams that NEED their own detailed PRD** before /plan: W4 (brief schema), W6 (search), W7 (WS quote stream), W8 (RLS + Stripe).
-**Workstreams that can go straight to /plan** without further PRD: W1, W2, W3, W5 (already detailed in PLAN-0058), W9, W10.
+**Workstreams that NEED their own detailed PRD** before /plan: W7 (WS quote stream), W8 (RLS + Stripe). **Updated 2026-05-09**: W4 brief schema resolved in-PRD (PLAN-0062 W4 / PLAN-0066 complete); W6 search resolved in PLAN-0064 (PLAN-0064 §3 resolves OQ-7 + OQ-11 — no follow-up PRD needed).
+**Workstreams that can go straight to /plan** without further PRD: W1, W2, W3, W5 (already detailed in PLAN-0058), **W6** (PLAN-0064 draft 0/5 waves), W9 (PLAN-0065 complete), W10 (plan TBD).
 
 ### AD-2: L1 lane decision (AI-native research terminal)
 **Decision**: Position MVP as L1, not L2 (retail prosumer dashboard) or L3 (news feed).
@@ -231,7 +232,7 @@ If a week slips, cut from Tier 3 (W10, observability extras) first, never from T
 | Cross-tenant data leakage | RLS policies (W8) on every table with `tenant_id` column. Integration test: 2-tenant fixture asserts queries return zero foreign rows. |
 | Stripe webhook spoofing | Verify webhook signature with Stripe-issued secret; reject on mismatch. Idempotency-key on subscription event processing. |
 | Free-tier rate limit bypass | Rate limit is per `tenant_id` from internal JWT, not per IP; abuse vector requires creating multiple accounts. Add email-verification-required for paid signup. |
-| Search query injection (tsvector) | Use parameterised query; escape `:` `&` `|` `!` `(` `)` from user input before passing to `to_tsquery`; or use `plainto_tsquery` which auto-escapes. |
+| Search query injection (tsvector) | **Locked 2026-05-03 (PLAN-0064 §3 AD-W6-3)**: use `websearch_to_tsquery('english', $1)` with asyncpg parameterised binding. `websearch_to_tsquery` auto-escapes all operators (`:`, `&`, `|`, `!`, `(`, `)`) AND supports user-facing quoted-phrase / `OR` / `-` syntax — strictly safer than `plainto_tsquery` (which strips operator intent) or `to_tsquery` (which requires manual escaping). Snippet highlights returned as plain-text + `match_offsets` (no HTML on the wire); no `dangerouslySetInnerHTML`; no DOMPurify needed. |
 | Alert explanation prompt injection | Untrusted alert payload goes into LLM prompt. Mitigation: structured prompt template; payload field values rendered as JSON not as instructions. Acceptable risk: explanation text is user-facing but not a privileged operation. |
 | WebSocket auth | WS connection requires `Authorization: Bearer <jwt>` on initial handshake (S9 InternalJWTMiddleware applies). Reject anonymous WS. |
 | Public status page leakage | Status page shows uptime only, not error details or stack traces. |
@@ -332,11 +333,11 @@ The doc currently lives at `docs/specs/ALERT_ENHANCEMENT_STRATEGY.md`. Recommend
 
 - **OQ-5**: ~~Exact JSON Schema for structured AI Brief response (W4)~~ **RESOLVED 2026-05-03** in §3 FR-T1-1: `{headline, lead, sections, confidence, generated_at}` where `lead` is a 1-sentence-to-1-paragraph synthesis with inline `[cN]` markers. PRD-0035 not required; PLAN-0062 W4 owns the Pydantic + TS implementation.
 - **OQ-6**: Avro schema for `market.quote.live.v1` (W7) — fields, partition key, retention. Defer to follow-up PRD-0037.
-- **OQ-7**: Search route exact query parameters and pagination semantics (W6). Defer to follow-up PRD-0036.
-- **OQ-8**: RLS policy text for each table (W8). Defer to follow-up PRD-0038.
-- **OQ-9**: Stripe product/price IDs and webhook event handling (W8). Defer to follow-up PRD-0038.
+- **OQ-7**: ~~Search route exact query parameters and pagination semantics (W6)~~ **RESOLVED 2026-05-03** in PLAN-0064 §3 AD-W6-5: `GET /v1/search?q=&entity_id=&scope=&source_type=&date_from=&date_to=&date_preset=&page=&page_size=`. `scope` default = `watchlist` when non-empty; `date_preset` values = `since_last_visit|7d|30d|90d`; `page_size` max = 100 (bumped from 50). `entity_id` repeatable (AND). No follow-up PRD-0036 required — PLAN-0064 is the definitive spec for W6.
+- **OQ-8**: RLS policy text for each table (W8). Defer to follow-up PRD when W8 plan is authored.
+- **OQ-9**: Stripe product/price IDs and webhook event handling (W8). Defer to follow-up PRD when W8 plan is authored.
 - **OQ-10**: Whether the 3 hand-curated alert profiles ship in W10 or are deferred to Phase-2. Recommend ship if W10 finishes ahead of schedule.
-- **OQ-11**: Whether to use a managed search service (Algolia / Typesense) vs. Postgres `tsvector` for W6. Recommend Postgres for cost; revisit if latency targets miss.
+- **OQ-11**: ~~Whether to use a managed search service (Algolia / Typesense) vs. Postgres `tsvector` for W6~~ **RESOLVED 2026-05-03** in PLAN-0064 §3 AD-W6-2: Postgres `tsvector` chosen. Cost: Algolia ~$50/month for 50K documents; Postgres is $0 incremental. Latency: GIN + ≤100K documents meets ≤500ms p95 at MVP scale. Re-evaluate at v1.1 if latency misses. `websearch_to_tsquery` provides fuzzy-operator UX without managed-search complexity.
 - **OQ-12**: Domain name for production launch and marketing site copy. Out of engineering scope but blocks public launch.
 
 ## 15. Estimation Summary
@@ -365,8 +366,8 @@ If calendar must compress to 4 weeks: cut W3 (do it inline during W1/W2), W6 (de
 
 1. **User reviews and answers OQ-1 through OQ-4** (BLOCKING).
 2. **Add the deprecation header to `docs/specs/ALERT_ENHANCEMENT_STRATEGY.md`** as recommended in §13.
-3. **Generate workstream-level detailed PRDs** for W4, W6, W7, W8 (the four workstreams flagged in AD-1 as needing follow-up PRDs). Suggested invocation pattern: `/prd Structured AI Brief schema (PRD-0034 W4 follow-up)`, etc.
-4. **For workstreams that can go straight to /plan** (W1, W2, W3, W5, W9, W10): invoke `/plan` per workstream, which will produce dependency-ordered waves.
+3. **Generate workstream-level detailed PRDs** for W7 and W8 only. **Updated 2026-05-09**: W4 brief schema is resolved (PLAN-0062 W4 + PLAN-0066 complete); W6 search spec is resolved in PLAN-0064 (no new PRD). Remaining: `/prd WebSocket quote stream (PRD-0034 W7 follow-up)` and `/prd RLS + tier gate + Stripe (PRD-0034 W8 follow-up)`.
+4. **For workstreams that can go straight to /plan** (W1, W2, W3, W5): invoke `/plan` per workstream; W6 → `/implement PLAN-0064 Wave 1` directly; W9 complete (PLAN-0065); W10 plan TBD.
 5. **/schedule a 6-week-out check-in agent** to verify launch metrics post-go-live (signups, NDCG@10, churn, error rate). Recommend: weekly cadence for the first 4 weeks post-launch.
 
 ---
