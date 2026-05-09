@@ -32,6 +32,36 @@ import httpx
 from nlp_pipeline.application.use_cases._snippet import _strip_markers
 from observability import get_logger  # type: ignore[import-untyped]
 
+# ── Domain-layer error types (PLAN-0064 W6 T-W6-3-01) ─────────────────────────
+# These are raised by the use case and caught by the API route to produce the
+# correct HTTP status codes (R25: route must not import from infrastructure).
+#
+# RetryableSearchError: transient DB/network failure (asyncpg QueryCanceledError,
+#   statement_timeout, connection pool exhausted). The route maps it to 503 so
+#   the client knows to retry. The error is NOT logged at exception level here —
+#   the calling code logs it as a warning to avoid log noise on transient blips.
+#
+# FatalSearchError: non-transient DB failure (programming error, schema mismatch,
+#   unexpected exception). The route maps it to 500 and logs the full traceback.
+
+
+class RetryableSearchError(Exception):
+    """Raised when the FTS query fails transiently (timeout, pool exhausted).
+
+    The API route maps this to HTTP 503 and the client should back off + retry.
+    Typical causes: asyncpg ``QueryCanceledError``, statement_timeout exceeded,
+    or a momentary loss of the Postgres connection pool.
+    """
+
+
+class FatalSearchError(Exception):
+    """Raised when the FTS query fails non-transiently (programming error, schema mismatch).
+
+    The API route maps this to HTTP 500.  These errors indicate a bug or
+    misconfiguration and should be investigated; retrying will not help.
+    """
+
+
 if TYPE_CHECKING:
     # TYPE_CHECKING-only: makes type hints work without runtime api/ import.
     # from __future__ import annotations turns all annotations into strings,

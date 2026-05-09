@@ -20,6 +20,7 @@ from nlp_pipeline.application.ports.repositories import NewsQueryPort, SignalsQu
 from nlp_pipeline.application.use_cases.dlq_admin import DLQAdminUseCase
 from nlp_pipeline.application.use_cases.enhanced_chunk_search import EnhancedChunkSearchUseCase
 from nlp_pipeline.application.use_cases.query_entity_resolver import QueryEntityResolverUseCase
+from nlp_pipeline.application.use_cases.search_documents import SearchDocumentsUseCase
 
 _VALID_ADMIN_TOKEN_RE = re.compile(r"^[A-Za-z0-9\-_]{8,128}$")
 
@@ -212,3 +213,40 @@ def get_chunk_search_use_case(
 
 
 ChunkSearchUseCaseDep = Annotated[EnhancedChunkSearchUseCase, Depends(get_chunk_search_use_case)]
+
+
+def get_search_documents_use_case(
+    request: Request,
+    nlp_session: Annotated[AsyncSession, Depends(get_read_nlp_session)],  # R27: read replica
+) -> SearchDocumentsUseCase:
+    """Build SearchDocumentsUseCase for the current request (PLAN-0064 W6 T-W6-3-01).
+
+    Uses the read replica session per R27 (this is a query-only path).
+    S5 (content-store) and S7 (knowledge-graph) base URLs come from settings
+    so they are operator-configurable without a code change.
+
+    The body-level imports (AsyncpgDocumentSearchRepository, _S5BatchClient,
+    _S7BatchClient) keep the API layer free of module-level infrastructure
+    references (LAYER-API-NO-MODULE-LEVEL-INFRA / R25).
+    """
+    # Body-level imports: infrastructure references must not appear at module
+    # scope in api/ (R25 / LAYER-API-NO-MODULE-LEVEL-INFRA). Importing here
+    # means the architecture test (tests/architecture/test_layer_invariants.py)
+    # will not flag the dependency as a module-level cross-layer violation.
+    from nlp_pipeline.application.use_cases.search_documents import _S5BatchClient, _S7BatchClient
+    from nlp_pipeline.infrastructure.nlp_db.repositories.document_search import AsyncpgDocumentSearchRepository
+
+    settings = request.app.state.settings
+    # content_store_internal_url / knowledge_graph_internal_url are operator-configurable
+    # (defaults point to Docker Compose service hostnames — see config.py).
+    s5_base_url: str = settings.content_store_internal_url
+    s7_base_url: str = settings.knowledge_graph_internal_url
+
+    repo = AsyncpgDocumentSearchRepository(nlp_session)
+    s5_client = _S5BatchClient(s5_base_url)
+    s7_client = _S7BatchClient(s7_base_url)
+
+    return SearchDocumentsUseCase(repo=repo, s5_client=s5_client, s7_client=s7_client)
+
+
+SearchDocumentsUseCaseDep = Annotated[SearchDocumentsUseCase, Depends(get_search_documents_use_case)]
