@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore[import-untyped]
@@ -167,31 +168,35 @@ class KnowledgeGraphScheduler:
             coalesce=True,
         )
 
-        # Worker 13D-3: weekly narrative generation PERIODIC_REFRESH at 03:00 UTC
-        # every Sunday (PRD-0074 §13.3).  INITIAL and MANUAL_TRIGGER are triggered
-        # by direct calls to NarrativeGenerationWorker.run_batch (no cron needed).
+        # Worker 13D-3: narrative generation PERIODIC_REFRESH.
+        # D-R3-003 (PLAN-0087, 2026-05-09): originally weekly Sunday 03:00.
+        # For the demo window we run it every 6 hours AND immediately at
+        # startup — entities with description IS NULL stay un-narrated otherwise,
+        # which means A4 Intelligence tab + A7 chat surface render placeholders.
+        # Post-demo: revert to weekly cron.
         fn_13d3 = self._resolve_job("narrative_generation")
         self._scheduler.add_job(
             fn_13d3,
-            "cron",
-            hour=3,
-            minute=0,
-            day_of_week="sun",
+            "interval",
+            hours=6,
             id="worker_13d3_narrative_generation",
             max_instances=1,
             coalesce=True,
+            next_run_time=datetime.now(tz=UTC) + timedelta(seconds=60),  # fire 60s after boot
         )
 
-        # PathInsightSeeder: nightly at 02:30 UTC (PLAN-0074 Wave E1).
+        # PathInsightSeeder: D-R3-005 — was nightly 02:30 UTC. For the demo
+        # window we also fire on startup (60s delay) so /paths is populated
+        # before the demo without needing to wait until 02:30.
         fn_seeder = self._resolve_job("path_insight_seeder")
         self._scheduler.add_job(
             fn_seeder,
-            "cron",
-            hour=2,
-            minute=30,
+            "interval",
+            hours=6,
             id="worker_path_insight_seeder",
             max_instances=1,
             coalesce=True,
+            next_run_time=datetime.now(tz=UTC) + timedelta(seconds=90),  # fire 90s after boot
         )
 
     def _resolve_job(self, name: str) -> Any:

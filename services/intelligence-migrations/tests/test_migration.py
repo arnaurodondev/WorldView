@@ -1386,6 +1386,134 @@ def test_path_templates_sequences_are_jsonb_arrays(conn: sa.engine.Connection) -
         assert rts_type == "array", f"{name}.relation_type_sequence is not a JSON array (got {rts_type})"
 
 
+# ── Migration 0037: defensive re-create of temporal_events / event_exposures ──
+#
+# Regression coverage for D-P3-002 / D-P3-003 (and D-P1-002 / D-P1-003): the
+# 2026-05-09 P3 audit caught a Postgres volume that had advanced its
+# alembic_version stamp past 0007 + 0018 but lacked the actual ``temporal_events``
+# / ``entity_event_exposures`` tables. Migration 0037 re-runs the CREATE TABLE
+# IF NOT EXISTS DDL so the gold-write path is restored without manual SQL.
+
+
+def test_migration_0037_creates_temporal_events_when_missing(conn: sa.engine.Connection) -> None:
+    """Drop temporal_events + entity_event_exposures inside a transaction, then
+    re-apply the 0037 DDL fragments and verify both tables come back.
+
+    We do not actually re-run alembic because the test fixture already ran
+    upgrade head end-to-end; instead we exercise the SAME DDL constants that
+    the migration imports so any drift between the test and the migration is
+    caught immediately.
+    """
+    # Sanity check: tables exist after `alembic upgrade head` ran in the
+    # session-scoped fixture. If this fails the broader migration chain is
+    # broken and the rest of the test is meaningless.
+    pre_temporal = conn.execute(text("SELECT 1 FROM pg_class WHERE relname = 'temporal_events'")).fetchone()
+    pre_exposure = conn.execute(text("SELECT 1 FROM pg_class WHERE relname = 'entity_event_exposures'")).fetchone()
+    assert pre_temporal is not None, "fixture precondition: temporal_events must exist after upgrade head"
+    assert pre_exposure is not None, "fixture precondition: entity_event_exposures must exist after upgrade head"
+
+    # Simulate the audit's drift: drop both tables. CASCADE handles the FK
+    # from entity_event_exposures → temporal_events automatically.
+    conn.execute(text("DROP TABLE IF EXISTS entity_event_exposures CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS temporal_events CASCADE"))
+    assert (
+        conn.execute(text("SELECT 1 FROM pg_class WHERE relname = 'temporal_events'")).fetchone() is None
+    ), "test setup: temporal_events should be gone after DROP"
+
+    # Import the live DDL constants from migration 0037 and execute them
+    # directly; if the migration body changes shape, this test follows.
+    import importlib.util
+    import os
+
+    migration_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "alembic",
+        "versions",
+        "0037_recreate_temporal_events_idempotent.py",
+    )
+    spec = importlib.util.spec_from_file_location("mig_0037", os.path.abspath(migration_path))
+    assert spec is not None and spec.loader is not None
+    mig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig)
+
+    conn.execute(text(mig._CREATE_TEMPORAL_EVENTS))
+    for stmt in mig._CREATE_TEMPORAL_EVENTS_INDEXES:
+        conn.execute(text(stmt))
+    conn.execute(text(mig._CREATE_ENTITY_EVENT_EXPOSURES))
+    for stmt in mig._CREATE_ENTITY_EVENT_EXPOSURES_INDEXES:
+        conn.execute(text(stmt))
+
+    # Tables back, indexes back, CHECK widened for 'corporate'.
+    assert conn.execute(text("SELECT 1 FROM pg_class WHERE relname = 'temporal_events'")).fetchone() is not None
+    assert conn.execute(text("SELECT 1 FROM pg_class WHERE relname = 'entity_event_exposures'")).fetchone() is not None
+    natural_key = conn.execute(
+        text("SELECT 1 FROM pg_indexes WHERE indexname = 'uidx_temporal_events_natural_key'")
+    ).fetchone()
+    assert natural_key is not None, "natural-key unique index must be re-created"
+
+    conn.rollback()
+
+
+def test_migration_0037_temporal_events_accepts_corporate_event_type(conn: sa.engine.Connection) -> None:
+    """The CK constraint embedded in 0037's DDL must allow event_type='corporate'.
+
+    This is the regression target for D-P3-002 (EarningsCalendarDatasetConsumer)
+    which writes ``EventType.CORPORATE`` rows.
+    """
+    eid = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO temporal_events "
+            "(event_id, event_type, scope, region, title, active_from, residual_impact_days, confidence) "
+            "VALUES (:id, 'corporate', 'LOCAL', 'AAPL', "
+            "        'AAPL Earnings — 2026-05-09', '2026-05-09 12:30:00+00', 7, 1.0)"
+        ),
+        {"id": str(eid)},
+    )
+    n = conn.execute(
+        text("SELECT count(*) FROM temporal_events WHERE event_id = :id"),
+        {"id": str(eid)},
+    ).scalar_one()
+    assert n == 1, "corporate event_type must be insertable post-0037"
+    conn.rollback()
+
+
+def test_migration_0037_idempotent_when_tables_already_exist(conn: sa.engine.Connection) -> None:
+    """Re-running 0037's DDL on a DB where the tables already exist must NOT
+    raise — every CREATE statement uses ``IF NOT EXISTS`` so the migration is
+    safe to re-apply during partial-failure recovery.
+    """
+    import importlib.util
+    import os
+
+    migration_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "alembic",
+        "versions",
+        "0037_recreate_temporal_events_idempotent.py",
+    )
+    spec = importlib.util.spec_from_file_location("mig_0037_idem", os.path.abspath(migration_path))
+    assert spec is not None and spec.loader is not None
+    mig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig)
+
+    # Tables already exist (fixture ran upgrade head). Running 0037's DDL
+    # again must be a no-op — this catches accidental drops of IF NOT EXISTS.
+    conn.execute(text(mig._CREATE_TEMPORAL_EVENTS))
+    conn.execute(text(mig._CREATE_ENTITY_EVENT_EXPOSURES))
+    for stmt in mig._CREATE_TEMPORAL_EVENTS_INDEXES:
+        conn.execute(text(stmt))
+    for stmt in mig._CREATE_ENTITY_EVENT_EXPOSURES_INDEXES:
+        conn.execute(text(stmt))
+    # No assertions needed beyond "didn't raise" — but we double-check the
+    # tables are still queryable.
+    conn.execute(text("SELECT count(*) FROM temporal_events"))
+    conn.execute(text("SELECT count(*) FROM entity_event_exposures"))
+    conn.rollback()
+
+
 # ── Original test (must stay last) ───────────────────────────────────────────
 
 

@@ -514,6 +514,7 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
     """
     from rag_chat.application.use_cases.briefing_context import BriefingContextGatherer
     from rag_chat.application.use_cases.generate_briefing import GenerateBriefingUseCase
+    from rag_chat.infrastructure.clients.brief_archive_write_adapter import BriefArchiveWriteAdapter
     from rag_chat.infrastructure.clients.s1_client import S1Client
     from rag_chat.infrastructure.clients.s3_client import S3Client
     from rag_chat.infrastructure.clients.s5_client import S5Client
@@ -534,10 +535,19 @@ def _wire_briefing_uc(app: FastAPI, settings: RagChatSettings, valkey_client: Va
 
     context_gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
 
+    # D-R4-004 (PLAN-0087, 2026-05-09): brief_archive was previously NOT
+    # supplied to GenerateBriefingUseCase, so the use case used a
+    # NullBriefArchive — no rows ever written to user_briefs.  Net effect:
+    # entire PLAN-0066 brief history / diff / feedback feature dark.
+    # Wire the write-adapter now using the existing write_factory so generated
+    # briefs persist for history + feedback widgets.
+    brief_archive = BriefArchiveWriteAdapter(write_factory=app.state.write_factory)
+
     app.state.briefing_uc = GenerateBriefingUseCase(
         llm_chain=app.state.llm_chain,  # same chain as ChatOrchestratorUseCase
         valkey=valkey_client,
         context_gatherer=context_gatherer,
+        brief_archive=brief_archive,
     )
 
 

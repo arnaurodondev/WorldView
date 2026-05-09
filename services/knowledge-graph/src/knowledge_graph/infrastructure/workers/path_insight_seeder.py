@@ -1,19 +1,27 @@
 """PathInsightSeeder — inserts pending path_insight_jobs for hub entities (T-E1-04).
 
-A "hub entity" is any canonical entity with more than 10 outgoing relations.
-The seeder is idempotent: jobs that are already pending or running are
-skipped via the ``uq_path_insight_jobs_active`` partial unique index
-(ON CONFLICT DO NOTHING).
+A "hub entity" is any canonical entity with more than ``_HUB_MIN_RELATIONS``
+outgoing relations.  The seeder is idempotent: jobs that are already pending
+or running are skipped via the ``uq_path_insight_jobs_active`` partial unique
+index (ON CONFLICT DO NOTHING).
 
 Jobs for hubs that already have recent insights (computed_at < 23 hours ago)
 are also skipped to avoid redundant work.
 
 Run nightly at 02:30 UTC by the APScheduler cron job in
 ``KnowledgeGraphScheduler``.
+
+D-R3-005 (PLAN-0087, 2026-05-09): the default threshold was 10, which was
+sized for a fully populated production KG (hundreds of relations per top-50
+entity).  The pre-demo KG has ~3 relations per subject and 8 distinct
+subjects, so the seeder found 0 hubs and ``/paths`` stayed permanently empty.
+Lowered default to 2; production should override via the
+``PATH_INSIGHT_HUB_MIN_RELATIONS`` env var once depth grows.
 """
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -27,7 +35,8 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 # Minimum outgoing relation count to qualify as a hub entity.
-_HUB_MIN_RELATIONS = 10
+# D-R3-005 (2026-05-09): lowered from 10 → 2 default; env-overridable.
+_HUB_MIN_RELATIONS = int(os.environ.get("PATH_INSIGHT_HUB_MIN_RELATIONS", "2"))
 
 # Skip seeding a job if the hub already has fresh insights younger than this.
 _FRESHNESS_HOURS = 23

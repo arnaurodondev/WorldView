@@ -183,6 +183,30 @@ LIMIT :limit OFFSET :offset
 )
 
 
+def _normalise_finnhub_api_url(url: str | None) -> str | None:
+    """D-F1-009 / D-R4-008 (PLAN-0087, 2026-05-09): map Finnhub API URLs to
+    the publicly-clickable equivalent.
+
+    Finnhub's /company-news endpoint returns ``https://finnhub.io/api/news?id=<hash>``
+    on free / lower-tier plans (which is what the demo runs on).  That URL
+    returns raw JSON when followed, breaking citations on every news surface.
+    The publicly-clickable web view lives at ``https://finnhub.io/news/<hash>``;
+    convert here so the frontend renders citations that open a readable page.
+
+    A NULL or non-Finnhub URL passes through unchanged.
+    """
+    if not url:
+        return url
+    # Pattern: https://finnhub.io/api/news?id=<hex>
+    if "finnhub.io/api/news?id=" in url:
+        article_hash = url.split("id=", 1)[-1]
+        # Strip any extra query params just in case (defensive — Finnhub doesn't
+        # return any today, but the parser shouldn't break if they add one).
+        article_hash = article_hash.split("&", 1)[0]
+        return f"https://finnhub.io/news/{article_hash}"
+    return url
+
+
 def _row_to_ranked_article(row: Any, *, include_primary_entity: bool = True) -> RankedArticleData:
     """Map a SQLAlchemy Row to a RankedArticleData DTO."""
     _market = float(row.market_impact_score) if row.market_impact_score is not None else None
@@ -191,7 +215,7 @@ def _row_to_ranked_article(row: Any, *, include_primary_entity: bool = True) -> 
     return RankedArticleData(
         article_id=row.doc_id,
         title=row.title,
-        url=row.url,
+        url=_normalise_finnhub_api_url(row.url),
         published_at=row.published_at,
         source_type=row.source_type,
         source_name=row.source_name,

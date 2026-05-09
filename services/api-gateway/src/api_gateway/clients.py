@@ -227,23 +227,88 @@ async def get_company_overview(
         # Use UTC-aware datetime (.date()) per project UTC-only convention (CLAUDE.md Rule 7).
         start_90d_ago = (datetime.now(tz=UTC) - timedelta(days=90)).date().isoformat()
 
+        # D-F1-007 (PLAN-0087, 2026-05-09): the frontend instrument page route
+        # is keyed on the KG entity_id (e.g. 11111111-...), not the
+        # market-data instrument_id (e.g. 01900000-...).  Calling
+        # ``/api/v1/instruments/lookup?id=<entity_id>`` returns 404 because
+        # market-data only knows its own UUID space, so EVERY downstream leg
+        # (overview/fundamentals/quote/ohlcv) returned null and the
+        # instrument page header rendered "—" for price/Δ/marketCap/PE.
+        # Fix: try id-based lookup first; on 404 fall back to resolving the
+        # entity_id → ticker via KG and retry by symbol.  When the ticker
+        # path succeeds, every other leg uses the RESOLVED market-data id.
+        # ADR-F-12 reaffirmed: entity_id ≠ instrument_id; the gateway owns
+        # the resolution rather than pushing it onto every downstream.
+        resolved_md_id: str = company_id
+        instrument_raw: dict[str, Any] = {}
+        try:
+            instrument_raw = await _checked_get(
+                clients.market_data,
+                "market-data",
+                f"/api/v1/instruments/lookup?id={company_id}&extra_info=true",
+                headers=_h(),
+            )
+        except Exception:
+            # Treat any failure (DownstreamError 404, parse error, network) as
+            # "not a market-data id" and try the entity_id → ticker fallback.
+            logger.info(
+                "company_overview_lookup_by_id_missed_falling_back_to_kg",
+                company_id=company_id,
+            )
+            try:
+                kg_entity_resp = await _checked_get(
+                    clients.knowledge_graph,
+                    "knowledge-graph",
+                    f"/api/v1/entities/{company_id}",
+                    headers=_h(),
+                )
+                ticker_for_lookup = kg_entity_resp.get("ticker") or ""
+                if isinstance(ticker_for_lookup, str) and ticker_for_lookup:
+                    instrument_raw = await _checked_get(
+                        clients.market_data,
+                        "market-data",
+                        f"/api/v1/instruments/lookup?symbol={ticker_for_lookup}&extra_info=true",
+                        headers=_h(),
+                    )
+            except Exception:
+                # KG miss too — the entity is genuinely unknown to both sides.
+                # Leave instrument_raw={} so downstream leg fanout returns nulls
+                # gracefully (the bundle composer turns this into a 200 with
+                # honest empty fields rather than a 404 page).
+                logger.warning(
+                    "company_overview_kg_fallback_failed",
+                    company_id=company_id,
+                    exc_info=True,
+                )
+
+        # Use the RESOLVED market-data UUID for the parallel legs (was
+        # silently using the input company_id, which could be the entity_id
+        # and would 404 the rest of the legs).
+        if isinstance(instrument_raw.get("id"), str):
+            resolved_md_id = str(instrument_raw["id"])
+        else:
+            # Both id-lookup AND ticker-fallback missed — instrument is
+            # genuinely unknown.  Raise DownstreamError(404) so the bundle
+            # composer's _safe_overview catches it and surfaces overview=null
+            # (preserving the existing "required leg failed" contract that
+            # tests rely on).  The frontend renders its 'not found' UI path.
+            raise DownstreamError(
+                "market-data",
+                404,
+                f"Instrument {company_id} not found via id or KG ticker fallback",
+            )
+
         # Instrument metadata is required; the rest degrade gracefully to null.
         # Each call gets its own fresh JWT via _h() so parallel calls don't share JTIs.
         # WHY 5 parallel calls (was 4): highlights gives us the header stats
         # (market_cap, pe_ratio) and technicals gives us the 52w range without
         # an extra round-trip after render. The general fundamentals endpoint
         # returns all sections in one call; we filter by section name below.
-        instrument_raw, profile_raw, ohlcv_raw, quote_raw, all_fundamentals_raw = await asyncio.gather(
-            _checked_get(
-                clients.market_data,
-                "market-data",
-                f"/api/v1/instruments/lookup?id={company_id}&extra_info=true",
-                headers=_h(),
-            ),
-            _safe(f"/api/v1/fundamentals/{company_id}/company-profile"),
-            _safe(f"/api/v1/ohlcv/{company_id}", params={"timeframe": "1d", "start": start_90d_ago}),
-            _safe(f"/api/v1/quotes/{company_id}"),
-            _safe(f"/api/v1/fundamentals/{company_id}"),
+        profile_raw, ohlcv_raw, quote_raw, all_fundamentals_raw = await asyncio.gather(
+            _safe(f"/api/v1/fundamentals/{resolved_md_id}/company-profile"),
+            _safe(f"/api/v1/ohlcv/{resolved_md_id}", params={"timeframe": "1d", "start": start_90d_ago}),
+            _safe(f"/api/v1/quotes/{resolved_md_id}"),
+            _safe(f"/api/v1/fundamentals/{resolved_md_id}"),
         )
 
         # WHY KG entity_id lookup (not instrument_id): ADR-F-12 — KG entity_id ≠ instrument_id.
