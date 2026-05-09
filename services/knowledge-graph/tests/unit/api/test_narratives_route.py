@@ -96,17 +96,20 @@ def _make_intelligence_app(return_value=None, raise_404: bool = False):
 
 class TestNarrativesListEndpoint:
     async def test_empty_history_returns_empty_list(self) -> None:
-        """Entity with no narratives returns empty versions list."""
+        """Entity with no narratives returns empty versions list.
+
+        The use case now returns (versions, next_cursor) — a plain tuple of
+        domain objects.  The API layer maps domain types to the wire format
+        (R12 — API layer must not import from application/).
+        """
         app = _make_narratives_app()
 
         import knowledge_graph.application.use_cases.list_narrative_versions as _luc_mod
-        from knowledge_graph.api.schemas_intelligence import NarrativeVersionListResponse
 
-        empty_response = NarrativeVersionListResponse(entity_id=_ENTITY_ID, versions=[], next_cursor=None)
-
+        # UC returns (versions_list, next_cursor) — empty list + None cursor.
         with patch.object(_luc_mod, "ListNarrativeVersionsUseCase") as mock_cls:
             mock_instance = AsyncMock()
-            mock_instance.execute = AsyncMock(return_value=empty_response)
+            mock_instance.execute = AsyncMock(return_value=([], None))
             mock_cls.return_value = mock_instance
 
             async with AsyncClient(
@@ -120,28 +123,30 @@ class TestNarrativesListEndpoint:
         assert data["next_cursor"] is None
 
     async def test_pagination_cursor_in_response(self) -> None:
-        """When there are more pages, next_cursor is populated."""
+        """When there are more pages, next_cursor is populated.
+
+        The use case returns (versions, next_cursor) where versions is a list
+        of EntityNarrativeVersion domain objects.  The API layer serialises them.
+        """
         app = _make_narratives_app()
 
         import knowledge_graph.application.use_cases.list_narrative_versions as _luc_mod
-        from knowledge_graph.api.schemas_intelligence import NarrativeVersionListResponse, NarrativeVersionPublic
+        from knowledge_graph.domain.narrative import EntityNarrativeVersion, NarrativeGenerationReason
 
-        version = NarrativeVersionPublic(
+        domain_version = EntityNarrativeVersion(
             version_id=_VERSION_ID,
+            entity_id=_ENTITY_ID,
             narrative_text="Apple Inc. is a technology company with wide product portfolio.",
             model_id="meta-llama/Meta-Llama-3.1-8B-Instruct",
-            generation_reason="INITIAL",
+            generation_reason=NarrativeGenerationReason.INITIAL,
             generated_at=_NOW,
-        )
-        cursor_response = NarrativeVersionListResponse(
-            entity_id=_ENTITY_ID,
-            versions=[version],
-            next_cursor="dGVzdC1jdXJzb3I=",  # base64 test cursor
+            is_current=True,
         )
 
         with patch.object(_luc_mod, "ListNarrativeVersionsUseCase") as mock_cls:
             mock_instance = AsyncMock()
-            mock_instance.execute = AsyncMock(return_value=cursor_response)
+            # UC returns (versions_list, next_cursor)
+            mock_instance.execute = AsyncMock(return_value=([domain_version], "dGVzdC1jdXJzb3I="))
             mock_cls.return_value = mock_instance
 
             async with AsyncClient(
