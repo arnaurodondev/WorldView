@@ -752,11 +752,13 @@ export default function ChatPage() {
 
         {activeThreadId && (
           <>
-            {/* Thread header — title + Export button */}
-            {/* WHY a header strip (T-E-5-07): the export button needs a
+            {/* Thread header — title + Export button.
+                WHY a header strip (T-E-5-07): the export button needs a
                 conventional resting place; a dedicated row above the messages
-                also reinforces the active thread title at the top of the panel. */}
-            <div className="flex items-center justify-between border-b border-border px-4 py-2">
+                also reinforces the active thread title at the top of the panel.
+                WHY px-3 (was px-4 py-2): matches the TopBar/sub-header
+                12-px horizontal rhythm — pass-2 polish defect 1G. */}
+            <div className="flex items-center justify-between border-b border-border px-3 py-2">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-semibold text-foreground">
                   {activeThread?.title ?? PLACEHOLDER_THREAD_TITLE}
@@ -777,7 +779,9 @@ export default function ChatPage() {
 
             {/* Message list */}
             <ScrollArea className="flex-1 bg-background">
-              <div className="flex flex-col gap-3 p-4">
+              <div className="flex flex-col gap-3 p-3">
+                {/* WHY p-3 (was p-4): terminal-density reading area; matches
+                    the post-F3 chat empty-state padding. Pass-2 defect 1G. */}
                 {threadLoading && (
                   <div className="space-y-4" aria-label="Loading messages">
                     {[...Array(3)].map((_, i) => (
