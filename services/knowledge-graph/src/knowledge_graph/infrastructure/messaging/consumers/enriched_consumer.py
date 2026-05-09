@@ -231,35 +231,38 @@ class EnrichedArticleConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                     message="incoming relations missing evidence_text — NLP extraction gap",
                 )
 
-        # T-B-03: resolve source_name + source_type for evidence row provenance.
-        # Preferred source: canonical event payload fields.
-        # Fallback: JOIN document_source_metadata on source_document_id.
+        # D-INIT-6 (2026-05-09): resolve source_name + source_type for evidence
+        # row provenance directly from the event payload.
+        #
+        # The previous T-B-03 implementation fell back to a query against
+        # ``document_source_metadata`` whenever ``source_name`` was None — but
+        # that table lives in ``nlp_db`` while this consumer runs on
+        # ``intelligence_db``. Every fallback hit asyncpg ``UndefinedTableError``
+        # and silently dropped provenance, leaving the intelligence layer
+        # generating zero narratives. The producer side now emits
+        # ``source_name`` in the Avro envelope (see PLAN-0087 D-INIT-6 fix).
+        #
+        # When source_name is None we log once and continue with NULL provenance
+        # — downstream evidence-row writes already accept None for these columns.
+        # We do NOT re-query nlp_db (R7 cross-service-DB violation).
         source_name: str | None = value.get("source_name")
         source_type_str: str | None = value.get("source_type")
+
+        if source_name is None:
+            logger.warning(  # type: ignore[no-any-return]
+                "evidence_source_metadata_missing",
+                doc_id=str(doc_id),
+                source_type=source_type_str,
+                message=(
+                    "enriched event payload has no source_name; evidence rows for this doc will have NULL source_name"
+                ),
+            )
 
         async with self._sf() as session:
             registry_repo = RelationTypeRegistryRepository(session)
             outbox_repo = OutboxRepository(session)
             relation_repo = RelationRepository(session)
             evidence_repo = RelationEvidenceRepository(session)
-
-            # T-B-03 fallback: query document_source_metadata when the event
-            # payload did not carry source_name (i.e. it is absent or None).
-            if source_name is None:
-                try:
-                    source_name, source_type_str = await evidence_repo.lookup_source_metadata(doc_id)  # type: ignore[attr-defined]
-                    if source_name is None and source_type_str is None:
-                        logger.warning(  # type: ignore[no-any-return]
-                            "evidence_source_metadata_missing",
-                            doc_id=str(doc_id),
-                            message="No source_name/source_type in event payload or document_source_metadata",
-                        )
-                except Exception:
-                    logger.warning(  # type: ignore[no-any-return]
-                        "evidence_source_metadata_lookup_failed",
-                        doc_id=str(doc_id),
-                        exc_info=True,
-                    )
 
             # ----------------------------------------------------------
             # Block 11: Canonicalize all relation types

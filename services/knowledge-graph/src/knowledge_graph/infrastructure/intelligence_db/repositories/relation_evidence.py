@@ -100,28 +100,17 @@ RETURNING raw_id
         row = result.fetchone()
         return UUID(str(row[0]))  # type: ignore[index]
 
-    async def lookup_source_metadata(
-        self,
-        source_document_id: UUID,
-    ) -> tuple[str | None, str | None]:
-        """Fetch (source_name, source_type) from document_source_metadata (T-B-03 fallback).
-
-        Returns (None, None) when no matching row exists.  NULL-safe — both
-        columns may be absent from the metadata table.
-        """
-        result = await self._session.execute(
-            text("""
-SELECT source_name, source_type
-FROM document_source_metadata
-WHERE document_id = :doc_id
-LIMIT 1
-"""),
-            {"doc_id": str(source_document_id)},
-        )
-        row = result.fetchone()
-        if row is None:
-            return None, None
-        return row[0], row[1]
+    # D-INIT-6 (2026-05-09): the previous ``lookup_source_metadata`` method that
+    # used to live here was an R7 cross-service-DB violation — it queried the
+    # ``document_source_metadata`` table from this repository's session, but that
+    # table only exists in ``nlp_db`` (we run on ``intelligence_db``). Every
+    # invocation raised asyncpg ``UndefinedTableError`` and silently dropped
+    # source provenance for every enriched event, leaving the intelligence layer
+    # producing zero narratives. The clean fix is to propagate ``source_name``
+    # in the ``nlp.article.enriched.v1`` event payload itself (see the matching
+    # producer-side change in ``services/nlp-pipeline``). The KG consumer now
+    # reads ``value.get("source_name")`` directly and never falls back to a
+    # cross-DB query.
 
     async def insert_immutable(
         self,

@@ -10,6 +10,7 @@
     {"name": "occurred_at",       "type": "string"},
     {"name": "doc_id",            "type": "string",                "doc": "Source document ID"},
     {"name": "source_type",       "type": "string"},
+    {"name": "source_name",       "type": ["null", "string"],      "default": null, "doc": "Human-readable source label (RSS feed name, EODHD provider, etc.). Forward-compat null default per R5. Added 2026-05-09 (D-INIT-6) so KG enriched_consumer can stamp evidence rows with source provenance without an R7 cross-DB query."},
     {"name": "published_at",      "type": ["null", "string"],      "default": null},
     {"name": "is_backfill",       "type": "boolean",               "default": false},
     {"name": "routing_tier",      "type": "string",                "doc": "suppress | light | medium | deep"},
