@@ -71,18 +71,30 @@ function MarketRow({ market }: { market: PredictionMarket }) {
     : null;
 
   // WHY link to polymarket.com: the prediction markets page is a read-only view;
-  // trading happens on Polymarket's platform. market.url is pre-built by the gateway.
+  // trading happens on Polymarket's platform.
+  // WHY title-search URL (density bundle 2026-05-09): the historic
+  // ``/event/{slug}`` pattern returned 404 for many markets because the slug we
+  // receive from the Gamma ``markets`` payload does NOT reliably match
+  // Polymarket's canonical event/market paths. The ``/markets?_q=`` search URL
+  // always resolves to a working results page regardless of slug shape — so we
+  // use it as the first-class target and only fall back to ``market.url`` when
+  // S3 supplied an explicit URL.
+  const fallbackUrl = `https://polymarket.com/markets?_q=${encodeURIComponent(market.title ?? "")}`;
+  const targetUrl = market.url && market.url.length > 0 ? market.url : fallbackUrl;
   const handleRowClick = () => {
-    if (market.url) window.open(market.url, "_blank", "noopener,noreferrer");
+    window.open(targetUrl, "_blank", "noopener,noreferrer");
   };
 
   return (
     <div
-      role={market.url ? "link" : undefined}
-      onClick={market.url ? handleRowClick : undefined}
+      role="link"
+      onClick={handleRowClick}
       className={cn(
-        "grid grid-cols-[1fr_160px_80px_80px] items-center gap-3 border-b border-border/30 px-4 py-2.5",
-        market.url && "cursor-pointer hover:bg-card/60",
+        // Density bundle 2026-05-09: tightened gaps (gap-3 → gap-2) and padding
+        // (px-4 py-2.5 → px-3 py-1.5) for terminal density. Row height drops
+        // from ~38px to ~28px which matches the platform's 22px-row mandate.
+        "grid grid-cols-[1fr_160px_80px_80px] items-center gap-2 border-b border-border/30 px-3 py-1.5",
+        "cursor-pointer hover:bg-card/60",
       )}
     >
       {/* Question + category badge */}
@@ -130,19 +142,43 @@ export default function PredictionMarketsPage() {
     if (!data?.markets) return [];
     let result = data.markets;
 
-    // Client-side category filter — keeps the API call simple (single fetch)
+    // Density bundle 2026-05-09 — fix non-working category filter.
+    //
+    // Previous bug: ``m.category?.toLowerCase() === category`` required EXACT
+    // string equality, but the upstream Polymarket categories include synonyms
+    // ("elections" → politics, "sports-mlb" → sports) and the DB column may
+    // hold either the canonical bucket OR the raw tag. We:
+    //   1. Lowercase + null-coerce both sides safely.
+    //   2. Allow substring match so "politics" pill catches "elections" rows.
+    //   3. Hand-map a few obvious synonyms so the pills feel responsive even
+    //      when the DB hasn't normalized to our 4 canonical buckets yet.
     if (category !== "all") {
-      result = result.filter((m) => m.category?.toLowerCase() === category);
+      // Synonym map — extend as needed. Keys are pill values; values are
+      // substrings that should also count as a match.
+      const SYNONYMS: Record<string, readonly string[]> = {
+        politics: ["politic", "election", "vote", "president", "senate", "congress"],
+        crypto: ["crypto", "btc", "bitcoin", "eth", "ethereum", "defi"],
+        sports: ["sport", "nba", "nfl", "nhl", "mlb", "soccer", "football", "baseball"],
+        macro: ["macro", "fed", "fomc", "gdp", "cpi", "inflation", "rate", "economy"],
+      };
+      const aliases = SYNONYMS[category] ?? [category];
+      result = result.filter((m) => {
+        const cat = (m.category ?? "").toLowerCase();
+        if (!cat) return false;
+        return aliases.some((alias) => cat.includes(alias));
+      });
     }
 
-    // Text search on title + category
+    // Text search on title + category. ``title`` defaults to "" when missing
+    // so we never call .toLowerCase on undefined (was crash-prone for half-
+    // populated dev rows).
     if (search.trim()) {
       const q = search.toLowerCase();
-      result = result.filter(
-        (m) =>
-          m.title.toLowerCase().includes(q) ||
-          (m.category ?? "").toLowerCase().includes(q),
-      );
+      result = result.filter((m) => {
+        const title = (m.title ?? "").toLowerCase();
+        const cat = (m.category ?? "").toLowerCase();
+        return title.includes(q) || cat.includes(q);
+      });
     }
 
     return result;
@@ -152,7 +188,8 @@ export default function PredictionMarketsPage() {
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
 
       {/* ── Page header ─────────────────────────────────────────────────────── */}
-      <div className="border-b border-border/50 px-5 py-3">
+      {/* Density bundle 2026-05-09: px-5 py-3 → px-3 py-2 for terminal density */}
+      <div className="border-b border-border/50 px-3 py-2">
         <div className="flex items-center gap-2">
           <TrendingUp className="h-4 w-4 text-muted-foreground" strokeWidth={1.5} />
           <h1 className="text-[11px] font-medium uppercase tracking-[0.1em] text-foreground">
@@ -198,7 +235,9 @@ export default function PredictionMarketsPage() {
       </div>
 
       {/* ── Column headers ───────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-[1fr_160px_80px_80px] gap-3 border-b border-border/50 px-4 py-1.5">
+      {/* Density bundle 2026-05-09: gap-3 → gap-2 + px-4 → px-3 to match
+          the row gap/padding tightening above. */}
+      <div className="grid grid-cols-[1fr_160px_80px_80px] gap-2 border-b border-border/50 px-3 py-1">
         {(["Question", "YES probability", "24h Vol", "Closes"] as const).map((label) => (
           <span
             key={label}

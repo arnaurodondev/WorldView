@@ -72,10 +72,15 @@ export function createPredictionMarketsApi(t: string | undefined) {
           entity_ids: [], // Not available in summary response — would need entity linking
           tickers: [], // Same — summary doesn't include ticker associations
           source: "polymarket" as const, // Currently only Polymarket is integrated (PRD-0019)
-          // WHY construct URL from market_slug: S3 now returns the Polymarket event slug
-          // (migration 009). Null slug → empty URL → PredictionMarketsWidget falls back
-          // to a search URL so clicking a row always opens a real page (Wave A-4).
-          url: m.market_slug ? `https://polymarket.com/event/${m.market_slug}` : "",
+          // WHY a search URL by default (density bundle 2026-05-09): the previous
+          // ``/event/{slug}`` pattern returned 404 for many markets — Polymarket's
+          // canonical URLs distinguish ``/event/`` (grouped market) from
+          // ``/market/`` (single binary), and the ``slug`` field on the Gamma
+          // ``markets`` payload does NOT reliably match either path. The most
+          // robust user-facing fallback is the search page, which always resolves
+          // to a working result for any title. We empty the ``url`` so the widget's
+          // own ``url -> slug -> search`` ladder still runs and prefers the search.
+          url: "",
           // WHY pass market_slug through: PredictionMarketsWidget (Wave A-4) builds
           // the URL client-side using market_slug as a second fallback after url.
           // Preserving it avoids re-fetching when url is empty.

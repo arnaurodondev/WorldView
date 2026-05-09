@@ -220,8 +220,36 @@ export function MorningBriefCard() {
   // (LLM generated zero tokens). Show the fallback message in both cases.
   // WHY check summary OR narrative: with v2.2 split, either field can carry
   // content. As long as one is non-empty we have something to render.
-  const safeNarrative = brief?.narrative?.trim() ?? "";
-  const safeSummary = brief?.summary?.trim() ?? "";
+  //
+  // Density bundle 2026-05-09 — markdown asterisk leak fix.
+  // The LLM occasionally emits stale-data metadata as Markdown emphasis,
+  // e.g. ``*(as of 2026-05-09)*``. ReactMarkdown SHOULD render this as
+  // ``<em>(as of …)</em>``, but two failure modes leak literal asterisks:
+  //   1. The opening ``*`` is followed immediately by ``(`` and remark-gfm
+  //      flanking rules sometimes refuse to treat it as emphasis (left flank
+  //      must be a non-punctuation character).
+  //   2. The metadata is a parenthetical aside that adds noise to the brief
+  //      summary even when it DOES render correctly — analysts don't need a
+  //      visible "as of" timestamp because the card header already shows
+  //      "Generated YYYY-MM-DD HH:MM UTC".
+  // Strip these inline metadata wrappers entirely BEFORE feeding the markdown
+  // to ReactMarkdown so neither failure mode is visible. Match shapes:
+  //   - ``*(as of 2026-05-09)*`` (asterisk-italic)
+  //   - ``_(as of 2026-05-09)_`` (underscore-italic)
+  //   - ``(as of 2026-05-09)``   (no emphasis at all — also redundant)
+  function stripStaleMetadata(text: string): string {
+    return text
+      // Remove ``*(...)*`` and ``_(...)_`` parenthetical italic asides.
+      .replace(/[*_]\((?:as of|updated)[^)]*\)[*_]/gi, "")
+      // Remove the same content without surrounding emphasis markers.
+      .replace(/\((?:as of|updated)[^)]*\)/gi, "")
+      // Collapse any double-spaces left by the removal so paragraphs reflow.
+      .replace(/[ \t]{2,}/g, " ")
+      .trim();
+  }
+
+  const safeNarrative = stripStaleMetadata(brief?.narrative?.trim() ?? "");
+  const safeSummary = stripStaleMetadata(brief?.summary?.trim() ?? "");
   if (!brief || (!safeNarrative && !safeSummary)) {
     return (
       <div className="flex h-full flex-col">
@@ -300,8 +328,12 @@ export function MorningBriefCard() {
       {/* WHY single-line header with all three elements: the user wants the brief
           to occupy minimal vertical real estate while still being informative.
           One line of chrome (timestamp + title + action) leaves all remaining
-          height for the actual brief content. */}
-      <div className="flex h-5 shrink-0 items-center border-b border-border/40 px-1">
+          height for the actual brief content.
+          Density bundle 2026-05-09 — h-5 (20px) → h-6 (24px). The 20px row was
+          too short to host the BriefDiffBadge ("7 new" amber pill, ~18px tall
+          including padding) which visibly overflowed above the card border.
+          24px gives the pill room to sit centered without clipping. */}
+      <div className="flex h-6 shrink-0 items-center border-b border-border/40 px-1">
         {/* Generated timestamp — muted, monospace for scannable date/time.
             font-mono + tabular-nums keeps digit columns aligned per Midnight
             Pro convention for any numeric data.
