@@ -58,6 +58,17 @@ _CODE_FENCE_RE = re.compile(r"^\s*```(?:markdown)?\s*\n?(.*?)\n?\s*```\s*$", re.
 # not supported.
 _CN_CITATION_RE = re.compile(r"\[c(\d+)\]")
 
+# D-R4-002 (PLAN-0087, 2026-05-09): the LLM occasionally echoes the prompt's
+# Jinja variable names as bracketed tokens (e.g. ``[relationships_context]``,
+# ``[entity_context]``, ``[fundamentals_context]``, ``[news_context]``,
+# ``[events_context]``).  These leaked into bullet text and rendered visibly
+# in MorningBriefCard / instrument News tab — see audit R4 for AAPL bullet
+# evidence.  Strip them defensively before bullet text is exposed.
+_TEMPLATE_PLACEHOLDER_RE = re.compile(
+    r"\s*\[(?:relationships_context|entity_context|fundamentals_context|news_context"
+    r"|events_context|portfolio_context|safety|context|input)\]"
+)
+
 
 def _strip_reasoning(text: str) -> str:
     """Remove <think>…</think> blocks, markdown code fences, and orphaned [N] markers.
@@ -374,6 +385,9 @@ def _parse_sections_with_citations(
     # Also strip "## summary" (back-compat with v2.2 LLM responses that emit SUMMARY)
     lead_block = _strip_block_header(lead_block, "summary")
     lead_block = lead_block.strip()
+    # D-R4-002: strip echoed Jinja variable names from the lead too.
+    lead_block = _TEMPLATE_PLACEHOLDER_RE.sub("", lead_block).strip()
+    details_block = _TEMPLATE_PLACEHOLDER_RE.sub("", details_block)
 
     lead_citations: list[BriefCitation] = []
     lead_text: str | None = None
@@ -476,6 +490,9 @@ def _parse_detail_sections_with_citations(
             bullet_citations = [context_citations[idx] for idx in raw_indices if 0 <= idx < len(context_citations)]
             # Strip [cN] markers from the display text
             display_text = _CN_CITATION_RE.sub("", raw_text).strip()
+            # D-R4-002: defensively strip bracketed prompt-template variable
+            # names the LLM occasionally echoes back (e.g. [relationships_context]).
+            display_text = _TEMPLATE_PLACEHOLDER_RE.sub("", display_text).strip()
             if display_text:
                 current_bullets.append((display_text, bullet_citations))
     flush()
@@ -947,12 +964,18 @@ class GenerateBriefingUseCase:
             confidence=confidence,
         )
 
-        # PLAN-0049 T-A-1-04: also parse narrative into legacy dict-based sections
-        # for the legacy structured render path (sections with string bullets).
-        # WHY keep: cached briefs and fallback render paths still use this.
-        # PLAN-0062-W4: sections (BriefBullet) takes precedence; legacy_sections
-        # is only used when the new parser returned no sections.
-        legacy_sections = _parse_sections_from_markdown(narrative) if not sections else []
+        # D-R4-003 (PLAN-0087, 2026-05-09): legacy_sections returned
+        # list[dict] with string bullets (typed `bullets: list[str]`), which
+        # violates the BriefSection / BriefBullet contract.  Caching this
+        # legacy shape into `briefs.sections_json` then deserialising it on a
+        # cache hit caused MorningBriefCard / InstrumentAISubheader to read
+        # `bullet.text` → undefined → empty <li> with raw `[c0][c1]` markers.
+        # Drop the legacy fallback: when v3.0 parsing fails, sections=[] and
+        # the frontend falls back to MarkdownContent over the narrative —
+        # already the documented degraded UX path.  Preserves the variable
+        # name `legacy_sections` to keep downstream cast/persistence code
+        # working unchanged.
+        legacy_sections: list[dict[str, Any]] = []
 
         # ── 8. PLAN-0066 Wave B: fire-and-forget brief persistence ───────────
         # WHY asyncio.shield: DB failures must NEVER propagate back to the caller
@@ -1114,11 +1137,18 @@ class GenerateBriefingUseCase:
         sections = _backfill_uncited_bullets(sections, context_citations)
         confidence = _compute_confidence(sections, lead, lead_citations)
 
-        # Legacy fallback when v3.0 parse returned no sections
-        if not sections:
-            sections = _parse_sections_from_markdown(content)  # type: ignore[assignment]
-            # WHY type: ignore: _parse_sections_from_markdown returns list[dict]
-            # (legacy format with string bullets) which the route layer handles.
+        # D-R4-003 (PLAN-0087, 2026-05-09): legacy fallback used to invoke
+        # _parse_sections_from_markdown which returns list[dict] with string
+        # bullets — violating the BriefSection / BriefBullet contract the
+        # frontend types declare.  Result: bullet.text was undefined and
+        # MorningBriefCard / InstrumentAISubheader rendered raw "[c0][c1]"
+        # markers + empty <li>s.  Now: drop the legacy fallback entirely.
+        # When v3.0 parse returns no sections, leave sections=[] and let the
+        # frontend fall back to MarkdownContent over the raw narrative —
+        # already the documented degradation path.  No type: ignore needed.
+        # The narrative content is preserved in the response (`content` field),
+        # so the user still sees the brief — just without the structured
+        # bullet UI affordance.
 
         generated_at = datetime.now(tz=UTC).isoformat()
         log.info(  # type: ignore[no-any-return]

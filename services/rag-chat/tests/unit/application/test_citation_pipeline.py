@@ -124,6 +124,47 @@ Lead text. [c1]
         assert "[c1]" not in first_bullet.text
         assert first_bullet.text.strip() == "Bullet text with citation"
 
+    def test_template_placeholder_leak_stripped_d_r4_002(self) -> None:
+        """D-R4-002: Jinja template variable names occasionally echoed by the LLM
+        as bracketed tokens (e.g. [relationships_context]) must be stripped from
+        bullet text and lead before reaching the frontend.
+        """
+        md = """## LEAD
+Apple's quarterly trajectory remains positive [c1] [relationships_context].
+
+---
+
+## DETAILS
+### Strategic relationships
+- TSMC supply commitment underpins iPhone margin [relationships_context] [c1]
+- Microsoft Azure dependency on the Apple silicon roadmap [entity_context]
+### News
+- Latest earnings beat consensus by 4% [news_context] [c2]
+"""
+        ctx_cits = _make_context_citations(3)
+        lead, _lead_cits, sections = _parse_sections_with_citations(md, ctx_cits)
+        # Lead must have no bracketed template token left
+        assert lead is not None
+        for token in (
+            "[relationships_context]",
+            "[entity_context]",
+            "[news_context]",
+            "[fundamentals_context]",
+            "[events_context]",
+        ):
+            assert token not in lead, f"lead leaked {token}"
+        assert sections, "sections must parse"
+        for section in sections:
+            for bullet in section.bullets:
+                for token in (
+                    "[relationships_context]",
+                    "[entity_context]",
+                    "[news_context]",
+                    "[fundamentals_context]",
+                    "[events_context]",
+                ):
+                    assert token not in bullet.text, f"bullet leaked {token}"
+
     def test_bullet_citations_resolved_correctly(self) -> None:
         """[c2] marker resolves to the second context citation (1-indexed)."""
         md = """## LEAD
