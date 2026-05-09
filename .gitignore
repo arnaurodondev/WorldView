@@ -65,6 +65,11 @@ terraform.tfvars
 *.tfbackend
 *.tfstate*
 
+# Eval run results (timestamped outputs — not source-of-truth artifacts)
+results/eval_*.json
+results/eval_*.csv
+results/boost_sweep_*.json
+
 # Claude Code local state
 .claude/projects/
 .claude/worktrees/

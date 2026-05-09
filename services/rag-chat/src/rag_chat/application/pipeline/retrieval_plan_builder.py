@@ -47,7 +47,7 @@ _INTENT_TO_FLAGS: dict[QueryIntent, _PlanFlags] = {
         use_cypher=False,
     ),
     QueryIntent.RELATIONSHIP: _PlanFlags(
-        use_chunks=False,
+        use_chunks=True,
         use_relations=True,
         use_graph=True,
         use_claims=False,
@@ -69,7 +69,7 @@ _INTENT_TO_FLAGS: dict[QueryIntent, _PlanFlags] = {
         use_cypher=False,
     ),
     QueryIntent.FINANCIAL_DATA: _PlanFlags(
-        use_chunks=False,
+        use_chunks=True,
         use_relations=False,
         use_graph=False,
         use_claims=True,
