@@ -25,6 +25,8 @@
 
 import { Newspaper } from "lucide-react";
 import { cn } from "@/lib/utils";
+// HF-10: locale-grouped USD price ("$4,892.11").
+import { formatPrice } from "@/lib/format";
 import type { WatchlistMover } from "../lib/movers";
 
 export interface WatchlistMoverRowProps {
@@ -129,7 +131,7 @@ export function WatchlistMoverRow({
       {/* Price — right-aligned in a fixed slot. Muted color because change%
           is the primary signal; price is supporting context. */}
       <span className="w-[52px] shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-        {mover.price != null ? `$${mover.price.toFixed(2)}` : "—"}
+        {formatPrice(mover.price)}
       </span>
 
       {/* Change % — right-aligned, colored by direction. The `side`

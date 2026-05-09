@@ -29,6 +29,8 @@ import { GlobalSearch } from "@/components/shell/GlobalSearch";
 import { AskAiButton } from "@/components/shell/AskAiButton";
 import { RefreshAllButton } from "@/components/shell/RefreshAllButton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+// HF-10: portfolio value uses shared compact-currency formatter for consistency.
+import { formatCompactCurrency } from "@/lib/format";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -71,15 +73,12 @@ function pnlColorClass(value: number): string {
   return "text-muted-foreground";
 }
 
+// HF-10: delegate to the shared compact-currency formatter.
+// formatCompactCurrency renders "$1.2M" / "$42.5K" / "$847.00" with locale
+// grouping. The hand-built ladder previously ignored thousands separators
+// for sub-$1K values and lacked null/NaN handling.
 function formatPortfolioValue(value: number | null | undefined): string {
-  if (value == null) return "—";
-  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
-  // WHY .toFixed(1) (not Math.round): one decimal preserves the most-significant
-  // remaining digit. $42,483.75 now reads "$42.5K" instead of "$42K" — still 5
-  // chars, still scannable, and now communicates the difference between
-  // $42.5K and $42K (a $500 swing on a $42K account is meaningful).
-  if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}K`;
-  return `$${Math.round(value).toLocaleString()}`;
+  return formatCompactCurrency(value, "USD", { maxDecimals: 1 });
 }
 
 /**

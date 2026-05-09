@@ -160,6 +160,21 @@ export default function InstrumentDetailPage() {
   const overview = bundle?.overview ?? null;
   const instrument = overview?.instrument;
 
+  // HF-10: refine the document title once we know the ticker.
+  // The route layout (instruments/[entityId]/layout.tsx) supplies a fallback
+  // "<entityId-prefix> | Worldview" title server-side. After the bundle loads
+  // we replace it with the ticker (analyst-grade tab labels). We update on
+  // every ticker change AND restore "Worldview" on unmount so navigating
+  // away leaves a clean tab title.
+  useEffect(() => {
+    if (!instrument?.ticker) return;
+    const previous = document.title;
+    document.title = `${instrument.ticker} | Worldview`;
+    return () => {
+      document.title = previous;
+    };
+  }, [instrument?.ticker]);
+
   // WHY kgEntityId derived before guards and queries: The URL segment (`entityId`) may
   // be a market-data instrument_id (dashboard/search navigate with instrument_id).
   // The S9 overview endpoint accepts both, but KG/news/briefing endpoints require the

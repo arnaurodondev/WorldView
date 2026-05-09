@@ -46,6 +46,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { DashboardEmptyState } from "@/components/ui/dashboard-empty-state";
 import { cn } from "@/lib/utils";
+// HF-10: locale-grouped USD price ("$4,892.11").
+import { formatPrice } from "@/lib/format";
 
 type Period = "1D" | "1W" | "1M";
 
@@ -413,7 +415,7 @@ function MoverRow({ mover, side, onClick }: MoverRowProps) {
         {mover.name}
       </span>
       <span className="w-[52px] shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-        {mover.price != null ? `$${mover.price.toFixed(2)}` : "—"}
+        {formatPrice(mover.price)}
       </span>
       <span
         className={cn(

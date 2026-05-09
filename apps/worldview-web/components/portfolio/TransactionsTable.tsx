@@ -217,10 +217,15 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
 // text, number, datalist trigger — shares the exact same height, padding,
 // font, border, and focus colour. A constant prevents drift when we add
 // another input.
+//
+// HF-10: switched the focus ring from `focus:` to `focus-visible:` so the
+// outline only renders for keyboard navigation (not on mouse click). The
+// browser default outline is removed via focus-visible:outline-none in the
+// same group so it doesn't double up on top of the ring.
 const INPUT_CLS =
   "h-6 px-2 text-[11px] font-mono bg-card border border-border rounded-[2px] " +
-  "text-foreground placeholder:text-muted-foreground focus:outline-none " +
-  "focus:border-primary focus:ring-1 focus:ring-primary/30";
+  "text-foreground placeholder:text-muted-foreground focus-visible:outline-none " +
+  "focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-ring";
 
 // ── TransactionsTable ─────────────────────────────────────────────────────────
 

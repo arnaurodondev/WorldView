@@ -74,7 +74,7 @@ export function AIDemoSection() {
         </div>
 
         {/* Chat mock card — mirrors the in-product RAG chat panel */}
-        <div className="mx-auto max-w-3xl overflow-hidden rounded-[3px] border border-border/60 bg-card shadow-xl">
+        <div className="mx-auto max-w-3xl overflow-hidden rounded-[2px] border border-border/60 bg-card shadow-xl">
           {/* Top label */}
           <div className="flex items-center justify-between border-b border-border/40 bg-muted/30 px-4 py-2">
             <div className="flex items-center gap-2">

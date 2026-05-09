@@ -28,6 +28,8 @@ import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+// HF-10: shared compact-currency formatter for "$1.2M" / "$42.5K" output.
+import { formatCompactCurrency } from "@/lib/format";
 // PLAN-0068 C-2-02: categorize/formatCountdown/keyword lists extracted to shared
 // lib so the /prediction-markets page and this widget stay in sync.
 import {
@@ -361,12 +363,11 @@ export function PredictionMarketsWidget() {
             // returned volume_24h=None; the gateway mapped null→0. PLAN-0048
             // D-1 wires real volume through the LATERAL JOIN, but markets
             // without snapshots still produce 0 — keep treating 0 == "no data".
+            // HF-10: delegate to shared compact-currency formatter and append
+            // " vol" suffix once. Removes the hand-built ladder + missing
+            // thousands separators for sub-$1K values.
             const formattedVolume = market.volume_usd > 0
-              ? market.volume_usd >= 1_000_000
-                ? `$${(market.volume_usd / 1_000_000).toFixed(1)}M vol`
-                : market.volume_usd >= 1_000
-                ? `$${(market.volume_usd / 1_000).toFixed(0)}K vol`
-                : `$${market.volume_usd.toFixed(0)} vol`
+              ? `${formatCompactCurrency(market.volume_usd, "USD", { maxDecimals: 1 })} vol`
               : null;
 
             // ── PLAN-0048 D-2: derive category, delta, countdown, sparkline ──
