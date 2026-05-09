@@ -284,9 +284,16 @@ export function TransactionsTable({
   }, [transactions, tickerByInstrumentId]);
 
   // ── Empty state guard ─────────────────────────────────────────────────────
+  // Density bundle 2026-05-09: previously the InlineEmptyState was rendered
+  // bare, which meant on a wide viewport the message hugged the left edge of
+  // the panel (right against the sidebar). Wrapping in a padded centered
+  // container keeps the message visually anchored to the panel chrome and
+  // matches the spacing of empty states elsewhere (Alerts, Watchlists).
   if (transactions.length === 0) {
     return (
-      <InlineEmptyState message="No transactions yet. Connect a brokerage to import activity, or use Add Position to record a trade manually." />
+      <div className="flex flex-1 items-center justify-center px-6 py-8">
+        <InlineEmptyState message="No transactions yet. Connect a brokerage to import activity, or use Add Position to record a trade manually." />
+      </div>
     );
   }
 
