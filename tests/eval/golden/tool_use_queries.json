@@ -244,5 +244,10 @@
     "expected_tools": ["get_earnings_calendar"],
     "min_retrieved_items": 1,
     "label": "catalog_calendar"
-  }
+  },
+  {"id": "tq-act-001", "query": "Show me my active alerts", "expected_tools": ["get_alerts"]},
+  {"id": "tq-act-002", "query": "What alerts do I have set up?", "expected_tools": ["get_alerts"]},
+  {"id": "tq-act-003", "query": "Are there any pending alerts for my portfolio?", "expected_tools": ["get_alerts"]},
+  {"id": "tq-act-004", "query": "List all my price alerts", "expected_tools": ["get_alerts"]},
+  {"id": "tq-act-005", "query": "What active signal alerts do I have?", "expected_tools": ["get_alerts"]}
 ]

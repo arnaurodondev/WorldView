@@ -42,6 +42,8 @@ _TOOL_LABELS: dict[str, str] = {
     "get_market_movers": "Fetching market movers...",
     "get_economic_calendar": "Loading economic calendar...",
     "get_earnings_calendar": "Loading earnings calendar...",
+    # PLAN-0082 Wave A: action tools
+    "get_alerts": "Loading your alerts...",
 }
 
 

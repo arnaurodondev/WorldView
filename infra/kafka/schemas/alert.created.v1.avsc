@@ -1,0 +1,36 @@
+{
+  "type": "record",
+  "name": "AlertCreated",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S10 Alert Service when a user-initiated alert rule is persisted (e.g. via the LLM create_alert tool). Distinct from alert.delivered.v1 which fires on delivery to a user channel.",
+  "fields": [
+    {"name": "event_id",      "type": "string"},
+    {"name": "event_type",    "type": "string",  "default": "alert.created"},
+    {"name": "schema_version","type": "int",     "default": 1},
+    {"name": "occurred_at",   "type": "string",  "doc": "ISO-8601 UTC timestamp of the creation event"},
+    {"name": "alert_id",      "type": "string",  "doc": "UUIDv7 of the persisted Alert record"},
+    {"name": "user_id",       "type": "string",  "doc": "UUIDv7 of the user who requested the alert"},
+    {"name": "tenant_id",     "type": "string",  "doc": "UUIDv7 of the tenant that owns the alert"},
+    {"name": "entity_id",     "type": "string",  "doc": "UUIDv7 of the entity being watched"},
+    {"name": "condition",     "type": "string",  "doc": "Condition type token, e.g. price_below | price_above | volume_spike | percent_change"},
+    {"name": "threshold",     "type": "string",  "doc": "JSON-encoded threshold parameters, e.g. {\"value\": 200.0} or {\"percent\": 5.0, \"window\": \"1d\"}"},
+    {
+      "name": "severity",
+      "type": "string",
+      "default": "low",
+      "doc": "Initial severity tier: low | medium | high | critical"
+    },
+    {
+      "name": "source",
+      "type": "string",
+      "default": "llm_tool",
+      "doc": "Origin of the alert rule: llm_tool (create_alert via chat) | api (direct REST) | future origins"
+    },
+    {
+      "name": "correlation_id",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Optional trace correlation ID forwarded from the originating request"
+    }
+  ]
+}
