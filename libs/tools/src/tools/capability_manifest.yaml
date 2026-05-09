@@ -1,4 +1,4 @@
-version: "1"
+version: "2"
 tools:
   - name: get_price_history
     description: >
@@ -169,6 +169,7 @@ tools:
     deprecated_at: null
     example_queries:
       - "List all companies that Microsoft has acquired"
+      - "What companies compete with NVIDIA in the GPU market?"
 
   - name: search_claims
     description: >
@@ -198,6 +199,7 @@ tools:
     deprecated_at: null
     example_queries:
       - "What are analysts saying about AAPL's AI strategy?"
+      - "What are analysts forecasting for MSFT's revenue next quarter?"
 
   - name: search_events
     description: >
@@ -226,6 +228,7 @@ tools:
     deprecated_at: null
     example_queries:
       - "When did AAPL last announce a major acquisition?"
+      - "What leadership changes happened at Tesla in 2025?"
 
   - name: get_contradictions
     description: >
@@ -246,6 +249,7 @@ tools:
     deprecated_at: null
     example_queries:
       - "Are there conflicting analyst views on TSLA's profitability?"
+      - "Are there contradictions between analysts about Amazon's profitability?"
 
   - name: get_portfolio_context
     description: >
@@ -259,3 +263,79 @@ tools:
     deprecated_at: null
     example_queries:
       - "How is my portfolio performing today?"
+      - "Which of my holdings have the highest exposure to AI?"
+
+  - name: get_entity_narrative
+    description: >
+      Retrieves the current LLM-generated narrative for an entity — a curated markdown
+      summary of the entity's recent developments, strategic position, and key signals.
+      Use when the user asks for an overview, summary, or what's been happening with an entity.
+      Returns the latest narrative version. High-authority source (platform-curated).
+    parameters:
+      - name: entity_id
+        type: string
+        description: UUID of the entity to retrieve the narrative for. Auto-injected from entity scope when available.
+        required: false
+    source_type: "narrative"
+    since: "v2"
+    deprecated_at: null
+    example_queries:
+      - "Give me a summary of what's been happening with Apple"
+      - "What's the latest narrative on NVDA?"
+
+  - name: get_entity_paths
+    description: >
+      Retrieves top-N pre-computed multi-hop relationship paths anchored on an entity,
+      ranked by composite_score. Use when the user asks about indirect connections,
+      how entities are linked through intermediaries, or wants to explore the entity's
+      broader network relationships.
+    parameters:
+      - name: entity_id
+        type: string
+        description: UUID of the entity to retrieve paths for. Auto-injected from entity scope when available.
+        required: false
+      - name: top_n
+        type: integer
+        description: Number of top paths to return (1-20). Default 5.
+        required: false
+    source_type: "knowledge_graph"
+    since: "v2"
+    deprecated_at: null
+    example_queries:
+      - "What are the most significant connections in AAPL's network?"
+      - "Show me the top relationship paths for Microsoft"
+
+  - name: get_entity_health
+    description: >
+      Retrieves the entity health score, key metrics, source distribution, and 90-day
+      confidence trend. Use when the user asks about data quality, confidence in the
+      entity's information, how well-covered the entity is, or signal health.
+    parameters:
+      - name: entity_id
+        type: string
+        description: UUID of the entity to retrieve health data for. Auto-injected from entity scope when available.
+        required: false
+    source_type: "narrative"
+    since: "v2"
+    deprecated_at: null
+    example_queries:
+      - "How confident are we in the data on Apple?"
+      - "What is TSLA's data health score?"
+
+  - name: get_entity_intelligence
+    description: >
+      Retrieves the full intelligence bundle for an entity — combining narrative,
+      relationship paths, health score, and relations summary in a single call.
+      Use when the user asks for a comprehensive overview or says "tell me everything
+      about X". Prefer this over calling individual intelligence tools separately.
+    parameters:
+      - name: entity_id
+        type: string
+        description: UUID of the entity to retrieve intelligence for. Auto-injected from entity scope when available.
+        required: false
+    source_type: "narrative"
+    since: "v2"
+    deprecated_at: null
+    example_queries:
+      - "Tell me everything about Apple"
+      - "Give me the full intelligence report on NVDA"
