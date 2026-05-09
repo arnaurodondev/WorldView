@@ -423,11 +423,44 @@ class ChatOrchestratorUseCase:
         request: ChatRequest,
         uow: RagUnitOfWorkPort,
     ) -> dict:  # type: ignore[type-arg]
-        """Run the full pipeline synchronously — collects all SSE events and returns final answer."""
+        """Run the full pipeline synchronously — collects all SSE events and returns final answer.
+
+        PLAN-0087 Wave F D-R1-005: error events emitted by ``execute_streaming`` MUST
+        propagate to the route handler as exceptions. Previously this method silently
+        accumulated only ``token``, ``citations``, ``contradictions`` and ``metadata``
+        events — when the LLM first turn failed (``llm_first_turn_failed``,
+        ``tool_use_first_turn_failed``, ``all_tools_failed`` …) the user received a
+        ``200 OK`` with an empty ``answer`` field instead of a ``5xx``.  That is a
+        silent failure (HF-1 spirit) and confused the demo audit (one prompt
+        returned ``null`` answer with status 200).
+
+        Mapping rules (codes are emitted by the orchestrator / pipeline, see
+        ``emit_error`` call sites):
+          - ``RATE_LIMIT_EXCEEDED``                       → ``RateLimitExceededError``
+          - ``INPUT_REJECTED``                            → ``PromptInjectionError``
+          - ``llm_first_turn_failed`` /
+            ``llm_second_turn_failed`` /
+            ``all_tools_failed`` /
+            ``PROVIDER_UNAVAILABLE``                      → ``ProviderUnavailableError`` (→ HTTP 503)
+          - any other error code                          → ``ProviderUnavailableError`` (default
+            non-recoverable upstream failure, HTTP 503)
+
+        We collect the error and re-raise AFTER the generator has fully drained so
+        any side effects emitted before the error (e.g. ``status``) are not swallowed
+        mid-flight.  In practice ``execute_streaming`` returns immediately after
+        emitting an error so the loop terminates after one extra iteration.
+        """
+        from rag_chat.domain.errors import (
+            PromptInjectionError,
+            ProviderUnavailableError,
+            RateLimitExceededError,
+        )
+
         answer = ""
         citations: list = []
         contradictions: list = []
         metadata: dict = {}  # type: ignore[type-arg]
+        error_payload: dict | None = None  # type: ignore[type-arg]
 
         async for event in self.execute_streaming(request, uow):
             event_type = event.get("event", "")
@@ -440,6 +473,31 @@ class ChatOrchestratorUseCase:
                 contradictions = data
             elif event_type == "metadata":
                 metadata = data
+            elif event_type == "error" and error_payload is None:
+                # Capture the FIRST error and keep draining; execute_streaming
+                # almost always terminates immediately after an error event but
+                # we don't rely on that — defensive consumption is cheap.
+                error_payload = data
+
+        if error_payload is not None:
+            code = str(error_payload.get("code", "")).upper()
+            message = str(error_payload.get("message", "")) or "Unable to process request"
+            log.warning(  # type: ignore[no-any-return]
+                "execute_sync_error_event",
+                code=code,
+                message=message,
+            )
+            if code == "RATE_LIMIT_EXCEEDED":
+                raise RateLimitExceededError(message)
+            if code == "INPUT_REJECTED":
+                raise PromptInjectionError(message)
+            # All other failure codes — including the upper-cased forms of
+            # ``llm_first_turn_failed``, ``llm_second_turn_failed``,
+            # ``all_tools_failed`` and the explicit ``PROVIDER_UNAVAILABLE`` —
+            # map to a 503 response.  The route handler converts
+            # ProviderUnavailableError → HTTPException(503), giving the user a
+            # real failure signal instead of a silent 200 with empty answer.
+            raise ProviderUnavailableError(message)
 
         # Safety net: strip any residual <think> blocks from accumulated token stream.
         answer = self._pipeline.process_output(answer, [])[0]

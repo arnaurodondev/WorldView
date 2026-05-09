@@ -138,6 +138,159 @@ class TestSystemPromptSection:
         assert "A very specific and detailed tool description." in section
 
 
+class TestToolDefinitions:
+    """PLAN-0087 Wave F D-R1-001: ToolRegistry.to_tool_definitions() returns
+    OpenAI function-calling shapes built from the registered ToolSpec list.
+
+    These tests verify the method exists, the shape matches the OpenAI
+    chat.completions ``tools`` schema, and the type / enum / required mappings
+    are correct.  The orchestrator passes the result directly to DeepInfra (an
+    OpenAI-compatible endpoint) so any deviation from the spec breaks tool use.
+    """
+
+    def test_returns_non_empty_list_for_registered_tools(self) -> None:
+        registry = _make_default_registry()
+        defs = registry.to_tool_definitions()
+        assert isinstance(defs, list)
+        assert len(defs) == 2  # get_price_history, get_fundamentals_history
+
+    def test_returns_empty_list_for_empty_registry(self) -> None:
+        registry = ToolRegistry()
+        defs = registry.to_tool_definitions()
+        assert defs == []
+
+    def test_each_entry_has_openai_envelope(self) -> None:
+        """Each entry: {"type": "function", "function": {name, description, parameters}}."""
+        registry = _make_default_registry()
+        defs = registry.to_tool_definitions()
+        for entry in defs:
+            assert entry["type"] == "function"
+            fn = entry["function"]
+            assert "name" in fn
+            assert "description" in fn
+            assert "parameters" in fn
+
+    def test_parameters_block_shape(self) -> None:
+        """parameters must be a JSON Schema ``object`` with ``properties`` and ``required``."""
+        registry = _make_default_registry()
+        defs = registry.to_tool_definitions()
+        for entry in defs:
+            params = entry["function"]["parameters"]
+            assert params["type"] == "object"
+            assert isinstance(params["properties"], dict)
+            assert isinstance(params["required"], list)
+
+    def test_required_list_matches_spec(self) -> None:
+        registry = _make_default_registry()
+        defs = registry.to_tool_definitions()
+        # get_price_history has 3 required (ticker, from_date, to_date), 0 optional.
+        price = next(d for d in defs if d["function"]["name"] == "get_price_history")
+        assert set(price["function"]["parameters"]["required"]) == {"ticker", "from_date", "to_date"}
+        # get_fundamentals_history has 1 required (ticker), 1 optional (periods).
+        fundamentals = next(d for d in defs if d["function"]["name"] == "get_fundamentals_history")
+        assert fundamentals["function"]["parameters"]["required"] == ["ticker"]
+
+    def test_date_type_is_mapped_to_string_with_format(self) -> None:
+        """ParameterSpec.type='date' must become {"type":"string","format":"date"}."""
+        registry = _make_default_registry()
+        defs = registry.to_tool_definitions()
+        price = next(d for d in defs if d["function"]["name"] == "get_price_history")
+        from_date = price["function"]["parameters"]["properties"]["from_date"]
+        assert from_date["type"] == "string"
+        assert from_date["format"] == "date"
+
+    def test_array_type_includes_items_schema(self) -> None:
+        """array params must include an ``items`` schema (OpenAI rejects raw 'array')."""
+        registry = ToolRegistry()
+        registry.register(
+            ToolSpec(
+                name="multi_ticker",
+                description="Multi-ticker tool",
+                parameters=[
+                    ParameterSpec(
+                        name="entity_tickers",
+                        type="array",
+                        description="List of tickers",
+                        required=True,
+                    ),
+                ],
+                source_type="mixed",
+            ),
+            handler=AsyncMock(),
+        )
+        defs = registry.to_tool_definitions()
+        prop = defs[0]["function"]["parameters"]["properties"]["entity_tickers"]
+        assert prop["type"] == "array"
+        assert prop["items"]["type"] == "string"
+
+    def test_enum_constraint_is_propagated(self) -> None:
+        """ParameterSpec.enum must show up as ``enum`` in the JSON Schema."""
+        registry = ToolRegistry()
+        registry.register(
+            ToolSpec(
+                name="sev_tool",
+                description="severity-tagged tool",
+                parameters=[
+                    ParameterSpec(
+                        name="severity",
+                        type="string",
+                        description="Severity tier",
+                        required=False,
+                        enum=["low", "medium", "high", "critical"],
+                    ),
+                ],
+                source_type="alert",
+            ),
+            handler=AsyncMock(),
+        )
+        defs = registry.to_tool_definitions()
+        prop = defs[0]["function"]["parameters"]["properties"]["severity"]
+        assert prop["enum"] == ["low", "medium", "high", "critical"]
+
+    def test_zero_parameter_tool_has_empty_properties(self) -> None:
+        """Tools without parameters (e.g. get_morning_brief) must still produce a
+        valid OpenAI schema with empty ``properties`` and ``required`` lists."""
+        registry = ToolRegistry()
+        registry.register(
+            ToolSpec(
+                name="no_args",
+                description="No-argument tool",
+                parameters=[],
+                source_type="narrative",
+            ),
+            handler=AsyncMock(),
+        )
+        defs = registry.to_tool_definitions()
+        params = defs[0]["function"]["parameters"]
+        assert params["properties"] == {}
+        assert params["required"] == []
+
+    def test_all_simple_types_round_trip(self) -> None:
+        """integer/number/boolean/object map 1:1; string is unchanged."""
+        registry = ToolRegistry()
+        registry.register(
+            ToolSpec(
+                name="kitchen_sink",
+                description="all types",
+                parameters=[
+                    ParameterSpec(name="i", type="integer", description="i", required=False),
+                    ParameterSpec(name="n", type="number", description="n", required=False),
+                    ParameterSpec(name="b", type="boolean", description="b", required=False),
+                    ParameterSpec(name="o", type="object", description="o", required=False),
+                    ParameterSpec(name="s", type="string", description="s", required=False),
+                ],
+                source_type="mixed",
+            ),
+            handler=AsyncMock(),
+        )
+        props = registry.to_tool_definitions()[0]["function"]["parameters"]["properties"]
+        assert props["i"]["type"] == "integer"
+        assert props["n"]["type"] == "number"
+        assert props["b"]["type"] == "boolean"
+        assert props["o"]["type"] == "object"
+        assert props["s"]["type"] == "string"
+
+
 class TestManifestArchitecture:
     def test_manifest_yaml_has_entry_for_every_registered_tool(self) -> None:
         """Architecture invariant: capability_manifest.yaml must have an entry
