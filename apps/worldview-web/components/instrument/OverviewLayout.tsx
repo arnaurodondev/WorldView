@@ -57,6 +57,11 @@ import { OverviewSidebarMetrics } from "@/components/instrument/InstrumentKeyMet
 import { InstrumentTopNews } from "@/components/instrument/InstrumentTopNews";
 import { FundamentalSparkline } from "@/components/instrument/FundamentalSparkline";
 import { InstrumentAskAiButton } from "@/components/instrument/InstrumentAskAiButton";
+// 2026-05-09 Overview redesign:
+//   PerformanceBar       — multi-timeframe % chips above the chart (TradingView pattern)
+//   OverviewInsiderStrip — 5-row insider transactions panel sibling to TopNews
+import { PerformanceBar } from "@/components/instrument/PerformanceBar";
+import { OverviewInsiderStrip } from "@/components/instrument/OverviewInsiderStrip";
 // WHY shadcn Select (T-B-2-03): finance mandate prohibits native <select> elements.
 // The native select has system-default styling that breaks the terminal dark theme and
 // produces OS-chrome dropdowns (white background on macOS). shadcn Select uses a Radix
@@ -104,9 +109,10 @@ const OHLCVChart = dynamic(
  * for tooltip positioning — a browser layout API unavailable during SSR.
  * Lazy-loading also shaves the SVG + tooltip state code from the initial bundle.
  *
- * WHY h-[400px] Skeleton (T-B-2-05): EntityGraphPanel container was expanded
- * from 280px to 400px to give the SVG radial layout more vertical room.
- * The Skeleton matches the new container height to prevent layout shift.
+ * WHY h-full Skeleton (2026-05-09 Overview redesign): the new layout sizes
+ * the panel via the parent grid cell (min-h-[400px] on the row), so the
+ * loader fills its container instead of a hard-coded height. Matches the
+ * EntityGraphPanel responsive update.
  */
 const EntityGraphPanel = dynamic(
   () => import("@/components/instrument/EntityGraphPanel").then((m) => ({ default: m.EntityGraphPanel })),
@@ -189,6 +195,14 @@ export function OverviewLayout({
   return (
     <div className="flex flex-col min-h-0">
 
+      {/* ── Performance bar (2026-05-09 Overview redesign) ───────────────── */}
+      {/* WHY ABOVE the chart row (not in the right sidebar): TradingView and
+          Finviz both place the multi-timeframe % strip directly under the
+          symbol header so analysts get an instant "is this hot/cold across
+          horizons?" read before they engage with the chart. Placing it in the
+          sidebar would compete with the metrics rail for attention. */}
+      <PerformanceBar instrumentId={instrumentId} />
+
       {/* ── Upper section: chart + right sidebar ─────────────────────────── */}
       {/* WHY flex (was grid grid-cols-[1fr_280px]): flex lets the chart column
           grow to fill remaining space (flex-1) while the sidebar stays at a
@@ -265,32 +279,45 @@ export function OverviewLayout({
         </div>
       </div>
 
-      {/* ── Lower section: news + entity graph (50/50) ───────────────────── */}
-      {/* WHY grid-cols-2 (was 3fr:3fr:4fr): news gets 50% (was 30%) and graph
-          gets 50% (was 40%). More news width allows 6 headlines without overflow;
-          the graph SVG has more canvas for the radial layout.
-          WHY min-h-[320px] (T-B-2-05): prevents the bottom section from collapsing
-          to zero height on initial render before EntityGraphPanel and news data loads.
-          Without it, the section flashes as a 0px bar before content fills it. */}
-      <div className="grid grid-cols-2 min-h-[320px]">
+      {/* ── Lower section: news + insider (left col) | entity graph (right col) ─ */}
+      {/* 2026-05-09 Overview redesign:
+          Old layout: 50/50 news + graph (graph wrapped in `h-[400px] bg-card/20`
+          while EntityGraphPanel SVG was only 280px tall → 120px black void below
+          the SVG; "black empty component" reported by the user).
+          New layout: 3 columns at 33% each — News, Insider, Graph. The graph
+          panel now fills its column (no fixed-height wrapper that doesn't match
+          the SVG). News empty (often 0 articles) is no longer half the screen;
+          insider transactions backfill the density.
+          WHY min-h-[400px]: matches the EntityGraphPanel internal target so the
+          row never collapses. Without this, the row collapses to 22px before
+          content paints. */}
+      <div className="grid grid-cols-3 min-h-[400px]">
 
-        {/* Zone 6: Top News */}
-        <div className="border-r border-border">
+        {/* Zone 6: Top News (1/3 col) */}
+        <div className="border-r border-border min-w-0">
           <InstrumentTopNews
             entityId={entityId}
             onViewAll={onViewAllNews}
           />
         </div>
 
-        {/* Zone 7: Entity Graph */}
-        {/* WHY h-[400px] (T-B-2-05): was h-[280px] inside EntityGraphPanel — the
-            graph SVG had too little vertical room for the radial node layout to
-            be legible with >6 edges. 400px gives the SVG enough canvas for a
-            proper radial arrangement without nodes overlapping the center label.
-            WHY bg-card/20: provides a subtle non-black background while the graph
-            is loading or if the panel is empty — avoids the jarring all-black
-            rectangle that appeared before Cytoscape.js initialised. */}
-        <div className="h-[400px] bg-card/20">
+        {/* Zone 7: Insider Activity (1/3 col)
+            WHY between news and graph: insider data is rich seeded data that
+            balances a sparse news column. Placing it adjacent to news lets
+            analysts scan both "what's the market hearing" and "what are
+            executives doing" side-by-side — the standard Bloomberg analyst
+            workflow. */}
+        <div className="border-r border-border min-w-0">
+          <OverviewInsiderStrip instrumentId={instrumentId} />
+        </div>
+
+        {/* Zone 8: Entity Graph (1/3 col)
+            WHY no h-[400px] wrapper anymore: the previous wrapper was 400px
+            tall but the SVG inside was only 280px → 120px of black space at
+            the bottom (the "black empty component" complaint). The
+            EntityGraphPanel now renders responsively — see EntityGraphPanel.tsx
+            for the responsive SVG fix. */}
+        <div className="min-w-0">
           <EntityGraphPanel
             entityId={entityId}
             centerLabel={centerLabel}
