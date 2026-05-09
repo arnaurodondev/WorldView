@@ -76,6 +76,87 @@ class ToolRegistry:
         lines.append("```")
         return "\n".join(lines)
 
+    def to_tool_definitions(self) -> list[dict[str, Any]]:
+        """Return OpenAI-format function-calling definitions for all registered tools.
+
+        Each entry has the OpenAI ``chat.completions`` ``tools`` shape:
+            {
+              "type": "function",
+              "function": {
+                "name": <tool_name>,
+                "description": <description>,
+                "parameters": {
+                  "type": "object",
+                  "properties": { <param_name>: { "type": ..., "description": ..., ... } },
+                  "required": [ <required_param_names> ]
+                }
+              }
+            }
+
+        WHY this method exists (D-R1-001 / PLAN-0087 Wave F): the chat orchestrator
+        previously called ``hasattr(registry, "to_tool_definitions")`` which always
+        returned False (the method was only mocked in tests, never defined in
+        production). As a result ``tool_defs=None`` was passed to ``chat_with_tools``,
+        the OpenAI ``tools`` and ``tool_choice`` keys were omitted, and the model
+        could only mimic tool calls by emitting raw markdown ``tool_code`` blocks
+        as user-visible answer text. Implementing this method makes native
+        OpenAI function-calling work end-to-end.
+
+        Type mapping (ParameterSpec.type → JSON Schema):
+            string  → {"type": "string"}
+            date    → {"type": "string", "format": "date"}  # YYYY-MM-DD
+            integer → {"type": "integer"}
+            number  → {"type": "number"}
+            boolean → {"type": "boolean"}
+            array   → {"type": "array", "items": {"type": "string"}}  # default item type
+            object  → {"type": "object"}  # opaque payload — LLM emits arbitrary JSON
+        """
+        definitions: list[dict[str, Any]] = []
+        for spec in self._specs.values():
+            properties: dict[str, dict[str, Any]] = {}
+            required: list[str] = []
+            for p in spec.parameters:
+                # Build the per-parameter JSON Schema fragment.
+                # WHY a dedicated builder: we need to handle date (string + format),
+                # array (items schema), and enum constraints uniformly.
+                schema: dict[str, Any] = {}
+                if p.type == "date":
+                    # JSON Schema convention for ISO-8601 dates.
+                    schema["type"] = "string"
+                    schema["format"] = "date"
+                elif p.type == "array":
+                    # Default array item type is string — covers all current uses
+                    # in capability_manifest.yaml (ticker lists, source-type lists,
+                    # relation-type lists).  If a future tool needs typed items,
+                    # extend ParameterSpec rather than guessing here.
+                    schema["type"] = "array"
+                    schema["items"] = {"type": "string"}
+                else:
+                    # string, integer, number, boolean, object — all map 1:1.
+                    schema["type"] = p.type
+                schema["description"] = p.description
+                if p.enum:
+                    # Constrain the LLM to a known allowlist (e.g. severity levels,
+                    # interval grain).  Mirrors capability_manifest.yaml ``enum:`` keys.
+                    schema["enum"] = list(p.enum)
+                properties[p.name] = schema
+                if p.required:
+                    required.append(p.name)
+            # Build the OpenAI function envelope.  ``parameters`` is always present
+            # (even for zero-parameter tools like get_morning_brief / get_alerts /
+            # get_portfolio_context) — OpenAI tolerates an empty properties object.
+            function_def: dict[str, Any] = {
+                "name": spec.name,
+                "description": spec.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                },
+            }
+            definitions.append({"type": "function", "function": function_def})
+        return definitions
+
     def load_manifest(self) -> dict[str, Any]:
         """Load and return the raw capability_manifest.yaml for architecture tests.
 
