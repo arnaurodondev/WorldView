@@ -229,6 +229,19 @@ class TenantDocumentUploadRepository(TenantDocumentUploadRepositoryPort):
         )
         await self._session.execute(stmt)
 
+    async def set_failed(self, doc_id: UUID, tenant_id: UUID, error_message: str) -> None:
+        """Mark the upload as FAILED and record the error message."""
+        stmt = (
+            update(TenantDocumentUploadModel)
+            .where(
+                TenantDocumentUploadModel.id == doc_id,
+                TenantDocumentUploadModel.tenant_id == tenant_id,
+                TenantDocumentUploadModel.status == "processing",
+            )
+            .values(status="failed", error_message=error_message)
+        )
+        await self._session.execute(stmt)
+
 
 class TenantDedupHashRepository(TenantDedupHashRepositoryPort):
     """PostgreSQL implementation of ``TenantDedupHashRepositoryPort``.

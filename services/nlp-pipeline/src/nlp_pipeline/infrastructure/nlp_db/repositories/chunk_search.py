@@ -116,6 +116,7 @@ class ChunkANNRepository(ChunkSearchPort):
                 date_from=date_from,
                 date_to=date_to,
                 source_types=source_types or [],
+                tenant_id=tenant_id,
             )
             results.extend(section_rows)
             total_searched += section_total
@@ -234,6 +235,7 @@ class ChunkANNRepository(ChunkSearchPort):
         date_from: Any | None,
         date_to: Any | None,
         source_types: list[str],
+        tenant_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
         vec_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
@@ -250,6 +252,16 @@ class ChunkANNRepository(ChunkSearchPort):
             where_clauses.append("dsm.source_type = ANY(:source_types)")
             params["source_types"] = source_types
 
+        # HR-053 / CRIT-1: tenant_id filter — CRITICAL security boundary.
+        # None = public-only: return only sections with tenant_id IS NULL.
+        # Non-None = tenant context: return public sections OR sections for this tenant.
+        # BP-180 CAST used to avoid asyncpg AmbiguousParameterError for nullable params.
+        if tenant_id is not None:
+            params["tenant_id_str"] = tenant_id
+            where_clauses.append("(s.tenant_id IS NULL OR s.tenant_id = CAST(:tenant_id_str AS UUID))")
+        else:
+            where_clauses.append("s.tenant_id IS NULL")
+
         where_filter = ("AND " + " AND ".join(where_clauses)) if where_clauses else ""
 
         query = text(
@@ -260,6 +272,7 @@ class ChunkANNRepository(ChunkSearchPort):
                 se.section_id,
                 s.title            AS heading_path,
                 s.section_type,
+                dsm.title          AS document_title,
                 1 - (se.embedding <=> cast(:vec AS vector)) AS score
             FROM section_embeddings se
             JOIN sections s ON s.section_id = se.section_id
@@ -284,13 +297,27 @@ class ChunkANNRepository(ChunkSearchPort):
                 "score": float(row.score),
                 "section_type": row.section_type,
                 "heading_path": row.heading_path,
+                "document_title": row.document_title,
             }
             for row in rows
         ]
 
-        count_result = await self._session.execute(
-            text("SELECT COUNT(*) FROM section_embeddings"),
-        )
+        # Count query also scoped to the same tenant context so the total
+        # does not leak the count of other tenants' private sections (MED-3).
+        if tenant_id is not None:
+            count_params: dict[str, Any] = {"tenant_id_str": tenant_id}
+            count_sql = text(
+                "SELECT COUNT(*) FROM section_embeddings se "
+                "JOIN sections s ON s.section_id = se.section_id "
+                "WHERE (s.tenant_id IS NULL OR s.tenant_id = CAST(:tenant_id_str AS UUID))"
+            ).bindparams(**count_params)
+        else:
+            count_sql = text(
+                "SELECT COUNT(*) FROM section_embeddings se "
+                "JOIN sections s ON s.section_id = se.section_id "
+                "WHERE s.tenant_id IS NULL"
+            )
+        count_result = await self._session.execute(count_sql)
         total = int(count_result.scalar_one())
 
         return section_results, total
