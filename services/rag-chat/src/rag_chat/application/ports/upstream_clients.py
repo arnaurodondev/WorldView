@@ -349,3 +349,40 @@ class S7IntelligencePort(Protocol):
     async def get_entity_intelligence(self, entity_id: UUID) -> EntityIntelligenceResult | None:
         """GET /api/v1/entities/{id}/intelligence → full intelligence bundle."""
         ...
+
+
+# ── S3BriefPort DTOs + Protocol (PLAN-0081 Wave A) ────────────────────────────
+
+
+@runtime_checkable
+class S3BriefPort(Protocol):
+    """Upstream S9-proxied screener, movers, and calendar client port (PLAN-0081 Wave A).
+
+    All methods return empty dicts/lists on any HTTP or network error (R9 safe degradation).
+    All call S9-proxied endpoints (R14/R7 compliance).
+    """
+
+    async def screen_instruments(self, filters: dict) -> dict:
+        """POST /v1/fundamentals/screen with JSON body → screener results dict."""
+        ...
+
+    async def get_top_movers(self, mover_type: str, limit: int, period: str) -> dict:
+        """GET /v1/market/top-movers → top gainers/losers/most-active."""
+        ...
+
+    async def get_economic_calendar(
+        self,
+        from_date: str | None,
+        to_date: str | None,
+        region: str | None,
+    ) -> list[dict]:
+        """GET /v1/fundamentals/economic-calendar → macro events."""
+        ...
+
+    async def get_earnings_calendar(
+        self,
+        from_date: str | None,
+        to_date: str | None,
+    ) -> list[dict]:
+        """GET /v1/fundamentals/earnings-calendar → earnings release dates."""
+        ...

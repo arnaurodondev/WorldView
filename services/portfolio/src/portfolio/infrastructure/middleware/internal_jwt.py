@@ -199,7 +199,8 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 public_key,
                 algorithms=["RS256"],
                 issuer=self._issuer,
-                options={"require": ["sub", "tenant_id", "role", "exp", "iss"]},
+                audience="worldview-internal",
+                options={"require": ["sub", "tenant_id", "role", "exp", "iss", "aud"]},
             )
             request.state.tenant_id = payload.get("tenant_id", "")
             request.state.user_id = payload.get("sub", "")

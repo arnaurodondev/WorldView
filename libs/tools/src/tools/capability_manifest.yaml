@@ -1,4 +1,4 @@
-version: "2"
+version: "3"
 tools:
   - name: get_price_history
     description: >
@@ -339,3 +339,143 @@ tools:
     example_queries:
       - "Tell me everything about Apple"
       - "Give me the full intelligence report on NVDA"
+
+  - name: get_morning_brief
+    description: >
+      Retrieves the user's latest morning brief — a curated daily summary of
+      portfolio-relevant news, earnings, and macro events. Use when the user asks
+      for their brief, today's brief, morning brief, or "what's happening today".
+      Returns the brief headline, lead, and all sections.
+    parameters: []
+    source_type: "narrative"
+    since: "v3"
+    deprecated_at: null
+    example_queries:
+      - "Show me my morning brief"
+      - "What's in my brief today?"
+
+  - name: compare_entities
+    description: >
+      Side-by-side comparison of 2-4 financial entities: fundamentals highlights
+      (market cap, P/E, revenue, EPS) and latest price quote. Use when the user
+      asks to compare multiple stocks or companies against each other.
+    parameters:
+      - name: entity_tickers
+        type: array
+        description: List of 2-4 stock tickers to compare (e.g. ["AAPL", "MSFT"])
+        required: true
+    source_type: "fundamentals"
+    since: "v3"
+    deprecated_at: null
+    example_queries:
+      - "Compare AAPL and MSFT side by side"
+      - "Show me a comparison of NVDA, AMD, and INTC"
+
+  - name: screen_universe
+    description: >
+      Quantitative screener — filters the instrument universe by market cap, P/E ratio,
+      sector, and region. Use when the user asks to screen, filter, or find stocks that
+      meet specific fundamental criteria.
+    parameters:
+      - name: market_cap_min
+        type: number
+        description: Minimum market cap in USD (e.g. 1000000000 for $1B)
+        required: false
+      - name: market_cap_max
+        type: number
+        description: Maximum market cap in USD
+        required: false
+      - name: pe_ratio_max
+        type: number
+        description: Maximum P/E ratio (e.g. 25.0)
+        required: false
+      - name: sector
+        type: string
+        description: "Sector filter (e.g. 'Technology', 'Healthcare')"
+        required: false
+      - name: region
+        type: string
+        description: "Region filter (e.g. 'US', 'EU')"
+        required: false
+      - name: limit
+        type: integer
+        description: Maximum number of results (1-100). Default 20.
+        required: false
+    source_type: "fundamentals"
+    since: "v3"
+    deprecated_at: null
+    example_queries:
+      - "Screen for tech stocks with P/E under 20 and market cap over $10B"
+      - "Find large-cap US healthcare companies"
+
+  - name: get_market_movers
+    description: >
+      Returns the top gainers, losers, or most-active stocks over a time period.
+      Use when the user asks about market movers, top performers, biggest gainers/losers,
+      or most-active stocks.
+    parameters:
+      - name: mover_type
+        type: string
+        enum: [gainers, losers, most_active]
+        description: "Type of movers: 'gainers', 'losers', or 'most_active'. Default 'gainers'."
+        required: false
+      - name: limit
+        type: integer
+        description: Number of results (1-50). Default 10.
+        required: false
+      - name: period
+        type: string
+        description: "Time period: '1d', '1w', '1m'. Default '1d'."
+        required: false
+    source_type: "market_data"
+    since: "v3"
+    deprecated_at: null
+    example_queries:
+      - "What are the top market movers today?"
+      - "Show me the biggest losers this week"
+
+  - name: get_economic_calendar
+    description: >
+      Retrieves upcoming and past macro economic events (CPI, FOMC, GDP releases,
+      PMI data) with actual vs. forecast vs. prior values. Use when the user asks about
+      economic events, macro calendar, upcoming data releases, or central bank decisions.
+    parameters:
+      - name: from_date
+        type: date
+        description: Start of date range (YYYY-MM-DD). Optional.
+        required: false
+      - name: to_date
+        type: date
+        description: End of date range (YYYY-MM-DD). Optional.
+        required: false
+      - name: region
+        type: string
+        description: "Region filter: 'US', 'EU', 'global'. Optional."
+        required: false
+    source_type: "market_data"
+    since: "v3"
+    deprecated_at: null
+    example_queries:
+      - "What economic events are coming up this week?"
+      - "When is the next FOMC meeting?"
+
+  - name: get_earnings_calendar
+    description: >
+      Returns earnings release dates for companies including EPS estimates and actuals.
+      Use when the user asks about upcoming earnings, earnings season, or when a
+      specific company reports.
+    parameters:
+      - name: from_date
+        type: date
+        description: Start of date range (YYYY-MM-DD). Optional.
+        required: false
+      - name: to_date
+        type: date
+        description: End of date range (YYYY-MM-DD). Optional.
+        required: false
+    source_type: "market_data"
+    since: "v3"
+    deprecated_at: null
+    example_queries:
+      - "What companies are reporting earnings this week?"
+      - "When does Apple next report earnings?"

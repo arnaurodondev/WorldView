@@ -7,7 +7,7 @@
 
 ## Mission & Boundaries
 
-**Owns**: Query rewriting, tool-use chat pipeline, 10-tool catalog, SSE streaming
+**Owns**: Query rewriting, tool-use chat pipeline, 20-tool catalog, SSE streaming
 (vector + KG + SQL tools), result injection, context assembly, prompt building,
 LLM provider fallback, streaming response delivery, citation injection, response caching.
 
@@ -189,7 +189,7 @@ Input → Validate → Cache check → Rate limit → Load history → Release U
       → Re-acquire UoW → persist thread + message
 ```
 
-### Tool Catalog (14 tools — `libs/tools/src/tools/capability_manifest.yaml` v2)
+### Tool Catalog (20 tools — `libs/tools/src/tools/capability_manifest.yaml` v3)
 
 | Tool | Target | Description | Since |
 |------|--------|-------------|-------|
@@ -207,8 +207,16 @@ Input → Validate → Cache check → Rate limit → Load history → Release U
 | `get_entity_paths` | S9→S7 | Top-N pre-computed multi-hop relationship paths, composite_score-ranked. Endpoint: `GET /api/v1/entities/{id}/paths` | v2 |
 | `get_entity_health` | S9→S7 | Entity health score, key metrics, source distribution (extracted from intelligence bundle). Endpoint: `GET /api/v1/entities/{id}/intelligence` | v2 |
 | `get_entity_intelligence` | S9→S7 | Full intelligence bundle: narrative + paths + health + relations summary. Single call for "tell me everything about X". Endpoint: `GET /api/v1/entities/{id}/intelligence` | v2 |
+| `get_morning_brief` | DB | User's latest morning brief from `user_briefs` table via `BriefArchivePort`. Read-only (R27). trust_weight=0.92 | v3 |
+| `compare_entities` | S3 | Side-by-side comparison of 2-4 tickers: fundamentals highlights + latest quote in parallel | v3 |
+| `screen_universe` | S9→S3 | Quantitative screener via S9 `POST /v1/fundamentals/screen`. Filter by market_cap, P/E, sector, region | v3 |
+| `get_market_movers` | S9→S3 | Top gainers/losers/most-active via S9 `GET /v1/market/top-movers`. Default: gainers/1d | v3 |
+| `get_economic_calendar` | S9→S3 | Macro events (CPI, FOMC, GDP) via S9 `GET /v1/fundamentals/economic-calendar` | v3 |
+| `get_earnings_calendar` | S9→S3 | Earnings release dates + EPS via S9 `GET /v1/fundamentals/earnings-calendar` | v3 |
 
 **v2 intelligence tools (PLAN-0080 Wave A)**: all 4 call S9-proxied endpoints (R14/R7 compliance — never S7 directly). All respect `EntityContext` scope: when the executor is bound to an entity via `ToolExecutorFactory.for_request(entity_context=...)`, the `entity_id` is auto-injected and LLM-supplied values are silently overridden (M-1 enforcement).
+
+**v3 catalog tools (PLAN-0081 Wave A)**: 6 tools backed by `S3BriefPort` (new Protocol — screener/movers/calendars via S9 proxy) and `BriefArchivePort` (existing). `S3BriefClient` adapter wired in `app.py` lifespan. `BriefArchiveReadAdapter` creates per-call read sessions (R27). All tools are read-only — no UnitOfWork acquired.
 
 All tool executions are independent; failures return empty results (safe degradation). The all-tools-failed guard prevents the second LLM turn from being called with zero context — the orchestrator short-circuits to a fallback answer in that case.
 

@@ -5,8 +5,8 @@ prd_section: "All sections (this is a /investigate-driven hardening plan; no for
 title: "W5-5b — Operating-Table Hardening (PLAN-0063 close-out)"
 status: in-progress
 created: 2026-05-07
-updated: 2026-05-07
-waves_done: "A-1, A-2, B-1, B-2, B-3, C-1, D-1, D-2, D-3, E-1, E-2, F-1, H-1 (2026-05-07)"
+updated: 2026-05-09
+waves_done: "A-1, A-2, B-1, B-2, B-3, C-1, D-1, D-2, D-3, E-1, E-2, E-3, F-1, H-1 (2026-05-07); G-1 gated — labelling reached 88.3% (106/120) on 2026-05-09, stack required to run sweep"
 plans: 8
 waves: 15
 tasks: 48
@@ -1257,6 +1257,8 @@ None — purely additive.
 
 **Waves**: G-1.
 **Gated on**: E-3 closing AND golden-set labelling ≥80% (currently 51%; this plan does NOT include labelling work). If labelling is still below 80% after E-3, defer G.
+
+**Gate status (2026-05-09)**: Both gates MET — E-3 complete (commit e39c298a); labelling at 88.3% (106/120). Pending: `make dev` + boost sweep command.
 **Estimated effort**: 2 hours.
 
 ### Wave G-1: Run `--mode hybrid_boost_sweep` and Lock the Optimum

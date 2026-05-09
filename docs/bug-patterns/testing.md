@@ -966,3 +966,19 @@ for m in REGISTRY.collect():
 The Prometheus `REGISTRY` is a process-wide singleton. Counter values accumulate across all tests in a session. Tests using `assert count == 1` will fail on the second run if the counter was already incremented earlier in the session. **Fix**: use unique label values per test (e.g. `source="unit_test_w55"`) and compare relative changes (`after > before`) rather than absolute values.
 
 ---
+
+## BP-435
+
+**Architecture enforcement test cited in plan as existing but never created — rule silently unenforced.**
+
+A plan bullet reads "the architecture test `tests/architecture/test_X.py` will fail if Y is not done" as a safety guardrail. The test was never created; the rule appears enforced on paper but has zero runtime enforcement. Violations introduced by future waves are never caught by CI.
+
+**Symptom**: zero CI failures even when the invariant is violated; only a `/revise-prd` audit or manual `ls` check reveals the gap.
+
+**Detection (mechanical)**: for every architecture-test path cited in any plan bullet or §4 constraint, run `ls <path>` — if it returns "no such file", the enforcement is phantom. Run as part of every `/revise-prd` audit.
+
+**Fix**: the wave that introduces the enforcement claim must also create the test in the same commit. The test file path must appear in the wave's explicit scope table, not only in the prose constraints. Never write "the test will fail if…" without listing the test creation in the scope.
+
+**Reference**: PLAN-0080 `/revise-prd` 2026-05-09 — R29 `test_tool_manifest_sync.py` cited in §4 but absent from repo; discovered during BP-405 name verification pass.
+
+---

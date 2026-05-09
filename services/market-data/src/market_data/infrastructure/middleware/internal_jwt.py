@@ -220,7 +220,8 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 public_key,
                 algorithms=["RS256"],
                 issuer="worldview-gateway",
-                options={"require": ["sub", "tenant_id", "role", "exp", "iss"]},
+                audience="worldview-internal",
+                options={"require": ["sub", "tenant_id", "role", "exp", "iss", "aud"]},
             )
 
             # F-012: JTI replay detection — prevent token reuse within TTL window.
