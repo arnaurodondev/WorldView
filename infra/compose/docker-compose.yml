@@ -485,7 +485,7 @@ services:
 
   prometheus:
     image: prom/prometheus:v3.2.1
-    profiles: [monitoring, all]
+    profiles: [monitoring, infra, all]
     ports:
       - "9090:9090"
     volumes:
@@ -501,7 +501,7 @@ services:
 
   tempo:
     image: grafana/tempo:2.7.2
-    profiles: [monitoring, all]
+    profiles: [monitoring, infra, all]
     command: ["-config.file=/etc/tempo.yml"]
     ports:
       - "3200:3200"
@@ -519,7 +519,7 @@ services:
 
   loki:
     image: grafana/loki:3.5.0
-    profiles: [monitoring, all]
+    profiles: [monitoring, infra, all]
     command: ["-config.file=/etc/loki/local-config.yml"]
     ports:
       - "3100:3100"
@@ -535,7 +535,7 @@ services:
 
   grafana:
     image: grafana/grafana:11.6.0
-    profiles: [monitoring, all]
+    profiles: [monitoring, infra, all]
     ports:
       - "3000:3000"
     environment:
@@ -564,7 +564,7 @@ services:
 
   alloy:
     image: grafana/alloy:v1.8.3
-    profiles: [monitoring, all]
+    profiles: [monitoring, infra, all]
     command:
       - run
       - /etc/alloy/config.alloy
@@ -593,7 +593,7 @@ services:
 
   alertmanager:
     image: prom/alertmanager:v0.27.0
-    profiles: [monitoring, all]
+    profiles: [monitoring, infra, all]
     ports:
       - "9093:9093"
     volumes:
@@ -619,7 +619,7 @@ services:
 
   postgres_exporter:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
-    profiles: [monitoring, all]
+    profiles: [monitoring, infra, all]
     environment:
       # WHY env var expansion: credentials must not be hardcoded; docker.env sets
       # POSTGRES_USER/POSTGRES_PASSWORD at runtime.  Defaults match the dev values
@@ -633,7 +633,7 @@ services:
 
   redis_exporter:
     image: oliver006/redis_exporter:v1.62.0
-    profiles: [monitoring, all]
+    profiles: [monitoring, infra, all]
     environment:
       # WHY redis_exporter not valkey_exporter: oliver006/redis_exporter is fully
       # compatible with Valkey (fork of Redis 7.2) — the Redis protocol is identical.
@@ -2001,7 +2001,7 @@ services:
   # monitor pushes after each probe cycle, and Prometheus scrapes the gateway.
   pushgateway:
     image: prom/pushgateway:v1.8.0
-    profiles: [monitoring, all]
+    profiles: [monitoring, infra, all]
     ports:
       - "127.0.0.1:9091:9091"
 
@@ -2017,7 +2017,7 @@ services:
     build:
       context: ../synthetic
       dockerfile: Dockerfile
-    profiles: [monitoring, all]
+    profiles: [monitoring, infra, all]
     environment:
       PUSHGATEWAY_URL: "http://pushgateway:9091"
       API_BASE_URL: "http://api-gateway:8000"
