@@ -139,8 +139,12 @@ export async function apiFetch<T>(
     throw new GatewayError(response.status, detail);
   }
 
-  // Handle 204 No Content (e.g., DELETE endpoints)
-  if (response.status === 204) {
+  // Handle no-body responses: 204 No Content and 202 Accepted (async job queued).
+  // WHY include 202: POST endpoints that queue async jobs (e.g., narrative generation)
+  // return 202 with no body. Attempting response.json() on a null/empty body throws
+  // a SyntaxError. We return undefined (cast to T) because the caller (e.g.,
+  // useTriggerNarrativeGeneration) types the result as void.
+  if (response.status === 204 || response.status === 202) {
     return undefined as unknown as T;
   }
 
