@@ -48,7 +48,7 @@ from rag_chat.domain.enums import ItemType
 
 if TYPE_CHECKING:
     # Port interfaces — annotation-only to satisfy TC001 and maintain R25 compliance.
-    from rag_chat.application.ports.upstream_clients import S1Port, S3Port, S6Port, S7Port
+    from rag_chat.application.ports.upstream_clients import S1Port, S3Port, S6Port, S7IntelligencePort, S7Port
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -154,6 +154,7 @@ class ToolExecutorFactory:
         s3: S3Port,
         s6: S6Port | None = None,
         s7: S7Port | None = None,
+        s7_intel: S7IntelligencePort | None = None,
         s1: S1Port | None = None,
         timeout: float = 5.0,
     ) -> None:
@@ -161,6 +162,7 @@ class ToolExecutorFactory:
         self._s3 = s3
         self._s6 = s6
         self._s7 = s7
+        self._s7_intel = s7_intel
         self._s1 = s1
         self._timeout = timeout
 
@@ -185,6 +187,7 @@ class ToolExecutorFactory:
             s3=self._s3,
             s6=self._s6,
             s7=self._s7,
+            s7_intel=self._s7_intel,
             s1=self._s1,
             user_id=user_id,
             tenant_id=tenant_id,
@@ -213,6 +216,7 @@ class ToolExecutor:
         s3: S3Port,
         s6: S6Port | None = None,
         s7: S7Port | None = None,
+        s7_intel: S7IntelligencePort | None = None,
         s1: S1Port | None = None,
         user_id: UUID | None = None,
         tenant_id: UUID | None = None,
@@ -224,6 +228,7 @@ class ToolExecutor:
         self._s3 = s3
         self._s6 = s6
         self._s7 = s7
+        self._s7_intel = s7_intel
         self._s1 = s1
         self._user_id = user_id
         self._tenant_id = tenant_id
@@ -268,6 +273,14 @@ class ToolExecutor:
                 result = await self._handle_get_contradictions(tool_call, **tool_call.input)
             elif tool_call.name == "get_portfolio_context":
                 result = await self._handle_get_portfolio_context(tool_call)
+            elif tool_call.name == "get_entity_narrative":
+                result = await self._handle_get_entity_narrative(tool_call, **tool_call.input)
+            elif tool_call.name == "get_entity_paths":
+                result = await self._handle_get_entity_paths(tool_call, **tool_call.input)
+            elif tool_call.name == "get_entity_health":
+                result = await self._handle_get_entity_health(tool_call, **tool_call.input)
+            elif tool_call.name == "get_entity_intelligence":
+                result = await self._handle_get_entity_intelligence(tool_call, **tool_call.input)
             else:
                 # Registry had the spec but we have no handler — shouldn't happen
                 # if build_default_registry() is used; guard logs the gap.
@@ -1112,6 +1125,274 @@ class ToolExecutor:
             )
         ]
 
+    # ── S7 Intelligence handlers (PLAN-0080 Wave A) ───────────────────────────
+
+    def _resolve_intel_entity_id(self, tool_name: str, llm_entity_id: str | None) -> UUID | None:
+        """Resolve entity_id for intelligence tools, enforcing EntityContext scope (M-1).
+
+        WHY: When the executor is bound to an entity scope (entity_context is set),
+        all intelligence tools MUST use that entity_id regardless of what the LLM
+        passes. This prevents the LLM from inadvertently leaking cross-entity data
+        and ensures tool results are always scoped to the active entity page.
+        If the LLM passes a different entity_id, we silently override it and log
+        a warning (M-1 compliance, not a hard error — the LLM may just be confused).
+        """
+        if self._entity_context is not None:
+            if llm_entity_id is not None and llm_entity_id != str(self._entity_context.entity_id):
+                log.warning(
+                    "entity_context_override",
+                    tool=tool_name,
+                    llm_entity_id=llm_entity_id,
+                    scoped_entity_id=str(self._entity_context.entity_id),
+                )
+            return self._entity_context.entity_id
+        if llm_entity_id is not None:
+            try:
+                from uuid import UUID as _UUID
+
+                return _UUID(llm_entity_id)
+            except ValueError:
+                log.warning("tool_invalid_entity_id", tool=tool_name, entity_id=llm_entity_id)
+                return None
+        log.warning("tool_no_entity_id", tool=tool_name)
+        return None
+
+    async def _handle_get_entity_narrative(
+        self,
+        tool_call: ToolUseBlock,
+        entity_id: str | None = None,
+    ) -> list[RetrievedItem]:
+        """Retrieve the LLM-generated narrative for an entity via S9 proxy."""
+        if self._s7_intel is None:
+            log.warning("tool_handler_missing_port", tool="get_entity_narrative", port="s7_intel")
+            return []
+
+        resolved_id = self._resolve_intel_entity_id("get_entity_narrative", entity_id)
+        if resolved_id is None:
+            return []
+
+        t0 = time.monotonic()
+        try:
+            result = await asyncio.wait_for(
+                self._s7_intel.get_narrative(resolved_id),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_entity_narrative", error=str(e))
+            return []
+
+        if result is None or not result.content:
+            log.warning("tool_no_data", tool="get_entity_narrative", entity_id=str(resolved_id))
+            return []
+
+        entity_name = self._entity_context.name if self._entity_context else str(resolved_id)
+        item = RetrievedItem.create(
+            item_id=f"tool:narrative:{resolved_id}",
+            item_type=ItemType.financial,
+            text=result.content[:_TOOL_RESULT_MAX_CHARS],
+            score=0.92,
+            trust_weight=0.88,  # platform-curated narrative — high authority
+            citation_meta=CitationMeta(
+                title=f"Narrative: {entity_name}",
+                url=None,
+                source_name="narrative",
+                published_at=None,
+                entity_name=entity_name,
+            ),
+        )
+        log.info(
+            "tool_executed",
+            tool="get_entity_narrative",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            items_returned=1,
+        )
+        return [item]
+
+    async def _handle_get_entity_paths(
+        self,
+        tool_call: ToolUseBlock,
+        entity_id: str | None = None,
+        top_n: int = 5,
+    ) -> list[RetrievedItem]:
+        """Retrieve top-N multi-hop paths for an entity via S9 proxy."""
+        if self._s7_intel is None:
+            log.warning("tool_handler_missing_port", tool="get_entity_paths", port="s7_intel")
+            return []
+
+        resolved_id = self._resolve_intel_entity_id("get_entity_paths", entity_id)
+        if resolved_id is None:
+            return []
+
+        top_n_clamped = max(1, min(int(top_n), 20))
+
+        t0 = time.monotonic()
+        try:
+            result = await asyncio.wait_for(
+                self._s7_intel.get_entity_paths(resolved_id, top_n=top_n_clamped),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_entity_paths", error=str(e))
+            return []
+
+        if not result.paths:
+            log.warning("tool_no_data", tool="get_entity_paths", entity_id=str(resolved_id))
+            return []
+
+        entity_name = self._entity_context.name if self._entity_context else str(resolved_id)
+        lines = [f"Top {len(result.paths)} relationship paths for {entity_name}:"]
+        for i, path in enumerate(result.paths, 1):
+            path_str = str(path)[:200]
+            lines.append(f"  {i}. {path_str}")
+        text = "\n".join(lines)
+
+        item = RetrievedItem.create(
+            item_id=f"tool:paths:{resolved_id}",
+            item_type=ItemType.relation,
+            text=text[:_TOOL_RESULT_MAX_CHARS],
+            score=0.85,
+            trust_weight=0.82,
+            citation_meta=CitationMeta(
+                title=f"Paths: {entity_name}",
+                url=None,
+                source_name="knowledge_graph",
+                published_at=None,
+                entity_name=entity_name,
+            ),
+        )
+        log.info(
+            "tool_executed",
+            tool="get_entity_paths",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            items_returned=1,
+        )
+        return [item]
+
+    async def _handle_get_entity_health(
+        self,
+        tool_call: ToolUseBlock,
+        entity_id: str | None = None,
+    ) -> list[RetrievedItem]:
+        """Retrieve entity health score + key_metrics subset from intelligence bundle."""
+        if self._s7_intel is None:
+            log.warning("tool_handler_missing_port", tool="get_entity_health", port="s7_intel")
+            return []
+
+        resolved_id = self._resolve_intel_entity_id("get_entity_health", entity_id)
+        if resolved_id is None:
+            return []
+
+        t0 = time.monotonic()
+        try:
+            result = await asyncio.wait_for(
+                self._s7_intel.get_entity_intelligence(resolved_id),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_entity_health", error=str(e))
+            return []
+
+        if result is None:
+            log.warning("tool_no_data", tool="get_entity_health", entity_id=str(resolved_id))
+            return []
+
+        entity_name = self._entity_context.name if self._entity_context else str(resolved_id)
+        lines = [f"Health data for {entity_name}:"]
+        if result.health_score is not None:
+            lines.append(f"  Health score: {result.health_score:.2f}")
+        if result.key_metrics:
+            lines.append(f"  Key metrics: {result.key_metrics}")
+        if result.source_distribution:
+            lines.append(f"  Source distribution: {result.source_distribution}")
+        text = "\n".join(lines)
+
+        item = RetrievedItem.create(
+            item_id=f"tool:health:{resolved_id}",
+            item_type=ItemType.financial,
+            text=text[:_TOOL_RESULT_MAX_CHARS],
+            score=0.88,
+            trust_weight=0.85,
+            citation_meta=CitationMeta(
+                title=f"Health: {entity_name}",
+                url=None,
+                source_name="narrative",
+                published_at=None,
+                entity_name=entity_name,
+            ),
+        )
+        log.info(
+            "tool_executed",
+            tool="get_entity_health",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            items_returned=1,
+        )
+        return [item]
+
+    async def _handle_get_entity_intelligence(
+        self,
+        tool_call: ToolUseBlock,
+        entity_id: str | None = None,
+    ) -> list[RetrievedItem]:
+        """Retrieve the full intelligence bundle for an entity via S9 proxy."""
+        if self._s7_intel is None:
+            log.warning("tool_handler_missing_port", tool="get_entity_intelligence", port="s7_intel")
+            return []
+
+        resolved_id = self._resolve_intel_entity_id("get_entity_intelligence", entity_id)
+        if resolved_id is None:
+            return []
+
+        t0 = time.monotonic()
+        try:
+            result = await asyncio.wait_for(
+                self._s7_intel.get_entity_intelligence(resolved_id),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_entity_intelligence", error=str(e))
+            return []
+
+        if result is None:
+            log.warning("tool_no_data", tool="get_entity_intelligence", entity_id=str(resolved_id))
+            return []
+
+        entity_name = self._entity_context.name if self._entity_context else str(resolved_id)
+        sections = [f"Intelligence bundle for {entity_name}:"]
+        if result.narrative:
+            sections.append(f"\n## Narrative\n{result.narrative}")
+        if result.health_score is not None:
+            sections.append(f"\n## Health Score\n{result.health_score:.2f}")
+        if result.key_metrics:
+            sections.append(f"\n## Key Metrics\n{result.key_metrics}")
+        if result.paths:
+            paths_preview = "\n".join(f"  - {str(p)[:150]}" for p in result.paths[:5])
+            sections.append(f"\n## Top Paths\n{paths_preview}")
+        if result.relations_summary:
+            sections.append(f"\n## Relations Summary\n{result.relations_summary}")
+        text = "\n".join(sections)
+
+        item = RetrievedItem.create(
+            item_id=f"tool:intelligence:{resolved_id}",
+            item_type=ItemType.financial,
+            text=text[:_TOOL_RESULT_MAX_CHARS],
+            score=0.90,
+            trust_weight=0.88,
+            citation_meta=CitationMeta(
+                title=f"Intelligence: {entity_name}",
+                url=None,
+                source_name="narrative",
+                published_at=None,
+                entity_name=entity_name,
+            ),
+        )
+        log.info(
+            "tool_executed",
+            tool="get_entity_intelligence",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            items_returned=1,
+        )
+        return [item]
+
     # ── Formatters ────────────────────────────────────────────────────────────
 
     def _format_price_table(
@@ -1276,6 +1557,26 @@ def build_default_registry() -> ToolRegistry:
                 description=f"Tool: {tool_name} (see capability_manifest.yaml for full description)",
                 parameters=[],
                 source_type="mixed",
+            ),
+            handler=lambda **_: None,
+        )
+
+    # PLAN-0080 Wave A: register 4 intelligence tools (get_entity_narrative, get_entity_paths,
+    # get_entity_health, get_entity_intelligence). These are distinct from the S7 KG tools —
+    # they call S9-proxied intelligence endpoints (R14 compliance).
+    _intel_tool_names = [
+        "get_entity_narrative",
+        "get_entity_paths",
+        "get_entity_health",
+        "get_entity_intelligence",
+    ]
+    for tool_name in _intel_tool_names:
+        registry.register(
+            ToolSpec(
+                name=tool_name,
+                description=f"Tool: {tool_name} (see capability_manifest.yaml for full description)",
+                parameters=[],
+                source_type="narrative",
             ),
             handler=lambda **_: None,
         )

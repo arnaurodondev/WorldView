@@ -1,9 +1,9 @@
 # PLAN-0080 — Intelligence-Layer LLM Tools (Narratives, Paths, Health, Bundle)
 
 > **PRD**: derived from `/investigate` 2026-05-07 — issue A-4 (the intelligence layer is the differentiator; it MUST be tool-callable)
-> **Status**: stub
+> **Status**: completed
 > **Created**: 2026-05-07
-> **Last revised**: 2026-05-07 (BP-405 name-verification + architecture compliance audit)
+> **Last revised**: 2026-05-09
 > **Owner**: TBD
 > **Estimated effort**: ~1.5 dev-days (1 wave, ~6 tasks)
 > **Critical path**: single wave
@@ -25,31 +25,29 @@ This plan adds 4 tools to the catalog and the corresponding `ToolExecutor` handl
 
 ## §1 BP-405 Name Verification
 
-The following names were mechanically verified via `grep` against the current codebase on 2026-05-07.
-Items tagged **NEW** do not exist yet and will be created by the indicated plan/wave.
+Re-verified 2026-05-09 (PLAN-0066 ✅ 2026-05-08, PLAN-0067 ✅ 2026-05-08, PLAN-0074 ✅ 2026-05-08).
+Items tagged **NEW** do not exist yet and will be created by this plan's Wave A.
 
-| Name | Type | Exists now? | Source |
-|------|------|-------------|--------|
-| `get_entity_narrative` | tool name (manifest + handler) | NO — NEW (this plan Wave A) | — |
-| `get_entity_paths` | tool name (manifest + handler) | NO — NEW (this plan Wave A) | — |
-| `get_entity_health` | tool name (manifest + handler) | NO — NEW (this plan Wave A) | — |
-| `get_entity_intelligence` | tool name (manifest + handler) | NO — NEW (this plan Wave A) | — |
-| `EntityContext` | value object | NO — NEW (PLAN-0067 W11-3) | — |
-| `ToolExecutorFactory` | class | NO — NEW (PLAN-0067 W11-3) | — |
-| `ToolExecutorFactory.for_request(...)` | method | NO — NEW (PLAN-0067 W11-3) | — |
-| `ToolExecutor` | class | NO — NEW (PLAN-0066 Wave H) | — |
-| `capability_manifest.yaml` | file | NO — NEW (PLAN-0066 Wave H) | — |
-| `S7Port` | Protocol port | YES | `services/rag-chat/src/rag_chat/application/ports/upstream_clients.py:154` |
-| `S7IntelligencePort` | new Protocol port extension | NO — NEW (this plan Wave A) | — |
-| `GET /api/v1/entities/{id}/intelligence` | S7 endpoint | YES (PLAN-0074 Wave C) | `services/knowledge-graph/` |
-| `GET /api/v1/entities/{id}/paths` | S7 endpoint | YES (PLAN-0074 Wave D) | `services/knowledge-graph/` |
-| `GET /api/v1/entities/{id}/narratives` | S7 endpoint | YES (PLAN-0074 Wave B) | `services/knowledge-graph/` |
-| S9 proxy for `/api/v1/entities/{id}/intelligence` | S9 gateway route | NO — NEW (PLAN-0074 Wave G) | — |
-| S9 proxy for `/api/v1/entities/{id}/paths` | S9 gateway route | NO — NEW (PLAN-0074 Wave G) | — |
-| S9 proxy for `/api/v1/entities/{id}/narratives` | S9 gateway route | NO — NEW (PLAN-0074 Wave G) | — |
+| Name | Type | Exists? | Source |
+|------|------|---------|--------|
+| `get_entity_narrative` | tool name (manifest + handler) | NO — NEW (Wave A) | — |
+| `get_entity_paths` | tool name (manifest + handler) | NO — NEW (Wave A) | — |
+| `get_entity_health` | tool name (manifest + handler) | NO — NEW (Wave A) | — |
+| `get_entity_intelligence` | tool name (manifest + handler) | NO — NEW (Wave A) | — |
+| `S7IntelligencePort` | new Protocol port extension | NO — NEW (Wave A) | — |
+| `EntityContext` | value object | YES — PLAN-0067 done | `services/rag-chat/src/rag_chat/application/pipeline/tool_executor.py:109` |
+| `ToolExecutorFactory` | class | YES — PLAN-0067 done | `services/rag-chat/src/rag_chat/application/pipeline/tool_executor.py:140` |
+| `ToolExecutorFactory.for_request(...)` | method | YES — PLAN-0067 done | `services/rag-chat/src/rag_chat/application/pipeline/tool_executor.py:167` |
+| `ToolExecutor` | class | YES — PLAN-0066 done | `services/rag-chat/src/rag_chat/application/pipeline/tool_executor.py:200` |
+| `capability_manifest.yaml` | file | YES — PLAN-0066 done | `libs/tools/src/tools/capability_manifest.yaml` |
+| `S7Port` | Protocol port | YES | `services/rag-chat/src/rag_chat/application/ports/upstream_clients.py:165` |
+| `GET /api/v1/entities/{id}/intelligence` | S7 + S9 endpoint | YES — PLAN-0074 Wave G done | `services/api-gateway/src/api_gateway/routes/proxy.py:2023` |
+| `GET /api/v1/entities/{id}/paths` | S7 + S9 endpoint | YES — PLAN-0074 Wave G done | `services/api-gateway/src/api_gateway/routes/proxy.py:2198` |
+| `GET /api/v1/entities/{id}/narratives` | S7 + S9 endpoint | YES — PLAN-0074 Wave G done | `services/api-gateway/src/api_gateway/routes/proxy.py:2102` |
+| `tests/architecture/test_tool_manifest_sync.py` | architecture test | NO — NEW (Wave A, see B-001) | — |
 
-**Verification passes**: S7Port, S7Port.get_egocentric_graph (existing method shape).
-**Verification fails (all are NEW and correctly tagged above)**: all 4 tool names, EntityContext, ToolExecutorFactory, capability_manifest.yaml.
+**Still NEW (Wave A creates these)**: all 4 tool names, `S7IntelligencePort`, `test_tool_manifest_sync.py`.
+**Confirmed existing (no creation needed)**: `EntityContext`, `ToolExecutorFactory`, `ToolExecutor`, `capability_manifest.yaml`, all 3 S9 proxy routes.
 
 ---
 
@@ -64,19 +62,19 @@ Items tagged **NEW** do not exist yet and will be created by the indicated plan/
 
 ## 3. Scope
 
-| Wave | Title | Layer | Effort |
-|------|-------|-------|--------|
-| A | Manifest entries (4 tools, with `since: v2`); `S7IntelligencePort` Protocol extension (NEW — Wave A); `ToolExecutor` handlers wrapping S9 routes via `S7IntelligencePort`; request-scoped EntityContext auto-injection via `ToolExecutorFactory.for_request(...)` (already established by PLAN-0067 W11-3); tests + 5 golden-eval queries added to PLAN-0067 W11-4 | libs + S8 | 1.5 dev-days |
+| Wave | Title | Layer | Effort | Status |
+|------|-------|-------|--------|--------|
+| A ✅ | (1) `capability_manifest.yaml` — add 4 tool entries with `since: "v2"`; bump top-level `version:` from `"1"` → `"2"`. (2) `S7IntelligencePort` Protocol extension (NEW) in `application/ports/upstream_clients.py`. (3) `ToolExecutor` — add 4 `_handle_*` methods dispatching via `S7IntelligencePort`; add handlers to the `execute()` dispatch table. (4) **`build_default_registry()`** (`tool_executor.py`) — register all 4 new `ToolSpec` entries (required for the LLM system-prompt; without this the tools are dead code). (5) **`sse_emitter.py _TOOL_LABELS`** — add UI labels for all 4 tools. (6) **`tests/architecture/test_tool_manifest_sync.py`** (NEW — R29 enforcement; see §4) — asserts every YAML tool name has a corresponding registration in `build_default_registry()`. (7) Unit tests (happy path + EntityContext enforcement + scope mismatch). (8) 5 golden-eval queries added to `tests/eval/golden/`. | libs + S8 | 1.5 dev-days | **DONE** — 2026-05-09 · 33 unit tests + 4 arch tests pass · ruff + mypy clean |
 
 ## 4. Hard Constraints
 
 - **No new endpoints needed** — pure tool-handler layer over PLAN-0074's REST surface proxied through S9 (Wave G).
-- **ABC/Protocol port requirement (R25)**: all 4 tool handlers MUST go through `S7IntelligencePort` (a `Protocol` port defined in `application/ports/upstream_clients.py`, extending `S7Port`). Tool handlers MUST NOT import from `infrastructure/clients/s7_client.py` directly. This follows the existing `S7Port` pattern at `upstream_clients.py:154`.
+- **ABC/Protocol port requirement (R25)**: all 4 tool handlers MUST go through `S7IntelligencePort` (a `Protocol` port defined in `application/ports/upstream_clients.py`, extending `S7Port`). Tool handlers MUST NOT import from `infrastructure/clients/s7_client.py` directly. This follows the existing `S7Port` pattern at `upstream_clients.py:165`.
 - **S9-only access (R14/R7)**: tool handlers call S9-proxied URLs, not S7 directly. The infrastructure adapter for `S7IntelligencePort` calls `app.state.s9_base_url` routes.
 - **EntityContext enforcement (M-1)**: when `EntityContext.entity_id` is set on the request-scoped `ToolExecutor` (bound via `ToolExecutorFactory.for_request(entity_context=...)`), all 4 tools auto-filter to that entity_id. The LLM cannot pass a different `entity_id` argument when scope is set. If the LLM passes `entity_id` and scope is already set, the executor silently replaces with the scoped value and emits a `structlog` warning (never stdlib logging — R14 equivalent for logs, structlog only).
 - **Trust scoring**: the resulting `RetrievedItem` flows through `TrustScorer` (PLAN-0079); `source_type="narrative"` gets a high authority (~0.88), reflecting that narratives are platform-curated.
-- **Manifest versioning**: all 4 entries have `since: "v2"`. Manifest top-level version bumps to `v2` in the same Wave A commit.
-- **R29 compliance**: `capability_manifest.yaml` MUST be updated atomically with the handler registration. Every new tool entry requires `name`, `description`, `parameters`, `since`, and at least 2 `example_queries`. The architecture test `tests/architecture/test_tool_manifest_sync.py` will fail otherwise.
+- **Manifest versioning**: all 4 entries have `since: "v2"` (with `v` prefix — consistent with existing `since: "v1"` pattern). Manifest top-level `version:` field bumps from `"1"` → `"2"` (no `v` prefix — consistent with current format).
+- **R29 compliance**: `capability_manifest.yaml` MUST be updated atomically with handler registration and `build_default_registry()`. Every new tool entry requires `name`, `description`, `parameters`, `since`, and at least 2 `example_queries`. Wave A MUST CREATE `tests/architecture/test_tool_manifest_sync.py` to enforce this going forward — this test does not yet exist (confirmed 2026-05-09 audit). It should load `ToolRegistry.load_manifest()` and assert every YAML tool name has a corresponding `ToolSpec` in `build_default_registry()`'s registry.
 - **UUIDs**: any entity IDs created by handlers use `common.ids.new_uuid7()` (R10). No `uuid.uuid4()`.
 - **Timestamps**: any timestamps use `common.time.utc_now()` (R11). No naive datetimes.
 - **structlog only**: all logging in handlers uses `structlog.get_logger()`, never `import logging` (R14-equivalent).
@@ -85,9 +83,11 @@ Items tagged **NEW** do not exist yet and will be created by the indicated plan/
 ## 5. Cross-cutting
 
 - Documentation: `docs/services/rag-chat.md` lists the 4 new tools in the "Tool Catalog" section.
+- **`sse_emitter.py _TOOL_LABELS`**: add 4 entries (e.g. `"get_entity_narrative": "Loading narrative..."`, `"get_entity_paths": "Tracing entity paths..."`, `"get_entity_health": "Computing health score..."`, `"get_entity_intelligence": "Loading intelligence bundle..."`). Without entries the UI fallback renders raw tool names with `...` suffix.
 - Tests: each tool gets a unit test for: (a) happy path, (b) EntityContext enforcement (scoped entity_id overrides LLM-supplied arg), (c) scope mismatch (entity_id from LLM differs from scope — verify override).
+- Architecture test: `tests/architecture/test_tool_manifest_sync.py` (NEW — created in Wave A per R29; see §4).
 - No Alembic migrations required.
 
 ---
 
-*Stub generated 2026-05-07. BP-405 audit 2026-05-07.*
+*Stub generated 2026-05-07. BP-405 audit 2026-05-07. Revised 2026-05-09 (revise-prd): stale name table updated, B-001 test scope added, B-002 registry scope added, N-001/002/003 fixed.*

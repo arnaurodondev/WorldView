@@ -293,3 +293,59 @@ class S1Port(Protocol):
         Results are cached in Valkey for 300 s.
         """
         ...
+
+
+# ── Intelligence Port DTOs + Protocol (PLAN-0080 Wave A) ──────────────────────
+
+
+@dataclass
+class NarrativeResult:
+    """Latest narrative for an entity returned by S7/S9."""
+
+    entity_id: str
+    content: str  # markdown
+    version: int = 1
+    generated_at: str | None = None
+
+
+@dataclass
+class EntityPathsResult:
+    """Multi-hop paths for an entity returned by S7/S9."""
+
+    entity_id: str
+    paths: list[dict] = field(default_factory=list)
+    total_paths: int = 0
+
+
+@dataclass
+class EntityIntelligenceResult:
+    """Full intelligence bundle for an entity returned by S7/S9."""
+
+    entity_id: str
+    narrative: str | None = None  # markdown, may be absent if not yet generated
+    health_score: float | None = None
+    key_metrics: dict = field(default_factory=dict)
+    source_distribution: dict = field(default_factory=dict)
+    paths: list[dict] = field(default_factory=list)
+    relations_summary: str | None = None
+
+
+@runtime_checkable
+class S7IntelligencePort(Protocol):
+    """Upstream intelligence endpoint client port (PLAN-0080 Wave A).
+
+    All methods call S9-proxied URLs (R14/R7 — never S7 directly).
+    All methods return None/empty on any network or HTTP error (R9 safe degradation).
+    """
+
+    async def get_narrative(self, entity_id: UUID) -> NarrativeResult | None:
+        """GET /api/v1/entities/{id}/narratives → latest narrative."""
+        ...
+
+    async def get_entity_paths(self, entity_id: UUID, top_n: int = 5) -> EntityPathsResult:
+        """GET /api/v1/entities/{id}/paths → top-N pre-computed paths."""
+        ...
+
+    async def get_entity_intelligence(self, entity_id: UUID) -> EntityIntelligenceResult | None:
+        """GET /api/v1/entities/{id}/intelligence → full intelligence bundle."""
+        ...
