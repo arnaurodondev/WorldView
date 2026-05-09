@@ -242,9 +242,16 @@ def get_search_documents_use_case(
     s5_base_url: str = settings.content_store_internal_url
     s7_base_url: str = settings.knowledge_graph_internal_url
 
+    # Forward the X-Internal-JWT that S9 attached when proxying the request to S6.
+    # S5 and S7 both run InternalJWTMiddleware, so they require this header on
+    # every inbound call.  Reading from request.state (set by InternalJWTMiddleware
+    # after successful validation) is more reliable than re-reading request.headers
+    # through stacked BaseHTTPMiddleware wrappers in Starlette 0.37.x.
+    jwt: str | None = getattr(request.state, "internal_jwt", None)
+
     repo = AsyncpgDocumentSearchRepository(nlp_session)
-    s5_client = _S5BatchClient(s5_base_url)
-    s7_client = _S7BatchClient(s7_base_url)
+    s5_client = _S5BatchClient(s5_base_url, jwt=jwt)
+    s7_client = _S7BatchClient(s7_base_url, jwt=jwt)
 
     return SearchDocumentsUseCase(repo=repo, s5_client=s5_client, s7_client=s7_client)
 

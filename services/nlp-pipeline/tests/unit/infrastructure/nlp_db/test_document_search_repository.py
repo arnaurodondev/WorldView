@@ -134,17 +134,30 @@ class TestSearch:
 
     @pytest.mark.asyncio
     async def test_search_with_source_type_filter(self) -> None:
-        """source_type='news' is passed as the :source_type param."""
+        """source_type='news' maps to the DB enum list via _SOURCE_TYPE_MAP.
+
+        The API exposes a coarser taxonomy ('news', 'sec_edgar') than the DB,
+        which stores per-adapter values ('eodhd_news', 'finnhub_news', etc.).
+        _build_search_params must translate API → DB list so the SQL ANY() clause
+        matches actual rows (PLAN-0064 BUG-2 fix).
+        """
         request = _make_request(source_type="news")
         params = _build_search_params(request)
-        assert params["source_type"] == "news"
+        assert params["source_types"] == ["eodhd_news", "finnhub_news", "press_release"]
+
+    @pytest.mark.asyncio
+    async def test_search_with_sec_edgar_source_type_filter(self) -> None:
+        """source_type='sec_edgar' maps to the three SEC adapter values."""
+        request = _make_request(source_type="sec_edgar")
+        params = _build_search_params(request)
+        assert params["source_types"] == ["sec_10k", "sec_8k", "sec_10q"]
 
     @pytest.mark.asyncio
     async def test_search_source_type_all_becomes_none(self) -> None:
-        """source_type='all' means no filter — :source_type param must be None."""
+        """source_type='all' means no filter — :source_types param must be None."""
         request = _make_request(source_type="all")
         params = _build_search_params(request)
-        assert params["source_type"] is None
+        assert params["source_types"] is None
 
     @pytest.mark.asyncio
     async def test_search_with_date_range(self) -> None:

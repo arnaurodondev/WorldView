@@ -196,14 +196,17 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
 
         try:
             # F-015: pass issuer= to jwt.decode so PyJWT validates iss internally.
-            # This is more robust than a manual payload.get("iss") check because
-            # PyJWT raises InvalidIssuerError before we touch the payload at all.
+            # DEF-002: also validate aud= so a token issued for service A cannot
+            # be replayed at service B. S9 always sets aud="worldview-internal";
+            # without audience= here PyJWT 2.x raises InvalidAudienceError on any
+            # JWT that carries an aud claim (BP-NEW-004 — pre-existing bug).
             payload = jwt.decode(
                 token,
                 public_key,
                 algorithms=["RS256"],
                 issuer="worldview-gateway",
-                options={"require": ["sub", "tenant_id", "role", "exp", "iss"]},
+                audience="worldview-internal",
+                options={"require": ["sub", "tenant_id", "role", "exp", "iss", "aud"]},
             )
 
             # F-012: JTI replay detection — prevent token reuse within TTL window.

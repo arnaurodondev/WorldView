@@ -15,7 +15,7 @@
 | [Kafka & Messaging](bug-patterns/kafka-messaging.md) | `bug-patterns/kafka-messaging.md` | 39 | Kafka, Avro, outbox, DLQ, Schema Registry |
 | [Database & ORM](bug-patterns/database-orm.md) | `bug-patterns/database-orm.md` | 42 | SQLAlchemy, asyncpg, Alembic, PostgreSQL, pgvector |
 | [Async & Concurrency](bug-patterns/async-concurrency.md) | `bug-patterns/async-concurrency.md` | 14 | asyncio, event loops, concurrency, React concurrent mode |
-| [Auth & Security](bug-patterns/auth-security.md) | `bug-patterns/auth-security.md` | 30 | JWT/OIDC, SSRF, XSS, tenant isolation, CSP, middleware |
+| [Auth & Security](bug-patterns/auth-security.md) | `bug-patterns/auth-security.md` | 31 | JWT/OIDC, SSRF, XSS, tenant isolation, CSP, middleware |
 | [Testing](bug-patterns/testing.md) | `bug-patterns/testing.md` | 28 | pytest, AsyncMock, fixtures, Vitest, pre-commit, CI |
 | [Frontend](bug-patterns/frontend.md) | `bug-patterns/frontend.md` | 45 | React, Next.js, WebSocket/SSE, TypeScript, CSS |
 | [Config & Docker](bug-patterns/config-docker.md) | `bug-patterns/config-docker.md` | 31 | pydantic-settings, Docker, Compose, env vars, images |

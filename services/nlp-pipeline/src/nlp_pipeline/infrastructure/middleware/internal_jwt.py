@@ -252,6 +252,11 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
             request.state.tenant_id = payload.get("tenant_id", "")
             request.state.user_id = payload.get("sub", "")
             request.state.role = payload.get("role", "")
+            # Store raw token so downstream use cases can forward it to other
+            # backend services (e.g. S6 → S5 batch calls).  Reading from
+            # request.state is more reliable than re-reading request.headers
+            # through stacked BaseHTTPMiddleware wrappers.
+            request.state.internal_jwt = token
         except jwt.ExpiredSignatureError:
             return Response(
                 content='{"detail":"Internal JWT expired"}',

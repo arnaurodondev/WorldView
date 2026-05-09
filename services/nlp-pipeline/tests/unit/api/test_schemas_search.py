@@ -137,15 +137,23 @@ def test_request_equal_dates_accepted() -> None:
 
 
 @pytest.mark.unit
-def test_result_snippet_is_plain_text_no_html() -> None:
-    """snippet containing '<' or '>' should raise ValidationError."""
-    with pytest.raises(ValidationError, match="no HTML tags"):
-        SearchDocumentResult(
-            doc_id=_UUID_A,
-            source_type="news",
-            score=0.9,
-            snippet="Apple <b>earnings</b> beat estimates",
-        )
+def test_result_snippet_accepts_angle_brackets() -> None:
+    """snippet with '<' or '>' is accepted — financial text like 'P/E <15x' is legitimate.
+
+    The _no_html_in_snippet validator was removed (PLAN-0064 bug-fix) because
+    SEC filing and financial article chunks legitimately contain angle bracket
+    comparisons (price <$50, yield >3%).  The repo constructs SearchDocumentResult
+    with raw ts_headline output (sentinels not yet stripped), and these chars are
+    not security-sensitive since the frontend renders highlights via match_offsets,
+    not dangerouslySetInnerHTML.
+    """
+    r = SearchDocumentResult(
+        doc_id=_UUID_A,
+        source_type="news",
+        score=0.9,
+        snippet="P/E ratio <15x and dividend yield >3%",
+    )
+    assert "<" in (r.snippet or "") and ">" in (r.snippet or "")
 
 
 @pytest.mark.unit
