@@ -120,7 +120,10 @@ export default function WatchlistDetailPage() {
   // ── Render branches ─────────────────────────────────────────────────────
 
   if (!watchlistId) {
-    return <div className="p-4 text-[11px] text-muted-foreground">Invalid URL.</div>;
+    // WHY p-2 (was p-4): dense list / inline message — Terminal Dark density
+    // standard reduces 16px → 8px padding so error messaging fits the
+    // surrounding row rhythm.
+    return <div className="p-2 text-[11px] text-muted-foreground">Invalid URL.</div>;
   }
 
   if (isLoading) {
@@ -138,7 +141,10 @@ export default function WatchlistDetailPage() {
   if (isError || !watchlist) {
     return (
       <Shell title={null} onBack={() => router.push("/watchlists")}>
-        <div className="flex flex-col items-start gap-2 p-4">
+        {/* WHY p-3 (was p-4): error empty-state in a dense list panel —
+            12px padding sits between the message and the surrounding row
+            rhythm without crowding the inline retry button. */}
+        <div className="flex flex-col items-start gap-2 p-3">
           <InlineEmptyState message="Watchlist failed to load — it may have been deleted." />
           <Button variant="outline" density="compact" onClick={() => refetch()}>
             Retry

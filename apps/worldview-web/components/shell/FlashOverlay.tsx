@@ -147,7 +147,9 @@ function FlashOverlayContent({ alert, onDismiss }: FlashOverlayContentProps) {
           style={{ width: `${progressPct}%` }}
         />
 
-        <div className="p-4">
+        {/* WHY p-3 (was p-4): overlay surface — 12px padding maintains breath
+            around the alert content while matching Terminal Dark density. */}
+        <div className="p-3">
           {/* Header: severity badge + close button */}
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-2">

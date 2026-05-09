@@ -136,7 +136,11 @@ function severityClass(severity: string): string {
     case "critical":
       return "text-destructive border-destructive/40 bg-destructive/10";
     case "high":
-      return "text-orange-400 border-orange-400/40 bg-orange-400/10";
+      // WHY text-warning (was off-palette text-orange-400): "high" sits
+      // between "medium" (warning) and "critical" (destructive) — the
+      // amber --warning token correctly signals elevated attention without
+      // crossing into red destructive territory.
+      return "text-warning border-warning/40 bg-warning/10";
     case "medium":
       return "text-warning border-warning/40 bg-warning/10";
     default: // "low"

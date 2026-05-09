@@ -65,29 +65,34 @@ afterEach(() => {
 
 // ─── statusInfo helper ────────────────────────────────────────────────────────
 
+// PLAN-0087 D-F3-005: status page migrated from off-palette Tailwind shorthand
+// (green-500/amber-500/red-500/zinc-500) to Terminal Dark design tokens
+// (positive/warning/destructive/muted). Tests now assert on tokens to preserve
+// the original intent ("operational maps to positive signal") while reflecting
+// the post-migration class vocabulary.
 describe("statusInfo()", () => {
-  it("returns green class for status 2 (up)", () => {
+  it("returns positive token class for status 2 (up)", () => {
     const { label, colorClass } = statusInfo(2);
     expect(label).toBe("Operational");
-    expect(colorClass).toContain("green");
+    expect(colorClass).toContain("positive");
   });
 
-  it("returns amber class for status 8 (seems down)", () => {
+  it("returns warning token class for status 8 (seems down)", () => {
     const { label, colorClass } = statusInfo(8);
     expect(label).toBe("Degraded");
-    expect(colorClass).toContain("amber");
+    expect(colorClass).toContain("warning");
   });
 
-  it("returns red class for status 9 (down)", () => {
+  it("returns destructive token class for status 9 (down)", () => {
     const { label, colorClass } = statusInfo(9);
     expect(label).toBe("Down");
-    expect(colorClass).toContain("red");
+    expect(colorClass).toContain("destructive");
   });
 
-  it("returns grey class for status 0 (paused)", () => {
+  it("returns muted token class for status 0 (paused)", () => {
     const { label, colorClass } = statusInfo(0);
     expect(label).toBe("Paused");
-    expect(colorClass).toContain("zinc");
+    expect(colorClass).toContain("muted");
   });
 });
 
@@ -157,18 +162,20 @@ function MinimalIncidentBanner({ incidents }: { incidents: Incident[] }) {
 }
 
 describe("status page — renders up state", () => {
-  it("shows green Operational badge when monitor is up (status=2)", () => {
+  it("shows positive-token Operational badge when monitor is up (status=2)", () => {
     render(<MinimalMonitorPill monitor={makeMonitor({ status: 2 })} />);
     expect(screen.getByTestId("status-badge").textContent).toBe("Operational");
-    expect(screen.getByTestId("status-badge").className).toContain("green");
+    // PLAN-0087 D-F3-005: design-token migration — was "green".
+    expect(screen.getByTestId("status-badge").className).toContain("positive");
   });
 });
 
 describe("status page — renders down state", () => {
-  it("shows red Down badge when monitor is down (status=9)", () => {
+  it("shows destructive-token Down badge when monitor is down (status=9)", () => {
     render(<MinimalMonitorPill monitor={makeMonitor({ status: 9 })} />);
     expect(screen.getByTestId("status-badge").textContent).toBe("Down");
-    expect(screen.getByTestId("status-badge").className).toContain("red");
+    // PLAN-0087 D-F3-005: design-token migration — was "red".
+    expect(screen.getByTestId("status-badge").className).toContain("destructive");
   });
 });
 
