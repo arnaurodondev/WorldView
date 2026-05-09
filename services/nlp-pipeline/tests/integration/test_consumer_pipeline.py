@@ -110,6 +110,10 @@ def _make_settings() -> MagicMock:
     s.entity_resolution_auto_resolve_threshold = 0.72
     s.entity_resolution_provisional_threshold = 0.45
     s.silver_bucket = "worldview-silver"
+    # WHY: gliner_mention_floor is used in _build_chunk_entity_mentions to filter
+    # entity mentions by confidence.  Without an explicit float value the MagicMock
+    # auto-attribute causes TypeError when compared with mention.confidence float.
+    s.gliner_mention_floor = 0.6
     return s
 
 
@@ -200,7 +204,7 @@ def _make_event(doc_id: uuid.UUID | None = None) -> dict[str, Any]:
     return {
         "event_id": str(uuid.uuid4()),
         "doc_id": str(doc_id or uuid.uuid4()),
-        "minio_silver_key": "silver/articles/test.txt",
+        "minio_silver_key": "silver/eodhd/2026/01/15/0195c7b4-a9f2-7b3e-8d1c-3f2e1a4b5c6d.txt",
         "source_type": "eodhd",
         "published_at": datetime.now(tz=UTC).isoformat(),
         "is_backfill": False,
