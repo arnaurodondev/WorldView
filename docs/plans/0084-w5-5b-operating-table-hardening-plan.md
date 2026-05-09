@@ -3,10 +3,10 @@ id: PLAN-0084
 prd: docs/audits/2026-05-07-investigate-w5-5b-and-strategic-direction.md
 prd_section: "All sections (this is a /investigate-driven hardening plan; no formal PRD)"
 title: "W5-5b — Operating-Table Hardening (PLAN-0063 close-out)"
-status: in-progress
+status: completed
 created: 2026-05-07
 updated: 2026-05-09
-waves_done: "A-1, A-2, B-1, B-2, B-3, C-1, D-1, D-2, D-3, E-1, E-2, E-3, F-1, H-1 (2026-05-07); G-1 gated — labelling reached 88.3% (106/120) on 2026-05-09, stack required to run sweep"
+waves_done: "A-1, A-2, B-1, B-2, B-3, C-1, D-1, D-2, D-3, E-1, E-2, E-3, F-1, H-1 (2026-05-07); G-1 DONE 2026-05-09 — boost sweep run; optimal boost=1.0 (all tested values identical at NDCG@10=0.1827 for identifier_lookup; overall=0.295); artifact results/boost_sweep_20260509T143904Z.json; hybrid_lexical_boost default updated to 1.0 in nlp-pipeline config; corpus coverage finding: 31.2% of golden set chunks exist in current DB (news corpus wiped) — re-ingest required for accurate general-class eval"
 plans: 8
 waves: 15
 tasks: 48
