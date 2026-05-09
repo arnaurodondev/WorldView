@@ -35,6 +35,9 @@ import { useRouter } from "next/navigation";
 import { X, Send, ExternalLink, Bot } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
+// HF-10: shared price formatter for locale-grouped output ("$4,892.11").
+// Used in both the visible context hint and the LLM system-context builder.
+import { formatPrice } from "@/lib/format";
 
 // ── Citation helpers ──────────────────────────────────────────────────────────
 
@@ -218,8 +221,9 @@ export function AskAiPanel({
   const buildSystemContext = useCallback((): string | undefined => {
     if (!ticker) return undefined;
     const sign = priceChangePct != null && priceChangePct >= 0 ? "+" : "";
+    // HF-10: formatPrice gives the LLM a locale-grouped, null-safe price.
     const pricePart = price != null
-      ? ` at $${price.toFixed(2)}${priceChangePct != null ? ` (${sign}${priceChangePct.toFixed(2)}%)` : ""}`
+      ? ` at ${formatPrice(price)}${priceChangePct != null ? ` (${sign}${priceChangePct.toFixed(2)}%)` : ""}`
       : "";
     const pePart = fundamentals?.pe != null ? ` P/E: ${fundamentals.pe.toFixed(1)}.` : "";
     return `User is viewing ${ticker}${pricePart}.${pePart} Answer in the context of this instrument.`;
@@ -227,7 +231,7 @@ export function AskAiPanel({
 
   // Derive the display hint: prefer explicit contextHint, fall back to structured props.
   const displayHint = contextHint ?? (ticker
-    ? `Context: ${ticker}${price != null ? ` · $${price.toFixed(2)}` : ""}${priceChangePct != null ? ` · ${priceChangePct >= 0 ? "+" : ""}${priceChangePct.toFixed(1)}%` : ""}${fundamentals?.pe != null ? ` · P/E ${fundamentals.pe.toFixed(1)}` : ""}`
+    ? `Context: ${ticker}${price != null ? ` · ${formatPrice(price)}` : ""}${priceChangePct != null ? ` · ${priceChangePct >= 0 ? "+" : ""}${priceChangePct.toFixed(1)}%` : ""}${fundamentals?.pe != null ? ` · P/E ${fundamentals.pe.toFixed(1)}` : ""}`
     : undefined);
 
   // WHY useRef for EventSource: the SSE connection is imperative infrastructure,

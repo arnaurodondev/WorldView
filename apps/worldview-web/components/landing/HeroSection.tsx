@@ -130,10 +130,10 @@ export function HeroSection() {
               cheap on dark backgrounds. */}
           <div
             aria-hidden
-            className="pointer-events-none absolute -inset-2 rounded-[6px] bg-primary/10 opacity-50 blur-2xl"
+            className="pointer-events-none absolute -inset-2 rounded-[2px] bg-primary/10 opacity-50 blur-2xl"
           />
 
-          <div className="relative overflow-hidden rounded-[3px] border border-border/60 bg-card shadow-2xl">
+          <div className="relative overflow-hidden rounded-[2px] border border-border/60 bg-card shadow-2xl">
             {/* macOS-style window chrome — tells the user "this is an app".
                 WHY semantic tokens (not raw HSL): PLAN-0059 token-compliance
                 policy forbids raw hex/HSL outside JSON-LD. The dots map to

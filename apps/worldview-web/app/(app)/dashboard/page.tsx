@@ -70,6 +70,13 @@ import { DashboardSnapshotPrefetcher } from "@/components/dashboard/DashboardSna
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
+// HF-10: per-route metadata replaces the generic root <title>. Each Phase-A
+// surface needs its own title so browser tabs / bookmarks / window-history
+// (and screen readers announcing page changes) identify the page distinctly.
+// The dashboard is a server component, so the metadata export works in-place;
+// client-component pages add a sibling `layout.tsx` that exports metadata.
+export const metadata = { title: "Dashboard | Worldview" };
+
 // WHY NO PAGE-LEVEL SKELETON / STAGGERED LOADING:
 // Each widget manages its own loading state independently via TanStack Query.
 // A page-level skeleton would block the entire dashboard until ALL endpoints

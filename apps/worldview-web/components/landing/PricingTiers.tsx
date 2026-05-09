@@ -161,7 +161,7 @@ export function PricingTiers() {
               <div
                 key={tier.name}
                 className={
-                  "relative flex flex-col rounded-[3px] border p-6 transition-all " +
+                  "relative flex flex-col rounded-[2px] border p-6 transition-all " +
                   (tier.highlight
                     ? "border-primary/50 bg-card shadow-lg shadow-primary/10"
                     : "border-border/40 bg-card hover:border-border/70")

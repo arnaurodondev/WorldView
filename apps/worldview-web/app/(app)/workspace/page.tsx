@@ -215,7 +215,7 @@ function WorkspaceSymbolBar() {
           }
         }}
         placeholder="e.g. AAPL"
-        className="h-6 w-24 rounded-[2px] border border-border/40 bg-transparent px-2 font-mono text-[11px] uppercase text-foreground placeholder:text-muted-foreground/40 focus:border-primary/50 focus:outline-none"
+        className="h-6 w-24 rounded-[2px] border border-border/40 bg-transparent px-2 font-mono text-[11px] uppercase text-foreground placeholder:text-muted-foreground/40 focus:border-primary/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         aria-label="Broadcast symbol to all panels"
       />
 

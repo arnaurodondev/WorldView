@@ -24,6 +24,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+// HF-10: shared compact-currency formatter for "$1.2M" / "$42.5K" output.
+import { formatCompactCurrency } from "@/lib/format";
 import { TrendingUp, Search, AlertCircle } from "lucide-react";
 import type { PredictionMarket } from "@/types/api";
 
@@ -60,12 +62,8 @@ function ProbabilityBar({ probability }: { probability: number }) {
 
 function MarketRow({ market }: { market: PredictionMarket }) {
   const volume = market.volume_usd ?? 0;
-  const formattedVolume =
-    volume >= 1_000_000
-      ? `$${(volume / 1_000_000).toFixed(1)}M`
-      : volume >= 1_000
-        ? `$${(volume / 1_000).toFixed(1)}K`
-        : `$${volume.toFixed(0)}`;
+  // HF-10: delegate to the shared formatter ("$1.2M" / "$42.5K" / "$847.00").
+  const formattedVolume = formatCompactCurrency(volume, "USD", { maxDecimals: 1 });
 
   const closeDate = market.resolution_date ? new Date(market.resolution_date) : null;
   const daysLeft = closeDate
