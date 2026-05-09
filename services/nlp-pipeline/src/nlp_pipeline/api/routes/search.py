@@ -2,12 +2,13 @@
 
 Internal endpoint for S8 RAG pipeline to perform ANN vector search with inline
 entity annotations and citation metadata in a single round trip.
-No user authentication is required (internal service-to-service call).
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from uuid import UUID
+
+from fastapi import APIRouter, Request
 
 from nlp_pipeline.api.dependencies import ChunkSearchUseCaseDep
 from nlp_pipeline.api.schemas import (
@@ -27,6 +28,7 @@ _log = get_logger(__name__)  # type: ignore[no-any-return]
 async def search_chunks(
     body: ChunkSearchRequest,
     use_case: ChunkSearchUseCaseDep,
+    request: Request,
 ) -> ChunkSearchResponse:
     """ANN search on chunk/section embeddings with entity annotations and source metadata.
 
@@ -35,6 +37,27 @@ async def search_chunks(
     When ``query_embedding`` is supplied (pre-computed by S8), the embed step
     is skipped.
     """
+    # PLAN-0087 (security F-001 / 2026-05-09): tenant_id MUST come from the
+    # InternalJWTMiddleware-derived request.state.tenant_id, NEVER from the
+    # request body. Pre-fix the route honoured ``body.tenant_id`` verbatim,
+    # so any authenticated caller could read another tenant's HNSW chunks
+    # by supplying ``{"tenant_id": "<victim-uuid>"}``. The downstream
+    # repository (chunks_search.py) already filters by the value passed in,
+    # so the fix is to override body.tenant_id at the route boundary.
+    auth_tenant_raw = getattr(request.state, "tenant_id", None)
+    auth_tenant: str | None
+    if isinstance(auth_tenant_raw, UUID):
+        auth_tenant = str(auth_tenant_raw)
+    elif isinstance(auth_tenant_raw, str) and auth_tenant_raw:
+        try:
+            # Validate it's a UUID even though we pass the str form downstream.
+            UUID(auth_tenant_raw)
+            auth_tenant = auth_tenant_raw
+        except ValueError:
+            auth_tenant = None
+    else:
+        auth_tenant = None
+
     # PLAN-0063 W5-3: forward the new search_type literal through to the use
     # case, which dispatches between the ANN / lexical / hybrid execution
     # paths. Default is "ann" so the existing API contract is unchanged.
@@ -52,9 +75,10 @@ async def search_chunks(
         # PLAN-0078 Wave C: entity filter params from the Pydantic schema.
         entity_ids=body.entity_ids,
         entity_types=body.entity_types,
-        # PLAN-0086 Wave C-1: tenant scope filter — prevents data leakage between tenants.
-        # body.tenant_id is None by default (public-only); set by internal callers (S8).
-        tenant_id=body.tenant_id,
+        # PLAN-0086 Wave C-1 + PLAN-0087 F-001: tenant scope ALWAYS comes
+        # from the JWT (request.state), never from the body. body.tenant_id
+        # is now ignored on this route.
+        tenant_id=auth_tenant,
     )
 
     _log.info(  # type: ignore[no-any-return]
