@@ -50,11 +50,28 @@ async def get_timeseries(
     end_date: Annotated[date | None, Query(description="End date (inclusive)")] = None,
     period_type: Annotated[str | None, Query(description="Filter by period type (ANNUAL, QUARTERLY, SNAPSHOT)")] = None,
     limit: Annotated[int, Query(ge=1, le=10000)] = 1000,
+    order: Annotated[
+        str,
+        Query(
+            pattern="^(asc|desc)$",
+            description=(
+                "Fetch ordering. Use 'desc' with a small limit to get the most-recent N points "
+                "(typical UI sparkline use case). Returned data is always sorted ASC by date for "
+                "chronological rendering. Default 'asc' preserves prior behaviour."
+            ),
+        ),
+    ] = "asc",
     uc: GetFundamentalMetricsTimeseriesUseCase = Depends(get_timeseries_uc),  # type: ignore[assignment]
 ) -> TimeseriesResponse:
     """Return timeseries data for a single instrument and metric.
 
     Query the read-optimised ``fundamental_metrics`` table.
+
+    Audit 2026-05-09: ``order`` previously existed only on the frontend
+    contract — it was sent over the wire but ignored by the router and the
+    underlying query helper. Charts on the Fundamentals tab consequently
+    rendered the OLDEST 12 quarters (1985-1988 for AAPL) instead of the
+    most-recent. Now wired end-to-end.
     """
     if start_date is not None and end_date is not None and start_date > end_date:
         raise HTTPException(
@@ -68,6 +85,7 @@ async def get_timeseries(
         end_date=end_date,
         period_type=period_type,
         limit=limit,
+        order=order,
     )
     return TimeseriesResponse(
         instrument_id=instrument_id,

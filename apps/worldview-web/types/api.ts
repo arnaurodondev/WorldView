@@ -226,6 +226,19 @@ export interface Fundamentals {
   week_52_low: number | null;
   // Daily
   daily_return: number | null;
+  // Analyst consensus — assembled from EODHD analyst_consensus section
+  // (audit 2026-05-09: data was always present in /v1/fundamentals/{id} but
+  // the AnalystConsensusStrip component ignored it and rendered a placeholder).
+  // All counts are absolute analyst counts (not percentages).
+  analyst_strong_buy_count: number | null;
+  analyst_buy_count: number | null;
+  analyst_hold_count: number | null;
+  analyst_sell_count: number | null;
+  analyst_strong_sell_count: number | null;
+  // EODHD's combined recommendation rating: 1.0 (Strong Sell) — 5.0 (Strong Buy)
+  analyst_rating: number | null;
+  // Wall Street consensus 12-month price target (USD)
+  analyst_target_price: number | null;
   updated_at: string | null; // ISO 8601 UTC; null if no fundamentals backfill has run yet
 }
 

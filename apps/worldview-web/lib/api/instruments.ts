@@ -271,6 +271,9 @@ export function createInstrumentsApi(t: string | undefined) {
       let hi: Record<string, unknown> = {};
       let vr: Record<string, unknown> = {};
       let ts: Record<string, unknown> = {};
+      // Audit 2026-05-09: also extract analyst_consensus (Buy/Hold/Sell/StrongBuy/StrongSell/Rating/TargetPrice)
+      // — previously dropped which forced AnalystConsensusStrip to render a hardcoded placeholder.
+      let ac: Record<string, unknown> = {};
       let updatedAt: string | null = null;
       for (const rec of raw.records ?? []) {
         const data = (rec["data"] ?? {}) as Record<string, unknown>;
@@ -278,6 +281,7 @@ export function createInstrumentsApi(t: string | undefined) {
         if (section === "highlights" && !Object.keys(hi).length) { hi = data; updatedAt = rec["ingested_at"] as string ?? null; }
         else if (section === "valuation_ratios" && !Object.keys(vr).length) vr = data;
         else if (section === "technicals_snapshot" && !Object.keys(ts).length) ts = data;
+        else if (section === "analyst_consensus" && !Object.keys(ac).length) ac = data;
       }
       const grossMarginTTM = (num(hi["GrossProfitTTM"]) != null && num(hi["RevenueTTM"]) != null && num(hi["RevenueTTM"])! > 0)
         ? num(hi["GrossProfitTTM"])! / num(hi["RevenueTTM"])!
@@ -310,6 +314,14 @@ export function createInstrumentsApi(t: string | undefined) {
         week_52_high:         num(ts["52WeekHigh"]),
         week_52_low:          num(ts["52WeekLow"]),
         daily_return:         null, // derived from OHLCV; available in overview.fundamentals
+        // Analyst consensus — see audit 2026-05-09. Field names match EODHD exactly.
+        analyst_strong_buy_count:   num(ac["StrongBuy"]),
+        analyst_buy_count:          num(ac["Buy"]),
+        analyst_hold_count:         num(ac["Hold"]),
+        analyst_sell_count:         num(ac["Sell"]),
+        analyst_strong_sell_count:  num(ac["StrongSell"]),
+        analyst_rating:             num(ac["Rating"]),
+        analyst_target_price:       num(ac["TargetPrice"]),
         updated_at:           updatedAt,
       };
     },
