@@ -134,33 +134,37 @@ class KeyBuilder:
             extension=extension,
         )
 
-    # Pattern for silver-layer keys written by content-store:
+    # Pattern for silver-layer keys written by content-store (legacy news pipeline):
     # silver/<source_slug>/<YYYY>/<MM>/<DD>/<uuid>.txt
     # Example: silver/reuters/2024/01/15/0195c7b4-a9f2-7b3e-8d1c-3f2e1a4b5c6d.txt
     _SILVER_KEY_PATTERN = re.compile(
         r"^silver/[a-zA-Z0-9_\-]+/\d{4}/\d{2}/\d{2}/[0-9a-f\-]+\.txt$",
         re.IGNORECASE,
     )
+    # Pattern for canonical keys written by content-store (PLAN-0086 canonical pipeline):
+    # content-store/canonical/<uuid>/body.json
+    _CANONICAL_KEY_PATTERN = re.compile(
+        r"^content-store/canonical/[0-9a-f\-]+/body\.json$",
+        re.IGNORECASE,
+    )
 
     @classmethod
     def is_valid_silver_key(cls, key: str) -> bool:
-        """Return True if *key* is a canonical silver-layer MinIO key.
+        """Return True if *key* is a canonical silver-layer or content-store MinIO key.
 
-        Expected format::
+        Accepted formats::
 
-            silver/<source_slug>/<YYYY>/<MM>/<DD>/<uuid>.txt
-
-        The source slug may contain letters, digits, underscores, and hyphens.
-        The UUID portion is case-insensitive hex with hyphens.
+            silver/<source_slug>/<YYYY>/<MM>/<DD>/<uuid>.txt    (legacy news)
+            content-store/canonical/<uuid>/body.json            (PLAN-0086)
 
         Args:
             key: The MinIO object key to validate.
 
         Returns:
-            ``True`` when the key matches the silver-key pattern; ``False``
-            otherwise.  Never raises.
+            ``True`` when the key matches either pattern; ``False`` otherwise.
+            Never raises.
         """
-        return bool(cls._SILVER_KEY_PATTERN.match(key))
+        return bool(cls._SILVER_KEY_PATTERN.match(key)) or bool(cls._CANONICAL_KEY_PATTERN.match(key))
 
     @staticmethod
     def build_prefix(service: str, domain: str | None = None) -> str:

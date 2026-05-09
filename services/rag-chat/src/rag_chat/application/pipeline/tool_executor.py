@@ -48,7 +48,15 @@ from rag_chat.domain.enums import ItemType
 
 if TYPE_CHECKING:
     # Port interfaces — annotation-only to satisfy TC001 and maintain R25 compliance.
-    from rag_chat.application.ports.upstream_clients import S1Port, S3Port, S6Port, S7IntelligencePort, S7Port
+    from rag_chat.application.ports.brief_archive import BriefArchivePort
+    from rag_chat.application.ports.upstream_clients import (
+        S1Port,
+        S3BriefPort,
+        S3Port,
+        S6Port,
+        S7IntelligencePort,
+        S7Port,
+    )
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -156,6 +164,8 @@ class ToolExecutorFactory:
         s7: S7Port | None = None,
         s7_intel: S7IntelligencePort | None = None,
         s1: S1Port | None = None,
+        s3_brief: S3BriefPort | None = None,
+        brief_archive: BriefArchivePort | None = None,
         timeout: float = 5.0,
     ) -> None:
         self._registry = registry
@@ -164,6 +174,8 @@ class ToolExecutorFactory:
         self._s7 = s7
         self._s7_intel = s7_intel
         self._s1 = s1
+        self._s3_brief = s3_brief
+        self._brief_archive = brief_archive
         self._timeout = timeout
 
     def for_request(
@@ -189,6 +201,8 @@ class ToolExecutorFactory:
             s7=self._s7,
             s7_intel=self._s7_intel,
             s1=self._s1,
+            s3_brief=self._s3_brief,
+            brief_archive=self._brief_archive,
             user_id=user_id,
             tenant_id=tenant_id,
             internal_jwt=internal_jwt,
@@ -218,6 +232,8 @@ class ToolExecutor:
         s7: S7Port | None = None,
         s7_intel: S7IntelligencePort | None = None,
         s1: S1Port | None = None,
+        s3_brief: S3BriefPort | None = None,
+        brief_archive: BriefArchivePort | None = None,
         user_id: UUID | None = None,
         tenant_id: UUID | None = None,
         internal_jwt: str | None = None,
@@ -230,6 +246,8 @@ class ToolExecutor:
         self._s7 = s7
         self._s7_intel = s7_intel
         self._s1 = s1
+        self._s3_brief = s3_brief
+        self._brief_archive = brief_archive
         self._user_id = user_id
         self._tenant_id = tenant_id
         self._internal_jwt = internal_jwt
@@ -281,6 +299,18 @@ class ToolExecutor:
                 result = await self._handle_get_entity_health(tool_call, **tool_call.input)
             elif tool_call.name == "get_entity_intelligence":
                 result = await self._handle_get_entity_intelligence(tool_call, **tool_call.input)
+            elif tool_call.name == "get_morning_brief":
+                result = await self._handle_get_morning_brief(tool_call)
+            elif tool_call.name == "compare_entities":
+                result = await self._handle_compare_entities(tool_call, **tool_call.input)
+            elif tool_call.name == "screen_universe":
+                result = await self._handle_screen_universe(tool_call, **tool_call.input)
+            elif tool_call.name == "get_market_movers":
+                result = await self._handle_get_market_movers(tool_call, **tool_call.input)
+            elif tool_call.name == "get_economic_calendar":
+                result = await self._handle_get_economic_calendar(tool_call, **tool_call.input)
+            elif tool_call.name == "get_earnings_calendar":
+                result = await self._handle_get_earnings_calendar(tool_call, **tool_call.input)
             else:
                 # Registry had the spec but we have no handler — shouldn't happen
                 # if build_default_registry() is used; guard logs the gap.
@@ -1363,6 +1393,499 @@ class ToolExecutor:
         )
         return [item]
 
+    # ── Catalog tool handlers (PLAN-0081 Wave A) ─────────────────────────────
+
+    async def _handle_get_morning_brief(
+        self,
+        tool_call: ToolUseBlock,
+    ) -> list[RetrievedItem]:
+        """Return the user's latest morning brief from the DB archive (PLAN-0081 Wave A).
+
+        R27: no UnitOfWork — uses BriefArchivePort.get_latest() via read adapter.
+        R9: returns [] on any error or missing data.
+        PRIVACY: headline and lead are passed to LLM context; sections_json may contain
+        sensitive portfolio context — no special filtering needed here (already curated).
+        """
+        if self._brief_archive is None:
+            log.warning("tool_handler_missing_port", tool="get_morning_brief", port="brief_archive")
+            return []
+        if self._user_id is None or self._tenant_id is None:
+            log.warning("tool_no_auth_context", tool="get_morning_brief")
+            return []
+
+        try:
+            records = await asyncio.wait_for(
+                self._brief_archive.get_latest(
+                    user_id=self._user_id,
+                    tenant_id=self._tenant_id,
+                    brief_type="morning",
+                    limit=1,
+                ),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_morning_brief", error=str(e))
+            return []
+
+        if not records:
+            log.info("tool_no_data", tool="get_morning_brief", user_id=str(self._user_id))
+            return []
+
+        brief = records[0]
+        lines = [f"**Morning Brief** — {brief.headline}"]
+        if brief.lead:
+            lines.append(brief.lead)
+        for section in brief.sections_json:
+            title = section.get("title", "")
+            content = section.get("content", "")
+            if title:
+                lines.append(f"\n### {title}")
+            if content:
+                lines.append(content)
+        text = "\n".join(lines)
+
+        log.info(
+            "tool_executed",
+            tool="get_morning_brief",
+            latency_ms=0,
+            sections=len(brief.sections_json),
+        )
+        return [
+            RetrievedItem.create(
+                item_id=f"tool:brief:{brief.id}",
+                item_type=ItemType.financial,
+                text=text[:_TOOL_RESULT_MAX_CHARS],
+                score=0.95,
+                trust_weight=0.92,  # platform-curated brief — high authority
+                citation_meta=CitationMeta(
+                    title=brief.headline,
+                    url=None,
+                    source_name="morning_brief",
+                    published_at=brief.generated_at,
+                    entity_name=None,
+                ),
+            )
+        ]
+
+    async def _handle_compare_entities(
+        self,
+        tool_call: ToolUseBlock,
+        entity_tickers: list[str] | None = None,
+    ) -> list[RetrievedItem]:
+        """Side-by-side fundamentals + price comparison for 2-4 entities (PLAN-0081 Wave A).
+
+        Fetches fundamentals highlights and latest quote in parallel for each ticker.
+        R9: returns [] on missing port, invalid input, or upstream errors.
+        R27: read-only — no UnitOfWork.
+        """
+        if self._s3 is None:
+            log.warning("tool_handler_missing_port", tool="compare_entities", port="s3")
+            return []
+
+        tickers = entity_tickers or []
+        if len(tickers) < 2 or len(tickers) > 4:
+            log.warning(
+                "tool_invalid_param",
+                tool="compare_entities",
+                reason="entity_tickers must be 2-4 items",
+                count=len(tickers),
+            )
+            return []
+
+        t0 = time.monotonic()
+
+        async def _fetch_one(ticker: str) -> dict:
+            """Fetch fundamentals + quote for a single ticker in parallel."""
+            instrument_id = await self._s3.find_instrument_by_ticker(ticker)
+            if instrument_id is None:
+                return {"ticker": ticker, "error": "not_found"}
+            # Fetch fundamentals highlights and quote concurrently — independent reads
+            gather_results: list[dict | BaseException] = list(
+                await asyncio.gather(
+                    self._s3.get_fundamentals_highlights(instrument_id),
+                    self._s3.get_quote(instrument_id),
+                    return_exceptions=True,
+                )
+            )
+            funda_raw, quote_raw = gather_results[0], gather_results[1]
+            return {
+                "ticker": ticker,
+                "fundamentals": funda_raw if not isinstance(funda_raw, BaseException) else {},
+                "quote": quote_raw if not isinstance(quote_raw, BaseException) else {},
+            }
+
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*[_fetch_one(t) for t in tickers], return_exceptions=True),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="compare_entities", error=str(e))
+            return []
+
+        lines = [f"## Entity Comparison: {', '.join(tickers)}\n"]
+        for item in results:
+            if isinstance(item, Exception) or item.get("error"):  # type: ignore[union-attr]
+                ticker_label = item.get("ticker", "?") if not isinstance(item, Exception) else "?"  # type: ignore[union-attr]
+                lines.append(f"### {ticker_label} — data unavailable\n")
+                continue
+            ticker = item["ticker"]  # type: ignore[index]
+            funda = item.get("fundamentals") or {}  # type: ignore[union-attr]
+            quote = item.get("quote") or {}  # type: ignore[union-attr]
+            lines.append(f"### {ticker}")
+            if quote:
+                price = quote.get("price") or quote.get("close") or quote.get("last_price")
+                if price:
+                    lines.append(f"  Price: {price}")
+            if funda:
+                for key in ("market_cap", "pe_ratio", "revenue", "gross_profit", "eps"):
+                    val = funda.get(key)
+                    if val is not None:
+                        lines.append(f"  {key.replace('_', ' ').title()}: {val}")
+            lines.append("")
+
+        text = "\n".join(lines)
+        log.info(
+            "tool_executed",
+            tool="compare_entities",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            ticker_count=len(tickers),
+        )
+        return [
+            RetrievedItem.create(
+                item_id=f"tool:compare:{'-'.join(tickers)}",
+                item_type=ItemType.financial,
+                text=text[:_TOOL_RESULT_MAX_CHARS],
+                score=0.88,
+                trust_weight=0.85,
+                citation_meta=CitationMeta(
+                    title=f"Comparison: {', '.join(tickers)}",
+                    url=None,
+                    source_name="fundamentals",
+                    published_at=None,
+                    entity_name=None,
+                ),
+            )
+        ]
+
+    async def _handle_screen_universe(
+        self,
+        tool_call: ToolUseBlock,
+        market_cap_min: float | None = None,
+        market_cap_max: float | None = None,
+        pe_ratio_max: float | None = None,
+        sector: str | None = None,
+        region: str | None = None,
+        limit: int = 20,
+    ) -> list[RetrievedItem]:
+        """Quantitative screener via S9 POST /v1/fundamentals/screen (PLAN-0081 Wave A).
+
+        Builds a filter dict from LLM-supplied params and forwards to S3BriefPort.
+        R9: returns [] on missing port or upstream errors.
+        R27: read-only — no UnitOfWork.
+        """
+        if self._s3_brief is None:
+            log.warning("tool_handler_missing_port", tool="screen_universe", port="s3_brief")
+            return []
+
+        filters: dict = {}
+        if market_cap_min is not None:
+            filters["market_cap_min"] = market_cap_min
+        if market_cap_max is not None:
+            filters["market_cap_max"] = market_cap_max
+        if pe_ratio_max is not None:
+            filters["pe_ratio_max"] = pe_ratio_max
+        if sector:
+            filters["sector"] = sector
+        if region:
+            filters["region"] = region
+        # WHY clamp limit: prevent the LLM from requesting huge result sets that
+        # would overflow the context window budget.
+        filters["limit"] = max(1, min(int(limit), 100))
+
+        t0 = time.monotonic()
+        try:
+            raw = await asyncio.wait_for(
+                self._s3_brief.screen_instruments(filters),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="screen_universe", error=str(e))
+            return []
+
+        if not raw:
+            log.info("tool_no_data", tool="screen_universe")
+            return []
+
+        instruments = raw.get("instruments") or raw.get("results") or raw.get("data") or []
+        if not instruments:
+            text = "No instruments matched the screening criteria."
+        else:
+            lines = [f"## Screener Results ({len(instruments)} instruments)\n"]
+            for inst in instruments[:50]:
+                ticker = inst.get("ticker") or inst.get("symbol") or "?"
+                name = inst.get("name") or ""
+                mc = inst.get("market_cap")
+                pe = inst.get("pe_ratio")
+                row = f"  {ticker}"
+                if name:
+                    row += f" — {name}"
+                if mc:
+                    row += f" | MCap: {mc}"
+                if pe:
+                    row += f" | P/E: {pe}"
+                lines.append(row)
+            text = "\n".join(lines)
+
+        log.info(
+            "tool_executed",
+            tool="screen_universe",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            result_count=len(instruments) if isinstance(instruments, list) else 0,
+        )
+        return [
+            RetrievedItem.create(
+                item_id="tool:screener:results",
+                item_type=ItemType.financial,
+                text=text[:_TOOL_RESULT_MAX_CHARS],
+                score=0.82,
+                trust_weight=0.80,
+                citation_meta=CitationMeta(
+                    title="Screener results",
+                    url=None,
+                    source_name="screener",
+                    published_at=None,
+                    entity_name=None,
+                ),
+            )
+        ]
+
+    async def _handle_get_market_movers(
+        self,
+        tool_call: ToolUseBlock,
+        mover_type: str = "gainers",
+        limit: int = 10,
+        period: str = "1d",
+    ) -> list[RetrievedItem]:
+        """Top gainers/losers/most-active via S9 GET /v1/market/top-movers (PLAN-0081 Wave A).
+
+        R9: returns [] on missing port or upstream errors.
+        R27: read-only — no UnitOfWork.
+        """
+        if self._s3_brief is None:
+            log.warning("tool_handler_missing_port", tool="get_market_movers", port="s3_brief")
+            return []
+
+        # Sanitize LLM-supplied mover_type to prevent injection of arbitrary query params
+        valid_types = {"gainers", "losers", "most_active"}
+        safe_mover_type = mover_type if mover_type in valid_types else "gainers"
+        limit_clamped = max(1, min(int(limit), 50))
+
+        t0 = time.monotonic()
+        try:
+            raw = await asyncio.wait_for(
+                self._s3_brief.get_top_movers(
+                    mover_type=safe_mover_type,
+                    limit=limit_clamped,
+                    period=period,
+                ),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_market_movers", error=str(e))
+            return []
+
+        if not raw:
+            log.info("tool_no_data", tool="get_market_movers")
+            return []
+
+        movers = raw.get("movers") or raw.get("data") or raw.get("results") or []
+        if not movers:
+            text = f"No {safe_mover_type} data available for period {period}."
+        else:
+            lines = [f"## Market Movers — {safe_mover_type.replace('_', ' ').title()} ({period})\n"]
+            for m in movers[:limit_clamped]:
+                ticker = m.get("ticker") or m.get("symbol") or "?"
+                change_pct = m.get("change_percent") or m.get("change_pct") or m.get("changePercent")
+                price = m.get("price") or m.get("close")
+                row = f"  {ticker}"
+                if change_pct is not None:
+                    row += f" {change_pct:+.2f}%" if isinstance(change_pct, float) else f" {change_pct}"
+                if price:
+                    row += f" @ {price}"
+                lines.append(row)
+            text = "\n".join(lines)
+
+        log.info(
+            "tool_executed",
+            tool="get_market_movers",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            mover_type=safe_mover_type,
+            count=len(movers) if isinstance(movers, list) else 0,
+        )
+        return [
+            RetrievedItem.create(
+                item_id=f"tool:movers:{safe_mover_type}:{period}",
+                item_type=ItemType.financial,
+                text=text[:_TOOL_RESULT_MAX_CHARS],
+                score=0.85,
+                trust_weight=0.82,
+                citation_meta=CitationMeta(
+                    title=f"Market movers: {safe_mover_type} ({period})",
+                    url=None,
+                    source_name="market_data",
+                    published_at=None,
+                    entity_name=None,
+                ),
+            )
+        ]
+
+    async def _handle_get_economic_calendar(
+        self,
+        tool_call: ToolUseBlock,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        region: str | None = None,
+    ) -> list[RetrievedItem]:
+        """Upcoming macro events (CPI, FOMC, GDP) via S9 GET /v1/fundamentals/economic-calendar (PLAN-0081 Wave A).
+
+        R9: returns [] on missing port or upstream errors.
+        R27: read-only — no UnitOfWork.
+        """
+        if self._s3_brief is None:
+            log.warning("tool_handler_missing_port", tool="get_economic_calendar", port="s3_brief")
+            return []
+
+        t0 = time.monotonic()
+        try:
+            events = await asyncio.wait_for(
+                self._s3_brief.get_economic_calendar(
+                    from_date=from_date,
+                    to_date=to_date,
+                    region=region,
+                ),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_economic_calendar", error=str(e))
+            return []
+
+        if not events:
+            log.info("tool_no_data", tool="get_economic_calendar")
+            return []
+
+        lines = ["## Economic Calendar\n"]
+        for evt in events[:30]:
+            date_str = evt.get("date") or evt.get("event_date") or ""
+            name = evt.get("name") or evt.get("event") or evt.get("title") or "?"
+            actual = evt.get("actual")
+            forecast = evt.get("forecast") or evt.get("estimate")
+            prev = evt.get("previous") or evt.get("prior")
+            row = f"  {date_str}  {name}"
+            if actual is not None:
+                row += f" | Actual: {actual}"
+            if forecast is not None:
+                row += f" | Forecast: {forecast}"
+            if prev is not None:
+                row += f" | Prior: {prev}"
+            lines.append(row)
+        text = "\n".join(lines)
+
+        log.info(
+            "tool_executed",
+            tool="get_economic_calendar",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            event_count=len(events),
+        )
+        return [
+            RetrievedItem.create(
+                item_id="tool:economic_calendar",
+                item_type=ItemType.financial,
+                text=text[:_TOOL_RESULT_MAX_CHARS],
+                score=0.88,
+                trust_weight=0.85,
+                citation_meta=CitationMeta(
+                    title="Economic calendar",
+                    url=None,
+                    source_name="economic_calendar",
+                    published_at=None,
+                    entity_name=None,
+                ),
+            )
+        ]
+
+    async def _handle_get_earnings_calendar(
+        self,
+        tool_call: ToolUseBlock,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> list[RetrievedItem]:
+        """Earnings release dates via S9 GET /v1/fundamentals/earnings-calendar (PLAN-0081 Wave A).
+
+        R9: returns [] on missing port or upstream errors.
+        R27: read-only — no UnitOfWork.
+        """
+        if self._s3_brief is None:
+            log.warning("tool_handler_missing_port", tool="get_earnings_calendar", port="s3_brief")
+            return []
+
+        t0 = time.monotonic()
+        try:
+            earnings = await asyncio.wait_for(
+                self._s3_brief.get_earnings_calendar(
+                    from_date=from_date,
+                    to_date=to_date,
+                ),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_earnings_calendar", error=str(e))
+            return []
+
+        if not earnings:
+            log.info("tool_no_data", tool="get_earnings_calendar")
+            return []
+
+        lines = ["## Earnings Calendar\n"]
+        for entry in earnings[:30]:
+            date_str = entry.get("date") or entry.get("report_date") or ""
+            ticker = entry.get("ticker") or entry.get("symbol") or "?"
+            name = entry.get("name") or entry.get("company") or ""
+            eps_est = entry.get("eps_estimate") or entry.get("eps_forecast")
+            eps_act = entry.get("eps_actual")
+            row = f"  {date_str}  {ticker}"
+            if name:
+                row += f" ({name})"
+            if eps_est is not None:
+                row += f" | EPS Est: {eps_est}"
+            if eps_act is not None:
+                row += f" | EPS Actual: {eps_act}"
+            lines.append(row)
+        text = "\n".join(lines)
+
+        log.info(
+            "tool_executed",
+            tool="get_earnings_calendar",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            entry_count=len(earnings),
+        )
+        return [
+            RetrievedItem.create(
+                item_id="tool:earnings_calendar",
+                item_type=ItemType.financial,
+                text=text[:_TOOL_RESULT_MAX_CHARS],
+                score=0.88,
+                trust_weight=0.85,
+                citation_meta=CitationMeta(
+                    title="Earnings calendar",
+                    url=None,
+                    source_name="earnings_calendar",
+                    published_at=None,
+                    entity_name=None,
+                ),
+            )
+        ]
+
     # ── Formatters ────────────────────────────────────────────────────────────
 
     def _format_price_table(
@@ -1421,7 +1944,7 @@ class ToolExecutor:
 
 
 def build_default_registry() -> ToolRegistry:
-    """Factory: create a ToolRegistry with all 14 tools registered (10 v1 + 4 PLAN-0080 Wave A intelligence tools).
+    """Factory: create a ToolRegistry with all 20 tools registered (10 v1 + 4 PLAN-0080 v2 + 6 PLAN-0081 v3).
 
     Called by api/dependencies.py to wire the ToolExecutor at startup.
     The handlers registered here are placeholder stubs — the actual execution
@@ -1547,6 +2070,27 @@ def build_default_registry() -> ToolRegistry:
                 description=f"Tool: {tool_name} (see capability_manifest.yaml for full description)",
                 parameters=[],
                 source_type="narrative",
+            ),
+            handler=lambda **_: None,
+        )
+
+    # PLAN-0081 Wave A: register 6 catalog tools (brief, compare, screener, movers, calendars).
+    # These call S9-proxied endpoints or the DB archive (R14 compliance).
+    _catalog_tool_names = [
+        "get_morning_brief",
+        "compare_entities",
+        "screen_universe",
+        "get_market_movers",
+        "get_economic_calendar",
+        "get_earnings_calendar",
+    ]
+    for tool_name in _catalog_tool_names:
+        registry.register(
+            ToolSpec(
+                name=tool_name,
+                description=f"Tool: {tool_name} (see capability_manifest.yaml for full description)",
+                parameters=[],
+                source_type="mixed",
             ),
             handler=lambda **_: None,
         )

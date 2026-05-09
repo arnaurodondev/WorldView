@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-revision = "0005_add_tenant_id_to_content_store"
+revision = "0005"
 down_revision = "0004"
 branch_labels = None
 depends_on = None
@@ -37,6 +37,10 @@ def upgrade() -> None:
 
     # 4. Fix dedup_hashes unique constraint — replace the table-level UniqueConstraint
     #    with two partial indexes so global and per-tenant hash spaces don't collide.
+    # Migration 0004 renamed the UNIQUE constraint to uq_dedup_hashes_type_value.
+    # PostgreSQL backs UNIQUE constraints with an index of the same name but that
+    # index cannot be dropped via DROP INDEX — it must be dropped via DROP CONSTRAINT.
+    op.execute("ALTER TABLE dedup_hashes DROP CONSTRAINT IF EXISTS uq_dedup_hashes_type_value")
     op.execute("DROP INDEX IF EXISTS uq_dedup_hashes_type_value")
     op.execute(
         "CREATE UNIQUE INDEX uq_dedup_hashes_global" " ON dedup_hashes(hash_type, hash_value) WHERE tenant_id IS NULL"
