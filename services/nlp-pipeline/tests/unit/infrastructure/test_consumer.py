@@ -406,6 +406,114 @@ class TestEnqueueEnriched:
         assert payload["raw_events_json"] is None
         assert payload["raw_claims_json"] is None
 
+    # ── D-INIT-6 (2026-05-09): source_name propagation regression tests ──
+    #
+    # Behaviour change: ``_enqueue_enriched`` now accepts ``source_name`` and
+    # serialises it onto the ``nlp.article.enriched.v1`` payload. The KG
+    # consumer reads it directly (no DB fallback). These tests guard the
+    # producer side of the contract — if the field is dropped here the KG side
+    # will silently lose source provenance, which previously caused the entire
+    # intelligence layer to produce zero narratives.
+
+    @pytest.mark.asyncio
+    async def test_enriched_payload_includes_source_name_when_provided(self) -> None:
+        """When the inbound event carried a source_name, it rides through to the outbox payload."""
+        outbox_repo = AsyncMock()
+        settings = _make_settings()
+        doc_id = uuid.uuid4()
+
+        from nlp_pipeline.domain.enums import RoutingTier
+        from nlp_pipeline.domain.models import RoutingDecision
+
+        rd = RoutingDecision(
+            decision_id=uuid.uuid4(),
+            doc_id=doc_id,
+            routing_tier=RoutingTier.MEDIUM,
+            composite_score=0.55,
+            feature_scores={},
+        )
+
+        await _enqueue_enriched(
+            outbox_repo=outbox_repo,
+            settings=settings,
+            doc_id=doc_id,
+            source_type="eodhd",
+            source_name="EODHD News",
+            published_at=datetime.now(tz=UTC),
+            is_backfill=False,
+            routing_decision=rd,
+            sections=[],
+            chunks=[],
+            mentions=[],
+            extraction_result={"events": [], "claims": [], "relations": []},
+            correlation_id=None,
+        )
+
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import _SCHEMA_DIR
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        wire_bytes = outbox_repo.add.call_args.kwargs["payload_avro"]
+        schema_path = str(_SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
+        payload = deserialize_confluent_avro(schema_path, wire_bytes)
+        # Critical assertion: source_name made it onto the wire.
+        assert payload["source_name"] == "EODHD News", (
+            "D-INIT-6 regression: source_name was supplied to _enqueue_enriched but did not "
+            "appear in the serialised Avro payload — KG consumer will fall back to None."
+        )
+        # source_type is the existing field; both should coexist.
+        assert payload["source_type"] == "eodhd"
+
+    @pytest.mark.asyncio
+    async def test_enriched_payload_source_name_is_null_when_not_provided(self) -> None:
+        """When the inbound event lacked source_name, the payload carries the Avro null branch.
+
+        We default ``source_name`` to None at the function signature level so legacy
+        callers (and unit tests that don't yet supply the new kwarg) keep working.
+        The Avro union ``["null", "string"]`` then encodes as null on the wire.
+        """
+        outbox_repo = AsyncMock()
+        settings = _make_settings()
+        doc_id = uuid.uuid4()
+
+        from nlp_pipeline.domain.enums import RoutingTier
+        from nlp_pipeline.domain.models import RoutingDecision
+
+        rd = RoutingDecision(
+            decision_id=uuid.uuid4(),
+            doc_id=doc_id,
+            routing_tier=RoutingTier.MEDIUM,
+            composite_score=0.55,
+            feature_scores={},
+        )
+
+        # Note: source_name omitted — exercises the default-None branch.
+        await _enqueue_enriched(
+            outbox_repo=outbox_repo,
+            settings=settings,
+            doc_id=doc_id,
+            source_type="rss",
+            published_at=datetime.now(tz=UTC),
+            is_backfill=False,
+            routing_decision=rd,
+            sections=[],
+            chunks=[],
+            mentions=[],
+            extraction_result={"events": [], "claims": [], "relations": []},
+            correlation_id=None,
+        )
+
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import _SCHEMA_DIR
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        wire_bytes = outbox_repo.add.call_args.kwargs["payload_avro"]
+        schema_path = str(_SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
+        payload = deserialize_confluent_avro(schema_path, wire_bytes)
+        # Avro decodes null union branch back to Python None.
+        assert payload["source_name"] is None
+        assert payload["source_type"] == "rss"
+
 
 # ── D-004: nlp commit failure logging (T-A-2-04) ─────────────────────────────
 

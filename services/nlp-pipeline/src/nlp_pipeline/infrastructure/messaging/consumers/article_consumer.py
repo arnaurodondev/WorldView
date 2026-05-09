@@ -297,11 +297,23 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         raw_title = value.get("title")
         doc_title: str | None = str(raw_title) if raw_title is not None else None
 
+        # D-INIT-6 (2026-05-09): pull source_name off the inbound event so it can
+        # ride along on the outbound nlp.article.enriched.v1 envelope. The KG
+        # enriched_consumer needs source_name to stamp evidence-row provenance;
+        # previously it tried to look this up via a cross-DB query against
+        # ``document_source_metadata`` (an nlp_db table) from its intelligence_db
+        # session pool — that's both an R7 cross-service-DB violation AND a
+        # guaranteed UndefinedTableError. The fix is to propagate source_name
+        # through the event itself. None is fine — the consumer logs a warning
+        # and continues, never re-querying.
+        source_name: str | None = value.get("source_name")
+
         async with self._bp:
             await self._run_pipeline(
                 doc_id=doc_id,
                 minio_key=minio_key,
                 source_type=source_type,
+                source_name=source_name,
                 published_at=published_at,
                 extracted_at=extracted_at,
                 is_backfill=is_backfill,
@@ -312,7 +324,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
 
         # Best-effort: cache citation metadata for S8 RAG inline citations.
         # Failure must never cause NLP processing to fail.
-        # url and source_name are not in the content.article.stored.v1 Avro schema;
+        # url is not in the content.article.stored.v1 Avro schema;
         # fall back to reading source_url from the silver JSON envelope.
         url = value.get("url") or await self._extract_url_from_silver(minio_key)
         await self._write_source_metadata(
@@ -320,7 +332,7 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
             title=value.get("title"),
             url=url,
             published_at=published_at,
-            source_name=value.get("source_name"),
+            source_name=source_name,
             source_type=source_type,
             word_count=value.get("word_count"),
         )
@@ -331,6 +343,13 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         doc_id: uuid.UUID,
         minio_key: str,
         source_type: str,
+        # D-INIT-6: source_name flows through the pipeline so _enqueue_enriched can
+        # include it in the outbound enriched.v1 payload. None is acceptable — the
+        # consumer side handles missing source_name without a cross-DB fallback.
+        # Default None keeps existing internal callers (and unit tests that drive
+        # _run_pipeline directly) working without churn while the new code path
+        # in process_message() always supplies a value.
+        source_name: str | None = None,
         published_at: datetime | None,
         extracted_at: datetime,
         is_backfill: bool,
@@ -689,6 +708,10 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
                 settings=self._settings,
                 doc_id=doc_id,
                 source_type=source_type,
+                # D-INIT-6: propagate source_name through to the outbound
+                # nlp.article.enriched.v1 payload so KG can stamp evidence
+                # provenance without a cross-DB query.
+                source_name=source_name,
                 published_at=published_at,
                 is_backfill=is_backfill,
                 routing_decision=routing_decision,
@@ -1118,6 +1141,14 @@ async def _enqueue_enriched(
     settings: Any,
     doc_id: uuid.UUID,
     source_type: str,
+    # D-INIT-6: human-readable source label (RSS feed name, EODHD provider, etc.).
+    # Travels in the enriched.v1 payload so KG can stamp evidence-row provenance
+    # without a cross-service DB query (the previous fallback queried
+    # document_source_metadata from intelligence_db — wrong DB, R7 violation).
+    # Default None keeps existing unit tests that call _enqueue_enriched
+    # directly working; the production caller in _run_pipeline always supplies
+    # the value pulled off the inbound event.
+    source_name: str | None = None,
     published_at: datetime | None,
     is_backfill: bool,
     routing_decision: RoutingDecision,
@@ -1247,6 +1278,9 @@ async def _enqueue_enriched(
         "occurred_at": common.time.utc_now().isoformat(),
         "doc_id": str(doc_id),
         "source_type": source_type,
+        # D-INIT-6: ride-along provenance label (None when the inbound event didn't
+        # carry one — KG consumer handles None without re-querying).
+        "source_name": source_name,
         "published_at": published_at.isoformat() if published_at else None,
         "is_backfill": is_backfill,
         "routing_tier": effective_tier.value,
