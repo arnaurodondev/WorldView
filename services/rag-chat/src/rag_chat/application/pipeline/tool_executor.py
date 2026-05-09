@@ -1148,9 +1148,7 @@ class ToolExecutor:
             return self._entity_context.entity_id
         if llm_entity_id is not None:
             try:
-                from uuid import UUID as _UUID
-
-                return _UUID(llm_entity_id)
+                return UUID(llm_entity_id)
             except ValueError:
                 log.warning("tool_invalid_entity_id", tool=tool_name, entity_id=llm_entity_id)
                 return None
@@ -1171,7 +1169,6 @@ class ToolExecutor:
         if resolved_id is None:
             return []
 
-        t0 = time.monotonic()
         try:
             result = await asyncio.wait_for(
                 self._s7_intel.get_narrative(resolved_id),
@@ -1200,12 +1197,6 @@ class ToolExecutor:
                 entity_name=entity_name,
             ),
         )
-        log.info(
-            "tool_executed",
-            tool="get_entity_narrative",
-            latency_ms=round((time.monotonic() - t0) * 1000),
-            items_returned=1,
-        )
         return [item]
 
     async def _handle_get_entity_paths(
@@ -1225,7 +1216,6 @@ class ToolExecutor:
 
         top_n_clamped = max(1, min(int(top_n), 20))
 
-        t0 = time.monotonic()
         try:
             result = await asyncio.wait_for(
                 self._s7_intel.get_entity_paths(resolved_id, top_n=top_n_clamped),
@@ -1260,12 +1250,6 @@ class ToolExecutor:
                 entity_name=entity_name,
             ),
         )
-        log.info(
-            "tool_executed",
-            tool="get_entity_paths",
-            latency_ms=round((time.monotonic() - t0) * 1000),
-            items_returned=1,
-        )
         return [item]
 
     async def _handle_get_entity_health(
@@ -1282,7 +1266,6 @@ class ToolExecutor:
         if resolved_id is None:
             return []
 
-        t0 = time.monotonic()
         try:
             result = await asyncio.wait_for(
                 self._s7_intel.get_entity_intelligence(resolved_id),
@@ -1320,12 +1303,6 @@ class ToolExecutor:
                 entity_name=entity_name,
             ),
         )
-        log.info(
-            "tool_executed",
-            tool="get_entity_health",
-            latency_ms=round((time.monotonic() - t0) * 1000),
-            items_returned=1,
-        )
         return [item]
 
     async def _handle_get_entity_intelligence(
@@ -1342,7 +1319,6 @@ class ToolExecutor:
         if resolved_id is None:
             return []
 
-        t0 = time.monotonic()
         try:
             result = await asyncio.wait_for(
                 self._s7_intel.get_entity_intelligence(resolved_id),
@@ -1384,12 +1360,6 @@ class ToolExecutor:
                 published_at=None,
                 entity_name=entity_name,
             ),
-        )
-        log.info(
-            "tool_executed",
-            tool="get_entity_intelligence",
-            latency_ms=round((time.monotonic() - t0) * 1000),
-            items_returned=1,
         )
         return [item]
 
@@ -1451,7 +1421,7 @@ class ToolExecutor:
 
 
 def build_default_registry() -> ToolRegistry:
-    """Factory: create a ToolRegistry with all 10 tools registered.
+    """Factory: create a ToolRegistry with all 14 tools registered (10 v1 + 4 PLAN-0080 Wave A intelligence tools).
 
     Called by api/dependencies.py to wire the ToolExecutor at startup.
     The handlers registered here are placeholder stubs — the actual execution
