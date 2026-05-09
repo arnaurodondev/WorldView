@@ -146,6 +146,7 @@ async def activate_brokerage_connection(
     connection_id: UUID,
     uow: UoWDep,
     request: Request,
+    background_tasks: BackgroundTasks,
     # WHY optional: SnapTrade Connection Portal v4 sends `connection_id` (their
     # authorization UUID) instead of `authorizationId`. Accept both; prefer
     # `authorizationId` if both arrive (v3 compat), else fall back to `connection_id`.
@@ -161,6 +162,14 @@ async def activate_brokerage_connection(
     Supports both Connection Portal v3 (authorizationId + userId + sessionId)
     and v4 (connection_id + status only). JWT ownership check replaces the
     userId anti-spoofing check when userId is absent.
+
+    Post-activation auto-sync (2026-05-09 QA fix): immediately after the connection
+    transitions to ACTIVE we schedule a one-shot ``_run_single_sync`` background
+    task so transactions and holdings appear in the UI within seconds, instead of
+    requiring the user to wait up to ``brokerage_sync_cycle_seconds`` (default 4 h)
+    for the next periodic ``BrokerageTransactionSyncWorker`` cycle. This was the
+    direct cause of the user-reported "SnapTrade flag-fetch initiated but no
+    transactions appear after connecting" symptom.
     """
     user_id, tenant_id = _require_user_headers(request)
     # Resolve authorization ID: v3 uses authorizationId, v4 uses connection_id
@@ -176,6 +185,29 @@ async def activate_brokerage_connection(
         ),
         uow=uow,
     )
+
+    # ── Post-activation auto-sync ─────────────────────────────────────────────
+    # WHY background task: re-load the connection through a fresh ReadOnly UoW
+    # outside the request UoW, then enqueue the sync. We avoid re-using `uow`
+    # because BackgroundTasks runs AFTER the response is sent and `uow` will
+    # already have been closed by the dependency injector by then. Failures are
+    # swallowed inside `_run_single_sync` (logged via structlog) so the 200
+    # response is never delayed.
+    if result.status == "active":
+        # Re-fetch via a fresh read-only UoW so we have a fully-hydrated entity
+        # (with secrets decrypted via the cipher) for the sync worker.
+        connection = await uow.brokerage_connections.get_by_user(
+            connection_id,
+            user_id,
+            tenant_id,
+        )
+        if connection is not None:
+            background_tasks.add_task(
+                _run_single_sync,
+                request.app.state,
+                connection,
+            )
+
     return ActivateBrokerageConnectionResponse(
         status=result.status,
         connection_id=result.connection_id,
