@@ -33,7 +33,8 @@ import { HeatCell } from "./HeatCell";
 import { MiniChart } from "./MiniChart";
 import { cn } from "@/lib/utils";
 // PLAN-0059 C-5: canonical compact formatter (1-decimal adaptive style like ScreenerTable).
-import { formatCompact } from "@/lib/format";
+// HF-10: formatPrice for locale-grouped USD output ("$4,892.11" not "$4892.11").
+import { formatCompact, formatPrice } from "@/lib/format";
 
 // ── Sort types (re-exported from previous ScreenerTable home) ─────────────────
 
@@ -192,7 +193,7 @@ export function createScreenerColumns(
         const v = row.original.current_price;
         return (
           <span className="font-mono text-[11px] tabular-nums text-foreground">
-            {v != null ? `$${v.toFixed(2)}` : "—"}
+            {formatPrice(v)}
           </span>
         );
       },

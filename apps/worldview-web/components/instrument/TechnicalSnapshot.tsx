@@ -36,6 +36,8 @@ import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
+// HF-10: use shared formatter so MAs render with locale grouping ("$4,892.11").
+import { formatPrice } from "@/lib/format";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -116,15 +118,15 @@ function getShortRatioClass(ratio: number | null | undefined): string {
 }
 
 /**
- * formatMa — round moving average to 2 decimal places.
+ * formatMa — render a moving average using the shared price formatter.
  *
- * WHY not formatPrice(): formatPrice() adds a $ prefix and uses 2 decimal places.
- * Moving averages from EODHD have many decimal places (e.g., 260.2392) — we display
- * 2 decimal places for accuracy without the $ prefix (price context is implicit).
+ * WHY this thin wrapper: keeps the call site readable ("formatMa(snapshot.ma50)")
+ * while delegating to formatPrice() which provides locale-grouped output and
+ * null/NaN handling. The previous implementation hand-built the string and
+ * skipped thousands separators (HF-10 demo-blocker fix).
  */
 function formatMa(value: number | null | undefined): string {
-  if (value == null) return "—";
-  return `$${value.toFixed(2)}`;
+  return formatPrice(value);
 }
 
 /**

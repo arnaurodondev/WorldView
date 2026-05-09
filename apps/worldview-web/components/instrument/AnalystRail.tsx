@@ -29,6 +29,10 @@ import { X, Send, Bot } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+// HF-10: visible price strip uses formatPrice for locale-grouped output.
+// The system-prompt builder above keeps `${price.toFixed(2)}` because
+// that string is sent to the LLM (commas would only confuse it).
+import { formatPrice } from "@/lib/format";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -271,7 +275,7 @@ export function AnalystRail({
           <span className="font-mono text-[11px] font-semibold text-foreground">{ticker}</span>
           {price != null && (
             <span className="font-mono text-[11px] tabular-nums text-foreground">
-              ${price.toFixed(2)}
+              {formatPrice(price)}
             </span>
           )}
           {priceChangePct != null && (

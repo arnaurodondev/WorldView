@@ -26,7 +26,8 @@ import type { ScreenerResult, OHLCVBar } from "@/types/api";
 import { HeatCell } from "./HeatCell";
 import { MiniChart } from "./MiniChart";
 import { cn } from "@/lib/utils";
-import { formatCompact } from "@/lib/format";
+// HF-10: formatPrice for locale-grouped USD output ("$4,892.11" not "$4892.11").
+import { formatCompact, formatPrice } from "@/lib/format";
 
 // ── Internal helper ───────────────────────────────────────────────────────────
 
@@ -81,7 +82,7 @@ function PriceCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
   const v = data?.current_price;
   return (
     <span className="font-mono text-[11px] tabular-nums text-foreground">
-      {v != null ? `$${v.toFixed(2)}` : "—"}
+      {formatPrice(v)}
     </span>
   );
 }
