@@ -27,6 +27,7 @@ class GetFundamentalMetricsTimeseriesUseCase:
         end_date: date | None = None,
         period_type: str | None = None,
         limit: int = 1000,
+        order: str = "asc",
     ) -> list[MetricDataPoint]:
         return await self._uow.fundamental_metrics_query.get_timeseries(
             instrument_id,
@@ -35,6 +36,7 @@ class GetFundamentalMetricsTimeseriesUseCase:
             end_date=end_date,
             period_type=period_type,
             limit=limit,
+            order=order,
         )
 
 

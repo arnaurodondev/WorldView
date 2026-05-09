@@ -33,10 +33,24 @@ async def query_timeseries(
     end_date: date | None = None,
     period_type: str | None = None,
     limit: int = 1000,
+    order: str = "asc",
 ) -> list[MetricDataPoint]:
     """Query timeseries data for a single instrument and metric.
 
-    Returns data points ordered by ``as_of_date`` ascending.
+    ``order`` controls SQL-side ordering and is critical when ``limit`` is
+    applied: with ``order="desc"`` and ``limit=12`` the caller gets the 12
+    most-recent points (typical UI use case for sparklines / trend charts).
+    With ``order="asc"`` the 12 OLDEST points are returned — almost never
+    what UI callers want, but useful for back-test windows.
+
+    Regardless of ``order``, the returned list is then re-sorted ASC by date
+    so callers can render bars left-to-right in chronological order without
+    needing to know the underlying fetch direction.
+
+    Audit 2026-05-09: prior to this version, ``order`` was silently dropped
+    by the read repository, causing the Fundamentals tab Revenue Trend and
+    EPS Trend charts to render data from 1985-1988 (Apple's pre-IPO
+    quarters) instead of the most recent 12.
     """
     m = FundamentalMetricModel
     conditions = [
@@ -50,17 +64,22 @@ async def query_timeseries(
     if period_type is not None:
         conditions.append(m.period_type == period_type)
 
+    # WHY explicit lower(): defensive against case-mismatched callers; the
+    # router validates the value but the repository must still be safe.
+    sql_order = m.as_of_date.desc() if order.lower() == "desc" else m.as_of_date.asc()
+
     stmt = (
         select(m.as_of_date, m.value_numeric, m.value_text, m.period_type)
         .where(and_(*conditions))
-        .order_by(m.as_of_date.asc())
+        .order_by(sql_order)
         .limit(limit)
     )
 
     result: Any = await session.execute(stmt)
     rows = result.all()
 
-    return [
+    # Always return ASC by date so the UI never has to know the fetch order.
+    points = [
         MetricDataPoint(
             as_of_date=row.as_of_date,
             value_numeric=row.value_numeric,
@@ -69,6 +88,8 @@ async def query_timeseries(
         )
         for row in rows
     ]
+    points.sort(key=lambda p: p.as_of_date)
+    return points
 
 
 async def query_screen(

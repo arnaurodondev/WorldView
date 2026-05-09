@@ -44,13 +44,12 @@ class PgFundamentalMetricsQueryRepository(FundamentalMetricsQueryRepository):
         end_date: date | None = None,
         period_type: str | None = None,
         limit: int = 1000,
-        order: str = "asc",  # accepted to match port signature; query helper ignores it.
+        order: str = "asc",
     ) -> list[MetricDataPoint]:
-        # WHY ignore `order` here: query_timeseries returns rows ordered by
-        # as_of_date ASC unconditionally. The port keeps `order` for future use;
-        # accepting + ignoring it preserves the LSP contract until the helper
-        # gains real ordering support.
-        del order
+        # WHY pass `order` through: when limit is applied the SQL-side direction
+        # determines whether we get the OLDEST or NEWEST N points. Audit
+        # 2026-05-09 fixed the silent-drop bug that returned 1985-era Apple
+        # data on /v1/fundamentals/timeseries when callers requested desc.
         return await query_timeseries(
             self._session,
             instrument_id=instrument_id,
@@ -59,6 +58,7 @@ class PgFundamentalMetricsQueryRepository(FundamentalMetricsQueryRepository):
             end_date=end_date,
             period_type=period_type,
             limit=limit,
+            order=order,
         )
 
     async def screen(
