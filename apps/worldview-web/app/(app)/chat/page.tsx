@@ -106,6 +106,12 @@ import {
 } from "@/features/chat/lib/starters";
 import { MarketContextBanner } from "@/components/chat/MarketContextBanner";
 import { useChatStream } from "@/features/chat/hooks/useChatStream";
+// PLAN-0082 Wave B: write-action confirmation modal.
+// WHY imported here (not at component file boundary): the modal needs
+// `accessToken` from the page's `useAuth()` call and the `pendingAction` /
+// `clearPendingAction` values from `useChatStream`. Both live at this page
+// level, so the modal is wired here rather than inside a sub-component.
+import { ActionConfirmModal } from "@/features/chat/components/ActionConfirmModal";
 
 // ── Main page component ───────────────────────────────────────────────────────
 
@@ -225,6 +231,11 @@ export default function ChatPage() {
     // PLAN-0067 W11-5: activeTools drives the ToolCallIndicator inside StreamingBubble.
     // Populated by tool_call SSE events, cleared on done/cancel.
     activeTools,
+    // PLAN-0082 Wave B: pending write-action confirmation (create_alert, etc.).
+    // pendingAction is non-null when the backend emits a ``pending_action`` SSE event.
+    // clearPendingAction is passed to ActionConfirmModal as `onDismiss`.
+    pendingAction,
+    clearPendingAction,
     send,
     cancel: handleCancelStream,
     resetForThread,
@@ -670,6 +681,18 @@ export default function ChatPage() {
           </div>
         </ScrollArea>
       </aside>
+
+      {/* ════════════════ PLAN-0082 Wave B — Action Confirm Modal ════════════ */}
+      {/* WHY outside the right panel div: Radix Dialog uses a Portal to render
+          the overlay + content at the document body level. Placing this inside
+          the layout div would still work (Portal escapes the DOM hierarchy), but
+          keeping it as a sibling to the panels makes the render tree clearer —
+          the modal is not a child of either panel; it floats above both. */}
+      <ActionConfirmModal
+        pendingAction={pendingAction}
+        accessToken={accessToken}
+        onDismiss={clearPendingAction}
+      />
 
       {/* ════════════════ RIGHT PANEL — Chat Area ════════════════ */}
       <div className="flex flex-1 flex-col overflow-hidden">
