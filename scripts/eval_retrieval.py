@@ -299,7 +299,7 @@ def evaluate_query(
         if doc_id is not None and relevance is not None:
             relevant[str(doc_id).lower()] = int(relevance)
 
-    retrieved_doc_ids = [str(c.get("doc_id") or c.get("chunk_id") or "").lower() for c in candidates[:top_k]]
+    retrieved_doc_ids = [str(c.get("chunk_id") or c.get("doc_id") or "").lower() for c in candidates[:top_k]]
 
     return {
         "query_id": row.get("query_id"),

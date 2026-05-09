@@ -849,7 +849,7 @@ If the integration test misses the target, the fallback options are: (a) reduce 
 Minimum 7 tests.
 
 **Acceptance criteria**:
-- [ ] All 7 tests pass.
+- [x] All 7 tests pass. (PLAN-0064 W4 — 7/7 passed 2026-05-09)
 - [ ] Manual: `curl` against `localhost:8000/v1/search?q=apple` with valid JWT returns S6 response.
 - [ ] Integration smoke against real S6 verifies the `X-Internal-JWT` header is present on the inbound side.
 
@@ -914,10 +914,11 @@ Minimum 7 tests.
 Minimum 10 tests.
 
 **Acceptance criteria**:
-- [ ] `pnpm typecheck` clean.
-- [ ] `pnpm test app/(app)/search/__tests__/` passes (≥10 tests).
+- [x] `pnpm typecheck` clean. (PLAN-0064 W4 — 2026-05-09)
+- [x] `pnpm lint` passes (exit 0). (PLAN-0064 W4 — 2026-05-09; page.tsx uses design tokens, no dangerouslySetInnerHTML)
+- [x] No new npm dependency added (DOMPurify is **not** needed — see AD-W6-3 snippet contract).
+- [ ] `pnpm test app/(app)/search/__tests__/` passes (≥10 tests). (deferred to T-W6-4-02b — standalone test file for the search page components)
 - [ ] `pnpm build` succeeds.
-- [ ] No new npm dependency added (DOMPurify is **not** needed — see AD-W6-3 snippet contract).
 - [ ] Manual: visit `/search?q=apple` against running stack → page renders with results.
 
 #### T-W6-4-03: Top-bar search command-palette wiring

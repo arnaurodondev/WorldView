@@ -3419,6 +3419,36 @@ async def watchlist_insights(watchlist_id: str, request: Request) -> Response:
     )
 
 
+# ── Document Search (PLAN-0064 Wave 4) ──────────────────────────────────────
+
+
+@router.get("/search")
+async def search_documents(request: Request) -> Any:
+    """Proxy GET /api/v1/search/documents → S6 NLP Pipeline (PLAN-0064 W6).
+
+    Full-text search across articles + EDGAR filings with entity facets.
+    Requires authentication — anonymous callers receive 401.
+    Forwards all query params (q, entity_id, scope, source_type, date_from,
+    date_to, date_preset, page, page_size) unchanged.
+    Issues a fresh RS256 internal JWT per _auth_headers() so S6's
+    InternalJWTMiddleware accepts the request (re-uses the user's identity).
+    Returns 503 on httpx.TimeoutException so the frontend can show a retry
+    message rather than a generic 500 error.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    clients = _clients(request)
+    try:
+        resp = await clients.nlp_pipeline.get(
+            "/api/v1/search/documents",
+            params=dict(request.query_params),
+            headers=_auth_headers(request),
+        )
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise HTTPException(status_code=503, detail="Search backend unavailable") from exc
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 # ── Search (PRD-0028 Wave S9-3, OQ-01) ──────────────────────────────────────
 
 
