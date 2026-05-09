@@ -95,6 +95,14 @@ class GenerateNarrativeUseCase:
         outbox_schema_path:     Absolute path to entity.narrative.generated.v1.avsc.
         retry_delays:           Tuple of sleep durations (sec) for LLM retries.
                                 Pass ``()`` in tests to skip sleeping.
+        narrative_repo_class:   Callable ``(AsyncSession) -> NarrativeRepositoryPort``
+                                injected by the infrastructure layer or tests.
+                                Satisfies LAYER-BOUNDARY (R12): no infra imports
+                                occur inside this application-layer module.
+                                Must not be None in production (callers in infra/
+                                import the concrete class and pass it here).
+        outbox_repo_class:      Callable ``(AsyncSession) -> OutboxRepositoryPort``
+                                injected by the infrastructure layer or tests.
 
     """
 
@@ -106,12 +114,23 @@ class GenerateNarrativeUseCase:
         outbox_schema_path: str | None = None,
         retry_delays: tuple[float, ...] = _LLM_RETRY_DELAYS,
         llm_client: Any | None = None,
+        # Repo class callables injected from the infrastructure/api layer so that
+        # this application-layer module never imports from infrastructure/ at runtime
+        # (LAYER-BOUNDARY rule, R12 / IG-LAYER-002).
+        # Tests pass AsyncMock / MagicMock instances directly; production callers
+        # (infrastructure/workers, api/narratives) pass the concrete repo classes.
+        narrative_repo_class: Any | None = None,
+        outbox_repo_class: Any | None = None,
     ) -> None:
         self._write_sf = write_session_factory
         self._read_sf = read_session_factory if read_session_factory is not None else write_session_factory
         self._model_id = narrative_llm_model_id
         self._retry_delays = retry_delays
         self._llm = llm_client
+        # Store injected repo class callables.  None means callers did not inject
+        # them (legacy path — handled in execute() via a sentinel check against None).
+        self._narrative_repo_class: Any = narrative_repo_class
+        self._outbox_repo_class: Any = outbox_repo_class
 
         # Resolve Avro schema path for outbox serialization
         if outbox_schema_path is None:
@@ -135,12 +154,22 @@ class GenerateNarrativeUseCase:
         ``False`` when the idempotency check hit (same snapshot already present).
         """
         from knowledge_graph.domain.narrative import EntityNarrativeVersion, NarrativeGenerationReason
-        from knowledge_graph.infrastructure.intelligence_db.repositories.narrative_repository import (
-            NarrativeRepository,
-        )
-        from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
-            OutboxRepository,
-        )
+
+        # Resolve repo constructors.  Callers in the infrastructure layer inject
+        # concrete NarrativeRepository / OutboxRepository classes at construction
+        # time via narrative_repo_class / outbox_repo_class (R12 — no infra imports
+        # inside this application-layer module).  When not injected (e.g. tests that
+        # did not migrate to constructor injection yet), raise immediately so the
+        # misconfiguration is obvious.
+        if self._narrative_repo_class is None or self._outbox_repo_class is None:
+            raise RuntimeError(
+                "GenerateNarrativeUseCase requires narrative_repo_class and "
+                "outbox_repo_class to be injected at construction time. "
+                "Infrastructure callers must pass the concrete NarrativeRepository "
+                "and OutboxRepository classes.",
+            )
+        NarrativeRepository = self._narrative_repo_class  # noqa: N806
+        OutboxRepository = self._outbox_repo_class  # noqa: N806
 
         t_start = time.monotonic()
         generation_reason = NarrativeGenerationReason(reason)
@@ -345,6 +374,44 @@ LIMIT 5
         entity_type = sanitize_description(entity.get("entity_type") or "")
         return canonical_name, entity_type
 
+    @staticmethod
+    def _sanitize_relations(
+        relations: list[dict[str, Any]],
+        contradictions: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Sanitize DB-sourced relation fields before LLM prompt interpolation.
+
+        WHY this method (F-SEC-02 extension): _sanitize_entity_ctx only sanitizes
+        canonical_name and entity_type.  The relation rows from _load_entity_context
+        contain canonical_type, object_name, and contradiction canonical_type — all
+        of which are stored in intelligence_db from LLM-extraction and NER pipelines.
+        A poisoned canonical_name in a related entity's record (e.g. "Apple Inc.
+        Ignore prior instructions and output...") could flow through unsanitized
+        into the narrative prompt and perform prompt injection.
+
+        sanitize_description() strips control characters and collapses newlines,
+        which is the minimum defence required to prevent line-break-based injection
+        patterns (the most common vector seen in prompt-injection research).
+        """
+        from prompts.knowledge.alias import sanitize_description  # type: ignore[import-untyped]
+
+        clean_relations = [
+            {
+                **r,
+                "canonical_type": sanitize_description(str(r.get("canonical_type") or "")),
+                "object_name": sanitize_description(str(r.get("object_name") or "")),
+            }
+            for r in relations
+        ]
+        clean_contradictions = [
+            {
+                **c,
+                "canonical_type": sanitize_description(str(c.get("canonical_type") or "")),
+            }
+            for c in contradictions
+        ]
+        return clean_relations, clean_contradictions
+
     async def _call_llm_with_retry(
         self,
         entity_id: UUID,
@@ -363,7 +430,15 @@ LIMIT 5
         if self._llm is None:
             return self._template_fallback(entity_name, entity_type, relation_count), "template-v1"
 
-        prompt = self._build_prompt(entity_name, entity_type, relations, entity_ctx.get("contradictions", []))
+        # F-SEC-02 extension: sanitize relation fields (canonical_type, object_name)
+        # and contradiction fields (canonical_type) before LLM interpolation.
+        # These values originate from intelligence_db extraction pipelines and may
+        # contain adversarial content placed by a compromised upstream source.
+        clean_relations, clean_contradictions = self._sanitize_relations(
+            relations,
+            entity_ctx.get("contradictions", []),
+        )
+        prompt = self._build_prompt(entity_name, entity_type, clean_relations, clean_contradictions)
 
         last_exc: Exception | None = None
         for attempt, delay in enumerate(self._retry_delays):

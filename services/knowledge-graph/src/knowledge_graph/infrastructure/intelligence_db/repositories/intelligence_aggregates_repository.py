@@ -89,18 +89,21 @@ WHERE (subject_entity_id = CAST(:entity_id AS uuid)
         Returns list of dicts with keys:
             source_type, source_name, count, pct
         """
+        # BUG FIX (DP-PLAN-0074-02): relation_evidence_raw has no relation_id column.
+        # The table stores the raw triple (subject_entity_id, object_entity_id,
+        # canonical_type) and is joined to relations on those three columns.
         result = await self._session.execute(
             text("""
 WITH evidence_sources AS (
     SELECT rer.source_type, rer.source_name, COUNT(*) AS cnt
     FROM relation_evidence_raw rer
-    WHERE rer.relation_id IN (
-        SELECT relation_id
-        FROM relations
-        WHERE (subject_entity_id = CAST(:entity_id AS uuid)
-               OR object_entity_id = CAST(:entity_id AS uuid))
-          AND valid_to IS NULL
-    )
+    JOIN relations r
+      ON  r.subject_entity_id = rer.subject_entity_id
+      AND r.object_entity_id  = rer.object_entity_id
+      AND r.canonical_type    = rer.canonical_type
+    WHERE (r.subject_entity_id = CAST(:entity_id AS uuid)
+           OR r.object_entity_id = CAST(:entity_id AS uuid))
+      AND r.valid_to IS NULL
     GROUP BY rer.source_type, rer.source_name
     ORDER BY cnt DESC
     LIMIT :limit

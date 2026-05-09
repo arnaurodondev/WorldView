@@ -59,18 +59,34 @@ def _make_intelligence_public():
     )
 
 
-def _make_narratives_app():
-    """Build test app with narrative-specific dependencies overridden."""
-    from knowledge_graph.api.dependencies import get_readonly_session
+def _make_narratives_app(list_uc=None):
+    """Build test app with narrative-specific dependencies overridden.
+
+    Args:
+        list_uc: Optional pre-configured ListNarrativeVersionsUseCase mock.
+                 When supplied, the Dep factory is overridden to return it.
+                 When None, the readonly session is mocked (POST-only tests).
+    """
+    from knowledge_graph.api.dependencies import (
+        get_list_narrative_versions_uc,
+        get_readonly_session,
+    )
     from knowledge_graph.app import create_app
     from knowledge_graph.config import Settings
 
     app = create_app(Settings(internal_jwt_skip_verification=True))  # type: ignore[call-arg]
 
-    async def _mock_readonly_session():
-        yield AsyncMock()
+    if list_uc is not None:
+        # Override the Dep factory with a synchronous callable returning the mock.
+        # FastAPI resolves synchronous callables just like async ones.
+        app.dependency_overrides[get_list_narrative_versions_uc] = lambda: list_uc
+    else:
+        # POST-only tests just need the readonly session mocked.
+        async def _mock_readonly_session():
+            yield AsyncMock()
 
-    app.dependency_overrides[get_readonly_session] = _mock_readonly_session
+        app.dependency_overrides[get_readonly_session] = _mock_readonly_session
+
     return app
 
 
@@ -102,20 +118,12 @@ class TestNarrativesListEndpoint:
         domain objects.  The API layer maps domain types to the wire format
         (R12 — API layer must not import from application/).
         """
-        app = _make_narratives_app()
+        mock_uc = AsyncMock()
+        mock_uc.execute = AsyncMock(return_value=([], None))
+        app = _make_narratives_app(list_uc=mock_uc)
 
-        import knowledge_graph.application.use_cases.list_narrative_versions as _luc_mod
-
-        # UC returns (versions_list, next_cursor) — empty list + None cursor.
-        with patch.object(_luc_mod, "ListNarrativeVersionsUseCase") as mock_cls:
-            mock_instance = AsyncMock()
-            mock_instance.execute = AsyncMock(return_value=([], None))
-            mock_cls.return_value = mock_instance
-
-            async with AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test", headers=_HEADERS
-            ) as client:
-                resp = await client.get(f"/api/v1/entities/{_ENTITY_ID}/narratives")
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_HEADERS) as client:
+            resp = await client.get(f"/api/v1/entities/{_ENTITY_ID}/narratives")
 
         assert resp.status_code == 200
         data = resp.json()
@@ -128,9 +136,6 @@ class TestNarrativesListEndpoint:
         The use case returns (versions, next_cursor) where versions is a list
         of EntityNarrativeVersion domain objects.  The API layer serialises them.
         """
-        app = _make_narratives_app()
-
-        import knowledge_graph.application.use_cases.list_narrative_versions as _luc_mod
         from knowledge_graph.domain.narrative import EntityNarrativeVersion, NarrativeGenerationReason
 
         domain_version = EntityNarrativeVersion(
@@ -143,16 +148,12 @@ class TestNarrativesListEndpoint:
             is_current=True,
         )
 
-        with patch.object(_luc_mod, "ListNarrativeVersionsUseCase") as mock_cls:
-            mock_instance = AsyncMock()
-            # UC returns (versions_list, next_cursor)
-            mock_instance.execute = AsyncMock(return_value=([domain_version], "dGVzdC1jdXJzb3I="))
-            mock_cls.return_value = mock_instance
+        mock_uc = AsyncMock()
+        mock_uc.execute = AsyncMock(return_value=([domain_version], "dGVzdC1jdXJzb3I="))
+        app = _make_narratives_app(list_uc=mock_uc)
 
-            async with AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test", headers=_HEADERS
-            ) as client:
-                resp = await client.get(f"/api/v1/entities/{_ENTITY_ID}/narratives")
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_HEADERS) as client:
+            resp = await client.get(f"/api/v1/entities/{_ENTITY_ID}/narratives")
 
         assert resp.status_code == 200
         data = resp.json()

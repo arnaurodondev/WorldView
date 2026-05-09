@@ -13,7 +13,7 @@ from uuid import UUID
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from knowledge_graph.api.schemas_intelligence import EntityIntelligencePublic
+    from knowledge_graph.application.schemas_intelligence import EntityIntelligencePublic
     from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
         CanonicalEntityRepository,
     )
@@ -101,8 +101,8 @@ class GetEntityIntelligenceUseCase:
           6. Compute data_completeness and key_metrics from entity metadata.
           7. Assemble and return EntityIntelligencePublic.
         """
-        # Deferred import to satisfy R12 (no infra imports at module level in use cases)
-        from knowledge_graph.api.schemas_intelligence import (
+        # Import from application layer — never from api/ (R12 / LAYER-BOUNDARY rule).
+        from knowledge_graph.application.schemas_intelligence import (
             ConfidenceBreakdownPublic,
             ConfidenceTrendPoint,
             EntityIntelligencePublic,

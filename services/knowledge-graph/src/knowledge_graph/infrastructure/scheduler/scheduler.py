@@ -325,11 +325,20 @@ def build_workers(
     # Worker 13D-3: NarrativeGenerationWorker is registered unconditionally so the
     # scheduler stub keeps working even when llm_client is None.  The use case
     # falls back to the template-v1 generator when the LLM is unavailable.
+    # Inject concrete repo classes (R12 / LAYER-BOUNDARY — use case must not import
+    # from infrastructure/ at runtime; callers in infra/ do it here instead).
+    from knowledge_graph.infrastructure.intelligence_db.repositories.narrative_repository import (
+        NarrativeRepository as _NarrRepo,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import OutboxRepository as _ORepo
+
     _narrative_use_case = GenerateNarrativeUseCase(
         write_session_factory=write_session_factory,
         read_session_factory=_read_factory,
         narrative_llm_model_id=getattr(settings, "narrative_llm_model_id", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
         llm_client=llm_client,  # may be None — use case falls back to template-v1
+        narrative_repo_class=_NarrRepo,
+        outbox_repo_class=_ORepo,
     )
     workers["narrative_generation"] = NarrativeGenerationWorker(use_case=_narrative_use_case)
 

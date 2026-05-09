@@ -21,8 +21,8 @@ from uuid import UUID
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from knowledge_graph.api.schemas.paths import EntityPathsResponse
     from knowledge_graph.application.ports.path_insight_repository import PathInsightRepositoryPort
+    from knowledge_graph.application.schemas.paths import EntityPathsResponse
     from knowledge_graph.application.services.path_explanation_service import PathExplanationService
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
@@ -103,9 +103,8 @@ class GetEntityPathsUseCase:
         )
 
         # ── Build public response objects + fire lazy explanation tasks ───
-        # Import here so the module can be imported in tests without the
-        # full FastAPI application context.
-        from knowledge_graph.api.schemas.paths import (
+        # Import from application layer — never from api/ (R12 / LAYER-BOUNDARY rule).
+        from knowledge_graph.application.schemas.paths import (
             EntityPathsResponse,
             PathEdgePublic,
             PathInsightPublic,

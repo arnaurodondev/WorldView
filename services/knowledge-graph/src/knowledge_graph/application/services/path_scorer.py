@@ -14,8 +14,9 @@ from __future__ import annotations
 
 from collections import Counter
 from typing import TYPE_CHECKING
-from uuid import UUID, uuid4
+from uuid import UUID
 
+from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.domain.entities.path_insight import (
     PathEdge,
@@ -43,14 +44,24 @@ def _diversity_score(node_types: tuple[str, ...], hop_count: int) -> float:
     diversity_score = 1 - (max_type_count / hop_count)
 
     hop_count is the number of edges (= hops), NOT the number of nodes.
-    We measure type variety across *edges* by looking at the intermediate
-    nodes (exclude the start node to get the hop-indexed set).
+    We measure type variety across the *traversed* nodes — those reached by
+    each hop — which means we exclude the anchor (start) node.  A path with
+    N hops has N+1 nodes total; after dropping the anchor we have exactly N
+    nodes, so max_type_count / hop_count is always in [1/N, 1] and the
+    diversity score is always in [0, 1].
+
+    BUG FIX (DP-PLAN-0074-01): the original code passed all node_types
+    (including the anchor) making max_type_count potentially N+1 and
+    producing a negative diversity score when all nodes share the same type.
     """
     if hop_count == 0:
         return 0.0
-    counts = Counter(node_types)
+    # Exclude the anchor node (index 0); the remaining `hop_count` entries
+    # correspond one-to-one to the hops, keeping the ratio in [0, 1].
+    traversed_types = node_types[1:]
+    counts = Counter(traversed_types)
     max_count = max(counts.values(), default=0)
-    return 1.0 - (max_count / hop_count)
+    return max(0.0, 1.0 - (max_count / hop_count))
 
 
 def _surprise_score(
@@ -142,8 +153,8 @@ class PathScorer:
         composite = _composite(harmonic, diversity, surprise, template_match)
 
         return PathInsight(
-            insight_id=uuid4(),
-            anchor_entity_id=_parse_uuid(raw_path.node_ids[0]) if raw_path.node_ids else uuid4(),
+            insight_id=new_uuid7(),
+            anchor_entity_id=_parse_uuid(raw_path.node_ids[0]) if raw_path.node_ids else new_uuid7(),
             hop_count=hop_count,
             path_nodes=nodes,
             path_edges=edges,
@@ -164,4 +175,4 @@ def _parse_uuid(value: object) -> UUID:
     try:
         return UUID(str(value))
     except (ValueError, AttributeError):
-        return uuid4()
+        return new_uuid7()
