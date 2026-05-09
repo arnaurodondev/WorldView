@@ -34,6 +34,10 @@ ENTITY_CANONICAL_CREATED = "entity.canonical.created.v1"
 # graph.state.changed.v1 — emitted by S7 outbox when the knowledge graph topology
 #   changes (edges added/removed); consumers can use it to invalidate caches.
 GRAPH_STATE_CHANGED = "graph.state.changed.v1"
+# entity.narrative.generated.v1 — emitted by S7 NarrativeGenerationWorker when a
+#   new entity narrative version is generated; consumed by NarrativeRefreshKafkaConsumer
+#   to trigger immediate narrative embedding refresh without waiting for hourly poll.
+ENTITY_NARRATIVE_GENERATED = "entity.narrative.generated.v1"
 
 # ── Prediction market domain (S4 / S3) ────────────────────────────────────────
 MARKET_PREDICTION = "market.prediction.v1"

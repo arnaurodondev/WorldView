@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     kafka_topic_instrument_created: str = "market.instrument.created"
     kafka_topic_dataset_fetched: str = "market.dataset.fetched"
     kafka_topic_temporal_event: str = "intelligence.temporal_event.v1"
+    # Hot-path narrative embedding refresh topic (PLAN-0074 T-C-05)
+    kafka_topic_narrative_generated: str = "entity.narrative.generated.v1"
+    kafka_consumer_group_narrative_refresh: str = "kg-narrative-refresh-group"
 
     # Kafka topics — produced
     kafka_topic_graph_state: str = "graph.state.changed.v1"
