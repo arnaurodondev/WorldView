@@ -74,6 +74,7 @@ async def test_timeseries_forwards_optional_params() -> None:
         end_date=date(2024, 12, 31),
         period_type="ANNUAL",
         limit=50,
+        order="asc",  # default order forwarded by use case (audit 2026-05-09)
     )
 
 
@@ -238,6 +239,7 @@ class TestGetFundamentalMetricsTimeseriesUseCase:
             end_date=None,
             period_type=None,
             limit=1000,
+            order="asc",
         )
 
     @pytest.mark.asyncio

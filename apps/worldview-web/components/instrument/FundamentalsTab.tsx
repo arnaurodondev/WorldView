@@ -440,7 +440,7 @@ export function FundamentalsTab({
             are macro-level summaries that should appear before the detail metrics.
             Bloomberg DES page shows consensus ratings at the top. */}
         <div className="border-b border-border">
-          <AnalystConsensusStrip fundamentals={fund} />
+          <AnalystConsensusStrip fundamentals={fund} currentPrice={currentPrice} />
         </div>
         <div className="border-b border-border">
           {/* WHY instrumentId (not fundamentals): RevenueTrendSparklines now fetches its own

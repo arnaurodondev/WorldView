@@ -147,6 +147,16 @@ const MOCK_FUNDAMENTALS: Fundamentals = {
   week_52_high: 199.62,
   week_52_low: 124.17,
   daily_return: 0.0125,
+  // Audit 2026-05-09: analyst consensus fields wired through getFundamentals
+  // transformer. AAPL fixture mirrors EODHD's typical coverage shape
+  // (≈47 analysts) so the AnalystConsensusStrip renders a non-empty bar.
+  analyst_strong_buy_count: 25,
+  analyst_buy_count: 6,
+  analyst_hold_count: 15,
+  analyst_sell_count: 1,
+  analyst_strong_sell_count: 1,
+  analyst_rating: 4.10,
+  analyst_target_price: 220.0,
   updated_at: "2026-04-17T10:00:00Z",
 };
 
@@ -354,6 +364,29 @@ describe("FundamentalsTab", () => {
     await waitFor(() => {
       expect(screen.getByText("ANALYST CONSENSUS")).toBeInTheDocument();
     });
+  });
+
+  it("renders Analyst Consensus counts and target price (audit 2026-05-09)", async () => {
+    // WHY: Regression test for the audit 2026-05-09 fix — analyst_consensus
+    // data was previously dropped by the transformer + the strip was a
+    // hardcoded placeholder. Verify the buckets render their counts AND the
+    // target price + delta show up when currentPrice is provided.
+    render(
+      <FundamentalsTab instrumentId="ins-001" currentPrice={187.43} initialData={MOCK_FUNDAMENTALS} />,
+      { wrapper },
+    );
+
+    // Strong Buy=25, Buy=6, Hold=15, Sell=1, Strong Sell=1 (from MOCK_FUNDAMENTALS)
+    await waitFor(() => {
+      // Bucket counts present in the legend
+      expect(screen.getByText("25")).toBeInTheDocument();
+      expect(screen.getByText("15")).toBeInTheDocument();
+    });
+
+    // Target price and delta — current=187.43, target=220 → +17.4%
+    expect(screen.getByText("$220.00")).toBeInTheDocument();
+    // Total analyst count shown as "· 48 analysts"
+    expect(screen.getByText(/48 analysts/)).toBeInTheDocument();
   });
 
   it("renders Debt & Credit section", async () => {

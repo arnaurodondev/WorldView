@@ -112,10 +112,20 @@ def test_timeseries_date_params_forwarded() -> None:
 
     mock_uc = MagicMock()
 
-    async def _capture(instrument_id, metric, *, start_date=None, end_date=None, period_type=None, limit=1000):  # type: ignore[misc]
+    async def _capture(  # type: ignore[misc]
+        instrument_id,
+        metric,
+        *,
+        start_date=None,
+        end_date=None,
+        period_type=None,
+        limit=1000,
+        order="asc",
+    ):
         captured["start_date"] = start_date
         captured["end_date"] = end_date
         captured["period_type"] = period_type
+        captured["order"] = order
         return []
 
     mock_uc.execute = AsyncMock(side_effect=_capture)
