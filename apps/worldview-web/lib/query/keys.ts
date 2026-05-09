@@ -281,6 +281,21 @@ export const qk = {
       scope == null
         ? (["search", "query", q] as const)
         : (["search", "query", q, scope] as const),
+    // WHY documents key: full-text document search (PLAN-0064 W6) needs a key
+    // that is unique per query+filters+page combination so TanStack Query does
+    // not serve stale results when the user changes any parameter. Including all
+    // four dimensions in the key tuple enables:
+    //  1. Cache sharing when the user re-types the same query with identical filters
+    //  2. Independent invalidation per parameter change (no over-broad invalidation)
+    //  3. Cascade invalidation via qk.search.all for logout / token refresh
+    documents: (
+      q: string,
+      sourceType: string,
+      facets: string[],
+      page: number,
+    ) =>
+      // Sort facets for stable cache identity — [a, b] and [b, a] are the same filter.
+      ["search", "documents", q, sourceType, [...facets].sort(), page] as const,
   },
 
   // ── Feedback / admin ─────────────────────────────────────────────────────
