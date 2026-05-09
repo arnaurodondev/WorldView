@@ -244,3 +244,108 @@ async def test_internal_jwt_rejects_wrong_issuer():
     # Wrong issuer → PyJWT raises InvalidIssuerError → middleware returns 401
     assert result.status_code == 401
     assert not called  # route handler must NOT have been called
+
+
+# ── F-001 (PLAN-0087 audit) — JWT audience negative tests ─────────────────────
+#
+# Commit 80dfc0fc added audience="worldview-internal" + "aud" to options.require
+# but no negative test asserted wrong/missing aud → 401.  qa-beta-test-engineer
+# (2026-05-09) flagged this BLOCKING — these three tests pin the contract.
+
+
+async def _mi_dispatch_with_token(token_bytes: bytes, public_key: object) -> object:
+    """Helper: dispatch through market-ingestion's InternalJWTMiddleware."""
+    from market_ingestion.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    mock_app = Starlette()
+    mock_app.state._internal_jwt_public_key = public_key
+    mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
+    mw._public_key = public_key
+
+    async def _ok(req: Request) -> Response:
+        return Response("ok", status_code=200, headers={"x-route-called": "1"})
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/tasks",
+        "query_string": b"",
+        "headers": [(b"x-internal-jwt", token_bytes)],
+        "app": mock_app,
+    }
+    return await mw.dispatch(Request(scope), _ok)
+
+
+@pytest.mark.asyncio
+async def test_internal_jwt_rejects_wrong_audience() -> None:
+    """F-001: aud="zitadel-frontend" → 401 (must be "worldview-internal")."""
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    bad_aud_token = jwt.encode(
+        {
+            "sub": "user-1",
+            "tenant_id": "tenant-1",
+            "role": "owner",
+            "iss": "worldview-gateway",
+            "aud": "zitadel-frontend",
+            "exp": 9999999999,
+        },
+        private_key,
+        algorithm="RS256",
+    )
+    result = await _mi_dispatch_with_token(bad_aud_token.encode(), private_key.public_key())
+    assert result.status_code == 401
+    assert "x-route-called" not in result.headers
+
+
+@pytest.mark.asyncio
+async def test_internal_jwt_rejects_missing_audience() -> None:
+    """F-001: token without aud claim → 401."""
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    no_aud_token = jwt.encode(
+        {
+            "sub": "user-1",
+            "tenant_id": "tenant-1",
+            "role": "owner",
+            "iss": "worldview-gateway",
+            # NO aud
+            "exp": 9999999999,
+        },
+        private_key,
+        algorithm="RS256",
+    )
+    result = await _mi_dispatch_with_token(no_aud_token.encode(), private_key.public_key())
+    assert result.status_code == 401
+    assert "x-route-called" not in result.headers
+
+
+@pytest.mark.asyncio
+async def test_internal_jwt_accepts_multi_audience_list_containing_expected() -> None:
+    """F-001: aud=["worldview-internal", "other"] → 200 (PyJWT list-aud contract)."""
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    multi_aud_token = jwt.encode(
+        {
+            "sub": "user-1",
+            "tenant_id": "tenant-1",
+            "role": "owner",
+            "iss": "worldview-gateway",
+            "aud": ["worldview-internal", "other-audience"],
+            "exp": 9999999999,
+        },
+        private_key,
+        algorithm="RS256",
+    )
+    result = await _mi_dispatch_with_token(multi_aud_token.encode(), private_key.public_key())
+    assert result.status_code == 200
+    assert result.headers.get("x-route-called") == "1"

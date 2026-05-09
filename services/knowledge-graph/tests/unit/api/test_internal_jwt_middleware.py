@@ -396,3 +396,66 @@ async def test_internal_jwt_rejects_wrong_issuer() -> None:
 
     # Wrong issuer → PyJWT raises InvalidIssuerError → middleware returns 401
     assert resp.status_code == 401
+
+
+# ── F-001 (PLAN-0087 audit) — JWT audience negative tests ─────────────────────
+#
+# Commit 80dfc0fc added audience="worldview-internal" + "aud" to options.require
+# but no negative test asserted wrong/missing aud → 401.  qa-beta-test-engineer
+# (2026-05-09) flagged this BLOCKING — these three tests close the gap by
+# pinning the rejection contract from both sides.
+
+
+async def test_internal_jwt_middleware_rejects_wrong_audience() -> None:
+    """F-001: aud="zitadel-frontend" → 401 (must be "worldview-internal")."""
+    private_key, public_key = _generate_rsa_pair()
+    app = _build_app(public_key=public_key)
+
+    bad_aud_token = _make_token(private_key, aud="zitadel-frontend")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/relations", headers={"X-Internal-JWT": bad_aud_token})
+
+    assert resp.status_code == 401
+
+
+async def test_internal_jwt_middleware_rejects_missing_audience() -> None:
+    """F-001: token without aud claim → 401 (require-list catches it)."""
+    private_key, public_key = _generate_rsa_pair()
+    app = _build_app(public_key=public_key)
+
+    # Build directly to omit the aud claim — _make_token always inserts it.
+    payload = {
+        "sub": "user-123",
+        "tenant_id": "tenant-abc",
+        "role": "user",
+        "iss": "worldview-gateway",
+        "exp": int(time.time()) + 3600,
+    }
+    no_aud_token = jwt.encode(payload, private_key, algorithm="RS256")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/relations", headers={"X-Internal-JWT": no_aud_token})
+
+    assert resp.status_code == 401
+
+
+async def test_internal_jwt_middleware_accepts_multi_audience_list_containing_expected() -> None:
+    """F-001: aud=["worldview-internal", "other"] → 200 (PyJWT list-aud contract)."""
+    private_key, public_key = _generate_rsa_pair()
+    app = _build_app(public_key=public_key)
+
+    payload = {
+        "sub": "user-123",
+        "tenant_id": "tenant-abc",
+        "role": "user",
+        "iss": "worldview-gateway",
+        "aud": ["worldview-internal", "other-audience"],
+        "exp": int(time.time()) + 3600,
+    }
+    multi_aud_token = jwt.encode(payload, private_key, algorithm="RS256")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/relations", headers={"X-Internal-JWT": multi_aud_token})
+
+    assert resp.status_code == 200
