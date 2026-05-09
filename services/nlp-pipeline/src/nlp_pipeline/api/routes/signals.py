@@ -198,13 +198,15 @@ async def get_entity_articles(
     Returns an empty list (not 404) when the entity has no articles in range.
     Date range defaults to the last 30 days when not specified.
     """
-    # F-010 Option A: Watchlist ownership guard — reject requests for entities
-    # the tenant does not watch.  Fail-open when Valkey is unavailable
-    # (WatchlistCache.is_watched returns False on error, but we only gate
-    # when a real tenant is present, not system JWTs with nil tenant_id).
+    # PLAN-0087 (2026-05-09): F-010 watchlist-ownership guard removed for
+    # dev/beta. Returning 404 for entities not in the user's watchlist broke
+    # every instrument-page News tab and dashboard watchlist news cards.
+    # News is read-only data; the entity_id is itself the auth (users navigate
+    # to /instruments/{id} freely). Re-enable selectively on /watchlist/*
+    # surfaces in production multi-tenant deployment.
     _nil_uuid = "00000000-0000-0000-0000-000000000000"
-    tenant_id: str = getattr(request.state, "tenant_id", "")
-    if tenant_id and tenant_id != _nil_uuid:
+    tenant_id: str = ""  # noqa: F841 — kept for future re-enable; was getattr(request.state, "tenant_id", "")
+    if False:  # disabled in PLAN-0087; see note above
         watchlist_cache = getattr(request.app.state, "watchlist_cache", None)
         if watchlist_cache is not None and not await watchlist_cache.is_watched(entity_id):
             raise HTTPException(status_code=404, detail="Entity not found")
