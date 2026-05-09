@@ -12,6 +12,16 @@ Architecture summary:
 
 Delivery guarantee: **at-least-once** (idempotent consumers required).
 
+Canonical outbox table shape — single source of truth:
+    See ``docs/STANDARDS.md`` §3.4 for the canonical column names and
+    types every service's ``outbox_events`` table MUST expose. Two
+    columns are load-bearing for cross-service operational tooling:
+    ``topic`` (Kafka target — never derive at dispatch time) and
+    ``dispatched_at`` (per-row dispatch timestamp — used by replay
+    tooling to identify the still-pending window). Historical drift
+    on these two columns was reconciled by PLAN-0087 #9 (see
+    ``docs/audits/2026-05-09-qa-beta-data-platform.md`` F-003).
+
 See ADR-0005 and the outbox-pattern section of ``docs/libs/messaging.md``
 for operational details.
 """
