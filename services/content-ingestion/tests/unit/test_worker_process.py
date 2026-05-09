@@ -358,3 +358,116 @@ class TestWorkerTimeout:
 
         # Must not raise — error is best-effort
         await worker._mark_task_timed_out(task)
+
+
+# ---------------------------------------------------------------------------
+# WorkerProcess._build_adapter — regression for the 2026-05-09 SEC EDGAR fix
+# ---------------------------------------------------------------------------
+
+
+class TestBuildAdapterKwargs:
+    """Validate per-source-type adapter constructor kwargs.
+
+    Regression for the SEC-EDGAR seeding incident (2026-05-09 QA):
+        SECEdgarAdapter.__init__() got an unexpected keyword argument 'rate_limiter'
+
+    The default branch in ``_build_adapter`` previously passed ``rate_limiter=`` to
+    every adapter except ``newsapi``. SEC EDGAR does not accept that kwarg
+    (it does its own pacing via provider settings), so every freshly-seeded
+    SEC task moved straight to FAILED. The fix groups newsapi + sec_edgar
+    together; this test guards the grouping so a future refactor does not
+    re-introduce the bug.
+    """
+
+    @pytest.mark.parametrize(
+        ("source_type", "expects_rate_limiter"),
+        [
+            (SourceType.EODHD, True),
+            (SourceType.FINNHUB, True),
+            (SourceType.NEWSAPI, False),
+            (SourceType.SEC_EDGAR, False),
+        ],
+    )
+    @patch("content_ingestion.infrastructure.workers.worker._build_factories")
+    @patch("content_ingestion.infrastructure.workers.worker.create_valkey_client_from_url")
+    @patch("content_ingestion.infrastructure.workers.worker.build_object_storage")
+    def test_build_adapter_passes_rate_limiter_only_when_supported(
+        self,
+        mock_storage: MagicMock,
+        mock_valkey: MagicMock,
+        mock_build: MagicMock,
+        source_type: SourceType,
+        expects_rate_limiter: bool,
+    ) -> None:
+        """Adapters that don't accept rate_limiter must NOT receive it.
+
+        We patch the registry so adapter_cls is a MagicMock, then assert on
+        whether 'rate_limiter' appeared in the kwargs.
+        """
+        from content_ingestion.infrastructure.workers import worker as worker_mod
+        from content_ingestion.infrastructure.workers.worker import WorkerProcess
+
+        mock_engine = MagicMock()
+        mock_session_cm = AsyncMock()
+        mock_factory = MagicMock(return_value=mock_session_cm)
+        mock_build.return_value = (mock_engine, mock_engine, mock_factory, mock_factory)
+        mock_valkey.return_value = AsyncMock()
+
+        settings = _make_settings()
+        # Provide every provider sub-config the build path may dereference.
+        settings.eodhd = MagicMock(rate_limit_per_second=10)
+        settings.eodhd_api_key = "demo"
+        settings.finnhub = MagicMock(rate_limit_per_minute=60)
+        settings.finnhub_api_key = "demo"
+        settings.newsapi = MagicMock()
+        settings.newsapi_key = "demo"
+        settings.newsapi_daily_limit = 100
+        settings.sec_edgar = MagicMock()
+        settings.sec_edgar_user_agent = "test/1.0 contact@test"
+
+        worker = WorkerProcess(settings=settings)
+        # _build_adapter accesses self._http_client and self._valkey directly
+        # (they are normally populated by run() before any adapter is built).
+        worker._http_client = MagicMock()
+        worker._valkey = AsyncMock()
+
+        # Replace the registry entry with our spy so we can capture kwargs
+        # without instantiating the real adapter (which has its own validation).
+        # Also stub out the per-provider client classes — SECEdgarClient builds
+        # an asyncio.Semaphore from settings.sec_edgar.max_concurrent, which
+        # blows up on a MagicMock.
+        adapter_spy = MagicMock(__name__=f"{source_type.value}AdapterSpy")
+        original = worker_mod.ADAPTER_REGISTRY[source_type]
+        worker_mod.ADAPTER_REGISTRY[source_type] = adapter_spy
+        try:
+            with (
+                patch(
+                    "content_ingestion.infrastructure.adapters.eodhd.client.EODHDClient",
+                    return_value=MagicMock(),
+                ),
+                patch(
+                    "content_ingestion.infrastructure.adapters.finnhub.client.FinnhubClient",
+                    return_value=MagicMock(),
+                ),
+                patch(
+                    "content_ingestion.infrastructure.adapters.newsapi.client.NewsAPIClient",
+                    return_value=MagicMock(),
+                ),
+                patch(
+                    "content_ingestion.infrastructure.adapters.sec_edgar.client.SECEdgarClient",
+                    return_value=MagicMock(),
+                ),
+            ):
+                worker._build_adapter(source_type, exists_fn=AsyncMock(return_value=False))
+        finally:
+            worker_mod.ADAPTER_REGISTRY[source_type] = original
+
+        assert adapter_spy.called, f"adapter for {source_type.value} was never constructed"
+        kwargs = adapter_spy.call_args.kwargs
+        if expects_rate_limiter:
+            assert "rate_limiter" in kwargs, f"{source_type.value} adapter should receive rate_limiter kwarg"
+        else:
+            assert "rate_limiter" not in kwargs, (
+                f"{source_type.value} adapter must NOT receive rate_limiter "
+                f"(its __init__ does not accept it; passing it triggers TypeError)"
+            )

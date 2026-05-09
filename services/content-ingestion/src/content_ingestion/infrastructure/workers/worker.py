@@ -371,8 +371,14 @@ class WorkerProcess:
         else:
             raise AdapterError(f"Unknown source type: {source_type_val}")
 
-        # Build adapter — newsapi does not use rate_limiter
-        if source_type_val == "newsapi":
+        # Build adapter — newsapi and sec_edgar do not accept `rate_limiter`.
+        # WHY sec_edgar excluded (2026-05-09 fix): SECEdgarAdapter relies on
+        # `provider_cfg.market_hours_interval_seconds` for its own pacing
+        # (see `SECEdgarAdapter._compute_next_request_at`) and never accepts
+        # a TokenBucket. Passing `rate_limiter=` raised TypeError which
+        # surfaced as "got an unexpected keyword argument 'rate_limiter'"
+        # and put every freshly-seeded SEC EDGAR task into FAILED.
+        if source_type_val in ("newsapi", "sec_edgar"):
             return adapter_cls(  # type: ignore[call-arg]
                 client=client,
                 exists_fn=exists_fn,

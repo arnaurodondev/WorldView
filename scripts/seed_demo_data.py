@@ -978,6 +978,47 @@ _NEWSAPI_SOURCES: list[dict] = [
     },
 ]
 
+# WHY SEC EDGAR sources: 2026-05-09 audit found that the SEC adapter is fully
+# implemented (`adapters/sec_edgar/{client.py,adapter.py}`) and the worker can
+# build it (`worker._build_adapter`), but no source row was ever seeded — so the
+# scheduler skipped SEC entirely and the user reported "only Finnhub news is
+# flowing". The 14 sec_10k / 12 sec_8k / 5 sec_10q docs in nlp_db are stale demo
+# fixtures from earlier seed passes.
+#
+# WHY one row per filing form: we deliberately split 10-K / 10-Q / 8-K into
+# three separate sources so the scheduler creates independent tasks and can
+# fetch each form on its own cadence (10-K = annual, 10-Q = quarterly, 8-K =
+# event-driven). The adapter accepts a comma-list in `config.forms` so a single
+# source COULD fetch all three at once, but separating them gives clearer
+# observability per form-type and lets us disable individual streams without
+# losing the others.
+#
+# WHY no `from_date`: leaving it empty makes EDGAR return the most-recent filings
+# only, which is what we want for live ingest. Backfill pulls a wider range via
+# the `is_backfill` task path (uses `EXTRA_BACKFILL_DAYS` from settings).
+#
+# WHY USER_AGENT requirement: SEC EDGAR mandates a `User-Agent` header naming
+# the requester (their fair-use policy). The platform reads
+# `CONTENT_INGESTION_SEC_EDGAR_USER_AGENT` from docker.env at worker startup;
+# the source row does not need to set it.
+_SEC_EDGAR_SOURCES: list[dict] = [
+    {
+        "id": "55555555-0001-7000-8000-000000000001",
+        "name": "SEC-EDGAR-10K",
+        "config": {"forms": "10-K"},
+    },
+    {
+        "id": "55555555-0002-7000-8000-000000000001",
+        "name": "SEC-EDGAR-10Q",
+        "config": {"forms": "10-Q"},
+    },
+    {
+        "id": "55555555-0003-7000-8000-000000000001",
+        "name": "SEC-EDGAR-8K",
+        "config": {"forms": "8-K"},
+    },
+]
+
 
 def seed_content_ingestion_db(conn, *, reset: bool = False) -> None:
     """Seed Polymarket, Finnhub, and NewsAPI polling sources in content_ingestion_db.
@@ -1000,7 +1041,12 @@ def seed_content_ingestion_db(conn, *, reset: bool = False) -> None:
     """
     cur = conn.cursor()
 
-    all_seeded_ids = [_POLYMARKET_SOURCE_ID] + [s["id"] for s in _FINNHUB_SOURCES] + [s["id"] for s in _NEWSAPI_SOURCES]
+    all_seeded_ids = (
+        [_POLYMARKET_SOURCE_ID]
+        + [s["id"] for s in _FINNHUB_SOURCES]
+        + [s["id"] for s in _NEWSAPI_SOURCES]
+        + [s["id"] for s in _SEC_EDGAR_SOURCES]
+    )
 
     if reset:
         print("  [reset] Removing seeded sources from content_ingestion_db...")
@@ -1065,6 +1111,28 @@ def seed_content_ingestion_db(conn, *, reset: bool = False) -> None:
                 src["id"],
                 src["name"],
                 "newsapi",
+                True,
+                json.dumps(src["config"]),
+                now_ts,
+            ),
+        )
+        status = "inserted" if cur.rowcount else "already exists"
+        print(f"  {src['name']} source: {status}")
+
+    # ── SEC EDGAR (form-based) ────────────────────────────────────────────────
+    # WHY one source per filing form: gives the scheduler independent task slots
+    # per form so 8-K (event-driven, frequent) does not starve 10-K (quarterly).
+    for src in _SEC_EDGAR_SOURCES:
+        cur.execute(
+            """
+            INSERT INTO sources (id, name, source_type, enabled, config, created_at)
+            VALUES (%s::uuid, %s, %s, %s, %s::jsonb, %s)
+            ON CONFLICT (name) DO NOTHING
+            """,
+            (
+                src["id"],
+                src["name"],
+                "sec_edgar",
                 True,
                 json.dumps(src["config"]),
                 now_ts,
