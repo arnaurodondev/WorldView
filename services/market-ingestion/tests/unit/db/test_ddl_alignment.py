@@ -91,7 +91,9 @@ def _extract_ddl_columns(migration_text: str, table_name: str) -> set[str]:
         columns.add(m.group(2))
 
     # -- Source 4: Raw ALTER TABLE ADD COLUMN ---------------------------------
-    alter_pattern = rf"ALTER\s+TABLE\s+{table_name}\s+ADD\s+COLUMN\s+(\w+)"
+    # The optional ``IF NOT EXISTS`` is supported because newer migrations
+    # (e.g., 0013_add_dispatched_at_to_outbox.py) use it for idempotency.
+    alter_pattern = rf"ALTER\s+TABLE\s+{table_name}\s+ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)"
     for col_name in re.findall(alter_pattern, migration_text, re.IGNORECASE):
         columns.add(col_name)
 
