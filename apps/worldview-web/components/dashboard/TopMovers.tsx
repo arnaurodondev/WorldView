@@ -80,7 +80,9 @@ export function TopMovers() {
          transient backend issue, not a user error. Red alarming text makes the
          dashboard look broken; muted text with a retry prompt is professional. */}
       {isError && (
-        <p className="text-sm text-muted-foreground">
+        // WHY text-xs: empty/error copy on dense dashboard tiles → 12px
+        // (PLAN-0087 F-DENSITY-001).
+        <p className="text-xs text-muted-foreground">
           Market movers unavailable — data will appear when market data is ingested.
         </p>
       )}
@@ -123,7 +125,7 @@ export function TopMovers() {
           ))}
 
           {data.movers.length === 0 && (
-            <p className="text-sm text-muted-foreground">No data available</p>
+            <p className="text-xs text-muted-foreground">No data available</p>
           )}
         </div>
       )}

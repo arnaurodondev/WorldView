@@ -75,7 +75,9 @@ export function EconomicCalendar() {
           Muted text avoids making the dashboard look broken. */}
       {isError && (
         // T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-1)
-        <p className="flex-1 px-3 py-2 text-sm text-muted-foreground">
+        // WHY text-xs (was text-sm): dashboard tile error copy → 12px Bloomberg
+        // standard. PLAN-0087 F-DENSITY-001.
+        <p className="flex-1 px-3 py-2 text-xs text-muted-foreground">
           Economic calendar unavailable — events will appear once macro data is ingested.
         </p>
       )}
