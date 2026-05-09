@@ -168,6 +168,9 @@ unchanged — R11: never break wire format.
 | `contradictions` | `[...]` |
 | `metadata` | `{thread_id, message_id, intent, provider, latency_ms}` |
 | `error` | `{code, message}` |
+| `pending_action` | `{proposal_id, tool_name, description, params: {entity_id, condition, threshold, severity}}` — emitted when a write-action tool proposes an action awaiting user confirmation (PLAN-0082) |
+| `action_executed` | `{proposal_id, tool_name, result: {alert_id, entity_id, condition, severity, created_at}}` — emitted when a confirmed action is executed successfully (PLAN-0082) |
+| `action_rejected` | `{proposal_id, tool_name, reason}` — emitted when a user rejects an action proposal or execution fails (PLAN-0082) |
 
 ---
 
@@ -219,6 +222,50 @@ Input → Validate → Cache check → Rate limit → Load history → Release U
 **v3 catalog tools (PLAN-0081 Wave A)**: 6 tools backed by `S3BriefPort` (new Protocol — screener/movers/calendars via S9 proxy) and `BriefArchivePort` (existing). `S3BriefClient` adapter wired in `app.py` lifespan. `BriefArchiveReadAdapter` creates per-call read sessions (R27). All tools are read-only — no UnitOfWork acquired.
 
 All tool executions are independent; failures return empty results (safe degradation). The all-tools-failed guard prevents the second LLM turn from being called with zero context — the orchestrator short-circuits to a fallback answer in that case.
+
+---
+
+### Action Tools and User Authorization (PLAN-0082)
+
+Two tools differ from the rest: they interact with user-owned state rather than read-only market data.
+
+| Tool | Type | Target | Description |
+|------|------|--------|-------------|
+| `get_alerts` | Read-only | S10 | List active alert rules for the authenticated user |
+| `create_alert` | Write (requires confirmation) | S10 | Propose a new price/volume alert rule |
+
+#### Confirmation Flow
+
+`create_alert` follows the "propose before execute" pattern — the LLM never creates alerts directly:
+
+```
+1. LLM emits create_alert tool call.
+2. ToolExecutor._handle_create_alert():
+   a. Validates condition against _VALID_CONDITIONS allowlist
+      {"price_below", "price_above", "volume_spike", "percent_change"}.
+   b. Validates severity against _VALID_SEVERITIES allowlist
+      {"low", "medium", "high", "critical"}.
+   c. On invalid condition or severity → returns [] (safe refusal, no modal shown).
+   d. On valid inputs → generates proposal_id (UUIDv7) and returns an
+      action_pending RetrievedItem.
+3. ChatOrchestratorUseCase detects item_type == action_pending and emits
+   pending_action SSE event (proposal_id, tool_name, description, params).
+4. Frontend shows ActionConfirmModal to the user.
+5. User confirms → frontend calls POST /api/v1/chat/proposals/{proposal_id}/confirm
+   with the params from the SSE event.
+6. Proposal endpoint calls S10 POST /v1/alerts and emits action_executed SSE.
+7. User declines → frontend emits action_rejected locally (no server call needed).
+```
+
+#### Security Properties
+
+- **No silent writes**: `create_alert` NEVER calls S10 without explicit user confirmation.
+- **Condition allowlist** (`_VALID_CONDITIONS` in `tool_executor.py`): prompt-injected strings like `"__SYSTEM_PROMPT__"` or `"admin_override"` are rejected before reaching the SSE stream.
+- **Severity allowlist** (`_VALID_SEVERITIES` in `tool_executor.py`): strings like `"CRITICAL; DROP TABLE alerts;"` are rejected at the same stage.
+- **Auth from JWT only**: `user_id` and `tenant_id` come exclusively from the `InternalJWT` parsed by middleware — never from tool call arguments. The `**_` in the handler signature silently discards injected `tenant_id`/`user_id` args.
+- **Rate limit**: max 5 `create_alert` proposals per `ToolExecutor` instance (per chat request). A 6th call returns `None` without presenting a confirmation modal.
+- **Idempotency guard** (`proposal.py`): `_CONFIRMED_PROPOSALS` in-memory set prevents duplicate alert creation if the frontend retries a confirmation. Returns HTTP 409 on replay. Single-instance only — move to Valkey for multi-replica deployments.
+- **All-tools-failed guard exemption**: when `create_alert` is the only tool and its result is `action_pending`, the orchestrator does NOT emit `all_tools_failed`. The guard only fires when ALL tool results are empty AND no pending action proposals were generated.
 
 ---
 

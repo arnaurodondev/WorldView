@@ -286,9 +286,15 @@ class ChatOrchestratorUseCase:
                 yield p.emitter.emit_tool_result(tc.name, status=_status, item_count=_count)
 
         # ── Step 7: All-tools-failed guard ───────────────────────────────────────
-        # If the LLM requested tools but ALL returned empty/None, do NOT call the
-        # second LLM turn — the model would hallucinate from empty context.
-        if tool_calls and not non_none_items:
+        # If the LLM requested tools but ALL returned empty/None AND there are no
+        # pending action proposals, do NOT call the second LLM turn — the model
+        # would hallucinate from empty context.
+        # PLAN-0082 QA fix C-1: exempt action_pending items from the "all failed"
+        # check.  When the only tool call is create_alert, non_none_items is empty
+        # (action_pending items were moved to _action_pending_items above), but the
+        # request was NOT a failure — the user has been presented a confirmation
+        # modal.  We must NOT emit all_tools_failed in that case.
+        if tool_calls and not non_none_items and not _action_pending_items:
             log.warning(  # type: ignore[no-any-return]
                 "all_tools_failed",
                 tool_count=len(tool_calls),

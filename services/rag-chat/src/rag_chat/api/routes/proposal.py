@@ -38,7 +38,7 @@ from __future__ import annotations
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse  # type: ignore[import-not-found]
 
@@ -48,6 +48,22 @@ from rag_chat.application.pipeline.sse_emitter import SSEEmitter
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 router = APIRouter(prefix="/api/v1", tags=["proposals"])
+
+# ── In-memory idempotency guard (PLAN-0082 QA fix M-3) ────────────────────────
+# WHY: the same proposal_id can be submitted multiple times (network retries,
+# double-click) which would create duplicate alerts.  S10 has a 5-minute dedup
+# window on (entity_id, alert_type) but NOT on (condition) — so two
+# "price_below" alerts with different thresholds for the same entity would both
+# be created.
+#
+# We store confirmed proposal IDs in a module-level set.  This is sufficient
+# for the thesis single-instance deployment.  In a multi-replica setup, move
+# this to Valkey (key: `s8:proposals:confirmed:{proposal_id}`, TTL 1h).
+#
+# Growth guard: evict the oldest half when the set exceeds _MAX_CONFIRMED_CACHE
+# entries.  FIFO ordering is not required; any 500-entry eviction is safe here.
+_CONFIRMED_PROPOSALS: set[str] = set()
+_MAX_CONFIRMED_CACHE = 1000  # prevent unbounded growth in long-running instances
 
 
 # ── Request schema ─────────────────────────────────────────────────────────────
@@ -105,6 +121,17 @@ async def confirm_proposal(
     Returns 401 if the JWT is invalid (handled by InternalJWTMiddleware).
     Returns 422 if the request body fails Pydantic validation.
     """
+    # PLAN-0082 QA fix M-3: idempotency guard — reject duplicate confirmations.
+    # Check BEFORE acquiring the SSE stream so we can return a plain 409 JSON
+    # response instead of streaming an error event (simpler for the frontend to
+    # handle — no SSE reader needed for the error path).
+    if proposal_id in _CONFIRMED_PROPOSALS:
+        log.warning(  # type: ignore[no-any-return]
+            "proposal_duplicate_confirmation",
+            proposal_id=proposal_id,
+        )
+        raise HTTPException(status_code=409, detail="Proposal already confirmed")
+
     emitter = SSEEmitter()
     # auth is (tenant_id, user_id) from JWT — validated by AuthContextDep
     _tenant_id, _user_id = auth
@@ -181,6 +208,20 @@ async def confirm_proposal(
             user_id=str(_user_id),
             tenant_id=str(_tenant_id),
         )
+
+        # PLAN-0082 QA fix M-3: mark this proposal as confirmed so that any
+        # subsequent duplicate submission returns 409 instead of creating a
+        # second alert.  We record AFTER the S10 call succeeds — a failed
+        # call does NOT consume the idempotency slot (the caller may retry).
+        _CONFIRMED_PROPOSALS.add(proposal_id)
+        if len(_CONFIRMED_PROPOSALS) > _MAX_CONFIRMED_CACHE:
+            # Evict the oldest half to prevent unbounded growth.  List
+            # iteration order is insertion order in CPython 3.7+ (set is
+            # unordered, but we just need to evict ~half, not strict FIFO).
+            _to_remove = list(_CONFIRMED_PROPOSALS)[: _MAX_CONFIRMED_CACHE // 2]
+            for _k in _to_remove:
+                _CONFIRMED_PROPOSALS.discard(_k)
+
         yield emitter.emit_action_executed(
             proposal_id=proposal_id,
             tool_name=body.tool_name,
