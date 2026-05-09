@@ -116,7 +116,7 @@ S1 ──portfolio.watchlist.updated.v1──► S10
 | S3 | **Market Data** | 8003 | `market_data_db` (TimescaleDB) | ✅ Mature | Materialize OHLCV/quotes/fundamentals; 30 query API routes |
 | S4 | **Content Ingestion** | 8004 | `content_ingestion_db` | ✅ Mature | Poll EODHD news, SEC EDGAR, Finnhub, NewsAPI; MinIO bronze |
 | S5 | **Content Store** | 8005 | `content_store_db` | ✅ Mature | HTML cleaning, 3-stage dedup, canonical IDs, MinIO silver |
-| S6 | **NLP Pipeline** | 8006 | `nlp_db` + `intelligence_db` | ✅ Mature | 8-block enrichment: NER, routing, embedding, entity resolution, LLM extraction |
+| S6 | **NLP Pipeline** | 8006 | `nlp_db` + `intelligence_db` | ✅ Mature | 8-block enrichment: NER, routing, embedding, entity resolution, LLM extraction. Full-text document search (`GET /api/v1/search/documents`) — tsvector GIN on chunks.tsv_english, entity facets via S7 batch, recency×source blend ranking (PLAN-0064 W6) |
 | S7 | **Knowledge Graph** | 8007 | `intelligence_db` | 🔄 In-progress | Relation canonicalization, graph materialization, async workers |
 | S8 | **RAG / Chat** | 8008 | `rag_db` | 🔄 In-progress | Hybrid retrieval (ANN+BM25+KG+SQL via RRF; hybrid default for entity-anchored intents — PLAN-0063 W5-3), HyDE, graph-enriched context, contradiction detection, LLM fallback chain, streaming SSE, citations, retrieval quality metrics + weekly citation-accuracy cron (W5-5) |
 | S9 | **API Gateway** | 8000 | None (stateless) | 🔄 In-progress | BFF entry point, auth, rate limiting, caching, CORS |

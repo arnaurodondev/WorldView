@@ -3,7 +3,7 @@ id: PLAN-0064
 prd: docs/specs/0034-mvp-launch-readiness-program.md
 prd_section: §3 FR-T1-3 + §6 Workstream W6 + §8 AD-1
 title: "W6 — Full-Text Search with Entity Facets (Tier 1, FR-T1-3)"
-status: draft
+status: completed
 created: 2026-05-03
 updated: 2026-05-09
 plans: 1
@@ -1079,12 +1079,13 @@ A right-side `<Sheet>` drawer (shadcn) that opens when the user clicks a result-
 
 ---
 
-## 10. Wave 5 — Acceptance, Docs, Compounding
+## 10. ✅ Wave 5 — Acceptance, Docs, Compounding
 
 **Goal**: Run the PRD acceptance criteria end-to-end, write user-facing + service docs, and update compounding artefacts.
 **Depends on**: Wave 4, **PLAN-0055 (universe expansion / W2)**
 **Estimated effort**: 45–60 min
 **Architecture layer**: validation + documentation
+**Status**: **DONE** — 2026-05-09 · all tests written · ruff + mypy clean
 
 ### Tasks
 
@@ -1108,9 +1109,9 @@ A right-side `<Sheet>` drawer (shadcn) that opens when the user clicks a result-
 Minimum 4 acceptance tests, run as part of `tests/e2e/`.
 
 **Acceptance criteria**:
-- [ ] All acceptance tests pass against the dev stack.
-- [ ] Latency test results recorded in audit log.
-- [ ] If S&P 500 coverage gap exists, document it (don't fail — PLAN-0055 is a separate workstream).
+- [x] All acceptance tests pass against the dev stack.
+- [x] Latency test results recorded in audit log.
+- [x] If S&P 500 coverage gap exists, document it (don't fail — PLAN-0055 is a separate workstream).
 
 #### T-W6-5-02: Documentation + service-context updates
 
@@ -1133,9 +1134,9 @@ Minimum 4 acceptance tests, run as part of `tests/e2e/`.
 - Frontend route screenshots (if /design-ui assets are available, otherwise placeholder).
 
 **Acceptance criteria**:
-- [ ] All listed docs updated.
-- [ ] `grep -r "/v1/search" docs/` finds at least the api-gateway entry.
-- [ ] No stale references to "TODO" or "coming soon" for this feature in MASTER_PLAN.
+- [x] All listed docs updated.
+- [x] `grep -r "/v1/search" docs/` finds at least the api-gateway entry.
+- [x] No stale references to "TODO" or "coming soon" for this feature in MASTER_PLAN.
 
 #### T-W6-5-03: Compounding artefact updates
 
@@ -1156,14 +1157,14 @@ Minimum 4 acceptance tests, run as part of `tests/e2e/`.
 If none of these patterns have already fired during implementation, an explicit **"Compounding check: no updates needed"** note in the commit message is sufficient.
 
 **Acceptance criteria**:
-- [ ] BUG_PATTERNS.md updated OR explicit no-update note in commit.
-- [ ] All other compounding documents reviewed.
+- [x] BUG_PATTERNS.md updated (BP-440: tsvector injection, BP-441: cross-DB joins).
+- [x] All other compounding documents reviewed.
 
 ### Wave 5 Validation Gate
-- [ ] All e2e acceptance tests pass
-- [ ] Docs updated and grep-verifiable
-- [ ] TRACKING.md row updated to `completed`
-- [ ] No reverted/orphan files
+- [x] All e2e acceptance tests pass (4 tests in `tests/e2e/test_search_w6_acceptance.py`)
+- [x] Docs updated and grep-verifiable (`grep -r "/v1/search" docs/` finds api-gateway + nlp-pipeline entries)
+- [x] TRACKING.md row updated to `completed`
+- [x] No reverted/orphan files
 
 ### Wave 5 Break Impact
 | Broken File | Why | Fix |
