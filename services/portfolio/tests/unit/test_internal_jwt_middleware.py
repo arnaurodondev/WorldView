@@ -215,3 +215,92 @@ async def test_internal_jwt_middleware_rejects_wrong_algorithm() -> None:
         resp = await client.get("/api/v1/data", headers={"X-Internal-JWT": hs_token})
 
     assert resp.status_code == 401
+
+
+# ── F-001 (PLAN-0087 audit) — JWT audience negative tests ─────────────────────
+#
+# Commit 80dfc0fc added audience="worldview-internal" to jwt.decode() and "aud"
+# to options.require across 6+ services BUT the helper _make_token() was
+# simultaneously updated to include aud="worldview-internal" so existing happy-
+# path tests still passed.  No negative test asserted that wrong/missing aud →
+# 401.  qa-beta-test-engineer flagged this BLOCKING (F-001) because a future
+# refactor that drops the audience= kwarg or the require-list entry would pass
+# every existing test and silently re-introduce a token-replay vulnerability.
+#
+# These three tests pin the contract from the rejection side:
+#   1. wrong aud value     → 401  (proves the audience= kwarg is enforced)
+#   2. missing aud claim   → 401  (proves "aud" in options.require is enforced)
+#   3. multi-aud list incl expected → 200 (pins PyJWT's list-aud behaviour)
+
+
+async def test_internal_jwt_middleware_rejects_wrong_audience() -> None:
+    """Token signed with aud="zitadel-frontend" → 401 (must be "worldview-internal").
+
+    Regression target: a future commit that drops `audience="worldview-internal"`
+    from the jwt.decode() call would cause this test to fail (token would be
+    accepted).  PyJWT raises InvalidAudienceError → middleware maps to 401.
+    """
+    private_key, public_key = _generate_rsa_pair()
+    app = _build_app(public_key=public_key)
+
+    bad_aud_token = _make_token(private_key, aud="zitadel-frontend")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/data", headers={"X-Internal-JWT": bad_aud_token})
+
+    assert resp.status_code == 401
+
+
+async def test_internal_jwt_middleware_rejects_missing_audience() -> None:
+    """Token with no aud claim → 401 (require: aud triggers MissingRequiredClaimError).
+
+    Regression target: a future commit that drops "aud" from options.require
+    would cause this test to fail (token without aud would be accepted because
+    PyJWT only enforces audience=... when an aud kwarg is supplied AND aud is
+    in require-list).
+    """
+    private_key, public_key = _generate_rsa_pair()
+    app = _build_app(public_key=public_key)
+
+    # Build a token WITHOUT the aud claim.  We bypass _make_token() because that
+    # helper unconditionally inserts aud="worldview-internal".
+    payload = {
+        "sub": "user-123",
+        "tenant_id": "tenant-abc",
+        "role": "user",
+        "iss": "worldview-gateway",
+        "exp": int(time.time()) + 3600,
+        # NO "aud" key — this is the whole point of the test.
+    }
+    no_aud_token = jwt.encode(payload, private_key, algorithm="RS256")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/data", headers={"X-Internal-JWT": no_aud_token})
+
+    assert resp.status_code == 401
+
+
+async def test_internal_jwt_middleware_accepts_multi_audience_list_containing_expected() -> None:
+    """Token with aud=["worldview-internal", "other"] → 200.
+
+    PyJWT 2.x accepts a list-form aud claim if the configured audience is one
+    of the entries.  This test pins that behaviour so a future PyJWT upgrade
+    that changes the semantics is caught.
+    """
+    private_key, public_key = _generate_rsa_pair()
+    app = _build_app(public_key=public_key)
+
+    payload = {
+        "sub": "user-123",
+        "tenant_id": "tenant-abc",
+        "role": "user",
+        "iss": "worldview-gateway",
+        "aud": ["worldview-internal", "other-audience"],
+        "exp": int(time.time()) + 3600,
+    }
+    multi_aud_token = jwt.encode(payload, private_key, algorithm="RS256")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/data", headers={"X-Internal-JWT": multi_aud_token})
+
+    assert resp.status_code == 200

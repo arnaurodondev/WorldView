@@ -469,3 +469,174 @@ async def test_skip_verification_flag_allows_bypass() -> None:
     assert body["user_id"] == "user-1"
     assert body["tenant_id"] == "t-1"
     assert body["role"] == "owner"
+
+
+# ── F-001 (PLAN-0087 audit) — JWT audience negative tests ─────────────────────
+#
+# Commit 80dfc0fc added audience="worldview-internal" to jwt.decode() across 6+
+# services BUT no negative test asserted that wrong/missing aud → 401.  The
+# happy-path tests pass because their helpers include aud in the payload.
+# qa-beta-test-engineer flagged this BLOCKING — a future refactor that drops
+# the audience= kwarg or "aud" from options.require would silently accept
+# tokens minted for any other audience (token-replay vulnerability).
+#
+# These tests use the dispatch+scope pattern already established by
+# test_internal_jwt_rejects_wrong_issuer above — same shape, different claim.
+
+
+def _build_aud_test_token(aud: object | None, *, private_key: object) -> tuple[str, object]:
+    """Helper: encode an RS256 JWT with a configurable aud claim.
+
+    aud=None → omit the aud key entirely (tests the require-list enforcement).
+    aud="..." → include the literal value (tests audience= kwarg enforcement).
+    aud=[...] → include a list (tests PyJWT's list-aud acceptance).
+    Returns (token, public_key) so the caller can install the key on the mock app.
+    """
+    import jwt as pyjwt
+
+    payload: dict[str, object] = {
+        "sub": "user-1",
+        "tenant_id": "tenant-1",
+        "role": "owner",
+        "iss": "worldview-gateway",
+        "exp": 9999999999,
+    }
+    if aud is not None:
+        payload["aud"] = aud
+    token = pyjwt.encode(payload, private_key, algorithm="RS256")  # type: ignore[arg-type]
+    return token, private_key.public_key()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_internal_jwt_rejects_wrong_audience() -> None:
+    """F-001: token with aud="zitadel-frontend" → 401 (not "worldview-internal").
+
+    Regression target: any future commit that drops `audience="worldview-internal"`
+    from jwt.decode() will fail this test (token would be accepted).
+    """
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    bad_aud_token, public_key = _build_aud_test_token("zitadel-frontend", private_key=private_key)
+
+    mock_app = Starlette()
+    mock_app.state._internal_jwt_public_key = public_key
+    mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
+    mw._public_key = public_key
+
+    called: list[bool] = []
+
+    async def _ok(req: Request) -> Response:
+        called.append(True)
+        return Response("ok", status_code=200)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/alerts/pending",
+        "query_string": b"",
+        "headers": [(b"x-internal-jwt", bad_aud_token.encode())],
+        "app": mock_app,
+    }
+    result = await mw.dispatch(Request(scope), _ok)
+
+    # Wrong audience → PyJWT raises InvalidAudienceError → middleware returns 401
+    assert result.status_code == 401
+    assert not called  # route handler must NOT have been called
+
+
+@pytest.mark.asyncio
+async def test_internal_jwt_rejects_missing_audience() -> None:
+    """F-001: token with no aud claim → 401 (require-list enforcement).
+
+    Regression target: any future commit that drops "aud" from options.require
+    will fail this test (token without aud would be accepted because PyJWT only
+    enforces audience= when aud is also in the require list).
+    """
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    no_aud_token, public_key = _build_aud_test_token(None, private_key=private_key)
+
+    mock_app = Starlette()
+    mock_app.state._internal_jwt_public_key = public_key
+    mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
+    mw._public_key = public_key
+
+    called: list[bool] = []
+
+    async def _ok(req: Request) -> Response:
+        called.append(True)
+        return Response("ok", status_code=200)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/alerts/pending",
+        "query_string": b"",
+        "headers": [(b"x-internal-jwt", no_aud_token.encode())],
+        "app": mock_app,
+    }
+    result = await mw.dispatch(Request(scope), _ok)
+
+    # Missing aud → PyJWT raises MissingRequiredClaimError → middleware returns 401
+    assert result.status_code == 401
+    assert not called
+
+
+@pytest.mark.asyncio
+async def test_internal_jwt_accepts_multi_audience_list_containing_expected() -> None:
+    """F-001: aud=["worldview-internal", "other"] → 200 (PyJWT list-aud contract).
+
+    Pins PyJWT 2.x semantics: a list-form aud claim is accepted iff the
+    configured audience is one of the entries.  Catches future PyJWT upgrades
+    that change this behaviour.
+    """
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    multi_aud_token, public_key = _build_aud_test_token(
+        ["worldview-internal", "other-audience"],
+        private_key=private_key,
+    )
+
+    mock_app = Starlette()
+    mock_app.state._internal_jwt_public_key = public_key
+    # No Valkey wired — alert middleware needs valkey set on app.state.
+    from unittest.mock import AsyncMock
+
+    mock_valkey = AsyncMock()
+    mock_valkey.set_nx = AsyncMock(return_value=True)
+    mock_app.state.valkey = mock_valkey
+
+    mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
+    mw._public_key = public_key
+
+    called: list[bool] = []
+
+    async def _ok(req: Request) -> Response:
+        called.append(True)
+        return Response("ok", status_code=200)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/alerts/pending",
+        "query_string": b"",
+        "headers": [(b"x-internal-jwt", multi_aud_token.encode())],
+        "app": mock_app,
+    }
+    result = await mw.dispatch(Request(scope), _ok)
+
+    # Expected aud is in the list → 200, route handler called
+    assert result.status_code == 200
+    assert called
