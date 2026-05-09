@@ -198,21 +198,28 @@ class TestSearchDocumentsUseCase:
 
     @pytest.mark.asyncio
     async def test_execute_handles_s7_partial_response(self) -> None:
-        """When S7 omits an entity_id, name falls back to str(entity_id)."""
+        """When S7 omits an entity_id, that facet is DROPPED (I-001).
+
+        Orphaned entity_mentions (resolved_entity_id in NLP DB with no
+        matching canonical_entity in KG) are silently skipped.  Showing a
+        raw UUID string in the facet sidebar is worse than omitting the facet.
+        Only fully-resolved facets are included in the response.
+        """
         hit = _make_hit()
         facet1 = _make_facet(entity_id=_ENTITY_ID_1)
         facet2 = _make_facet(entity_id=_ENTITY_ID_2)
         repo = _make_repo(hits=[hit], total=1, facets=[facet1, facet2])
         s5 = _make_s5()
-        # S7 only returns data for ENTITY_ID_1
+        # S7 only returns data for ENTITY_ID_1 — ENTITY_ID_2 is orphaned
         s7 = _make_s7({_ENTITY_ID_1: {"entity_id": str(_ENTITY_ID_1), "canonical_name": "Apple Inc"}})
 
         uc = SearchDocumentsUseCase(repo=repo, s5_client=s5, s7_client=s7)
         resp = await uc.execute(_make_request())
 
+        # Only ENTITY_ID_1 should appear — ENTITY_ID_2 is dropped, not shown as UUID
+        assert len(resp.facets) == 1
         assert resp.facets[0].name == "Apple Inc"
-        # ENTITY_ID_2 missing → fallback is str(UUID)
-        assert resp.facets[1].name == str(_ENTITY_ID_2)
+        assert resp.facets[0].entity_id == _ENTITY_ID_1
 
     @pytest.mark.asyncio
     async def test_execute_runs_s5_and_s7_in_parallel(self) -> None:
@@ -319,7 +326,13 @@ class TestSearchDocumentsUseCase:
 
     @pytest.mark.asyncio
     async def test_execute_s7_exception_degrades_gracefully(self) -> None:
-        """If S7 raises an exception, facet name falls back to str(entity_id)."""
+        """If S7 raises an exception, all facets are dropped (I-001).
+
+        When S7 is fully unavailable (exception raised), s7_data degrades to {}.
+        Every facet is then unresolvable, so all are silently skipped rather
+        than emitting UUID strings.  The response still succeeds (no crash) with
+        an empty facets list — a graceful degradation.
+        """
         hit = _make_hit()
         facet = _make_facet(entity_id=_ENTITY_ID_1)
         repo = _make_repo(hits=[hit], total=1, facets=[facet])
@@ -328,5 +341,7 @@ class TestSearchDocumentsUseCase:
         s7.batch_get_entities = AsyncMock(side_effect=Exception("S7 down"))
 
         uc = SearchDocumentsUseCase(repo=repo, s5_client=s5, s7_client=s7)
+        # Must not raise — asyncio.gather catches it via return_exceptions=True
         resp = await uc.execute(_make_request())
-        assert resp.facets[0].name == str(_ENTITY_ID_1)
+        # Facets cannot be resolved without S7 → all dropped, not shown as UUIDs
+        assert resp.facets == []
