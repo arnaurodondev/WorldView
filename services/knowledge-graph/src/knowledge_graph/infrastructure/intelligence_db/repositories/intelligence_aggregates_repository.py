@@ -35,10 +35,19 @@ class IntelligenceAggregatesRepository:
         self,
         entity_id: UUID,
     ) -> dict[str, Any]:
-        """Return AVG confidence components and latest_evidence_at for an entity.
+        """Return mean confidence + latest_evidence_at + relation_count for an entity.
 
         Aggregates across all active (valid_to IS NULL) relations where the entity
-        appears as subject or object.  Extracts JSON paths from confidence_components.
+        appears as subject or object.
+
+        D-R3-001 / D-P1-002 fix (PLAN-0087, 2026-05-09): the relations table has
+        NO `confidence_components` JSONB column — PLAN-0074 Wave B designed it
+        but never migrated.  Read-side query now uses the scalar `confidence`
+        column for `mean_support` so the endpoint stops 500-ing.  The
+        corroboration/contradiction averages are returned as None until the
+        upstream populator (ConfidenceWorker) ships the JSONB column post-demo.
+        The dict shape is preserved for backward compatibility with callers
+        (`get_entity_intelligence` use case + `EntityIntelligencePublic`).
 
         Returns dict with keys:
             mean_support, mean_corroboration, mean_contradiction,
@@ -47,11 +56,9 @@ class IntelligenceAggregatesRepository:
         result = await self._session.execute(
             text("""
 SELECT
-    AVG((confidence_components->>'support')::float)      AS mean_support,
-    AVG((confidence_components->>'corroboration')::float) AS mean_corroboration,
-    AVG((confidence_components->>'contradiction')::float) AS mean_contradiction,
-    MAX(latest_evidence_at)                               AS latest_evidence_at,
-    COUNT(*)                                              AS relation_count
+    AVG(confidence)              AS mean_confidence,
+    MAX(latest_evidence_at)      AS latest_evidence_at,
+    COUNT(*)                     AS relation_count
 FROM relations
 WHERE (subject_entity_id = CAST(:entity_id AS uuid)
        OR object_entity_id = CAST(:entity_id AS uuid))
@@ -69,11 +76,14 @@ WHERE (subject_entity_id = CAST(:entity_id AS uuid)
                 "relation_count": 0,
             }
         return {
+            # `mean_support` now repurposed to mean overall confidence (the only
+            # scalar we have).  Pre-migration field kept for contract stability.
             "mean_support": float(row[0]) if row[0] is not None else None,
-            "mean_corroboration": float(row[1]) if row[1] is not None else None,
-            "mean_contradiction": float(row[2]) if row[2] is not None else None,
-            "latest_evidence_at": row[3],
-            "relation_count": int(row[4]) if row[4] is not None else 0,
+            # No JSONB column means we cannot decompose; return None.
+            "mean_corroboration": None,
+            "mean_contradiction": None,
+            "latest_evidence_at": row[1],
+            "relation_count": int(row[2]) if row[2] is not None else 0,
         }
 
     async def get_source_distribution(
