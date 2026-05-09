@@ -101,9 +101,13 @@ def _make_use_case(
     if uow_commit_raises is not None:
         _uow.commit = AsyncMock(side_effect=uow_commit_raises)
 
+    outbox = AsyncMock()
+    outbox.append = AsyncMock()
+
     uc = UploadTenantDocumentUseCase(
         upload_repo=upload_repo,
         dedup_repo=dedup_repo,
+        outbox=outbox,
         rate_limit=rate_limit,
         storage=storage,
         uow=_uow,

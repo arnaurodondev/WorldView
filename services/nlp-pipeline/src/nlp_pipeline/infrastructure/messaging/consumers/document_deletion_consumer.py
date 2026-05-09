@@ -85,6 +85,8 @@ class DocumentDeletionConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
 
     # ── ValkeyDedupMixin class attributes ────────────────────────────────────
     # Unique prefix prevents key collisions with other consumers' dedup sets.
+    _topic: ClassVar[str] = "content.document.deleted.v1"
+    _consumer_group: ClassVar[str] = "s6-document-deletion"
     _dedup_prefix: str = "nlp:dd:dedup"
     _dedup_ttl_seconds: ClassVar[int] = 86400  # 24 hours — matches topic retention
 

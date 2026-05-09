@@ -66,7 +66,7 @@ class DeleteTenantDocumentUseCase:
             NotFoundError:      Document does not exist or belongs to a different tenant.
             AlreadyDeletedError: Document is already in the DELETED state.
         """
-        from common.ids import new_uuid7  # type: ignore[import-untyped]
+        from common.ids import uuid5_from_parts  # type: ignore[import-untyped]
         from common.time import utc_now  # type: ignore[import-untyped]
 
         async with self._uow:
@@ -92,7 +92,7 @@ class DeleteTenantDocumentUseCase:
                 event_type="content.document.deleted",
                 topic="content.document.deleted.v1",
                 payload={
-                    "event_id": str(new_uuid7()),
+                    "event_id": uuid5_from_parts(str(doc_id), "content_document_deleted_v1"),
                     "event_type": "content.document.deleted",
                     "schema_version": 1,
                     "occurred_at": utc_now().isoformat(),
