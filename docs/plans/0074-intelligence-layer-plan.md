@@ -1,9 +1,9 @@
 # PLAN-0074 — Intelligence Layer
 
 > **PRD**: [docs/specs/0074-intelligence-layer.md](../specs/0074-intelligence-layer.md)
-> **Status**: in-progress
+> **Status**: completed
 > **Created**: 2026-05-05
-> **Last revised**: 2026-05-08 (Wave D — entity intelligence API endpoints committed; Waves A+B+C+D+E1+E2 done)
+> **Last revised**: 2026-05-08 (Wave H — 3-column intelligence page committed; ALL waves done: A+B+C+D+E1+E2+F+G+H)
 > **Owner**: Arnau Rodon
 > **Depends on**:
 > - PLAN-0073 (intelligence_db structured enrichment columns + `relation_type_registry` source fields + `relations.relation_source` — required before Wave A).
@@ -1248,7 +1248,9 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 ---
 
-# Wave H — Frontend 3-Column Intelligence Page
+# Wave H — Frontend 3-Column Intelligence Page ✅ DONE
+
+**Status**: DONE — committed 2026-05-08 (T-H-01 through T-H-07, 26 new vitest tests, 4 e2e tests).
 
 **Goal**: Implement the redesigned intelligence page per §11 ADR-0074-005 — 3 columns (graph 25% / intelligence tabs 45% / entity sidebar 30%) plus full-width collapsible chat. All client-side panel sync, no server round-trips per ADR-0074-006.
 **Depends on**: Wave G.
@@ -1264,7 +1266,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 ### Tasks
 
-#### T-H-01: TanStack Query hooks + types for new endpoints
+#### T-H-01: TanStack Query hooks + types for new endpoints ✅ DONE
 
 **Type**: impl
 **depends_on**: T-G-02, T-G-03, T-G-04
@@ -1285,7 +1287,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 **Heavy inline comments** required (user is new to Next.js — feedback memory).
 
-#### T-H-02: 3-column layout shell + `selectedEntityId` React context
+#### T-H-02: 3-column layout shell + `selectedEntityId` React context ✅ DONE
 
 **Type**: impl
 **depends_on**: T-H-01
@@ -1301,7 +1303,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 **Tests** (≥4 playwright + vitest): grid renders, context state changes propagate, resizable handles work.
 
-#### T-H-03: Column 1 — Cytoscape graph panel + node click → context update
+#### T-H-03: Column 1 — Cytoscape graph panel + node click → context update ✅ DONE
 
 **Type**: impl
 **depends_on**: T-H-02
@@ -1317,7 +1319,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 **Tests** (≥3): node click updates context, depth control re-fetches, focus highlight applied.
 
-#### T-H-04: Column 2 — Intelligence tabs (Relations / Evidence / Paths / Narrative History)
+#### T-H-04: Column 2 — Intelligence tabs (Relations / Evidence / Paths / Narrative History) ✅ DONE
 
 **Type**: impl
 **depends_on**: T-H-02, T-H-01
@@ -1333,7 +1335,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 **Tests** (≥8 vitest): tab switching, relations table filtering by selected node, paths empty state, narrative history pagination, generation reason badges.
 
-#### T-H-05: Column 3 — Entity Sidebar (Narrative + Health + Source Distribution + Confidence Trend)
+#### T-H-05: Column 3 — Entity Sidebar (Narrative + Health + Source Distribution + Confidence Trend) ✅ DONE
 
 **Type**: impl
 **depends_on**: T-H-02, T-H-01
@@ -1351,7 +1353,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 **Tests** (≥6): renders for anchor, switches on context change, regenerate trigger, 429 toast displayed, sparkline renders 90 points, color thresholds correct.
 
-#### T-H-06: Full-width collapsible Entity Chat panel (SSE)
+#### T-H-06: Full-width collapsible Entity Chat panel (SSE) ✅ DONE
 
 **Type**: impl
 **depends_on**: T-H-02, T-H-01
@@ -1368,7 +1370,7 @@ Migration numbers are **hard-reserved** per I-9 (R32). At plan-write time (2026-
 
 **Tests** (≥5 vitest + playwright): SSE stream renders tokens, multi-turn keeps conversation_id, sources displayed, collapsed/expanded toggle, empty state.
 
-#### T-H-07: Integration polish — accessibility, loading skeletons, error boundaries
+#### T-H-07: Integration polish — accessibility, loading skeletons, error boundaries ✅ DONE
 
 **Type**: impl
 **depends_on**: T-H-03, T-H-04, T-H-05, T-H-06
