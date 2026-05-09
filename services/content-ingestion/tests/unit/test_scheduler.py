@@ -25,7 +25,8 @@ class TestAdapterRegistry:
     # Source types whose adapters are registered in ADAPTER_REGISTRY.
     # MANUAL: not polled — delivered via webhook/submit endpoint, no adapter needed.
     # POLYMARKET: adapter added in Wave A-2 (PLAN-0019); excluded here until then.
-    _NO_ADAPTER: ClassVar[set[SourceType]] = {SourceType.MANUAL, SourceType.POLYMARKET}
+    # TENANT_UPLOAD: not polled — documents arrive via REST upload API (PLAN-0086).
+    _NO_ADAPTER: ClassVar[set[SourceType]] = {SourceType.MANUAL, SourceType.POLYMARKET, SourceType.TENANT_UPLOAD}
 
     def test_all_source_types_have_adapters(self) -> None:
         """Every SourceType except non-polled types should have an adapter."""
