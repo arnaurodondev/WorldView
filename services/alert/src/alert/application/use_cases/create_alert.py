@@ -30,7 +30,7 @@ from common.time import utc_now  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from alert.application.ports.repositories import AlertSaveRepositoryPort, OutboxRepositoryPort
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -155,11 +155,16 @@ class CreateAlertUseCase:
     pattern used by other S10 use cases).
     """
 
-    def __init__(self, session: AsyncSession) -> None:
-        # WHY store session (not factory): the caller (route dependency) already
-        # created the session; we must reuse it so the flush + commit pair stay
-        # inside the same transaction context (R8).
-        self._session = session
+    def __init__(
+        self,
+        alert_repo: AlertSaveRepositoryPort,
+        outbox_repo: OutboxRepositoryPort,
+    ) -> None:
+        # R25: depend on port interfaces (ABCs), not concrete infrastructure classes.
+        # Concrete repos (AlertRepository, OutboxRepository) are injected by the
+        # route-layer DI factory (api/dependencies.py), never imported here.
+        self._alert_repo = alert_repo
+        self._outbox_repo = outbox_repo
 
     async def execute(self, req: CreateAlertRequest) -> CreateAlertResult:
         """Create an alert rule and enqueue an outbox event in a single transaction.
@@ -171,15 +176,13 @@ class CreateAlertUseCase:
           3. Persist Alert row via AlertRepository.save() (flush, no commit yet).
           4. Serialise alert.created.v1 Avro bytes.
           5. Persist OutboxEvent row via OutboxRepository.append() (flush).
-          6. Commit the session — both rows land atomically (R8).
+          6. Session commit is delegated to the caller (route layer) — the
+             use case holds no session reference and never calls commit() directly.
 
         Returns CreateAlertResult on success.
         Raises DuplicateAlertError if a matching dedup_key already exists.
         """
         import uuid as _uuid
-
-        from alert.infrastructure.db.repositories.alert import AlertRepository
-        from alert.infrastructure.db.repositories.outbox import OutboxRepository
 
         now = utc_now()
 
@@ -215,8 +218,7 @@ class CreateAlertUseCase:
         )
 
         # ── 2. Persist Alert row (flush but do not commit yet) ────────────────
-        alert_repo = AlertRepository(self._session)
-        await alert_repo.save(alert)
+        await self._alert_repo.save(alert)
 
         # ── 3. Serialise Avro event bytes ─────────────────────────────────────
         try:
@@ -247,11 +249,12 @@ class CreateAlertUseCase:
             partition_key=str(alert.alert_id),
             payload_avro=avro_bytes,
         )
-        outbox_repo = OutboxRepository(self._session)
-        await outbox_repo.append(outbox_event)
+        await self._outbox_repo.append(outbox_event)
 
-        # ── 5. Commit — both rows land atomically (R8) ────────────────────────
-        await self._session.commit()
+        # ── 5. Commit is the caller's responsibility ───────────────────────────
+        # The route-layer dependency (get_create_alert_uc) commits via the
+        # write-session context manager after this method returns. Keeping commit
+        # out of the use case preserves testability and R8 atomicity.
 
         logger.info(  # type: ignore[no-any-return]
             "alert_created",
