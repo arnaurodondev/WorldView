@@ -382,21 +382,51 @@ class PortfolioSnapshotWorker:
                 try:
                     async with SqlAlchemyUnitOfWork(self._session_factory) as uow:
                         # Idempotency: skip if a row already exists for this
-                        # (portfolio, date). The repo's ``list_range`` over
-                        # a single day is the cheapest existence probe we
-                        # have without adding a new port method.
+                        # (portfolio, date) AND that row was written with full
+                        # price coverage. The repo's ``list_range`` over a
+                        # single day is the cheapest existence probe we have
+                        # without adding a new port method.
+                        #
+                        # 2026-05-09 audit fix (F-H-1): the previous code
+                        # skipped on ANY existing row, including those written
+                        # with ``data_quality='partial_prices'`` (cost-basis
+                        # fallback because the price client was unreachable
+                        # at startup). That produced a permanent flat-line
+                        # equity curve at cost basis even after S3 came back
+                        # — the row was never recomputed because the skip
+                        # ran before the price-fetch attempt. The fix: only
+                        # skip rows whose data_quality is OK; partial rows
+                        # are recomputed every catch-up so a transient S3
+                        # outage at startup self-heals on the next worker
+                        # restart (or the next 21:30 UTC scheduled pass).
+                        # ``upsert`` is idempotent so re-writing an OK row
+                        # would be safe but wasteful — the OK guard keeps
+                        # catch-up cheap once the time-series is healthy.
                         existing = await uow.portfolio_value_snapshots.list_range(
                             portfolio.id,
                             d,
                             d,
                         )
-                        if existing:
+                        if existing and existing[0].data_quality == DATA_QUALITY_OK:
                             logger.info(  # type: ignore[no-any-return]
-                                "portfolio_snapshot_catchup_skip_existing",
+                                "portfolio_snapshot_catchup_skip_existing_ok",
                                 portfolio_id=str(portfolio.id),
                                 date=d.isoformat(),
                             )
                             continue
+                        if existing:
+                            # Existing row carries data_quality != 'ok' (e.g.
+                            # 'partial_prices' from a previous catch-up where
+                            # the price client was unreachable). Log the retry
+                            # so operators can correlate it with upstream
+                            # health changes; the upsert below overwrites the
+                            # row in place.
+                            logger.info(  # type: ignore[no-any-return]
+                                "portfolio_snapshot_catchup_retry_partial",
+                                portfolio_id=str(portfolio.id),
+                                date=d.isoformat(),
+                                prior_data_quality=existing[0].data_quality,
+                            )
 
                         # F-210 (QA iter-2): skip empty portfolios in catch-up
                         # too — same rationale as the steady-state pass.
