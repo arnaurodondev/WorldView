@@ -106,18 +106,14 @@ def _relation_response(
     if not confidence_breakdown:
         return resp
 
-    # Extract confidence_components JSONB sub-fields (Wave B populated columns)
-    cc = row.get("confidence_components")
+    # D-R3-001 / D-P1-002 (PLAN-0087, 2026-05-09): the relations table has no
+    # `confidence_components` JSONB column.  PLAN-0074 Wave B designed it but
+    # never migrated.  Fall back to None for the sub-scores; clients see the
+    # scalar `confidence` field instead.  TODO post-demo: ship the migration
+    # + the upstream populator (ConfidenceWorker) so the breakdown becomes real.
     support: float | None = None
     corroboration: float | None = None
     contradiction: float | None = None
-    if isinstance(cc, dict):
-        _sup = cc.get("support")
-        _cor = cc.get("corroboration")
-        _con = cc.get("contradiction")
-        support = float(_sup) if _sup is not None else None
-        corroboration = float(_cor) if _cor is not None else None
-        contradiction = float(_con) if _con is not None else None
 
     return RelationResponse(
         relation_id=resp.relation_id,
