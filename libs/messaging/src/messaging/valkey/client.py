@@ -331,7 +331,7 @@ class ValkeyClient:
         Returns:
             Whatever the Lua script returns (int, str, list, or nil → ``None``).
         """
-        return await self._redis.eval(script, len(keys), *keys, *args)  # type: ignore[no-any-return]
+        return await self._redis.eval(script, len(keys), *keys, *args)  # type: ignore[no-any-return, misc]
 
     @asynccontextmanager  # type: ignore[misc]
     async def pipeline(self, *, transaction: bool = False) -> Any:

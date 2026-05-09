@@ -22,7 +22,7 @@
 | PLAN-0001-D | **S9 API Gateway: External Ingestion + Intelligence Query Proxy**. 2 waves. **Next: Wave 1**. | draft | 0/2 | PLAN-0001-B ✓ | 2026-03-25 |
 | PLAN-0014 | **Claude Code Source Adaptations** — hooks, subagent isolation, memory scopes, S8 RAG pipeline. 6 waves. | pending | 0/6 | none | 2026-04-01 |
 
-| PLAN-0086 | **Multi-Tenant Content Pipeline Isolation & Tenant Document Ingestion** — All implementation waves done. Avro contract tests pass (10 new tests in `libs/contracts/tests/test_avro_tenant_schemas.py`). Unit tests pass: 716 content-ingestion, 317 content-store, 846 nlp-pipeline, 807 rag-chat. Integration tests scaffolded as skipped stubs (require live infra for G-1). Pre-existing fixes: local Avro schema copy sync (`tenant_id`), `TENANT_UPLOAD` added to scheduler no-adapter set. **Next: QA pass**. | in-progress | 10/10 | none | 2026-05-08 |
+| PLAN-0086 | **Multi-Tenant Content Pipeline Isolation & Tenant Document Ingestion** — COMPLETE. All 10 implementation waves + 5-agent QA pass + 8-issue bug fix commit (ab29049b). Critical fixes: pipeline trigger gap (outbox event in upload use case), _search_sections tenant filter (HR-053 CRIT-1), X-Tenant-ID header precedence, deterministic delete event_id, set_failed port/repo, Docker Compose container for deletion consumer. 844 content-ingestion + 844 nlp-pipeline unit tests pass. BP-432..434 added. | completed | 10/10 | none | 2026-05-08 |
 
 <!-- New plans are appended here by the /plan skill -->
 

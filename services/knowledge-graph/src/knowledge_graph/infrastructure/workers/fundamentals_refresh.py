@@ -105,7 +105,7 @@ def _system_jwt_headers(private_key_pem: str = "") -> dict[str, str]:
         from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
         private_key = load_pem_private_key(private_key_pem.encode(), password=None)
-        token = jwt.encode(payload, private_key, algorithm="RS256")
+        token = jwt.encode(payload, private_key, algorithm="RS256")  # type: ignore[arg-type]
     else:
         # Fallback: HS256 dev token — only accepted when skip_verification=True
         token = jwt.encode(payload, _INTERNAL_JWT_DEV_KEY, algorithm="HS256")
