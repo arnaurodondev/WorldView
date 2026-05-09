@@ -39,6 +39,8 @@ import { useAuth } from "@/hooks/useAuth";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- WHY: false positive; DataTimestamp is used inside conditional JSX at the snapshot footer (line ~294). ESLint's TypeScript plugin misses usage inside {condition && (...<DataTimestamp/>...)} patterns in some Next.js versions.
 import { DataTimestamp } from "@/components/ui/data-timestamp";
 import { formatMarketCap, formatRatio, formatPercent } from "@/lib/utils";
+// HF-10: locale-grouped EPS via shared formatter.
+import { formatPrice } from "@/lib/format";
 import { WeekRangeBar } from "@/components/instrument/52WeekRangeBar";
 import type { Fundamentals, FundamentalsSnapshot, FundamentalsSectionResponse, Instrument } from "@/types/api";
 
@@ -264,7 +266,7 @@ export function OverviewSidebarMetrics({
           earnings records. Null = not yet backfilled or ETF with no EPS. */}
       <MetricRow
         label="EPS (TTM)"
-        value={snapshot?.eps_ttm != null ? `$${snapshot.eps_ttm.toFixed(2)}` : "—"}
+        value={formatPrice(snapshot?.eps_ttm)}
         valueClass={
           snapshot?.eps_ttm != null
             ? snapshot.eps_ttm >= 0 ? "text-positive" : "text-negative"

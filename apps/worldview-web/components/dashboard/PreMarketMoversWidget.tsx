@@ -28,6 +28,8 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { cn } from "@/lib/utils";
+// HF-10: locale-grouped USD price ("$4,892.11").
+import { formatPrice } from "@/lib/format";
 import type { Mover } from "@/types/api";
 // PLAN-0048 Wave F-2: shared sector pill list (re-used by F-1 SectorHeatmap and
 // future Wave E WatchlistMoversWidget) so all three widgets keep identical

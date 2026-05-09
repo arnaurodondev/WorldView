@@ -65,6 +65,10 @@ import {
   priceChangeClass,
   formatRelativeTime,
 } from "@/lib/utils";
+// formatPrice provides locale-grouped USD output ("$4,892.11" not "$4892.11").
+// HF-10: bare `${v.toFixed(2)}` lacks thousands separators and looks amateur
+// in the analyst-grade UI. The shared helper handles null/NaN and currency code.
+import { formatPrice } from "@/lib/format";
 import type {
   Fundamentals,
   Instrument,
@@ -177,7 +181,7 @@ function OverviewSummaryZone({
       {/* ── Row 1: current price + daily return ──────────────────────────── */}
       <div className="flex items-baseline gap-2 mb-1">
         <span className="font-mono text-[14px] tabular-nums font-semibold text-foreground">
-          {currentPrice != null ? `$${currentPrice.toFixed(2)}` : "—"}
+          {formatPrice(currentPrice)}
         </span>
         {dailyReturn != null && (
           <span
