@@ -416,7 +416,7 @@ function MoverRow({ mover, side }: MoverRowProps) {
       {/* Price — right-aligned in a fixed slot; muted so % change remains primary */}
       {/* WHY text-muted-foreground: price is context, change% is the signal */}
       <span className="w-[48px] shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-        {mover.price != null ? `$${mover.price.toFixed(2)}` : "—"}
+        {formatPrice(mover.price)}
       </span>
 
       {/* Spacer — pushes the change% to the right edge */}

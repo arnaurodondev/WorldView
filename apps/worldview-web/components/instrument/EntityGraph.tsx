@@ -662,7 +662,7 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search nodes…"
           data-testid="node-search"
-          className="h-7 rounded-[2px] border border-border/40 bg-card px-2 text-[11px] text-foreground placeholder:text-muted-foreground/50 focus:border-border focus:outline-none"
+          className="h-7 rounded-[2px] border border-border/40 bg-card px-2 text-[11px] text-foreground placeholder:text-muted-foreground/50 focus:border-border focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
 
         {/* ── Layout switcher ────────────────────────────────────────────────── */}

@@ -1,13 +1,24 @@
 /**
  * Architecture regression test — PLAN-0087 D-F3-001/002 Terminal Dark token
- * sweep. Locks in that no source file under app/, components/, lib/, hooks/,
- * features/, or contexts/ uses retired Bloomberg-Dark / Midnight-Pro palette
- * hex codes inline OR off-palette Tailwind shorthand colour classes.
+ * sweep, extended in pass-2 HF-10 to also catch off-token corner radii and
+ * unformatted currency literals.
+ *
+ * Locks in that no source file under app/, components/, lib/, hooks/,
+ * features/, or contexts/ uses:
+ *   1. Retired Bloomberg-Dark / Midnight-Pro palette hex codes (D-F3-001).
+ *   2. Off-palette Tailwind shorthand colour classes (D-F3-002).
+ *   3. Non-2px explicit `rounded-[Npx]` radii ≥ 3px (HF-10 1F).
+ *      Sub-2px micro-indicators (rounded-[1px]) are allowed for sparkline
+ *      bars and progress dots; 2px is the canonical token; ≥ 3px is drift.
+ *   4. Hand-built currency literals `$${value.toFixed(N)}` (HF-10 1A).
+ *      All visible USD must go through formatPrice / formatCompactCurrency
+ *      which apply locale grouping ("$4,892.11" not "$4892.11").
  *
  * WHY this exists: D-F3-001/002 fixed 19 inline-style hex sites and 22 off-
- * palette Tailwind shorthand sites. Without a regression test, an analyst-
- * ready PR could re-introduce them through copy-paste from older code or
- * design references. This test runs in CI and fails any future drift.
+ * palette Tailwind shorthand sites; HF-10 fixed 17 currency sites and 4
+ * radius sites. Without a regression test, an analyst-ready PR could re-
+ * introduce them through copy-paste from older code or design references.
+ * This test runs in CI and fails any future drift.
  *
  * SCOPE: scans the four app surface roots only — never node_modules,
  * .next, public/, scripts/. Avoids the architecture-test cost of walking
@@ -55,6 +66,24 @@ const FORBIDDEN_HEX = /(#1A2030|#6B7585|#0A0E14|#111820|#E0DDD4|#0EA5E9)\b/i;
 // stack post-fix), gray-* (replaced project-wide), slate-* (replaced).
 const FORBIDDEN_TW =
   /\b(text|bg|border|ring|from|to|via|divide)-(amber|green|red|blue|emerald|violet|cyan|orange|purple|zinc|sky|rose|pink|yellow|indigo|slate|gray)-[0-9]/;
+
+// HF-10 (1F): non-canonical explicit corner radii. The design system uses
+// rounded-[2px] as the single explicit-pixel token; rounded-[1px] is allowed
+// for micro-indicators (sparkline bars, 3px progress slivers). Anything 3px
+// or larger is drift — the canvas redesign is a sharp 2px terminal aesthetic.
+//
+// WHY a literal alternation (not a negative-lookahead): Node's RegExp engine
+// supports lookaheads, but a literal alternation `\[(3|4|5|6|7|8|9|[1-9][0-9]+)px\]`
+// is more transparent in error output and matches engine support across all
+// our test runtimes (Vitest + jsdom + node:fs).
+const FORBIDDEN_RADIUS = /rounded-\[(?:[3-9]|[1-9][0-9]+)px\]/;
+
+// HF-10 (1A): hand-built USD currency literals — must go through formatPrice
+// / formatCompactCurrency for locale grouping. Matches `$${anything.toFixed(`
+// in template-literal syntax. Allowing one site per intentional exception via
+// the file allowlist below. Note the double-`$` is the literal escape-then-
+// interpolation pattern in TS template strings.
+const FORBIDDEN_CURRENCY = /\$\$\{[^}]+\.toFixed\(/;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -124,7 +153,18 @@ function findOffences(): { file: string; line: number; text: string }[] {
       for (let i = 0; i < strippedLines.length; i++) {
         const codeLine = strippedLines[i] ?? "";
         if (codeLine.trim().length === 0) continue;
-        if (FORBIDDEN_HEX.test(codeLine) || FORBIDDEN_TW.test(codeLine)) {
+        // HF-10: combined detector — any one of the four checks triggers an
+        // offence. Currency check skips the test file itself (which embeds
+        // the forbidden pattern in regex string form to assert the rule).
+        const isCurrencyOffence =
+          FORBIDDEN_CURRENCY.test(codeLine) &&
+          !rel.endsWith("no-off-palette-colors.test.ts");
+        if (
+          FORBIDDEN_HEX.test(codeLine) ||
+          FORBIDDEN_TW.test(codeLine) ||
+          FORBIDDEN_RADIUS.test(codeLine) ||
+          isCurrencyOffence
+        ) {
           offences.push({
             file: rel,
             line: i + 1,
@@ -140,8 +180,8 @@ function findOffences(): { file: string; line: number; text: string }[] {
 
 // ── Test ─────────────────────────────────────────────────────────────────
 
-describe("architecture: no off-palette colors in source", () => {
-  it("contains no retired hex codes or off-palette Tailwind shorthand", () => {
+describe("architecture: no off-palette colors / radii / currency in source", () => {
+  it("contains no retired hex codes, off-palette Tailwind, off-token radii, or hand-built currency", () => {
     const offences = findOffences();
     if (offences.length > 0) {
       // Print a readable failure so future drift is easy to spot.
@@ -149,7 +189,7 @@ describe("architecture: no off-palette colors in source", () => {
         .map((o) => `${o.file}:${o.line}  ${o.text}`)
         .join("\n");
       throw new Error(
-        `Found ${offences.length} off-palette colour offences:\n${detail}`,
+        `Found ${offences.length} architecture offences (palette / radius / currency):\n${detail}`,
       );
     }
     expect(offences).toEqual([]);

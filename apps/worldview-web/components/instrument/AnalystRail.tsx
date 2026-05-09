@@ -29,9 +29,9 @@ import { X, Send, Bot } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-// HF-10: visible price strip uses formatPrice for locale-grouped output.
-// The system-prompt builder above keeps `${price.toFixed(2)}` because
-// that string is sent to the LLM (commas would only confuse it).
+// HF-10: shared price formatter for locale-grouped output ("$4,892.11").
+// Used both in the visible context strip AND the LLM system-prompt builder
+// so the analyst and the model see the same human-readable number.
 import { formatPrice } from "@/lib/format";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -62,8 +62,9 @@ function buildSystemContext({
   pe,
 }: Pick<AnalystRailProps, "ticker" | "price" | "priceChangePct" | "pe">): string {
   const sign = priceChangePct != null && priceChangePct >= 0 ? "+" : "";
+  // HF-10: formatPrice gives the LLM a locale-grouped, null-safe price string.
   const pricePart = price != null
-    ? ` at $${price.toFixed(2)}${priceChangePct != null ? ` (${sign}${priceChangePct.toFixed(2)}%)` : ""}`
+    ? ` at ${formatPrice(price)}${priceChangePct != null ? ` (${sign}${priceChangePct.toFixed(2)}%)` : ""}`
     : "";
   const pePart = pe != null ? ` P/E: ${pe.toFixed(1)}.` : "";
   return `User is viewing ${ticker}${pricePart}.${pePart} Answer in the context of this instrument.`;

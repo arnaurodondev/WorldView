@@ -174,12 +174,21 @@ function FlashOverlayContent({ alert, onDismiss }: FlashOverlayContentProps) {
           </p>
 
           {/* Metadata */}
+          {/* HF-10 fix: previously we rendered alert.entity_id (a raw KG UUID),
+              which is meaningless to a human reader and looks like a leaked
+              database identifier on demo. Prefer entity_symbol (ticker like
+              "AAPL") → entity_name (canonical name like "Apple Inc.") →
+              "Unknown ticker" honest-empty-state. We only show the chip when
+              entity_id is present to preserve the "no entity = no chip"
+              invariant of the original layout. */}
           <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
             {alert.alert_type && (
               <span>{alert.alert_type.replace(/_/g, " ")}</span>
             )}
             {alert.entity_id && (
-              <span className="font-mono">{alert.entity_id}</span>
+              <span className="font-mono">
+                {alert.entity_symbol ?? alert.entity_name ?? "Unknown ticker"}
+              </span>
             )}
             {/* WHY optional guard: a malformed WebSocket payload could arrive with
                 created_at=undefined — this guard prevents RangeError from crashing the overlay */}
