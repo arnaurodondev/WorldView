@@ -261,6 +261,12 @@ class ToolExecutor:
         self._internal_jwt = internal_jwt
         self._entity_context = entity_context
         self._timeout = timeout
+        # PLAN-0082 Wave B: per-session rate limit for create_alert (≤5/session).
+        # WHY session limit: the LLM could in principle loop and emit many create_alert
+        # calls in a single conversation turn. Limiting to 5 prevents runaway alert
+        # creation and keeps the UX intention clear — this is a deliberate action,
+        # not a background task.
+        self._create_alert_count: int = 0
 
     async def execute(self, tool_call: ToolUseBlock) -> RetrievedItem | list[RetrievedItem] | None:
         """Execute a single tool call and return a RetrievedItem, list, or None.
@@ -321,6 +327,8 @@ class ToolExecutor:
                 result = await self._handle_get_earnings_calendar(tool_call, **tool_call.input)
             elif tool_call.name == "get_alerts":
                 result = await self._handle_get_alerts(tool_call)
+            elif tool_call.name == "create_alert":
+                result = await self._handle_create_alert(tool_call, **tool_call.input)
             else:
                 # Registry had the spec but we have no handler — shouldn't happen
                 # if build_default_registry() is used; guard logs the gap.
@@ -1983,6 +1991,130 @@ class ToolExecutor:
         )
         return items
 
+    # ── S10 write action handlers (PLAN-0082 Wave B) ──────────────────────────
+
+    async def _handle_create_alert(
+        self,
+        tool_call: ToolUseBlock,
+        entity_id: str = "",
+        condition: str = "",
+        threshold: dict | None = None,
+        severity: str = "low",
+        **_: Any,
+    ) -> RetrievedItem | None:
+        """Create a user-initiated alert rule via S10 (PLAN-0082 Wave B).
+
+        CONFIRMATION FLOW: this handler does NOT execute the alert creation
+        directly.  Instead it returns a special ``action_pending`` RetrievedItem
+        that signals to the ChatPipeline that user confirmation is required
+        before the action is executed.
+
+        The confirmation flow:
+          1. LLM emits a ``create_alert`` tool call.
+          2. This handler is called; it validates inputs and returns an
+             ``action_pending`` RetrievedItem with a generated ``proposal_id``.
+          3. The orchestrator detects the ``action_pending`` item type and emits
+             a ``pending_action`` SSE event with the proposal_id.
+          4. The frontend shows a confirmation modal.
+          5. The user confirms → frontend calls POST /v1/chat/proposals/{id}/confirm.
+          6. The proposal endpoint calls S10 directly and emits ``action_executed``.
+
+        RATE LIMIT: ≤5 create_alert calls per session. Exceeding the limit
+        returns None (no confirmation offered) so the LLM receives an empty
+        result and should not retry.
+
+        WHY NOT EXECUTE DIRECTLY: write actions must never be auto-executed
+        without user consent — doing so would be a UX footgun and a security
+        issue if an adversarial query triggers alert creation.
+
+        R25: depends only on S10Port Protocol — no concrete infra imports.
+        R9:  returns None on missing port, missing auth, rate limit, or bad input.
+        """
+        if self._s10 is None:
+            log.warning("tool_handler_missing_port", tool="create_alert", port="s10")
+            return None
+
+        # Auth guard: user_id and tenant_id are required (resolved from JWT).
+        if self._user_id is None or self._tenant_id is None:
+            log.warning(
+                "tool_no_auth_context",
+                tool="create_alert",
+                user_id_missing=self._user_id is None,
+                tenant_id_missing=self._tenant_id is None,
+            )
+            return None
+
+        # Per-session rate limit: ≤5 create_alert calls.
+        _max_create_alert = 5
+        if self._create_alert_count >= _max_create_alert:
+            log.warning(
+                "create_alert_rate_limit_exceeded",
+                count=self._create_alert_count,
+                limit=_max_create_alert,
+            )
+            return None
+
+        # Input validation: both entity_id and condition are required.
+        if not entity_id or not condition:
+            log.warning(
+                "tool_no_data",
+                tool="create_alert",
+                reason="missing_entity_id_or_condition",
+            )
+            return None
+
+        # Increment session counter.
+        self._create_alert_count += 1
+
+        # Generate a proposal_id that the frontend will send back on confirm.
+        # WHY UUIDv7: consistent with all other IDs in this codebase (R10).
+        from common.ids import new_uuid7  # type: ignore[import-untyped]
+
+        proposal_id = str(new_uuid7())
+
+        threshold_dict: dict[str, Any] = threshold or {}
+
+        # Serialise proposal params as JSON text for LLM context injection.
+        # The LLM receives this text and can reference the pending action.
+        import json as _json
+
+        params_text = _json.dumps(
+            {
+                "proposal_id": proposal_id,
+                "entity_id": entity_id,
+                "condition": condition,
+                "threshold": threshold_dict,
+                "severity": severity,
+            }
+        )
+
+        log.info(
+            "create_alert_proposal_created",
+            proposal_id=proposal_id,
+            entity_id=entity_id,
+            condition=condition,
+            user_id=str(self._user_id),
+            tenant_id=str(self._tenant_id),
+        )
+
+        # Return a special action_pending RetrievedItem.  The orchestrator
+        # detects item_type == action_pending and emits the pending_action SSE.
+        return RetrievedItem.create(
+            item_id=f"tool:create_alert:{proposal_id}",
+            item_type=ItemType.action_pending,
+            text=params_text[:_TOOL_RESULT_MAX_CHARS],
+            score=1.0,  # user-initiated action — maximally relevant
+            trust_weight=1.0,
+            source_type="action_pending",
+            citation_meta=CitationMeta(
+                title="Pending alert creation",
+                url=None,
+                source_name="alert_service",
+                published_at=None,
+                entity_name=None,
+            ),
+        )
+
     # ── Formatters ────────────────────────────────────────────────────────────
 
     def _format_price_table(
@@ -2041,9 +2173,9 @@ class ToolExecutor:
 
 
 def build_default_registry() -> ToolRegistry:
-    """Factory: create a ToolRegistry with all 21 tools registered.
+    """Factory: create a ToolRegistry with all 22 tools registered.
 
-    Breakdown: 10 v1 + 4 PLAN-0080 v2 + 6 PLAN-0081 v3 + 1 PLAN-0082 v4.
+    Breakdown: 10 v1 + 4 PLAN-0080 v2 + 6 PLAN-0081 v3 + 2 PLAN-0082 v4.
 
     Called by api/dependencies.py to wire the ToolExecutor at startup.
     The handlers registered here are placeholder stubs — the actual execution
@@ -2194,10 +2326,12 @@ def build_default_registry() -> ToolRegistry:
             handler=lambda **_: None,
         )
 
-    # PLAN-0082 Wave A: register 1 action tool (get_alerts).
+    # PLAN-0082 Wave A + Wave B: register 2 action tools (get_alerts, create_alert).
     # Calls S9-proxied S10 alert endpoints (R14 compliance).
+    # create_alert requires user confirmation before execution (requires_confirmation=true).
     _action_tool_names = [
         "get_alerts",
+        "create_alert",
     ]
     for tool_name in _action_tool_names:
         registry.register(

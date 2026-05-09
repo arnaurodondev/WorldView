@@ -1,6 +1,7 @@
 """Alert service REST and WebSocket routes.
 
 Endpoints:
+  POST   /api/v1/alerts                           — create a user-initiated alert rule (PLAN-0082 Wave B)
   GET    /api/v1/alerts/pending                   — list unacknowledged alerts for the authenticated user
   DELETE /api/v1/alerts/{alert_id}/ack            — acknowledge a per-user pending alert
   PATCH  /api/v1/alerts/{alert_id}/acknowledge    — tenant-level alert ack (PLAN-0051 T-D-4-02)
@@ -20,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSock
 from alert.api.dependencies import (
     AckAlertUseCaseDep,
     AckUseCaseDep,
+    CreateAlertUseCaseDep,
     CurrentUserIdDep,
     GetPendingAlertsUseCaseDep,
     HistoryUseCaseDep,
@@ -28,12 +30,15 @@ from alert.api.dependencies import (
 )
 from alert.api.schemas import (
     AcknowledgeAlertRequest,
+    AlertCreatedResponse,
     AlertHistoryResponse,
     AlertResponse,
+    CreateAlertRequest,
     PendingAlertResponse,
     PendingAlertsResponse,
     SnoozeAlertRequest,
 )
+from alert.application.use_cases.create_alert import CreateAlertRequest as CreateAlertInput
 from alert.domain.entities import Alert
 from alert.domain.enums import AlertSeverity
 from observability import get_logger  # type: ignore[import-untyped]
@@ -100,6 +105,69 @@ async def get_pending_alerts(
         total=len(alert_responses),
         limit=limit,
         offset=offset,
+    )
+
+
+# ── REST: POST /api/v1/alerts ────────────────────────────────────────────────
+
+
+@router.post("/alerts", response_model=AlertCreatedResponse, status_code=201)
+async def create_alert(
+    body: CreateAlertRequest,
+    uc: CreateAlertUseCaseDep,
+    tenant_user: TenantUserDep,
+) -> AlertCreatedResponse:
+    """Create a user-initiated alert rule (PLAN-0082 Wave B).
+
+    Writes an Alert row + OutboxEvent in a single transaction (R8 outbox
+    pattern).  The OutboxDispatcher publishes ``alert.created.v1`` to Kafka
+    asynchronously so the response does not wait on Kafka availability.
+
+    ``tenant_id`` and ``user_id`` are extracted from the RS256 internal JWT
+    set by InternalJWTMiddleware (PRD-0025 §T-D-1-10).  Callers must never
+    pass them in the request body — they are injected from the verified JWT.
+
+    Returns 201 + AlertCreatedResponse on success.
+    Returns 409 if a duplicate alert rule exists for the same entity + condition
+    within the dedup window (5 minutes).
+    """
+    from alert.domain.errors import DuplicateAlertError
+
+    tenant_id, user_id = tenant_user
+
+    try:
+        result = await uc.execute(
+            CreateAlertInput(
+                user_id=str(user_id),
+                tenant_id=str(tenant_id),
+                entity_id=str(body.entity_id),
+                condition=body.condition,
+                threshold=dict(body.threshold),
+                severity=body.severity,
+                source="llm_tool",  # REST path — same source label as LLM tool path
+            )
+        )
+    except DuplicateAlertError:
+        raise HTTPException(
+            status_code=409,
+            detail="A duplicate alert rule for this entity and condition already exists",
+        ) from None
+
+    logger.info(  # type: ignore[no-any-return]
+        "alert_rule_created_via_api",
+        alert_id=result.alert_id,
+        entity_id=result.entity_id,
+        condition=result.condition,
+        user_id=str(user_id),
+        tenant_id=str(tenant_id),
+    )
+    return AlertCreatedResponse(
+        alert_id=UUID(result.alert_id),
+        entity_id=UUID(result.entity_id),
+        condition=result.condition,
+        threshold=result.threshold,
+        severity=result.severity,
+        created_at=result.created_at,
     )
 
 

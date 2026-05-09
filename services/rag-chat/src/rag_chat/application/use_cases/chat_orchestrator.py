@@ -245,6 +245,36 @@ class ChatOrchestratorUseCase:
                     _flat_items.append(_item)
             non_none_items = _flat_items
 
+            # PLAN-0082 Wave B: detect action_pending items from write-action tools.
+            # These items require user confirmation before execution.  We emit a
+            # pending_action SSE event for each one and remove them from the normal
+            # retrieval context (they must not go to the LLM for a second-turn answer).
+            from rag_chat.domain.enums import ItemType as _ItemType
+
+            _action_pending_items = [i for i in non_none_items if i.item_type == _ItemType.action_pending]
+            _retrieval_items = [i for i in non_none_items if i.item_type != _ItemType.action_pending]
+            non_none_items = _retrieval_items
+
+            for _pending in _action_pending_items:
+                # Extract proposal_id from the item text (JSON-encoded params).
+                try:
+                    _params = json.loads(_pending.text)
+                except Exception:
+                    _params = {}
+                _proposal_id = _params.get("proposal_id", str(_pending.item_id))
+                _tool_name = _pending.item_id.split(":")[1] if ":" in _pending.item_id else "create_alert"
+                _description = _params.get("description") or f"Create alert: {_params.get('condition', '?')}"
+                # Extract safe display params (never include user_id or tenant_id).
+                _display_params = {
+                    k: v for k, v in _params.items() if k in {"entity_id", "condition", "threshold", "severity"}
+                }
+                yield p.emitter.emit_pending_action(
+                    proposal_id=_proposal_id,
+                    tool_name=_tool_name,
+                    description=_description,
+                    params=_display_params,
+                )
+
             # Emit tool_result events and record per-tool metrics.
             for tc, _item in zip(tool_calls, tool_items, strict=False):
                 _item_list = _item if isinstance(_item, list) else ([_item] if _item is not None else [])

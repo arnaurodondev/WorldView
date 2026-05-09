@@ -43,3 +43,38 @@ export interface SlashTurn {
 
 /** Either a regular Message or a slash-command turn — what the log iterates over. */
 export type LogEntry = Message | SlashTurn;
+
+/**
+ * PendingActionEvent — received from the ``pending_action`` SSE event emitted
+ * by S8 when the LLM invokes a write-action tool (e.g. ``create_alert``).
+ *
+ * WHY A SEPARATE TYPE (not part of StreamingMessage):
+ * The ``pending_action`` event is a *blocking* event — the frontend must
+ * show a confirmation modal and wait for user input before the pipeline
+ * continues.  It is not a transient token or informational spinner.
+ * Giving it a first-class type makes it easy to pass around without
+ * casting or duck-typing at the call site.
+ *
+ * The ``params`` dict mirrors the ``params`` field from the SSE data
+ * (entity_id, condition, threshold, severity).  The frontend sends these
+ * back in the request body of POST /api/v1/chat/proposals/{id}/confirm.
+ */
+export interface PendingActionEvent {
+  /** Server-generated UUID — sent back as the path param on confirm. */
+  proposal_id: string;
+  /** Internal tool name, e.g. "create_alert". */
+  tool: string;
+  /** Human-readable description of the pending action shown in the modal. */
+  description: string;
+  /**
+   * Safe action parameters (never contains user_id or tenant_id).
+   * Passed to the confirm endpoint in the request body.
+   */
+  params: {
+    entity_id?: string;
+    condition?: string;
+    threshold?: Record<string, unknown>;
+    severity?: string;
+    [key: string]: unknown;
+  };
+}

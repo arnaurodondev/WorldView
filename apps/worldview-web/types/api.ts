@@ -1888,3 +1888,85 @@ export interface BetaEnrollmentPatch {
   enrolled?: boolean;
   notes?: string | null;
 }
+
+// ── Full-text document search (PLAN-0064 W6) ─────────────────────────────────
+
+/**
+ * Single search result document from GET /v1/search/documents.
+ *
+ * WHY match_offsets (not HTML snippet): The backend returns plain text in
+ * `snippet` and character offsets where matches occur. The frontend renders
+ * `<mark>` tags from these offsets using React's automatic XSS escaping.
+ * This avoids any dangerouslySetInnerHTML surface — AD-W6-3 snippet contract.
+ *
+ * WHY entity_hits is string[] not UUID[]: UUIDs arrive as strings over JSON;
+ * the frontend never does arithmetic on them, so parsing to a typed UUID
+ * class would waste CPU on every search render.
+ */
+export interface SearchDocumentResult {
+  doc_id: string;
+  title: string | null;
+  source_type: string;
+  source_url: string | null;
+  published_at: string | null;  // ISO 8601 UTC
+  snippet: string | null;       // plain text, no HTML — see AD-W6-3
+  match_offsets: [number, number][];  // [start, end] char offsets in snippet
+  score: number;
+  entity_hits: string[];  // entity_id UUIDs (as strings) that matched
+}
+
+/**
+ * Entity facet sidebar item — one entity that appears across the result set.
+ *
+ * WHY count: lets the sidebar show "Apple Inc. (12)" without re-counting on the
+ * client. The backend aggregates entity_mentions per entity_id in the SQL query.
+ */
+export interface SearchDocumentsFacet {
+  entity_id: string;
+  name: string;
+  entity_type: string;
+  count: number;
+}
+
+/**
+ * Full search response from GET /v1/search/documents.
+ *
+ * WHY latency_ms: server-side timing lets the frontend show "Found 42 results
+ * (120ms)" in the search bar status — a Bloomberg-terminal pattern that signals
+ * system health to power users.
+ */
+export interface SearchDocumentsResponse {
+  query: string;
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+  results: SearchDocumentResult[];
+  facets: SearchDocumentsFacet[];
+  latency_ms: number;
+}
+
+/**
+ * Request params for searchDocuments() — maps to GET /v1/search/documents query params.
+ *
+ * WHY entity_ids (plural) here but entity_id (singular) in the URL: the backend
+ * uses repeated params `entity_id=a&entity_id=b` (FastAPI list[UUID] semantics).
+ * The frontend sends them as repeated params; we use the plural name in the TypeScript
+ * interface to signal "this is a list". The serialisation in searchDocuments() handles
+ * the conversion via `url.append("entity_id", ...)`.
+ *
+ * WHY all optional except q: defaults match the backend: scope="all", source_type="all",
+ * page=1, page_size=25. The frontend only needs to pass overrides.
+ */
+export interface SearchDocumentsParams {
+  q: string;
+  entity_ids?: string[];
+  scope?: "watchlist" | "portfolio" | "all";
+  source_type?: "news" | "sec_edgar" | "all";
+  // NOTE: "transcript" is intentionally absent from source_type — not yet ingested.
+  date_from?: string;  // ISO 8601 date string (timezone-aware on backend)
+  date_to?: string;
+  date_preset?: "since_last_visit" | "7d" | "30d" | "90d";
+  page?: number;
+  page_size?: number;
+}

@@ -46,6 +46,7 @@ import { parseInput } from "@/lib/chat/slash-commands";
 import type { Message } from "@/types/api";
 import type {
   LogEntry,
+  PendingActionEvent,
   SlashTurn,
   StreamingMessage,
 } from "@/features/chat/lib/types";
@@ -126,6 +127,17 @@ export interface UseChatStreamResult {
    * Cleared to [] when the stream ends or is cancelled.
    */
   activeTools: ToolCallState[];
+  /**
+   * Pending write-action event waiting for user confirmation (PLAN-0082 Wave B).
+   * Set when the backend emits a ``pending_action`` SSE event.
+   * Cleared to null after the user confirms or dismisses the modal.
+   *
+   * WHY state (not ref): the chat page reads this to conditionally render the
+   * ActionConfirmModal. React must re-render when this value changes.
+   */
+  pendingAction: PendingActionEvent | null;
+  /** Clear the pending action (called by ActionConfirmModal on dismiss or after confirm). */
+  clearPendingAction: () => void;
   /** Trigger the slash-command branch or the SSE LLM call for `question`. */
   send: (question: string) => Promise<void>;
   /** Abort an in-flight stream. Safe to call when nothing is streaming. */
@@ -162,6 +174,12 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
   // WHY state (not ref): the chat page reads this to pass down to ToolCallIndicator;
   // we need React to re-render on every tool status change.
   const [activeTools, setActiveTools] = useState<ToolCallState[]>([]);
+  // `pendingAction` — set when the backend emits a `pending_action` SSE event
+  // for a write-action tool (e.g. create_alert). The page renders an
+  // ActionConfirmModal when this is non-null. Cleared to null on dismiss/confirm.
+  // WHY state (not ref): the page must re-render when this changes so the
+  // modal appears/disappears. A ref would not trigger a re-render.
+  const [pendingAction, setPendingAction] = useState<PendingActionEvent | null>(null);
 
   // ── Refs ────────────────────────────────────────────────────────────────
   // `abortRef` holds the AbortController for the in-flight request so that
@@ -183,6 +201,19 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     return () => {
       abortRef.current?.abort();
     };
+  }, []);
+
+  /**
+   * `clearPendingAction` — called by ActionConfirmModal when the user
+   * confirms or dismisses the pending write-action.  Resets the state so
+   * the modal closes and React re-renders without a pending action.
+   *
+   * WHY a stable callback (not inline setState): ActionConfirmModal is a
+   * memoised component that receives this as a prop.  A stable reference
+   * prevents unnecessary re-renders of the modal tree.
+   */
+  const clearPendingAction = useCallback(() => {
+    setPendingAction(null);
   }, []);
 
   /**
@@ -222,6 +253,10 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     // resetForThread ensures the new thread always starts with a clean tool
     // indicator state, matching the post-stream/post-cancel invariant.
     setActiveTools([]);
+    // WHY clear pendingAction here: a pending confirmation modal must not
+    // persist across thread switches — the proposal_id is scoped to the
+    // thread that generated it. If the user switches threads, dismiss the modal.
+    setPendingAction(null);
   }, []);
 
   /**
@@ -466,6 +501,49 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
                     ),
                   );
                 }
+              } else if (eventName === "pending_action") {
+                // PLAN-0082 Wave B: write-action tool requires user confirmation.
+                // The backend emits this event when the LLM calls create_alert
+                // (or any future requires_confirmation=true tool).
+                //
+                // Data shape from S8 SSEEmitter (Wave B):
+                //   { type: "pending_action", proposal_id: string, tool: string,
+                //     description: string, params: { entity_id?, condition?,
+                //     threshold?, severity? } }
+                //
+                // WHY set state from SSE: the modal must appear immediately when
+                // the pending_action event arrives, before the stream ends.  We
+                // set it here in the read loop so the React render triggers
+                // promptly.  The modal will render on the next frame.
+                const pa = data as {
+                  proposal_id?: string;
+                  tool?: string;
+                  description?: string;
+                  params?: Record<string, unknown>;
+                };
+                if (pa.proposal_id && pa.tool) {
+                  setPendingAction({
+                    proposal_id: pa.proposal_id,
+                    tool: pa.tool,
+                    description: pa.description ?? `Create alert: ${pa.params?.condition ?? "?"}`,
+                    params: pa.params ?? {},
+                  });
+                }
+              } else if (
+                eventName === "action_executed" ||
+                eventName === "action_rejected"
+              ) {
+                // PLAN-0082 Wave B: confirmation endpoint response events.
+                // These arrive on the SEPARATE confirm SSE stream (not the chat
+                // stream), so in practice this branch is unreachable from the
+                // chat stream reader loop.  We handle them here defensively in
+                // case S8 ever emits them inline, and to silence the linter
+                // warning about unhandled known event names.
+                //
+                // WHY clear pendingAction on executed/rejected: if the confirm
+                // stream somehow feeds back into the same hook (future multi-turn
+                // flow), the modal should auto-dismiss on both outcomes.
+                setPendingAction(null);
               } else if (
                 eventName === "token" ||
                 (!eventName && ("text" in data || "token" in data))
