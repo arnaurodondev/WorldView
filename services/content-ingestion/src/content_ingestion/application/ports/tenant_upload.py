@@ -88,6 +88,11 @@ class TenantDocumentUploadRepositoryPort(ABC):
         """Mark an upload as READY and populate pipeline output fields."""
         ...
 
+    @abstractmethod
+    async def set_failed(self, doc_id: UUID, tenant_id: UUID, error_message: str) -> None:
+        """Mark an upload as FAILED with an error message."""
+        ...
+
 
 class TenantDedupHashRepositoryPort(ABC):
     """Port for per-tenant content-hash deduplication.

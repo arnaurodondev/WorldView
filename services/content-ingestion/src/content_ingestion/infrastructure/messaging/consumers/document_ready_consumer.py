@@ -82,6 +82,8 @@ class DocumentReadyConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
     """
 
     # ── ValkeyDedupMixin class attributes ────────────────────────────────────
+    _topic: ClassVar[str] = "nlp.document.ready.v1"
+    _consumer_group: ClassVar[str] = "s4-document-ready"
     _dedup_prefix: str = "ci:dr:dedup"
     _dedup_ttl_seconds: ClassVar[int] = 86400  # 24 hours
 

@@ -65,15 +65,18 @@ def tenant_id_dep(
     request: Request,
     x_tenant_id: str | None = Header(None),
 ) -> UUID:
-    """Resolve tenant_id from X-Tenant-ID header or InternalJWT state.
+    """Resolve tenant_id from InternalJWT state or X-Tenant-ID header.
 
     Precedence:
-    1. X-Tenant-ID header (explicit forwarding from S9 or test clients)
-    2. request.state.tenant_id (set by InternalJWTMiddleware from JWT payload)
+    1. request.state.tenant_id (set by InternalJWTMiddleware — verified JWT)
+    2. X-Tenant-ID header (fallback for internal service-to-service calls only)
+
+    JWT-derived state always takes precedence so that a caller who bypasses S9
+    cannot spoof their tenant via the header.
 
     Raises 400 on malformed UUID.  Raises 401 if no tenant identity is found.
     """
-    raw: str | None = x_tenant_id or getattr(request.state, "tenant_id", None) or None
+    raw: str | None = getattr(request.state, "tenant_id", None) or x_tenant_id or None
     if not raw:
         raise HTTPException(status_code=401, detail="Tenant identity missing (X-Tenant-ID or JWT)")
     try:
@@ -86,15 +89,15 @@ def user_id_dep(
     request: Request,
     x_user_id: str | None = Header(None),
 ) -> UUID:
-    """Resolve user_id from X-User-ID header or InternalJWT state.
+    """Resolve user_id from InternalJWT state or X-User-ID header.
 
     Precedence:
-    1. X-User-ID header (explicit forwarding from S9 or test clients)
-    2. request.state.user_id (set by InternalJWTMiddleware from JWT payload)
+    1. request.state.user_id (set by InternalJWTMiddleware — verified JWT)
+    2. X-User-ID header (fallback for internal service-to-service calls only)
 
     Raises 400 on malformed UUID.  Raises 401 if no user identity is found.
     """
-    raw: str | None = x_user_id or getattr(request.state, "user_id", None) or None
+    raw: str | None = getattr(request.state, "user_id", None) or x_user_id or None
     if not raw:
         raise HTTPException(status_code=401, detail="User identity missing (X-User-ID or JWT)")
     try:
@@ -188,6 +191,7 @@ async def upload_document(
         UploadTenantDocumentInput,
         UploadTenantDocumentUseCase,
     )
+    from content_ingestion.infrastructure.db.repositories.outbox import OutboxRepository
     from content_ingestion.infrastructure.db.repositories.tenant_upload import (
         TenantDedupHashRepository,
         TenantDocumentUploadRepository,
@@ -202,6 +206,7 @@ async def upload_document(
     async with request.app.state.write_factory() as session:
         upload_repo = TenantDocumentUploadRepository(session)
         dedup_repo = TenantDedupHashRepository(session)
+        outbox = OutboxRepository(session)
         rate_limit = UploadRateLimitAdapter(request.app.state.valkey)
         storage = request.app.state.storage
         inline_uow = _InlineUoW(session)
@@ -209,6 +214,7 @@ async def upload_document(
         uc = UploadTenantDocumentUseCase(
             upload_repo=upload_repo,
             dedup_repo=dedup_repo,
+            outbox=outbox,  # type: ignore[arg-type]
             rate_limit=rate_limit,
             storage=storage,
             uow=inline_uow,  # type: ignore[arg-type]

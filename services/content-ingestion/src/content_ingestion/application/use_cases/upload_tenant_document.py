@@ -41,6 +41,7 @@ from content_ingestion.domain.exceptions import (
 from content_ingestion.domain.tenant_upload import TenantDocumentUpload, UploadStatus
 
 if TYPE_CHECKING:
+    from content_ingestion.application.ports.repositories import OutboxPort
     from content_ingestion.application.ports.tenant_upload import (
         TenantDedupHashRepositoryPort,
         TenantDocumentUploadRepositoryPort,
@@ -144,6 +145,7 @@ class UploadTenantDocumentUseCase:
         self,
         upload_repo: TenantDocumentUploadRepositoryPort,
         dedup_repo: TenantDedupHashRepositoryPort,
+        outbox: OutboxPort,
         rate_limit: UploadRateLimitPort,
         storage: object,  # ObjectStorage from libs/storage — duck-typed to avoid hard dep
         uow: UnitOfWork,
@@ -152,6 +154,7 @@ class UploadTenantDocumentUseCase:
     ) -> None:
         self._upload_repo = upload_repo
         self._dedup_repo = dedup_repo
+        self._outbox = outbox
         self._rate_limit = rate_limit
         self._storage = storage
         self._uow = uow
@@ -252,7 +255,35 @@ class UploadTenantDocumentUseCase:
                 await self._upload_repo.create(doc)
                 # Record the dedup hash so future uploads of the same content are rejected.
                 await self._dedup_repo.insert(doc_id, "sha256", content_hash, inp.tenant_id)
-                # TODO Wave E-2: append outbox event content.article.raw.v1 here.
+                # Publish content.article.raw.v1 so S5 content-store picks up the document
+                # and S6 NLP pipeline processes it.  The event_id is deterministic so the
+                # outbox ON CONFLICT (event_id) DO NOTHING guard deduplicates retries.
+                from common.ids import uuid5_from_parts  # type: ignore[import-untyped]
+                from common.time import utc_now as _utc_now  # type: ignore[import-untyped]
+
+                await self._outbox.append(
+                    aggregate_type="content_document",
+                    aggregate_id=doc_id,
+                    event_type="content.article.raw.v1",
+                    topic="content.article.raw.v1",
+                    payload={
+                        "event_id": uuid5_from_parts(str(doc_id), "content_article_raw_v1"),
+                        "event_type": "content.article.raw",
+                        "schema_version": 1,
+                        "occurred_at": _utc_now().isoformat(),
+                        "doc_id": str(doc_id),
+                        "source_type": "tenant_upload",
+                        "source_url": None,
+                        "minio_bronze_key": minio_bronze_key,
+                        "content_hash": content_hash,
+                        "fetch_id": str(doc_id),  # no fetch for uploads; use doc_id
+                        "title": title,
+                        "published_at": None,
+                        "is_backfill": False,
+                        "correlation_id": None,
+                        "tenant_id": str(inp.tenant_id),
+                    },
+                )
                 await self._uow.commit()
         except Exception:
             # Compensating GC: the MinIO object is now orphaned — delete it.
