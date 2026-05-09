@@ -62,6 +62,7 @@ def _make_repos(
         return_value={},  # filled per-test below
     )
     alias_repo.batch_ticker_isin_match = AsyncMock(return_value={})
+    alias_repo.batch_class_aware_canonical_match = AsyncMock(return_value={})
     alias_repo.batch_fuzzy_trigram = AsyncMock(return_value={})
 
     embedding_repo = MagicMock()
@@ -85,6 +86,10 @@ def _make_batch_repos(
     alias_repo = MagicMock()
     alias_repo.batch_exact_match = AsyncMock(return_value=exact_map or {})
     alias_repo.batch_ticker_isin_match = AsyncMock(return_value=ticker_isin_map or {})
+    # Stage 2.5 — class-aware canonical_name match (PLAN-0087 F-LLM-001).
+    # Default to empty dict so existing tests are unaffected.  Tests that
+    # exercise the class-aware path override this attribute directly.
+    alias_repo.batch_class_aware_canonical_match = AsyncMock(return_value={})
     alias_repo.batch_fuzzy_trigram = AsyncMock(return_value=fuzzy_map or {})
     # Single-mention methods still present (stage helper tests)
     alias_repo.exact_match = AsyncMock(return_value=None)
@@ -595,3 +600,171 @@ class TestEnsureProvisionalForMention:
         assert mention.provisional_queue_id is None
         # Outcome stays UNRESOLVED so the next cycle re-attempts.
         assert mention.resolution_outcome == ResolutionOutcome.UNRESOLVED
+
+
+# ── PLAN-0087 F-LLM-001: Stage 2.5 class-aware canonical_name resolution ─────
+
+
+@pytest.mark.unit
+class TestStage25ClassAwareCanonical:
+    """Stage 2.5 — class-aware canonical_name match (PLAN-0087 F-LLM-001).
+
+    These tests assert the integration of the new
+    ``batch_class_aware_canonical_match`` call inside
+    ``run_entity_resolution_block``: a GLiNER ``organization`` mention for
+    "Apple" must resolve to the AAPL canonical (which is stored as
+    ``entity_type='financial_instrument'``) without falling through to
+    Stage 3 fuzzy or Stage 4 ANN.
+
+    Without this stage, the mention would land in PROVISIONAL or UNRESOLVED
+    and the article-consumer's ``entity_id_by_ref`` filter would silently
+    drop every relation/event/claim referencing it — the root cause of the
+    "1141 LLM extraction calls → 0 organic relation_evidence_raw rows"
+    pattern documented in 2026-05-09 QA F-LLM-001.
+    """
+
+    @pytest.mark.asyncio
+    async def test_organization_mention_resolves_to_financial_instrument_canonical(self) -> None:
+        """An "Apple" mention tagged ``organization`` resolves to AAPL canonical via Stage 2.5.
+
+        Stages 1 + 2 miss (no bare "apple" alias, not all-caps for ticker).
+        Stage 2.5 returns the AAPL entity_id from the class-aware canonical
+        sweep.  Confidence equals ``CONFIDENCE_CLASS_AWARE_CANONICAL`` (0.93)
+        which is well above ``AUTO_RESOLVE_THRESHOLD`` (0.62), so the mention
+        flips to ``AUTO_RESOLVED`` and gets a real ``resolved_entity_id``.
+        """
+        from nlp_pipeline.application.blocks.entity_resolution import CONFIDENCE_CLASS_AWARE_CANONICAL
+
+        aapl_entity_id = uuid.uuid4()
+        mention = _make_mention("Apple", MentionClass.ORGANIZATION)
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos()
+        # Stage 2.5 returns AAPL for the (surface, class) pair.
+        alias_repo.batch_class_aware_canonical_match = AsyncMock(
+            return_value={("Apple", "organization"): aapl_entity_id},
+        )
+        intelligence_session = MagicMock()
+        intelligence_session.execute = AsyncMock()
+
+        resolved, _audit = await run_entity_resolution_block(
+            [mention],
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=_make_embedding_client(),
+            intelligence_session=intelligence_session,
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        assert resolved[0].resolution_outcome == ResolutionOutcome.AUTO_RESOLVED
+        assert resolved[0].resolved_entity_id == aapl_entity_id
+        assert resolved[0].resolution_confidence == CONFIDENCE_CLASS_AWARE_CANONICAL
+
+    @pytest.mark.asyncio
+    async def test_stage25_skipped_when_stage1_already_resolved(self) -> None:
+        """If Stage 1 already resolved the mention, Stage 2.5 is not asked about it.
+
+        The candidate pair list passed to ``batch_class_aware_canonical_match``
+        excludes mentions matched by exact alias (Stage 1) or ticker/isin
+        (Stage 2).  This keeps the SQL parameter count down and prevents
+        Stage 2.5 from accidentally overruling a higher-priority match.
+        """
+        entity_id = uuid.uuid4()
+        mention = _make_mention("Apple Inc.", MentionClass.ORGANIZATION)
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos(
+            exact_map={"apple inc.": entity_id},
+        )
+        intelligence_session = MagicMock()
+        intelligence_session.execute = AsyncMock()
+
+        await run_entity_resolution_block(
+            [mention],
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=_make_embedding_client(),
+            intelligence_session=intelligence_session,
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        # batch_class_aware_canonical_match was either not called at all OR
+        # called with an empty list (Stage-1 hit excludes the mention from
+        # the Stage-2.5 candidate set).  Either is correct behaviour.
+        if alias_repo.batch_class_aware_canonical_match.await_count > 0:
+            call_args = alias_repo.batch_class_aware_canonical_match.await_args
+            pairs = call_args.args[0] if call_args.args else call_args.kwargs.get("surface_class_pairs", [])
+            assert pairs == [], "Stage 2.5 should not see Stage-1-resolved mentions"
+
+    @pytest.mark.asyncio
+    async def test_stage25_emits_audit_row(self) -> None:
+        """Stage 2.5 always writes a MentionResolution audit row (hit or miss).
+
+        The audit row is needed for observability: without it, the
+        F-LLM-005-style discrepancy ("resolved but resolution_outcome stays
+        unresolved") would extend to "resolved at Stage 2.5 but no audit
+        trail of the resolution path".
+        """
+        aapl_id = uuid.uuid4()
+        mention = _make_mention("Apple", MentionClass.ORGANIZATION)
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos()
+        alias_repo.batch_class_aware_canonical_match = AsyncMock(
+            return_value={("Apple", "organization"): aapl_id},
+        )
+        intelligence_session = MagicMock()
+        intelligence_session.execute = AsyncMock()
+
+        _resolved, audit = await run_entity_resolution_block(
+            [mention],
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=_make_embedding_client(),
+            intelligence_session=intelligence_session,
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        # Filter audit for Stage 2.5 (method='class_aware_canonical').
+        s25_audits = [a for a in audit if a.metadata.get("method") == "class_aware_canonical"]
+        assert len(s25_audits) == 1
+        assert s25_audits[0].is_winner is True
+        assert s25_audits[0].candidate_entity_id == aapl_id
+        assert s25_audits[0].metadata["mention_class"] == "organization"
+
+    @pytest.mark.asyncio
+    async def test_stage25_miss_falls_through_to_fuzzy(self) -> None:
+        """A Stage-2.5 miss does not short-circuit later stages.
+
+        Backward-compat invariant: the addition of Stage 2.5 must not skip
+        mentions that have a fuzzy or ANN match.  A surface that isn't in
+        any class-typed canonical_name should still reach Stage 3.
+        """
+        fuzzy_id = uuid.uuid4()
+        mention = _make_mention("Acme Holdings Incorporated", MentionClass.ORGANIZATION)
+        alias_repo, embedding_repo, canonical_repo, audit_repo = _make_batch_repos(
+            fuzzy_map={"acme holdings incorporated": [(fuzzy_id, 0.85)]},
+        )
+        # Stage 2.5 returns nothing for this surface.
+        alias_repo.batch_class_aware_canonical_match = AsyncMock(return_value={})
+        intelligence_session = MagicMock()
+        intelligence_session.execute = AsyncMock()
+
+        resolved, _ = await run_entity_resolution_block(
+            [mention],
+            alias_repo=alias_repo,
+            embedding_repo=embedding_repo,
+            canonical_entity_repo=canonical_repo,
+            resolution_audit_repo=audit_repo,
+            embedding_client=_make_embedding_client(),
+            intelligence_session=intelligence_session,
+            model_id="bge",
+            instruction_prefix="",
+        )
+
+        # 0.85 (fuzzy sim) * 0.90 (multiplier) = 0.765 → AUTO_RESOLVED
+        assert resolved[0].resolution_outcome == ResolutionOutcome.AUTO_RESOLVED
+        assert resolved[0].resolved_entity_id == fuzzy_id

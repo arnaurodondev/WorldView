@@ -63,6 +63,12 @@ MAX_PROVISIONAL_PER_HOUR: int = 15
 
 CONFIDENCE_EXACT: float = 1.0
 CONFIDENCE_TICKER_ISIN: float = 0.95
+# Stage 2.5 — class-aware canonical_name match (PLAN-0087 F-LLM-001).  We use
+# 0.93 (slightly below ticker/isin) because the match is class-typed but
+# operates on the human-readable canonical_name, which is a softer signal
+# than a deterministic ticker code.  Still well above AUTO_RESOLVE_THRESHOLD
+# (0.62) so a hit auto-resolves without further fuzzy/ANN work.
+CONFIDENCE_CLASS_AWARE_CANONICAL: float = 0.93
 FUZZY_CONFIDENCE_MULTIPLIER: float = 0.90
 ANN_CONFIDENCE_MULTIPLIER: float = 0.95
 
@@ -404,12 +410,44 @@ async def run_entity_resolution_block(
             isins.append(text_stripped)
     ticker_isin_matches: dict[str, UUID] = await alias_repo.batch_ticker_isin_match(tickers, isins)
 
+    # ── Stage 2.5 batch: class-aware canonical_name match (PLAN-0087 F-LLM-001) ─
+    # GLiNER tags Apple/Microsoft/Intel as ``mention_class='organization'`` but
+    # their canonicals are stored as ``entity_type='financial_instrument'``.
+    # Without this stage, those mentions miss every other lookup (no bare
+    # "apple" alias, not all-caps for ticker, just below the trigram floor)
+    # and get silently dropped at the article-consumer's ``entity_id_by_ref``
+    # gate — destroying every relation/event/claim the LLM extracted.
+    #
+    # Only run on mentions that didn't already resolve via Stage 1 or 2.
+    # Resolution is by (surface, mention_class) so the same surface tagged
+    # with two different classes gets two independent lookups (correct
+    # behaviour: "Apple" as person ≠ "Apple" as organization).
+    stage25_pairs: list[tuple[str, str]] = []
+    for m in mentions:
+        if m.mention_text.lower().strip() in exact_matches:
+            continue
+        if m.mention_text.strip() in ticker_isin_matches:
+            continue
+        mclass_val = m.mention_class.value if hasattr(m.mention_class, "value") else str(m.mention_class)
+        stage25_pairs.append((m.mention_text, mclass_val))
+    class_aware_matches: dict[tuple[str, str], UUID] = {}
+    if stage25_pairs:
+        class_aware_matches = await alias_repo.batch_class_aware_canonical_match(stage25_pairs)
+
     # ── Stage 3 batch: fuzzy trigram (1 LATERAL query for all mentions) ────────
-    # Only pass mentions that didn't resolve in stages 1 or 2
+    # Only pass mentions that didn't resolve in stages 1, 2, or 2.5.  We
+    # consult ``class_aware_matches`` here so a Stage-2.5 hit short-circuits
+    # the fuzzy/ANN work for that mention.
+    def _matched_in_stage25(m: EntityMention) -> bool:
+        mclass_val = m.mention_class.value if hasattr(m.mention_class, "value") else str(m.mention_class)
+        return (m.mention_text, mclass_val) in class_aware_matches
+
     stage3_candidates = [
         m
         for m in mentions
-        if m.mention_text.lower().strip() not in exact_matches and m.mention_text.strip() not in ticker_isin_matches
+        if m.mention_text.lower().strip() not in exact_matches
+        and m.mention_text.strip() not in ticker_isin_matches
+        and not _matched_in_stage25(m)
     ]
     fuzzy_matches: dict[str, list[tuple[UUID, float]]] = {}
     if stage3_candidates:
@@ -460,6 +498,30 @@ async def run_entity_resolution_block(
                     is_winner=s2_entity is not None,
                     candidate_entity_id=s2_entity,
                     metadata={"method": "ticker_isin"},
+                ),
+            )
+
+        # Stage 2.5 result — class-aware canonical_name match (PLAN-0087 F-LLM-001).
+        # Resolves the GLiNER class-mismatch silent-drop pattern: a bare
+        # "Apple" (organization) → AAPL (financial_instrument) canonical.
+        # We always emit an audit row (hit or miss) so observability shows
+        # whether the new stage carried its weight on a per-document basis.
+        if resolved_id is None:
+            mclass_val = (
+                mention.mention_class.value if hasattr(mention.mention_class, "value") else str(mention.mention_class)
+            )
+            s25_entity = class_aware_matches.get((mention.mention_text, mclass_val))
+            if s25_entity is not None:
+                resolved_id = s25_entity
+                confidence = CONFIDENCE_CLASS_AWARE_CANONICAL
+            audit.append(
+                MentionResolution(
+                    mention_id=mention.mention_id,
+                    stage=2,  # share stage=2 in the int column to avoid migration; method tag below disambiguates
+                    score=CONFIDENCE_CLASS_AWARE_CANONICAL if s25_entity else 0.0,
+                    is_winner=s25_entity is not None,
+                    candidate_entity_id=s25_entity,
+                    metadata={"method": "class_aware_canonical", "mention_class": mclass_val},
                 ),
             )
 
