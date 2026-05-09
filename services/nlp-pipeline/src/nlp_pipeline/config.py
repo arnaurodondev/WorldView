@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     # query has rare identifier tokens. Default 1.5 from the spec; tuned
     # empirically per dataset via ``scripts/eval_retrieval.py --mode
     # hybrid_boost_sweep``. NLP_PIPELINE_HYBRID_LEXICAL_BOOST.
-    hybrid_lexical_boost: float = 1.5
+    hybrid_lexical_boost: float = 1.0
 
     # Ollama / ML endpoints
     ollama_base_url: str = "http://localhost:11434"
