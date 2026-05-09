@@ -547,8 +547,14 @@ export default function ChatPage() {
   return (
     <div className="flex h-full overflow-hidden">
       {/* ════════════════ LEFT PANEL — Thread List ════════════════ */}
+      {/* Density bundle 2026-05-09: w-[280px] → w-[224px] (= w-56). The 280px
+          sidebar was inherited from a consumer-chatbot layout (Slack/Claude)
+          but on a terminal the message column is the high-density surface and
+          deserves the extra 56px of horizontal real estate. 224px still fits
+          the "New chat" button + search box + 11px thread title without
+          truncating the dev seed titles. */}
       <aside
-        className="flex w-[280px] shrink-0 flex-col border-r border-border bg-background"
+        className="flex w-[224px] shrink-0 flex-col border-r border-border bg-background"
         aria-label="Chat thread list"
       >
         {/* PLAN-0071 P2C-1: market session status strip — grounds the
@@ -557,10 +563,15 @@ export default function ChatPage() {
         <MarketContextBanner />
 
         {/* Header + New Chat button */}
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <div className="flex items-center gap-2">
-            <MessageSquare className="h-4 w-4 text-primary" strokeWidth={1.5} />
-            <span className="text-sm font-semibold text-foreground">Threads</span>
+        {/* Density bundle 2026-05-09: px-4 py-3 → px-3 py-2; text-sm → text-[11px]
+            uppercase tracking-wide so the "Threads" label matches the rest of
+            the platform's terminal section labels (e.g. WatchlistPanel, Alerts). */}
+        <div className="flex items-center justify-between border-b border-border px-3 py-2">
+          <div className="flex items-center gap-1.5">
+            <MessageSquare className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />
+            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-foreground">
+              Threads
+            </span>
           </div>
           <Button
             size="sm"
@@ -758,9 +769,13 @@ export default function ChatPage() {
                 also reinforces the active thread title at the top of the panel.
                 WHY px-3 (was px-4 py-2): matches the TopBar/sub-header
                 12-px horizontal rhythm — pass-2 polish defect 1G. */}
-            <div className="flex items-center justify-between border-b border-border px-3 py-2">
+            <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+              {/* Density bundle 2026-05-09: text-sm (14px) → text-[12px] for the
+                  thread title; py-2 → py-1.5 to match TopBar rhythm. The thread
+                  title is a header label, not data — 12px keeps it readable
+                  while pulling it closer to the surrounding 11px text scale. */}
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-foreground">
+                <p className="truncate text-[12px] font-semibold text-foreground">
                   {activeThread?.title ?? PLACEHOLDER_THREAD_TITLE}
                 </p>
               </div>
@@ -778,8 +793,12 @@ export default function ChatPage() {
             </div>
 
             {/* Message list */}
+            {/* Density bundle 2026-05-09: gap-3 → gap-2 between messages.
+                Tighter inter-message gap reduces wasted vertical real estate
+                without losing message-boundary clarity (each bubble has its
+                own bg + rounded corners). */}
             <ScrollArea className="flex-1 bg-background">
-              <div className="flex flex-col gap-3 p-3">
+              <div className="flex flex-col gap-2 p-3">
                 {/* WHY p-3 (was p-4): terminal-density reading area; matches
                     the post-F3 chat empty-state padding. Pass-2 defect 1G. */}
                 {threadLoading && (
@@ -950,7 +969,10 @@ export default function ChatPage() {
                   rows={2}
                   disabled={isStreaming}
                   maxLength={2000}
-                  className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
+                  // Density bundle 2026-05-09: textarea text-sm (14px) →
+                  // text-[12px] to align with the rest of the chat surface
+                  // density. The 14px size felt like a consumer-app input.
+                  className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-3 py-2 text-[12px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
                   aria-label="Chat message input"
                 />
 

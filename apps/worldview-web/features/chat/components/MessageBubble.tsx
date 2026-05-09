@@ -59,7 +59,7 @@ export function TypingIndicator() {
             weight overpowers the 14px bot avatar icon at this size. */}
         <Bot className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />
       </div>
-      <div className="rounded-[2px] bg-muted px-4 py-3">
+      <div className="rounded-[2px] bg-muted px-3 py-2">
         {/* WHY static dots (no animate-bounce): Bloomberg-terminal mandate — no
             bounce/pulse animations on data surfaces. Three static dots still
             convey "generating" when paired with the TypingIndicator label. */}
@@ -99,8 +99,12 @@ export function MessageBubble({ message }: { message: Message }) {
          * consistency and makes chat feel like a consumer chatbot pasted into a
          * Bloomberg terminal. leading-[1.5] matches the compact prose standard.
          */}
+        {/* Density bundle 2026-05-09: bubble padding px-4 py-3 → px-3 py-2.
+            12-16px message bubble padding is a consumer-chatbot convention
+            ported from Slack/Claude; on a terminal where the surrounding
+            chrome runs at 8-12px we tighten to keep visual rhythm. */}
         <div
-          className={`rounded-[2px] px-4 py-3 text-[11px] leading-[1.5] ${
+          className={`rounded-[2px] px-3 py-2 text-[11px] leading-[1.5] ${
             isUser ? "bg-primary/10 text-foreground" : "bg-muted text-foreground"
           }`}
         >
@@ -193,8 +197,9 @@ export function StreamingBubble({ streaming, activeTools = [] }: StreamingBubble
           <Bot className="h-3.5 w-3.5 text-primary" strokeWidth={1.5} />
         </div>
         {/* WHY text-[11px] leading-[1.5] + size="compact": streaming bubble must
-            match the final settled MessageBubble density — same 11px terminal rule. */}
-        <div className="rounded-[2px] bg-muted px-4 py-3 text-[11px] leading-[1.5]">
+            match the final settled MessageBubble density — same 11px terminal rule.
+            Density bundle 2026-05-09: px-4 py-3 → px-3 py-2 to match MessageBubble. */}
+        <div className="rounded-[2px] bg-muted px-3 py-2 text-[11px] leading-[1.5]">
           {/*
            * Tool call indicators appear ABOVE the streaming text.
            * WHY: the tool-use phase precedes token generation. If we placed

@@ -282,10 +282,19 @@ export default function ScreenerPage() {
   const loadedDisplayed = filteredRows.length;
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    // Density bundle 2026-05-09: explicit ``bg-background`` on the page root.
+    // Without it the AG Grid wrapper (``ag-theme-alpine-dark``) leaks the
+    // alpine theme's default ``--ag-background-color`` (white) through any
+    // gap above the grid — most visibly during the empty/loading state and on
+    // the seam between toolbar and grid. Applying ``bg-background`` here
+    // forces the platform dark token (#09090B) so the page always reads as
+    // the rest of the terminal regardless of AG Grid mount state.
+    <div className="flex flex-col h-full min-h-0 bg-background">
 
       {/* ── Toolbar ─────────────────────────────────────────────────────── */}
-      <div className="flex h-9 shrink-0 items-center border-b border-border px-3 gap-2">
+      <div className="flex h-9 shrink-0 items-center border-b border-border px-3 gap-2 bg-background">
+        {/* Density bundle 2026-05-09: keep at text-[11px] (already at terminal
+            density baseline) — no further reduction without breaking legibility. */}
         <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
           Instrument Screener
         </h1>
