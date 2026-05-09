@@ -13,7 +13,6 @@
 | PLAN-0082 | **Action Tools** — get_alerts + create_alert tools, user-confirmation SSE surface (pending_action → action_executed), 30-attempt adversarial expansion. `alert.created.v1` Avro schema + `CanonicalAlertCreated` canonical model + 11 contract tests pre-implemented (2026-05-09). **Next: Wave 1 (after PLAN-0081 ✓)**. | stub | 0/3 | PLAN-0080 ✓, PLAN-0081 ✓ | 2026-05-09 |
 | PLAN-0071 | **Institutional UI Uplift** — adversarial second-pass. Phases 1–5 done. Phase 6/6.5 (density sprint: sidebar h-9→h-7, news ArticleRow, p-4→p-2 sweep, TopBar). Phase 7 blocked on backend. **Next: Phase 6.5 (density sprint)**. | in-progress | 5/9 phases | Phase 7 needs S3 price-stream SSE | 2026-05-05 |
 | PLAN-0080 | **Intelligence-Layer LLM Tools** — COMPLETE. Wave A implemented: 4 new tools in manifest v2 (get_entity_narrative, get_entity_paths, get_entity_health, get_entity_intelligence), S7IntelligencePort Protocol, S7IntelligenceClient adapter (S9-proxied, R14/R7 compliant), EntityContext enforcement (M-1), architecture test (test_tool_manifest_sync.py, R29), 33 unit + 4 arch tests PASS. 2026-05-09. | completed | 1/1 | none | 2026-05-09 |
-| PLAN-0081 | **Catalog Tools** — 6 tools (get_morning_brief, compare_entities, screen_universe, get_market_movers, get_economic_calendar, get_earnings_calendar). Manifest v3. Wave A DONE: S3BriefPort Protocol, S3BriefClient, BriefArchiveReadAdapter, 6 handlers, manifest v3, 31 unit tests, 10 golden-eval queries. **Next: Wave B (cross-tool composition tests)**. | in-progress | 1/2 | PLAN-0080 | 2026-05-09 |
 | PLAN-0024 | **Production Deployment** — Hetzner k3s, Terraform, Helm, ArgoCD, Traefik TLS, Email (Brevo), Vercel, SOPS+Age, GitHub Actions. **Next: Wave A-3**. | in-progress | 3/6 | none | 2026-04-11 |
 | PLAN-0063 | **W5 — Retrieval Substrate + L1 Eval** — W5-1..W5-5 done; W5-6 (ingestion bench) and W5-7 (contextual retrieval experiment) remain. **Next: W5-6 (ingestion bench, parallel after W5-2 ✓); W5-7 gated on ≥80% query labelling**. | in-progress | 5/7 | W5-7 gated on labelling | 2026-05-07 |
 | PLAN-0056 | **Polymarket Wave 2** — 4 new adapters, 6 new partitioned tables, S7 consumers+APIs, S9 proxies. 10 waves. **Next: Wave 1 (S4 adapters)**. | draft | 0/10 | none | 2026-05-01 |
@@ -95,7 +94,7 @@ PLAN-0080 (Intelligence LLM Tools, 1 wave)  ←— PLAN-0074 Wave G complete
 ### Tier 3 — After PLAN-0080 completes
 
 ```
-PLAN-0081 (Catalog Tools, 2 waves)
+PLAN-0081 (Catalog Tools, 2 waves) ✅ COMPLETE — 2026-05-09
 ```
 
 ### Tier 4 — After PLAN-0081 completes
@@ -132,9 +131,9 @@ PLAN-0014 (Claude Code adaptations, low priority)
 ```
 PLAN-0074 Wave A → B → C → D → G
     ↓
-PLAN-0080 (1 wave)
+PLAN-0080 (1 wave) ✅
     ↓
-PLAN-0081 (2 waves)
+PLAN-0081 (2 waves) ✅
     ↓
 PLAN-0082 (3 waves — action tools + confirmation UX)
 ```
@@ -143,6 +142,7 @@ PLAN-0082 (3 waves — action tools + confirmation UX)
 
 | Plan ID | Title | PRD | Completed | Waves | QA |
 |---------|-------|-----|-----------|-------|----|
+| PLAN-0081 | **Catalog Tools** — 6 catalog tools (get_morning_brief, compare_entities, screen_universe, get_market_movers, get_economic_calendar, get_earnings_calendar). Wave A: S3BriefPort Protocol, S3BriefClient, BriefArchiveReadAdapter, 6 handlers, manifest v3, 31 unit tests, 10 golden-eval queries. Wave B: 5 cross-tool composition tests (execute_all with compare+movers, screen+earnings, brief+compare, missing-port graceful degradation, unknown-tool hallucination guard). | — | 2026-05-09 | 2/2 | All tests pass; ruff + mypy clean |
 | PLAN-0067 | W11 — Full Tool Catalog: Embedding Search + Graph Traversal as LLM Tools. W11-1: `ToolCallBatch`/`LLMToolResponse` types + `LlmChatProvider` protocol + `chat_with_tools`/`stream_chat` on all adapters. W11-2: 8 new tools in manifest (search_documents, get_entity_graph, traverse_graph, search_entity_relations, search_claims, search_events, get_contradictions, get_portfolio_context) + `ToolExecutorFactory` + `EntityContext` + `ToolCallProvenance` + all handlers. W11-3: `ChatOrchestratorUseCase` full tool-use migration (only path), hard-deleted IntentClassifier/RetrievalPlanBuilder/ParallelRetrievalOrchestrator, `emit_thinking` + updated SSEEmitter, Alembic 0006 `llm_usage_log` tool tracking, metrics. W11-4: 20-query golden eval JSON + eval_tool_use.py harness (search_docs ≥25% threshold) + 6 integration tests. W11-5: `ToolCallIndicator` component + `useChatStream` activeTools state + StreamingBubble wiring. 783 rag-chat + 658 arch + 1837 frontend PASS. Post-QA fixes: ToolExecutorFactory DI wiring, ToolCallProvenance id/tool_use_id, traverse_graph params, depth cap, .dockerignore libs/tools allowlist. Docker rebuild + smoke test: PASS. | PLAN-0066 Wave H + /investigate 2026-05-07 | 2026-05-08 | 5/5 | QA PASS 2026-05-08 — 783 rag-chat + 658 arch + 1837 frontend; Docker build + /healthz smoke PASS; eval harness threshold corrected to 25% (golden set: 6/20 = 30% search_documents is correct multi-tool routing) |
 | PLAN-0084 | W5-5b — Operating-Table Hardening (PLAN-0063 close-out): citation cron wiring, circuit-breaker SETNX probe, ValkeyDedupMixin migration, CanonicalTickersCache refresh, port ABCs, CI gate flip, boost sweep. 15 waves, 48 tasks. | docs/audits/2026-05-07-qa-plan-0063-report.md | 2026-05-07 | 14/15 | 14 waves DONE (QA PASS 2026-05-07 Wave 6+7; E-3 gate enabled commit e39c298a; BP-421..425 fixed). G-1 (boost sweep) pending: labelling gate met 88.3% (106/120) on 2026-05-09 — run `make dev` then `python scripts/eval_retrieval.py --mode hybrid_boost_sweep ...` to complete. |
 | PLAN-0078 | Chunk Entity-Filter + GLiNER Mention Storage — chunks.entity_mentions JSONB, GLiNER mention persistence, entity_ids/entity_types filter on chunk search, rag-chat port extension. 4 waves. | derived from /investigate 2026-05-07 | 2026-05-07 | 4/4 | 757 nlp-pipeline + 662 rag-chat unit tests PASS; ruff + mypy clean |
