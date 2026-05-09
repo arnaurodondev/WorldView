@@ -386,3 +386,19 @@ class S3BriefPort(Protocol):
     ) -> list[dict]:
         """GET /v1/fundamentals/earnings-calendar → earnings release dates."""
         ...
+
+
+# ── S10Port (PLAN-0082 Wave A) ────────────────────────────────────────────────
+
+
+@runtime_checkable
+class S10Port(Protocol):
+    """Alert service client port (PLAN-0082 Wave A).
+
+    All methods call S9-proxied URLs (R14/R7 compliance).
+    All methods return empty list on any HTTP or network error (R9 safe degradation).
+    """
+
+    async def get_alerts(self, user_id: str, tenant_id: str, limit: int = 20) -> list[dict]:
+        """GET /v1/alerts/pending → list of active alerts for the user."""
+        ...

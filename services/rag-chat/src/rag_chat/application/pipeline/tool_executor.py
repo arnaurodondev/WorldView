@@ -1,4 +1,6 @@
-"""ToolExecutor — dispatches LLM tool_use blocks to S3/S6/S7/S1 Port handlers (PLAN-0066 Wave H, PLAN-0067 Wave W11-2).
+"""ToolExecutor — dispatches LLM tool_use blocks to S3/S6/S7/S1/S10 Port handlers.
+
+Plans: PLAN-0066 Wave H, PLAN-0067 Wave W11-2, PLAN-0082 Wave A.
 
 Architecture notes:
 - R25: ToolExecutor depends on port Protocols (S3Port, S6Port, S7Port, S1Port), never concrete adapters
@@ -56,6 +58,7 @@ if TYPE_CHECKING:
         S6Port,
         S7IntelligencePort,
         S7Port,
+        S10Port,
     )
 
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
@@ -166,6 +169,7 @@ class ToolExecutorFactory:
         s1: S1Port | None = None,
         s3_brief: S3BriefPort | None = None,
         brief_archive: BriefArchivePort | None = None,
+        s10: S10Port | None = None,
         timeout: float = 5.0,
     ) -> None:
         self._registry = registry
@@ -176,6 +180,7 @@ class ToolExecutorFactory:
         self._s1 = s1
         self._s3_brief = s3_brief
         self._brief_archive = brief_archive
+        self._s10 = s10
         self._timeout = timeout
 
     def for_request(
@@ -203,6 +208,7 @@ class ToolExecutorFactory:
             s1=self._s1,
             s3_brief=self._s3_brief,
             brief_archive=self._brief_archive,
+            s10=self._s10,
             user_id=user_id,
             tenant_id=tenant_id,
             internal_jwt=internal_jwt,
@@ -234,6 +240,7 @@ class ToolExecutor:
         s1: S1Port | None = None,
         s3_brief: S3BriefPort | None = None,
         brief_archive: BriefArchivePort | None = None,
+        s10: S10Port | None = None,
         user_id: UUID | None = None,
         tenant_id: UUID | None = None,
         internal_jwt: str | None = None,
@@ -248,6 +255,7 @@ class ToolExecutor:
         self._s1 = s1
         self._s3_brief = s3_brief
         self._brief_archive = brief_archive
+        self._s10 = s10
         self._user_id = user_id
         self._tenant_id = tenant_id
         self._internal_jwt = internal_jwt
@@ -311,6 +319,8 @@ class ToolExecutor:
                 result = await self._handle_get_economic_calendar(tool_call, **tool_call.input)
             elif tool_call.name == "get_earnings_calendar":
                 result = await self._handle_get_earnings_calendar(tool_call, **tool_call.input)
+            elif tool_call.name == "get_alerts":
+                result = await self._handle_get_alerts(tool_call)
             else:
                 # Registry had the spec but we have no handler — shouldn't happen
                 # if build_default_registry() is used; guard logs the gap.
@@ -1893,6 +1903,86 @@ class ToolExecutor:
             )
         ]
 
+    # ── S10 action handlers (PLAN-0082 Wave A) ────────────────────────────────
+
+    async def _handle_get_alerts(self, tool_call: ToolUseBlock) -> list[RetrievedItem]:
+        """Retrieve active (pending) alerts for the authenticated user via S10 (PLAN-0082 Wave A).
+
+        R25: depends only on S10Port Protocol — never imports S10Client directly.
+        R27: read-only — no UnitOfWork; calls S10 via HTTP only.
+        R9:  returns [] on missing port, missing auth, or any upstream error.
+        PRIVACY: alert content is passed to LLM context; no special filtering needed
+        (alerts are the user's own data, already scoped by user_id + tenant_id).
+        """
+        if self._s10 is None:
+            log.warning("tool_handler_missing_port", tool="get_alerts", port="s10")
+            return []
+
+        # Auth guard: user_id and tenant_id are required to scope the alert query.
+        # Both are resolved from X-Internal-JWT by InternalJWTMiddleware — if either
+        # is None the request is anonymous (or the JWT is malformed) so we degrade.
+        if self._user_id is None or self._tenant_id is None:
+            log.warning(
+                "tool_no_auth_context",
+                tool="get_alerts",
+                user_id_missing=self._user_id is None,
+                tenant_id_missing=self._tenant_id is None,
+            )
+            return []
+
+        t0 = time.monotonic()
+        try:
+            alerts = await asyncio.wait_for(
+                self._s10.get_alerts(
+                    user_id=str(self._user_id),
+                    tenant_id=str(self._tenant_id),
+                ),
+                timeout=self._timeout,
+            )
+        except Exception as e:
+            log.warning("tool_failed", tool="get_alerts", error=str(e))
+            return []
+
+        if not alerts:
+            log.info("tool_no_data", tool="get_alerts", user_id=str(self._user_id))
+            return []
+
+        import json
+
+        items: list[RetrievedItem] = []
+        for alert in alerts:
+            # Serialise each alert dict as JSON for LLM context injection.
+            # WHY json.dumps: keeps the alert structure intact so the LLM can
+            # reason about individual fields (status, trigger_price, etc.).
+            alert_text = json.dumps(alert)[:_TOOL_RESULT_MAX_CHARS]
+            # Use alert_id if present for stable item_id; fall back to loop index.
+            alert_id = alert.get("id") or alert.get("alert_id") or str(len(items))
+            items.append(
+                RetrievedItem.create(
+                    item_id=f"tool:alert:{alert_id}",
+                    item_type=ItemType.financial,
+                    text=alert_text,
+                    score=1.0,  # user's own alerts — maximally relevant
+                    trust_weight=0.95,
+                    source_type="alert",
+                    citation_meta=CitationMeta(
+                        title="Alert",
+                        url=None,
+                        source_name="alert_service",
+                        published_at=None,
+                        entity_name=None,
+                    ),
+                )
+            )
+
+        log.info(
+            "tool_executed",
+            tool="get_alerts",
+            latency_ms=round((time.monotonic() - t0) * 1000),
+            items_returned=len(items),
+        )
+        return items
+
     # ── Formatters ────────────────────────────────────────────────────────────
 
     def _format_price_table(
@@ -1951,7 +2041,9 @@ class ToolExecutor:
 
 
 def build_default_registry() -> ToolRegistry:
-    """Factory: create a ToolRegistry with all 20 tools registered (10 v1 + 4 PLAN-0080 v2 + 6 PLAN-0081 v3).
+    """Factory: create a ToolRegistry with all 21 tools registered.
+
+    Breakdown: 10 v1 + 4 PLAN-0080 v2 + 6 PLAN-0081 v3 + 1 PLAN-0082 v4.
 
     Called by api/dependencies.py to wire the ToolExecutor at startup.
     The handlers registered here are placeholder stubs — the actual execution
@@ -2098,6 +2190,22 @@ def build_default_registry() -> ToolRegistry:
                 description=f"Tool: {tool_name} (see capability_manifest.yaml for full description)",
                 parameters=[],
                 source_type="mixed",
+            ),
+            handler=lambda **_: None,
+        )
+
+    # PLAN-0082 Wave A: register 1 action tool (get_alerts).
+    # Calls S9-proxied S10 alert endpoints (R14 compliance).
+    _action_tool_names = [
+        "get_alerts",
+    ]
+    for tool_name in _action_tool_names:
+        registry.register(
+            ToolSpec(
+                name=tool_name,
+                description=f"Tool: {tool_name} (see capability_manifest.yaml for full description)",
+                parameters=[],
+                source_type="alert",
             ),
             handler=lambda **_: None,
         )

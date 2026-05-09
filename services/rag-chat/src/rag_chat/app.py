@@ -431,6 +431,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     from rag_chat.infrastructure.clients.brief_archive_read_adapter import BriefArchiveReadAdapter
     from rag_chat.infrastructure.clients.s3_brief_client import S3BriefClient
     from rag_chat.infrastructure.clients.s7_intelligence_client import S7IntelligenceClient
+    from rag_chat.infrastructure.clients.s10_client import S10Client
 
     # S7IntelligenceClient calls S9-proxied intelligence endpoints (R14/R7 compliance).
     # WHY api_gateway_url (not s7_base_url): the intelligence endpoints go through S9
@@ -452,6 +453,14 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     # above. This adapter creates per-call read sessions without acquiring a UnitOfWork.
     brief_archive = BriefArchiveReadAdapter(read_factory=app.state.read_factory)
 
+    # S10Client: S9-proxied alert endpoints (PLAN-0082 Wave A).
+    # WHY api_gateway_url (not S10 direct): R14/R7 — all service-to-service calls go
+    # through S9 for auth and rate limiting; S10 direct URLs bypass those controls.
+    s10_client = S10Client(
+        base_url=settings.api_gateway_url,
+        timeout=settings.upstream_timeout_seconds,
+    )
+
     tool_registry = build_default_registry()
     tool_executor_factory = ToolExecutorFactory(
         registry=tool_registry,
@@ -462,6 +471,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         s1=s1,
         s3_brief=s3_brief,
         brief_archive=brief_archive,
+        s10=s10_client,
         timeout=settings.upstream_timeout_seconds,
     )
     app.state.tool_executor_factory = tool_executor_factory  # expose for tests / health checks
