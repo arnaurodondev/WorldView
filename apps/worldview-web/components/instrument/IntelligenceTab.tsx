@@ -1,41 +1,61 @@
 /**
- * components/instrument/IntelligenceTab.tsx — Intelligence tab: entity graph + AI brief + contradictions
+ * components/instrument/IntelligenceTab.tsx — Instrument Intelligence tab
  *
- * WHY THIS EXISTS: The Intelligence tab gives analysts a holistic view of an entity's
- * relationship network and conflicting signals in one place. Three sections:
+ * WHY THIS EXISTS:
+ * The Intelligence tab on the instrument page surfaces "what does the platform
+ * KNOW about this entity?" — distinct from price (Overview) and metrics
+ * (Fundamentals). After 2026-05-09 redesign (audit: docs/audits/2026-05-09-qa-intelligence-tab-redesign.md)
+ * it pulls the rich PLAN-0074 intelligence payload — health score, narrative,
+ * confidence breakdown, source distribution, key metrics — and reuses the
+ * dedicated Wave H components (`HealthScoreBadge`, `NarrativeCard`, etc.)
+ * inline so analysts no longer see an empty/floppy graph-only view.
  *
- * 1. Entity Knowledge Graph (sigma.js) — full depth=2 interactive WebGL graph showing
- *    how this entity connects to others: competitors, executives, suppliers, macro events.
- *    Replaces the compact Overview sidebar SVG for deeper exploration.
+ * SECTIONS (top → bottom):
  *
- * 2. AI Intelligence Brief — AI-generated summary of recent developments, risk factors,
- *    and price-relevant signals (uses getInstrumentBrief S9 endpoint).
+ * 1. Intelligence header strip — health badge + entity name/type + a
+ *    deep-link to the full 3-column intelligence page at `/intelligence/{id}`.
  *
- * 3. Detected Contradictions — NLP-extracted conflicting claims across recent articles.
- *    These are HIGH-signal for risk-aware investors and the unique worldview differentiator.
+ * 2. Intelligence summary grid (2-col, only when /intelligence returns data):
+ *    LEFT: NarrativeCard (current LLM/template narrative + Regenerate button)
+ *          + Evidence Quality breakdown (support / corroboration / contradiction)
+ *          + Source Distribution bars
+ *          + Key Metrics grid
+ *    RIGHT: ConfidenceTrendSparkline (90-day) + jump links / latest-evidence stamp
  *
- * LAYOUT (post-redesign):
- *   Two-column: main content (graph + brief + contradictions) on the left,
- *   a sticky right sidebar (270px) that shows clicked-node details or graph-level stats
- *   when nothing is selected. Clicking a node in the sigma graph calls onNodeClick which
- *   populates the sidebar — the sidebar replaces the default router.push navigation.
+ * 3. Entity Knowledge Graph (sigma.js, unchanged from prior version) — full
+ *    depth=2 interactive WebGL graph + the same filter toolbar + right sidebar
+ *    showing graph stats / clicked-node details.
+ *
+ * 4. AI Intelligence Brief — markdown brief from /v1/briefings/instrument/{id}.
+ *    Shown only when the brief endpoint returns data; falls back gracefully
+ *    when the narrative card already provides equivalent information.
+ *
+ * 5. Detected Contradictions — NLP-extracted conflicting claims. Hidden
+ *    when the contradictions array is empty (was previously rendering a
+ *    "no contradictions detected" tile that wasted prime screen real estate).
  *
  * WHO USES IT: app/(app)/instruments/[entityId]/page.tsx (Intelligence tab)
- * DATA SOURCES:
- *   - S9 GET /v1/entities/{entityId}/graph?depth=2 (entity graph)
- *   - S9 GET /v1/entities/{entityId}/contradictions (NLP contradictions)
- * DESIGN REFERENCE: PRD-0028 §6.5 Instrument Detail State C-4 Intelligence tab
+ *
+ * DATA SOURCES (all via S9 gateway):
+ *   - GET /v1/entities/{entityId}/intelligence  (NEW — useEntityIntelligence)
+ *   - GET /v1/entities/{entityId}/graph?depth=2 (entity graph)
+ *   - GET /v1/entities/{entityId}/contradictions (NLP contradictions)
+ *   - GET /v1/briefings/instrument/{entityId} (instrument AI brief)
+ *
+ * DESIGN REFERENCE: PRD-0074 §3 (FR-1 narrative, FR-6 confidence, FR-10 health,
+ *   FR-11 source distribution, FR-12 confidence trend); audit 2026-05-09.
  */
 
 "use client";
 // WHY "use client": uses useQuery for async data fetching, useState, sigma.js WebGL.
 
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { EntityDescriptionPanel } from "@/components/instrument/EntityDescriptionPanel";
 import { EntityGraphErrorBoundary } from "@/components/instrument/EntityGraphErrorBoundary";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, RefreshCw, ChevronRight, ChevronDown, Clock, Network, ArrowUpRight, X } from "lucide-react";
+import { AlertTriangle, RefreshCw, ChevronRight, ChevronDown, Clock, Network, ArrowUpRight, X, ExternalLink } from "lucide-react";
 import { MarkdownContent } from "@/components/ui/markdown-content";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -43,6 +63,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatRelativeTime, cn } from "@/lib/utils";
 import type { BriefingResponse, Contradiction } from "@/types/api";
 import { useState, useMemo, useCallback } from "react";
+// Wave H component reuse — see audit 2026-05-09. Single source of truth for
+// each card lives in components/intelligence/*; we mount them inline here so
+// the tab no longer "looks empty/floppy".
+import { useEntityIntelligence } from "@/lib/api/intelligence";
+import { HealthScoreBadge } from "@/components/intelligence/HealthScoreBadge";
+import { NarrativeCard } from "@/components/intelligence/NarrativeCard";
+import { ConfidenceTrendSparkline } from "@/components/intelligence/ConfidenceTrendSparkline";
+import { SourceDistributionList } from "@/components/intelligence/SourceDistributionList";
+import { KeyMetricsGrid } from "@/components/intelligence/KeyMetricsGrid";
 
 // ── EntityGraph dynamic import (ssr:false) ────────────────────────────────────
 // WHY next/dynamic with ssr:false: EntityGraph.tsx uses sigma.js which creates a
@@ -251,6 +280,295 @@ function InstrumentBriefSection({ entityId }: { entityId: string }) {
           No intelligence brief available for this entity yet.
         </div>
       )}
+    </section>
+  );
+}
+
+// ── IntelligenceSummarySection — PLAN-0074 rich intelligence cards ───────────
+/**
+ * IntelligenceSummarySection — top-of-tab summary using Wave H components.
+ *
+ * WHY THIS EXISTS:
+ * The pre-2026-05-09 Intelligence tab consumed only `/graph` + `/contradictions` +
+ * `/briefings/instrument`. It ignored the rich `/v1/entities/{id}/intelligence`
+ * endpoint that PLAN-0074 Wave D shipped, leaving the tab feeling empty even
+ * when the platform had narrative + health + confidence data ready to display.
+ *
+ * This section renders the rich payload at the top of the tab so the most
+ * actionable intelligence (health score, narrative, evidence quality) is the
+ * FIRST thing analysts see — graph and contradictions remain below for deep work.
+ *
+ * WHY 2-COL SPLIT (left = cards, right = trend):
+ * On the instrument page the Intelligence tab is already squeezed by the
+ * (optional) AnalystRail on the right. A 2-col internal split (60/40) keeps the
+ * narrative text wide enough to read while pinning the small sparkline + jump
+ * links to the right where they don't compete for attention.
+ *
+ * WHY hide silently when API errors:
+ * The legacy graph + brief sections still work without /intelligence. Showing
+ * a loud error tile when only this top section fails would penalise users who
+ * still have valid graph data below. Silent hide keeps the tab usable.
+ */
+function IntelligenceSummarySection({ entityId }: { entityId: string }) {
+  const router = useRouter();
+  // useEntityIntelligence is the canonical Wave H hook for `/v1/entities/{id}/intelligence`.
+  // It already handles auth (useAccessToken), caching (1-min staleTime aligned with KG
+  // pipeline cycle), and the !!entityId/!!token enabled guard — same hook used by the
+  // standalone /intelligence/[entity_id] page so any future bug fix lands in one place.
+  const { data: intel, isLoading, isError } = useEntityIntelligence(entityId);
+
+  // ── Loading skeleton ────────────────────────────────────────────────────────
+  // WHY a skeleton (not a spinner): the section has multiple cards arriving
+  // together; a skeleton communicates the eventual shape so analysts visually
+  // anchor to the layout before content arrives — avoiding layout shift.
+  if (isLoading) {
+    return (
+      <section className="p-3">
+        <div className="flex items-center gap-3 mb-3">
+          <Skeleton className="h-12 w-12 rounded-full shrink-0" />
+          <div className="flex-1 space-y-1.5">
+            <Skeleton className="h-4 w-3/4" />
+            <Skeleton className="h-3 w-1/2" />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-3">
+          <Skeleton className="h-[140px] w-full" />
+          <Skeleton className="h-[140px] w-full" />
+        </div>
+      </section>
+    );
+  }
+
+  // WHY hide on error or no data: see component header comment. Graph/brief
+  // sections below still render and provide value; we keep the tab usable.
+  if (isError || !intel) {
+    return null;
+  }
+
+  const trend = intel.confidence_breakdown?.confidence_trend ?? [];
+  const hasMetrics = intel.key_metrics && Object.keys(intel.key_metrics).length > 0;
+  const hasSources = (intel.confidence_breakdown?.source_distribution?.length ?? 0) > 0;
+  // WHY show evidence quality only when we have at least one signal:
+  // template-v1 narratives often lack mean_corroboration / mean_contradiction,
+  // and rendering "Support 80%" alone with everything else N/A reads as broken.
+  const hasEvidenceSignals =
+    intel.confidence_breakdown?.mean_support != null ||
+    intel.confidence_breakdown?.mean_corroboration != null ||
+    intel.confidence_breakdown?.mean_contradiction != null ||
+    intel.confidence_breakdown?.relation_count > 0;
+
+  return (
+    <section className="p-3 space-y-3">
+      {/* ── Header strip: health + entity name + deep-link to full page ──── */}
+      {/* WHY a strip (not a full hero): the instrument page already has its own
+          CompactInstrumentHeader at the top. We don't repeat the price; we add
+          KG-specific signals (health score) and a path to the full intelligence page. */}
+      <div className="flex items-center gap-3">
+        {/* HealthScoreBadge is purely visual — no hooks. Reused from the
+            EntitySidebar so the same color thresholds apply everywhere. */}
+        <HealthScoreBadge
+          score={intel.health_score ?? null}
+          size={48}
+          className="shrink-0"
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <h2 className="text-[13px] font-semibold text-foreground truncate">
+              {intel.canonical_name}
+            </h2>
+            <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">
+              {intel.entity_type?.replace(/_/g, " ")}
+            </span>
+            {intel.data_completeness != null && (
+              <span className="text-[10px] font-mono text-muted-foreground tabular-nums">
+                · {Math.round(intel.data_completeness * 100)}% complete
+              </span>
+            )}
+          </div>
+          <p className="text-[10px] text-muted-foreground mt-0.5">
+            Knowledge graph intelligence summary
+          </p>
+        </div>
+        {/* Deep-link to /intelligence/[entity_id] — closes the discovery gap
+            identified in audit 2026-05-09 G3 (orphan route had no entry point).
+            WHY router.push (not Link href): the instrument page is a deep route
+            with state we want to preserve via browser back; router.push handles
+            the back-stack correctly without prefetching an entire 3-col page on
+            hover. Link href would prefetch all four panel queries on tab load. */}
+        <button
+          type="button"
+          onClick={() => router.push(`/intelligence/${encodeURIComponent(entityId)}`)}
+          className="shrink-0 flex items-center gap-1 rounded-[2px] border border-border/60 bg-card/60 px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-muted-foreground hover:text-foreground hover:border-border transition-colors"
+          aria-label="Open full intelligence page"
+        >
+          <ExternalLink className="h-3 w-3" strokeWidth={1.5} />
+          Full page
+        </button>
+      </div>
+
+      {/* ── 2-col grid: narrative+evidence on the left, trend on the right ── */}
+      {/* WHY lg breakpoint (1024px) for the split: below 1024px the right column
+          becomes too narrow for the sparkline. Stacking on small viewports keeps
+          everything readable; the AnalystRail forces this on tablets too. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-3">
+
+        {/* ── LEFT: narrative + evidence breakdown + sources + key metrics ── */}
+        <div className="space-y-3">
+          {/* NarrativeCard handles its own truncate/expand + Regenerate mutation.
+              We pass the entityId so the regenerate button knows which entity to
+              target (uses useTriggerNarrativeGeneration internally). */}
+          <div className="rounded-[2px] border border-border/40 bg-card/40 p-3">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">
+              Current Narrative
+            </p>
+            <NarrativeCard
+              entityId={entityId}
+              narrative={intel.current_narrative}
+            />
+          </div>
+
+          {/* Evidence Quality breakdown (mirrors EntitySidebar §"Evidence Quality").
+              WHY render here: the support/corroboration/contradiction triple is
+              the worldview differentiator from PRD-0074 §3 FR-6. Hiding it
+              behind the "Full page" button defeats the purpose of the redesign. */}
+          {hasEvidenceSignals && (
+            <div className="rounded-[2px] border border-border/40 bg-card/40 p-3">
+              <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">
+                Evidence Quality
+              </p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] font-mono">
+                {intel.confidence_breakdown.mean_support != null && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Support</span>
+                    <span className="tabular-nums text-foreground/90">
+                      {(intel.confidence_breakdown.mean_support * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                )}
+                {intel.confidence_breakdown.mean_corroboration != null && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Corroboration</span>
+                    <span className="tabular-nums text-foreground/90">
+                      {(intel.confidence_breakdown.mean_corroboration * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                )}
+                {intel.confidence_breakdown.mean_contradiction != null && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Contradiction</span>
+                    <span className="tabular-nums text-negative">
+                      {(intel.confidence_breakdown.mean_contradiction * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Relations</span>
+                  <span className="tabular-nums text-foreground/90">
+                    {intel.confidence_breakdown.relation_count}
+                  </span>
+                </div>
+                {intel.confidence_breakdown.latest_evidence_at && (
+                  <div className="flex justify-between col-span-2">
+                    <span className="text-muted-foreground">Latest evidence</span>
+                    <span className="tabular-nums text-foreground/90">
+                      {/* WHY Intl.DateTimeFormat (not toISOString().slice):
+                          mirrors EntitySidebar's locale formatting so the same
+                          timestamp on /intelligence and the tab look identical. */}
+                      {new Intl.DateTimeFormat("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      }).format(new Date(intel.confidence_breakdown.latest_evidence_at))}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Source Distribution (PRD-0074 FR-11). Hidden when empty so the
+              section doesn't show a "no sources" placeholder. */}
+          {hasSources && (
+            <div className="rounded-[2px] border border-border/40 bg-card/40 p-3">
+              <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">
+                Evidence Sources
+              </p>
+              <SourceDistributionList
+                distribution={intel.confidence_breakdown.source_distribution}
+              />
+            </div>
+          )}
+
+          {/* Key Metrics (entity-type-specific JSONB fields from canonical_entities) */}
+          {hasMetrics && (
+            <div className="rounded-[2px] border border-border/40 bg-card/40 p-3">
+              <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">
+                Key Metrics
+              </p>
+              <KeyMetricsGrid metrics={intel.key_metrics} />
+            </div>
+          )}
+        </div>
+
+        {/* ── RIGHT: confidence trend sparkline + jump links ──────────────── */}
+        <div className="space-y-3">
+          {/* Confidence Trend sparkline (PRD-0074 FR-12). Show a placeholder
+              tile if trend data is empty so the right column isn't blank
+              while data accumulates — better than collapsing the column. */}
+          <div className="rounded-[2px] border border-border/40 bg-card/40 p-3">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">
+              Confidence Trend (90d)
+            </p>
+            {trend.length > 0 ? (
+              <>
+                <ConfidenceTrendSparkline data={trend} height={48} />
+                <div className="flex justify-between mt-1">
+                  {trend.length >= 2 && (
+                    <>
+                      <span className="text-[9px] font-mono text-muted-foreground">
+                        {trend[0].date.slice(0, 7)}
+                      </span>
+                      <span className="text-[9px] font-mono text-muted-foreground">
+                        {trend[trend.length - 1].date.slice(0, 7)}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="text-[11px] font-mono text-muted-foreground italic py-3">
+                Not enough evidence history yet — trend builds as the KG pipeline
+                processes more articles.
+              </p>
+            )}
+          </div>
+
+          {/* Jump links — encourage exploration of the deeper page without
+              forcing it. Layout mirrors the dense Bloomberg "see also" pattern. */}
+          <div className="rounded-[2px] border border-border/40 bg-card/40 p-3">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">
+              Explore further
+            </p>
+            <div className="space-y-1.5">
+              {/* Each link uses next/link for client-side navigation + prefetch */}
+              <Link
+                href={`/intelligence/${encodeURIComponent(entityId)}`}
+                className="flex items-center justify-between gap-2 text-[11px] text-foreground hover:text-primary transition-colors"
+              >
+                <span>Multi-hop paths & narrative history</span>
+                <ArrowUpRight className="h-3 w-3 shrink-0" strokeWidth={1.5} />
+              </Link>
+              <Link
+                href={`/intelligence/${encodeURIComponent(entityId)}#chat`}
+                className="flex items-center justify-between gap-2 text-[11px] text-foreground hover:text-primary transition-colors"
+              >
+                <span>Ask AI about this entity</span>
+                <ArrowUpRight className="h-3 w-3 shrink-0" strokeWidth={1.5} />
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
     </section>
   );
 }
@@ -750,10 +1068,20 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
       {/* ── Left column: description + graph + brief + contradictions ─────────── */}
       <div className="flex-1 min-w-0 flex flex-col divide-y divide-border/40">
 
+        {/* PLAN-0074 rich intelligence summary — health badge, narrative card,
+            confidence breakdown, source distribution, key metrics, trend
+            sparkline, and a deep-link to the standalone /intelligence page.
+            WHY first: addresses the "empty/floppy" complaint by surfacing the
+            most actionable analyst signals at the top of the tab.
+            See audit 2026-05-09 §6 (top fix #1). */}
+        <IntelligenceSummarySection entityId={entityId} />
+
         {/* Entity description panel (PRD-0073 Worker 13J enrichment).
-            WHY above the graph: analysts see the description first — it gives
-            context before exploring the relationship graph below.
-            The panel renders nothing when description is null (enrichment pending). */}
+            WHY here (not above the summary): the LLM-generated narrative in
+            IntelligenceSummarySection supersedes the static description for
+            most entities. The description still renders when narrative is
+            absent (template-v1 fallback), so we keep it as a secondary band.
+            The panel renders nothing when description is null. */}
         <EntityDescriptionPanel entityId={entityId} />
 
         {/* Entity Knowledge Graph section */}
@@ -817,7 +1145,17 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
         {/* AI brief */}
         <InstrumentBriefSection entityId={entityId} />
 
-        {/* Contradictions */}
+        {/* Contradictions — only mount when we have something to show.
+            WHY conditional <section>: when there are zero contradictions we
+            also drop the divide-y border line and 12px padding above; this
+            makes the tab feel tight rather than padded with empty bands.
+            See audit 2026-05-09 §6 fix #3.
+
+            Show the section when:
+              - we are still loading (skeleton communicates pending state), OR
+              - the request errored (analyst should know data is unavailable), OR
+              - we have at least one contradiction. */}
+        {(isLoading || isError || contradictions.length > 0) && (
         <section className="p-3">
           {isLoading && (
             <div className="space-y-3">
@@ -836,9 +1174,13 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
           {isError && !isLoading && (
             <p className="text-[11px] text-muted-foreground">Could not load intelligence data. Try again shortly.</p>
           )}
-          {!isLoading && !isError && contradictions.length === 0 && (
-            <p className="py-2 text-[11px] text-positive">No contradictions detected — signals are consistent.</p>
-          )}
+          {/* WHY hide when empty (was a "no contradictions detected" tile):
+              audit 2026-05-09 §6 fix #3 — the empty fallback wasted prime
+              real estate and reinforced the "tab looks empty" perception
+              for the (very common) case where no contradictions are detected.
+              The negative space below the brief is more honest than a fake
+              positive signal. The contradictions section now renders ONLY
+              when contradictions.length > 0. */}
           {!isLoading && !isError && contradictions.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
@@ -908,6 +1250,7 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
             </div>
           )}
         </section>
+        )}
       </div>
 
       {/* ── Right sidebar: node/edge detail panel ──────────────────────────── */}
