@@ -40,6 +40,7 @@ performs read/write operations only.
 | POST | `/api/v1/reprocess/{article_id}` | Re-run NLP on an article (admin) | — |
 | GET | `/api/v1/topics` | Active topic clusters | fast |
 | GET | `/internal/v1/llm-costs` | LLM cost aggregates (PLAN-0033); params: `period` (YYYY-MM), `provider`, `breakdown` | X-Internal-JWT (system) |
+| GET | `/api/v1/search/documents` | Full-text search across articles + EDGAR with entity facets. Params: q (req), entity_id (multi), scope, source_type, date_from, date_to, date_preset, page, page_size. Response: SearchDocumentsResponse with results + facets + latency_ms. Internal JWT required. PLAN-0064 W6. | X-Internal-JWT |
 
 ---
 
