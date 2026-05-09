@@ -14,13 +14,20 @@ import { aliasTypeToken, sortAliasesByType } from "@/lib/alias-types";
 
 describe("aliasTypeToken", () => {
   it("returns explicit tokens for every Wave C-3 alias_type", () => {
+    // PLAN-0087 D-F3-002: post Terminal Dark token migration the four
+    // reference identifiers (CUSIP/FIGI/LEI/ISIN) deliberately share the
+    // muted-foreground class so they recede behind primary identifiers.
+    // The test now anchors uniqueness via the (label, sortIndex) tuple
+    // rather than the legacy assumption that every type owned a unique
+    // off-palette colour.
     const required = ["CUSIP", "FIGI", "LEI", "PRIMARY_TICKER", "NAME"];
     for (const type of required) {
       const token = aliasTypeToken(type);
       expect(token.label, `missing label for ${type}`).not.toBe("Alias");
-      expect(token.className, `missing className for ${type}`).not.toContain(
-        "muted-foreground",
-      );
+      // sortIndex of FALLBACK is 100 — every required type gets a deliberate
+      // (non-fallback) sort priority. This keeps the contract that they are
+      // explicitly registered without coupling to the colour vocabulary.
+      expect(token.sortIndex, `missing sortIndex for ${type}`).toBeLessThan(100);
     }
   });
 

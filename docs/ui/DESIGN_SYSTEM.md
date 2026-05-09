@@ -16,6 +16,7 @@
 |-------|--------|-------|
 | Framework | Next.js 15 (App Router) | Node SSR; no `output: 'export'` (ADR-F-01) |
 | UI library | shadcn/ui **only** | Radix UI primitives + Tailwind CSS; no other component library |
+| Data grid | AG Grid (Community) | Whitelisted institutional data-grid primitive — used for screener and portfolio tables where shadcn/ui's `data-table` is insufficient (virtualization, column groups, server-side sort/filter). No other table library is allowed. |
 | Styling | Tailwind CSS v3 + CSS variables | Dark theme enforced; no hardcoded hex colors |
 | Theme | **Dark only** | `class="dark"` set permanently on `<html>` (ADR-F-04) |
 | **Font (UI)** | **IBM Plex Sans** | Loaded via `next/font/google`. Weights: 300/400/500/600/700. Variable: `--font-sans` |
