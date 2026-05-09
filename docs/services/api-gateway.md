@@ -315,6 +315,7 @@ preferable to all-or-nothing for dashboard widgets.
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
+| GET | `/v1/search` | Full-text document search (proxies → S6 /api/v1/search/documents). Params forwarded verbatim: q, entity_id (multi), scope, source_type, date_from, date_to, date_preset, page, page_size. Authenticated only. PLAN-0064 W6. | Yes |
 | GET | `/v1/search/instruments` | Search instruments by name/ticker. `response_model=list[InstrumentSearchResult]` | No |
 | GET | `/v1/signals/ai` | AI signals (stub — returns empty) | Yes |
 
