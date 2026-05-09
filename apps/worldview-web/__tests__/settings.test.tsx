@@ -126,15 +126,36 @@ describe("SettingsAppearancePage", () => {
   });
 });
 
-describe("SettingsSecurityPage (placeholder)", () => {
-  it("renders the Security heading", () => {
+// PLAN-0087 F-BB-005: Security page is no longer a placeholder. It now ships
+// real (mocked-state) controls — MFA toggle, password form, sessions list,
+// audit log. We assert on the substantive content.
+describe("SettingsSecurityPage", () => {
+  it("renders the two-factor authentication card", () => {
     render(<SettingsSecurityPage />);
-    expect(screen.getByText(/^security$/i)).toBeInTheDocument();
+    // The phrase appears in both the heading and body copy; assert presence
+    // via getAllByText so either occurrence satisfies the check.
+    expect(
+      screen.getAllByText(/two-factor authentication/i).length,
+    ).toBeGreaterThan(0);
   });
 
-  it("renders the 'Coming soon' notice", () => {
+  it("renders the password change form", () => {
     render(<SettingsSecurityPage />);
-    expect(screen.getByText(/coming soon/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/current password/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^new password$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/confirm new password/i)).toBeInTheDocument();
+  });
+
+  it("renders the active sessions list with at least one row", () => {
+    render(<SettingsSecurityPage />);
+    expect(screen.getByText(/active sessions/i)).toBeInTheDocument();
+    // The mock data includes at least one session marked as the current device.
+    expect(screen.getAllByText(/this device/i).length).toBeGreaterThan(0);
+  });
+
+  it("renders the recent sign-in audit list", () => {
+    render(<SettingsSecurityPage />);
+    expect(screen.getByText(/recent sign-ins/i)).toBeInTheDocument();
   });
 });
 

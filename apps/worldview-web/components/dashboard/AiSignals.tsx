@@ -58,7 +58,8 @@ export function AiSignals() {
   // WHY muted (not destructive red): NLP pipeline offline is not a user error.
   if (isError) {
     return (
-      <p className="text-sm text-muted-foreground">
+      // WHY text-xs: dashboard tile empty/error copy → 12px (PLAN-0087 F-DENSITY-001).
+      <p className="text-xs text-muted-foreground">
         AI signals unavailable — scores will appear once the NLP pipeline processes articles.
       </p>
     );

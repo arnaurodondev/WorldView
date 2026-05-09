@@ -320,7 +320,9 @@ function GraphDetailSidebar({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3 space-y-4">
+        {/* WHY space-y-3 (was space-y-4): tighter 12px vertical rhythm matches
+            the surrounding gap-3 grid. PLAN-0087 F-DENSITY-002. */}
+        <div className="flex-1 overflow-y-auto p-3 space-y-3">
           {/* Entity name + type badge */}
           <div>
             <p className="text-[13px] font-medium text-foreground leading-snug mb-1.5">{selectedNode.label}</p>
@@ -414,7 +416,8 @@ function GraphDetailSidebar({
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">Graph Overview</span>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-4">
+      {/* WHY space-y-3: 12px rhythm — see PLAN-0087 F-DENSITY-002. */}
+      <div className="flex-1 overflow-y-auto p-3 space-y-3">
 
         {/* Graph size stats */}
         <div className="grid grid-cols-2 gap-px rounded-[2px] overflow-hidden border border-border/30 bg-border/30">
@@ -867,7 +870,9 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
                 );
               })()}
               {/* Severity filter strip */}
-              <div className="flex items-center gap-4 h-[22px] px-0 mb-1">
+              {/* WHY gap-2 (was gap-4): 16px gap on 22px-tall pills was too
+                  loose; 8px is the dense Bloomberg pill rhythm. F-DENSITY-002. */}
+              <div className="flex items-center gap-2 h-[22px] px-0 mb-1">
                 {(["HIGH", "MEDIUM", "LOW"] as const).map((sev) => {
                   const count = contradictions.filter((c) => c.severity === sev).length;
                   return (

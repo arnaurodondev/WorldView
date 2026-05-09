@@ -56,7 +56,10 @@ export function TopBets() {
   // WHY muted (not destructive red): prediction market service offline is not a user error.
   if (isError) {
     return (
-      <p className="text-sm text-muted-foreground">
+      // WHY text-xs (was text-sm): empty/error copy on dense dashboard tiles
+      // matches the 12px Bloomberg standard. text-sm (14px) drifts toward
+      // marketing-page typography. PLAN-0087 F-DENSITY-001.
+      <p className="text-xs text-muted-foreground">
         Prediction markets unavailable — odds will appear once Polymarket data syncs.
       </p>
     );
@@ -66,7 +69,7 @@ export function TopBets() {
 
   if (markets.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">No open prediction markets</p>
+      <p className="text-xs text-muted-foreground">No open prediction markets</p>
     );
   }
 
