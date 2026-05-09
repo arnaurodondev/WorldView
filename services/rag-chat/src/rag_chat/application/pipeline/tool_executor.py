@@ -43,7 +43,7 @@ from uuid import UUID
 import structlog
 
 # Import from libs/tools (must be on PYTHONPATH — added in Dockerfile, BP-181)
-from tools.tool_registry import ToolRegistry  # type: ignore[import-untyped]
+from tools.tool_registry import ToolRegistry  # type: ignore[import-untyped,import-not-found]
 
 from rag_chat.domain.entities.chat import CitationMeta, RetrievedItem
 from rag_chat.domain.enums import ItemType
@@ -2227,7 +2227,7 @@ def build_default_registry() -> ToolRegistry:
     through the handler stored in the registry. The registry handler field is
     kept for future extension (e.g. PLAN-0067 full tool catalog).
     """
-    from tools.tool_spec import ParameterSpec, ToolSpec  # type: ignore[import-untyped]
+    from tools.tool_spec import ParameterSpec, ToolSpec  # type: ignore[import-untyped,import-not-found]
 
     registry = ToolRegistry()
 

@@ -26,6 +26,8 @@ import pytest
 
 from messaging.kafka.consumer.base import ConsumerConfig
 
+pytestmark = pytest.mark.unit
+
 
 class TestConsumerConfigDefaults:
     """Pin the rebalance-safety defaults in :class:`ConsumerConfig`.

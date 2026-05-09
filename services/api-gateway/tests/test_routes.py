@@ -170,12 +170,23 @@ async def test_company_overview_composes_responses(authed_client, authed_mock_cl
 
 @pytest.mark.asyncio
 async def test_company_overview_propagates_downstream_error(authed_client, authed_mock_clients) -> None:
-    """Downstream 404 should propagate through the gateway."""
+    """D-F1-007 (PLAN-0087, 2026-05-09): semantics preserved with the new
+    KG-fallback chain.
+
+    The gateway now tries an entity_id → ticker → symbol-lookup fallback
+    when the id-based lookup misses.  Only when BOTH paths miss does the
+    function raise DownstreamError(404), which the route handler converts
+    back to a 404 response.  Net behaviour matches the pre-fix contract for
+    the "instrument truly unknown" case; the new code path only changes the
+    "input id is a KG entity_id" case (covered by other tests).
+    """
     err_resp = MagicMock(spec=httpx.Response)
     err_resp.status_code = 404
     err_resp.text = "Instrument not found"
 
     authed_mock_clients.market_data.get = AsyncMock(return_value=err_resp)
+    # KG fallback also misses — ensures DownstreamError is raised + propagated.
+    authed_mock_clients.knowledge_graph.get = AsyncMock(return_value=err_resp)
 
     response = await authed_client.get(
         "/v1/companies/00000000-0000-0000-0000-000000000404/overview",

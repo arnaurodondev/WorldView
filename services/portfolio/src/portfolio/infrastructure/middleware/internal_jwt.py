@@ -212,7 +212,16 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
             )
         except Exception as exc:
-            logger.debug("internal_jwt_invalid", error=str(exc))  # type: ignore[no-any-return]
+            # D-F2-001 (PLAN-0087, 2026-05-09): elevated from DEBUG → WARNING
+            # so production logs surface the actual decode failure without
+            # needing to reconfigure log levels.  Includes the exception
+            # class name to disambiguate signature/issuer/audience/expiry
+            # failures at a glance.
+            logger.warning(  # type: ignore[no-any-return]
+                "internal_jwt_invalid",
+                error_class=type(exc).__name__,
+                error=str(exc),
+            )
             return Response(
                 content='{"detail":"Invalid internal JWT"}',
                 status_code=401,
