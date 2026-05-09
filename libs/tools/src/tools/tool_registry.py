@@ -10,11 +10,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml  # type: ignore[import-untyped]
 
-from tools.tool_spec import ToolSpec  # noqa: TCH001
+if TYPE_CHECKING:
+    from tools.tool_spec import ToolSpec
 
 # Path to the canonical tool manifest, co-located with this module
 _MANIFEST_PATH = Path(__file__).parent / "capability_manifest.yaml"
