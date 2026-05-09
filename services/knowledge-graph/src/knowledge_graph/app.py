@@ -119,6 +119,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.engine = engine
     app.state.read_engine = read_engine
 
+    # 4b. Register repo classes on app.state so the narratives.py POST route can resolve
+    # them without importing from infrastructure/ (R25 compliance).
+    # WHY app.state: the router never imports infrastructure directly; it reads these
+    # class references from app.state at request time and passes them to the use case.
+    from knowledge_graph.infrastructure.intelligence_db.repositories.narrative_repository import (
+        NarrativeRepository as _NarrativeRepo,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
+        OutboxRepository as _OutboxRepo,
+    )
+
+    app.state.narrative_repo_class = _NarrativeRepo
+    app.state.outbox_repo_class = _OutboxRepo
+
     # 4. Admin token (DLQ endpoint auth)
     app.state.admin_token = getattr(settings, "admin_token", "")
 

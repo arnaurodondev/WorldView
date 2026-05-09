@@ -3,8 +3,14 @@
   GET  /api/v1/entities/{entity_id}/narratives           — paginated version history
   POST /api/v1/entities/{entity_id}/narratives/generate  — manual generation trigger
 
-Read-only GET uses ReadOnlyDbSessionDep (R27).
-POST uses write session for GenerateNarrativeUseCase.
+R25 compliance: the GET route uses ListNarrativeVersionsUseCaseDep (wired in
+dependencies.py); the POST route resolves repo classes from app.state (also
+set in the infrastructure startup layer) so this module never imports from
+knowledge_graph.infrastructure.
+
+R27 compliance:
+  - GET  uses ReadOnlyDbSessionDep (read-only path via ListNarrativeVersionsUseCaseDep).
+  - POST uses write session factories stored on app.state (write path).
 
 Rate-limit (POST): one manual trigger per entity+tenant+user per hour via Valkey.
 BP-200 guard: uses set_nx() — NOT set(..., nx=True).
@@ -16,10 +22,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from knowledge_graph.api.dependencies import ReadOnlyDbSessionDep
+from knowledge_graph.api.dependencies import ListNarrativeVersionsUseCaseDep
 from knowledge_graph.api.schemas_intelligence import (
     NarrativeGenerateTriggerResponse,
     NarrativeVersionListResponse,
+    NarrativeVersionPublic,
 )
 from knowledge_graph.application.use_cases.generate_narrative import GenerateNarrativeUseCase
 from knowledge_graph.application.use_cases.trigger_narrative_generation import (
@@ -42,7 +49,7 @@ _RATE_LIMIT_RETRY_AFTER = 3600  # seconds — matches TriggerNarrativeGeneration
 )
 async def list_narrative_versions(
     entity_id: UUID,
-    session: ReadOnlyDbSessionDep,
+    uc: ListNarrativeVersionsUseCaseDep,
     request: Request,
     limit: int = Query(default=20, ge=1, le=100),
     cursor: str | None = Query(default=None),
@@ -55,19 +62,9 @@ async def list_narrative_versions(
     - 200: list (possibly empty) with optional next_cursor
     - 422: invalid entity_id UUID
 
-    Uses ReadOnlyDbSessionDep (R27 — read-only).
+    R25: infra wired in dependencies.py via ListNarrativeVersionsUseCaseDep.
+    R27: uses read-only session (ReadOnlyDbSessionDep inside the Dep factory).
     """
-    # Deferred infra import: R25 compliance — never import infra at module level
-    from knowledge_graph.application.use_cases.list_narrative_versions import (
-        ListNarrativeVersionsUseCase,
-    )
-    from knowledge_graph.infrastructure.intelligence_db.repositories.narrative_repository import (
-        NarrativeRepository,
-    )
-
-    narrative_repo = NarrativeRepository(session)
-    uc = ListNarrativeVersionsUseCase(narrative_repo)
-
     # Extract tenant_id from JWT claims (optional)
     tenant_id: UUID | None = None
     jwt_claims = getattr(request.state, "jwt_claims", {}) or {}
@@ -78,11 +75,29 @@ async def list_narrative_versions(
         except (ValueError, AttributeError):
             tenant_id = None
 
-    return await uc.execute(
+    # Use case returns (versions, next_cursor) — domain types.
+    # Map to wire-format response here in the API layer (R12).
+    versions, next_cursor = await uc.execute(
         entity_id=entity_id,
         tenant_id=tenant_id,
         limit=limit,
         cursor=cursor,
+    )
+    return NarrativeVersionListResponse(
+        entity_id=entity_id,
+        versions=[
+            NarrativeVersionPublic(
+                version_id=v.version_id,
+                narrative_text=v.narrative_text,
+                model_id=v.model_id,
+                generation_reason=v.generation_reason.value,
+                generated_at=v.generated_at,
+                word_count=v.word_count,
+                quality_score=v.quality_score,
+            )
+            for v in versions
+        ],
+        next_cursor=next_cursor,
     )
 
 
@@ -104,7 +119,9 @@ async def trigger_narrative_generation(
     - 429: rate limit hit — ``Retry-After: 3600`` header included
     - 422: invalid entity_id UUID
 
-    Uses write session (R27 — write use case).
+    R25: repo classes resolved from app.state (set during startup by the
+    infrastructure layer) — this router never imports from infrastructure/.
+    R27: write use case — session factories from app.state are write-capable.
     """
     # Identify caller for rate-limit key
     jwt_claims = getattr(request.state, "jwt_claims", {}) or {}
@@ -126,13 +143,21 @@ async def trigger_narrative_generation(
         # Fail open — allow the trigger but skip rate limiting
         valkey = None
 
-    # Build GenerateNarrativeUseCase using the app session factories
-    # Use getattr to handle tests where lifespan has not run (factories not set).
+    # Resolve repo classes from app.state (set by the infrastructure startup layer).
+    # WHY app.state: the infrastructure startup registers the concrete NarrativeRepository
+    # and OutboxRepository classes on app.state so this API router never imports from
+    # knowledge_graph.infrastructure (R25). Tests set app.state.narrative_repo_class etc.
+    # directly to mock objects.
+    _narrative_repo_class = getattr(request.app.state, "narrative_repo_class", None)
+    _outbox_repo_class = getattr(request.app.state, "outbox_repo_class", None)
+
     settings = request.app.state.settings
     generate_uc = GenerateNarrativeUseCase(
         write_session_factory=getattr(request.app.state, "write_factory", None),  # type: ignore[arg-type]
         read_session_factory=getattr(request.app.state, "read_factory", None),
         narrative_llm_model_id=getattr(settings, "narrative_llm_model_id", "template-v1"),
+        narrative_repo_class=_narrative_repo_class,
+        outbox_repo_class=_outbox_repo_class,
     )
 
     if valkey is not None:

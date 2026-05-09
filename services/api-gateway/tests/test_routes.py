@@ -1054,8 +1054,11 @@ async def test_entity_graph_resilient_to_missing_fields(authed_client, authed_mo
     rather than raising KeyError / TypeError.
     """
     # Minimal payload: center only, no relations, no neighbor entities
+    # WHY valid UUID: entity_id path param is now UUID-typed (security fix — rejects
+    # malformed values with 422 before any downstream call).
+    _LONELY_ENTITY_ID = "00000000-0000-0000-0000-000000000042"
     s7_minimal = {
-        "center": {"entity_id": "abc-123", "canonical_name": "Lonely Corp.", "entity_type": "company"},
+        "center": {"entity_id": _LONELY_ENTITY_ID, "canonical_name": "Lonely Corp.", "entity_type": "company"},
         "relations": [],
         "entities": {},
     }
@@ -1073,12 +1076,12 @@ async def test_entity_graph_resilient_to_missing_fields(authed_client, authed_mo
         algorithm="HS256",
     )
     response = await authed_client.get(
-        "/v1/entities/abc-123/graph",
+        f"/v1/entities/{_LONELY_ENTITY_ID}/graph",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["entity_id"] == "abc-123"
+    assert body["entity_id"] == _LONELY_ENTITY_ID
     assert len(body["nodes"]) == 1  # center only
     assert body["nodes"][0]["size"] == 2
     assert body["edges"] == []
