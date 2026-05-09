@@ -33,6 +33,7 @@ from rag_chat.api.routes import briefings as briefings_router
 from rag_chat.api.routes import chat as chat_router
 from rag_chat.api.routes import internal as internal_router
 from rag_chat.api.routes import internal_costs as internal_costs_router
+from rag_chat.api.routes import proposal as proposal_router
 from rag_chat.api.routes import public_briefings as public_briefings_router
 from rag_chat.api.routes import threads as threads_router
 from rag_chat.infrastructure.config.settings import RagChatSettings
@@ -461,6 +462,11 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         timeout=settings.upstream_timeout_seconds,
     )
 
+    # Expose s10_client on app.state so the proposal confirmation route can call it directly
+    # (POST /v1/chat/proposals/{id}/confirm executes the write action without going through
+    # ToolExecutor, which is per-request and not available at proposal-confirm time).
+    app.state.s10_client = s10_client  # PLAN-0082 Wave B
+
     tool_registry = build_default_registry()
     tool_executor_factory = ToolExecutorFactory(
         registry=tool_registry,
@@ -727,5 +733,6 @@ def create_app(settings: RagChatSettings | None = None) -> FastAPI:
     app.include_router(public_briefings_router.router)
     app.include_router(internal_costs_router.router)
     app.include_router(internal_router.router)
+    app.include_router(proposal_router.router)  # PLAN-0082 Wave B: proposal confirmation
 
     return app

@@ -154,6 +154,46 @@ class AlertResponse(BaseModel):
     snooze_until: datetime | None = None
 
 
+# ── User-initiated alert creation (PLAN-0082 Wave B) ──────────────────────────
+
+
+class CreateAlertRequest(BaseModel):
+    """Request body for ``POST /api/v1/alerts``.
+
+    ``condition`` identifies the trigger type. ``threshold`` holds
+    condition-specific parameters (e.g. ``{"value": 200.0}``). Both are
+    required — a condition without a threshold cannot be evaluated.
+
+    ``entity_id`` is the UUID of the entity to watch.  It is required
+    because alert rules are always entity-scoped (no global alerts).
+    """
+
+    entity_id: UUID = Field(description="UUID of the entity to watch")
+    condition: str = Field(
+        description="Trigger condition: price_below | price_above | volume_spike | percent_change",
+        min_length=1,
+        max_length=100,
+    )
+    threshold: dict = Field(  # type: ignore[type-arg]
+        description="JSON threshold parameters, e.g. {'value': 200.0}"
+    )
+    severity: str = Field(
+        default="low",
+        description="Initial severity tier: low | medium | high | critical",
+    )
+
+
+class AlertCreatedResponse(BaseModel):
+    """Response body for ``POST /api/v1/alerts`` on success."""
+
+    alert_id: UUID
+    entity_id: UUID
+    condition: str
+    threshold: dict  # type: ignore[type-arg]
+    severity: str
+    created_at: str  # ISO-8601 UTC
+
+
 class AlertHistoryResponse(BaseModel):
     """Paginated list of alerts in a tenant's history."""
 

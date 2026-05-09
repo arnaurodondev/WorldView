@@ -44,6 +44,8 @@ _TOOL_LABELS: dict[str, str] = {
     "get_earnings_calendar": "Loading earnings calendar...",
     # PLAN-0082 Wave A: action tools
     "get_alerts": "Loading your alerts...",
+    # PLAN-0082 Wave B: write action tools
+    "create_alert": "Creating alert...",
 }
 
 
@@ -180,6 +182,100 @@ class SSEEmitter:
                     "label": label,
                     "input": input_summary,
                     "status": status,
+                }
+            ),
+        }
+
+    def emit_pending_action(
+        self,
+        proposal_id: str,
+        tool_name: str,
+        description: str,
+        params: dict,  # type: ignore[type-arg]
+    ) -> dict[str, str]:
+        """Emit a pending_action event when a write-action tool requires user confirmation.
+
+        WHY a separate SSE event type (not tool_call): tool_call/tool_result are
+        informational spinners — they fire for read tools and resolve automatically.
+        ``pending_action`` is a blocking event: the frontend must show a modal and
+        wait for explicit user confirmation before the action executes.
+
+        The ``proposal_id`` is a server-generated UUID the frontend sends back via
+        POST /v1/chat/proposals/{id}/confirm to execute the action.
+
+        Args:
+            proposal_id:  UUID string for the pending proposal (client sends back on confirm).
+            tool_name:    Internal tool name (e.g. "create_alert").
+            description:  Human-readable description of the pending action shown in modal.
+            params:       Safe display parameters shown in the confirmation modal.
+        """
+        return {
+            "event": "pending_action",
+            "data": json.dumps(
+                {
+                    "type": "pending_action",
+                    "proposal_id": proposal_id,
+                    "tool": tool_name,
+                    "description": description,
+                    "params": params,
+                }
+            ),
+        }
+
+    def emit_action_executed(
+        self,
+        proposal_id: str,
+        tool_name: str,
+        result: dict,  # type: ignore[type-arg]
+    ) -> dict[str, str]:
+        """Emit an action_executed event after the user confirms and the action completes.
+
+        WHY ALWAYS EMITTED on confirm: the frontend proposal modal opened by
+        ``pending_action`` must always receive a close signal.  Emitting on
+        success ensures the UI never hangs in a loading state.
+
+        Args:
+            proposal_id:  UUID string matching the prior pending_action proposal_id.
+            tool_name:    Internal tool name matching the prior pending_action.
+            result:       Action result summary (e.g. {"alert_id": "...", "condition": "..."}).
+        """
+        return {
+            "event": "action_executed",
+            "data": json.dumps(
+                {
+                    "type": "action_executed",
+                    "proposal_id": proposal_id,
+                    "tool": tool_name,
+                    "result": result,
+                }
+            ),
+        }
+
+    def emit_action_rejected(
+        self,
+        proposal_id: str,
+        tool_name: str,
+        reason: str = "user_cancelled",
+    ) -> dict[str, str]:
+        """Emit an action_rejected event when the user dismisses the confirmation modal.
+
+        WHY ALWAYS EMITTED on dismiss: mirrors emit_action_executed so the frontend
+        always has a matching close signal regardless of whether the user confirmed
+        or cancelled.
+
+        Args:
+            proposal_id:  UUID string matching the prior pending_action proposal_id.
+            tool_name:    Internal tool name matching the prior pending_action.
+            reason:       Rejection reason token. Default "user_cancelled".
+        """
+        return {
+            "event": "action_rejected",
+            "data": json.dumps(
+                {
+                    "type": "action_rejected",
+                    "proposal_id": proposal_id,
+                    "tool": tool_name,
+                    "reason": reason,
                 }
             ),
         }

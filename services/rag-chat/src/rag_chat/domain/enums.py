@@ -27,6 +27,9 @@ class ItemType(StrEnum):
     event = "event"
     financial = "financial"
     cypher_path = "cypher_path"
+    # PLAN-0082 Wave B: write-action tools return an action_pending item so the
+    # pipeline can detect it and emit a pending_action SSE event for confirmation.
+    action_pending = "action_pending"
 
 
 class MessageRole(StrEnum):

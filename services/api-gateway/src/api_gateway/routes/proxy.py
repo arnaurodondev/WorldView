@@ -374,6 +374,37 @@ async def chat_entity_context_stream(request: Request) -> Any:
     return StreamingResponse(_stream_body(), media_type="text/event-stream")
 
 
+# ── Proposal confirmation (PLAN-0082 Wave B) ─────────────────────────────────
+
+
+@router.post("/chat/proposals/{proposal_id}/confirm")
+async def confirm_proposal(proposal_id: str, request: Request) -> Any:
+    """Proxy POST /v1/chat/proposals/{id}/confirm → S8 (SSE streaming).
+
+    Requires authentication. The frontend calls this after the user confirms
+    a write-action in the ActionConfirmModal.  Forwards the JSON body and
+    X-Internal-JWT to S8 which executes the action (e.g. creates an alert
+    via S10) and streams ``action_executed`` or ``action_rejected`` SSE events.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _auth_headers(request)
+    clients = _clients(request)
+
+    async def _stream_body() -> AsyncIterator[bytes]:
+        async with clients.rag_chat.stream(
+            "POST",
+            f"/api/v1/chat/proposals/{proposal_id}/confirm",
+            content=body,
+            headers={"Content-Type": "application/json", **headers},
+        ) as resp:
+            async for chunk in resp.aiter_bytes():
+                yield chunk
+
+    return StreamingResponse(_stream_body(), media_type="text/event-stream")
+
+
 # ── Threads ───────────────────────────────────────────────
 
 
@@ -811,6 +842,37 @@ async def list_alert_history(request: Request) -> Response:
     resp = await clients.alert.get(
         "/api/v1/alerts/history",
         params=dict(request.query_params),
+        headers=headers,
+    )
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+# ── Alert creation proxy (PLAN-0082 Wave B) ──────────────────────────────────
+
+
+@router.post("/alerts", status_code=201)
+async def create_alert(request: Request) -> Response:
+    """Proxy POST /api/v1/alerts → S10 Alert service.
+
+    Creates a user-initiated alert rule.  Requires authentication.  Forwards
+    the JSON body and X-Internal-JWT so S10's InternalJWTMiddleware can extract
+    the user_id and tenant_id from the JWT (PRD-0025 §T-D-1-10).
+
+    Cache-Control: no-store — this is a write mutation, must never be cached.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = {"Content-Type": "application/json", **_auth_headers(request)}
+    clients = _clients(request)
+    resp = await clients.alert.post(
+        "/api/v1/alerts",
+        content=body,
         headers=headers,
     )
     return Response(
