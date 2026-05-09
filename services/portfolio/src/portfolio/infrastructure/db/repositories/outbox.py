@@ -43,10 +43,18 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         )
 
     async def save(self, record: OutboxRecord) -> None:
+        # F-003 / PLAN-0087 #9: persist the resolved Kafka topic on every
+        # outbox row so SQL replay tooling and observability can see the
+        # routing target without loading service code. Falls back to None if
+        # the event_type is not in the canonical map — dispatch will reject
+        # those rows with a clear error at publish time anyway, so a NULL
+        # topic is informative (a known event_type has no excuse to be NULL).
+        topic = EVENT_TOPIC_MAP.get(record.event_type)
         row = OutboxEventModel(
             id=record.id,
             tenant_id=record.tenant_id,
             event_type=record.event_type,
+            topic=topic,
             payload=record.payload,
             status=record.status,
             attempt_count=record.attempt_count,

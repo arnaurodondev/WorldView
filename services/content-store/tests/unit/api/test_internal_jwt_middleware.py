@@ -250,3 +250,111 @@ async def test_middleware_passes_through_with_skip_verification() -> None:
         resp = await client.get("/test", headers={"X-Internal-JWT": "bad.token.here"})
     # skip_verification=True: passes through with empty state rather than 503
     assert resp.status_code == 200
+
+
+# ── F-001 (PLAN-0087 audit) — JWT audience negative tests ─────────────────────
+#
+# Commit 80dfc0fc added audience="worldview-internal" + "aud" to options.require
+# but no negative test asserted wrong/missing aud → 401.  qa-beta-test-engineer
+# (2026-05-09) flagged this BLOCKING — content-store handles document writes,
+# so an aud-bypass would let any other-audience token (e.g. zitadel-frontend)
+# write to gold storage.
+
+
+async def _cs_dispatch_with_token(token_bytes: bytes, public_key: object) -> object:
+    """Helper: dispatch through InternalJWTMiddleware, return Response.
+
+    Mirrors the existing wrong-issuer test pattern in this file.  No jti claim
+    is present, so the valkey check is skipped (no Valkey wiring needed).
+    """
+    from content_store.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    mock_app = Starlette()
+    mock_app.state._internal_jwt_public_key = public_key
+    mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
+    mw._public_key = public_key
+
+    async def _ok(req: Request) -> Response:
+        return Response("ok", status_code=200, headers={"x-route-called": "1"})
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/documents/batch",
+        "query_string": b"",
+        "headers": [(b"x-internal-jwt", token_bytes)],
+        "app": mock_app,
+    }
+    return await mw.dispatch(Request(scope), _ok)
+
+
+async def test_internal_jwt_rejects_wrong_audience() -> None:
+    """F-001: aud="zitadel-frontend" → 401 (must be "worldview-internal")."""
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    bad_aud_token = jwt.encode(
+        {
+            "sub": "user-1",
+            "tenant_id": "tenant-1",
+            "role": "owner",
+            "iss": "worldview-gateway",
+            "aud": "zitadel-frontend",  # WRONG audience
+            "exp": 9999999999,
+        },
+        private_key,
+        algorithm="RS256",
+    )
+    result = await _cs_dispatch_with_token(bad_aud_token.encode(), private_key.public_key())
+    assert result.status_code == 401
+    assert "x-route-called" not in result.headers
+
+
+async def test_internal_jwt_rejects_missing_audience() -> None:
+    """F-001: token without aud claim → 401 (require-list catches it)."""
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    no_aud_token = jwt.encode(
+        {
+            "sub": "user-1",
+            "tenant_id": "tenant-1",
+            "role": "owner",
+            "iss": "worldview-gateway",
+            # NO "aud" key
+            "exp": 9999999999,
+        },
+        private_key,
+        algorithm="RS256",
+    )
+    result = await _cs_dispatch_with_token(no_aud_token.encode(), private_key.public_key())
+    assert result.status_code == 401
+    assert "x-route-called" not in result.headers
+
+
+async def test_internal_jwt_accepts_multi_audience_list_containing_expected() -> None:
+    """F-001: aud=["worldview-internal", "other"] → 200 (PyJWT list-aud contract)."""
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    multi_aud_token = jwt.encode(
+        {
+            "sub": "user-1",
+            "tenant_id": "tenant-1",
+            "role": "owner",
+            "iss": "worldview-gateway",
+            "aud": ["worldview-internal", "other-audience"],
+            "exp": 9999999999,
+        },
+        private_key,
+        algorithm="RS256",
+    )
+    result = await _cs_dispatch_with_token(multi_aud_token.encode(), private_key.public_key())
+    assert result.status_code == 200
+    assert result.headers.get("x-route-called") == "1"

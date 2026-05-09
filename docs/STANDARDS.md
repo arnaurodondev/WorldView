@@ -379,6 +379,30 @@ CREATE INDEX ix_outbox_claimable ON outbox_events (status, lease_expires)
 Services that need to identify the domain aggregate may add `aggregate_type TEXT` and
 `aggregate_id UUID` columns. The columns listed above are the minimum required set.
 
+#### 3.4.1 Cross-service consistency — known historical drift
+
+Historically, several services diverged from the canonical shape (audited
+2026-05-09 in `docs/audits/2026-05-09-qa-beta-data-platform.md` finding
+F-003). PLAN-0087 #9 reconciled the two outright bugs:
+
+| Service / DB | Drift | Remediation migration |
+|---|---|---|
+| `portfolio_db` | `topic` column missing — derived from `event_type` via Python `EVENT_TOPIC_MAP` at dispatch time | `services/portfolio/alembic/versions/0017_add_topic_to_outbox_events.py` (adds nullable `topic` + back-fills) |
+| `ingestion_db` | `dispatched_at` column missing — only `published_at` was present; SQL tooling that filtered on the canonical column missed this service | `services/market-ingestion/alembic/versions/0013_add_dispatched_at_to_outbox.py` (adds nullable `dispatched_at` + back-fills from `published_at`) |
+
+Other historical column-name variations remain (e.g., the
+"avro group" — `intelligence_db`, `nlp_db`, `alert_db` — still uses
+`event_id` PK, `payload_avro BYTEA`, `retry_count`). Renaming these is
+out-of-scope until a coordinated cut-over wave because it requires
+simultaneous code changes across producers, consumers, and replay
+tooling. New services MUST adopt the §3.4 canonical shape from day one;
+existing-service migrations are the safety net for cross-service tooling.
+
+When you write SQL that scans `outbox_events` across services (replay
+scripts, dashboards, retention queries), use the **canonical column names**
+(`id`, `topic`, `dispatched_at`, `attempt_count`) — every service's
+post-PLAN-0087 schema exposes them.
+
 ### 3.5 Outbox status values — canonical state machine
 
 ```
