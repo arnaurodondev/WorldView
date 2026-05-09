@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog.contextvars
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from alert.api import dlq, email_routes, health, routes
@@ -159,6 +160,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Exception handlers — must be registered before middleware so that handler
     # responses are still processed by middleware layers (e.g. Prometheus timing).
     register_error_handlers(app)
+
+    # PLAN-0087 (2026-05-09): CORS for browser WS connections from worldview-web.
+    # uvicorn rejects WS upgrades from cross-origin browsers with 403 before any
+    # route handler runs without this middleware (observed on /api/v1/alerts/stream).
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3001",
+            "http://localhost:3000",
+            "http://127.0.0.1:3001",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # Middleware (must register before app starts)
     app.add_middleware(RequestIdMiddleware)
