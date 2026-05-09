@@ -58,16 +58,31 @@ ALTER TABLE relation_evidence_raw
     # -------------------------------------------------------------------------
     # 2. Best-effort backfill from document_source_metadata.
     # Rows without a matching document_source_metadata record keep NULL.
-    # Note: document_source_metadata is in content_db; this UPDATE will be a
-    # no-op if running against a standalone intelligence_db (e.g., test DB).
+    # Note: document_source_metadata lives in content_db (S5), not in
+    # intelligence_db.  When running against a standalone intelligence_db
+    # (e.g., the dev Docker stack where both databases share the same Postgres
+    # instance but document_source_metadata is in content_store_db), the table
+    # simply does not exist in this schema and the UPDATE would raise
+    # "relation does not exist".  We catch undefined_table to make the backfill
+    # genuinely no-op in that case (BP-420).
     # -------------------------------------------------------------------------
     op.execute("""
-UPDATE relation_evidence_raw rer
-SET    source_name = dsm.source_name,
-       source_type = dsm.source_type
-FROM   document_source_metadata dsm
-WHERE  rer.source_document_id = dsm.document_id
-  AND  (rer.source_name IS NULL OR rer.source_type IS NULL)
+DO $$
+BEGIN
+    UPDATE relation_evidence_raw rer
+    SET    source_name = dsm.source_name,
+           source_type = dsm.source_type
+    FROM   document_source_metadata dsm
+    WHERE  rer.source_document_id = dsm.document_id
+      AND  (rer.source_name IS NULL OR rer.source_type IS NULL);
+EXCEPTION
+    WHEN undefined_table THEN
+        -- document_source_metadata is not in this schema (cross-DB table living
+        -- in content_store_db).  Skip the backfill — rows retain NULL values
+        -- and will be populated correctly by the KG consumer at insert time.
+        RAISE NOTICE 'document_source_metadata not found — skipping backfill (expected in standalone intelligence_db)';
+END;
+$$
 """)
 
     # -------------------------------------------------------------------------
@@ -79,8 +94,12 @@ WHERE  rer.source_document_id = dsm.document_id
     #   GROUP BY canonical_type, source_type, source_name
     # -------------------------------------------------------------------------
     with op.get_context().autocommit_block():
+        # IF NOT EXISTS guards against the case where a previous partial run
+        # created this index in the autocommit block before the main transaction
+        # rolled back (so alembic_version was NOT updated to 0035, but the index
+        # already exists in pg_class).
         op.execute("""
-CREATE INDEX CONCURRENTLY idx_relation_evidence_source_diversity
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_relation_evidence_source_diversity
     ON relation_evidence_raw (canonical_type, source_type, source_name)
     WHERE processed = true
 """)
