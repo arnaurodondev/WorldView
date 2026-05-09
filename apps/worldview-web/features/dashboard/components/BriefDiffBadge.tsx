@@ -83,10 +83,11 @@ export function BriefDiffBadge({ token, briefId }: BriefDiffBadgeProps) {
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-label={`${newCount} new bullets in today's brief. Click to see what changed.`}
-        // WHY amber-500/10 background: amber is the design system "attention" token
-        // (--warning) used for stale badges elsewhere. Consistent colour language:
-        // amber = "something changed / needs attention". bg-/10 keeps it subtle.
-        className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-400 hover:bg-amber-500/20 transition-colors"
+        // WHY bg-warning/10 + text-warning (was off-palette amber-400/500):
+        // --warning is the design system attention token (Bloomberg amber);
+        // mapping to it keeps a single source for "needs attention" badges
+        // and makes the change automatically pick up future palette tweaks.
+        className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning hover:bg-warning/20 transition-colors"
       >
         {/* WHY show count: traders want the exact number; "3 new" is more actionable
             than just "changes". Zero new bullets (only removals) shows "changes". */}

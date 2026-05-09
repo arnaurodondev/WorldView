@@ -72,19 +72,20 @@ export function BriefRating({ token, briefId }: BriefRatingProps) {
           disabled={selected !== null}
           aria-label={`Rate brief ${s} star${s > 1 ? "s" : ""}`}
           aria-pressed={selected !== null && s <= selected}
-          // WHY filled (text-amber-400) for all stars ≤ selected:
+          // WHY text-warning (was off-palette text-amber-400):
+          // --warning is the Bloomberg amber design token (#FFB000) used
+          // across the terminal for "attention/quality" signals; stars
+          // for rating naturally fall into that semantic group.
           // Standard 5-star convention — clicking "3" fills stars 1, 2, and 3.
-          // WHY hover highlights all stars ≤ hovered: not implemented here
-          // (kept simple since hover state adds complexity for minor UX gain).
           className={
             selected !== null && s <= selected
-              ? "text-amber-400 cursor-default text-[13px]"
-              : "text-muted-foreground/40 hover:text-amber-400 transition-colors cursor-pointer text-[13px]"
+              ? "text-warning cursor-default text-[13px]"
+              : "text-muted-foreground/40 hover:text-warning transition-colors cursor-pointer text-[13px]"
           }
         >
           {/* WHY Unicode star (not Lucide Star icon): avoids an extra icon import
               for a very simple shape. The filled/unfilled distinction is handled
-              via colour (text-amber-400 vs muted) rather than two separate SVGs. */}
+              via colour (text-warning vs muted) rather than two separate SVGs. */}
           {selected !== null && s <= selected ? "★" : "☆"}
         </button>
       ))}

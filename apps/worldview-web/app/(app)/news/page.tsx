@@ -160,7 +160,10 @@ export default function NewsHubPage() {
             ))}
           </div>
         ) : isError ? (
-          <div className="flex flex-col items-start gap-2 p-4">
+          // WHY p-3 (was p-4): error state inside a dense article list — the
+          // 12px padding visually anchors the message to the surrounding row
+          // rhythm without crowding the retry button.
+          <div className="flex flex-col items-start gap-2 p-3">
             <InlineEmptyState message="News failed to load — check connection." />
             <Button variant="outline" density="compact" onClick={() => refetch()}>
               Retry

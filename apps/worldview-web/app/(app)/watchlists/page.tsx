@@ -96,7 +96,9 @@ export default function WatchlistsHubPage() {
   if (isError) {
     return (
       <PageShell onCreate={() => setCreateOpen(true)} count={null}>
-        <div className="flex flex-col items-start gap-2 p-4">
+        {/* WHY p-3 (was p-4): empty-state in dense list — 12px padding aligns
+            with the row rhythm; 16px was too generous for terminal density. */}
+        <div className="flex flex-col items-start gap-2 p-3">
           <InlineEmptyState message="Watchlists failed to load — check connection." />
           <Button variant="outline" density="compact" onClick={() => refetch()}>
             Retry
@@ -113,7 +115,8 @@ export default function WatchlistsHubPage() {
     return (
       <>
         <PageShell onCreate={() => setCreateOpen(true)} count={0}>
-          <div className="flex flex-col items-start gap-2 p-4">
+          {/* WHY p-3 (was p-4): same density rule — 12px aligns with row rhythm. */}
+          <div className="flex flex-col items-start gap-2 p-3">
             <InlineEmptyState message="No watchlists yet. Group instruments to track them across dashboard, alerts, and the screener." />
             <Button density="compact" onClick={() => setCreateOpen(true)}>
               <Plus className="h-3 w-3" strokeWidth={1.5} /> Create watchlist

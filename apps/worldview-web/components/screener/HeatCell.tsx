@@ -55,9 +55,12 @@ function HeatCellInner({ score }: HeatCellProps) {
     // WHY neutral palette: user should see "no data" not "bad score" — grey
     // communicates absence, red communicates negative signal (important distinction)
     return (
+      // WHY bg-muted + text-muted-foreground (was inline #1A2030/#6B7585):
+      // those hex codes were retired-palette Bloomberg Dark values. Switching
+      // to the design tokens lets the cell automatically pick up any future
+      // palette adjustment via CSS variables (no source edits required).
       <span
-        className="inline-flex h-6 w-12 items-center justify-center rounded-[2px] text-[11px] font-mono font-medium tabular-nums"
-        style={{ backgroundColor: "#1A2030", color: "#6B7585" }}
+        className="inline-flex h-6 w-12 items-center justify-center rounded-[2px] bg-muted text-[11px] font-mono font-medium tabular-nums text-muted-foreground"
         title="No score available"
         aria-label="Score unavailable"
       >

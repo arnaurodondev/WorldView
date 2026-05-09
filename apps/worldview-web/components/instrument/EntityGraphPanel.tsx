@@ -74,7 +74,10 @@ const NODE_COLORS: Record<string, { fill: string; stroke: string }> = {
   person:  { fill: "#0D2921", stroke: "#26A69A" },
   event:   { fill: "#2A1E06", stroke: "#F59E0B" },
   topic:   { fill: "#1A1A2E", stroke: "#818CF8" },
-  default: { fill: "#111820", stroke: "#6B7585" },   // card (#111820) + muted-foreground (#6B7585)
+  // WHY hex literals (not tokens): this map is consumed by raw <circle> SVG
+  // attributes which only accept hex/rgb strings. The fill/stroke mirror the
+  // Terminal Dark `--card` (#111113) and `--muted-foreground` (#83838A) tokens.
+  default: { fill: "#111113", stroke: "#83838A" },
 };
 
 // ── Layout helpers ─────────────────────────────────────────────────────────────
@@ -283,7 +286,10 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
                 y1={src.y}
                 x2={tgt.x}
                 y2={tgt.y}
-                stroke={isHighlighted ? "#6B7585" : "#1A2030"}
+                // WHY hex literals: SVG stroke only accepts hex/rgb. The values
+                // mirror Terminal Dark --muted-foreground (#83838A) when the
+                // edge is highlighted and --muted (#18181B) when dimmed.
+                stroke={isHighlighted ? "#83838A" : "#18181B"}
                 strokeWidth={isHighlighted ? 1.5 : 0.75}
                 strokeOpacity={isHighlighted ? 0.9 : 0.4}
               />
@@ -363,7 +369,10 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
                 textAnchor="middle"
                 dy={isCenter ? "0.35em" : "2.6em"}
                 fontSize={isCenter ? 9 : 7}
-                fill={isHovered ? "#E0DDD4" : "#6B7585"}
+                // WHY hex literals: SVG <text> fill needs hex/rgb. The values
+                // mirror Terminal Dark --foreground (#E4E4E7) on hover and
+                // --muted-foreground (#83838A) at rest.
+                fill={isHovered ? "#E4E4E7" : "#83838A"}
                 fontFamily="IBM Plex Mono, monospace"
                 pointerEvents="none"
               >
