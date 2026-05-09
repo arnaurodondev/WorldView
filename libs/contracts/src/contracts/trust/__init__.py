@@ -27,6 +27,8 @@ SOURCE_AUTHORITY: dict[str, float] = {
     "relation": 0.80,
     "claim": 0.75,
     "financial": 0.85,
+    # Platform-curated narrative (LLM-generated entity summary)
+    "narrative": 0.88,
     # Social/forum
     "social": 0.30,
     # User-generated
