@@ -285,7 +285,7 @@ New fields added to `RelationResponse` when `confidence_breakdown=true`:
 | version_id | string | — | no | UUIDv7 of the new `entity_narrative_versions` row |
 | generation_reason | string | — | no | INITIAL \| PERIODIC_REFRESH \| DATA_UPDATE \| EVIDENCE_SURGE \| MANUAL_TRIGGER |
 | model_id | string | — | no | LLM model used, e.g. `Qwen/Qwen3-235B-A22B-Instruct-2507` |
-| word_count | int | 0 | yes | Narrative word count |
+| word_count | ["null", "int"] | null | yes | Narrative word count (Avro union — default must be null, not 0, because the first type in the union is "null") |
 
 ---
 

@@ -79,6 +79,26 @@ export interface UseChatStreamArgs {
    * the new thread (or refreshes the `last_msg_at` of an existing one).
    */
   refetchThreads: () => void;
+  /**
+   * Optional entity ID for the intelligence page chat panel (A-3 ADR).
+   *
+   * WHY a single hook option instead of a parallel hook:
+   * The SSE parsing, abort handling, streaming state, and tool event demux
+   * logic are identical for both the main chat and the entity-scoped chat.
+   * Creating a parallel hook would duplicate ~400 LOC of tested logic with
+   * subtle divergence risk. A single boolean-ish option keeps one path
+   * through the code and one set of tests. Callers that don't set entityId
+   * get the original /api/v1/chat/stream endpoint unchanged.
+   *
+   * WHEN SET: uses POST /api/v1/chat/entity-context instead of
+   * POST /api/v1/chat/stream, and includes `entity_id` in the request body.
+   * This lets S8 scope its RAG retrieval to evidence/relations for that entity.
+   *
+   * ANCHOR vs SELECTED: the EntityChatPanel always passes `anchorEntityId`
+   * (the route param), NOT selectedEntityId — chat is scoped to the entity
+   * the user navigated to, not the node they last clicked in the graph.
+   */
+  entityId?: string;
 }
 
 /**
@@ -121,7 +141,7 @@ export interface UseChatStreamResult {
 // ── Implementation ────────────────────────────────────────────────────────────
 
 export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
-  const { accessToken, activeThreadId, setActiveThreadId, refetchThreads } =
+  const { accessToken, activeThreadId, setActiveThreadId, refetchThreads, entityId } =
     args;
 
   // ── State ───────────────────────────────────────────────────────────────
@@ -283,13 +303,26 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
       // after early return, preventing the connection from returning to the pool.
       let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
       try {
-        const response = await fetch("/api/v1/chat/stream", {
+        // WHY entity-context endpoint when entityId set:
+        // /api/v1/chat/entity-context scopes S8's RAG retrieval to evidence,
+        // relations, and narratives for the specific entity. The main
+        // /api/v1/chat/stream uses the full knowledge graph without entity
+        // scoping. Using a separate endpoint (not a query param) keeps the
+        // two search strategies cleanly separated on the backend. The request
+        // body includes entity_id so S8 can pre-filter its vector search.
+        const chatEndpoint = entityId
+          ? "/api/v1/chat/entity-context"
+          : "/api/v1/chat/stream";
+        const chatBody: Record<string, unknown> = { message: question, thread_id: threadId };
+        if (entityId) chatBody.entity_id = entityId;
+
+        const response = await fetch(chatEndpoint, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${accessToken}`,
           },
-          body: JSON.stringify({ message: question, thread_id: threadId }),
+          body: JSON.stringify(chatBody),
           signal: controller.signal,
         });
 
@@ -537,7 +570,9 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
     },
     // WHY no `streaming` dep: we read isStreamingRef.current for the guard
     // (ref-based, always current) so the closure doesn't need to re-bind.
-    [accessToken, activeThreadId, refetchThreads, setActiveThreadId],
+    // WHY entityId in deps: when entityId changes (e.g. sidebar sync switches
+    // the anchor), the endpoint changes — the closure must re-bind to pick it up.
+    [accessToken, activeThreadId, refetchThreads, setActiveThreadId, entityId],
   );
 
   return {
