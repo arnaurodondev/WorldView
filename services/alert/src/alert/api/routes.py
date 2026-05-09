@@ -23,6 +23,7 @@ from alert.api.dependencies import (
     AckUseCaseDep,
     CreateAlertUseCaseDep,
     CurrentUserIdDep,
+    DbSessionDep,
     GetPendingAlertsUseCaseDep,
     HistoryUseCaseDep,
     SnoozeUseCaseDep,
@@ -115,6 +116,7 @@ async def get_pending_alerts(
 async def create_alert(
     body: CreateAlertRequest,
     uc: CreateAlertUseCaseDep,
+    session: DbSessionDep,
     tenant_user: TenantUserDep,
 ) -> AlertCreatedResponse:
     """Create a user-initiated alert rule (PLAN-0082 Wave B).
@@ -152,6 +154,11 @@ async def create_alert(
             status_code=409,
             detail="A duplicate alert rule for this entity and condition already exists",
         ) from None
+
+    # Commit both the Alert row and OutboxEvent row atomically (R8). The use case
+    # flushes but does not commit — commit ownership stays in the route layer so
+    # the transaction boundary is explicit and visible to the caller.
+    await session.commit()
 
     logger.info(  # type: ignore[no-any-return]
         "alert_rule_created_via_api",

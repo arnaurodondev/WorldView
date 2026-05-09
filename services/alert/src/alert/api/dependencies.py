@@ -250,12 +250,17 @@ def get_create_alert_uc(
 ) -> CreateAlertUseCase:
     """Build a CreateAlertUseCase wired to the write session.
 
-    Write session required — the use case writes both an Alert row and an
-    OutboxEvent row in a single transaction commit (R8 outbox pattern).
-    The session factory is NOT used here; we use the caller-scoped session
-    so the caller (route) controls the transaction boundary.
+    R25: injects concrete repository objects (infrastructure layer) here, in the
+    DI factory (API layer), not inside the use case itself. The use case only
+    sees port interfaces (AlertSaveRepositoryPort, OutboxRepositoryPort).
     """
-    return CreateAlertUseCase(session)
+    from alert.infrastructure.db.repositories.alert import AlertRepository
+    from alert.infrastructure.db.repositories.outbox import OutboxRepository
+
+    return CreateAlertUseCase(
+        alert_repo=AlertRepository(session),  # type: ignore[arg-type]
+        outbox_repo=OutboxRepository(session),  # type: ignore[arg-type]
+    )
 
 
 CreateAlertUseCaseDep = Annotated[CreateAlertUseCase, Depends(get_create_alert_uc)]
