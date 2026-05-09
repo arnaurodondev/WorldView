@@ -359,3 +359,134 @@ def test_internal_jwt_rejects_wrong_issuer() -> None:
     # Wrong issuer → PyJWT raises InvalidIssuerError → middleware returns 401
     assert result.status_code == 401
     assert not called  # route handler must NOT have been called
+
+
+# ── F-001 (PLAN-0087 audit) — JWT audience negative tests ─────────────────────
+#
+# Commit 80dfc0fc added audience="worldview-internal" + "aud" to options.require
+# across 6+ services WITHOUT a negative test asserting wrong/missing aud → 401.
+# qa-beta-test-engineer (2026-05-09) flagged this BLOCKING — a future refactor
+# that drops `audience=` or the require-list entry would silently re-introduce
+# a token-replay vulnerability and pass every existing test.
+#
+# Pattern mirrors the issuer-rejection test above: build an RSA key, mint a
+# token with the wrong / missing aud claim, dispatch directly through the
+# middleware, assert 401.
+
+
+def _md_dispatch_with_token(token_bytes: bytes, public_key: object) -> object:
+    """Helper: dispatch a single request through InternalJWTMiddleware and
+    return the Response.  Uses the same dispatch+scope pattern already
+    established by the wrong-issuer test in this file.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    mock_app = Starlette()
+    mock_app.state._internal_jwt_public_key = public_key
+    # market-data uses app.state.valkey_client for jti replay-check; populate
+    # so the (potentially valid) multi-aud test does not blow up on an attr
+    # access.  set_nx → True means "first use accepted".
+    mock_valkey = AsyncMock()
+    mock_valkey.set_nx = AsyncMock(return_value=True)
+    mock_app.state.valkey_client = mock_valkey
+
+    mw = InternalJWTMiddleware(mock_app, jwks_url="http://mock/jwks", skip_verification=False)
+    mw._public_key = public_key
+
+    async def _mock_call_next(req: Request) -> Response:
+        # Set a sentinel header so the caller can tell the route handler was
+        # actually invoked (vs the middleware short-circuiting).
+        return Response("ok", status_code=200, headers={"x-route-called": "1"})
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/instruments",
+        "query_string": b"",
+        "headers": [(b"x-internal-jwt", token_bytes)],
+        "app": mock_app,
+    }
+    return asyncio.run(mw.dispatch(Request(scope), _mock_call_next))
+
+
+def test_internal_jwt_rejects_wrong_audience() -> None:
+    """F-001: aud="zitadel-frontend" → 401 (must be "worldview-internal")."""
+    import time
+
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    bad_aud_token = pyjwt.encode(
+        {
+            "sub": "user-1",
+            "tenant_id": "tenant-1",
+            "role": "viewer",
+            "iss": "worldview-gateway",
+            "aud": "zitadel-frontend",  # WRONG audience
+            "exp": int(time.time()) + 3600,
+        },
+        private_key,
+        algorithm="RS256",
+    )
+    result = _md_dispatch_with_token(bad_aud_token.encode(), private_key.public_key())
+    # Wrong audience → InvalidAudienceError → 401
+    assert result.status_code == 401
+    assert "x-route-called" not in result.headers
+
+
+def test_internal_jwt_rejects_missing_audience() -> None:
+    """F-001: token without aud claim → 401 (require-list catches it)."""
+    import time
+
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    no_aud_token = pyjwt.encode(
+        {
+            "sub": "user-1",
+            "tenant_id": "tenant-1",
+            "role": "viewer",
+            "iss": "worldview-gateway",
+            # NO "aud" key — the contract under test
+            "exp": int(time.time()) + 3600,
+        },
+        private_key,
+        algorithm="RS256",
+    )
+    result = _md_dispatch_with_token(no_aud_token.encode(), private_key.public_key())
+    # Missing aud → MissingRequiredClaimError → 401
+    assert result.status_code == 401
+    assert "x-route-called" not in result.headers
+
+
+def test_internal_jwt_accepts_multi_audience_list_containing_expected() -> None:
+    """F-001: aud=["worldview-internal", "other"] → 200 (PyJWT list-aud contract)."""
+    import time
+
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    multi_aud_token = pyjwt.encode(
+        {
+            "sub": "user-1",
+            "tenant_id": "tenant-1",
+            "role": "viewer",
+            "iss": "worldview-gateway",
+            "aud": ["worldview-internal", "other-audience"],
+            "exp": int(time.time()) + 3600,
+        },
+        private_key,
+        algorithm="RS256",
+    )
+    result = _md_dispatch_with_token(multi_aud_token.encode(), private_key.public_key())
+    # Expected aud is one of the list entries → PyJWT accepts → 200
+    assert result.status_code == 200
+    assert result.headers.get("x-route-called") == "1"
