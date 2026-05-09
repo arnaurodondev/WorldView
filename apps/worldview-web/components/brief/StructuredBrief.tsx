@@ -481,7 +481,14 @@ function BriefBulletItem({
     // the opacity-0 BulletFeedback would never become visible on hover.
     <li className={`${bulletClass} group`}>
       <span>
-        {bullet.text}
+        {/* PLAN-0087 F-LLM-016 defense-in-depth: strip stray [cN] / [c1][c2]
+            citation placeholders that the prompt cleanup in services/rag-chat
+            (generate_briefing.py) is supposed to scrub server-side. The frontend
+            has its own CitationChips row, so any [cN] left in `bullet.text` is
+            visual leakage — never useful, sometimes the literal placeholder
+            "[cN]" itself when the LLM mis-formats. We collapse the surrounding
+            whitespace too so a stripped marker doesn't leave a double-space. */}
+        {bullet.text.replace(/\s*\[c\d+\]/g, "").replace(/\s{2,}/g, " ").trim()}
         {/* PLAN-0066 Wave F T-W10-F-03: thumbs up/down feedback on hover.
             WHY only in "full" + briefId: compact/inline variants are space-constrained
             (workspace panels, chat bubbles) where feedback buttons are intrusive.
