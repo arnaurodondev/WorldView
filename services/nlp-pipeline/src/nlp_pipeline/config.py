@@ -178,6 +178,12 @@ class Settings(BaseSettings):
     chunk_bucket: str = "worldview"
     silver_bucket: str = "worldview-silver"
 
+    # External service base URLs (PLAN-0064 W6 — document search needs S5 + S7 batch calls)
+    # These are used by the API process only (dependency injection in dependencies.py).
+    # Defaults point to the Docker Compose service names; override via env vars in production.
+    content_store_internal_url: str = "http://content-store:8005"  # NLP_PIPELINE_CONTENT_STORE_INTERNAL_URL
+    knowledge_graph_internal_url: str = "http://knowledge-graph:8007"  # NLP_PIPELINE_KNOWLEDGE_GRAPH_INTERNAL_URL
+
     # Price-impact labelling worker (PRD-0026 §6.7 Flow A)
     # Per-window normalisation caps — configurable via S6_CAP_DAY_T*_PCT env vars
     price_impact_cap_day_t0_pct: float = 5.0  # S6_CAP_DAY_T0_PCT
