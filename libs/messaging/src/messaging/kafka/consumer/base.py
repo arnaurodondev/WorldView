@@ -92,9 +92,29 @@ class ConsumerConfig:
     # Maximum dead-letters allowed before the consumer crashes to force a restart.
     # Prevents a runaway poison-message storm from silently filling the DLQ.
     dead_letter_cap: int = 100
+    # PLAN-0087 D-P3-006 / D-P3-009 (2026-05-09): partial-assignment wedge fix.
+    # Default Kafka assignor "range" performs stop-the-world rebalances —
+    # every member revokes ALL partitions, then re-joins to receive a new set.
+    # When a single slow consumer (e.g. one doing per-message DeepInfra calls
+    # that span 30-60s) hits the rebalance window, it can fail to re-claim
+    # all of its partitions in time, leaving some with CURRENT-OFFSET=`-`
+    # for hours.  "cooperative-sticky" performs incremental rebalances —
+    # only partitions that need to move are revoked, dramatically shrinking
+    # the rebalance attack surface and preventing partial-assignment wedges.
+    # Reference: KIP-429 (incremental cooperative rebalancing) and
+    # librdkafka >=1.6 cooperative-sticky support.
+    partition_assignment_strategy: str = "cooperative-sticky"
 
     def to_dict(self) -> dict[str, Any]:
-        """Return Confluent-compatible consumer config dict."""
+        """Return Confluent-compatible consumer config dict.
+
+        Note (PLAN-0087 D-P3-006): previously this method dropped
+        ``max_poll_records`` and ``partition_assignment_strategy``, so the
+        rdkafka defaults (500 records / range assignor) silently won.  Both
+        keys are now passed through; the cooperative-sticky default prevents
+        the partial-assignment wedge observed on
+        ``nlp-pipeline-group`` and the KG dataset consumer groups.
+        """
         return {
             "bootstrap.servers": self.bootstrap_servers,
             "group.id": self.group_id,
@@ -103,6 +123,8 @@ class ConsumerConfig:
             "session.timeout.ms": self.session_timeout_ms,
             "heartbeat.interval.ms": self.heartbeat_interval_ms,
             "max.poll.interval.ms": self.max_poll_interval_ms,
+            "max.poll.records": self.max_poll_records,
+            "partition.assignment.strategy": self.partition_assignment_strategy,
         }
 
 
@@ -581,6 +603,15 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
         Called after each successfully committed message.  Errors are swallowed
         so that a transient Kafka metadata timeout never breaks the consumer loop.
         Non-critical: a missing data point is far better than a dead consumer.
+
+        PLAN-0087 D-P3-006: this routine is invoked from an asyncio context but
+        ``get_watermark_offsets`` is a *blocking* librdkafka call with a 1-second
+        timeout per partition.  Across 12 partitions that is up to 12s of
+        event-loop blocking after every committed message — long enough to
+        delay Confluent's poll loop and contribute to the "wedged consumer"
+        symptom (assigned but no progress).  The call sites now hop this
+        method onto the default executor via :func:`run_in_executor` so the
+        event loop remains responsive while broker watermarks are read.
         """
         if self._metrics is None or self._consumer is None:
             # Metrics or consumer not initialised yet — nothing to record.
@@ -794,7 +825,13 @@ class BaseKafkaConsumer(ABC, Generic[TFailure]):
                     # Record consumer lag after each successful commit so Prometheus
                     # reflects the latest position.  Failures are swallowed inside
                     # _record_consumer_lag to keep this non-critical.
-                    self._record_consumer_lag()
+                    # PLAN-0087 D-P3-006: hop the blocking watermark/position
+                    # broker calls onto the executor so they cannot delay the
+                    # event loop (up to ~12s blocking with 12 partitions and
+                    # the 1s per-call timeout).  Event-loop responsiveness is
+                    # critical for Confluent poll(), heartbeat callbacks,
+                    # and other pending coroutines.
+                    await loop.run_in_executor(None, self._record_consumer_lag)
                 except ConsumerError as exc:
                     await self._handle_failure(msg, exc)
                 except Exception as exc:
