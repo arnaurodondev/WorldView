@@ -458,8 +458,21 @@ LIMIT 5
                 # the correct field is ``raw_response`` (the LLM's full text
                 # answer). Without this fix every narrative collapsed to the
                 # template-v1 fallback after exhausting all retries.
+                # PLAN-0087 followup: also reject obvious JSON error
+                # envelopes that some upstream LLMs emit when the prompt is
+                # empty or the model name passed by the FallbackChain is
+                # unrecognised. Treating those as valid output produced
+                # narratives like ``{ "error": { "message": "No entity
+                # provided"} }`` rendering in the Intelligence tab.
                 if result is not None and result.raw_response:
-                    text_result = str(result.raw_response)
+                    text_result = str(result.raw_response).strip()
+                    looks_like_error = text_result.startswith("{") and (
+                        '"error"' in text_result[:120] or '"invalid_request_error"' in text_result[:200]
+                    )
+                    if looks_like_error:
+                        # Treat as a retryable failure — let the caller
+                        # exhaust retries and fall back to template-v1.
+                        raise ValueError(f"LLM returned JSON error envelope: {text_result[:120]}")
                     if len(text_result) >= _MIN_NARRATIVE_LEN:
                         return text_result[:10000], self._model_id
             except Exception as exc:

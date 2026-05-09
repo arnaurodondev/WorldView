@@ -140,7 +140,12 @@ def _make_use_case(
     if llm_text is not None:
         llm = AsyncMock()
         llm_result = MagicMock()
-        llm_result.output = llm_text
+        # PLAN-0087 D-R3-NARR (2026-05-09): the use case reads
+        # ``ExtractionOutput.raw_response`` (the actual dataclass field).
+        # Earlier tests set ``.output`` which silently wrote to a MagicMock
+        # attribute that didn't exist on the real dataclass, masking the
+        # bug for weeks (see commit 1ef95ee9). Pin to the real field name.
+        llm_result.raw_response = llm_text
         llm.extract = AsyncMock(return_value=llm_result)
         retry_delays: tuple[float, ...] = (0.0,)  # one attempt, zero sleep
     elif llm_error is not None:
@@ -381,6 +386,60 @@ class TestNarrativeLLMFallback:
         version = narr_repo.insert_and_promote.call_args.args[0]
         assert version.model_id == "template-v1"
         assert "[template-v1]" in version.narrative_text
+
+    def test_narrative_reads_raw_response_field_d_r3_narr(self) -> None:
+        """D-R3-NARR (PLAN-0087): use case must read ExtractionOutput.raw_response.
+
+        Pre-fix the use case read ``result.output`` which doesn't exist on
+        the real ExtractionOutput dataclass, so every LLM call raised
+        AttributeError on every retry → every narrative collapsed to the
+        template-v1 fallback. This test pins the field name and asserts
+        the LLM-text path runs to completion (model_id matches the
+        configured LLM model_id, narrative_text equals the LLM output).
+        """
+        ctx = _make_entity_ctx()
+        llm_text = "x" * 200  # well above _MIN_NARRATIVE_LEN (50)
+        uc, _write_sf, _read_sf, narr_repo, _outbox_repo = _make_use_case(
+            entity_ctx=ctx,
+            llm_text=llm_text,
+        )
+        with (
+            patch(_SANITIZE, side_effect=lambda x: x),
+            patch(_SERIALIZE, return_value=b"avro_bytes"),
+        ):
+            result = asyncio.run(uc.execute(entity_id=_ENTITY_ID, tenant_id=None, reason="INITIAL"))
+        assert result is True
+        version = narr_repo.insert_and_promote.call_args.args[0]
+        # Must be the configured LLM model id, NOT the template fallback.
+        assert version.model_id != "template-v1"
+        assert version.narrative_text.startswith("x" * 50)
+
+    def test_narrative_rejects_json_error_envelopes_d_r3_narr_followup(self) -> None:
+        """D-R3-NARR followup: JSON-error envelopes must NOT be stored as narratives.
+
+        Some LLM providers return JSON error bodies as ``raw_response`` when
+        the prompt is empty or the model alias is wrong. Pre-followup the
+        use case happily stored the JSON verbatim, leaking error text into
+        the Intelligence tab. The followup raises ValueError on detection so
+        the caller exhausts retries and falls back to template-v1.
+        """
+        ctx = _make_entity_ctx()
+        json_error = '{"error":{"message":"No entity provided","type":"invalid_request_error"}}'
+        # Provide enough retries for the loop to exhaust.
+        uc, _write_sf, _read_sf, narr_repo, _outbox_repo = _make_use_case(
+            entity_ctx=ctx,
+            llm_text=json_error,  # populates raw_response with the error JSON
+        )
+        with (
+            patch(_SANITIZE, side_effect=lambda x: x),
+            patch(_SERIALIZE, return_value=b"avro_bytes"),
+        ):
+            result = asyncio.run(uc.execute(entity_id=_ENTITY_ID, tenant_id=None, reason="INITIAL"))
+        # Must fall back to template — never store the JSON error as narrative.
+        assert result is True
+        version = narr_repo.insert_and_promote.call_args.args[0]
+        assert version.model_id == "template-v1"
+        assert '"error"' not in version.narrative_text
 
 
 class TestNarrativeSanitization:
