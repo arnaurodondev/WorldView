@@ -453,8 +453,13 @@ LIMIT 5
                     model_id=self._model_id,
                 )
                 result = await self._llm.extract(inp)
-                if result is not None and result.output:
-                    text_result = str(result.output)
+                # PLAN-0087 (2026-05-09): the use case originally read
+                # ``result.output`` which does not exist on ExtractionOutput;
+                # the correct field is ``raw_response`` (the LLM's full text
+                # answer). Without this fix every narrative collapsed to the
+                # template-v1 fallback after exhausting all retries.
+                if result is not None and result.raw_response:
+                    text_result = str(result.raw_response)
                     if len(text_result) >= _MIN_NARRATIVE_LEN:
                         return text_result[:10000], self._model_id
             except Exception as exc:
