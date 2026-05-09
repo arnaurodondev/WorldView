@@ -373,10 +373,19 @@ class SearchDocumentsUseCase:
 
         # ── Step 6: Build final facets ────────────────────────────────────────
         # _facet_from_repo_result merges S7 entity names.
+        # I-001: skip facets where S7 returned no metadata — these represent
+        # orphaned entity_mentions (resolved_entity_id exists in NLP DB but
+        # the entity was deleted from canonical_entities in S7's KG DB).
+        # Showing a raw UUID string in the facet sidebar is worse than omitting
+        # the facet entirely: it confuses users and is unclickable as a filter.
         final_facets: list[SearchDocumentsFacetResult] = []
         for facet in facet_rows:
             if not s7_data.get(facet.entity_id):
-                _log.warning("s7_missing_entity", entity_id=str(facet.entity_id))  # type: ignore[no-any-return]
+                _log.warning(  # type: ignore[no-any-return]
+                    "s7_missing_entity_skipped",
+                    entity_id=str(facet.entity_id),
+                )
+                continue  # omit unresolvable facets — UUID string is worse than no facet
             final_facets.append(_facet_from_repo_result(facet, s7_data))
 
         # ── Step 7: Build output ──────────────────────────────────────────────
