@@ -283,9 +283,9 @@ Minimum 11 tests. Edge cases: empty q, max-length q, single-char q, `all` source
 **Downstream test impact**: none yet (no caller exists).
 
 **Acceptance criteria**:
-- [ ] All 4 models import cleanly with `mypy --strict`.
-- [ ] 8 unit tests pass.
-- [ ] `ruff check` clean.
+- [x] All 4 models import cleanly with `mypy --strict`.
+- [x] 8 unit tests pass.
+- [x] `ruff check` clean.
 
 #### T-W6-1-02: OpenAPI route stub + 422 contract test
 
@@ -315,9 +315,9 @@ Minimum 11 tests. Edge cases: empty q, max-length q, single-char q, `all` source
 **Downstream test impact**: none.
 
 **Acceptance criteria**:
-- [ ] Route registered in `app.py` router list.
-- [ ] OpenAPI spec at `/openapi.json` shows the new route with all query params.
-- [ ] 5 contract tests pass.
+- [x] Route registered in `app.py` router list.
+- [x] OpenAPI spec at `/openapi.json` shows the new route with all query params.
+- [x] 5 contract tests pass.
 
 #### T-W6-1-03: Prometheus metric definitions (no instrumentation yet)
 
@@ -337,8 +337,8 @@ Minimum 11 tests. Edge cases: empty q, max-length q, single-char q, `all` source
 **Tests to write**: assert metrics exist on the Prometheus registry with correct label sets. Minimum 3 tests.
 
 **Acceptance criteria**:
-- [ ] `curl /metrics` shows all three new series with zero samples.
-- [ ] `ruff check` and `mypy` clean.
+- [x] `curl /metrics` shows all three new series with zero samples.
+- [x] `ruff check` and `mypy` clean.
 
 #### T-W6-1-04: TypeScript types + frontend gateway stub
 
@@ -367,9 +367,9 @@ Minimum 5 tests.
 **Downstream test impact**: none — function is new.
 
 **Acceptance criteria**:
-- [ ] `pnpm typecheck` clean.
-- [ ] `pnpm test lib/api/__tests__/search.test.ts` passes.
-- [ ] No call site uses the function yet (linker only).
+- [x] `pnpm typecheck` clean.
+- [x] `pnpm test lib/api/__tests__/search.test.ts` passes.
+- [x] No call site uses the function yet (linker only).
 
 ### Wave 1 Pre-read
 
@@ -379,12 +379,12 @@ Minimum 5 tests.
 - `services/nlp-pipeline/src/nlp_pipeline/infrastructure/metrics/prometheus.py` — existing metric patterns
 
 ### Wave 1 Validation Gate
-- [ ] ruff check passes on changed files
-- [ ] mypy passes on `services/nlp-pipeline/`
-- [ ] `pnpm typecheck` and `pnpm lint` pass
-- [ ] All Wave 1 unit tests pass (≥21 new tests across 4 tasks)
-- [ ] OpenAPI spec change visible at `/openapi.json`
-- [ ] No domain-layer infra imports (R12 / IG-LAYER-001)
+- [x] ruff check passes on changed files
+- [x] mypy passes on `services/nlp-pipeline/`
+- [x] `pnpm typecheck` and `pnpm lint` pass
+- [x] All Wave 1 unit tests pass (≥21 new tests across 4 tasks) — 31 Python + 5 vitest = 36 tests
+- [x] OpenAPI spec change visible at `/openapi.json`
+- [x] No domain-layer infra imports (R12 / IG-LAYER-001)
 
 ### Wave 1 Break Impact
 | Broken File | Why It Breaks | Fix Required |

@@ -388,17 +388,35 @@ class S3BriefPort(Protocol):
         ...
 
 
-# ── S10Port (PLAN-0082 Wave A) ────────────────────────────────────────────────
+# ── S10Port (PLAN-0082 Wave A / Wave B) ──────────────────────────────────────
 
 
 @runtime_checkable
 class S10Port(Protocol):
-    """Alert service client port (PLAN-0082 Wave A).
+    """Alert service client port (PLAN-0082 Wave A / Wave B).
 
     All methods call S9-proxied URLs (R14/R7 compliance).
-    All methods return empty list on any HTTP or network error (R9 safe degradation).
+    All methods return empty list / None on any HTTP or network error (R9 safe degradation).
     """
 
     async def get_alerts(self, user_id: str, tenant_id: str, limit: int = 20) -> list[dict]:
         """GET /v1/alerts/pending → list of active alerts for the user."""
+        ...
+
+    async def create_alert(
+        self,
+        *,
+        entity_id: str,
+        condition: str,
+        threshold: dict,
+        severity: str = "low",
+        internal_jwt: str | None = None,
+    ) -> dict | None:
+        """POST /v1/alerts → create a user-initiated alert rule.
+
+        Returns the AlertCreatedResponse dict on success, or None on any error
+        (R9 safe degradation).  ``internal_jwt`` is forwarded as X-Internal-JWT
+        so S9/S10 can extract user_id + tenant_id from the verified RS256 JWT
+        (PRD-0025 §T-D-1-10).
+        """
         ...

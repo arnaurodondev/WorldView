@@ -11,6 +11,7 @@ from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from alert.application.use_cases.acknowledge_alert import AcknowledgeAlertUseCase as AcknowledgeAlertEntityUseCase
+from alert.application.use_cases.create_alert import CreateAlertUseCase
 from alert.application.use_cases.dlq_admin import DLQAdminUseCase
 from alert.application.use_cases.email_preferences import GetEmailPreferencesUseCase, UpdateEmailPreferencesUseCase
 from alert.application.use_cases.list_alert_history import ListAlertHistoryUseCase
@@ -239,3 +240,22 @@ def get_history_uc(
 
 
 HistoryUseCaseDep = Annotated[ListAlertHistoryUseCase, Depends(get_history_uc)]
+
+
+# ── Create alert use case factory (PLAN-0082 Wave B) ──────────────────────────
+
+
+def get_create_alert_uc(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> CreateAlertUseCase:
+    """Build a CreateAlertUseCase wired to the write session.
+
+    Write session required — the use case writes both an Alert row and an
+    OutboxEvent row in a single transaction commit (R8 outbox pattern).
+    The session factory is NOT used here; we use the caller-scoped session
+    so the caller (route) controls the transaction boundary.
+    """
+    return CreateAlertUseCase(session)
+
+
+CreateAlertUseCaseDep = Annotated[CreateAlertUseCase, Depends(get_create_alert_uc)]

@@ -97,3 +97,26 @@ def record_display_score_path(
     else:
         path = "routing_only"
     news_display_score_path_total.labels(path=path).inc()
+
+
+# ── Full-text document search (PLAN-0064 W6) ─────────────────────────────────
+
+s6_search_documents_total = prometheus_client.Counter(
+    "s6_search_documents_total",
+    "Total document search requests by source_type and status",
+    ["source_type", "status"],  # status: ok | error | empty
+)
+
+s6_search_documents_duration_seconds = prometheus_client.Histogram(
+    "s6_search_documents_duration_seconds",
+    "Document search end-to-end duration in seconds",
+    ["source_type"],
+    buckets=[0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0],
+)
+
+s6_search_documents_results_count = prometheus_client.Histogram(
+    "s6_search_documents_results_count",
+    "Distribution of result counts per search request",
+    ["source_type"],
+    buckets=[0, 1, 5, 10, 25, 50, 100, 500, 1000],
+)

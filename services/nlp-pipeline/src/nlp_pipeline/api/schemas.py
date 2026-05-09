@@ -6,7 +6,7 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ── Signal schemas ────────────────────────────────────────────────────────────
 
@@ -302,3 +302,77 @@ class DLQListResponse(BaseModel):
 
 class DLQResolveRequest(BaseModel):
     note: str = Field(default="", max_length=1024)
+
+
+# ── Full-text document search (PLAN-0064 W6) ─────────────────────────────────
+
+
+class SearchDocumentsRequest(BaseModel):
+    q: str = Field(..., min_length=1, max_length=500)
+    entity_ids: list[UUID] = Field(default_factory=list)
+    scope: Literal["watchlist", "portfolio", "all"] = "all"
+    source_type: Literal["news", "sec_edgar", "all"] = "all"
+    # NOTE: "transcript" deliberately omitted — not yet ingested (see PLAN-0064 §0)
+    date_from: datetime | None = None
+    date_to: datetime | None = None
+    date_preset: Literal["since_last_visit", "7d", "30d", "90d"] | None = None
+    page: int = Field(default=1, ge=1, le=40)
+    page_size: int = Field(default=25, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def _validate_dates(self) -> SearchDocumentsRequest:
+        # Both dates must be timezone-aware (UTC required — hard rule R7)
+        for fname, val in (("date_from", self.date_from), ("date_to", self.date_to)):
+            if val is not None and val.tzinfo is None:
+                raise ValueError(f"{fname} must be timezone-aware (UTC required)")
+        # date_from <= date_to
+        if self.date_from and self.date_to and self.date_from > self.date_to:
+            raise ValueError("date_from must be <= date_to")
+        return self
+
+
+class SearchDocumentResult(BaseModel):
+    doc_id: UUID
+    title: str | None = None
+    source_type: str
+    source_url: str | None = None
+    published_at: datetime | None = None
+    snippet: str | None = None  # plain text (no HTML) — see AD-W6-3 snippet contract
+    match_offsets: list[tuple[int, int]] = Field(default_factory=list)
+    score: float
+    entity_hits: list[UUID] = Field(default_factory=list)
+
+    @field_validator("snippet")
+    @classmethod
+    def _no_html_in_snippet(cls, v: str | None) -> str | None:
+        """Reject snippets containing HTML tags — frontend renders <mark> from match_offsets."""
+        if v is not None and ("<" in v or ">" in v):
+            raise ValueError("snippet must be plain text — no HTML tags")
+        return v
+
+    @field_validator("match_offsets")
+    @classmethod
+    def _validate_offsets(cls, v: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        """Each offset must have start < end — open-ended [start, end) half-interval."""
+        for start, end in v:
+            if start >= end:
+                raise ValueError(f"offset ({start}, {end}): start must be < end")
+        return v
+
+
+class SearchDocumentsFacet(BaseModel):
+    entity_id: UUID
+    name: str
+    entity_type: str
+    count: int
+
+
+class SearchDocumentsResponse(BaseModel):
+    query: str
+    total: int
+    page: int
+    page_size: int
+    has_more: bool
+    results: list[SearchDocumentResult]
+    facets: list[SearchDocumentsFacet] = Field(default_factory=list)
+    latency_ms: int

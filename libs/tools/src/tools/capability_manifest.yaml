@@ -493,3 +493,40 @@ tools:
     example_queries:
       - "Show me my active alerts"
       - "What alerts do I have set up?"
+
+  - name: create_alert
+    description: >
+      Creates a user-initiated alert rule for a specific entity and condition.
+      Use when the user explicitly asks to set, create, or add an alert
+      (e.g. "alert me when AAPL drops below $200" or "set a price alert for NVDA").
+      IMPORTANT: this tool requires explicit user confirmation before execution
+      (requires_confirmation: true). Do NOT call this tool unless the user has
+      clearly and unambiguously asked to create an alert — never create alerts
+      speculatively or as a follow-up to an unrelated question.
+    parameters:
+      - name: entity_id
+        type: string
+        description: UUID of the entity to watch (auto-injected from entity scope when available)
+        required: true
+      - name: condition
+        type: string
+        enum: [price_below, price_above, volume_spike, percent_change]
+        description: "Alert trigger condition: price_below | price_above | volume_spike | percent_change"
+        required: true
+      - name: threshold
+        type: object
+        description: "Condition parameters as a JSON object, e.g. {\"value\": 200.0} or {\"percent\": 5.0, \"window\": \"1d\"}"
+        required: true
+      - name: severity
+        type: string
+        enum: [low, medium, high, critical]
+        description: "Alert severity tier. Default: low."
+        required: false
+    source_type: "alert"
+    since: "v4"
+    deprecated_at: null
+    requires_confirmation: true
+    example_queries:
+      - "Alert me when AAPL drops below $200"
+      - "Set a price alert for NVDA above $1000"
+      - "Notify me if there's a volume spike on TSLA"

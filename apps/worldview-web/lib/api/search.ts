@@ -11,7 +11,7 @@
  * The minimal shape required by `this` is captured by `SearchApiThis`.
  */
 
-import type { SearchResult, SearchResponse, CompanyOverview } from "@/types/api";
+import type { SearchResult, SearchResponse, CompanyOverview, SearchDocumentsParams, SearchDocumentsResponse } from "@/types/api";
 import { apiFetch } from "./_client";
 
 // Minimal `this` contract: `searchFundamentals` needs access to
@@ -24,10 +24,10 @@ type SearchApiThis = {
 };
 
 export function createSearchApi(t: string | undefined) {
-  // Note: t is unused by /v1/search/instruments (public endpoint) but is kept
-  // in the factory signature for symmetry with other domain APIs and so that
-  // future authenticated search endpoints don't change the surface.
-  void t;
+  // Note: t is unused by /v1/search/instruments (public endpoint) but IS used by
+  // the authenticated /v1/search/documents endpoint (PLAN-0064 W6). We keep the
+  // `void t` comment here as a reminder that instruments search is public, while
+  // the document search below requires the Bearer token.
 
   return {
     /**
@@ -136,6 +136,55 @@ export function createSearchApi(t: string | undefined) {
       );
       const results = enriched.filter((r): r is SearchResult => r !== null);
       return { results, query: q };
+    },
+
+    /**
+     * searchDocuments — full-text search across articles + EDGAR filings with entity facets.
+     * Authenticated endpoint — requires a valid access token (t parameter).
+     *
+     * WHY entity_ids uses repeated params: FastAPI parses repeated `entity_id=uuid1&entity_id=uuid2`
+     * into a list[UUID]. A JSON body would require a POST; we use GET + repeated params for
+     * cache-friendliness and bookmark-ability (standard browser URL pattern for filters).
+     *
+     * WHY dates are ISO strings: JS Date objects don't survive URL serialisation cleanly;
+     * ISO strings are unambiguous and parse correctly on the Python side via FastAPI's datetime coercion.
+     *
+     * WHY we use URLSearchParams (not template literals): URLSearchParams auto-encodes special
+     * characters in q (quotes, OR, - operators that websearch_to_tsquery accepts from users)
+     * and handles repeated params (entity_id) without manual string concatenation.
+     */
+    async searchDocuments(params: SearchDocumentsParams): Promise<SearchDocumentsResponse> {
+      const url = new URLSearchParams();
+
+      // q is required and URL-encoded automatically by URLSearchParams
+      url.set("q", params.q);
+
+      // entity_ids sent as repeated params: entity_id=a&entity_id=b (FastAPI list semantics).
+      // WHY append (not set): URLSearchParams.set() overwrites; append() accumulates duplicates,
+      // which is exactly what FastAPI needs to reconstruct a list[UUID] from query params.
+      if (params.entity_ids?.length) {
+        for (const id of params.entity_ids) {
+          url.append("entity_id", id);
+        }
+      }
+
+      // Optional filters — only serialise when present to keep URLs minimal
+      if (params.scope) url.set("scope", params.scope);
+      if (params.source_type) url.set("source_type", params.source_type);
+      if (params.date_from) url.set("date_from", params.date_from);
+      if (params.date_to) url.set("date_to", params.date_to);
+      if (params.date_preset) url.set("date_preset", params.date_preset);
+      if (params.page != null) url.set("page", String(params.page));
+      if (params.page_size != null) url.set("page_size", String(params.page_size));
+
+      // WHY /v1/search (not /v1/search/documents): S9 proxy strips /api prefix
+      // and forwards to S6. The S6 route is GET /api/v1/search/documents; S9
+      // maps GET /v1/search → S6. Verify against api-gateway routes if 404.
+      return apiFetch<SearchDocumentsResponse>(`/v1/search?${url.toString()}`, {
+        // Authenticated: S6's search/documents route requires the internal JWT
+        // that S9 injects after verifying the Bearer token here.
+        headers: t ? { Authorization: `Bearer ${t}` } : {},
+      });
     },
   };
 }

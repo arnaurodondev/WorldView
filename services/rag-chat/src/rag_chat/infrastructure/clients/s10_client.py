@@ -1,10 +1,10 @@
-"""S10Client — S9-proxied alert service HTTP adapter (PLAN-0082 Wave A).
+"""S10Client — S9-proxied alert service HTTP adapter (PLAN-0082 Wave A / Wave B).
 
 WHY S9-proxied (not S10 direct): R14/R7 — all internal service-to-service calls go through
 S9 for auth and rate limiting. The concrete endpoint path is the S9 proxy route that
 forwards to S10 (Alert service) behind authentication.
 
-R9 safe degradation: all methods return [] on any HTTP or network error so callers
+R9 safe degradation: all methods return [] / None on any HTTP or network error so callers
 never receive an exception from this adapter.
 """
 
@@ -69,3 +69,59 @@ class S10Client(BaseUpstreamClient):
             )
             return []
         return alerts  # type: ignore[return-value]
+
+    async def create_alert(
+        self,
+        *,
+        entity_id: str,
+        condition: str,
+        threshold: dict,
+        severity: str = "low",
+        internal_jwt: str | None = None,
+    ) -> dict | None:
+        """POST /v1/alerts → create a user-initiated alert rule (PLAN-0082 Wave B).
+
+        Forwards the JSON body to S9 which proxies to S10.  X-Internal-JWT is
+        injected automatically by BaseUpstreamClient._post() from the current
+        request auth context (PRD-0025 §T-D-1-10).
+
+        WHY extra_headers for internal_jwt override: in rare cases the caller may
+        need to pass a specific JWT (e.g. from a proposal confirmation endpoint
+        that runs outside the normal request context). We accept it as an
+        override but the auto-inject handles the common case.
+
+        Returns the AlertCreatedResponse dict on success (contains alert_id,
+        entity_id, condition, threshold, severity, created_at), or None on
+        any HTTP or network error (R9 safe degradation).
+        """
+        extra_headers: dict[str, str] = {}
+        if internal_jwt:
+            extra_headers["X-Internal-JWT"] = internal_jwt
+
+        payload: dict = {
+            "entity_id": entity_id,
+            "condition": condition,
+            "threshold": threshold,
+            "severity": severity,
+        }
+
+        # _post returns {} on any error (R9 contract from BaseUpstreamClient)
+        raw = await self._post(
+            "/v1/alerts",
+            payload=payload,
+            extra_headers=extra_headers or None,
+        )
+
+        if not raw:
+            # Either upstream error or empty response — already logged by _post.
+            return None
+
+        # Validate the response has the expected alert_id field.
+        if "alert_id" not in raw:
+            log.warning(
+                "s10_create_alert_unexpected_response",
+                keys=list(raw.keys()),
+            )
+            return None
+
+        return raw  # type: ignore[return-value]
