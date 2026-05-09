@@ -36,6 +36,19 @@ export interface AliasTypeToken {
   sortIndex: number;
 }
 
+// PLAN-0087 D-F3-002: alias pill classes were using off-palette Tailwind
+// shorthand (amber-300/400, zinc-300, sky-400, cyan-400, emerald-400,
+// violet-400). The Terminal Dark token vocabulary is narrower, so we collapse
+// the alias families into three semantic tiers:
+//   • Primary identifiers (TICKER / PRIMARY_TICKER / EXCHANGE_TICKER) → primary token
+//     (Bloomberg yellow); they're the most analyst-visible identifier and earn
+//     the strongest CTA-adjacent tint.
+//   • Display names (NAME / EXACT) → foreground (neutral, uncoloured pill).
+//   • Reference identifiers (ISIN / CUSIP / FIGI / LEI) → muted-foreground;
+//     they're scannable but should sit visually behind the primary identifiers.
+// Subtle differentiation within tiers comes from the alpha on `border-` /
+// `bg-` rather than competing hues — the Terminal Dark direction is
+// deliberately monochromatic for reference data.
 const TOKENS = {
   EXACT: {
     label: "Exact",
@@ -44,44 +57,42 @@ const TOKENS = {
   },
   TICKER: {
     label: "Ticker",
-    className: "text-[#FFD60A] bg-[#FFD60A]/10 border-[#FFD60A]/30",
+    className: "text-primary bg-primary/10 border-primary/30",
     sortIndex: 10,
   },
   PRIMARY_TICKER: {
-    // Differentiated from TICKER via a slightly cooler tint so analysts can
-    // spot which row drove resolution Stage-2 (PLAN-0057 Decisions #3).
     label: "Primary",
-    className: "text-amber-300 bg-amber-300/10 border-amber-300/30",
+    className: "text-primary bg-primary/15 border-primary/40",
     sortIndex: 11,
   },
   EXCHANGE_TICKER: {
     label: "Exchange",
-    className: "text-amber-400 bg-amber-400/10 border-amber-400/25",
+    className: "text-primary bg-primary/5 border-primary/25",
     sortIndex: 12,
   },
   NAME: {
     label: "Name",
-    className: "text-zinc-300 bg-zinc-300/10 border-zinc-300/25",
+    className: "text-foreground bg-foreground/5 border-border/30",
     sortIndex: 20,
   },
   ISIN: {
     label: "ISIN",
-    className: "text-sky-400 bg-sky-400/10 border-sky-400/30",
+    className: "text-muted-foreground bg-muted/30 border-border/40",
     sortIndex: 30,
   },
   CUSIP: {
     label: "CUSIP",
-    className: "text-cyan-400 bg-cyan-400/10 border-cyan-400/30",
+    className: "text-muted-foreground bg-muted/30 border-border/40",
     sortIndex: 31,
   },
   FIGI: {
     label: "FIGI",
-    className: "text-emerald-400 bg-emerald-400/10 border-emerald-400/30",
+    className: "text-muted-foreground bg-muted/30 border-border/40",
     sortIndex: 32,
   },
   LEI: {
     label: "LEI",
-    className: "text-violet-400 bg-violet-400/10 border-violet-400/30",
+    className: "text-muted-foreground bg-muted/30 border-border/40",
     sortIndex: 33,
   },
 } satisfies Record<string, AliasTypeToken>;

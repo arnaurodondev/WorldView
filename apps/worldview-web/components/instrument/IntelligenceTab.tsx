@@ -109,10 +109,17 @@ const SEVERITY_STYLES: Record<
 // GraphLoader. Consistency between graph and sidebar is a deliberate design contract.
 const NODE_TYPE_COLORS: Record<string, string> = {
   financial_instrument: "bg-primary/15 text-primary border-primary/30",
-  // organization uses accent-ai (violet) — distinct from financial_instrument (amber)
-  organization: "bg-accent-ai/15 text-accent-ai border-accent-ai/30",
-  person: "bg-purple-500/15 text-purple-400 border-purple-500/30",
-  macro_event: "bg-orange-500/15 text-orange-400 border-orange-500/30",
+  // WHY arbitrary-value bg-[hsl(var(--accent-ai))]: --accent-ai is defined in
+  // globals.css but not registered in tailwind.config.ts, so the shorthand
+  // `bg-accent-ai/15` does not generate any class. The full var() form is the
+  // pattern used elsewhere (InstrumentAskAiButton, AnalystRail) — keeps a
+  // single design-token source while compiling to a real Tailwind utility.
+  organization: "bg-[hsl(var(--accent-ai)/0.15)] text-[hsl(var(--accent-ai))] border-[hsl(var(--accent-ai)/0.30)]",
+  // WHY tokens (was off-palette purple-500/orange-500): person reuses the
+  // accent-ai violet (humans/AI share the violet semantic group); macro_event
+  // uses the design-system --warning amber for "attention".
+  person: "bg-[hsl(var(--accent-ai)/0.15)] text-[hsl(var(--accent-ai))] border-[hsl(var(--accent-ai)/0.30)]",
+  macro_event: "bg-warning/15 text-warning border-warning/30",
   // product uses positive (green token) — intentional semantic match
   product: "bg-positive/10 text-positive border-positive/20",
 };

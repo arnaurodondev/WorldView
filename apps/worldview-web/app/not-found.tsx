@@ -56,11 +56,13 @@ export default function NotFound() {
 
         {/* ── Actions ──────────────────────────────────────────────────────── */}
         <div className="flex flex-col items-center gap-3">
-          {/* WHY inline bg-primary style: primary CTA uses the Bloomberg Dark
-              primary colour (#E8A317) as a button. This is the main recovery path. */}
+          {/* WHY bg-primary: primary CTA uses the Terminal Dark trading-yellow
+              primary token (#FFD60A) as the recovery action button. */}
           <Link
             href="/dashboard"
-            className="inline-flex items-center justify-center rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            // WHY rounded-[2px] (was rounded-md=6px): Terminal Dark uniform
+            // 2px corner radius across the platform.
+            className="inline-flex items-center justify-center rounded-[2px] bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Back to Dashboard
           </Link>

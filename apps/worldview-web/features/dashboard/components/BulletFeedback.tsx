@@ -78,12 +78,14 @@ export function BulletFeedback({ token, briefId, sectionIdx, bulletIdx }: Bullet
         disabled={selected !== null}
         aria-label="Mark this bullet as helpful"
         aria-pressed={selected === "helpful"}
-        // WHY text-green-400 when selected: green = positive signal, consistent
-        // with the diff panel's "new bullet" colour.
+        // WHY text-positive when selected (was off-palette text-green-400):
+        // --positive is the design system's institutional green (#00D26A);
+        // mapping to the token keeps colour language consistent with price-up
+        // displays and any future palette adjustment auto-propagates.
         className={
           selected === "helpful"
-            ? "text-green-400 cursor-default"
-            : "text-muted-foreground hover:text-green-400 transition-colors cursor-pointer"
+            ? "text-positive cursor-default"
+            : "text-muted-foreground hover:text-positive transition-colors cursor-pointer"
         }
       >
         {/* WHY Unicode arrows (not Lucide icons): avoids a Lucide import in this
@@ -98,12 +100,13 @@ export function BulletFeedback({ token, briefId, sectionIdx, bulletIdx }: Bullet
         disabled={selected !== null}
         aria-label="Mark this bullet as unhelpful"
         aria-pressed={selected === "unhelpful"}
-        // WHY text-red-400 when selected: red = negative signal, consistent with
-        // change_pct negative values elsewhere in the terminal.
+        // WHY text-negative (was text-red-400): --negative is the design
+        // system urgent red (#FF3B5C); using the token keeps the negative
+        // signal aligned with change_pct down displays.
         className={
           selected === "unhelpful"
-            ? "text-red-400 cursor-default"
-            : "text-muted-foreground hover:text-red-400 transition-colors cursor-pointer"
+            ? "text-negative cursor-default"
+            : "text-muted-foreground hover:text-negative transition-colors cursor-pointer"
         }
       >
         {selected === "unhelpful" ? "▼" : "▽"}

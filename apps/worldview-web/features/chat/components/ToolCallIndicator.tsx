@@ -101,13 +101,15 @@ export function ToolCallIndicator({ tools }: ToolCallIndicatorProps) {
       {done.map((t) => (
         <div key={t.name} className="flex items-center gap-2">
           {/*
-           * WHY green Check for ok, muted X for error/empty:
-           * - ok = data was retrieved successfully → green Check signals "done, trust it"
+           * WHY text-positive Check for ok, muted X for error/empty:
+           * - ok = data was retrieved successfully → positive (Terminal Dark green
+           *        token) Check signals "done, trust it"
            * - error/empty = tool ran but found nothing or errored → X signals "done, no data"
            *   (muted because it's not a critical failure — the LLM will handle gracefully)
+           * Token migration: text-green-500 → text-positive for palette consistency.
            */}
           {t.status === "ok" ? (
-            <Check className="h-3 w-3 text-green-500 shrink-0" aria-hidden="true" />
+            <Check className="h-3 w-3 text-positive shrink-0" aria-hidden="true" />
           ) : (
             <X className="h-3 w-3 text-muted-foreground shrink-0" aria-hidden="true" />
           )}
