@@ -138,22 +138,31 @@ class _S5BatchClient:
 
     BP-235: httpx.Timeout(2.0) used explicitly to avoid the default 5-second
     timeout silently shadowing an asyncio.wait_for wrapper.
+
+    jwt: the X-Internal-JWT value forwarded from the incoming request so that
+    S5's InternalJWTMiddleware accepts the call.  When None (tests, no auth
+    configured) the header is omitted and S5 must have auth disabled.
     """
 
-    def __init__(self, base_url: str, timeout: float = 2.0) -> None:
+    def __init__(self, base_url: str, timeout: float = 2.0, jwt: str | None = None) -> None:
         self._base_url = base_url
         # BP-235: always specify httpx.Timeout(N) — never rely on the default.
         self._timeout = httpx.Timeout(timeout)
+        self._jwt = jwt
 
     async def batch_documents(self, doc_ids: list[UUID]) -> dict[UUID, dict]:
         """POST /api/v1/documents/batch → {doc_id: {title, source_url, published_at, ...}}"""
         if not doc_ids:
             return {}
+        headers: dict[str, str] = {}
+        if self._jwt:
+            headers["X-Internal-JWT"] = self._jwt
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.post(
                     f"{self._base_url}/api/v1/documents/batch",
                     json={"doc_ids": [str(d) for d in doc_ids]},
+                    headers=headers,
                 )
                 if resp.status_code != 200:
                     _log.warning(  # type: ignore[no-any-return]
@@ -180,22 +189,30 @@ class _S7BatchClient:
     the use case can gracefully fall back to name=str(entity_id).
 
     BP-235: httpx.Timeout(2.0) used explicitly.
+
+    jwt: the X-Internal-JWT value forwarded from the incoming request so that
+    S7's InternalJWTMiddleware accepts the call.
     """
 
-    def __init__(self, base_url: str, timeout: float = 2.0) -> None:
+    def __init__(self, base_url: str, timeout: float = 2.0, jwt: str | None = None) -> None:
         self._base_url = base_url
         # BP-235: always specify httpx.Timeout(N) — never rely on the default.
         self._timeout = httpx.Timeout(timeout)
+        self._jwt = jwt
 
     async def batch_get_entities(self, entity_ids: list[UUID]) -> dict[UUID, dict]:
         """POST /api/v1/entities/batch → {entity_id: {canonical_name, entity_type, ...}}"""
         if not entity_ids:
             return {}
+        headers: dict[str, str] = {}
+        if self._jwt:
+            headers["X-Internal-JWT"] = self._jwt
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.post(
                     f"{self._base_url}/api/v1/entities/batch",
                     json={"entity_ids": [str(e) for e in entity_ids]},
+                    headers=headers,
                 )
                 if resp.status_code != 200:
                     _log.warning(  # type: ignore[no-any-return]

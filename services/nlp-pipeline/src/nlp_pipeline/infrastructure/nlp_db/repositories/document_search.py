@@ -22,6 +22,7 @@ SQL design (PLAN-0064 §3 AD-W6-2 + AD-W6-3):
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -97,8 +98,8 @@ filtered AS (
             )
         )
         AND (
-            CAST(:source_type AS text) IS NULL
-            OR dsm.source_type = CAST(:source_type AS text)
+            CAST(:source_types AS text[]) IS NULL
+            OR dsm.source_type = ANY(CAST(:source_types AS text[]))
         )
         AND (
             CAST(:date_from AS timestamptz) IS NULL
@@ -133,7 +134,7 @@ SELECT
     ) AS final_score
 FROM filtered f
 LEFT JOIN document_source_metadata dsm ON dsm.doc_id = f.doc_id
-ORDER BY final_score DESC
+ORDER BY final_score DESC NULLS LAST
 LIMIT :limit OFFSET :offset"""
 
 # ── COUNT leg: same CTEs, no LIMIT/OFFSET ────────────────────────────────────
@@ -252,6 +253,18 @@ class AsyncpgDocumentSearchRepository(DocumentSearchRepositoryPort):
 
 # ── Param builder ─────────────────────────────────────────────────────────────
 
+# Maps API source_type values to the actual source_type strings stored in
+# document_source_metadata.  The API exposes a coarser taxonomy than the DB
+# (which records the exact ingestion adapter name).
+_SOURCE_TYPE_MAP: dict[str, list[str]] = {
+    "news": ["eodhd_news", "finnhub_news", "press_release"],
+    "sec_edgar": ["sec_10k", "sec_8k", "sec_10q"],
+}
+
+# Maps date_preset values to a relative window in days before now.
+# "since_last_visit" requires per-user state and is treated as no filter here.
+_DATE_PRESET_DAYS: dict[str, int] = {"7d": 7, "30d": 30, "90d": 90}
+
 
 def _build_search_params(request: SearchDocumentsRequest) -> dict:
     """Build the parameter dict for the search + count SQL queries.
@@ -259,23 +272,30 @@ def _build_search_params(request: SearchDocumentsRequest) -> dict:
     BP-180: nullable params are passed as None and use CAST(...) IS NULL in
     the SQL to avoid asyncpg AmbiguousParameterError for NULL typed params.
 
-    source_type filter: "all" means no filter → pass None.
-    entity_ids filter: empty list means no filter → pass None (CAST(NULL AS uuid[])
-    evaluates to NULL, which short-circuits the IN subquery).
+    source_type filter: "all" means no filter → pass None (CAST(NULL AS text[]) IS NULL).
+    source_types filter: list of DB values when source_type is not "all".
+    entity_ids filter: empty list means no filter → pass None.
+    date_preset: resolved to date_from when set; "since_last_visit" treated as no preset.
     """
     # Entity IDs: None when the list is empty (no filter).
     entity_ids_param = [str(eid) for eid in request.entity_ids] if request.entity_ids else None
 
-    # source_type: "all" means no filter.
-    source_type_param: str | None = None
+    # source_types: None means no filter; mapped from API taxonomy to DB values.
+    source_types_param: list[str] | None = None
     if request.source_type and request.source_type != "all":
-        source_type_param = request.source_type
+        source_types_param = _SOURCE_TYPE_MAP.get(request.source_type)
+
+    # date_preset: wins over date_from when both are supplied.
+    date_from = request.date_from
+    if request.date_preset and request.date_preset in _DATE_PRESET_DAYS:
+        days = _DATE_PRESET_DAYS[request.date_preset]
+        date_from = datetime.now(tz=UTC) - timedelta(days=days)
 
     return {
         "q": request.q,
         "ts_headline_opts": _TS_HEADLINE_OPTS,
         "entity_ids": entity_ids_param,
-        "source_type": source_type_param,
-        "date_from": request.date_from,
+        "source_types": source_types_param,
+        "date_from": date_from,
         "date_to": request.date_to,
     }
