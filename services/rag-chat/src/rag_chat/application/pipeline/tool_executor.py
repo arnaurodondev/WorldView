@@ -1413,6 +1413,8 @@ class ToolExecutor:
             log.warning("tool_no_auth_context", tool="get_morning_brief")
             return []
 
+        # M-1: start timer before the async call so latency_ms reflects actual wait time.
+        t0 = time.monotonic()
         try:
             records = await asyncio.wait_for(
                 self._brief_archive.get_latest(
@@ -1447,7 +1449,7 @@ class ToolExecutor:
         log.info(
             "tool_executed",
             tool="get_morning_brief",
-            latency_ms=0,
+            latency_ms=round((time.monotonic() - t0) * 1000),
             sections=len(brief.sections_json),
         )
         return [
@@ -1525,8 +1527,10 @@ class ToolExecutor:
 
         lines = [f"## Entity Comparison: {', '.join(tickers)}\n"]
         for item in results:
-            if isinstance(item, Exception) or item.get("error"):  # type: ignore[union-attr]
-                ticker_label = item.get("ticker", "?") if not isinstance(item, Exception) else "?"  # type: ignore[union-attr]
+            # M-3: BaseException is the correct check — asyncio.gather(return_exceptions=True)
+            # can return KeyboardInterrupt, SystemExit, etc. which are BaseException but not Exception.
+            if isinstance(item, BaseException) or item.get("error"):  # type: ignore[union-attr]
+                ticker_label = item.get("ticker", "?") if not isinstance(item, BaseException) else "?"  # type: ignore[union-attr]
                 lines.append(f"### {ticker_label} — data unavailable\n")
                 continue
             ticker = item["ticker"]  # type: ignore[index]
@@ -1665,10 +1669,12 @@ class ToolExecutor:
         tool_call: ToolUseBlock,
         mover_type: str = "gainers",
         limit: int = 10,
-        period: str = "1d",
+        period: str = "1D",
     ) -> list[RetrievedItem]:
-        """Top gainers/losers/most-active via S9 GET /v1/market/top-movers (PLAN-0081 Wave A).
+        """Top gainers/losers via S9 GET /v1/market/top-movers (PLAN-0081 Wave A).
 
+        C-2: period default changed to "1D" (uppercase) to match S9 contract.
+        C-3: "most_active" removed — S9 only accepts "gainers" and "losers".
         R9: returns [] on missing port or upstream errors.
         R27: read-only — no UnitOfWork.
         """
@@ -1676,8 +1682,9 @@ class ToolExecutor:
             log.warning("tool_handler_missing_port", tool="get_market_movers", port="s3_brief")
             return []
 
-        # Sanitize LLM-supplied mover_type to prevent injection of arbitrary query params
-        valid_types = {"gainers", "losers", "most_active"}
+        # C-3: "most_active" is NOT a valid S9 mover_type — only "gainers" and "losers" are accepted.
+        # WHY removed: sending "most_active" to S9 causes a 422 validation error downstream.
+        valid_types = {"gainers", "losers"}
         safe_mover_type = mover_type if mover_type in valid_types else "gainers"
         limit_clamped = max(1, min(int(limit), 50))
 

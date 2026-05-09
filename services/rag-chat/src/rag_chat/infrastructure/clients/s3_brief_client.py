@@ -25,12 +25,15 @@ class S3BriefClient(BaseUpstreamClient):
         """
         return await self._post("/v1/fundamentals/screen", payload=filters)
 
-    async def get_top_movers(self, mover_type: str = "gainers", limit: int = 10, period: str = "1d") -> dict:
-        """GET /v1/market/top-movers → top gainers/losers/most-active.
+    async def get_top_movers(self, mover_type: str = "gainers", limit: int = 10, period: str = "1D") -> dict:
+        """GET /v1/market/top-movers → top gainers/losers.
 
+        C-2: period is uppercased before sending — S9 contract requires uppercase ("1D", "1W", "1M").
         Returns {} on any error (R9). Caller checks for "movers"/"data" key.
         """
-        params: dict = {"type": mover_type, "limit": limit, "period": period}
+        # WHY .upper(): S9 /v1/market/top-movers requires uppercase period tokens ("1D", "1W", "1M").
+        # The LLM may pass lowercase values; normalise here so the contract is always satisfied.
+        params: dict = {"type": mover_type, "limit": limit, "period": period.upper()}
         return await self._get("/v1/market/top-movers", params=params)
 
     async def get_economic_calendar(
@@ -41,8 +44,7 @@ class S3BriefClient(BaseUpstreamClient):
     ) -> list[dict]:
         """GET /v1/fundamentals/economic-calendar → macro events list.
 
-        S9 may return {"events": [...]} or a direct JSON array. Both are handled.
-        Returns [] on any error (R9 safe degradation).
+        S9 returns {"events": [...], "total": N}. Returns [] on any error (R9 safe degradation).
         """
         params: dict = {}
         if from_date:
@@ -52,13 +54,10 @@ class S3BriefClient(BaseUpstreamClient):
         if region:
             params["region"] = region
         raw = await self._get("/v1/fundamentals/economic-calendar", params=params)
-        # raw is {} on error. S9 may return {"events": [...]} or a direct JSON array
-        # stored as a dict under some key. Handle both wrapper shapes.
         if not raw:
             return []
-        if isinstance(raw, list):
-            return raw  # type: ignore[return-value]
-        return raw.get("events") or raw.get("data") or []
+        # H-1: _get() always returns dict; isinstance(raw, list) was dead code — removed.
+        return raw.get("events") or raw.get("data") or []  # type: ignore[return-value]
 
     async def get_earnings_calendar(
         self,
@@ -67,7 +66,7 @@ class S3BriefClient(BaseUpstreamClient):
     ) -> list[dict]:
         """GET /v1/fundamentals/earnings-calendar → earnings release dates list.
 
-        S9 may return {"earnings": [...]} or {"data": [...]}. Both are handled.
+        C-1: S9 returns {"events": [...], "total": N} — NOT {"earnings": [...]}. Fixed.
         Returns [] on any error (R9 safe degradation).
         """
         params: dict = {}
@@ -78,6 +77,6 @@ class S3BriefClient(BaseUpstreamClient):
         raw = await self._get("/v1/fundamentals/earnings-calendar", params=params)
         if not raw:
             return []
-        if isinstance(raw, list):
-            return raw  # type: ignore[return-value]
-        return raw.get("earnings") or raw.get("data") or []
+        # H-1: _get() always returns dict; isinstance(raw, list) was dead code — removed.
+        # C-1: use "events" key (matches S9 contract), NOT "earnings" (never set by S9).
+        return raw.get("events") or raw.get("data") or []  # type: ignore[return-value]

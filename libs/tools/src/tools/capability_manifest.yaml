@@ -416,8 +416,8 @@ tools:
     parameters:
       - name: mover_type
         type: string
-        enum: [gainers, losers, most_active]
-        description: "Type of movers: 'gainers', 'losers', or 'most_active'. Default 'gainers'."
+        enum: [gainers, losers]
+        description: "Type of movers: 'gainers' or 'losers'. Default 'gainers'."
         required: false
       - name: limit
         type: integer
@@ -425,7 +425,7 @@ tools:
         required: false
       - name: period
         type: string
-        description: "Time period: '1d', '1w', '1m'. Default '1d'."
+        description: "Time period: '1D', '1W', '1M'. Default '1D'."
         required: false
     source_type: "market_data"
     since: "v3"
