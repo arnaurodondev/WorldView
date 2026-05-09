@@ -1265,6 +1265,34 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
             />
           )}
 
+          {/* ── Empty-state for 0 bars (CHART-001 / F-CHART-001 fix, 2026-05-09) ──
+              WHY THIS EXISTS: When the user picks a timeframe that has no data
+              (e.g. AAPL on `5M` or `1W` returns `bars: []`), the chart canvas
+              previously rendered as a totally blank black 360px box with grid
+              lines and no candles. Analysts who hit this thought the platform
+              was broken. Now we show an explicit "No data" message + a hint to
+              switch to a populated timeframe.
+              WHY check `data && data.bars.length === 0` (not just `!data`):
+              `!data` is the loading case (covered by Skeleton above). The empty
+              case is a SUCCESSFUL response that just happens to be empty — needs
+              its own branch.
+              WHY pointer-events-none on the wrapper: the chart container below
+              still owns clicks (the user can interact with the toolbar above).
+              Using a non-blocking overlay keeps the toolbar functional. */}
+          {!isLoading && data && data.bars.length === 0 && (
+            <div
+              className="pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center justify-center"
+              style={{ height: CHART_HEIGHT }}
+            >
+              <p className="text-[12px] text-muted-foreground">
+                No price data for this timeframe
+              </p>
+              <p className="mt-1 text-[10px] text-muted-foreground/60">
+                Try the 1D or 1W timeframe
+              </p>
+            </div>
+          )}
+
           {/* ── Refreshing indicator ───────────────────────────────────────── */}
           {isLoading && data && (
             <span

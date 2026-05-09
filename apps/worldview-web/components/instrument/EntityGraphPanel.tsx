@@ -26,7 +26,7 @@
 "use client";
 // WHY "use client": uses useQuery + useState for hover state and tooltip positioning.
 
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
@@ -167,9 +167,46 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
     staleTime: 10 * 60_000,
   });
 
+  // ── Sparse-graph fallback derivation (2026-05-09 redesign) ─────────────────
+  // WHY computed BEFORE early returns: rules-of-hooks demands every hook
+  // (including useMemo) is called in the same order on every render. The
+  // early returns below would skip the hook on loading/empty paths. We make
+  // the memo null-safe (graph might still be loading or empty) so the body
+  // never throws — its result is consumed only in the success-path JSX below.
+  // WHY threshold 6: under 6 edges the radial SVG is too sparse to convey
+  // structure; the textual list is the higher-value surface in that regime.
+  // At ≥6 edges the spatial graph itself communicates clusters effectively.
+  const keyRelations = useMemo(() => {
+    if (!graph?.edges || !graph.nodes) return [] as Array<{
+      id: string;
+      label: string;
+      weight: number;
+      otherId: string;
+      otherLabel: string;
+    }>;
+    return [...graph.edges]
+      .sort((a, b) => b.weight - a.weight)
+      .map((edge) => {
+        const otherId = edge.source === entityId ? edge.target : edge.source;
+        const otherNode = graph.nodes.find((n) => n.id === otherId);
+        return {
+          id: edge.id,
+          label: edge.label,
+          weight: edge.weight,
+          otherId,
+          otherLabel: otherNode?.label ?? otherId,
+        };
+      })
+      .slice(0, 8);
+  }, [graph?.edges, graph?.nodes, entityId]);
+  // isSparse can stay below the early returns — it's a plain expression, not a hook.
+
   // ── Loading state ──────────────────────────────────────────────────────────
+  // WHY h-full (was h-[280px]): the panel is now sized by its parent grid cell
+  // (OverviewLayout sets min-h-[400px] on the row). h-full lets the skeleton
+  // fill whatever space the parent gives it — no orphan space below the panel.
   if (isLoading) {
-    return <Skeleton className="h-[280px] w-full rounded-[2px]" />;
+    return <Skeleton className="h-full min-h-[280px] w-full rounded-[2px]" />;
   }
 
   // ── Error / empty state ────────────────────────────────────────────────────
@@ -178,7 +215,7 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
   // undefined → undefined.length throws RangeError → crashes the whole instrument page.
   if (isError || !graph || !graph.nodes || graph.nodes.length === 0) {
     return (
-      <div className="flex h-[280px] items-center justify-center rounded-[2px] border border-border/30 bg-card/50">
+      <div className="flex h-full min-h-[280px] items-center justify-center rounded-[2px] border border-border/30 bg-card/50">
         <p className="text-xs text-muted-foreground">No relationship data</p>
       </div>
     );
@@ -234,13 +271,24 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
     };
   }
 
+  // ── Sparse-graph derived state ─────────────────────────────────────────────
+  // isSparse uses the now-narrowed `graph` (non-null after the early returns
+  // above) — it's a plain expression, NOT a hook, so it can live here. The
+  // `keyRelations` memo itself lives at the top of the component to satisfy
+  // rules-of-hooks (every hook must be called on every render).
+  const isSparse = graph.edges.length > 0 && graph.edges.length < 6;
+
   return (
     // WHY position:relative: tooltips use position:absolute relative to this container.
     // The SVG viewBox coordinate system is fixed (320×280); the tooltip <div>s are
     // positioned in CSS-pixel space relative to this wrapper.
-    <div className="relative overflow-hidden rounded-[2px] border border-border/30 bg-card/30">
+    // WHY h-full flex flex-col: the panel now expands to fill its parent cell
+    // (OverviewLayout grid row sets min-h-[400px]). The SVG block grows with
+    // flex-1 so we never get the orphan dead-space below the SVG that triggered
+    // the "black empty component" complaint.
+    <div className="relative overflow-hidden rounded-[2px] border border-border/30 bg-card/30 flex h-full min-h-[280px] flex-col">
       {/* Legend */}
-      <div className="flex flex-wrap gap-3 border-b border-border/30 px-3 py-1.5">
+      <div className="flex flex-wrap gap-3 border-b border-border/30 px-3 py-1.5 shrink-0">
         {Object.entries(NODE_COLORS).filter(([k]) => k !== "default").map(([type, colors]) => (
           <div key={type} className="flex items-center gap-1">
             <div
@@ -252,13 +300,23 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
         ))}
       </div>
 
-      {/* SVG graph */}
+      {/* SVG graph
+          WHY width="100%" height="100%" + preserveAspectRatio="xMidYMid meet":
+          the SVG now scales to fill its flex parent, eliminating the prior
+          120px void at the bottom. The viewBox coordinates remain 320×280 so
+          all internal node positions still work; the browser scales the
+          rendered output to the container.
+          WHY flex-1 on the wrapper div: gives the SVG vertical room to grow.
+          The previous fixed width={WIDTH} height={HEIGHT} pinned the SVG to
+          320×280px regardless of container size — root cause of the void. */}
+      <div className="flex-1 min-h-[200px] relative">
       <svg
         ref={svgRef}
-        width={WIDTH}
-        height={HEIGHT}
-        className="w-full"
+        width="100%"
+        height="100%"
+        className="absolute inset-0"
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+        preserveAspectRatio="xMidYMid meet"
         role="img"
         aria-label={`Entity relationship graph for ${centerLabel ?? entityId}`}
         // WHY onMouseLeave on SVG: clears tooltips when the cursor leaves the SVG
@@ -382,6 +440,51 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
           );
         })}
       </svg>
+      </div>
+
+      {/* ── Sparse-graph fallback list (2026-05-09 redesign) ──────────────────
+          WHY: when extraction has produced fewer than 6 relations, the radial
+          SVG looks empty. A textual key-relations list gives analysts the same
+          information in a denser, scannable format.
+          WHY threshold check (not always-on): at ≥6 edges the spatial graph
+          itself communicates clusters effectively; the list would then just
+          duplicate information and waste vertical space.
+          WHY router.push on click: matches the SVG node click behaviour —
+          clicking a relation jumps to that entity's detail page. */}
+      {isSparse && (
+        <div className="border-t border-border/30 px-2 py-1.5 shrink-0">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+              Key relations
+            </span>
+            <span className="text-[9px] text-muted-foreground/60">
+              {keyRelations.length} edge{keyRelations.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <ul className="space-y-0.5">
+            {keyRelations.map((rel) => (
+              <li
+                key={rel.id}
+                className="flex items-center gap-1.5 cursor-pointer hover:bg-muted/30 rounded-[2px] px-1 py-0.5"
+                onClick={() => router.push(`/instruments/${rel.otherId}`)}
+                title={`${rel.label.replace(/_/g, " ").toLowerCase()} ${rel.otherLabel} · weight ${rel.weight.toFixed(2)}`}
+              >
+                {/* WHY uppercase 9px: matches the rest of the terminal "edge label" typography
+                    (hover tooltip uses the same style). */}
+                <span className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground shrink-0 w-[88px] truncate">
+                  {rel.label.replace(/_/g, " ")}
+                </span>
+                <span className="text-[10px] text-foreground truncate flex-1">
+                  {rel.otherLabel}
+                </span>
+                <span className="font-mono text-[9px] tabular-nums text-muted-foreground shrink-0">
+                  {rel.weight.toFixed(2)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* ── Node hover tooltip ───────────────────────────────────────────────
           WHY pointer-events-none: the tooltip must not intercept mouse events —
