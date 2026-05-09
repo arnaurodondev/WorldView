@@ -87,7 +87,10 @@ export function BriefDiffBadge({ token, briefId }: BriefDiffBadgeProps) {
         // --warning is the design system attention token (Bloomberg amber);
         // mapping to it keeps a single source for "needs attention" badges
         // and makes the change automatically pick up future palette tweaks.
-        className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning hover:bg-warning/20 transition-colors"
+        // Density bundle 2026-05-09: tightened (px-2 py-0.5 text-[11px]) →
+        // (px-1.5 py-0 text-[10px] + h-4 leading-none) so the pill sits
+        // cleanly inside the 24px MorningBriefCard header without clipping.
+        className="inline-flex h-4 items-center gap-1 rounded-full bg-warning/10 px-1.5 text-[10px] font-medium leading-none text-warning hover:bg-warning/20 transition-colors"
       >
         {/* WHY show count: traders want the exact number; "3 new" is more actionable
             than just "changes". Zero new bullets (only removals) shows "changes". */}
