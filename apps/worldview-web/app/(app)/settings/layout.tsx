@@ -38,9 +38,11 @@ const NAV: NavItem[] = [
   { href: "/settings/preferences", label: "Preferences", icon: Sliders },
   { href: "/settings/notifications", label: "Notifications", icon: Bell },
   { href: "/settings/appearance", label: "Appearance", icon: Palette },
-  { href: "/settings/security", label: "Security", icon: ShieldCheck, badge: "soon" },
-  { href: "/settings/data", label: "Data & exports", icon: Database, badge: "soon" },
-  { href: "/settings/integrations", label: "Integrations", icon: Plug, badge: "soon" },
+  // PLAN-0087 F-BB-005: dropped the "soon" badge — these three sub-pages
+  // ship substantive (mocked-state) UI as of the beta-readiness pass.
+  { href: "/settings/security", label: "Security", icon: ShieldCheck },
+  { href: "/settings/data", label: "Data & exports", icon: Database },
+  { href: "/settings/integrations", label: "Integrations", icon: Plug },
   { href: "/settings/beta-program", label: "Beta program", icon: Beaker },
 ];
 
