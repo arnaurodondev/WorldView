@@ -182,11 +182,35 @@ class ChatOrchestratorUseCase:
         if hasattr(tool_executor._registry, "to_tool_definitions"):
             tool_defs = tool_executor._registry.to_tool_definitions()
 
+        # PLAN-0087 D-Q-002 / D-Q-003 (2026-05-09): two prompt fixes that landed
+        # together because they're a single string edit:
+        #
+        # (a) "Today's date is YYYY-MM-DD" anchor — without it the LLM's
+        #     pre-training cutoff bleeds into tool arguments and
+        #     ``get_price_history``/``get_earnings_calendar`` get called with
+        #     2023 dates instead of the current year. Result: tools route
+        #     correctly but query non-existent rows → 503 to user.
+        #
+        # (b) Citation-marker instruction — the prompt previously gave NO
+        #     guidance about [N1]…[Nk] citations, so the LLM produced
+        #     factually-correct answers WITHOUT any cite markers. PRD §3.3
+        #     mandates clickable citations on every news/factual answer.
+        from common.time import utc_now  # type: ignore[import-untyped]
+
+        _today = utc_now().date().isoformat()
         system_prompt = (
             tool_executor._registry.to_system_prompt_section()
-            + "\n\nYou are a market intelligence assistant with access to the tools listed above. "
-            "Use them to retrieve precise data before answering. "
-            "If a tool returns no data, acknowledge that in your answer."
+            + f"\n\nYou are a market intelligence assistant with access to the tools listed above. "
+            f"Today's date is {_today}. When you call tools that take dates "
+            f"(price history, earnings calendar, economic events, news search), use this "
+            f"date as the reference point — never use dates from your pre-training cutoff. "
+            f"Use the tools to retrieve precise data before answering. "
+            f"If a tool returns no data, acknowledge that in your answer.\n\n"
+            f"CITATIONS: when the tools you call return documents, articles, or chunks "
+            f"with identifiers, cite them inline using [N1], [N2], … markers — one marker "
+            f"per claim that is supported by a retrieved item, in the order the items "
+            f"appear in the tool output. Do NOT invent citation numbers. If no documents "
+            f"were retrieved, do not emit any citation markers."
         )
 
         # Assemble OpenAI-format messages for the structured call.

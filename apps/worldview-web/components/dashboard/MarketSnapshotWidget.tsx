@@ -29,6 +29,8 @@ import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+// HF-10: locale-grouped USD price ("$4,892.11").
+import { formatPrice } from "@/lib/format";
 
 // ── Snapshot instruments ──────────────────────────────────────────────────────
 
@@ -199,7 +201,7 @@ function SnapshotRow({ ticker, instrumentId, quote }: SnapshotRowProps) {
 
       {/* Price — center, muted (context); change% is the primary signal */}
       <span className="flex-1 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-        {quote?.price != null ? `$${quote.price.toFixed(2)}` : "—"}
+        {formatPrice(quote?.price)}
       </span>
 
       {/* Change % — right-aligned, colored by direction */}
