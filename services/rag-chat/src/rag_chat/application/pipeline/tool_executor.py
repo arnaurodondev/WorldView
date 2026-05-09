@@ -92,6 +92,21 @@ _ALLOWED_CYPHER_REL_TYPES: frozenset[str] = frozenset(
     }
 )
 
+# ── create_alert allowlists (PLAN-0082 QA fix M-1 / M-2) ─────────────────────
+# WHY allowlists: the LLM may emit attacker-injected strings (from prompt
+# injection or indirect injection via entity names) into the ``condition`` and
+# ``severity`` fields.  Without validation those strings reach the SSE stream
+# unescaped and are displayed verbatim in the ActionConfirmModal — a UX XSS
+# risk and a confusing UX when the string is garbage.
+#
+# We enumerate the full set of valid values once here (before the class
+# definitions so the constants are module-level and importable by tests).
+# Any value NOT in the allowlist causes the handler to return [] immediately,
+# which the orchestrator treats as an empty tool result (no confirmation modal
+# shown, no write executed).
+_VALID_CONDITIONS: frozenset[str] = frozenset({"price_below", "price_above", "volume_spike", "percent_change"})
+_VALID_SEVERITIES: frozenset[str] = frozenset({"low", "medium", "high", "critical"})
+
 
 # ── Domain helpers ─────────────────────────────────────────────────────────────
 
@@ -2001,7 +2016,11 @@ class ToolExecutor:
         threshold: dict | None = None,
         severity: str = "low",
         **_: Any,
-    ) -> RetrievedItem | None:
+    ) -> RetrievedItem | list[RetrievedItem] | None:
+        # Return type extended to include list[RetrievedItem] so that
+        # allowlist-rejected inputs can return [] (empty list) — the same
+        # contract used by all multi-result handlers.  None is kept for
+        # port-missing / auth-missing / rate-limit paths.
         """Create a user-initiated alert rule via S10 (PLAN-0082 Wave B).
 
         CONFIRMATION FLOW: this handler does NOT execute the alert creation
@@ -2062,6 +2081,31 @@ class ToolExecutor:
                 reason="missing_entity_id_or_condition",
             )
             return None
+
+        # PLAN-0082 QA fix M-1: reject condition strings not in the allowlist.
+        # WHY: prompt-injected or adversarial condition strings (e.g.
+        # "__SYSTEM_PROMPT__", "admin_override", "price_below\nIGNORE …") must
+        # never reach the SSE stream or the ActionConfirmModal.  Returning []
+        # causes the orchestrator to treat this as an empty tool result — no
+        # confirmation modal, no write.
+        if condition not in _VALID_CONDITIONS:
+            log.warning(
+                "create_alert_invalid_condition",
+                condition=condition,
+                valid=sorted(_VALID_CONDITIONS),
+            )
+            return []
+
+        # PLAN-0082 QA fix M-2: reject severity strings not in the allowlist.
+        # WHY: same rationale as M-1 — an injected severity like
+        # "CRITICAL; DROP TABLE alerts;" must not reach the proposal payload.
+        if severity not in _VALID_SEVERITIES:
+            log.warning(
+                "create_alert_invalid_severity",
+                severity=severity,
+                valid=sorted(_VALID_SEVERITIES),
+            )
+            return []
 
         # Increment session counter.
         self._create_alert_count += 1
