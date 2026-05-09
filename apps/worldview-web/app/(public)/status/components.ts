@@ -83,21 +83,29 @@ export interface UptimePayload {
   incidents: Incident[];
 }
 
-/** Translate numeric status to a human label and Tailwind color class. */
+/**
+ * Translate numeric status to a human label and design-token color class.
+ *
+ * WHY design tokens (was off-palette green-500/amber-500/red-500/zinc-500):
+ * Terminal Dark mandates semantic tokens for every coloured surface so a
+ * future palette migration only edits CSS variables, never source files.
+ * The mapping is straightforward: operational → positive, degraded →
+ * warning, down → destructive, paused → muted.
+ */
 export function statusInfo(status: MonitorStatus): {
   label: string;
   colorClass: string;
 } {
   switch (status) {
     case 2:
-      return { label: "Operational", colorClass: "bg-green-500" };
+      return { label: "Operational", colorClass: "bg-positive" };
     case 8:
-      return { label: "Degraded", colorClass: "bg-amber-500" };
+      return { label: "Degraded", colorClass: "bg-warning" };
     case 9:
-      return { label: "Down", colorClass: "bg-red-500" };
+      return { label: "Down", colorClass: "bg-destructive" };
     case 0:
-      return { label: "Paused", colorClass: "bg-zinc-500" };
+      return { label: "Paused", colorClass: "bg-muted" };
     default:
-      return { label: "Unknown", colorClass: "bg-zinc-500" };
+      return { label: "Unknown", colorClass: "bg-muted" };
   }
 }

@@ -79,9 +79,11 @@ const MOCK_COLUMNS: ColumnDef<MockRow>[] = [
     cell: ({ getValue }) => {
       const v = Number(getValue());
       return (
-        // WHY text-green-400 / text-red-400: financial convention (green=up, red=down)
-        // using the palette-safe 400-shade that passes WCAG AA on #131722.
-        <span className={`tabular-nums font-mono ${v >= 0 ? "text-green-400" : "text-red-400"}`}>
+        // WHY text-positive / text-negative (was text-green-400/red-400):
+        // design tokens map to Terminal Dark institutional green/red and
+        // satisfy WCAG AA against the platform card backgrounds. Tokens
+        // also keep storybook in lockstep with prod components.
+        <span className={`tabular-nums font-mono ${v >= 0 ? "text-positive" : "text-negative"}`}>
           {v >= 0 ? "+" : ""}
           {v.toFixed(2)}%
         </span>

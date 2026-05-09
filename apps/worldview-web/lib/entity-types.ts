@@ -11,11 +11,17 @@
  * WHY a TS object (not a tailwind class map): some consumers — most notably
  * sigma.js inside `EntityGraph.tsx` — render to a WebGL canvas and need raw
  * hex values; tailwind classes would never reach the canvas.  So the tokens
- * carry both a hex (`color`) and a tailwind class string (`badgeClass`) — UI
- * surfaces pick whichever fits their renderer.
+ * carry the hex (`color`) for sigma plus a human label and an icon for
+ * badge surfaces (badges/chips compose their own classes from foreground
+ * tokens, not from this module).
  *
  * The label stays human-readable (Title Case, no underscores) so we can drop
  * the token straight into a chip/badge without per-call formatting code.
+ *
+ * PLAN-0087 D-F3-011: removed unused `badgeClass` field — every entry
+ * defined a tailwind shorthand string but no consumer ever read it (verified
+ * via grep). Keeping dead API breaks R1 (small focused diffs) and risks the
+ * shorthand drifting from the rest of the design system over time.
  */
 
 import type { LucideIcon } from "lucide-react";
@@ -43,8 +49,6 @@ export interface EntityTypeToken {
   color: string;
   /** Human-readable label rendered as-is in chips/badges (Title Case). */
   label: string;
-  /** Tailwind class fragment matching the colour — `text-x bg-y/10 border-z/30`. */
-  badgeClass: string;
   /** Lucide icon used inside avatars and 24x24 type stamps. */
   icon: LucideIcon;
 }
@@ -60,7 +64,6 @@ const TOKENS = {
   financial_instrument: {
     color: "#FFD60A",
     label: "Instrument",
-    badgeClass: "text-[#FFD60A] bg-[#FFD60A]/10 border-[#FFD60A]/30",
     icon: TrendingUp,
   },
   // Pre-existing canonicals (PRD-0017 §6) — sectors and industry groups
@@ -75,62 +78,52 @@ const TOKENS = {
   sector: {
     color: "#6366F1", // indigo-500 — broadest bucket, deepest tone
     label: "Sector",
-    badgeClass: "text-indigo-400 bg-indigo-400/10 border-indigo-400/30",
     icon: Layers,
   },
   industry_group: {
     color: "#A78BFA",
     label: "Industry Group",
-    badgeClass: "text-violet-400 bg-violet-400/10 border-violet-400/30",
     icon: Factory,
   },
   industry: {
     color: "#C084FC",
     label: "Industry",
-    badgeClass: "text-purple-400 bg-purple-400/10 border-purple-400/30",
     icon: Hammer,
   },
   technology_theme: {
     color: "#22D3EE",
     label: "Theme",
-    badgeClass: "text-cyan-400 bg-cyan-400/10 border-cyan-400/30",
     icon: Wrench,
   },
   // PLAN-0057 A-3 seeds added the 9 below — F-1 makes them renderable.
   currency: {
     color: "#34D399",
     label: "Currency",
-    badgeClass: "text-emerald-400 bg-emerald-400/10 border-emerald-400/30",
     icon: Banknote,
   },
   regulatory_body: {
     color: "#FB7185",
     label: "Regulator",
-    badgeClass: "text-rose-400 bg-rose-400/10 border-rose-400/30",
     icon: Scale,
   },
   government_body: {
     color: "#F87171",
     label: "Government",
-    badgeClass: "text-red-400 bg-red-400/10 border-red-400/30",
     icon: Landmark,
   },
   location: {
     color: "#38BDF8",
     label: "Location",
-    badgeClass: "text-sky-400 bg-sky-400/10 border-sky-400/30",
     icon: MapPin,
   },
   person: {
     color: "#26A69A",
     label: "Person",
-    badgeClass: "text-teal-400 bg-teal-400/10 border-teal-400/30",
     icon: User2,
   },
   financial_institution: {
     color: "#FBBF24",
     label: "Institution",
-    badgeClass: "text-amber-400 bg-amber-400/10 border-amber-400/30",
     icon: Building2,
   },
   commodity: {
@@ -140,19 +133,16 @@ const TOKENS = {
     // HardHat (often read as construction) to Coins (universal commodity glyph).
     color: "#F59E0B",
     label: "Commodity",
-    badgeClass: "text-amber-500 bg-amber-500/10 border-amber-500/30",
     icon: Coins,
   },
   macroeconomic_indicator: {
     color: "#F472B6",
     label: "Macro Indicator",
-    badgeClass: "text-pink-400 bg-pink-400/10 border-pink-400/30",
     icon: Activity,
   },
   index: {
     color: "#94A3B8",
     label: "Index",
-    badgeClass: "text-slate-400 bg-slate-400/10 border-slate-400/30",
     icon: LineChart,
   },
   // Legacy aliases retained from the EntityGraph palette so existing graph
@@ -161,19 +151,16 @@ const TOKENS = {
   company: {
     color: "#FFD60A",
     label: "Company",
-    badgeClass: "text-[#FFD60A] bg-[#FFD60A]/10 border-[#FFD60A]/30",
     icon: TrendingUp,
   },
   event: {
     color: "#F59E0B",
     label: "Event",
-    badgeClass: "text-amber-500 bg-amber-500/10 border-amber-500/30",
     icon: Flag,
   },
   topic: {
     color: "#818CF8",
     label: "Topic",
-    badgeClass: "text-indigo-400 bg-indigo-400/10 border-indigo-400/30",
     icon: Wrench,
   },
 } satisfies Record<string, EntityTypeToken>;
@@ -181,7 +168,6 @@ const TOKENS = {
 const FALLBACK: EntityTypeToken = {
   color: "#6B7585",
   label: "Entity",
-  badgeClass: "text-muted-foreground bg-muted/30 border-border/40",
   // Generic Box icon — distinct from `commodity` (Coins) so an unstyled
   // type doesn't get visually confused with a real commodity entity.
   icon: Box,

@@ -93,7 +93,11 @@ export default function ErrorPage({ error, reset }: ErrorPageProps) {
           <button
             type="button"
             onClick={reset}
-            className="inline-flex items-center justify-center rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            // WHY rounded-[2px] (was rounded-md=6px): Terminal Dark sharp
+            // corners across the platform; the 6px curve was a consumer-app
+            // throwback. Aligns with the design system rule that all radii
+            // be 2px (or rounded-full for avatars).
+            className="inline-flex items-center justify-center rounded-[2px] bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Try again
           </button>

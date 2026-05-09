@@ -206,8 +206,13 @@ export function ChartToolbar({
         title="Toggle 200-day moving average"
         data-testid="toolbar-ma200"
       >
-        {/* WHY text-sky-500: MA200 line color — matches lightweight-charts config */}
-        <span className="text-[10px]">MA<span className="text-sky-500">200</span></span>
+        {/* WHY text-foreground for the "200" label (was text-sky-500): the
+            chart line itself is rendered by lightweight-charts in #0EA5E9
+            (see OHLCVChart MA200 series). The toolbar label only needs to
+            be readable; matching the line colour 1:1 forces an off-palette
+            class, so we keep the label in the foreground token while the
+            chart line preserves the functional MA200 hex. */}
+        <span className="text-[10px]">MA<span className="text-foreground">200</span></span>
       </ToolbarButton>
 
       {/* ── Volume submenu (T-C-3-03) ───────────────────────────────────────── */}
