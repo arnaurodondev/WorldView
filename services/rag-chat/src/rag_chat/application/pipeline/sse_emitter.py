@@ -35,6 +35,13 @@ _TOOL_LABELS: dict[str, str] = {
     "get_entity_paths": "Tracing entity paths...",
     "get_entity_health": "Computing health score...",
     "get_entity_intelligence": "Loading intelligence bundle...",
+    # PLAN-0081 Wave A: catalog tools
+    "get_morning_brief": "Loading morning brief...",
+    "compare_entities": "Comparing entities...",
+    "screen_universe": "Screening universe...",
+    "get_market_movers": "Fetching market movers...",
+    "get_economic_calendar": "Loading economic calendar...",
+    "get_earnings_calendar": "Loading earnings calendar...",
 }
 
 

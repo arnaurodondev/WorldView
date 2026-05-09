@@ -428,6 +428,8 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     # execute against real S6/S7/S1 adapters instead of returning [] silently.
     # The s6/s7/s3/s1 instances are created above in this function scope.
     from rag_chat.application.pipeline.tool_executor import ToolExecutorFactory, build_default_registry
+    from rag_chat.infrastructure.clients.brief_archive_read_adapter import BriefArchiveReadAdapter
+    from rag_chat.infrastructure.clients.s3_brief_client import S3BriefClient
     from rag_chat.infrastructure.clients.s7_intelligence_client import S7IntelligenceClient
 
     # S7IntelligenceClient calls S9-proxied intelligence endpoints (R14/R7 compliance).
@@ -438,6 +440,18 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         timeout=settings.upstream_timeout_seconds,
     )
 
+    # S3BriefClient: S9-proxied screener/movers/calendar endpoints (PLAN-0081 Wave A).
+    # WHY api_gateway_url: all catalog endpoints go through S9 for auth + rate limiting.
+    s3_brief = S3BriefClient(
+        base_url=settings.api_gateway_url,
+        timeout=settings.upstream_timeout_seconds,
+    )
+
+    # BriefArchiveReadAdapter: read-only adapter backed by read session factory (R27).
+    # WHY read_factory from app.state: the factory was set up in the DB lifespan step
+    # above. This adapter creates per-call read sessions without acquiring a UnitOfWork.
+    brief_archive = BriefArchiveReadAdapter(read_factory=app.state.read_factory)
+
     tool_registry = build_default_registry()
     tool_executor_factory = ToolExecutorFactory(
         registry=tool_registry,
@@ -446,6 +460,8 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         s7=s7,
         s7_intel=s7_intel,
         s1=s1,
+        s3_brief=s3_brief,
+        brief_archive=brief_archive,
         timeout=settings.upstream_timeout_seconds,
     )
     app.state.tool_executor_factory = tool_executor_factory  # expose for tests / health checks
