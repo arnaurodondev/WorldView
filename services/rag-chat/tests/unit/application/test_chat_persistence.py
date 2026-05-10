@@ -333,6 +333,82 @@ class TestChatPersistenceLazyThreadCreation:
         assert uow.messages.create.call_count == 2
 
 
+class TestHeuristicTitleFromUserMessage:
+    """P0-10 PLAN-0088: Phase-A heuristic auto-title for new threads."""
+
+    def test_short_message_used_verbatim(self) -> None:
+        from rag_chat.application.use_cases.persist_chat import (
+            _heuristic_title_from_user_message,
+        )
+
+        assert _heuristic_title_from_user_message("Why is AAPL down today") == "Why is AAPL down today"
+
+    def test_question_truncated_at_question_mark(self) -> None:
+        from rag_chat.application.use_cases.persist_chat import (
+            _heuristic_title_from_user_message,
+        )
+
+        title = _heuristic_title_from_user_message("Why is AAPL down? Any earnings risk soon?")
+        assert title == "Why is AAPL down?"
+
+    def test_long_message_truncated_with_ellipsis(self) -> None:
+        from rag_chat.application.use_cases.persist_chat import (
+            _heuristic_title_from_user_message,
+        )
+
+        msg = "x" * 200
+        title = _heuristic_title_from_user_message(msg)
+        # 60-char cap (59 + ellipsis)
+        assert len(title) == 60
+        assert title.endswith("…")
+
+    def test_internal_whitespace_collapsed(self) -> None:
+        from rag_chat.application.use_cases.persist_chat import (
+            _heuristic_title_from_user_message,
+        )
+
+        assert _heuristic_title_from_user_message("  hello   \n  world  ") == "hello world"
+
+    def test_empty_message_falls_back(self) -> None:
+        from rag_chat.application.use_cases.persist_chat import (
+            _AUTO_TITLE_FALLBACK,
+            _heuristic_title_from_user_message,
+        )
+
+        assert _heuristic_title_from_user_message("   ") == _AUTO_TITLE_FALLBACK
+        assert _heuristic_title_from_user_message("") == _AUTO_TITLE_FALLBACK
+
+    async def test_lazy_thread_create_uses_heuristic_title(self) -> None:
+        """When a new thread is lazy-created, its title is set from the user message."""
+        from rag_chat.application.use_cases.persist_chat import ChatPersistenceUseCase
+
+        uow = MagicMock()
+        uow.messages = MagicMock()
+        uow.messages.create = AsyncMock(return_value=None)
+        uow.threads = MagicMock()
+        uow.threads.get = AsyncMock(return_value=None)
+        uow.threads.create = AsyncMock(return_value=None)
+        uow.threads.update_last_msg = AsyncMock(return_value=None)
+        uow.commit = AsyncMock(return_value=None)
+
+        resp = _make_assistant_response()
+        tenant_id = uuid4()
+        user_id = uuid4()
+
+        await ChatPersistenceUseCase().execute(
+            thread_id=_THREAD_ID,
+            user_message="What's happening with NVDA earnings?",
+            assistant_response=resp,
+            uow=uow,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+
+        # Inspect the ConversationThread that was passed to threads.create
+        created_thread = uow.threads.create.call_args.args[0]
+        assert created_thread.title == "What's happening with NVDA earnings?"
+
+
 class TestThinkBlockFilter:
     """Bug 1 Fix: _ThinkBlockFilter strips <think> blocks from streaming tokens."""
 
