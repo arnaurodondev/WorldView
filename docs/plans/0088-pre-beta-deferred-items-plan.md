@@ -170,13 +170,14 @@ Six parallel subagents shipped a substantial second batch:
 - AAPL ≥ 30 edges target — blocked on content-quality (see I-2 above)
 
 **Open issues flagged but not fixed:**
-- Portfolio internal JWT missing `aud` claim (log noise every 24s)
-- Market-data CRITICAL `internal_jwt_unverified_decode` log
+- ~~Portfolio internal JWT missing `aud` claim (log noise every 24s)~~ — **FIXED** SA-5 commit `cbbf0a4b`: alert `ALERT_S1_INTERNAL_JWT` re-generated with `aud=worldview-internal` (gitignored docker.env; container rebuild needed to deploy)
+- ~~Market-data CRITICAL `internal_jwt_unverified_decode` log~~ — **FIXED** SA-5 commit `cbbf0a4b`: demoted CRITICAL→DEBUG (container rebuild needed)
 - KG `/readyz` cosmetic kafka="not_started"
 - Content-store consumer drift ~1.2k lag on content.article.raw.v1
 - SnapTrade brokerage worker writes signed quantities to DB
   (Portfolio QA Issue-A); read path now correct but data shape divergent
 - duplicate_clusters table 0 rows after 1641 docs (likely worker offline)
+- **NEW BP-443**: KG path-insight-worker: `end` reserved AGE keyword caused PostgresSyntaxError on all jobs — **FIXED** SA-5 commit `cbbf0a4b` (container rebuild needed; 3 pending jobs reset in DB)
 
 ### 2026-05-10 partial landing
 
