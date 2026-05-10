@@ -1019,6 +1019,22 @@ _SEC_EDGAR_SOURCES: list[dict] = [
     },
 ]
 
+# WHY EODHD news sources: 2026-05-09 PLAN-0088 Wave H investigation found that
+# the EODHD adapter (`adapters/eodhd/{client.py,adapter.py}`) is fully wired
+# and the premium API key is plumbed via CONTENT_INGESTION_EODHD_API_KEY, but
+# zero source rows existed and the seeder actively disabled any that appeared
+# (rationale was a stale "demo key returns 403" comment). With a real premium
+# key configured, EODHD news is the highest-volume English-market news feed
+# available and was the largest gap in source diversity.
+#
+# WHY one row per ticker: same pattern as Finnhub — EODHDAdapter fetches news
+# for one symbol per task, so independent rows yield independent task slots.
+# Tickers are EODHD's exchange-suffixed format (.US for NASDAQ/NYSE).
+_EODHD_NEWS_SOURCES: list[dict] = [
+    {"id": f"66666666-0001-7000-8000-{str(i + 1).zfill(12)}", "ticker": tkr}
+    for i, tkr in enumerate(["AAPL", "MSFT", "NVDA", "AMZN", "TSLA", "GOOGL", "META", "JPM"])
+]
+
 
 def seed_content_ingestion_db(conn, *, reset: bool = False) -> None:
     """Seed Polymarket, Finnhub, and NewsAPI polling sources in content_ingestion_db.
@@ -1032,9 +1048,10 @@ def seed_content_ingestion_db(conn, *, reset: bool = False) -> None:
     - NewsAPI: query-based articles for the portfolio news widget;
       uses CONTENT_INGESTION_NEWSAPI_KEY from docker.env
 
-    WHY disable EODHD sources: CONTENT_INGESTION_EODHD_API_KEY=demo returns HTTP
-    403 on news/sentiment endpoints.  Disabling prevents the worker from filling
-    the task queue with unresolvable retries and consuming lease budget.
+    WHY conditional EODHD seeding: with a real premium key
+    (CONTENT_INGESTION_EODHD_API_KEY != "demo" and len ≥ 16) the news rows are
+    seeded and enabled. With a demo or absent key, any leftover rows are
+    disabled to keep the worker from churning on 403s.
 
     All inserts are idempotent (ON CONFLICT (name) DO NOTHING).
     Running the script multiple times is safe.
@@ -1046,6 +1063,7 @@ def seed_content_ingestion_db(conn, *, reset: bool = False) -> None:
         + [s["id"] for s in _FINNHUB_SOURCES]
         + [s["id"] for s in _NEWSAPI_SOURCES]
         + [s["id"] for s in _SEC_EDGAR_SOURCES]
+        + [s["id"] for s in _EODHD_NEWS_SOURCES]
     )
 
     if reset:
@@ -1141,18 +1159,45 @@ def seed_content_ingestion_db(conn, *, reset: bool = False) -> None:
         status = "inserted" if cur.rowcount else "already exists"
         print(f"  {src['name']} source: {status}")
 
-    # ── Disable EODHD news sources (demo key returns HTTP 403) ───────────────
-    # WHY: CONTENT_INGESTION_EODHD_API_KEY=demo does not have access to the
-    # /news and /market-sentiment endpoints.  Disabling these sources prevents
-    # the worker from continuously creating failing tasks and consuming retries.
-    cur.execute(
-        "UPDATE sources SET enabled = false WHERE source_type = 'eodhd' AND enabled = true",
-    )
-    n_disabled = cur.rowcount
-    if n_disabled:
-        print(f"  EODHD sources disabled: {n_disabled} (demo key lacks news access)")
+    # ── EODHD news (one row per ticker) ──────────────────────────────────────
+    # WHY conditional seeding: PLAN-0088 Wave H — only seed EODHD news rows
+    # when a real premium key is present. The literal value "demo" returns 403
+    # on /news and /market-sentiment endpoints, so seeding under that key just
+    # fills the queue with retry-failures. With a real key (~30+ chars) the
+    # premium news feed is high-volume and improves source diversity.
+    eodhd_key = os.environ.get("CONTENT_INGESTION_EODHD_API_KEY", "demo")
+    eodhd_premium = bool(eodhd_key) and eodhd_key != "demo" and len(eodhd_key) >= 16
+    if eodhd_premium:
+        for src in _EODHD_NEWS_SOURCES:
+            ticker = src["ticker"]
+            cur.execute(
+                """
+                INSERT INTO sources (id, name, source_type, enabled, config, created_at)
+                VALUES (%s::uuid, %s, %s, %s, %s::jsonb, %s)
+                ON CONFLICT (name) DO NOTHING
+                """,
+                (
+                    src["id"],
+                    f"EODHD-News-{ticker}",
+                    "eodhd",
+                    True,
+                    json.dumps({"ticker": f"{ticker}.US"}),
+                    now_ts,
+                ),
+            )
+            status = "inserted" if cur.rowcount else "already exists"
+            print(f"  EODHD-News-{ticker} source: {status}")
     else:
-        print("  EODHD sources: already disabled or not present")
+        # No premium key — disable any leftover rows from earlier dev cycles to
+        # avoid log noise from the worker hitting 403.
+        cur.execute(
+            "UPDATE sources SET enabled = false WHERE source_type = 'eodhd' AND enabled = true",
+        )
+        n_disabled = cur.rowcount
+        if n_disabled:
+            print(f"  EODHD sources disabled: {n_disabled} (no premium key set)")
+        else:
+            print("  EODHD sources: skipped (no premium key — set CONTENT_INGESTION_EODHD_API_KEY)")
 
     conn.commit()
     cur.close()

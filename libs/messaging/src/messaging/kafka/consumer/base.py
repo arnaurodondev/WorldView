@@ -91,7 +91,13 @@ class ConsumerConfig:
     message_processing_timeout_s: int = 45
     # Maximum dead-letters allowed before the consumer crashes to force a restart.
     # Prevents a runaway poison-message storm from silently filling the DLQ.
-    dead_letter_cap: int = 100
+    # PLAN-0088 Wave I (2026-05-10): bumped from 100 → 5000 after a schema
+    # evolution (D-INIT-6 added source_name to nlp.article.enriched.v1) caused
+    # the kg-service-group-enriched consumer to fail-stop on ~770 pre-change
+    # messages on the topic, leaving the entire KG pipeline dead for 5h. The
+    # cap is still load-bearing as a poison-storm guard, but 100 is too tight
+    # for any non-trivial schema migration window.
+    dead_letter_cap: int = 5000
     # PLAN-0087 D-P3-006 / D-P3-009 (2026-05-09): partial-assignment wedge fix.
     # Default Kafka assignor "range" performs stop-the-world rebalances —
     # every member revokes ALL partitions, then re-joins to receive a new set.
