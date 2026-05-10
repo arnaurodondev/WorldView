@@ -14,6 +14,79 @@ supersedes: none
 
 ## 0. Status Log
 
+### 2026-05-10 second pass — Wave E + replay + QA
+
+Six parallel subagents shipped a substantial second batch:
+
+**Done:**
+- **Wave E Holdings redesign** (commit `84314be4`) — full implementation:
+  - Deleted CashManagementCard, RealizedPnLChart, DividendIncomeTimeline
+  - Added 8 new components: CashRow, ConcentrationStrip, ExposureStrip,
+    DayPnLDistribution, DividendYTDStrip, RealizedPnLSparkline,
+    PositionBarHeat, HoldingLotsPanel
+  - Backend: get_holding_lots + compute_concentration use cases
+  - 2 new endpoints: `GET /portfolios/{id}/holdings/{instr}/lots` and
+    `GET /portfolios/{id}/concentration` (R27 ReadUoW, R25 use-case-only)
+  - 13 new unit tests (FIFO, ST/LT boundary, HHI math, edge cases)
+  - Portfolio tests 710 → 724; api-gateway 407 pass; frontend zero
+    regressions
+  - Live verified: HHI=2370 moderate, top-3=81.24%, 7 positions
+- **Wave I-2 KG replay path** (commit `89363198`):
+  - Built `scripts/ops/replay_kg_extraction.py` — clears
+    routing_decisions sentinels and re-emits content.article.stored.v1
+    outbox events
+  - Discovered 561 EODHD silver articles never reached NLP (no
+    routing_decisions row)
+  - Enqueued 600 events; ~60 processed in session window
+  - Density: relations 133→189, evidence_raw 120→178, canonicals 364→399
+  - AAPL stuck at 6 edges due to **content-quality ceiling**: 100% of
+    AAPL articles are 47-word Finnhub headlines (LLM yields 0-1 unique
+    triples each; replays no-op once triples exist). Path to ≥30: longer
+    sources (SEC 10-K, per-ticker EODHD) or extraction model upgrade
+    (PLAN-0088 I-4).
+- **Realized P&L sign-convention fix** (commit `fa279b7e`):
+  - SnapTrade-synced SELL transactions have negative quantity; the FIFO
+    walker silently dropped them via `if tx.quantity <= 0: return`
+  - Fix: `effective_qty = abs(tx.quantity)` throughout BUY/SELL paths
+  - Live verified: portfolio realized P&L was $0.00/0 trades; now
+    $735.34/76 trades
+- **Frontend Invalid-Date polish** (commit `19945166`):
+  - 4 components leaking literal "Invalid Date" via unguarded `new Date(x).toLocaleTimeString()`
+  - Centralised guard in `lib/utils.ts` (formatDate + safeFormatClockTime),
+    11 regression tests added; touched MessageBubble, SlashTurnBlock,
+    StaleBadge, InsiderTransactionsTable
+- **Service validation matrix** (no commit — read-only):
+  - 10 services verified up + healthy + migrated
+  - Identified orphaned `market-data-prediction-markets` consumer (62k
+    lag, dead 8h ago after Postgres DNS hiccup); restarted, now draining
+- **News ingestion QA** (no commit — read-only):
+  - All 5 adapters producing; EODHD now 772 docs, NLP draining backlog
+  - 0 DLQ messages; outbox dispatcher 100% delivered
+
+**Still open:**
+- Wave A (Zitadel SSO + MFA + Settings substance) — beta-blocking, ~25h
+- Wave B (Postgres TDE + MinIO SSE + GDPR + structlog PII) — ~22h
+- Wave C (PITR backups + MinIO mirror) — ~14h
+- Wave D (Grafana alerts + LLM-cost cap) — ~12h
+- Wave F/G remainders — F-1, F-2 (Earnings/Tech/Ownership move into
+  Overview), G-1 (FY-column income statement), G-4 (EPS beat/miss +
+  AnalystTargetSparkline)
+- Wave H-4 confirmed **moot** (existing entity_mentions path returns
+  114+ articles for AAPL); Wave H-5 (duplicate_clusters worker) untouched
+- Wave I-3, I-4, I-5 — relation_summaries close-out, model bench,
+  density check
+- Wave J — perf & scale
+- AAPL ≥ 30 edges target — blocked on content-quality (see I-2 above)
+
+**Open issues flagged but not fixed:**
+- Portfolio internal JWT missing `aud` claim (log noise every 24s)
+- Market-data CRITICAL `internal_jwt_unverified_decode` log
+- KG `/readyz` cosmetic kafka="not_started"
+- Content-store consumer drift ~1.2k lag on content.article.raw.v1
+- SnapTrade brokerage worker writes signed quantities to DB
+  (Portfolio QA Issue-A); read path now correct but data shape divergent
+- duplicate_clusters table 0 rows after 1641 docs (likely worker offline)
+
 ### 2026-05-10 partial landing
 
 The deferred-failure trio (EODHD, KG density, failing fixtures) and two
