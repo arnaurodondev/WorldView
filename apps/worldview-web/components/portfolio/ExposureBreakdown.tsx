@@ -240,8 +240,9 @@ export function ExposureBreakdown({ portfolioId }: ExposureBreakdownProps) {
  * empty / data states.
  */
 function Header() {
+  // WHY font-mono: ADR-F-15 — section header labels use IBM Plex Mono
   return (
-    <h3 className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+    <h3 className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
       Exposure
     </h3>
   );

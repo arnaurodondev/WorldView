@@ -170,7 +170,8 @@ export function WorkspaceFundamentalsWidget({ ticker }: WorkspaceFundamentalsWid
        * matches the widget's chart sibling visually.
        */}
       <div className="flex h-6 items-center gap-1.5 border-b border-border px-2">
-        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+        {/* WHY font-mono: ADR-F-15 — section labels use IBM Plex Mono */}
+        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
           Fundamentals
         </span>
         <span className="font-mono text-[11px] uppercase tabular-nums text-primary">

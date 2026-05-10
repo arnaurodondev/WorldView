@@ -139,21 +139,21 @@ export function WorkspaceScreenerWidget() {
       >
         {/* WHY text-[10px] uppercase tracking-[0.08em]: §0.1 label typography rule —
          * ALL column headers use this exact treatment. NO exceptions. */}
-        <span className="w-[52px] shrink-0 text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+        <span className="w-[52px] shrink-0 text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
           TICKER
         </span>
-        <span className="flex-1 text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans truncate">
+        <span className="flex-1 text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono truncate">
           NAME
         </span>
         {/* WHY text-right on CHG%: §0.8 column header contract — header alignment
          * MUST mirror data alignment. CHG% data is right-aligned (numeric column). */}
-        <span className="w-[48px] shrink-0 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+        <span className="w-[48px] shrink-0 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
           CHG%
         </span>
-        <span className="w-[44px] shrink-0 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+        <span className="w-[44px] shrink-0 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
           CAP
         </span>
-        <span className="w-[36px] shrink-0 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+        <span className="w-[36px] shrink-0 text-right text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
           SCORE
         </span>
       </div>

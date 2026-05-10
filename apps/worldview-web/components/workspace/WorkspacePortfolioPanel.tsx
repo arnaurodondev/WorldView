@@ -83,7 +83,8 @@ export function WorkspacePortfolioPanel() {
     <div className="divide-y divide-border/30">
       {/* Section header (§0.9 pattern) */}
       <div className="flex h-6 items-center border-b border-border px-2">
-        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+        {/* WHY font-mono: ADR-F-15 — section labels use IBM Plex Mono */}
+        <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
           {portfolios[0].name}
         </span>
       </div>

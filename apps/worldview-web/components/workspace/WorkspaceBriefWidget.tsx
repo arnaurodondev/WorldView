@@ -113,7 +113,8 @@ export function WorkspaceBriefWidget() {
           <ChevronRight className="h-3 w-3 text-primary shrink-0" aria-hidden />
         )}
         {/* Section label */}
-        <span className="text-[10px] uppercase tracking-[0.08em] text-primary font-sans">
+        {/* WHY font-mono: ADR-F-15 — all section labels use IBM Plex Mono */}
+        <span className="text-[10px] uppercase tracking-[0.08em] text-primary font-mono">
           Morning Brief
         </span>
         {/* Collapsed preview text — shown inline when collapsed */}
