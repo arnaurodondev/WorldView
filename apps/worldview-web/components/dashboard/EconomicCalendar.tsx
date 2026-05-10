@@ -57,9 +57,10 @@ export function EconomicCalendar() {
       </div>
 
       {/* ── Loading state ──────────────────────────────────────────────── */}
-      {/* T-F-6-03: standardised inner content padding px-3 py-2 (was px-2 pt-1) */}
+      {/* SA-2 PLAN-0088 density: space-y-1.5 + py-1.5 (was space-y-2 + py-2).
+          T-F-6-03: standardised inner content padding px-3 (unchanged). */}
       {isLoading && (
-        <div className="flex-1 space-y-2 px-3 py-2">
+        <div className="flex-1 space-y-1.5 px-3 py-1.5">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="flex gap-2">
               <Skeleton className="h-5 w-12" style={{ animationDelay: `${i * 50}ms` }} />

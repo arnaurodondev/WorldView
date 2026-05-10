@@ -84,7 +84,10 @@ export function EarningsCalendarWidget() {
       {/* WHY 4 skeleton rows: matches the visible row count when data is present.
           animationDelay staggers the pulse so it doesn't look like a single block. */}
       {isLoading && (
-        <div className="flex-1 space-y-2 px-3 py-2">
+        // SA-2 PLAN-0088 density: space-y-1.5 (was space-y-2) + py-1.5 (was py-2)
+        // — conservative 1-unit reduction in skeleton spacing to match the
+        // actual 22px row height when data renders. Readability is unchanged.
+        <div className="flex-1 space-y-1.5 px-3 py-1.5">
           {Array.from({ length: 4 }).map((_, i) => (
             // WHY key={i}: index-keyed skeleton rows are safe — they have no
             // identity beyond "placeholder slot N" and never reorder.

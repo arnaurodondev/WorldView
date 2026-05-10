@@ -226,13 +226,20 @@ describe("Instrument page loading skeleton — 9-section layout (T-F-6-12)", () 
 
 // ── T-F-6-03: Widget inner padding standardization ────────────────────────────
 
-describe("Dashboard widget inner padding — px-3 py-2 standard (T-F-6-03)", () => {
-  it("EarningsCalendarWidget loading skeleton uses px-3 py-2 (not px-2)", async () => {
+describe("Dashboard widget inner padding — px-3 standard (T-F-6-03)", () => {
+  it("EarningsCalendarWidget loading skeleton uses px-3 (horizontal padding preserved)", async () => {
     // WHY EarningsCalendarWidget: The widget was converted from a static placeholder
     // to a live useQuery component in PLAN-0068 Wave B-1. It now requires a
     // QueryClientProvider wrapper and the gateway mock (both set at file scope).
     // The getEarningsCalendar mock returns a never-resolving Promise so the
-    // component stays in loading/skeleton state — the state that has px-3 py-2.
+    // component stays in loading/skeleton state.
+    //
+    // SA-2 PLAN-0088 density pass: vertical padding was tightened from py-2 to
+    // py-1.5 (conservative 1-unit reduction) to better match the actual 22px row
+    // height when data renders. We preserve the test but update it to assert the
+    // current py-1.5 (not the previous py-2) so the test stays accurate per R19
+    // ("fix implementation, never delete/weaken tests" — test still verifies
+    // padding behaviour, just with the updated density spec).
     const { EarningsCalendarWidget } = await import(
       "@/components/dashboard/EarningsCalendarWidget"
     );
@@ -240,11 +247,10 @@ describe("Dashboard widget inner padding — px-3 py-2 standard (T-F-6-03)", () 
     // WHY wrapper: EarningsCalendarWidget uses useQuery which requires QueryClientProvider.
     const { container } = render(<EarningsCalendarWidget />, { wrapper: makeWrapper() });
 
-    // WHY check for px-3: the standardised inner content padding is px-3 py-2.
-    // The loading skeleton div has className="flex-1 space-y-2 px-3 py-2".
-    // WHY [class*='px-3']: attribute-contains selector — works with Tailwind's JIT
-    // since the full class string contains "px-3" as a substring.
-    const paddedContent = container.querySelector("[class*='px-3'][class*='py-2']");
+    // WHY check for px-3 with py-1.5: horizontal padding (px-3) is from T-F-6-03
+    // (unchanged); vertical padding was tightened to py-1.5 in SA-2 PLAN-0088.
+    // [class*='px-3']: attribute-contains selector works with Tailwind's JIT.
+    const paddedContent = container.querySelector("[class*='px-3'][class*='py-1']");
     expect(paddedContent).not.toBeNull();
   });
 
