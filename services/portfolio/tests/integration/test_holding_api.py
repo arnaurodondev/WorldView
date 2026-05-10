@@ -28,21 +28,46 @@ _EXECUTED_AT = "2025-01-01T12:00:00Z"
 
 
 async def test_holdings_empty_before_transaction(integration_client, db_session) -> None:
-    """GET /api/v1/holdings/{portfolio_id} returns empty list before any transaction."""
+    """GET /api/v1/holdings/{portfolio_id} returns empty paginated envelope before any transaction.
+
+    PLAN-0088 (2026-05-10): assertion updated from raw list `[]` to paginated
+    envelope. The endpoint switched to a paginated response shape
+    (``{items, limit, offset, total}``) when read paths were rewired through
+    ReadOnlyUnitOfWork (PLAN-0076 B-5). The old fixture failure masked this
+    drift; with the fixture fixed, the assertion now matches current behavior.
+    """
     portfolio_id = await _create_portfolio(integration_client)
 
     resp = await integration_client.get(f"/api/v1/holdings/{portfolio_id}")
     assert resp.status_code == 200
-    assert resp.json() == []
+    body = resp.json()
+    assert body["items"] == []
+    assert body["total"] == 0
 
 
-async def test_holdings_updated_after_buy(integration_client, db_session) -> None:
-    """After BUY transaction, GET holdings shows updated quantity and avg_cost."""
+async def test_holdings_unchanged_after_buy_without_snapshot(
+    integration_client,
+    db_session,
+) -> None:
+    """A BUY transaction alone does NOT mutate holdings — broker snapshot is sole writer.
+
+    PLAN-0088 (2026-05-10): test renamed and assertions inverted to reflect
+    BP-264 / PLAN-0046 T-46-1-03. record_transaction.py is now history-only;
+    Holdings are derived exclusively from broker position snapshots via
+    UpsertHoldingsFromSnapshotUseCase. Manual transactions are recorded in
+    history but no longer auto-update holdings (that path silently doubled
+    quantities when SnapTrade emitted the same activity twice via legacy +
+    per-account fallback paths). See record_transaction.py:168-181.
+
+    The original assertion (BUY → 1 holding row) was masked by the
+    read_factory fixture bug for several months.
+    """
     portfolio_id = await _create_portfolio(integration_client)
     instrument_id = await _seed_instrument(db_session, "AAPL", "NYSE")
 
-    # BUY 10 @ 150
-    await integration_client.post(
+    # BUY 10 @ 150 — recorded in transactions table + outbox event, but no
+    # holding row is created (snapshot upsert is the sole writer).
+    resp = await integration_client.post(
         "/api/v1/transactions",
         json={
             "portfolio_id": portfolio_id,
@@ -55,14 +80,13 @@ async def test_holdings_updated_after_buy(integration_client, db_session) -> Non
             "executed_at": _EXECUTED_AT,
         },
     )
+    assert resp.status_code == 201
 
     resp = await integration_client.get(f"/api/v1/holdings/{portfolio_id}")
     assert resp.status_code == 200
-    holdings = resp.json()
-    assert len(holdings) == 1
-    assert holdings[0]["quantity"] == "10.00000000"
-    assert holdings[0]["average_cost"] == "150.00000000"
-    assert holdings[0]["instrument_id"] == str(instrument_id)
+    body = resp.json()
+    assert body["items"] == []
+    assert body["total"] == 0
 
 
 async def test_holdings_cross_tenant_denied(integration_client, db_session) -> None:
