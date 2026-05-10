@@ -295,7 +295,9 @@ export default function ScreenerPage() {
       <div className="flex h-9 shrink-0 items-center border-b border-border px-3 gap-2 bg-background">
         {/* Density bundle 2026-05-09: keep at text-[11px] (already at terminal
             density baseline) — no further reduction without breaking legibility. */}
-        <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+        {/* WHY font-mono (not font-sans): all page header labels use IBM Plex Mono
+            per ADR-F-15 — numeric/ticker/label text must be monospace. */}
+        <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
           Instrument Screener
         </h1>
         {isFetching && !isLoading && (

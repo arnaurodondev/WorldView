@@ -1255,7 +1255,16 @@ async def _enqueue_enriched(
     if _hallucinated > 0:
         s6_extraction_entity_ref_hallucinated_total.inc(_hallucinated)
 
-    raw_relations = _build_raw_relations(extraction_result.get("relations", []), entity_id_by_ref, provisional_refs)
+    # SA-3 fix (2026-05-10): pass published_at so each relation row gets
+    # evidence_date = published_at (or None → KG falls back to utc_now()).
+    # Without this, KG's _parse_dt receives None and stamps all rows with now(),
+    # making every evidence_date the same day and breaking the confidence trend chart.
+    raw_relations = _build_raw_relations(
+        extraction_result.get("relations", []),
+        entity_id_by_ref,
+        provisional_refs,
+        published_at=published_at,
+    )
     raw_events = _build_raw_events(extraction_result.get("events", []), entity_id_by_ref, provisional_refs)
     raw_claims = _build_raw_claims(extraction_result.get("claims", []), entity_id_by_ref, provisional_refs)
 
@@ -1469,6 +1478,8 @@ def _build_raw_relations(
     relations: list[Any],
     entity_id_by_ref: dict[str, str],
     provisional_refs: set[str],
+    *,
+    published_at: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Convert LLM extraction relations into the dict format S7 expects.
 
@@ -1478,7 +1489,17 @@ def _build_raw_relations(
     ``entity_provisional=True`` and emits the corresponding queue id as
     ``provisional_queue_id`` so KG can promote the row once a canonical entity
     is later created (PLAN-0057 B-1, F-CRIT-07).
+
+    SA-3 fix (2026-05-10): ``published_at`` is now included in each relation dict as
+    ``evidence_date``.  KG's ``_parse_dt`` falls back to ``now()`` when the field is
+    absent, which stamps all rows with today's date and breaks the confidence trend
+    chart (every point clusters on the ingestion day rather than the article date).
+    Passing the article's ``published_at`` propagates historically-dated evidence so
+    the 90-day trend chart shows meaningful multi-day variation.
     """
+    # ISO string once — all rows in this batch share the same article date
+    evidence_date_iso: str | None = published_at.isoformat() if published_at else None
+
     result: list[dict[str, Any]] = []
     for rel in relations:
         rel_d: dict[str, Any] = dict(rel) if not isinstance(rel, dict) else rel  # type: ignore[call-overload]
@@ -1511,6 +1532,10 @@ def _build_raw_relations(
                 "evidence_text": str(rel_d.get("evidence_text", "")) or None,
                 "entity_provisional": subject_is_provisional or object_is_provisional,
                 "provisional_queue_id": provisional_qid,
+                # SA-3 (2026-05-10): carry article publication date into each relation row.
+                # KG ``_parse_dt`` treats None as utc_now() fallback — that's fine here
+                # for articles where published_at is unknown (e.g. wire-feed items).
+                "evidence_date": evidence_date_iso,
             }
         )
     return result

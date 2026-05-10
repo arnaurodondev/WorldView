@@ -41,12 +41,14 @@ type Category = (typeof CATEGORIES)[number];
 function ProbabilityBar({ probability }: { probability: number }) {
   // WHY clamp: Polymarket prices can briefly exceed [0,1] during liquidity events.
   const pct = Math.round(Math.min(1, Math.max(0, probability)) * 100);
+  // WHY CSS variable tokens (not hardcoded HSL): design system mandates no
+  // raw color values — use --positive (teal-green), --primary (yellow), --negative (red).
   const barClass =
     pct >= 70
-      ? "bg-[hsl(142,76%,36%)]" // green — high YES probability
+      ? "bg-positive" // green — high YES probability
       : pct >= 40
-        ? "bg-[hsl(45,93%,47%)]" // yellow — uncertain
-        : "bg-[hsl(0,72%,51%)]"; // red — low probability
+        ? "bg-primary" // yellow — uncertain
+        : "bg-negative"; // red — low probability
 
   return (
     <div className="flex items-center gap-2">
@@ -211,8 +213,9 @@ export default function PredictionMarketsPage() {
                 onClick={() => setCategory(cat)}
                 className={cn(
                   "rounded-[2px] px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider transition-colors",
+                  // WHY bg-primary/20 text-primary (not hardcoded yellow HSL): design-system tokens.
                   category === cat
-                    ? "bg-[hsl(45,93%,47%)] text-black"
+                    ? "bg-primary/20 text-primary"
                     : "bg-muted/30 text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                 )}
               >
@@ -254,10 +257,13 @@ export default function PredictionMarketsPage() {
       {/* ── Market list ─────────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
         {isLoading &&
+          // WHY h-[22px]: match the real row height token — avoids layout shift when data arrives.
           Array.from({ length: 14 }).map((_, i) => (
-            <div key={i} className="border-b border-border/30 px-4 py-2.5">
+            <div key={i} className="grid grid-cols-[1fr_160px_80px_80px] h-[22px] items-center gap-2 border-b border-border/30 px-3" style={{ animationDelay: `${i * 30}ms` }}>
               <Skeleton className="h-3 w-3/4" />
-              <Skeleton className="mt-1.5 h-1.5 w-full" />
+              <Skeleton className="h-1.5 w-full" />
+              <Skeleton className="h-3 w-8 ml-auto" />
+              <Skeleton className="h-3 w-6 ml-auto" />
             </div>
           ))}
 

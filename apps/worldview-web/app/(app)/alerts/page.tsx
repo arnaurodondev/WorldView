@@ -192,17 +192,20 @@ export default function AlertsPage() {
   );
 
   return (
-    // WHY full-width p-3: terminal alert feeds should use the full viewport width.
-    // p-3 (12px) is the standard terminal panel padding per design system.
-    <div className="space-y-1 p-3">
+    // WHY flex h-full flex-col overflow-hidden (not space-y-1 p-3):
+    // The outer wrapper must fill the shell's main area completely so tab
+    // content can scroll independently rather than the whole page scrolling.
+    // `space-y-1` with a block wrapper was preventing the Tabs from growing
+    // to fill the remaining viewport height.
+    <div className="flex h-full flex-col overflow-hidden">
 
-      {/* ── Page header ────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono">Alerts &amp; News</h1>
-          <p className="mt-0.5 text-[10px] text-muted-foreground">
-            Pending alerts and latest market news
-          </p>
+      {/* ── Page header — compact 7px terminal header ─────────────────────── */}
+      {/* WHY h-7 shrink-0: matches the other page headers (settings, watchlists).
+          Keeps top chrome at 28px so the tab content area is maximised. */}
+      <div className="flex h-7 shrink-0 items-center justify-between border-b border-border px-3">
+        <div className="flex items-center gap-2">
+          <BellRing className="h-3 w-3 text-muted-foreground" aria-hidden strokeWidth={1.5} />
+          <h1 className="font-mono text-[11px] uppercase tracking-[0.08em] text-foreground">Alerts &amp; News</h1>
         </div>
 
         {/* ── Rule management toolbar ─────────────────────────────────────── */}
@@ -236,11 +239,14 @@ export default function AlertsPage() {
       </div>
 
       {/* ── Tabbed layout ──────────────────────────────────────────────────── */}
+      {/* WHY flex-1 flex flex-col min-h-0: the Tabs must fill the remaining
+          space below the page header and allow each TabsContent panel to
+          independently scroll. Without flex-1/min-h-0 the tab body clips. */}
       {/* WHY shadcn Tabs: consistent with Instrument Detail page tab navigation.
           Radix UI handles keyboard navigation (Left/Right arrows + Home/End)
           and ARIA roles (role="tablist", role="tab", role="tabpanel"). */}
-      <Tabs defaultValue={defaultTab} className="w-full">
-        <TabsList className="shrink-0 h-9 px-0 border-b border-border rounded-none bg-transparent justify-start gap-0 w-full">
+      <Tabs defaultValue={defaultTab} className="flex flex-1 flex-col min-h-0">
+        <TabsList className="shrink-0 h-8 px-0 border-b border-border rounded-none bg-transparent justify-start gap-0 w-full">
           <TabsTrigger value="alerts" className="gap-1.5 text-[11px] h-7 px-3 data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none">
             <BellRing className="h-3 w-3" aria-hidden="true" strokeWidth={1.5} />
             Alerts
@@ -260,8 +266,10 @@ export default function AlertsPage() {
             Acknowledged / History). Active uses the existing AlertsList
             (severity-grouped pending alerts); the rest hit /v1/alerts/history
             with a fixed status filter via AlertHistoryTab. */}
-        <TabsContent value="alerts">
-          <Tabs defaultValue="active" className="w-full">
+        {/* WHY flex-1 overflow-auto: the tab panel must fill the remaining space
+            and scroll independently — not the whole page. */}
+        <TabsContent value="alerts" className="flex-1 overflow-auto mt-0 p-0">
+          <Tabs defaultValue="active" className="flex flex-col h-full">
             <TabsList className="shrink-0 h-8 px-0 border-b border-border/60 rounded-none bg-transparent justify-start gap-0 w-full">
               <TabsTrigger value="active" className="text-[11px] h-7 px-3 data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none">
                 Active
@@ -296,12 +304,12 @@ export default function AlertsPage() {
         </TabsContent>
 
         {/* ── News Feed tab ─────────────────────────────────────────────────── */}
-        <TabsContent value="news">
+        <TabsContent value="news" className="flex-1 overflow-auto mt-0 p-0">
           <NewsFeedTab accessToken={accessToken} />
         </TabsContent>
 
         {/* ── Top Today tab ─────────────────────────────────────────────────── */}
-        <TabsContent value="top">
+        <TabsContent value="top" className="flex-1 overflow-auto mt-0 p-0">
           <TopTodayTab accessToken={accessToken} />
         </TabsContent>
       </Tabs>
@@ -330,9 +338,12 @@ interface CategoryFilterRailProps {
 
 function CategoryFilterRail({ active, onChange }: CategoryFilterRailProps) {
   return (
+    // WHY sticky top-0 z-10: the comment above promised sticky but the class was
+    // missing — without it the rail scrolls away and users must scroll back to top
+    // to change category. Added bg-background so the content beneath doesn't bleed.
     // WHY border-b + overflow-x-auto: allows horizontal scroll on narrow viewports
     // without wrapping the chips to a second line which would push articles down.
-    <div className="flex gap-0 overflow-x-auto border-b border-border">
+    <div className="sticky top-0 z-10 flex gap-0 overflow-x-auto border-b border-border bg-background">
       {CATEGORIES.map((cat) => (
         <button
           key={cat}
