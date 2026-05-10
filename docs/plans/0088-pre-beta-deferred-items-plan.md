@@ -1,8 +1,9 @@
 ---
 id: PLAN-0088
 title: "Pre-Beta Deferred Items — Hardening between Demo (PLAN-0087) and Daily-Analyst Beta"
-status: draft
+status: in-progress
 created: 2026-05-09
+updated: 2026-05-10
 owner: Arnau Rodon
 audience: hedge-fund analyst/trader using the platform daily inside the firm
 deadline: 2026-06-06 (T+4 weeks after demo on 2026-05-11)
@@ -10,6 +11,76 @@ type: implementation
 spawned_from: PRD-0087 + 2026-05-09 beta-readiness audits
 supersedes: none
 ---
+
+## 0. Status Log
+
+### 2026-05-10 partial landing
+
+The deferred-failure trio (EODHD, KG density, failing fixtures) and two
+small Wave F/G items shipped in a single session. Larger waves (E, I-2
+density replay, A–D) remain.
+
+**Done:**
+- **H-3** EODHD news adapter — root cause was seeder omission + stale
+  "demo key" disable; `_EODHD_NEWS_SOURCES` now seeded conditionally on
+  premium-key presence. 57 EODHD docs flowing within 5min of restart.
+- **I core unblock** — three orthogonal bugs:
+  1. `provisional_enrichment_core.py` referenced
+     `subject_provisional_id` / `object_provisional_id` columns that do
+     not exist on `relation_evidence_raw` (only `provisional_queue_id`
+     was ever shipped). Rewritten to mirror
+     `entity_consumer._unblock_provisional_evidence` single-column path.
+  2. `dead_letter_cap` 100 → 5000 in `libs/messaging/.../base.py`. The
+     previous cap fail-stopped the entire KG pipeline when D-INIT-6
+     (source_name field added to nlp.article.enriched.v1) caused ~770
+     pre-change messages on the topic to fail Avro deserialisation.
+  3. `kg-service-group-enriched` offsets reset to LATEST to skip the
+     poisoned backlog.
+  → relations: 18 (seed only) → 46 in 30min. AAPL still at 5 edges
+  pending broader backlog replay (Wave I-2).
+- **Failing test fixtures (deferred-failure #3)** — three patches:
+  1. `services/portfolio/tests/conftest.py` + `test_watchlist_api.py` +
+     `test_watchlist_reverse_index.py` now wire `get_read_uow` +
+     `read_factory` (R23 read/write split fixtures lagged behind PLAN-
+     0076 B-5).
+  2. `services/nlp-pipeline/tests/unit/api/test_entity_ownership.py`
+     updated to assert the disabled-guard behaviour set by PLAN-0087
+     (200 regardless of watchlist; `is_watched` never awaited).
+  3. `services/market-data/tests/e2e/conftest.py` now probes the test
+     DB host:port and `pytest.skip`s when unreachable (was: hard
+     `OSError: Connect call failed`).
+  Plus stale-assertion drift surfaced by the read_factory fix:
+  `test_buy_transaction_creates_records` (no `holding.changed` post-
+  BP-264) and `test_holdings_*` (paginated envelope).
+- **F-3** `SplitsDividendsPanel.tsx` — 4-row Yield/Payout/Ex-Date/Last
+  Split panel in the Overview right rail (zone 12 of the wireframe).
+- **G-3** `ShortInterestRow.tsx` — 4-column Float/Short Float/Short
+  Ratio/Short Int strip on the Fundamentals tab.
+
+**Still open:**
+- Wave A (Zitadel SSO, MFA, Settings substance) — beta-blocking, not started.
+- Wave B (Postgres TDE, MinIO SSE, GDPR, structlog PII) — not started.
+- Wave C (PITR backups, MinIO mirror, alembic stamp) — not started.
+- Wave D (Grafana alerts, Tempo, SnapTrade dashboard, LLM-cost cap) — not started.
+- Wave E (Holdings redesign, 16h) — not started.
+- F-1, F-2 (Earnings/Tech/Ownership move into Overview) — F-2 panel
+  already exists in Fundamentals; selective Overview move deferred.
+- G-1 (FY-column income statement), G-2 (PerformanceBar already shipped
+  in PLAN-0087), G-4 (EPS beat/miss + AnalystTargetSparkline) — not started.
+- Wave H-1, H-2 (NewsAPI, SEC EDGAR adapter audits) — adapters seeded;
+  audit deferred. H-4 (entity_article_links backfill), H-5 (dedup
+  cluster expansion) — not started.
+- I-2 (replay extraction for AAPL ≥ 30 edges target) — pipeline alive
+  and growing, but a deliberate offset-reset-to-earliest replay is
+  needed to materialise the 1141 historical LLM calls; currently the
+  reset-to-latest skips them. Worth ~1h of operations work.
+- I-3 (`relation_summaries` + contradiction worker close-out) — not started.
+- I-4 (extraction model bench) — not started.
+- Wave J (perf & scale) — not started.
+
+### 2026-05-09 created
+
+
 
 # PLAN-0088 — Pre-Beta Deferred Items
 
