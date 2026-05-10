@@ -472,5 +472,27 @@ export function createInstrumentsApi(t: string | undefined) {
         { token: t },
       );
     },
+
+    /**
+     * getIncomeStatement — annual income-statement records from S3
+     *
+     * Returns FundamentalsResponse with period_type=ANNUAL records. Each record's
+     * data dict contains income-statement fields: totalRevenue, grossProfit,
+     * operatingIncome, netIncome, ebitda, eps, etc. (EODHD PascalCase keys).
+     *
+     * Used by: IncomeStatementFY (PLAN-0088 Wave G-1) — Finviz-style FY-column
+     * table showing the last 4 fiscal years of key P&L metrics.
+     *
+     * WHY separate from getFundamentals: the main getFundamentals call returns
+     * TTM point-in-time snapshots (highlights section). This endpoint returns
+     * per-fiscal-year actuals from the income_statement section — a different
+     * data shape (array of periods, not a single snapshot).
+     */
+    getIncomeStatement(instrumentId: string): Promise<FundamentalsSectionResponse> {
+      return apiFetch<FundamentalsSectionResponse>(
+        `/v1/fundamentals/${encodeURIComponent(instrumentId)}/income-statement`,
+        { token: t },
+      );
+    },
   };
 }

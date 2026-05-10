@@ -6,14 +6,20 @@
  * sidebar (KEY METRICS + sparkline panels). The bottom section becomes 50/50
  * news + entity graph.
  *
- * Layout structure (Wave C-1):
- * ┌──────────────────────────────────────┬──────────────┐
- * │  OHLCVChart + ChartToolbar           │  KEY METRICS │  ← grid-cols-[1fr_280px]
- * │  SessionStatsStrip                   │  TREND 1     │
- * │                                      │  TREND 2     │
- * ├──────────────────────────────────────┴──────────────┤
- * │  InstrumentTopNews (50%)  │  EntityGraph (50%)      │  ← grid-cols-2
- * └───────────────────────────┴─────────────────────────┘
+ * Layout structure (Wave C-1 + PLAN-0088 F-1/F-2):
+ * ┌──────────────────────────────────────┬──────────────────┐
+ * │  PerformanceBar (full width)         │                  │  ← row above chart
+ * ├──────────────────────────────────────┤                  │
+ * │  OHLCVChart + ChartToolbar           │  [3] KEY METRICS │  ← grid-cols-[1fr_280px]
+ * │  SessionStatsStrip                   │  [4] TREND 1     │
+ * │                                      │  [5] TREND 2     │
+ * │                                      │  [9] EPS TREND   │  ← F-1
+ * │                                      │ [10] TECHNICALS  │  ← F-1
+ * │                                      │ [11] OWNERSHIP   │  ← F-2
+ * │                                      │ [12] SPLITS/DIV  │  ← F-3
+ * ├──────────────────────────────────────┴──────────────────┤
+ * │  TopNews (33%) │  Insider (33%)  │  EntityGraph (33%)  │  ← grid-cols-3
+ * └────────────────┴─────────────────┴─────────────────────┘
  *
  * WHY 280px fixed sidebar (not percentage): percentages collapse below readability
  * at wide viewport widths and expand beyond useful at narrow widths. 280px is wide
@@ -67,6 +73,21 @@ import { OverviewInsiderStrip } from "@/components/instrument/OverviewInsiderStr
 // stock context (yield, payout, ex-date, last split) is visible without the
 // user needing to switch to the Fundamentals tab.
 import { SplitsDividendsPanel } from "@/components/instrument/SplitsDividendsPanel";
+// PLAN-0088 Wave F-1: EarningsHistoryChart (zone 9 of the 12-zone wireframe).
+// Moving a compact EPS bar chart into the Overview right rail lets analysts see
+// the EPS trajectory alongside the live price without switching to Fundamentals.
+// WHY same component as FundamentalsTab: no duplication — both tabs mount their
+// own instance with a unique instrumentId key so React doesn't share state.
+import { EarningsHistoryChart } from "@/components/instrument/EarningsHistoryChart";
+// PLAN-0088 Wave F-1: TechnicalSnapshot (zone 10) — Beta / 50DayMA / 200DayMA.
+// Traders check "is price above its 200DayMA?" before engaging. Having this
+// in the Overview right rail means one less tab switch during a trade decision.
+import { TechnicalSnapshot } from "@/components/instrument/TechnicalSnapshot";
+// PLAN-0088 Wave F-2: OwnershipSnapshotPanel (zone 11) — Insider% / Inst% / Float.
+// Institutional ownership is a key institutional-liquidity signal; high insider
+// ownership signals management conviction. Both are overview-level context that
+// analysts want to see at first glance before drilling into Fundamentals.
+import { OwnershipSnapshotPanel } from "@/components/instrument/OwnershipSnapshotPanel";
 // WHY shadcn Select (T-B-2-03): finance mandate prohibits native <select> elements.
 // The native select has system-default styling that breaks the terminal dark theme and
 // produces OS-chrome dropdowns (white background on macOS). shadcn Select uses a Radix
@@ -281,6 +302,38 @@ export function OverviewLayout({
             onMetricChange={setMetric2}
             availableMetrics={SPARKLINE_METRICS.filter((m) => m.value !== metric1)}
           />
+
+          {/* Zone 9 (PLAN-0088 Wave F-1): EPS Trend chart — compact version.
+              WHY in Overview right rail: analysts want to see the EPS growth
+              trajectory (are earnings growing?) alongside the live price chart
+              before they commit to a deeper fundamental review. Having it here
+              avoids a Fundamentals tab switch for the initial "is this growing?"
+              check — the most common first question.
+              WHY same EarningsHistoryChart as FundamentalsTab: the component
+              is reusable by design. React gives each mounted instance its own
+              state; the Overview instance and Fundamentals instance are independent.
+              TanStack Query deduplicates the network request via the query key
+              ["earnings-history", instrumentId]. */}
+          <EarningsHistoryChart instrumentId={instrumentId} />
+
+          {/* Zone 10 (PLAN-0088 Wave F-1): Technical Snapshot — Beta / MAs.
+              WHY in Overview right rail: traders integrate price position vs
+              moving averages into every trade decision. "Is AAPL above its 200DMA?"
+              is a 1-second check; forcing a Fundamentals tab switch for it
+              interrupts the Overview workflow. Passing currentPrice enables the
+              bull/bear MA color-coding without an extra prop chain. */}
+          <TechnicalSnapshot
+            instrumentId={instrumentId}
+            currentPrice={currentPrice ?? undefined}
+          />
+
+          {/* Zone 11 (PLAN-0088 Wave F-2): Ownership Snapshot — Insider% / Inst%.
+              WHY in Overview right rail: institutional ownership and insider
+              holdings are "governance context" that institutional analysts check
+              as part of every new instrument review. 60%+ institutional = under
+              Wall Street scrutiny. High insider% = skin in the game. Both signals
+              are fast glances, not deep-dive work — exactly right for Overview. */}
+          <OwnershipSnapshotPanel instrumentId={instrumentId} />
 
           {/* Zone 12 (PLAN-0088 Wave F-3): Splits & Dividends panel.
               WHY at the bottom of the right rail: yield/payout/ex-date are
