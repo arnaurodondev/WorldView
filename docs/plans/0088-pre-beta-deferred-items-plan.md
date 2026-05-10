@@ -1254,6 +1254,25 @@ Post-rebuild verification:
 
 Commits this pass: `fa410cd1`, `730069bc`, `6c109a6f`, `2ea4bef0`, `b0ff21aa`, `fadabb87`, `67247347`, `34185d29`, `2c15aae4`, `a433d0fe`. Full audit: `docs/audits/2026-05-10-pre-beta-third-pass-report.md`.
 
+## 2026-05-10 late evening — pre-beta fourth pass (universe + AGE + Worker 13B + dedup BP-443)
+
+Ten subagents (SA-1..SA-10) ran in parallel; verdict **GO for beta**.
+
+* **SA-1** — Dedup `MissingGreenlet` root cause (BP-443): `_SessionUnitOfWork.__aexit__` lacked explicit `await session.close()` before delegating to context manager. Fix verified: 0 errors across 10 min (was ~11/3m). 7 regression tests; 334 unit tests pass.
+* **SA-2** — Worker 13B periodic (5-min) `relation_evidence` promoter + SummaryWorker retry-with-backoff + Gemini 2.5 Flash Lite fallback (no Groq). Confirmed firing organically.
+* **SA-3** — Definition embedding root causes: stale `source_hash`, silent `source_text=NULL` skip, wrong `FundamentalsRefreshWorker` URL. **def_emb 100%** across all entity types; `fst_emb` 0→55.
+* **SA-4** — Cross-DB `evidence_date` backfill from `content_store_db.documents.published_at`. **Distinct days 1→10**; AAPL trend 5 real points. Aggregates repo switched from raw to partitioned table.
+* **SA-5** — AGE sync worker + `path_discovery.py` rewrite (2-hop/3-hop scalar Cypher, UUID injection guard). **AGE 1268 nodes / 323 edges**; **path_insight_jobs 54/54 done**; **path_insights 0→2107**.
+* **SA-6** — **FR-T0-2 met**: 57→614 instruments (543 S&P + ADRs, 20 ETFs, 29 crypto, 7 macro, 6 FX). OHLCV 29→600 (+137k bars). Idempotent seed.
+* **SA-7** — News density polish (cluster-chip copy, source border, NewsTab compression).
+* **SA-8** — SnapTrade dividend regression check: clean (98 positive / 102 withholding); `/balances` unmapped → P1.
+* **SA-9** — Settings density + intelligence-tab/portfolio empty states.
+* **SA-10** — Final QA: verdict GO; all routes, APIs, KG semantic completeness, Kafka, container health verified.
+
+DB delta this pass: `relation_evidence` 438→947, `relation_summaries` 5, `path_insights` 0→2107, `LLM narratives` 898→1257, `template-v1` 263→**0**, `def_emb` 1040→1277 (100%), `instruments` 57→614, `AGE nodes` 2→1268, `duplicate_clusters` 807→835.
+
+Commits this pass: `ca089fbc`, `0832f4a2`, `1968ee24`, `c184e53e`, `1eb00225`, `9603059d`, `f191799d`, `eb913f4f`. Full audit: `docs/audits/2026-05-10-pre-beta-fourth-pass-report.md`.
+
 ---
 
 **End of PLAN-0088.**
