@@ -103,10 +103,13 @@ async def integration_client(postgres_container: str) -> AsyncGenerator[AsyncCli
     """
     from uuid import UUID
 
-    from portfolio.api.dependencies import get_uow
+    from portfolio.api.dependencies import get_read_uow, get_uow
     from portfolio.infrastructure.db.models.tenant import TenantModel
     from portfolio.infrastructure.db.models.user import UserModel
-    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
+    from portfolio.infrastructure.db.unit_of_work import (
+        SqlAlchemyReadOnlyUnitOfWork,
+        SqlAlchemyUnitOfWork,
+    )
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
 
@@ -136,10 +139,22 @@ async def integration_client(postgres_container: str) -> AsyncGenerator[AsyncCli
         async with SqlAlchemyUnitOfWork(session_factory) as uow:
             yield uow
 
+    # PLAN-0088 (2026-05-10): R27 read/write split (PLAN-0076 B-5) introduced
+    # get_read_uow which reads request.app.state.read_factory. Tests created
+    # apps without populating it, so every read endpoint 500'd with
+    # AttributeError. Production app.py:87-90 wires read_factory to a separate
+    # replica factory; in tests we point it at the same testcontainer factory.
+    async def _test_read_uow() -> AsyncGenerator:
+        async with SqlAlchemyReadOnlyUnitOfWork(session_factory) as uow:
+            yield uow
+
     app = create_app()
     app.dependency_overrides[get_uow] = _test_uow
+    app.dependency_overrides[get_read_uow] = _test_read_uow
     app.state.session_factory = session_factory
     app.state.engine = engine
+    app.state.write_factory = session_factory
+    app.state.read_factory = session_factory
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test", headers=_INTERNAL_HEADERS) as ac:

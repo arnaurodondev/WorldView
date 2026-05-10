@@ -96,18 +96,27 @@ def _make_app(
 
 
 class TestEntityOwnershipGuard:
-    """F-010 Option A: Watchlist ownership guard tests."""
+    """F-010 watchlist ownership guard tests.
+
+    PLAN-0087 (2026-05-09) intentionally disabled the guard at
+    ``signals.py:209`` (``if False:``) because it was returning 404 for every
+    instrument-page News tab. News is read-only data and the entity_id is
+    itself the auth — users navigate to ``/instruments/{id}`` freely. The
+    tests below now assert the disabled behaviour: regardless of watchlist
+    state, the endpoint returns 200 and ``is_watched`` is never awaited.
+    These guard the disabled state — flipping ``signals.py:209`` back to
+    ``if True:`` without re-enabling selectively (e.g. only on
+    ``/watchlist/*`` surfaces) will break these tests, exactly as intended.
+    """
 
     @pytest.mark.asyncio
-    async def test_entity_articles_returns_404_for_unwatched_entity(self) -> None:
-        """When tenant_id is real and entity is NOT watched, return 404."""
+    async def test_entity_articles_returns_200_for_unwatched_entity_guard_disabled(self) -> None:
+        """Guard is disabled (PLAN-0087): unwatched entities are NOT 404'd."""
         repo = _make_repo(articles=[_ranked_article()])
         watchlist = AsyncMock()
         watchlist.is_watched = AsyncMock(return_value=False)
         app = _make_app(repo, watchlist_cache=watchlist)
 
-        # Simulate InternalJWTMiddleware by setting request.state.tenant_id
-        # We bypass the actual middleware and set state directly via middleware shim
         real_tenant = str(uuid4())
 
         @app.middleware("http")
@@ -118,13 +127,17 @@ class TestEntityOwnershipGuard:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get(f"/api/v1/entities/{_ENTITY_ID}/articles")
 
-        assert response.status_code == 404
-        assert response.json()["detail"] == "Entity not found"
-        watchlist.is_watched.assert_awaited_once_with(_ENTITY_ID)
+        assert response.status_code == 200
+        watchlist.is_watched.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_entity_articles_succeeds_for_watched_entity(self) -> None:
-        """When tenant_id is real and entity IS watched, return 200."""
+        """When tenant_id is real and entity IS watched, return 200.
+
+        Same expected outcome as the unwatched case (guard disabled), but kept
+        as a separate scenario so re-enabling the guard with selective scope
+        will surface clearly in the test diff.
+        """
         repo = _make_repo(articles=[_ranked_article()])
         watchlist = AsyncMock()
         watchlist.is_watched = AsyncMock(return_value=True)
@@ -143,7 +156,7 @@ class TestEntityOwnershipGuard:
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 1
-        watchlist.is_watched.assert_awaited_once_with(_ENTITY_ID)
+        watchlist.is_watched.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_entity_articles_skips_check_for_nil_tenant(self) -> None:
