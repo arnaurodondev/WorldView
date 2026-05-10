@@ -151,6 +151,31 @@ async def main() -> None:
         retry_delays_ollama=(5.0, 30.0),  # shorter delays for scheduler context
         usage_logger=kg_usage_logger,
     )
+
+    # SA-2: wire the Gemini 2.5 Flash Lite extraction adapter as the explicit
+    # last-resort fallback for SummaryWorker.  Uses the same KNOWLEDGE_GRAPH_GEMINI_API_KEY
+    # that powers the description client.  When the key is absent, the fallback
+    # is disabled (gemini_ext=None) and SummaryWorker behaviour is unchanged.
+    gemini_ext: Any = None
+    _gemini_api_key = settings.gemini_api_key.get_secret_value()
+    if _gemini_api_key and settings.summary_fallback_provider.lower() == "gemini":
+        from ml_clients.adapters.gemini_extraction import GeminiExtractionAdapter  # type: ignore[import-not-found]
+
+        gemini_ext = GeminiExtractionAdapter(
+            api_key=_gemini_api_key,
+            model_id=settings.summary_fallback_model_id,
+            semaphore=asyncio.Semaphore(2),  # limit to 2 concurrent summary calls
+        )
+        log.info(
+            "kg_summary_gemini_fallback_wired",
+            model_id=settings.summary_fallback_model_id,
+        )
+    else:
+        log.info(
+            "kg_summary_gemini_fallback_disabled",
+            reason="gemini_api_key absent or summary_fallback_provider != gemini",
+        )
+
     workers = build_workers(
         settings,
         write_factory,
@@ -158,6 +183,7 @@ async def main() -> None:
         llm_client=llm_client,
         valkey_client=valkey_client,
         usage_logger=kg_usage_logger,
+        gemini_extraction_client=gemini_ext,
     )
     scheduler = KnowledgeGraphScheduler(settings, workers=workers)
 
