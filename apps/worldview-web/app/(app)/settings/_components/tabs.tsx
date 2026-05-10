@@ -115,17 +115,17 @@ export function ProfileTab({ user }: ProfileTabProps) {
 
         <Separator className="bg-border/40" />
 
-        <dl className="grid grid-cols-[140px_1fr] gap-x-4 gap-y-3 text-sm">
+        <dl className="grid grid-cols-[140px_1fr] gap-x-4 gap-y-2 text-xs">
           <dt className="text-muted-foreground">Name</dt>
           <dd className="text-foreground">{user?.name ?? "—"}</dd>
           <dt className="text-muted-foreground">Email</dt>
           <dd className="text-foreground">{user?.email ?? "—"}</dd>
           <dt className="text-muted-foreground">User ID</dt>
-          <dd className="font-mono text-xs text-muted-foreground">
+          <dd className="font-mono text-[11px] tabular-nums text-muted-foreground">
             {user?.user_id ?? "—"}
           </dd>
           <dt className="text-muted-foreground">Tenant ID</dt>
-          <dd className="font-mono text-xs text-muted-foreground">
+          <dd className="font-mono text-[11px] tabular-nums text-muted-foreground">
             {user?.tenant_id ?? "—"}
           </dd>
         </dl>

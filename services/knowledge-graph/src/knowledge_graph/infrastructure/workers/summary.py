@@ -28,6 +28,7 @@ Session discipline (DS-001 / ARCH-003 / DEF-018, Wave B-1):
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -36,12 +37,18 @@ from common.time import utc_now  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from ml_clients.protocols import EmbeddingClient  # type: ignore[import-untyped]
+    from ml_clients.protocols import EmbeddingClient, ExtractionClient  # type: ignore[import-untyped]
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+# SA-2: retry-with-exponential-backoff schedule for the primary LLM call.
+# 3 total attempts: initial → 2 s wait → 5 s wait → give up → Gemini fallback.
+# Delays are short because the caller (SummaryWorker) holds no DB session
+# during LLM I/O — sleeping here is safe and does not block the DB pool.
+_SUMMARY_RETRY_DELAYS: tuple[float, ...] = (2.0, 5.0)
 
 _BATCH_LIMIT = 20
 _EVIDENCE_LIMIT = 10
@@ -71,6 +78,15 @@ class SummaryWorker:
             When ``None`` (default), falls back to ``session_factory`` so
             existing call sites and tests that pass only the write factory
             continue to work unchanged.
+        gemini_extraction_client:
+            SA-2: optional direct Gemini extraction client.  Used as an
+            explicit last-resort fallback when the primary FallbackChainClient
+            is fully exhausted (returns None).  When ``None``, the Gemini
+            fallback path is skipped.
+        summary_retry_delays:
+            SA-2: delays (seconds) between retries of the primary LLM call.
+            Default ``_SUMMARY_RETRY_DELAYS`` = (2 s, 5 s) → 3 total attempts.
+            Pass ``()`` in unit tests to skip sleeping.
 
     """
 
@@ -81,6 +97,9 @@ class SummaryWorker:
         force_regen_batch_size: int = 0,
         read_session_factory: Any = None,
         embedding_port: EmbeddingClient | None = None,
+        *,
+        gemini_extraction_client: ExtractionClient | None = None,
+        summary_retry_delays: tuple[float, ...] = _SUMMARY_RETRY_DELAYS,
     ) -> None:
         self._sf = session_factory
         # DEF-018 / Wave B-1: route Phase 1 + Phase 2 reads through the read
@@ -93,6 +112,12 @@ class SummaryWorker:
         # T-B-04: optional embedding port for summary_embedding population.
         # When None, embedding is skipped (does not block summary write).
         self._embedding_port = embedding_port
+        # SA-2: Gemini 2.5 Flash Lite direct fallback client.  Used when the
+        # FallbackChainClient returns None (all primary+secondary providers
+        # exhausted).  None = Gemini fallback disabled.
+        self._gemini_ext: ExtractionClient | None = gemini_extraction_client
+        # SA-2: retry delays for the primary LLM call before escalating to Gemini.
+        self._summary_retry_delays = summary_retry_delays
 
     async def run(self) -> None:
         """Generate summaries for stale relations.
@@ -406,6 +431,16 @@ class SummaryWorker:
         evidence_texts: list[str],
         relation_id: Any,
     ) -> str | None:
+        """Generate a summary via LLM with retry-with-backoff + Gemini fallback.
+
+        SA-2 retry/fallback chain:
+          1. FallbackChainClient.extract() — attempt 1 (primary: DeepInfra → Ollama → Gemini chain).
+          2. On None: wait ``_summary_retry_delays[0]`` seconds, retry once.
+          3. On None: wait ``_summary_retry_delays[1]`` seconds, retry once more.
+          4. On None after all retries: escalate to direct Gemini 2.1 Flash Lite client
+             (``self._gemini_ext``) with ``summary_worker_fallback_invoked`` log.
+          5. On Gemini failure or ``self._gemini_ext=None``: return None (caller handles).
+        """
         from ml_clients.dataclasses import ExtractionInput  # type: ignore[import-untyped]
         from prompts.knowledge.summary import RELATION_SUMMARY  # type: ignore[import-untyped]
 
@@ -419,18 +454,75 @@ class SummaryWorker:
             template_id=_PROMPT_TEMPLATE_ID,
         )
 
-        result = await self._llm.extract(inp, entity_id=None)
-        if result is None:
+        # ── Primary path: FallbackChainClient with retry-with-backoff ────────
+        # The FallbackChainClient itself already applies per-provider retries
+        # internally (DeepInfra: 2 attempts; Ollama/Gemini: configurable).
+        # The outer retry loop here is an additional layer applied at the
+        # WORKER level, independent of per-provider retries inside the chain.
+        # This ensures transient "chain exhausted" events (e.g. a brief network
+        # blip that hits all providers simultaneously) are retried before
+        # escalating to the explicit Gemini fallback.
+        result = None
+        for attempt, delay in enumerate(self._summary_retry_delays):
+            result = await self._llm.extract(inp, entity_id=None)
+            if result is not None:
+                break
+            logger.warning(  # type: ignore[no-any-return]
+                "summary_worker_primary_retry",
+                relation_id=str(relation_id),
+                attempt=attempt + 1,
+                delay_s=delay,
+            )
+            await asyncio.sleep(delay)
+        else:
+            # Final attempt after the last delay has been served.
+            result = await self._llm.extract(inp, entity_id=None)
+
+        if result is not None:
+            raw_resp = getattr(result, "raw_response", None)
+            # Fix SEC-003: downgrade from INFO to DEBUG — raw LLM responses may
+            # contain financial data excerpted from news articles.
+            # Fix SEC-204: raw_response_preview removed — even truncated text may
+            # contain PII or proprietary financial data; length alone is sufficient
+            # for debugging truncation/empty-response issues.
+            logger.debug(  # type: ignore[no-any-return]
+                "summary_worker_llm_raw_response",
+                relation_id=str(relation_id),
+                raw_response_length=len(raw_resp) if raw_resp else 0,
+            )
+            return str(result.result.get("summary", "")) or None
+
+        # ── Gemini 2.5 Flash Lite explicit fallback (SA-2) ───────────────────
+        # Primary chain exhausted after retries.  Escalate to the Gemini client
+        # wired in at construction time (via ``gemini_extraction_client``).
+        # ``summary_worker_fallback_invoked`` is the validation-gate log event.
+        if self._gemini_ext is None:
             return None
-        raw_resp = getattr(result, "raw_response", None)
-        # Fix SEC-003: downgrade from INFO to DEBUG — raw LLM responses may
-        # contain financial data excerpted from news articles.
-        # Fix SEC-204: raw_response_preview removed — even truncated text may
-        # contain PII or proprietary financial data; length alone is sufficient
-        # for debugging truncation/empty-response issues.
+
+        logger.warning(  # type: ignore[no-any-return]
+            "summary_worker_fallback_invoked",
+            relation_id=str(relation_id),
+            fallback_provider="gemini",
+        )
+        try:
+            fallback_result = await self._gemini_ext.extract(inp)
+        except Exception as exc:
+            logger.error(  # type: ignore[no-any-return]
+                "summary_worker_fallback_failed",
+                relation_id=str(relation_id),
+                fallback_provider="gemini",
+                error=str(exc),
+            )
+            return None
+
+        if fallback_result is None:
+            return None
+
+        raw_resp = getattr(fallback_result, "raw_response", None)
         logger.debug(  # type: ignore[no-any-return]
             "summary_worker_llm_raw_response",
             relation_id=str(relation_id),
             raw_response_length=len(raw_resp) if raw_resp else 0,
+            provider="gemini_fallback",
         )
-        return str(result.result.get("summary", "")) or None
+        return str(fallback_result.result.get("summary", "")) or None

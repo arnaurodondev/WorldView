@@ -34,9 +34,8 @@
 // hooks into TanStack Query (client only), useAuth reads React context.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Beaker, Loader2 } from "lucide-react";
+import { Beaker, Loader2 } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -152,7 +151,7 @@ export default function BetaProgramPage() {
   // the first render still shows the page. Returning a loading shell
   // avoids a flash of empty state.
   if (authLoading || !isAuthenticated) {
-    return <div className="p-8 text-sm text-muted-foreground">Loading…</div>;
+    return <div className="p-3 text-xs text-muted-foreground">Loading…</div>;
   }
 
   // Error rendering — most likely a network blip; offer a retry instead of
@@ -161,11 +160,10 @@ export default function BetaProgramPage() {
     const message =
       error instanceof GatewayError ? error.message : "Failed to load beta program.";
     return (
-      <div className="mx-auto max-w-3xl space-y-3 p-3">
-        <Header />
-        <Card>
-          <CardContent className="py-6">
-            <p className="text-sm text-destructive" role="alert">
+      <div className="space-y-3">
+        <Card className="border-border/60 bg-card">
+          <CardContent className="py-4">
+            <p className="text-xs text-destructive" role="alert">
               {message}
             </p>
             <Button
@@ -183,12 +181,14 @@ export default function BetaProgramPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-3 p-3">
-      <Header />
+    <div className="space-y-3">
+      {/* No back-button header — the settings sidebar nav already provides
+          navigation to all sections. Adding a header here creates visual
+          noise and wastes vertical space. */}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+      <Card className="border-border/60 bg-card">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
             <Beaker className="h-4 w-4 text-primary" aria-hidden="true" strokeWidth={1.5} />
             Beta Program
           </CardTitle>
@@ -294,22 +294,6 @@ export default function BetaProgramPage() {
         We&apos;ll notify you by email before enabling new beta features. You can leave
         the program at any time — your existing data is unaffected.
       </p>
-    </div>
-  );
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────
-
-/** Page header with a back-to-settings link — separate so the error path can reuse it. */
-function Header() {
-  return (
-    <div className="flex items-center gap-2">
-      <Button asChild variant="ghost" size="sm">
-        <Link href="/settings" aria-label="Back to settings">
-          <ArrowLeft className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
-          Settings
-        </Link>
-      </Button>
     </div>
   );
 }

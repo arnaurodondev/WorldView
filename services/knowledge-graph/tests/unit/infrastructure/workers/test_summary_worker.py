@@ -1193,3 +1193,263 @@ class TestSummaryWorkerWaveB1:
         assert "summary_stale" in sql, f"Captured wrong SQL: {sql!r}"
         # Silence unused-import lint for the in-test alias.
         _ = _text
+
+
+# ---------------------------------------------------------------------------
+# SA-2: SummaryWorker retry-with-backoff + Gemini 2.1 Flash Lite fallback
+# ---------------------------------------------------------------------------
+
+
+class TestSummaryWorkerRetryAndGeminiFallback:
+    """SA-2: retry-with-backoff and explicit Gemini fallback path.
+
+    Chain shape:
+      primary success             → FallbackChainClient returns result on first try
+      primary fail → retry → ok  → FallbackChainClient returns None once, then succeeds
+      primary exhausted → Gemini → Gemini extraction client returns result
+      all exhausted               → both primary and Gemini return None → run() returns None
+    """
+
+    def test_primary_success_no_retry_no_gemini(self) -> None:
+        """FallbackChainClient succeeds on first attempt — no retries, no Gemini."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        evidence_rows = [{"evidence_text": "Apple beat estimates.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000a01"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(
+            return_value=ExtractionOutput(result={"summary": "Apple strong Q3."}, raw_response="ok", model_id="m")
+        )
+
+        gemini = AsyncMock()
+        gemini.extract = AsyncMock()  # should NOT be called
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(
+                sf,
+                llm,
+                gemini_extraction_client=gemini,
+                summary_retry_delays=(),  # no sleep in tests
+            )
+            asyncio.run(worker.run())
+
+        # Primary succeeded immediately → Gemini must never be called.
+        gemini.extract.assert_not_awaited()
+        mock_sum.insert_new.assert_awaited_once()
+
+    def test_primary_fail_retry_succeeds(self) -> None:
+        """Primary returns None once, then succeeds on retry — Gemini not called."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        evidence_rows = [{"evidence_text": "Evidence for retry test.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000a02"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        success_output = ExtractionOutput(result={"summary": "Retry success."}, raw_response="ok", model_id="m")
+
+        # First call returns None (primary fails), second call succeeds.
+        llm = AsyncMock()
+        llm.extract = AsyncMock(side_effect=[None, success_output])
+
+        gemini = AsyncMock()
+        gemini.extract = AsyncMock()  # must NOT be called — retry succeeded
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(
+                sf,
+                llm,
+                gemini_extraction_client=gemini,
+                summary_retry_delays=(0.0,),  # 1 retry, no sleep
+            )
+            asyncio.run(worker.run())
+
+        # LLM called twice (first fail + retry success).
+        assert llm.extract.await_count == 2
+        # Gemini must NOT be called since the retry worked.
+        gemini.extract.assert_not_awaited()
+        mock_sum.insert_new.assert_awaited_once()
+
+    def test_primary_exhausted_gemini_fallback_success(self) -> None:
+        """Primary chain exhausted → Gemini fallback invoked and succeeds."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        evidence_rows = [{"evidence_text": "Fallback test evidence.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000a03"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        # Primary chain always returns None.
+        llm = AsyncMock()
+        llm.extract = AsyncMock(return_value=None)
+
+        # Gemini returns a valid summary.
+        gemini_output = ExtractionOutput(
+            result={"summary": "Gemini fallback summary."},
+            raw_response='{"summary":"..."}',
+            model_id="gemini-2.5-flash-lite",
+        )
+        gemini = AsyncMock()
+        gemini.extract = AsyncMock(return_value=gemini_output)
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(
+                sf,
+                llm,
+                gemini_extraction_client=gemini,
+                summary_retry_delays=(),  # no retries → immediately escalate to Gemini
+            )
+            asyncio.run(worker.run())
+
+        # Gemini must have been called as the fallback.
+        gemini.extract.assert_awaited_once()
+        # Summary must have been inserted with the Gemini result.
+        mock_sum.insert_new.assert_awaited_once()
+
+    def test_fallback_invoked_log_emitted(self) -> None:
+        """summary_worker_fallback_invoked is logged when Gemini fallback fires."""
+        import knowledge_graph.infrastructure.workers.summary as _summary_mod
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+        from ml_clients.dataclasses import ExtractionOutput  # type: ignore[import-untyped]
+
+        evidence_rows = [{"evidence_text": "Log test evidence.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000a04"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(return_value=None)
+
+        gemini_output = ExtractionOutput(
+            result={"summary": "Gemini summary."}, raw_response="ok", model_id="gemini-2.5-flash-lite"
+        )
+        gemini = AsyncMock()
+        gemini.extract = AsyncMock(return_value=gemini_output)
+
+        logged_warnings: list[tuple] = []
+        orig_warn = _summary_mod.logger.warning  # type: ignore[attr-defined]
+
+        def _capture(event: str, **kw: object) -> None:  # type: ignore[return]
+            logged_warnings.append((event, kw))
+            return orig_warn(event, **kw)  # type: ignore[no-any-return]
+
+        _summary_mod.logger.warning = _capture  # type: ignore[method-assign]
+        try:
+            with (
+                patch(_REL_REPO, return_value=mock_rel),
+                patch(_EV_REPO, return_value=mock_ev),
+                patch(_SUM_REPO, return_value=mock_sum),
+            ):
+                worker = SummaryWorker(
+                    sf,
+                    llm,
+                    gemini_extraction_client=gemini,
+                    summary_retry_delays=(),
+                )
+                asyncio.run(worker.run())
+        finally:
+            _summary_mod.logger.warning = orig_warn  # type: ignore[method-assign]
+
+        fallback_events = [ev for ev, _ in logged_warnings if ev == "summary_worker_fallback_invoked"]
+        assert fallback_events, "summary_worker_fallback_invoked was not logged"
+
+    def test_all_fallbacks_exhausted_no_insert(self) -> None:
+        """Primary exhausted + Gemini also fails → insert_new not called, mark_updated called."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+
+        evidence_rows = [{"evidence_text": "All fallbacks exhausted.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000a05"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        # Both primary and Gemini return None.
+        llm = AsyncMock()
+        llm.extract = AsyncMock(return_value=None)
+
+        gemini = AsyncMock()
+        gemini.extract = AsyncMock(return_value=None)
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            worker = SummaryWorker(
+                sf,
+                llm,
+                gemini_extraction_client=gemini,
+                summary_retry_delays=(),
+            )
+            asyncio.run(worker.run())
+
+        # No summary written — but stale flag cleared (F-DS-208).
+        mock_sum.insert_new.assert_not_awaited()
+        mock_rel.mark_summary_updated.assert_awaited_once()
+
+    def test_gemini_raises_does_not_propagate(self) -> None:
+        """Gemini.extract() raises → exception swallowed; worker marks stale flag cleared."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+
+        evidence_rows = [{"evidence_text": "Gemini raises.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000a06"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(return_value=None)
+
+        gemini = AsyncMock()
+        gemini.extract = AsyncMock(side_effect=RuntimeError("Gemini 500"))
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            # Must NOT propagate — Gemini failure is non-fatal for the worker.
+            worker = SummaryWorker(
+                sf,
+                llm,
+                gemini_extraction_client=gemini,
+                summary_retry_delays=(),
+            )
+            asyncio.run(worker.run())  # should not raise
+
+        mock_sum.insert_new.assert_not_awaited()
+        mock_rel.mark_summary_updated.assert_awaited_once()
+
+    def test_no_gemini_client_no_fallback(self) -> None:
+        """When gemini_extraction_client=None, worker falls back to None after primary exhausted."""
+        from knowledge_graph.infrastructure.workers.summary import SummaryWorker
+
+        evidence_rows = [{"evidence_text": "No Gemini client.", "canonicalized_evidence_text": None}]
+        stale_relations = [{"relation_id": "00000000-0000-0000-0000-000000000a07"}]
+        sf, _session, mock_rel, mock_ev, mock_sum = _make_session(stale_relations, evidence_rows, None)
+
+        llm = AsyncMock()
+        llm.extract = AsyncMock(return_value=None)
+
+        with (
+            patch(_REL_REPO, return_value=mock_rel),
+            patch(_EV_REPO, return_value=mock_ev),
+            patch(_SUM_REPO, return_value=mock_sum),
+        ):
+            # gemini_extraction_client defaults to None.
+            worker = SummaryWorker(sf, llm, summary_retry_delays=())
+            asyncio.run(worker.run())  # must not raise
+
+        mock_sum.insert_new.assert_not_awaited()
+        # Stale flag must still be cleared (F-DS-208).
+        mock_rel.mark_summary_updated.assert_awaited_once()

@@ -133,6 +133,10 @@ class KnowledgeGraphScheduler:
         jobs: list[tuple[str, int, str]] = [
             ("confidence_recompute", s.worker_confidence_interval_s, "worker_13a_confidence"),
             ("contradiction_batch", s.worker_contradiction_interval_s, "worker_13b_contradiction"),
+            # Worker 13B: SA-2 — periodic relation_evidence promotion (300 s / 5 min).
+            # Promotes relation_evidence_raw rows to the immutable partitioned table so
+            # SummaryWorker can find high-quality evidence via get_all_for_relation().
+            ("evidence_promotion", s.worker_evidence_promote_interval_s, "worker_13b_evidence_promoter"),
             ("summary_generation", s.worker_summary_interval_s, "worker_13c_summary"),
             ("definition_embedding", s.worker_definition_refresh_interval_s, "worker_13d1_definition"),
             ("narrative_embedding", s.worker_narrative_refresh_interval_s, "worker_13d2_narrative"),
@@ -252,6 +256,7 @@ def build_workers(
     llm_client: FallbackChainClient | None = None,
     valkey_client: Any | None = None,
     usage_logger: LlmUsageLogProtocol | None = None,
+    gemini_extraction_client: Any | None = None,
 ) -> dict[str, Any]:
     """Instantiate all workers from service dependencies.
 
@@ -270,6 +275,10 @@ def build_workers(
                               logger threaded into ``DefinitionRefreshWorker`` and
                               ``ProvisionalEnrichmentWorker``.  When None the
                               workers stay backward-compatible (no logging).
+        gemini_extraction_client:
+                              SA-2: optional GeminiExtractionAdapter for SummaryWorker
+                              explicit Gemini 2.5 Flash Lite fallback.  When None
+                              the Gemini fallback path in SummaryWorker is disabled.
 
     Returns:
     -------
@@ -286,6 +295,7 @@ def build_workers(
     from knowledge_graph.infrastructure.workers.narrative_refresh import NarrativeRefreshWorker
     from knowledge_graph.infrastructure.workers.partitions import MonthlyPartitionWorker
     from knowledge_graph.infrastructure.workers.provisional_enrichment import ProvisionalEnrichmentWorker
+    from knowledge_graph.infrastructure.workers.relation_evidence_promoter import RelationEvidencePromoterWorker
     from knowledge_graph.infrastructure.workers.summary import SummaryWorker
 
     # DEF-034 (Wave B-5): when no read replica is wired, fall back to the write
@@ -305,6 +315,10 @@ def build_workers(
         # R23-EXEMPT: DDL-only (CREATE TABLE IF NOT EXISTS for monthly
         # partitions; partition existence check + creation must be atomic).
         "partition_management": MonthlyPartitionWorker(write_session_factory),
+        # Worker 13B: SA-2 — periodic relation_evidence_raw → relation_evidence
+        # promotion.  Runs every worker_evidence_promote_interval_s (default 300 s).
+        # Does not need llm_client — pure SQL SELECT + INSERT batch.
+        "evidence_promotion": RelationEvidencePromoterWorker(write_session_factory),
     }
 
     if valkey_client is not None:
@@ -396,11 +410,17 @@ def build_workers(
                 # via ``read_session_factory``; the LLM call holds no session;
                 # Phase 4 writes use the write factory.  See
                 # workers/summary.py for the phase split details.
+                # SA-2: wire Gemini 2.5 Flash Lite as the explicit last-resort
+                # fallback for SummaryWorker when the primary FallbackChainClient
+                # is exhausted (``summary_worker_fallback_invoked`` log event).
+                # ``gemini_extraction_client`` is None when the Gemini API key
+                # is absent → fallback disabled, same behaviour as before SA-2.
                 "summary_generation": SummaryWorker(
                     session_factory=write_session_factory,
                     llm_client=llm_client,
                     force_regen_batch_size=settings.summary_worker_force_regen_batch_size,
                     read_session_factory=_read_factory,
+                    gemini_extraction_client=gemini_extraction_client,
                 ),
                 "definition_embedding": def_worker,
                 "narrative_embedding": NarrativeRefreshWorker(
