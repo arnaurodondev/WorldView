@@ -57,6 +57,9 @@ vi.mock("@react-sigma/core", () => ({
     // Without these stubs, FilterController throws "setSettings is not a function".
     setSettings: vi.fn(),
     refresh: vi.fn(),
+    // WHY getCamera: SA-3 (2026-05-10) added CameraAutoFit + KeyboardResetListener
+    // which call sigma.getCamera().animatedReset(). Without this stub they throw.
+    getCamera: vi.fn(() => ({ animatedReset: vi.fn() })),
   })),
 }));
 
@@ -148,15 +151,18 @@ describe("EntityGraph", () => {
   });
 
   it("renders the controls hint text", () => {
-    // WHY: the controls hint ("Scroll to zoom · Drag to pan · Click to navigate")
-    // is important UX — users need to know how to interact with the graph.
+    // WHY: the controls hint tells users how to interact with the graph and
+    // shows the keyboard shortcut. SA-3 (2026-05-10) added "R to fit" to the hint
+    // so keyboard-friendly analysts know the reset shortcut without mousing to the button.
     render(
       <EntityGraph data={MOCK_GRAPH_DATA} centerEntityId="ent-001" />,
     );
 
-    expect(screen.getByText(/Scroll to zoom/)).toBeInTheDocument();
-    expect(screen.getByText(/Drag to pan/)).toBeInTheDocument();
-    expect(screen.getByText(/Click to navigate/)).toBeInTheDocument();
+    // WHY single regex: the hint is one span — any partial match confirms it rendered.
+    // Using a regex avoids over-specifying the exact punctuation style.
+    expect(screen.getByText(/Scroll/)).toBeInTheDocument();
+    expect(screen.getByText(/Drag/)).toBeInTheDocument();
+    expect(screen.getByText(/R to fit/)).toBeInTheDocument();
   });
 
   it("renders legend reflecting only entity types present in the data", () => {

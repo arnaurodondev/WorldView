@@ -76,6 +76,8 @@ function makeArticle(overrides: Partial<RankedArticle> = {}): RankedArticle {
     // PLAN-0050 Wave E fields
     sentiment: null,
     impact_score: null,
+    // SA-4: cluster_size added to RankedArticle type; null for test fixtures
+    cluster_size: null,
     ...overrides,
   };
 }

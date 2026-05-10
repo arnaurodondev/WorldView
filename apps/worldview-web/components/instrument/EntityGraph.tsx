@@ -576,13 +576,80 @@ function CameraResetButton() {
   return (
     <button
       onClick={() => sigma.getCamera().animatedReset()}
-      title="Reset camera to fit all nodes"
+      title="Reset camera to fit all nodes (R)"
       aria-label="Reset graph camera"
       className="rounded-[2px] border border-border/40 p-1 text-muted-foreground transition-colors hover:border-border/70 hover:text-foreground"
     >
       <Maximize2 className="h-3.5 w-3.5" />
     </button>
   );
+}
+
+// ── CameraAutoFit — auto-reset camera when the entity changes ─────────────────
+// WHY separate component: useSigma is a context hook — must live inside
+// SigmaContainer. We use a ref to compare the previous centerEntityId so the
+// camera only resets when the anchor entity changes (not on every filter update).
+//
+// SA-3 UX improvement (2026-05-10): when the analyst navigates to a different
+// entity (e.g., via the instrument page entity picker), the sigma camera preserves
+// its previous position — the new graph renders off-screen. animatedReset() re-fits
+// all nodes into view. We trigger on centerEntityId change only (not on every data
+// refresh) to avoid disrupting in-progress panning.
+function CameraAutoFit({ centerEntityId }: { centerEntityId: string }) {
+  const sigma = useSigma();
+  // Track previous entity so we only reset when it actually changes.
+  const prevEntityRef = React.useRef<string>(centerEntityId);
+
+  useEffect(() => {
+    if (prevEntityRef.current !== centerEntityId) {
+      prevEntityRef.current = centerEntityId;
+      // Small delay lets GraphLoader finish building + FA2 before camera reset,
+      // otherwise the reset fires while nodes are still at random positions.
+      const timer = setTimeout(() => {
+        sigma.getCamera().animatedReset();
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [sigma, centerEntityId]);
+
+  return null; // WHY null: this component is pure side-effect, renders nothing
+}
+
+// ── KeyboardResetListener — 'R' key resets graph camera ───────────────────────
+// WHY inside SigmaContainer: useSigma context hook requirement.
+// WHY 'R' (not Ctrl+R / Cmd+R): browser refresh is reserved; lowercase 'r' is
+// unused in the sigma default bindings and follows Bloomberg keyboard navigation
+// conventions where single-letter keys trigger view resets without modifier keys.
+//
+// SA-3 UX improvement (2026-05-10): keyboard shortcut for power users who switch
+// entities frequently and need a fast way to re-center without reaching for the
+// toolbar button. The listener only fires when the graph container has focus or
+// no other interactive element is focused (guard: target is not an input/textarea).
+function KeyboardResetListener() {
+  const sigma = useSigma();
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      // WHY skip when target is an input: the 'R' key inside a search field
+      // should type the letter, not reset the graph. Skip contenteditable too.
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable
+      ) {
+        return;
+      }
+      if (e.key === "r" || e.key === "R") {
+        e.preventDefault();
+        sigma.getCamera().animatedReset();
+      }
+    }
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [sigma]);
+
+  return null; // WHY null: pure side-effect component
 }
 
 export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphProps) {
@@ -806,6 +873,15 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
             graphData={data}
           />
 
+          {/* SA-3 (2026-05-10): auto-fit camera when entity changes so the new
+              graph is visible without manual reset. Must be inside SigmaContainer
+              for the useSigma() hook to work. */}
+          <CameraAutoFit centerEntityId={centerEntityId} />
+
+          {/* SA-3 (2026-05-10): keyboard shortcut 'R' to reset camera.
+              Must be inside SigmaContainer for useSigma() context. */}
+          <KeyboardResetListener />
+
           {/* CameraResetButton — rendered INSIDE SigmaContainer because it uses
               useSigma() context hook. Positioned absolute top-right within the
               canvas so it floats over the graph without interfering with mouse
@@ -833,7 +909,7 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
             is purely a hint label. */}
         <div className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-[2px] border border-border/40 bg-card/80 px-2 py-1 backdrop-blur-sm">
           <span className="text-[9px] text-muted-foreground/60">
-            Scroll · Drag · Click
+            Scroll · Drag · Click · R to fit
           </span>
         </div>
       </div>

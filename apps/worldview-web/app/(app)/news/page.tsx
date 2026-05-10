@@ -154,9 +154,15 @@ export default function NewsHubPage() {
       {/* Body */}
       <div className="flex-1 overflow-auto">
         {isLoading ? (
-          <div className="space-y-1 p-2">
-            {Array.from({ length: 12 }).map((_, i) => (
-              <Skeleton key={i} className="h-12" style={{ animationDelay: `${i * 30}ms` }} />
+          // WHY h-6 rows (not h-12 block): article rows are single-line ~24px.
+          // A 48px skeleton would shift layout when real rows arrive. Match actual height.
+          <div className="divide-y divide-border/40">
+            {Array.from({ length: 18 }).map((_, i) => (
+              <div key={i} className="flex h-6 items-center gap-2 px-3" style={{ animationDelay: `${i * 20}ms` }}>
+                <Skeleton className="h-3 w-8 shrink-0" />
+                <Skeleton className="h-3 flex-1" />
+                <Skeleton className="h-3 w-12 shrink-0" />
+              </div>
             ))}
           </div>
         ) : isError ? (
@@ -292,6 +298,19 @@ function ArticleRow({ article: a }: { article: RankedArticle }) {
         {a.display_relevance_score > 0 && (
           <span className="shrink-0 rounded-[2px] bg-muted/40 px-1 font-mono text-[9px] tabular-nums text-muted-foreground">
             {(a.display_relevance_score * 100).toFixed(0)}
+          </span>
+        )}
+
+        {/* Cluster-size chip — "+N similar" when near-duplicates exist.
+            WHY only when cluster_size > 1: cluster_size=1 means "alone",
+            nothing useful to surface. "+N similar" tells the analyst that
+            N other articles cover the same story — a corroboration signal. */}
+        {a.cluster_size != null && a.cluster_size > 1 && (
+          <span
+            className="shrink-0 rounded-[2px] bg-muted/40 px-1 font-mono text-[9px] tabular-nums text-muted-foreground/70"
+            title={`${a.cluster_size - 1} similar article${a.cluster_size - 1 !== 1 ? "s" : ""} detected`}
+          >
+            +{a.cluster_size - 1}
           </span>
         )}
 
