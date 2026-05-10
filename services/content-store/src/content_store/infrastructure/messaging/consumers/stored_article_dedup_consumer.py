@@ -32,6 +32,7 @@ Idempotency
 
 from __future__ import annotations
 
+import contextlib
 import json
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
@@ -79,7 +80,31 @@ _CORPUS_WINDOW_DAYS = 14
 
 
 class _SessionUnitOfWork(UnitOfWorkProtocol):
-    """SQLAlchemy AsyncSession UoW — identical to ArticleConsumer's pattern."""
+    """SQLAlchemy AsyncSession UoW — identical to ArticleConsumer's pattern.
+
+    SA-1 fix (BP-443): Explicit close() in __aexit__ prevents MissingGreenlet.
+
+    Root cause: when the session was returned to the asyncpg pool via
+    ``_session_cm.__aexit__`` only (no prior ``close()``), SQLAlchemy's pool
+    would try to reset the raw connection (issue a ROLLBACK) on check-in.
+    That reset fires an ``await_only()`` call from inside the pool's
+    ``_reset_agent`` pathway, which is NOT running inside a greenlet spawned by
+    ``greenlet_spawn`` — triggering:
+
+        RuntimeError: greenlet_spawn has not been called; can't call
+        await_only() here. Was IO attempted in an unexpected place?
+
+    The fix: explicitly ``await session.close()`` while we are still inside a
+    normal asyncio coroutine frame (which SQLAlchemy treats as a valid async
+    context).  This causes SQLAlchemy to issue the final ROLLBACK/reset via its
+    own ``greenlet_spawn`` machinery, cleanly returning the connection to the
+    pool with no pending reset needed.  We also ensure ``self.session`` is
+    cleared so it cannot be touched after ``__aexit__`` returns.
+
+    Both ``close()`` and the ``_session_cm.__aexit__`` call are guarded with
+    ``try/except`` so a pool error during teardown never propagates to the
+    consumer loop.
+    """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
@@ -92,8 +117,21 @@ class _SessionUnitOfWork(UnitOfWorkProtocol):
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        # Explicitly close the session while we are inside a proper asyncio
+        # coroutine.  This lets SQLAlchemy's greenlet_spawn machinery issue the
+        # final ROLLBACK/reset synchronously, so the pool check-in has nothing
+        # left to reset asynchronously — eliminating the MissingGreenlet error.
+        session = self.session
+        self.session = None  # prevent any further access through self.session
+        if session is not None:
+            # Pool teardown errors are non-fatal; log nothing here to avoid
+            # recursive noise — the pool already emits its own warning.
+            with contextlib.suppress(Exception):
+                await session.close()
+        # Delegate to the session context-manager to release resources.
         if self._session_cm is not None:
-            await self._session_cm.__aexit__(*args)
+            with contextlib.suppress(Exception):
+                await self._session_cm.__aexit__(*args)
 
     async def commit(self) -> None:
         if self.session is not None:
