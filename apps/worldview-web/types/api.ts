@@ -446,6 +446,11 @@ export interface GraphEdge {
    *  Examples: "competes_with", "has_executive", "listed_on" */
   label: string;
   weight: number;     // confidence / strength [0, 1]
+  /** One-line LLM summary from relation_summaries (Worker 13C). Null when
+   *  no summary has been generated yet (table empty pre-SummaryWorker run). */
+  relation_summary?: string | null;
+  /** Top evidence text snippets (max 3, from relation_evidence_raw). */
+  evidence_snippets?: string[];
 }
 
 export interface EntityGraph {
