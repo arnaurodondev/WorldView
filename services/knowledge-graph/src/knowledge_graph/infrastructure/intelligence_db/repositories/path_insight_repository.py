@@ -96,11 +96,15 @@ class PathInsightRepository(PathInsightRepositoryPort):
         params: dict[str, object] = {}
         for i, insight in enumerate(insights):
             suffix = f"_{i}"
+            # asyncpg / SQLAlchemy text() treats ``:name::type`` as a conflict
+            # between the named-param ``:name`` and the Postgres cast ``::type``.
+            # Use explicit CAST(:name AS type) for all typed columns to avoid
+            # the parse ambiguity (BP-180 pattern).
             rows_sql_parts.append(
                 f"(CAST(:insight_id{suffix} AS UUID), "
                 f"CAST(:anchor{suffix} AS UUID), "
-                f":path_nodes{suffix}::jsonb, "
-                f":path_edges{suffix}::jsonb, "
+                f"CAST(:path_nodes{suffix} AS jsonb), "
+                f"CAST(:path_edges{suffix} AS jsonb), "
                 f":hop_count{suffix}, "
                 f":harmonic{suffix}, "
                 f":diversity{suffix}, "
