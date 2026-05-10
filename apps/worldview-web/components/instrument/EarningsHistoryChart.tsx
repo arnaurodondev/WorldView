@@ -17,18 +17,25 @@
  * (e.g., Apple Q4 is always a blowout due to holiday sales). Annual shows the clean
  * year-over-year trend analysts use for valuation. 8 years = one full business cycle.
  *
- * WHY GREEN/GREY COLORING (not beat/miss): Beat vs miss coloring requires matching
- * historical actuals with contemporary estimates — two separate EODHD records that
- * may not align on dates. Positive/negative EPS coloring is the most reliable signal:
- * is the company profitable this year, or not?
+ * PLAN-0088 G-4 BEAT/MISS COLORING:
+ * EODHD's earnings-annual-trend records contain BOTH epsActual (what was reported)
+ * and epsEstimate (the consensus estimate at the time). When epsEstimate is present,
+ * we color bars green for beats and red for misses — the most actionable signal for
+ * earnings-event traders. When no estimate is available, we fall back to
+ * positive (green) / negative (red) based on sign — the pre-existing behavior.
  *
- * DATA SHAPE: `gateway.getEarningsHistory(id)` → `{records: [{data: {date, epsActual}}, ...]}`
+ * Beat/miss coloring convention (PLAN-0088 G-4):
+ *   epsActual > epsEstimate → beat → green (same hue as positive-EPS green)
+ *   epsActual < epsEstimate → miss → red (same hue as negative-EPS red)
+ *   epsEstimate absent       → positive/negative sign coloring (fallback)
+ *
+ * DATA SHAPE: `gateway.getEarningsHistory(id)` → `{records: [{data: {date, epsActual, epsEstimate}}, ...]}`
  * Each record is one fiscal year. Records are ordered most-recent-first from EODHD;
  * we reverse + slice for left-to-right temporal chart display.
  *
  * WHO USES IT: FundamentalsTab left column (Wave D-3), below the metrics grid
  * DATA SOURCE: S9 GET /v1/fundamentals/{instrumentId}/earnings-annual-trend
- * DESIGN REFERENCE: PLAN-0041 §T-D-3-01
+ * DESIGN REFERENCE: PLAN-0041 §T-D-3-01, PLAN-0088 §Wave G §G-4
  */
 
 "use client";
@@ -62,10 +69,15 @@ interface EarningsHistoryChartProps {
  * WHY separate interface: `FundamentalsSectionResponse.records[].data` is typed as
  * `Record<string, unknown>` — the DB stores generic JSON. We cast to this interface
  * for typed access. All accesses are null-guarded because the cast is unvalidated.
+ *
+ * WHY epsEstimate (PLAN-0088 G-4): EODHD stores the analyst consensus estimate
+ * at the time of the earnings release alongside the actual. When present, we use
+ * it for beat/miss coloring instead of the sign-based fallback.
  */
 interface EarningsAnnualRecord {
-  date?: string | null;       // Fiscal year end date: "YYYY-MM-DD"
-  epsActual?: number | null;  // Diluted EPS actual for the fiscal year
+  date?: string | null;         // Fiscal year end date: "YYYY-MM-DD"
+  epsActual?: number | null;    // Diluted EPS actual for the fiscal year
+  epsEstimate?: number | null;  // Analyst consensus estimate at report time (PLAN-0088 G-4)
 }
 
 // ── Color constants ────────────────────────────────────────────────────────────
@@ -124,15 +136,22 @@ export function EarningsHistoryChart({ instrumentId }: EarningsHistoryChartProps
   // we reverse to ascending order. We take the 8 most recent fiscal years after
   // sorting to show one complete business cycle.
   const rawRecords = data?.records ?? [];
+  // PLAN-0088 G-4: include epsEstimate alongside epsActual for beat/miss coloring.
+  // When epsEstimate is present in the EODHD record, we can determine if the company
+  // beat or missed analyst expectations — the most actionable earnings signal.
   const chartData = rawRecords
     .map((rec) => {
       const d = rec.data as EarningsAnnualRecord | undefined;
-      return { date: d?.date ?? "", eps: d?.epsActual ?? null };
+      return {
+        date:        d?.date ?? "",
+        eps:         d?.epsActual  ?? null,
+        epsEstimate: d?.epsEstimate ?? null,
+      };
     })
     .filter((d) => !!d.date) // Drop records with missing date
     .sort((a, b) => a.date.localeCompare(b.date)) // Ascending: oldest → newest
     .slice(-8) // Keep last 8 fiscal years (right-end of timeline = most recent)
-    .map((d) => ({ label: formatFiscalYear(d.date), eps: d.eps }));
+    .map((d) => ({ label: formatFiscalYear(d.date), eps: d.eps, epsEstimate: d.epsEstimate }));
 
   // ── Loading state ──────────────────────────────────────────────────────────
   if (isLoading) {
@@ -171,6 +190,15 @@ export function EarningsHistoryChart({ instrumentId }: EarningsHistoryChartProps
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-medium">
           EPS TREND
         </span>
+        {/* WHY "beat/miss" badge when estimates are available: signals to the analyst
+            that the bar colors convey more information than just positive/negative EPS.
+            The badge is hidden when no epsEstimate data is present (ETFs, tickers with
+            no analyst coverage) so we never display a badge that doesn't apply. */}
+        {chartData.some((d) => d.epsEstimate != null) && (
+          <span className="text-[9px] font-mono text-muted-foreground/50 rounded-[2px] border border-border/30 px-1">
+            beat/miss
+          </span>
+        )}
         <span className="text-[9px] font-mono text-muted-foreground/60 ml-auto">
           Annual · {chartData.length}Y
         </span>
@@ -189,7 +217,7 @@ export function EarningsHistoryChart({ instrumentId }: EarningsHistoryChartProps
 function ChartBars({
   chartData,
 }: {
-  chartData: { label: string; eps: number | null }[];
+  chartData: { label: string; eps: number | null; epsEstimate: number | null }[];
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
@@ -239,8 +267,28 @@ function ChartBars({
           }
           const y = d.eps >= 0 ? yEps(d.eps) : yZero;
           const h = Math.abs(yEps(d.eps) - yZero);
-          const fill = d.eps >= 0 ? COLOR_POSITIVE : COLOR_NEGATIVE;
-          const stroke = d.eps >= 0 ? COLOR_POSITIVE_STROKE : COLOR_NEGATIVE_STROKE;
+
+          // PLAN-0088 G-4 beat/miss coloring:
+          // If epsEstimate is available, compare actual vs estimate to determine
+          // beat/miss. This is more informative than sign-coloring alone: a
+          // $0.50 actual that beat a $0.45 estimate is a win even if EPS is small.
+          // If epsEstimate is absent, fall back to sign-based coloring (pre-existing).
+          let fill: string;
+          let stroke: string;
+          if (d.epsEstimate != null) {
+            // Beat: actual ≥ estimate (green). Miss: actual < estimate (red).
+            // WHY ≥ (not >): meets-estimate is conventionally treated as a beat in
+            // sell-side research — in-line is "no surprise", which markets treat neutrally.
+            // We color it green to match the "no negative catalyst" framing.
+            const isBeat = d.eps >= d.epsEstimate;
+            fill   = isBeat ? COLOR_POSITIVE        : COLOR_NEGATIVE;
+            stroke = isBeat ? COLOR_POSITIVE_STROKE : COLOR_NEGATIVE_STROKE;
+          } else {
+            // Fallback: sign-based coloring (original behavior)
+            fill   = d.eps >= 0 ? COLOR_POSITIVE        : COLOR_NEGATIVE;
+            stroke = d.eps >= 0 ? COLOR_POSITIVE_STROKE : COLOR_NEGATIVE_STROKE;
+          }
+
           return (
             <rect
               key={`bar-${i}`}
@@ -323,15 +371,32 @@ function ChartBars({
             {chartData[hoverIdx].label}
           </p>
           {chartData[hoverIdx].eps != null ? (
-            <p
-              className={
-                chartData[hoverIdx].eps! >= 0
-                  ? "text-positive"
-                  : "text-negative"
-              }
-            >
-              EPS: ${chartData[hoverIdx].eps!.toFixed(2)}
-            </p>
+            <>
+              {/* Actual EPS — colored by beat/miss if estimate available, else by sign */}
+              {(() => {
+                const actual   = chartData[hoverIdx].eps!;
+                const estimate = chartData[hoverIdx].epsEstimate;
+                const colorClass =
+                  estimate != null
+                    ? actual >= estimate ? "text-positive" : "text-negative"
+                    : actual >= 0        ? "text-positive" : "text-negative";
+                return (
+                  <p className={colorClass}>
+                    EPS: ${actual.toFixed(2)}
+                  </p>
+                );
+              })()}
+              {/* Beat/miss vs estimate — only when estimate data is present (PLAN-0088 G-4) */}
+              {chartData[hoverIdx].epsEstimate != null && (
+                <p className="text-muted-foreground mt-0.5">
+                  {/* WHY ▲/▼ prefix: Bloomberg/FactSet convention for beat/miss signal */}
+                  Est: ${chartData[hoverIdx].epsEstimate!.toFixed(2)}{" "}
+                  {chartData[hoverIdx].eps! >= chartData[hoverIdx].epsEstimate!
+                    ? <span className="text-positive">▲ beat</span>
+                    : <span className="text-negative">▼ miss</span>}
+                </p>
+              )}
+            </>
           ) : (
             <p className="text-muted-foreground">EPS: —</p>
           )}

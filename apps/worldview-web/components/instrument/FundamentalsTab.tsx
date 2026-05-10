@@ -96,6 +96,16 @@ import { TechnicalSnapshot } from "@/components/instrument/TechnicalSnapshot";
 // "P/E: 34" alone. T-E-5-03 requires timeseries gateway calls for key valuation
 // and profitability metrics.
 import { FundamentalSparkline } from "@/components/instrument/FundamentalSparkline";
+// PLAN-0088 Wave G-1: FY-column income statement table (Revenue / Gross Profit /
+// Op. Income / Net Income / EBITDA / EPS for the last 4 fiscal years). Placed
+// below the metrics grid so analysts can see the multi-year P&L trajectory after
+// reviewing the current-period ratios.
+import { IncomeStatementFY } from "@/components/instrument/IncomeStatementFY";
+// PLAN-0088 Wave G-4: analyst price-target distribution sparkline. Placed in the
+// right sidebar alongside AnalystConsensusStrip to show the low/consensus/high
+// spread visually. Passes fundamentals so it can read analyst_target_price without
+// an additional network call.
+import { AnalystTargetSparkline } from "@/components/instrument/AnalystTargetSparkline";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -794,10 +804,21 @@ export function FundamentalsTab({
             left column has a uniform 12px gutter between the grid bottom edge and
             the chart panels. */}
         <div className="space-y-2 p-3">
+          {/* ── PLAN-0088 Wave G-1: FY-column income statement ────────────
+              WHY first (above EPS Trend chart): the income statement provides
+              the revenue/profit trajectory in absolute dollar terms before
+              the EPS bar chart drills into per-share earnings. This matches
+              the Finviz "Income Statement" → "EPS History" page ordering that
+              professional sell-side analysts follow: macro (total revenue)
+              before micro (per-share EPS). */}
+          <IncomeStatementFY instrumentId={instrumentId} />
+
           {/* ── EPS Trend chart ───────────────────────────────────────────
-              WHY first: EPS history is the most important trailing indicator in
-              fundamental analysis — analysts check EPS growth before P/E.
-              Bloomberg DES shows EPS history below the metrics grid. */}
+              WHY second (after FY table): EPS history is the most important
+              trailing per-share indicator — analysts check the bar chart to
+              validate that the EPS row in the FY table is a growing trend
+              (not a one-year blip). Bloomberg DES shows EPS history below
+              the income-statement table. */}
           <EarningsHistoryChart instrumentId={instrumentId} />
 
           {/* ── Insider activity table ────────────────────────────────────
@@ -844,6 +865,23 @@ export function FundamentalsTab({
           3. Ownership Snapshot — governance and float context
           4. Top News — current catalyst narrative */}
       <div className="overflow-y-auto divide-y divide-border/30">
+        {/* ── Analyst Target Distribution (PLAN-0088 Wave G-4) ────────────
+            WHY first in sidebar: the analyst target distribution is the most
+            directly actionable signal — "what price do professionals think this
+            is worth?" — before market position, peer comparison, or ownership
+            context. Placing it at the top of the sidebar keeps it at eye level
+            when the analyst loads the tab. AnalystConsensusStrip above the grid
+            shows the absolute target; this visual distribution shows WHERE
+            current price sits within the analyst range — complementary info.
+            WHY pass fund + currentPrice via props: AnalystTargetSparkline is
+            a pure display component with no internal fetch — it reads from
+            fundamentals.analyst_target_price which getFundamentals already
+            fetches. No additional network round-trip. */}
+        <AnalystTargetSparkline
+          fundamentals={fund}
+          currentPrice={currentPrice}
+        />
+
         {/* ── Market Position ──────────────────────────────────────────── */}
         <MarketPositionPanel
           instrument={instrument ?? null}
