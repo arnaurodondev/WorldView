@@ -88,23 +88,38 @@ export const formatRatio = (
 /**
  * formatDate — compact date for table cells
  * e.g., "2026-04-17T14:32:00Z" → "Apr 17, 2026"
+ *
+ * POLISH PASS 2026-05-09: hardened against the silent "Invalid Date" bug.
+ * When `isoString` is a non-ISO string (legacy rows pre-PRD-0028 sometimes
+ * carry "" or a timestamp without TZ marker), `new Date(...)` returns a
+ * Date object whose `getTime()` is NaN. `Intl.DateTimeFormat.format()` of
+ * an invalid date renders the literal string "Invalid Date" — visible to
+ * the user. We probe `getTime()` BEFORE formatting and fall through to the
+ * em-dash placeholder so the cell still has consistent height/layout.
  */
 export function formatDate(isoString: string | null | undefined): string {
   if (!isoString) return "—";
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return "—";
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
     timeZone: "UTC",
-  }).format(new Date(isoString));
+  }).format(d);
 }
 
 /**
  * formatDateTime — date + time in UTC for alert timestamps
  * e.g., "2026-04-17T14:32:00Z" → "Apr 17, 14:32 UTC"
+ *
+ * POLISH PASS 2026-05-09: same Invalid-Date guard as `formatDate` above —
+ * see that function's WHY block for the rationale.
  */
 export function formatDateTime(isoString: string | null | undefined): string {
   if (!isoString) return "—";
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return "—";
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
@@ -112,7 +127,27 @@ export function formatDateTime(isoString: string | null | undefined): string {
     minute: "2-digit",
     timeZone: "UTC",
     hour12: false,
-  }).format(new Date(isoString)) + " UTC";
+  }).format(d) + " UTC";
+}
+
+/**
+ * safeFormatClockTime — wall-clock "HH:MM" for chat bubbles & in-thread
+ * timestamps. Returns "—" for null/undefined/Invalid-Date inputs instead
+ * of leaking the literal "Invalid Date" string from `toLocaleTimeString`.
+ *
+ * WHY THIS EXISTS: chat MessageBubble + SlashTurnBlock historically called
+ *   `new Date(message.created_at).toLocaleTimeString(...)`
+ * directly. When `created_at` is null (an unhydrated optimistic message) or
+ * a non-parseable string (pre-PRD-0028 cached threads), the rendered text
+ * is the literal "Invalid Date" — a noisy regression that has cropped up
+ * across multiple QA passes. Centralizing the guard here means future
+ * callers automatically inherit the safe behaviour.
+ */
+export function safeFormatClockTime(isoString: string | null | undefined): string {
+  if (!isoString) return "—";
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 /**

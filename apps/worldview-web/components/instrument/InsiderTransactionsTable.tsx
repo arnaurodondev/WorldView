@@ -78,6 +78,11 @@ function formatTxDate(dateStr: string | null | undefined): string {
   // WHY slice to "MMM DD": full date at 9px font is unreadable in the tight row.
   // "Jan 15" is the Bloomberg convention for insider table date cells.
   const date = new Date(dateStr + "T00:00:00Z");
+  // POLISH PASS 2026-05-09: SplitsDividendsPanel formatDate already had this
+  // guard; copy the same pattern here so a malformed insider `transaction_date`
+  // (S4 EODHD adapter occasionally hands back "0000-00-00" for redacted Form 4
+  // filings) renders as "—" instead of the literal string "Invalid Date".
+  if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
