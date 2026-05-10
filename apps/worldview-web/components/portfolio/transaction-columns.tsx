@@ -249,7 +249,20 @@ export function makeTransactionColumns(
         const total = rowTotal(tx);
         return (
           <span className="font-mono text-[11px] tabular-nums text-foreground text-right w-full block">
-            {isPlaceholder ? "n/a" : total > 0 ? formatPrice(total) : "—"}
+            {/* WHY separate DIVIDEND branch: negative dividend amounts (tax
+                withholdings like -$0.76) are legitimate values. The old
+                `total > 0` guard silently showed "—" for any negative or
+                zero-amount dividend. Show any non-null amount the broker
+                reported; use "—" only when the field is absent (null). */}
+            {isPlaceholder
+              ? "n/a"
+              : tx.type === "DIVIDEND"
+                ? tx.amount != null
+                  ? formatPrice(tx.amount)
+                  : "—"
+                : total > 0
+                  ? formatPrice(total)
+                  : "—"}
           </span>
         );
       },

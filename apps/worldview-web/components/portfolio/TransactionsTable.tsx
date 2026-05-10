@@ -183,7 +183,21 @@ function makeVirtualRowRenderer(rows: Transaction[]) {
                 {tx.type === "DIVIDEND" ? "—" : formatPrice(tx.price)}
               </td>
               <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
-                {isPlaceholder ? "n/a" : total > 0 ? formatPrice(total) : "—"}
+                {/* WHY separate DIVIDEND branch: for dividends the total is
+                    tx.amount (broker-reported cash). We show it whenever the
+                    broker supplied the value (even negative — withholdings
+                    like -$0.76 are meaningful). The old `total > 0` guard
+                    silently hid all negative-amount dividend rows. For BUY/
+                    SELL rows the guard stands: qty × price is always ≥ 0. */}
+                {isPlaceholder
+                  ? "n/a"
+                  : tx.type === "DIVIDEND"
+                    ? tx.amount != null
+                      ? formatPrice(tx.amount)
+                      : "—"
+                    : total > 0
+                      ? formatPrice(total)
+                      : "—"}
               </td>
               <td className="px-2 font-mono text-[11px] tabular-nums text-muted-foreground text-right">
                 {tx.type !== "DIVIDEND" && tx.fee > 0 ? formatPrice(tx.fee) : "—"}
@@ -658,7 +672,20 @@ export function TransactionsTable({
                         {tx.type === "DIVIDEND" ? "—" : formatPrice(tx.price)}
                       </td>
                       <td className="px-2 font-mono text-[11px] tabular-nums text-foreground text-right">
-                        {isPlaceholder ? "n/a" : total > 0 ? formatPrice(total) : "—"}
+                        {/* WHY separate DIVIDEND branch (mirrors virtual-path fix):
+                            negative dividend amounts (tax withholdings like -$0.76)
+                            are meaningful values that the old `total > 0` guard
+                            silently suppressed. Show any non-null broker-reported
+                            amount, even when negative. */}
+                        {isPlaceholder
+                          ? "n/a"
+                          : tx.type === "DIVIDEND"
+                            ? tx.amount != null
+                              ? formatPrice(tx.amount)
+                              : "—"
+                            : total > 0
+                              ? formatPrice(total)
+                              : "—"}
                       </td>
                       <td className="px-2 font-mono text-[11px] tabular-nums text-muted-foreground text-right">
                         {tx.type !== "DIVIDEND" && tx.fee > 0 ? formatPrice(tx.fee) : "—"}
