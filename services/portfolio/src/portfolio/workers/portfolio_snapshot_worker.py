@@ -316,7 +316,22 @@ class PortfolioSnapshotWorker:
                     error=str(exc),
                 )
 
-    async def _startup_catchup(self, lookback_trading_days: int = 30) -> None:
+    # PLAN-0088 P0-5: bump default catch-up window from 30 → 252 trading
+    # days (one full trading year, US calendar). The previous 30-day cap
+    # silently truncated the equity curve to "the last six weeks", which
+    # made the chart look like the analyst had only ever held the
+    # portfolio for a month even when their first transaction was a year
+    # back. The companion historical replay (``scripts/backfill_portfolio
+    # _value_snapshots.py``) covers older history; the worker on startup
+    # owns the recent year so a single restart self-heals back to that
+    # horizon.
+    #
+    # WHY 252 (not 365): trading days, not calendar days — matches the
+    # NYSE working-year convention used by every other ``trading_day``
+    # call site in this file. The bounded calendar walk below uses
+    # ``lookback_trading_days * 3`` so even with weekends + holidays we
+    # touch at most ~756 calendar days, still finite.
+    async def _startup_catchup(self, lookback_trading_days: int = 252) -> None:
         """Fill in missing snapshot rows for the past N trading days.
 
         F-001 / F-017 implementation. We iterate calendar days backwards
