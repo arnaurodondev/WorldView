@@ -50,3 +50,29 @@ class DocumentMetadataResponse(BaseModel):
 
 class BatchDocumentsResponse(BaseModel):
     documents: list[DocumentMetadataResponse]
+
+
+# ── Batch cluster sizes ───────────────────────────────────────────────────────
+
+
+class BatchClusterSizesRequest(BaseModel):
+    """Request body for POST /api/v1/documents/cluster-sizes."""
+
+    # Max 100 enforced in the use case; validated here for early 422 rejection.
+    doc_ids: list[UUID] = Field(..., min_length=1, max_length=100)
+
+
+class ClusterSizeEntry(BaseModel):
+    """Cluster size for a single document."""
+
+    doc_id: UUID
+    # WHY cluster_size (not sibling_count): cluster_size includes the document
+    # itself, so cluster_size=1 means "no duplicates" and cluster_size=3 means
+    # "this doc + 2 near-duplicate siblings".
+    cluster_size: int
+
+
+class BatchClusterSizesResponse(BaseModel):
+    """Response for POST /api/v1/documents/cluster-sizes."""
+
+    entries: list[ClusterSizeEntry]

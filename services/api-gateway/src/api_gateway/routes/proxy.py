@@ -2403,19 +2403,64 @@ async def get_entity_paths(
 
 @router.get("/news/top", response_model=NewsTopResponse, response_model_exclude_none=True)
 async def get_news_top(request: Request) -> Any:
-    """Proxy GET /api/v1/news/top → S6 NLP Pipeline (PRD-0026 §6.7 Flow C).
+    """Proxy GET /api/v1/news/top → S6 NLP Pipeline with cluster_size enrichment.
 
     No authentication required — public endpoint.  Issues a system JWT so S6's
     InternalJWTMiddleware accepts the request.
     Forwards query parameters (hours, limit, offset, min_display_score, routing_tier) unchanged.
+
+    SA-4 enrichment: after fetching from S6, calls content-store
+    POST /api/v1/documents/cluster-sizes in a single batch to add cluster_size
+    to each article.  cluster_size=1 means no near-duplicates detected;
+    cluster_size=N means N-1 near-duplicate siblings exist.  Enrichment
+    failure is non-fatal (cluster_size defaults to null in the response).
     """
     clients = _clients(request)
+    sys_headers = _system_headers(request)
     resp = await clients.nlp_pipeline.get(
         "/api/v1/news/top",
         params=dict(request.query_params),
-        headers=_system_headers(request),
+        headers=sys_headers,
     )
-    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+    if resp.status_code != 200:
+        # Pass through non-200 responses unchanged (e.g. 429, 503 from S6).
+        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+    # ── Cluster-size enrichment ───────────────────────────────────────────────
+    # Parse the S6 response, collect article_ids (= content-store doc_ids),
+    # and batch-fetch cluster sizes.  Merge back into each article dict.
+    # WHY best-effort (try/except): enrichment is cosmetic — a content-store
+    # outage should never break the news feed.
+    try:
+        body = json.loads(resp.content)
+        articles = body.get("articles", [])
+        doc_ids = [a["article_id"] for a in articles if a.get("article_id")]
+        cluster_size_map: dict[str, int] = {}
+        if doc_ids:
+            cs_resp = await clients.content_store.post(
+                "/api/v1/documents/cluster-sizes",
+                json={"doc_ids": doc_ids},
+                headers=sys_headers,
+            )
+            if cs_resp.status_code == 200:
+                cs_body = json.loads(cs_resp.content)
+                for entry in cs_body.get("entries", []):
+                    cluster_size_map[str(entry["doc_id"])] = entry["cluster_size"]
+        # Merge cluster_size into each article dict.
+        for article in articles:
+            aid = str(article.get("article_id", ""))
+            # cluster_size=1 means "alone in cluster" (no near-duplicates)
+            article["cluster_size"] = cluster_size_map.get(aid, 1)
+        body["articles"] = articles
+        return Response(
+            content=json.dumps(body),
+            status_code=200,
+            media_type="application/json",
+        )
+    except Exception:
+        # Enrichment failed — return the original S6 response unchanged.
+        logger.warning("news_top_cluster_size_enrichment_failed", exc_info=True)
+        return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
 @router.get("/news/entity/{entity_id}")
