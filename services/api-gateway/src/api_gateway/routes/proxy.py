@@ -1839,6 +1839,27 @@ async def get_splits_dividends(instrument_id: str, request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+@router.get("/fundamentals/{instrument_id}/income-statement")
+async def get_income_statement(instrument_id: str, request: Request) -> Any:
+    """Proxy GET /v1/fundamentals/{id}/income-statement → S3 /income-statement.
+
+    WHY: Annual income-statement records (Revenue, Gross Profit, Operating Income,
+    Net Income, EBITDA, EPS) per fiscal year — used by IncomeStatementFY component
+    (PLAN-0088 Wave G-1) to render the Finviz-style FY-column table on the
+    Fundamentals tab.  Returns FundamentalsResponse with period_type=ANNUAL records
+    ordered most-recent-first from S3.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.market_data.get(
+        f"/api/v1/fundamentals/{instrument_id}/income-statement",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 # NOTE: /snapshot MUST be registered before /{instrument_id} to prevent FastAPI
 # matching "snapshot" as an instrument_id path parameter value.
 @router.get("/fundamentals/{instrument_id}/snapshot")
