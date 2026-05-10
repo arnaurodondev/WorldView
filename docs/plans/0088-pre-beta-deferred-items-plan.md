@@ -1235,6 +1235,27 @@ Pass conditions:
 
 ---
 
+## 2026-05-10 evening — pre-beta third pass (full beta-hardening sweep)
+
+Eight subagents (SA-1..SA-8) ran in parallel; verdict **GO for beta**.
+
+* **SA-1** — KG bugs root-caused: NarrativeWorker NoneType (BP-SA1-001), PathInsightSeeder FK (BP-SA1-002), AGE Cypher `|` rewrite (BP-SA1-003), one-shot raw→partitioned promotion (BP-SA1-004). `relation_evidence` 0 → 438; `relation_summaries` 0 → 5.
+* **SA-2** — Long-tail narrative regen unblocked (idempotency guard now exempts template-v1). LLM narratives 337 → 898; template-v1 689 → 263; narrative embeddings 988 → 1103; demo-critical entities on template-v1 = **0**.
+* **SA-3** — `evidence_date` plumbing fix: `_build_raw_relations` now propagates article `published_at`. Graph camera auto-fit + 'R' shortcut shipped.
+* **SA-4** — BP-442 root cause: migration `0002` constraint name mismatch → `UndefinedObjectError` → cascading `MissingGreenlet`. Migration `0006` rename + repo `index_elements` switch. `duplicate_clusters` 791 → 807. New gateway `cluster_size` enrichment endpoint.
+* **SA-5** — DIVIDEND UI now shows broker-reported `amount` at 3 render sites (incl. negatives); `/portfolio/brokerage` redirect stub; 3 regression tests.
+* **SA-6** — Runtime hygiene clean: 0 ERROR/CRITICAL across 9 backend services; Polymarket lag stable; no DLQ topics.
+* **SA-7** — Font-mono label enforcement + EPS formatPrice; full primary-page polish review.
+* **SA-8** — Final beta QA: all 11 actual app routes 200; all primary user-data APIs 200; verdict GO.
+
+Post-rebuild verification:
+* Path-insight worker: **0 syntax errors** in 2m window (was 147/10m on stale image).
+* Dedup-consumer: residual `MissingGreenlet` ~11/3m (data integrity OK; tracked as P1-B).
+
+Commits this pass: `fa410cd1`, `730069bc`, `6c109a6f`, `2ea4bef0`, `b0ff21aa`, `fadabb87`, `67247347`, `34185d29`, `2c15aae4`, `a433d0fe`. Full audit: `docs/audits/2026-05-10-pre-beta-third-pass-report.md`.
+
+---
+
 **End of PLAN-0088.**
 
 > Compounding check: future BPs likely landing during this plan — BP-446
