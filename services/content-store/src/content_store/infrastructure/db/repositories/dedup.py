@@ -11,11 +11,12 @@ compare against.
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, union_all
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import common.ids  # type: ignore[import-untyped]
@@ -148,11 +149,53 @@ class DuplicateClusterRepository:
                 # (func.now()) is NOT used — avoids DB clock drift on replays.
                 detected_at=datetime.now(tz=UTC),
             )
+            # WHY index_elements (not constraint=): Using the column list is
+            # more robust than a named constraint because it resolves the
+            # conflict target by the unique index, not by constraint name.
+            # The named-constraint approach broke in dev volumes where migration
+            # 0002 auto-named the constraint differently (BP-442).
             .on_conflict_do_nothing(
-                constraint="uq_duplicate_clusters_pair",
+                index_elements=["primary_doc_id", "duplicate_doc_id"],
             )
         )
         await self._session.execute(stmt)
+
+    async def get_cluster_sizes(self, doc_ids: list[UUID]) -> dict[UUID, int]:
+        """Return the near-duplicate cluster size for each requested doc_id.
+
+        For each doc_id, counts how many rows in ``duplicate_clusters`` reference
+        it as either primary_doc_id OR duplicate_doc_id.  A size of 1 means the
+        document has no detected duplicates (it is alone in its cluster).
+
+        Used by the gateway enrichment path to add ``cluster_size`` to ranked
+        article responses without adding a cross-service JOIN at S6.
+
+        Args:
+            doc_ids: List of document UUIDs to look up.  Empty list returns {}.
+
+        Returns:
+            Dict mapping doc_id → cluster size (minimum 1).  doc_ids that have
+            no rows in duplicate_clusters map to 1 (the document itself).
+        """
+        if not doc_ids:
+            return {}
+
+        # Count all rows where the doc appears as either side of the pair,
+        # then add 1 (the document itself is always counted in the cluster).
+        # union_all from sqlalchemy merges the primary and duplicate sides.
+        combined = union_all(
+            select(
+                DuplicateClusterModel.primary_doc_id.label("doc_id"),
+            ).where(DuplicateClusterModel.primary_doc_id.in_(doc_ids)),
+            select(
+                DuplicateClusterModel.duplicate_doc_id.label("doc_id"),
+            ).where(DuplicateClusterModel.duplicate_doc_id.in_(doc_ids)),
+        )
+        result = await self._session.execute(combined)
+        # Count appearances per doc_id.
+        counts: Counter[UUID] = Counter(row.doc_id for row in result)
+        # cluster_size = number of *other* docs detected as near-duplicates + 1 (self)
+        return {doc_id: counts.get(doc_id, 0) + 1 for doc_id in doc_ids}
 
 
 # ── Corpus reader for MinHash near-dup candidate lookup ───────────────────────
