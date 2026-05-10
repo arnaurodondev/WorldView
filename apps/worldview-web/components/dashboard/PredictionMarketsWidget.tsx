@@ -38,6 +38,28 @@ import {
   type Category,
 } from "@/lib/prediction-markets";
 
+// ── Pill configuration ─────────────────────────────────────────────────────────
+
+/**
+ * CATEGORY_PILLS — ordered list of category filter pills.
+ * "all" is always first (the natural reset); other buckets follow in
+ * descending finance relevance so the most-useful filters are visible
+ * without scrolling on standard 1440px+ screens.
+ *
+ * WHY include ai/energy/tech: SA-2 PLAN-0088 Demo P1 classifier expansion
+ * added these buckets to the categorize() function. The pill row reflects
+ * the same set so users can filter by the new categories.
+ *
+ * WHY zero-count pills are hidden below: a "MACRO (0)" pill is confusing
+ * because clicking it yields an empty state when the data is already loaded.
+ * We hide any category pill whose count is 0 (or whose count is not yet
+ * known) when the counts query has resolved. The "All" pill is always shown.
+ */
+const ORDERED_PILL_LABELS = [
+  "all", "macro", "politics", "sports", "crypto", "ai", "energy", "tech",
+] as const;
+type PillLabel = (typeof ORDERED_PILL_LABELS)[number];
+
 // ── ECON filter ───────────────────────────────────────────────────────────────
 
 // PLAN-0050 T-F-6-01: the binary ECON keyword filter (ECON_KEYWORDS +
@@ -122,10 +144,7 @@ export function PredictionMarketsWidget() {
   const { accessToken } = useAuth();
 
   // PLAN-0050 T-F-6-01: replaced the binary ECON toggle with a category pill
-  // row. The audit (F-D-005) noted the prior toggle hid the other 4 buckets the
-  // categoriser already produced (politics/sports/crypto/general), forcing
-  // traders interested in any of those to scroll past unrelated rows. The pill
-  // row makes all 5 buckets first-class — same data, more useful filter axis.
+  // row. SA-2 PLAN-0088: expanded from 4 to 7 buckets (+ ai, energy, tech).
   // null = "All" (no filter); a non-null value keeps only that category.
   const [categoryFilter, setCategoryFilter] = useState<Category | null>(null);
 
@@ -229,17 +248,32 @@ export function PredictionMarketsWidget() {
           role="group"
           aria-label="Filter by category"
         >
-          {(["all", "macro", "politics", "sports", "crypto"] as const).map((label) => {
+          {ORDERED_PILL_LABELS.map((label: PillLabel) => {
             // null = "all" sentinel — keeps the state model boolean-like for filtering.
             const value: Category | null = label === "all" ? null : (label as Category);
             const active = categoryFilter === value;
+
             // PLAN-0053 T-C-3-05: render count next to the label (e.g. "MACRO 12").
-            // Counts come from the /categories endpoint above.  When the count
-            // is 0 (or unknown) we still render the pill but suppress the count
-            // suffix — keeping the row stable while the data loads.
+            // Counts come from the /categories endpoint.
             const pillCount = label === "all"
               ? categoryCounts?.total
               : categoryCounts?.items.find((c) => c.category === value)?.count;
+
+            // SA-2 PLAN-0088 Demo P1: hide zero-count category pills once the
+            // counts query has resolved. A "MACRO (0)" pill is misleading —
+            // clicking it immediately yields an empty state while all data is
+            // loaded. The "All" pill is always visible (users need a reset path).
+            // WHY only hide when categoryCounts has loaded (not undefined):
+            // during loading we render all pills to avoid layout shift as counts
+            // stream in. Once the query resolves and a bucket has count=0 we
+            // hide it. If the active filter happens to be a hidden bucket (edge
+            // case: user selected it then data refreshed to 0), we still show it
+            // so the user can see WHY the list is empty and click "all" to reset.
+            const countLoaded = categoryCounts !== undefined;
+            const isZeroCount = countLoaded && label !== "all" && (pillCount === 0 || pillCount == null);
+            const isActiveFilter = active && value !== null;
+            if (isZeroCount && !isActiveFilter) return null;
+
             return (
               <button
                 key={label}
@@ -254,9 +288,7 @@ export function PredictionMarketsWidget() {
                 )}
               >
                 {label}
-                {/* WHY conditional: show count only when non-zero (zero count =
-                    no markets in this bucket; the user will see this in the
-                    empty state if they click). Loading shows just the label. */}
+                {/* WHY conditional: show count only when non-zero and loaded. */}
                 {pillCount != null && pillCount > 0 ? (
                   <span className="ml-1 opacity-70">{pillCount}</span>
                 ) : null}
@@ -293,13 +325,19 @@ export function PredictionMarketsWidget() {
       )}
 
       {/* ── Empty state ──────────────────────────────────────────────────────
+          SA-2 PLAN-0088 Demo P1 gap fix: when no markets match the filter we
+          show a compact centered notice rather than leaving a dark black gap.
+          WHY flex-1 + flex + items-center + justify-center: the empty state
+          cell occupies the same height as the market-rows cell would (preventing
+          the panel from collapsing). Centering the text vertically/horizontally
+          uses the same idiom as the error state above.
+          WHY min-h-[88px]: 4 × 22px rows = 88px is the minimum readable height
+          for the widget when it has no data. Without this, the panel collapses
+          to just the header + footer and the gap between Row 3 cells is visible.
           PLAN-0053 T-C-3-05: when a category filter yields 0 results, surface
-          the bucket size so the user understands WHY (Polymarket simply has
-          few markets in that bucket today — it's not a bug). When no filter is
-          active and we still have 0 results, we keep the original "loading…"
-          text since that's typically a fetch race rather than an empty universe. */}
+          the bucket size so the user understands WHY. */}
       {!isError && !isLoading && topMarkets.length === 0 && (
-        <div className="flex-1 px-2">
+        <div className="flex flex-1 min-h-[88px] items-center justify-center px-2">
           {categoryFilter ? (
             (() => {
               // Look up the count for the active category — null when the
@@ -308,17 +346,17 @@ export function PredictionMarketsWidget() {
                 (c) => c.category === categoryFilter,
               )?.count ?? 0;
               return (
-                <InlineEmptyState
-                  message={
-                    bucketCount > 0
-                      ? `No markets in this category right now (only ${bucketCount} ${categoryFilter} markets available). Try 'All' or another filter.`
-                      : `No ${categoryFilter} markets are open right now. Try 'All' or another filter.`
-                  }
-                />
+                <span className="text-center text-[10px] text-muted-foreground">
+                  {bucketCount > 0
+                    ? `${bucketCount} ${categoryFilter} markets — none match current filter.`
+                    : `No ${categoryFilter} markets open. Try 'All' or another filter.`}
+                </span>
               );
             })()
           ) : (
-            <InlineEmptyState message="Prediction market data loading…" />
+            <span className="text-[10px] text-muted-foreground">
+              Prediction market data loading…
+            </span>
           )}
         </div>
       )}
