@@ -288,22 +288,31 @@ class GetRealizedPnLUseCase:
         if ttype not in (TransactionType.BUY, TransactionType.SELL):
             return
 
-        if tx.quantity <= 0:
-            # Defensive — the record-transaction validator already rejects
-            # non-positive qty, but historical brokerage rows occasionally
-            # land with units==0 (corporate actions etc.). Skipping keeps
-            # the math sane and avoids a divide-by-zero in cost-per-share.
+        # 2026-05-09 audit fix — sign-convention normalisation.
+        # The record-transaction API validator rejects non-positive ``quantity``
+        # (rest path always positive), but the SnapTrade brokerage sync writes
+        # SELL rows with NEGATIVE quantity straight from the broker's
+        # ``UniversalActivity.units`` field (no abs() in the worker). Without
+        # this normalisation every SELL silently failed the original
+        # ``if tx.quantity <= 0: return`` guard, producing
+        # ``total_realized = 0`` for every brokerage-synced portfolio (this
+        # was reproduced live: 80/80 SELLs in the demo portfolio dropped).
+        # We treat the absolute value as the disposal size; corporate-action
+        # rows with units==0 are still skipped to avoid div-by-zero in the
+        # BUY cost-per-share calculation.
+        effective_qty = abs(tx.quantity)
+        if effective_qty == 0:
             return
 
         if ttype == TransactionType.BUY:
             # cost-per-share folds the BUY-side fee into the lot so future
             # SELLs implicitly recover it (matching standard brokerage
             # statements). Decimal preserves precision through the divide.
-            buy_total = tx.quantity * tx.price + (tx.fees or Decimal(0))
-            cost_per_share = buy_total / tx.quantity
+            buy_total = effective_qty * tx.price + (tx.fees or Decimal(0))
+            cost_per_share = buy_total / effective_qty
             open_lots[tx.instrument_id].append(
                 _OpenLot(
-                    qty_remaining=tx.quantity,
+                    qty_remaining=effective_qty,
                     cost_per_share=cost_per_share,
                     executed_at=tx.executed_at,
                 ),
@@ -312,12 +321,12 @@ class GetRealizedPnLUseCase:
 
         # ── SELL path ────────────────────────────────────────────────────────
         queue = open_lots[tx.instrument_id]
-        remaining_to_match = tx.quantity
+        remaining_to_match = effective_qty
         sell_fee_total = tx.fees or Decimal(0)
         # We need the size of the sell BEFORE we start popping so that the
         # pro-rata fee allocation can use a stable denominator (the total
         # quantity sold). Matching modifies ``remaining_to_match`` in place.
-        sell_qty_total = tx.quantity
+        sell_qty_total = effective_qty
         in_window = from_date <= tx.executed_at.date() <= to_date
 
         while remaining_to_match > 0 and queue:
@@ -348,7 +357,7 @@ class GetRealizedPnLUseCase:
             if head.qty_remaining == 0:
                 queue.popleft()
 
-        if in_window and remaining_to_match < tx.quantity:
+        if in_window and remaining_to_match < effective_qty:
             # At least one chunk landed inside the window — count this
             # disposal once. Deliberately AFTER the loop so partial fills
             # (e.g. half the qty was a short sale) still register.
