@@ -128,3 +128,106 @@ class TestDedupHashInsertIdempotent:
         result = await repo.check_exists("raw_sha256", "existing_hash")
 
         assert result == doc_id
+
+
+# ── Stage C: DuplicateClusterRepository ──────────────────────────────────────
+
+
+class TestDuplicateClusterRepository:
+    """Verify DuplicateClusterRepository canonical-pair ordering and idempotency."""
+
+    async def test_insert_pair_uses_on_conflict_do_nothing(self) -> None:
+        """insert_pair() must use ON CONFLICT DO NOTHING for idempotency (BP-040)."""
+        from content_store.infrastructure.db.repositories.dedup import DuplicateClusterRepository
+
+        session = _mock_session()
+        repo = DuplicateClusterRepository(session)
+
+        doc_a = UUID("00000000-0000-0000-0000-000000000001")
+        doc_b = UUID("00000000-0000-0000-0000-000000000002")
+        await repo.insert_pair(doc_a, doc_b, similarity=0.85)
+
+        session.execute.assert_called_once()
+        stmt = session.execute.call_args.args[0]
+        compiled = stmt.compile(dialect=__import__("sqlalchemy.dialects.postgresql", fromlist=["dialect"]).dialect())
+        assert "ON CONFLICT" in str(compiled)
+
+    async def test_insert_pair_canonical_ordering(self) -> None:
+        """Pairs are always stored with the lexicographically smaller UUID as primary.
+
+        This prevents (A, B) and (B, A) duplicate rows when both docs are
+        processed.
+        """
+        from content_store.infrastructure.db.repositories.dedup import DuplicateClusterRepository
+
+        session = _mock_session()
+        repo = DuplicateClusterRepository(session)
+
+        # B > A lexicographically — passing (B, A) should still produce (A, B).
+        doc_a = UUID("00000000-0000-0000-0000-000000000001")
+        doc_b = UUID("00000000-0000-0000-0000-000000000002")
+
+        await repo.insert_pair(doc_b, doc_a, similarity=0.75)
+
+        stmt = session.execute.call_args.args[0]
+        # Inspect the VALUES dict to confirm ordering was normalised.
+        # PostgreSQL INSERT statement stores values in the compiled params.
+        compiled = stmt.compile(dialect=__import__("sqlalchemy.dialects.postgresql", fromlist=["dialect"]).dialect())
+        params = compiled.params
+        # After canonical ordering, primary_doc_id should be doc_a (smaller).
+        assert params["primary_doc_id"] == doc_a
+        assert params["duplicate_doc_id"] == doc_b
+
+
+# ── Stage C: _estimate_jaccard ────────────────────────────────────────────────
+
+
+class TestEstimateJaccard:
+    """Unit tests for the MinHash Jaccard estimator."""
+
+    def test_identical_signatures(self) -> None:
+        """Identical signatures should give similarity 1.0."""
+        from content_store.infrastructure.messaging.consumers.stored_article_dedup_consumer import (
+            _estimate_jaccard,
+        )
+
+        sig = list(range(128))
+        assert _estimate_jaccard(sig, sig) == 1.0
+
+    def test_completely_different_signatures(self) -> None:
+        """Non-overlapping signatures should give similarity 0.0."""
+        from content_store.infrastructure.messaging.consumers.stored_article_dedup_consumer import (
+            _estimate_jaccard,
+        )
+
+        sig_a = [0] * 128
+        sig_b = [1] * 128
+        assert _estimate_jaccard(sig_a, sig_b) == 0.0
+
+    def test_partial_overlap(self) -> None:
+        """Half-matching signature gives ~0.5 similarity."""
+        from content_store.infrastructure.messaging.consumers.stored_article_dedup_consumer import (
+            _estimate_jaccard,
+        )
+
+        sig_a = [0] * 64 + [1] * 64
+        sig_b = [0] * 64 + [2] * 64  # First 64 match, last 64 differ
+        result = _estimate_jaccard(sig_a, sig_b)
+        assert abs(result - 0.5) < 1e-6
+
+    def test_empty_signatures_return_zero(self) -> None:
+        """Empty signatures should return 0.0, not raise."""
+        from content_store.infrastructure.messaging.consumers.stored_article_dedup_consumer import (
+            _estimate_jaccard,
+        )
+
+        assert _estimate_jaccard([], []) == 0.0
+        assert _estimate_jaccard([], [1, 2, 3]) == 0.0
+
+    def test_mismatched_length_returns_zero(self) -> None:
+        """Signatures of different length must return 0.0 (safety guard)."""
+        from content_store.infrastructure.messaging.consumers.stored_article_dedup_consumer import (
+            _estimate_jaccard,
+        )
+
+        assert _estimate_jaccard([1, 2, 3], [1, 2]) == 0.0
