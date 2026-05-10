@@ -1344,6 +1344,50 @@ class TestBuildRawRelationsProvisional:
         out = _build_raw_relations(relations, {"apple": aapl}, set())
         assert out == []
 
+    @pytest.mark.unit
+    def test_evidence_date_propagated_from_published_at(self) -> None:
+        """SA-3 regression (2026-05-10): evidence_date must be published_at's ISO string.
+
+        Without this, KG ``_parse_dt`` receives None and stamps every relation row with
+        today's UTC datetime — all evidence clusters on the ingestion day and the
+        90-day confidence trend chart shows a single point instead of a multi-day curve.
+        """
+
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_relations,
+        )
+
+        aapl = str(uuid.uuid4())
+        msft = str(uuid.uuid4())
+        pub = datetime(2025, 3, 15, 8, 0, 0, tzinfo=UTC)
+        relations = [
+            {"subject_ref": "Apple", "object_ref": "Microsoft", "predicate": "competes_with", "confidence": 0.8}
+        ]
+        out = _build_raw_relations(
+            relations,
+            {"apple": aapl, "microsoft": msft},
+            set(),
+            published_at=pub,
+        )
+        assert len(out) == 1
+        assert out[0]["evidence_date"] == pub.isoformat()
+
+    @pytest.mark.unit
+    def test_evidence_date_none_when_no_published_at(self) -> None:
+        """Without published_at, evidence_date must be None (KG falls back to utc_now)."""
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import (
+            _build_raw_relations,
+        )
+
+        aapl = str(uuid.uuid4())
+        msft = str(uuid.uuid4())
+        relations = [
+            {"subject_ref": "Apple", "object_ref": "Microsoft", "predicate": "competes_with", "confidence": 0.8}
+        ]
+        out = _build_raw_relations(relations, {"apple": aapl, "microsoft": msft}, set())
+        assert len(out) == 1
+        assert out[0]["evidence_date"] is None
+
 
 class TestBuildRawEventsProvisional:
     @pytest.mark.unit

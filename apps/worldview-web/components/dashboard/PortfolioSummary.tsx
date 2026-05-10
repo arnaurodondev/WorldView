@@ -136,9 +136,16 @@ export function PortfolioSummary() {
   const isLoading = portfoliosLoading || holdingsLoading || quotesLoading;
 
   // ── Loading state ──────────────────────────────────────────────────────────
+  // WHY bg-background h-full flex-col: loading state must match the outer
+  // container shape so Row 3 grid cell doesn't collapse/expand on data arrival.
   if (isLoading && !holdingsResp) {
     return (
-      <div className="space-y-3">
+      <div className="flex h-full flex-col bg-background">
+        {/* Section header placeholder (matches the real h-6 header) */}
+        <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
+          <Skeleton className="h-3 w-28" />
+        </div>
+        <div className="flex-1 space-y-2 px-2 py-1">
         <div className="flex justify-between">
           <Skeleton className="h-8 w-32" />
           <Skeleton className="h-6 w-20" />
@@ -152,21 +159,31 @@ export function PortfolioSummary() {
             <Skeleton key={i} className="h-6 w-full" style={{ animationDelay: `${i * 50}ms` }} />
           ))}
         </div>
+        </div>
       </div>
     );
   }
 
   // ── Empty state ────────────────────────────────────────────────────────────
   if (!firstPortfolio || !holdingsResp) {
-    // WHY compact inline (was h-24 flex items-center justify-center):
-    // terminal empty states don't center-vertically; they use compact inline text.
+    // WHY panel wrapper: the empty state must fill the Row-3 grid cell the same
+    // way the loaded widget does — prevents layout shift / height collapse when
+    // no portfolio exists.
     return (
-      <p className="py-3 text-xs text-muted-foreground">
-        No portfolio yet —{" "}
-        <Link href="/portfolio" className="text-primary">
-          create one
-        </Link>
-      </p>
+      <div className="flex h-full flex-col bg-background">
+        <div className="flex h-6 shrink-0 items-center border-b border-border px-2">
+          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+            PORTFOLIO
+          </span>
+        </div>
+        <div className="flex flex-1 flex-col gap-0.5 px-3 py-2">
+          <p className="text-[10px] text-muted-foreground">No portfolio yet.</p>
+          <p className="text-[10px] text-muted-foreground/60">
+            <Link href="/portfolio" className="text-primary">Create a portfolio</Link>
+            {" "}to track your holdings here.
+          </p>
+        </div>
+      </div>
     );
   }
 

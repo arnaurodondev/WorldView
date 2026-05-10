@@ -132,7 +132,8 @@ export default function InstrumentsPage() {
        * immediately understand they're on the browse page, not the advanced screener.
        */}
       <div className="flex h-9 shrink-0 items-center border-b border-border px-3">
-        <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+        {/* WHY font-mono: ADR-F-15 — all page-level labels use IBM Plex Mono */}
+        <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
           Instruments
         </h1>
         {/* WHY static dot (no animate-pulse): §0.5 bans animate-pulse on status indicators */}

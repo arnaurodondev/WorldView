@@ -121,6 +121,9 @@ function makeArticle(overrides: Partial<RankedArticle> = {}): RankedArticle {
     impact_windows: null,
     sentiment: null,
     impact_score: null,
+    // SA-4: cluster_size added to RankedArticle type; null for test fixtures
+    // where near-duplicate cluster enrichment is not relevant.
+    cluster_size: null,
     ...overrides,
   };
 }
