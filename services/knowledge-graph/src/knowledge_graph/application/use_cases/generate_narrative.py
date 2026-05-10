@@ -200,11 +200,16 @@ class GenerateNarrativeUseCase:
         input_snapshot, snapshot_hash = self._build_snapshot(entity_ctx)
 
         # ── Step 3: Idempotency check (READ session) ──────────────────────────
+        # Only skip when the EXISTING version is already an LLM narrative.
+        # If find_by_input_snapshot returns a template-v1 fallback (model_id='template-v1'),
+        # we MUST proceed — the snapshot hash matches but the prior result was a placeholder.
+        # Skipping in that case causes entities with no relations (e.g. newly-seeded ETFs)
+        # to be permanently stuck on the template even after the LLM client is available.
         async with self._read_sf() as read_session:
             narrative_repo = NarrativeRepository(read_session)
             existing = await narrative_repo.find_by_input_snapshot(entity_id, snapshot_hash)
 
-        if existing is not None:
+        if existing is not None and existing.model_id != "template-v1":
             logger.info(  # type: ignore[no-any-return]
                 "narrative_idempotent_skip",
                 entity_id=str(entity_id),
@@ -213,6 +218,16 @@ class GenerateNarrativeUseCase:
             )
             _inc_metric(_narrative_total, reason, self._model_id, "idempotent_skip")
             return False
+
+        if existing is not None and existing.model_id == "template-v1":
+            # Prior generation produced a template fallback; log but proceed to LLM.
+            logger.info(  # type: ignore[no-any-return]
+                "narrative_template_upgrade",
+                entity_id=str(entity_id),
+                prior_version_id=str(existing.version_id),
+                snapshot_hash=snapshot_hash,
+                message="prior version is template-v1; re-generating with LLM",
+            )
 
         # ── Step 4: Sanitize entity-derived strings ───────────────────────────
         sanitized_name, sanitized_type = self._sanitize_entity_ctx(entity_ctx)

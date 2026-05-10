@@ -214,6 +214,49 @@ class TestNarrativeIdempotency:
         narr_repo.insert_and_promote.assert_not_awaited()
         outbox_repo.append.assert_not_awaited()
 
+    def test_narrative_template_v1_existing_does_not_skip(self) -> None:
+        """Existing version with model_id='template-v1' must NOT trigger idempotent skip.
+
+        SA-2 regression test (2026-05-10): entities with no relations produce an
+        identical snapshot on every run.  Before this fix, ``find_by_input_snapshot``
+        returning a template-v1 row caused the use case to skip LLM generation
+        permanently — these entities were stuck on the placeholder forever.
+        """
+        from knowledge_graph.domain.narrative import EntityNarrativeVersion, NarrativeGenerationReason
+
+        # Simulate a prior template-v1 version with the same snapshot hash.
+        existing_template = EntityNarrativeVersion(
+            version_id=UUID("00000000-0000-0000-0000-000000000002"),
+            entity_id=_ENTITY_ID,
+            narrative_text="[template-v1] SomeEntity: financial_instrument with 0 known relations.",
+            model_id="template-v1",
+            generation_reason=NarrativeGenerationReason.INITIAL,
+            input_snapshot={"_hash": "abc"},
+            generated_at=datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC),
+        )
+
+        ctx = _make_entity_ctx()
+        # Provide a valid LLM response so the use case can produce a real narrative.
+        uc, _write_sf, _read_sf, narr_repo, outbox_repo = _make_use_case(
+            entity_ctx=ctx,
+            llm_text="A" * 100,  # valid LLM narrative
+            existing_version=existing_template,
+        )
+
+        with (
+            patch(_SANITIZE, side_effect=lambda x: x),
+            patch(_SERIALIZE, return_value=b"avro_bytes"),
+        ):
+            result = asyncio.run(uc.execute(entity_id=_ENTITY_ID, tenant_id=None, reason="PERIODIC_REFRESH"))
+
+        # Must proceed to LLM — template-v1 prior does NOT count as idempotent hit.
+        assert result is True
+        narr_repo.insert_and_promote.assert_awaited_once()
+        outbox_repo.append.assert_awaited_once()
+        # Verify the generated version uses the LLM model, not template fallback.
+        generated_version = narr_repo.insert_and_promote.call_args.args[0]
+        assert generated_version.model_id != "template-v1"
+
     def test_narrative_input_snapshot_deterministic(self) -> None:
         """Same entity context always produces the same snapshot hash (deterministic)."""
         from knowledge_graph.application.use_cases.generate_narrative import GenerateNarrativeUseCase
