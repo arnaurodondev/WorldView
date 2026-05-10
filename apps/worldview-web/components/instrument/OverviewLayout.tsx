@@ -62,6 +62,11 @@ import { InstrumentAskAiButton } from "@/components/instrument/InstrumentAskAiBu
 //   OverviewInsiderStrip — 5-row insider transactions panel sibling to TopNews
 import { PerformanceBar } from "@/components/instrument/PerformanceBar";
 import { OverviewInsiderStrip } from "@/components/instrument/OverviewInsiderStrip";
+// PLAN-0088 Wave F-3: SplitsDividendsPanel completes the 12-zone Overview
+// wireframe (zone 12). Placed at the bottom of the right rail so income-
+// stock context (yield, payout, ex-date, last split) is visible without the
+// user needing to switch to the Fundamentals tab.
+import { SplitsDividendsPanel } from "@/components/instrument/SplitsDividendsPanel";
 // WHY shadcn Select (T-B-2-03): finance mandate prohibits native <select> elements.
 // The native select has system-default styling that breaks the terminal dark theme and
 // produces OS-chrome dropdowns (white background on macOS). shadcn Select uses a Radix
@@ -275,6 +280,19 @@ export function OverviewLayout({
             metric={metric2}
             onMetricChange={setMetric2}
             availableMetrics={SPARKLINE_METRICS.filter((m) => m.value !== metric1)}
+          />
+
+          {/* Zone 12 (PLAN-0088 Wave F-3): Splits & Dividends panel.
+              WHY at the bottom of the right rail: yield/payout/ex-date are
+              "context numbers" — useful but secondary to the live metrics
+              and trend sparklines above. Income screeners hit this panel
+              first; growth analysts skip past it. The right rail's
+              overflow-y-auto handles scroll if total content exceeds the
+              chart-row height (typical: 12 metrics × 22px + 2 sparklines
+              + this panel ≈ 460-540px). */}
+          <SplitsDividendsPanel
+            instrumentId={instrumentId}
+            dividendYield={fundamentals?.dividend_yield ?? null}
           />
         </div>
       </div>

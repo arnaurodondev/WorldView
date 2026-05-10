@@ -80,6 +80,13 @@ import { WeekRangeBar } from "@/components/instrument/52WeekRangeBar";
 import { MarketPositionPanel } from "@/components/instrument/MarketPositionPanel";
 import { PeerComparisonPanel } from "@/components/instrument/PeerComparisonPanel";
 import { OwnershipSnapshotPanel } from "@/components/instrument/OwnershipSnapshotPanel";
+// PLAN-0088 Wave G-3: short-interest row (Float / Short Float % / Short Ratio
+// / Short Int). The Fundamentals tab previously had no short-side data despite
+// it being the single most-watched sentiment signal post-earnings. The row
+// pulls from /v1/fundamentals/{id}/share-statistics — same endpoint that
+// OwnershipSnapshotPanel uses for share counts/insider %, so no additional
+// network round-trips beyond TanStack Query's per-key cache.
+import { ShortInterestRow } from "@/components/instrument/ShortInterestRow";
 import { FundamentalsTopNews } from "@/components/instrument/FundamentalsTopNews";
 import { EarningsHistoryChart } from "@/components/instrument/EarningsHistoryChart";
 import { InsiderTransactionsTable } from "@/components/instrument/InsiderTransactionsTable";
@@ -860,6 +867,15 @@ export function FundamentalsTab({
 
         {/* ── Ownership Snapshot ───────────────────────────────────────── */}
         <OwnershipSnapshotPanel instrumentId={instrumentId} />
+
+        {/* ── Short Interest Row (PLAN-0088 Wave G-3) ──────────────────── */}
+        {/* WHY between Ownership and TopNews: short-interest is structurally
+            an extension of share statistics — same source endpoint
+            (share-statistics), same "who owns / who's betting against"
+            theme. Placing it after the ownership panel keeps the share-
+            structure section coherent before the news block reorients the
+            reader to qualitative signal. */}
+        <ShortInterestRow instrumentId={instrumentId} />
 
         {/* ── Top News ─────────────────────────────────────────────────── */}
         {entityId && (
