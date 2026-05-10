@@ -81,20 +81,54 @@ export function CashRow({ portfolioId }: CashRowProps) {
     );
   }
 
-  // Default values — em-dashes are the platform's universal "no data" glyph.
-  // We never display $0 unless we KNOW it's $0 — but in v1 cash is always 0
-  // by construction so the value is real even if uninspiring.
-  const cash = data?.cash ?? 0;
+  // PLAN-0088 P0-11 (truthful Cash / Buying Power surface).
+  //
+  // BEFORE: this component blindly rendered ``formatPrice(data?.cash ?? 0)``
+  // which always painted "$0.00" because the v1 ``GetExposureUseCase``
+  // hard-codes ``cash=0`` (no SnapTrade balance integration shipped). A
+  // hard "$0.00" implies "we checked your broker, you have zero dollars",
+  // which is a lie — we never asked the broker.
+  //
+  // AFTER: when the backend reports ``cash === 0`` we treat it as
+  // "unknown / not yet wired" and render an em-dash with a hover tooltip
+  // explaining what's missing. The moment SnapTrade balance sync is wired
+  // (see ``docs/audits/2026-05-10-demo-stabilization-cash-balance-state.md``)
+  // and the API returns a non-zero figure, the live value lights up
+  // automatically without a frontend change.
+  //
+  // WHY no separate "balance_status" envelope: avoids a backend contract
+  // change for a UI fix; the v1 cash value of 0 is the unambiguous
+  // "no broker sync yet" signal because no real portfolio with holdings
+  // has literal $0 cash. When v2 backend wiring lands, the upgrade path
+  // is to keep the UI as-is and let the real value flow through.
+  const rawCash = data?.cash;
+  const cashKnown = typeof rawCash === "number" && rawCash > 0;
 
   return (
     <div className="flex h-7 items-stretch divide-x divide-border border-b border-border bg-card font-mono text-[11px]">
-      {/* CASH cell — actual numeric value. Coloured neutral so it doesn't
-          compete with the headline P&L numbers above. */}
-      <div className="flex-1 px-3 flex items-center gap-2">
+      {/* CASH cell — em-dash + tooltip when value is unknown / pending
+          broker sync. The title attribute is the lightweight tooltip
+          surface that matches the rest of the dense grid (no shadcn
+          Tooltip wrapper here — it would add a portal per row and the
+          whole row is 28px tall). */}
+      <div
+        className="flex-1 px-3 flex items-center gap-2"
+        title={
+          cashKnown
+            ? undefined
+            : "Cash and buying power are not synced yet. Connect a brokerage in Settings to enable live balances."
+        }
+      >
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
           CASH
         </span>
-        <span className="tabular-nums text-foreground">{formatPrice(cash)}</span>
+        {cashKnown ? (
+          <span className="tabular-nums text-foreground">{formatPrice(rawCash)}</span>
+        ) : (
+          <span className="tabular-nums text-muted-foreground" aria-label="Cash unavailable — broker sync pending">
+            —
+          </span>
+        )}
       </div>
 
       {/* BUYING POWER — placeholder until SnapTrade cash + margin endpoints
