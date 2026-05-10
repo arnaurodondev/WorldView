@@ -23,6 +23,9 @@ import {
   POLITICS_KEYWORDS,
   SPORTS_KEYWORDS,
   CRYPTO_KEYWORDS,
+  AI_KEYWORDS,
+  ENERGY_KEYWORDS,
+  TECH_KEYWORDS,
 } from "@/lib/prediction-markets";
 
 // ── categorize() ──────────────────────────────────────────────────────────────
@@ -49,6 +52,18 @@ describe("categorize", () => {
     ["Will Bitcoin exceed $100k?", "crypto"],
     ["Ethereum above $5k by end of year?", "crypto"],
     ["Will Solana flip ETH by market cap?", "crypto"],
+    // ai (SA-2 PLAN-0088 new bucket)
+    ["Will OpenAI release GPT-5 in 2025?", "ai"],
+    ["Will Claude reach AGI capability benchmarks?", "ai"],
+    ["Will Anthropic release a new Claude model this quarter?", "ai"],
+    // energy (SA-2 PLAN-0088 new bucket)
+    ["Will Brent crude exceed $100 per barrel?", "energy"],
+    ["Will OPEC cut production in Q4?", "energy"],
+    ["Will natural gas prices fall below $2?", "energy"],
+    // tech (SA-2 PLAN-0088 new bucket)
+    ["Will Apple release iPhone 17 in September?", "tech"],
+    ["Will NVIDIA announce a new chip architecture?", "tech"],
+    ["Will Microsoft acquire another company?", "tech"],
     // general (no keyword match)
     ["Will Elon Musk tweet more than 10 times today?", "general"],
     ["Will SpaceX launch before June?", "general"],
@@ -81,11 +96,39 @@ describe("categorize", () => {
     expect(categorize("IOC vote on 2036 Olympic host city")).toBe("politics");
   });
 
-  it("exports keyword arrays that are non-empty", () => {
+  it("exports all keyword arrays (original 4 + 3 new SA-2 PLAN-0088) as non-empty", () => {
     expect(MACRO_KEYWORDS.length).toBeGreaterThan(0);
     expect(POLITICS_KEYWORDS.length).toBeGreaterThan(0);
     expect(SPORTS_KEYWORDS.length).toBeGreaterThan(0);
     expect(CRYPTO_KEYWORDS.length).toBeGreaterThan(0);
+    // SA-2 PLAN-0088 new buckets
+    expect(AI_KEYWORDS.length).toBeGreaterThan(0);
+    expect(ENERGY_KEYWORDS.length).toBeGreaterThan(0);
+    expect(TECH_KEYWORDS.length).toBeGreaterThan(0);
+  });
+
+  it("macro beats AI when both keywords present (first-match wins)", () => {
+    // "rate" is in MACRO_KEYWORDS (checked before AI_KEYWORDS), so this
+    // market about AI rate-limiting should tag macro.
+    expect(categorize("Fed rate decision impacts OpenAI investments")).toBe("macro");
+  });
+
+  it("AI bucket catches openai markets not matching earlier buckets", () => {
+    expect(categorize("Will OpenAI become a public company in 2025?")).toBe("ai");
+  });
+
+  it("energy bucket catches crude oil markets", () => {
+    expect(categorize("Will crude oil hit $100 by year end?")).toBe("energy");
+  });
+
+  it("tech bucket catches Apple product markets", () => {
+    expect(categorize("Will Apple ship the Vision Pro 2 in 2025?")).toBe("tech");
+  });
+
+  it("SpaceX still general (not tech) — no TECH_KEYWORDS match", () => {
+    // SpaceX is not in the tech keywords list (it's aerospace, not consumer tech).
+    // This preserves the existing test intent per R19.
+    expect(categorize("Will SpaceX launch before June?")).toBe("general");
   });
 });
 
