@@ -154,14 +154,27 @@ vi.mock("@/lib/gateway", () => ({
       limit: 10,
     }),
     // WHY searchInstruments: MarketSnapshotWidget resolves ticker → instrument_id
-    searchInstruments: vi.fn().mockResolvedValue({
-      results: [{ instrument_id: "ins-aapl", entity_id: "ins-aapl", ticker: "AAPL", name: "Apple Inc", exchange: "US", type: "equity" }],
-      query: "AAPL",
-    }),
-    // WHY getBatchQuotes: MarketSnapshotWidget batch-fetches live quotes
+    // for all 9 tickers (3 index + 6 equities). Return a single result with the
+    // searched ticker so all group rows get instrument IDs and the LIVE badge appears.
+    searchInstruments: vi.fn().mockImplementation((ticker: string) =>
+      Promise.resolve({
+        results: [{ instrument_id: `ins-${ticker.toLowerCase()}`, entity_id: `ins-${ticker.toLowerCase()}`, ticker, name: `${ticker} Inc`, exchange: "US", type: "equity" }],
+        query: ticker,
+      }),
+    ),
+    // WHY getBatchQuotes: MarketSnapshotWidget batch-fetches live quotes.
+    // Return non-zero prices so the truthfulness guard (hasPrice) passes for equities.
     getBatchQuotes: vi.fn().mockResolvedValue({
       quotes: {
         "ins-aapl": { price: 185.5, change: 2.3, change_pct: 1.25 },
+        "ins-msft": { price: 350.0, change: 1.5, change_pct: 0.43 },
+        "ins-nvda": { price: 800.0, change: 15.0, change_pct: 1.91 },
+        "ins-amzn": { price: 180.0, change: 2.0, change_pct: 1.12 },
+        "ins-googl": { price: 170.0, change: -1.0, change_pct: -0.58 },
+        "ins-jpm": { price: 195.0, change: 0.5, change_pct: 0.26 },
+        "ins-qqq": { price: 420.0, change: 5.0, change_pct: 1.20 },
+        "ins-spy": { price: 0.0, change: 0.0, change_pct: 0.0 }, // no data yet
+        "ins-btc": { price: 80000.0, change: 1000.0, change_pct: 1.27 },
       },
     }),
     // WHY getEarningsCalendar: EarningsCalendarWidget (Wave B-1, PLAN-0068) fetches
@@ -351,26 +364,44 @@ describe("EconomicCalendar", () => {
   });
 });
 
-// ── Tests: MarketSnapshotWidget (Wave 7 new, updated for live equity data) ─────
-// WHY updated: MarketSnapshotWidget was converted from a static placeholder to a
-// live-data component backed by searchInstruments + getBatchQuotes. Old tests for
-// static labels (ES, NQ, VIX etc.) and the EODHD-pending footer are no longer valid.
+// ── Tests: MarketSnapshotWidget (SA-2 PLAN-0088 Demo P1 rewrite) ───────────────
+// WHY updated: SA-2 PLAN-0088 rewrite extended the widget from "6 large-cap
+// equities" to a two-group snapshot (INDICES: QQQ/SPY/BTC + EQUITIES: 6 names).
+// Footer text changed from "US large-cap equities" to "indices · equities · prior session".
+// Tests updated to reflect the new layout while preserving the "renders header" and
+// "LIVE badge" tests per R19 (never delete/weaken tests — update assertions to new spec).
 
 describe("MarketSnapshotWidget", () => {
   it("renders MARKET SNAPSHOT header", () => {
-    // WHY wrapper: MarketSnapshotWidget now uses useQuery and must be inside QueryClientProvider
+    // WHY wrapper: MarketSnapshotWidget uses useQuery and must be inside QueryClientProvider
     render(<MarketSnapshotWidget />, { wrapper });
     expect(screen.getByText("MARKET SNAPSHOT")).toBeInTheDocument();
   });
 
-  it("renders 6 equity ticker labels after loading", async () => {
+  it("renders INDICES group label after loading", async () => {
     render(<MarketSnapshotWidget />, { wrapper });
-    // WHY waitFor: ticker labels only render after the idsQuery resolves (replacing skeletons).
-    // The widget shows a Skeleton grid during loading so tickers are absent synchronously.
+    // WHY waitFor: group labels render after the idsQuery resolves (replacing skeletons).
+    await waitFor(() => {
+      expect(screen.getByText("INDICES")).toBeInTheDocument();
+    });
+  });
+
+  it("renders EQUITIES group label after loading", async () => {
+    render(<MarketSnapshotWidget />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByText("EQUITIES")).toBeInTheDocument();
+    });
+  });
+
+  it("renders equity ticker labels after loading", async () => {
+    render(<MarketSnapshotWidget />, { wrapper });
+    // WHY waitFor: ticker labels only render after the idsQuery resolves.
     await waitFor(() => {
       expect(screen.getByText("AAPL")).toBeInTheDocument();
     });
-    // These render in the same pass as AAPL — once loading is done, all 6 appear
+    // These render in the same pass as AAPL — once loading is done, all appear.
+    // WHY still test AAPL/MSFT/NVDA: the EQUITIES group still contains all 6
+    // original tickers; this test confirms no regression (R19).
     expect(screen.getByText("MSFT")).toBeInTheDocument();
     expect(screen.getByText("NVDA")).toBeInTheDocument();
     expect(screen.getByText("AMZN")).toBeInTheDocument();
@@ -387,11 +418,12 @@ describe("MarketSnapshotWidget", () => {
     });
   });
 
-  it("renders footer with data context text after loading", async () => {
+  it("renders footer with updated data context text after loading", async () => {
     render(<MarketSnapshotWidget />, { wrapper });
     await waitFor(() => {
-      // Footer shows equity context text once loading is complete
-      expect(screen.getByText(/US large-cap equities/i)).toBeInTheDocument();
+      // SA-2 PLAN-0088: footer now says "indices · equities · prior session"
+      // (was "US large-cap equities · prior session") to reflect the two-group layout.
+      expect(screen.getByText(/indices.*equities.*prior session/i)).toBeInTheDocument();
     });
   });
 });
