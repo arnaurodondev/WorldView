@@ -340,14 +340,17 @@ function ArticleRow({
   return (
     <article
       className={cn(
-        "border-b border-border/30 px-3 py-2 hover:bg-muted/30 transition-colors",
+        // WHY py-1.5 (was py-2): NewsTab lives inside the instrument detail page
+        // where vertical space is constrained. 6px vert padding (up from 8px) gives
+        // ~2px back per row without losing readability on 11px text.
+        "border-b border-border/30 px-3 py-1.5 hover:bg-muted/30 transition-colors",
         // WHY opacity-60 for LIGHT tier: LIGHT articles are low-signal;
         // de-emphasising them lets analysts focus on MEDIUM/DEEP articles.
         article.routing_tier === "LIGHT" && "opacity-60",
       )}
     >
       {/* ── Row 1: pills + timestamp ─────────────────────────────────────── */}
-      <div className="mb-1 flex items-center gap-1.5">
+      <div className="mb-0.5 flex items-center gap-1.5">
         {/* Relevance badge — always shown when score is available */}
         {article.display_relevance_score != null && (
           <RelevanceBadge score={article.display_relevance_score} />
@@ -381,7 +384,10 @@ function ArticleRow({
         href={safeExternalUrl(article.url)}
         target="_blank"
         rel="noopener noreferrer"
-        className="group mb-1 block text-[13px] font-medium leading-snug text-foreground hover:text-primary transition-colors"
+        // WHY text-[11px] (was 13px): NewsTab is an instrument-detail sub-panel;
+        // using the same 11px data text density as other instrument panels (OHLCV,
+        // fundamentals) keeps the tab visually consistent and maximises rows shown.
+        className="group mb-0.5 block text-[11px] font-medium leading-snug text-foreground hover:text-primary transition-colors"
         aria-label={article.title ?? "Untitled article"}
       >
         <span className="flex items-start gap-1">

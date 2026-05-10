@@ -287,10 +287,14 @@ function ArticleRow({ article: a }: { article: RankedArticle }) {
 
         {/* Right cluster — source, relevance, timestamp, external icon */}
 
-        {/* Source name — compact label before timestamp */}
+        {/* Source label — compact uppercase chip.
+            WHY source_name preferred over source_type: source_name is a
+            human-readable outlet name ("Bloomberg") while source_type is a
+            technical identifier ("eodhd_news"). Fall back to source_type
+            when name is absent, uppercasing it so "eodhd" reads as "EODHD". */}
         {(a.source_name || a.source_type) && (
-          <span className="shrink-0 font-mono text-[9px] text-muted-foreground/60 uppercase tracking-wider">
-            {(a.source_name ?? a.source_type ?? "").slice(0, 12)}
+          <span className="shrink-0 rounded-[2px] border border-border/30 px-1 font-mono text-[9px] text-muted-foreground/60 uppercase tracking-wider">
+            {(a.source_name ?? a.source_type ?? "").slice(0, 8)}
           </span>
         )}
 
@@ -302,15 +306,16 @@ function ArticleRow({ article: a }: { article: RankedArticle }) {
         )}
 
         {/* Cluster-size chip — "+N similar" when near-duplicates exist.
-            WHY only when cluster_size > 1: cluster_size=1 means "alone",
-            nothing useful to surface. "+N similar" tells the analyst that
-            N other articles cover the same story — a corroboration signal. */}
+            WHY "similar" (not "dupes"): near-duplicates are corroboration
+            signals, not garbage — "similar" is descriptive, "dupes" implies
+            the article itself is a duplicate which it may not be.
+            WHY only when cluster_size > 1: cluster_size=1 means "alone". */}
         {a.cluster_size != null && a.cluster_size > 1 && (
           <span
             className="shrink-0 rounded-[2px] bg-muted/40 px-1 font-mono text-[9px] tabular-nums text-muted-foreground/70"
-            title={`${a.cluster_size - 1} similar article${a.cluster_size - 1 !== 1 ? "s" : ""} detected`}
+            title={`${a.cluster_size - 1} similar article${a.cluster_size - 1 !== 1 ? "s" : ""} cover the same story`}
           >
-            +{a.cluster_size - 1}
+            +{a.cluster_size - 1} sim
           </span>
         )}
 
