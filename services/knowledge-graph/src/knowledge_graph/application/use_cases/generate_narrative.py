@@ -121,12 +121,24 @@ class GenerateNarrativeUseCase:
         # (infrastructure/workers, api/narratives) pass the concrete repo classes.
         narrative_repo_class: Any | None = None,
         outbox_repo_class: Any | None = None,
+        # PLAN-0088 P0-7 (2026-05-10): direct DeepInfra chat-completion callable for
+        # narrative generation. The pre-existing FallbackChainClient.extract path is
+        # hard-wired to JSON-mode (response_format=json_object) which is correct for
+        # NER/relation extraction but fatal for free-form narrative prose: the model
+        # returns hallucinated `{"error": ...}` envelopes, the use case rejects them
+        # as "invalid output", retries exhaust, and template-v1 fallback fires. This
+        # callable bypasses extraction-style adapters entirely. Signature:
+        # ``async def chat(prompt: str) -> str`` returning free-form narrative text.
+        # When set it is preferred over self._llm.extract.
+        narrative_chat_client: Any | None = None,
     ) -> None:
         self._write_sf = write_session_factory
         self._read_sf = read_session_factory if read_session_factory is not None else write_session_factory
         self._model_id = narrative_llm_model_id
         self._retry_delays = retry_delays
         self._llm = llm_client
+        # PLAN-0088 P0-7: free-form narrative chat client (bypasses JSON-mode).
+        self._narrative_chat = narrative_chat_client
         # Store injected repo class callables.  None means callers did not inject
         # them (legacy path — handled in execute() via a sentinel check against None).
         self._narrative_repo_class: Any = narrative_repo_class
@@ -427,7 +439,11 @@ LIMIT 5
         relations = entity_ctx.get("relations", [])
         relation_count = len(relations)
 
-        if self._llm is None:
+        # PLAN-0088 P0-7: prefer the dedicated narrative chat client. The legacy
+        # ``self._llm.extract`` path forces JSON-mode (response_format=json_object)
+        # which causes the LLM to emit hallucinated error envelopes for free-form
+        # narrative prompts; that path is now reserved as a last resort.
+        if self._narrative_chat is None and self._llm is None:
             return self._template_fallback(entity_name, entity_type, relation_count), "template-v1"
 
         # F-SEC-02 extension: sanitize relation fields (canonical_type, object_name)
@@ -439,6 +455,47 @@ LIMIT 5
             entity_ctx.get("contradictions", []),
         )
         prompt = self._build_prompt(entity_name, entity_type, clean_relations, clean_contradictions)
+
+        # PLAN-0088 P0-7: free-form narrative chat path. When a dedicated
+        # ``narrative_chat_client`` is wired (production: DeepInfra chat without
+        # JSON-mode) we use it directly. This avoids the extraction-adapter JSON
+        # contract that previously forced template-v1 fallback for ~97% of entities.
+        if self._narrative_chat is not None:
+            last_exc_chat: Exception | None = None
+            for attempt, delay in enumerate(self._retry_delays):
+                try:
+                    text_result = await self._narrative_chat(prompt)
+                    if text_result:
+                        cleaned = str(text_result).strip()
+                        # Reject obvious refusal/error text from upstream provider.
+                        looks_like_error = cleaned.startswith("{") and (
+                            '"error"' in cleaned[:120] or '"invalid_request_error"' in cleaned[:200]
+                        )
+                        if not looks_like_error and len(cleaned) >= _MIN_NARRATIVE_LEN:
+                            return cleaned[:10000], self._model_id
+                        if looks_like_error:
+                            raise ValueError(f"Narrative chat returned error envelope: {cleaned[:120]}")
+                except Exception as exc:
+                    last_exc_chat = exc
+                    logger.warning(  # type: ignore[no-any-return]
+                        "narrative_chat_attempt_failed",
+                        entity_id=str(entity_id),
+                        attempt=attempt + 1,
+                        error=str(exc),
+                    )
+                    if attempt < len(self._retry_delays) - 1:
+                        await asyncio.sleep(delay)
+            logger.warning(  # type: ignore[no-any-return]
+                "narrative_chat_exhausted_using_template",
+                entity_id=str(entity_id),
+                last_error=str(last_exc_chat) if last_exc_chat else None,
+            )
+            return self._template_fallback(entity_name, entity_type, relation_count), "template-v1"
+
+        # Reachable only when ``narrative_chat_client`` is None and ``llm_client``
+        # is set (legacy extraction-mode path retained for backward-compat).
+        if self._llm is None:  # pragma: no cover — defensive; guarded above
+            return self._template_fallback(entity_name, entity_type, relation_count), "template-v1"
 
         last_exc: Exception | None = None
         for attempt, delay in enumerate(self._retry_delays):
