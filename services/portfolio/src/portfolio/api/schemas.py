@@ -578,3 +578,85 @@ class RealizedPnLResponse(BaseModel):
     @field_serializer("total_realized", "realized_long_term", "realized_short_term")
     def serialize_decimal(self, v: Decimal) -> str:
         return _fmt_decimal(v)
+
+
+# ── PLAN-0088 Wave E — Holdings redesign ──────────────────────────────────────
+
+
+class HoldingLotItem(BaseModel):
+    """One open FIFO lot for the holding-lots drilldown (E-2).
+
+    All Decimal fields serialise as 8-dp strings to match every other
+    Decimal in the API. ``unrealised_pnl`` is nullable on the wire so the
+    frontend renders "—" cleanly when the gateway couldn't supply a price.
+    """
+
+    open_date: date
+    qty: Decimal
+    cost_per_share: Decimal
+    days_held: int
+    is_long_term: bool
+    unrealised_pnl: Decimal | None = None
+
+    @field_serializer("qty", "cost_per_share")
+    def _decimals(self, v: Decimal) -> str:
+        return _fmt_decimal(v)
+
+    @field_serializer("unrealised_pnl")
+    def _decimal_or_none(self, v: Decimal | None) -> str | None:
+        # WHY explicit None handling: field_serializer fires for None too in
+        # Pydantic v2; without the guard ``f"{None:.8f}"`` would crash.
+        return _fmt_decimal(v) if v is not None else None
+
+
+class HoldingLotsResponse(BaseModel):
+    """``GET /v1/portfolios/{id}/holdings/{instrument_id}/lots`` response."""
+
+    portfolio_id: UUID
+    instrument_id: UUID
+    lots: list[HoldingLotItem]
+    total_qty: Decimal
+    total_cost: Decimal
+    long_term_qty: Decimal
+    short_term_qty: Decimal
+    as_of: datetime  # UTC ISO-8601 — emit naturally via Pydantic
+
+    @field_serializer("total_qty", "total_cost", "long_term_qty", "short_term_qty")
+    def _decimals(self, v: Decimal) -> str:
+        return _fmt_decimal(v)
+
+
+class TopPositionItem(BaseModel):
+    """One entry in the concentration response's top-N list."""
+
+    instrument_id: UUID
+    weight_pct: Decimal  # 0-100 (NOT a fraction)
+
+    @field_serializer("weight_pct")
+    def _decimals(self, v: Decimal) -> str:
+        return _fmt_decimal(v)
+
+
+class ConcentrationResponse(BaseModel):
+    """``GET /v1/portfolios/{id}/concentration`` response (E-3).
+
+    ``hhi`` is the standard 0-10,000 Herfindahl-Hirschman index (sum of
+    squared percent weights). ``label`` is ``"diversified"`` (HHI<1500),
+    ``"moderate"`` (1500-2500), or ``"concentrated"`` (≥2500). For empty
+    portfolios HHI=0 and label="empty".
+
+    ``top_3_share_pct`` is the sum of the three largest position weights as
+    a percent (0-100, matching ``weight_pct`` in ``top_positions``).
+    """
+
+    portfolio_id: UUID
+    hhi: int
+    label: str
+    top_3_share_pct: Decimal
+    positions_count: int
+    top_positions: list[TopPositionItem]
+    prices_stale: bool
+
+    @field_serializer("top_3_share_pct")
+    def _decimals(self, v: Decimal) -> str:
+        return _fmt_decimal(v)

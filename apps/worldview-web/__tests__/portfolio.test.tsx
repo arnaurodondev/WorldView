@@ -276,8 +276,12 @@ describe("PortfolioPage — Holdings tab", () => {
     render(<PortfolioPage />, { wrapper });
 
     await waitFor(() => {
-      // Holdings tab is active by default — AAPL should be visible
-      expect(screen.getByText("AAPL")).toBeInTheDocument();
+      // Holdings tab is active by default — AAPL should be visible.
+      // PLAN-0088 Wave E: AAPL now legitimately appears in multiple places
+      // (table cell + HoldingLotsPanel ticker dropdown option + PositionBarHeat
+      // bar label). getAllByText asserts the same intent — at least one
+      // occurrence of the ticker is rendered — without restricting how many.
+      expect(screen.getAllByText("AAPL").length).toBeGreaterThan(0);
     });
   });
 
@@ -285,7 +289,8 @@ describe("PortfolioPage — Holdings tab", () => {
     render(<PortfolioPage />, { wrapper });
 
     await waitFor(() => {
-      expect(screen.getByText("MSFT")).toBeInTheDocument();
+      // Same multi-render rationale as the AAPL test above.
+      expect(screen.getAllByText("MSFT").length).toBeGreaterThan(0);
     });
   });
 
