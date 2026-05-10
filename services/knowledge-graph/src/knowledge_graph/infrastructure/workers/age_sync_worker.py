@@ -149,6 +149,8 @@ _VALID_EDGE_LABELS: frozenset[str] = frozenset(
         "OPERATES_IN_COUNTRY",
         # temporal event exposure
         "EVENT_EXPOSES",
+        # theme exposure (added in migration 0029 / PLAN-0076)
+        "EXPOSED_TO_THEME",
     },
 )
 
