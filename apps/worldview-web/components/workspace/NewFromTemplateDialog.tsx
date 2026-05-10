@@ -138,7 +138,8 @@ export function NewFromTemplateDialog({ onCreate, trigger }: NewFromTemplateDial
         className="max-w-md p-0 bg-card border border-border rounded-[2px] shadow-none"
       >
         <DialogHeader className="px-3 py-2 border-b border-border">
-          <DialogTitle className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-sans font-normal">
+          {/* WHY font-mono: ADR-F-15 — dialog titles are section labels, use IBM Plex Mono */}
+          <DialogTitle className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono font-normal">
             New Workspace from Template
           </DialogTitle>
           {/*

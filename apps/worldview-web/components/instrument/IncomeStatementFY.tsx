@@ -40,7 +40,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatMarketCap } from "@/lib/utils";
+import { formatMarketCap, formatPrice } from "@/lib/utils";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -136,7 +136,9 @@ function formatCellValue(value: number | null, rowKey: RowKey): string {
   if (rowKey === "eps") {
     // WHY separate EPS format: EPS is per-share ($2.43), not billions.
     // formatMarketCap would output "$0.00" for EPS < $1M — wrong scale.
-    return `$${value.toFixed(2)}`;
+    // WHY formatPrice (not template literal): architecture test bans hand-built
+    // currency strings (\$${...}); formatPrice uses Intl.NumberFormat correctly.
+    return formatPrice(value);
   }
   return formatMarketCap(value);
 }

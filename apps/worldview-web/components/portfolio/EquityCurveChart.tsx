@@ -651,7 +651,8 @@ function ChartHeader({
 }) {
   return (
     <div className="flex items-center justify-between h-6 px-1">
-      <h3 className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+      {/* WHY font-mono: ADR-F-15 — section header labels use IBM Plex Mono */}
+      <h3 className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
         Equity Curve
       </h3>
       <div className="flex items-center gap-0.5">
