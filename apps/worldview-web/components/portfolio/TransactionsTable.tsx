@@ -305,7 +305,7 @@ export function TransactionsTable({
   // matches the spacing of empty states elsewhere (Alerts, Watchlists).
   if (transactions.length === 0) {
     return (
-      <div className="flex flex-1 items-center justify-center px-6 py-8">
+      <div className="flex flex-1 items-center justify-center px-4 py-4">
         <InlineEmptyState message="No transactions yet. Connect a brokerage to import activity, or use Add Position to record a trade manually." />
       </div>
     );

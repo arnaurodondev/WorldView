@@ -795,7 +795,7 @@ export function WatchlistsTabPanel({
     // (the "void above tabs" bug, F-P-008). Centred flex column keeps the
     // message + CTA visually balanced inside the panel.
     return (
-      <div className="flex flex-col items-center justify-center gap-3 py-8">
+      <div className="flex flex-col items-center justify-center gap-2 py-4">
         <InlineEmptyState message="No watchlists yet." />
         {/* WHY shadcn Button (not raw <button>): matches the rest of the app
             so size + spacing + focus ring stay consistent with portfolio CTAs. */}
