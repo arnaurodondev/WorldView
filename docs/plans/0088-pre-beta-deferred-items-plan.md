@@ -163,11 +163,12 @@ Six parallel subagents shipped a substantial second batch:
 - Wave C (PITR backups + MinIO mirror) — ~14h
 - Wave D (Grafana alerts + LLM-cost cap) — ~12h
 - Wave H-4 confirmed **moot** (existing entity_mentions path returns
-  114+ articles for AAPL); Wave H-5 (duplicate_clusters worker) untouched
+  114+ articles for AAPL)
+- ~~Wave H-5 (duplicate_clusters streaming worker)~~ — **DONE** SA-4 commit `f5268efa`
 - Wave I-3, I-4, I-5 — relation_summaries close-out, model bench,
-  density check
+  density check (I-3 unblocked: prompt_templates FK seed fixed SA-4)
 - Wave J — perf & scale
-- AAPL ≥ 30 edges target — blocked on content-quality (see I-2 above)
+- AAPL graph: dense-graph auto-filter + camera-reset shipped SA-4; raw edge count still content-quality-gated
 
 **Open issues flagged but not fixed:**
 - ~~Portfolio internal JWT missing `aud` claim (log noise every 24s)~~ — **FIXED** SA-5 commit `cbbf0a4b`: alert `ALERT_S1_INTERNAL_JWT` re-generated with `aud=worldview-internal` (gitignored docker.env; container rebuild needed to deploy)
@@ -176,7 +177,7 @@ Six parallel subagents shipped a substantial second batch:
 - Content-store consumer drift ~1.2k lag on content.article.raw.v1
 - SnapTrade brokerage worker writes signed quantities to DB
   (Portfolio QA Issue-A); read path now correct but data shape divergent
-- duplicate_clusters table 0 rows after 1641 docs (likely worker offline)
+- ~~duplicate_clusters table 0 rows after 1641 docs~~ — **FIXED** SA-4 commit `f5268efa`: streaming writer shipped + prompt_template FK seed fixed
 - **NEW BP-443**: KG path-insight-worker: `end` reserved AGE keyword caused PostgresSyntaxError on all jobs — **FIXED** SA-5 commit `cbbf0a4b` (container rebuild needed; 3 pending jobs reset in DB)
 
 ### 2026-05-10 partial landing
@@ -222,24 +223,32 @@ density replay, A–D) remain.
 - **G-3** `ShortInterestRow.tsx` — 4-column Float/Short Float/Short
   Ratio/Short Int strip on the Fundamentals tab.
 
+**Done (SA-4, commit f5268efa):**
+- **prompt_templates FK seed**: SummaryWorker UUID `00000000-...-0001` seeded;
+  `relation_summaries` will now populate on the next 60-min SummaryWorker tick.
+- **Narrative regen longtail**: `scripts/ops/trigger_narrative_regen_longtail.py`
+  executed; 100 entities reset, 310 eligible for Worker 13D-3 regen.
+- **AAPL graph UX**: dense-graph auto-filter (30% floor for >50 edges) + Sigma
+  camera-reset button + warning badge for 128-edge graphs.
+- **EntitySidebar top-3 relations**: LLM summary panel reading from TanStack
+  Query graph cache; `GraphEdge` type extended with `relation_summary`.
+- **H-5 streaming dedup**: `StoredArticleDedupConsumer` on
+  `content.article.stored.v1`; Jaccard >=0.65; `content-store-dedup-consumer`
+  docker-compose entry; 321 unit tests pass.
+
 **Still open:**
 - Wave A (Zitadel SSO, MFA, Settings substance) — beta-blocking, not started.
 - Wave B (Postgres TDE, MinIO SSE, GDPR, structlog PII) — not started.
 - Wave C (PITR backups, MinIO mirror, alembic stamp) — not started.
 - Wave D (Grafana alerts, Tempo, SnapTrade dashboard, LLM-cost cap) — not started.
-- Wave E (Holdings redesign, 16h) — not started.
-- F-1, F-2 (Earnings/Tech/Ownership move into Overview) — F-2 panel
-  already exists in Fundamentals; selective Overview move deferred.
-- G-1 (FY-column income statement), G-2 (PerformanceBar already shipped
-  in PLAN-0087), G-4 (EPS beat/miss + AnalystTargetSparkline) — not started.
 - Wave H-1, H-2 (NewsAPI, SEC EDGAR adapter audits) — adapters seeded;
-  audit deferred. H-4 (entity_article_links backfill), H-5 (dedup
-  cluster expansion) — not started.
+  audit deferred. H-4 (entity_article_links backfill) — moot per prior SA.
 - I-2 (replay extraction for AAPL ≥ 30 edges target) — pipeline alive
   and growing, but a deliberate offset-reset-to-earliest replay is
   needed to materialise the 1141 historical LLM calls; currently the
   reset-to-latest skips them. Worth ~1h of operations work.
-- I-3 (`relation_summaries` + contradiction worker close-out) — not started.
+- I-3 (`relation_summaries` close-out) — unblocked by SA-4 seed fix; SummaryWorker
+  will self-populate on next tick (no code change needed).
 - I-4 (extraction model bench) — not started.
 - Wave J (perf & scale) — not started.
 
