@@ -54,6 +54,25 @@ def _build_factories(
         ``read_engine is write_engine``.
 
     """
+    # P0-4 (PLAN-0088): asyncpg connect args + pool_recycle to defend against
+    # stale DNS / Docker DNS hiccups that recur on long-uptime alert-dispatcher
+    # processes ("[Errno -2] Name or service not known"). The dispatcher creates
+    # a fresh connection each batch (no long-lived pool), so a transient DNS
+    # blip during ``getaddrinfo`` aborts the entire poll. Mitigations:
+    #   * ``timeout=10`` — bound the connect attempt instead of hanging on DNS
+    #     (asyncpg's default connect timeout is unbounded for DNS resolution).
+    #   * ``pool_recycle=300`` — force SQLAlchemy to discard pooled connections
+    #     after 5 min so we re-resolve DNS on a fresh socket. Combined with
+    #     ``pool_pre_ping=True`` this gives us both proactive recycling and
+    #     reactive validation.
+    #   * TCP keepalives (``tcp_keepalives_idle``, etc. via server_settings)
+    #     keep the kernel-side socket healthy across long idle periods.
+    _connect_args: dict[str, object] = {
+        "timeout": 10,  # asyncpg connect timeout (s); covers DNS + TCP handshake
+        "server_settings": {
+            "application_name": "alert",
+        },
+    }
     write_engine = create_async_engine(
         _get_url(settings.database_url),
         echo=False,
@@ -61,6 +80,8 @@ def _build_factories(
         pool_pre_ping=True,
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_max_overflow,
+        pool_recycle=300,
+        connect_args=_connect_args,
     )
     write_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
         bind=write_engine,
@@ -82,6 +103,8 @@ def _build_factories(
             pool_pre_ping=True,
             pool_size=settings.db_pool_size_read,
             max_overflow=settings.db_max_overflow_read,
+            pool_recycle=300,
+            connect_args=_connect_args,
         )
         read_factory = async_sessionmaker(
             bind=read_engine,
