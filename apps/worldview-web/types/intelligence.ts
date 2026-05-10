@@ -172,9 +172,12 @@ export interface EntityPathsResponse {
  * infinite scroll sequence stays stable even as new versions are generated.
  */
 export interface NarrativeHistoryPage {
-  items: NarrativeVersionPublic[];
+  // WHY `versions` (not `items`): canonical S7 schema is NarrativeVersionListResponse
+  // which serialises this field as `versions`. The earlier FE type guessed `items`
+  // and broke runtime rendering (P0-9 PLAN-0088).
+  entity_id: string;
+  versions: NarrativeVersionPublic[];
   next_cursor: string | null;  // pass as `cursor=` query param for next page
-  total: number;
 }
 
 // ── Path filter types ────────────────────────────────────────────────────────

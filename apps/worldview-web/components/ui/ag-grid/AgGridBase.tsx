@@ -72,6 +72,11 @@ export function AgGridBase<TData extends object>({
       className={`terminal-ag-grid ag-theme-alpine-dark w-full h-full${className ? ` ${className}` : ""}`}
     >
       <AgGridReact<TData>
+        // WHY theme="legacy": AG Grid v33+ defaults to the new Theming API which
+        // generates inline styles and ignores CSS class themes (ag-theme-alpine-dark).
+        // The wrapper class above + ag-grid-theme.css depend on legacy CSS theming.
+        // Without this prop the grid renders white-on-white. P0-2 (PLAN-0088).
+        theme="legacy"
         rowData={rowData}
         columnDefs={columnDefs}
         rowHeight={28}

@@ -157,14 +157,12 @@ export function FundamentalSparkline({
     .filter((v): v is number => v != null);
 
   if (isError || numericValues.length < 2) {
-    return (
-      <div
-        className={`w-full flex items-center justify-center text-muted-foreground text-[10px] font-mono ${className}`}
-        style={{ height: `${height}px` }}
-      >
-        —
-      </div>
-    );
+    // WHY render nothing (P0-12 PLAN-0088): the previous "—" placeholder showed
+    // a rogue em-dash directly under the P/E Ratio MetricRow when fundamentals
+    // timeseries were empty, giving the impression that the *value* was unknown.
+    // The MetricRow itself already renders "—" for missing values; an empty
+    // sparkline area should disappear, not duplicate the dash.
+    return null;
   }
 
   // ── Trend color — compare first vs last data point ───────────────────────
