@@ -354,10 +354,13 @@ export function MorningBriefCard() {
           Morning Briefing
         </span>
 
-        {/* Right side: diff badge + discuss button + stale badge + refresh + Read more / show less */}
-        {/* WHY diff badge in header: at-a-glance freshness signal without expanding */}
-        {/* WHY discuss button in header: always visible; doesn't require expanding the brief */}
-        <div className="flex w-[200px] shrink-0 items-center justify-end gap-1">
+        {/* ── Right action strip: diff badge · Discuss · stale/refresh · expand ── */}
+        {/* SA-2 PLAN-0088 Demo P1: polish pass — gap-1.5 (was gap-1) for better
+            breathing room between actions; RefreshCw icon now inline-flex centered;
+            Discuss and Read more labels are styled consistently at text-[9px].
+            WHY w-[220px] (was 200px): added 20px to accommodate the new gap and
+            prevent the Discuss label from wrapping on "Opening…" text. */}
+        <div className="flex w-[220px] shrink-0 items-center justify-end gap-1.5">
           {/* PLAN-0066 Wave F T-W10-F-01: diff badge — amber pill showing new bullets */}
           {/* WHY brief.id ?? generated_at as briefId: prefer the DB id (PLAN-0066 Wave A
               adds it to PublicBriefingResponse). Fall back to generated_at so the diff
@@ -375,34 +378,39 @@ export function MorningBriefCard() {
             disabled={discussLoading}
             title={discussError ?? "Open a chat thread seeded with this brief"}
             aria-label="Discuss this brief in chat"
-            className="text-[9px] text-primary hover:text-primary/80 disabled:text-[hsl(var(--disabled-foreground))] transition-colors whitespace-nowrap"
+            className="whitespace-nowrap text-[9px] text-primary transition-colors hover:text-primary/80 disabled:text-[hsl(var(--disabled-foreground))]"
           >
             {discussLoading ? "Opening…" : "Discuss"}
           </button>
 
           {isStale && (
             <>
-              <span className="text-[9px] text-warning">stale</span>
+              <span className="text-[9px] text-warning/80">stale</span>
+              {/* WHY inline-flex items-center: ensures the RefreshCw icon is
+                  vertically centered within the 24px header row — without it the
+                  icon floats 1-2px high on some font-stack configurations. */}
               <button
                 onClick={() => void refetch()}
                 disabled={isFetching}
-                className="text-muted-foreground hover:text-foreground disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
+                className="inline-flex items-center text-muted-foreground transition-colors hover:text-foreground disabled:text-[hsl(var(--disabled-foreground))]"
                 title="Refresh morning brief"
                 aria-label="Refresh morning brief"
               >
-                {/* WHY strokeWidth={1.5}: terminal icon convention — thinner strokes match 11px data density; default 2px looks heavy at h-3 w-3 */}
-            <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} strokeWidth={1.5} />
+                {/* WHY strokeWidth={1.5}: terminal icon convention */}
+                <RefreshCw
+                  className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`}
+                  strokeWidth={1.5}
+                />
               </button>
             </>
           )}
-          {/* WHY Read more in header (not text area): moving the CTA to the header
-              gives users a persistent, always-visible expand action. In the old layout
-              the button appeared only after the 3 content lines, making it easy to miss.
-              This mirrors Bloomberg's panel-header affordance for secondary content. */}
+
+          {/* WHY Read more / show less in header: always-visible expand CTA.
+              Bloomberg panel-header affordance for secondary content. */}
           {isLong && !expanded && (
             <button
               onClick={() => setExpanded(true)}
-              className="flex items-center gap-0.5 text-[9px] text-primary"
+              className="inline-flex items-center gap-0.5 whitespace-nowrap text-[9px] text-primary transition-colors hover:text-primary/80"
               aria-label="Expand morning brief"
             >
               Read more <ChevronRight className="h-3 w-3 shrink-0" strokeWidth={1.5} />
@@ -411,7 +419,7 @@ export function MorningBriefCard() {
           {isLong && expanded && (
             <button
               onClick={() => setExpanded(false)}
-              className="flex items-center gap-0.5 text-[9px] text-muted-foreground hover:text-foreground"
+              className="inline-flex items-center gap-0.5 whitespace-nowrap text-[9px] text-muted-foreground transition-colors hover:text-foreground"
               aria-label="Collapse morning brief"
             >
               show less <ChevronUp className="h-3 w-3 shrink-0" strokeWidth={1.5} />
