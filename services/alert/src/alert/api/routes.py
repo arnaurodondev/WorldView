@@ -412,9 +412,22 @@ async def alerts_stream(
     # ASGI scopes (scope["type"] != "http"), so InternalJWTMiddleware never runs
     # for WS connections. websocket.state.user_id is therefore never populated.
     # We validate the ws-token directly here instead.
+    #
+    # P0-1 (PLAN-0088): The api-gateway issues this token via ``issue_ws_jwt`` with
+    # ``aud=worldview-internal`` and ``scope=alerts:stream``. PyJWT >= 2.0 raises
+    # ``InvalidAudienceError`` whenever a token contains an ``aud`` claim and the
+    # ``jwt.decode`` call does NOT pass ``audience=`` — that bug was making every
+    # WebSocket upgrade close with 4001/403. We now mirror the canonical decode
+    # parameters from ``InternalJWTMiddleware.dispatch`` exactly: same issuer,
+    # same audience, same algorithm. We additionally enforce the ``alerts:stream``
+    # scope so a token issued for a different purpose cannot subscribe to the
+    # alert WebSocket.
     token = websocket.query_params.get("token")
     if not token:
-        await websocket.close(code=4001)
+        # 4401 = unauthorized application close code (see RFC 6455 §7.4.2 +
+        # IANA WebSocket Close Code registry). Distinct from 4001 so that
+        # operators / tests can tell "no token" apart from "service down (1011)".
+        await websocket.close(code=4401, reason="missing token")
         return
 
     public_key = getattr(websocket.app.state, "_internal_jwt_public_key", None)
@@ -422,7 +435,7 @@ async def alerts_stream(
 
     if public_key is None and not skip_verification:
         # Fail-closed: JWKS not yet loaded (only possible during startup race).
-        await websocket.close(code=1011)
+        await websocket.close(code=1011, reason="jwks not loaded")
         return
 
     try:
@@ -439,11 +452,53 @@ async def alerts_stream(
                 public_key,  # type: ignore[arg-type]
                 algorithms=["RS256"],
                 issuer="worldview-gateway",
-                options={"require": ["sub", "exp", "iss"]},
+                # P0-1: audience=worldview-internal must match the ``aud`` claim
+                # set by ``issue_ws_jwt`` in api-gateway/jwt_utils.py. Without
+                # this, PyJWT raises InvalidAudienceError → close(4401).
+                audience="worldview-internal",
+                options={"require": ["sub", "exp", "iss", "aud"]},
             )
         user_id = UUID(payload["sub"])
-    except (jwt.InvalidTokenError, ValueError, KeyError):
-        await websocket.close(code=4001)
+
+        # P0-1: enforce the OAuth2-style ``scope`` claim. ws-tokens are issued with
+        # exactly ``scope="alerts:stream"``; reject anything else so a token minted
+        # for an unrelated purpose can't subscribe to the alert stream.
+        # We accept either the OAuth2 ``scope`` (space-delimited string) or the
+        # less-common ``scopes`` (list) shape so we stay compatible with future
+        # token formats.
+        raw_scope = payload.get("scope")
+        scope_list: list[str]
+        if isinstance(raw_scope, str):
+            scope_list = raw_scope.split()
+        elif isinstance(raw_scope, list):
+            scope_list = [str(s) for s in raw_scope]
+        else:
+            # Skip-verification path historically uses tokens with no scope claim;
+            # we keep the dev/test path permissive there to avoid breaking unit
+            # tests. In production (skip_verification=False) the token always
+            # has scope=alerts:stream because issue_ws_jwt sets it unconditionally.
+            scope_list = []
+        if not skip_verification and "alerts:stream" not in scope_list:
+            logger.warning(  # type: ignore[no-any-return]
+                "ws_scope_missing",
+                user_id=str(user_id),
+                scopes=scope_list,
+            )
+            await websocket.close(code=4401, reason="missing scope")
+            return
+    except jwt.InvalidAudienceError:
+        # Surface this as its own log so the P0-1 regression is visible if
+        # the token issuer ever changes audience again.
+        logger.warning("ws_invalid_audience", token_prefix=token[:12])  # type: ignore[no-any-return]
+        await websocket.close(code=4401, reason="invalid audience")
+        return
+    except jwt.ExpiredSignatureError:
+        logger.debug("ws_token_expired", token_prefix=token[:12])  # type: ignore[no-any-return]
+        await websocket.close(code=4401, reason="token expired")
+        return
+    except (jwt.InvalidTokenError, ValueError, KeyError) as exc:
+        logger.debug("ws_token_invalid", error=str(exc))  # type: ignore[no-any-return]
+        await websocket.close(code=4401, reason="invalid token")
         return
 
     manager = websocket.app.state.ws_manager
