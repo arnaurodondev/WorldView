@@ -95,30 +95,32 @@ async def _setup_age_session(session: AsyncSession) -> None:
 # preventing the path-insight-worker from computing ANY paths and causing
 # repeated fatal restarts (6 restarts visible in docker inspect).
 # Fix: renamed the destination node alias from ``end`` → ``tgt`` throughout.
+#
+# BP-SA1-003 (2026-05-10): Apache AGE does NOT support the openCypher
+# list-comprehension pipe syntax ``[rel IN relationships(p) | rel.confidence]``.
+# This caused a hard PostgresSyntaxError ("syntax error at or near |") for every
+# path-insight job, leaving path_insight_jobs permanently failed.
+#
+# Fix: return ``relationships(p)`` and ``nodes(p)`` as raw agtype arrays.  The
+# agtype JSON objects carry their full ``properties`` dict (e.g.
+# ``{"confidence": 0.9, "relation_type": "PARTNER_OF"}``).  The Python parser
+# (_parse_agtype_object_list) extracts the required fields post-query so no
+# list-comprehension syntax is needed in the Cypher at all.
 _CYPHER_FIND_PATHS = (
     "SELECT "  # noqa: S608 — only static int literals (*2..5, LIMIT 200) embedded; entity_id is :params JSON
-    "  edges_col::text, "
-    "  node_types_col::text, "
-    "  rel_types_col::text, "
-    "  node_ids_col::text, "
-    "  node_names_col::text "
+    "  rels_col::text, "
+    "  nodes_col::text "
     "FROM ag_catalog.cypher('worldview_graph', $$"
     "  MATCH p=(start:entity {entity_id: $id})-[*2..5]-(tgt:entity)"
     "  WHERE id(start) <> id(tgt)"
     "  RETURN"
-    "    [rel IN relationships(p) | rel.confidence]      AS edges_col,"
-    "    [n   IN nodes(p)         | n.entity_type]       AS node_types_col,"
-    "    [rel IN relationships(p) | rel.relation_type]   AS rel_types_col,"
-    "    [n   IN nodes(p)         | n.entity_id]         AS node_ids_col,"
-    "    [n   IN nodes(p)         | n.canonical_name]    AS node_names_col"
+    "    relationships(p) AS rels_col,"
+    "    nodes(p)         AS nodes_col"
     f"  ORDER BY length(p) DESC"
     f"  LIMIT {_PATH_LIMIT}"
     " $$, :params) AS ("
-    "   edges_col      agtype,"
-    "   node_types_col agtype,"
-    "   rel_types_col  agtype,"
-    "   node_ids_col   agtype,"
-    "   node_names_col agtype"
+    "   rels_col  agtype,"
+    "   nodes_col agtype"
     " )"
 )
 
@@ -126,15 +128,19 @@ _CYPHER_FIND_PATHS = (
 # ── Agtype parsing helpers ─────────────────────────────────────────────────────
 
 
+def _strip_agtype_suffix(text_val: str) -> str:
+    """Remove trailing ``::agtype``, ``::edge``, ``::vertex``, etc. type annotations."""
+    if "::" in text_val:
+        text_val = text_val[: text_val.rindex("::")]
+    return text_val.strip()
+
+
 def _parse_agtype_list(raw: Any) -> list[Any]:
     """Coerce an agtype column value (str / bytes / None) to a Python list."""
     if raw is None:
         return []
     text_val: str = raw.decode() if isinstance(raw, bytes | bytearray) else str(raw)
-    # Strip trailing ``::agtype`` or ``::path`` type annotations if present.
-    if "::" in text_val:
-        text_val = text_val[: text_val.rindex("::")]
-    text_val = text_val.strip()
+    text_val = _strip_agtype_suffix(text_val)
     if not text_val or text_val == "null":
         return []
     return json.loads(text_val)  # type: ignore[no-any-return]
@@ -151,6 +157,47 @@ def _parse_agtype_float(v: Any) -> float:
         return float(s.strip())
     except (ValueError, TypeError):
         return 0.0
+
+
+def _parse_agtype_object(raw: Any) -> dict[str, Any]:
+    """Parse a single agtype object (edge or vertex) to a Python dict.
+
+    AGE serialises edges as:
+      {"id": ..., "label": "PARTNER_OF", "properties": {"confidence": 0.9, ...}}::edge
+    and vertices as:
+      {"id": ..., "label": "entity", "properties": {"entity_id": "...", ...}}::vertex
+
+    The ``::edge`` / ``::vertex`` suffix is stripped before JSON parsing.
+    Returns an empty dict on any parse error.
+    """
+    if raw is None:
+        return {}
+    text_val: str = raw.decode() if isinstance(raw, bytes | bytearray) else str(raw)
+    text_val = _strip_agtype_suffix(text_val)
+    if not text_val or text_val == "null":
+        return {}
+    try:
+        return json.loads(text_val)  # type: ignore[no-any-return]
+    except (ValueError, TypeError):
+        return {}
+
+
+def _parse_agtype_object_list(raw: Any) -> list[dict[str, Any]]:
+    """Parse an agtype array of edge/vertex objects to a list of Python dicts.
+
+    BP-SA1-003: used to extract per-element properties from ``relationships(p)``
+    and ``nodes(p)`` return values instead of using the unsupported ``|`` pipe
+    list-comprehension syntax.
+    """
+    items = _parse_agtype_list(raw)
+    result: list[dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, dict):
+            result.append(item)
+        else:
+            # Item may still carry ``::edge`` suffix as a bare string — parse it.
+            result.append(_parse_agtype_object(item))
+    return result
 
 
 # ── Main discovery class ───────────────────────────────────────────────────────
@@ -216,22 +263,39 @@ class PathDiscovery:
         raw_paths: list[RawPath] = []
         for row in rows:
             try:
-                edge_confs_raw = _parse_agtype_list(row[0])
-                node_types_raw = _parse_agtype_list(row[1])
-                rel_types_raw = _parse_agtype_list(row[2])
-                node_ids_raw = _parse_agtype_list(row[3])
-                node_names_raw = _parse_agtype_list(row[4])
+                # BP-SA1-003: row now has 2 columns — rels_col and nodes_col.
+                # Each element is a full agtype object with a ``properties`` dict.
+                edge_objects = _parse_agtype_object_list(row[0])
+                node_objects = _parse_agtype_object_list(row[1])
 
-                if not rel_types_raw or not edge_confs_raw:
+                if not edge_objects or not node_objects:
                     continue
 
-                edge_confs = tuple(_parse_agtype_float(c) for c in edge_confs_raw)
+                # Extract per-edge fields from the ``properties`` sub-dict.
+                # AGE edge object shape: {"id": ..., "label": "...", "properties": {...}}
+                edge_props = [obj.get("properties") or {} for obj in edge_objects]
+                edge_confs = tuple(_parse_agtype_float(ep.get("confidence")) for ep in edge_props)
+                rel_types = tuple(
+                    str(ep.get("relation_type") or obj.get("label") or "")
+                    for ep, obj in zip(edge_props, edge_objects, strict=False)
+                )
+
+                # Extract per-node fields from the ``properties`` sub-dict.
+                # AGE vertex shape: {"id": ..., "label": "...", "properties": {...}}
+                node_props = [obj.get("properties") or {} for obj in node_objects]
+                node_ids = tuple(str(np.get("entity_id") or "") for np in node_props)
+                node_names = tuple(str(np.get("canonical_name") or "") for np in node_props)
+                node_types = tuple(str(np.get("entity_type") or "") for np in node_props)
+
+                if not rel_types or not edge_confs:
+                    continue
+
                 raw_paths.append(
                     RawPath(
-                        node_ids=tuple(str(nid) for nid in node_ids_raw),
-                        node_names=tuple(str(nn) for nn in node_names_raw),
-                        node_types=tuple(str(nt) for nt in node_types_raw),
-                        rel_types=tuple(str(rt) for rt in rel_types_raw),
+                        node_ids=node_ids,
+                        node_names=node_names,
+                        node_types=node_types,
+                        rel_types=rel_types,
                         edge_confs=edge_confs,
                     )
                 )
