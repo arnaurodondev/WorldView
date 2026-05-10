@@ -461,6 +461,22 @@ function ArticleRow({
             {article.primary_entity_symbol}
           </button>
         )}
+
+        {/* Cluster-size chip — "+N similar" for near-duplicate corroboration.
+            WHY only cluster_size > 1: cluster_size=1 = no siblings, nothing to show.
+            WHY muted style (not primary): this is informational metadata, not
+            an actionable signal like the entity chip or narrative chips. */}
+        {article.cluster_size != null && article.cluster_size > 1 && (
+          <span
+            className={cn(
+              "shrink-0 rounded-[2px] px-1.5 py-0.5 font-mono text-[9px] tabular-nums",
+              "bg-muted/50 text-muted-foreground border border-border/30",
+            )}
+            title={`${article.cluster_size - 1} similar article${article.cluster_size - 1 !== 1 ? "s" : ""} detected`}
+          >
+            +{article.cluster_size - 1} similar
+          </span>
+        )}
       </div>
     </article>
   );

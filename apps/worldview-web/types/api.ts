@@ -607,6 +607,10 @@ export interface RankedArticle {
   //   null until PriceImpactLabellingWorker computes windows (< 25h old articles).
   sentiment: "positive" | "negative" | "neutral" | "mixed" | null;
   impact_score: number | null;            // 0.0–1.0; null until price windows computed
+  // SA-4: near-duplicate cluster size enriched by S9 gateway from content-store.
+  // cluster_size=1 → no near-duplicates; cluster_size=N → N-1 sibling articles.
+  // null when enrichment was skipped (e.g. content-store outage).
+  cluster_size: number | null;
 }
 
 /**
