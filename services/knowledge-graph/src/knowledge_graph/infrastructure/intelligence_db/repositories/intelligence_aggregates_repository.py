@@ -151,8 +151,13 @@ ORDER BY es.cnt DESC
     ) -> list[dict[str, Any]]:
         """Return a daily confidence trend over the last *days* days.
 
-        Aggregates AVG(extraction_confidence) per day from relation_evidence_raw,
-        filtered to evidence linked to relations touching entity_id.
+        SA-4 backfill (2026-05-10): switched source from relation_evidence_raw to
+        the partitioned relation_evidence table.  The raw table still stores
+        evidence_date = now() at extraction time; the partitioned table has correct
+        published_at dates after the backfill_evidence_dates.py run.
+
+        relation_evidence has relation_id directly (unlike raw, which stores the
+        triple), so the join is a single FK lookup instead of a triple-join.
 
         D-R3-001 (PLAN-0087, 2026-05-09): the previous query referenced
         `confidence_score` (does not exist) AND filtered via `relation_id IN
@@ -165,16 +170,16 @@ ORDER BY es.cnt DESC
         result = await self._session.execute(
             text("""
 WITH evidence_in_window AS (
-    SELECT rer.evidence_date, rer.extraction_confidence
-    FROM relation_evidence_raw rer
-    JOIN relations r
-      ON  r.subject_entity_id = rer.subject_entity_id
-      AND r.object_entity_id  = rer.object_entity_id
-      AND r.canonical_type    = rer.canonical_type
+    -- Use the partitioned relation_evidence table (not raw) so that
+    -- evidence_date reflects the document's published_at, not extraction time.
+    -- The backfill_evidence_dates.py script set correct dates on all 438 rows.
+    SELECT re.evidence_date, re.extraction_confidence
+    FROM relation_evidence re
+    JOIN relations r ON r.relation_id = re.relation_id
     WHERE (r.subject_entity_id = CAST(:entity_id AS uuid)
            OR r.object_entity_id = CAST(:entity_id AS uuid))
       AND r.valid_to IS NULL
-      AND rer.evidence_date >= NOW() - INTERVAL '1 day' * :days
+      AND re.evidence_date >= NOW() - INTERVAL '1 day' * :days
 )
 SELECT
     date_trunc('day', evidence_date)::date AS d,

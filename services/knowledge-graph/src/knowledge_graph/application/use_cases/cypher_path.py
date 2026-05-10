@@ -119,11 +119,13 @@ def _build_path_sql(max_hops: int, *, all_paths: bool) -> str:
     """
     fn = "allShortestPaths" if all_paths else "shortestPath"
     limit_clause = " LIMIT 5" if all_paths else ""
+    # BP-SA5-001 (2026-05-10): use lowercase ``entity`` label to match the
+    # canonical label written by AgeSyncWorker and queried by PathDiscovery.
     return (
         "SELECT nodes_col::text, edges_col::text"  # noqa: S608 — max_hops validated int; IDs via $source/$target
         " FROM ag_catalog.cypher('worldview_graph', $$"
         f" MATCH path = {fn}("
-        f"   (s:Entity {{entity_id: $source}})-[r*1..{max_hops}]->(t:Entity {{entity_id: $target}})"
+        f"   (s:entity {{entity_id: $source}})-[r*1..{max_hops}]->(t:entity {{entity_id: $target}})"
         " )"
         " WHERE ALL(rel IN relationships(path) WHERE rel.confidence >= $min_conf)"
         " RETURN [n IN nodes(path) | n] AS nodes_col,"
