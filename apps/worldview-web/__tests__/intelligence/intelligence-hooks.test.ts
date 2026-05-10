@@ -114,8 +114,13 @@ function mockPathsResponse() {
 }
 
 function mockNarrativesPage(cursor: string | null = null) {
+  // P0-9 PLAN-0088: canonical S7 NarrativeVersionListResponse uses `versions`
+  // (not `items`) and does not return a `total` (cursor pagination on a
+  // growing list). The earlier test fixture mocked the wrong shape, masking
+  // the runtime contract mismatch that crashed the Narrative-history tab.
   return {
-    items: [
+    entity_id: "00000000-0000-7000-8000-000000000001",
+    versions: [
       {
         version_id: "v1",
         narrative_text: "Apple is a technology company...",
@@ -127,7 +132,6 @@ function mockNarrativesPage(cursor: string | null = null) {
       },
     ],
     next_cursor: cursor,
-    total: 3,
   };
 }
 
@@ -244,8 +248,8 @@ describe("useEntityNarrativeHistory", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    // First page items
-    const allItems = result.current.data?.pages.flatMap((p) => p.items) ?? [];
+    // First page versions (canonical S7 schema — see fixture comment above)
+    const allItems = result.current.data?.pages.flatMap((p) => p.versions ?? []) ?? [];
     expect(allItems).toHaveLength(1);
     expect(allItems[0].version_id).toBe("v1");
 

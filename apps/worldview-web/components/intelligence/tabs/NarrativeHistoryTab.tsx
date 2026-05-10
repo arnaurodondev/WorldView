@@ -181,8 +181,11 @@ export function NarrativeHistoryTab({ entityId }: NarrativeHistoryTabProps) {
   }
 
   // Flatten paginated pages into a single array
+  // WHY `versions` (not `items`): canonical S7 NarrativeVersionListResponse
+  // serialises versions under that key. Earlier code referenced .items and
+  // crashed at runtime when the field was undefined (P0-9 PLAN-0088).
   const allVersions: NarrativeVersionPublic[] =
-    data?.pages.flatMap((page) => page.items) ?? [];
+    data?.pages.flatMap((page) => page.versions ?? []) ?? [];
 
   if (allVersions.length === 0) {
     return (
@@ -194,10 +197,11 @@ export function NarrativeHistoryTab({ entityId }: NarrativeHistoryTabProps) {
 
   return (
     <div className="h-full overflow-y-auto p-3">
-      {/* WHY total in header: lets analysts know if there are many more versions
-          beyond what's currently visible (e.g., "12 of 47 narratives loaded"). */}
+      {/* Backend does not return a total (cursor pagination on a growing list);
+          show count loaded so far + a hint that more may exist. */}
       <p className="text-[10px] font-mono text-muted-foreground mb-3">
-        {data?.pages[0]?.total ?? allVersions.length} narrative versions
+        {allVersions.length} narrative version{allVersions.length === 1 ? "" : "s"}
+        {hasNextPage ? "+" : ""}
       </p>
 
       {/* Timeline — most recent first */}
