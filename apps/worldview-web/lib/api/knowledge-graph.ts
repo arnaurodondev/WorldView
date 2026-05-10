@@ -53,10 +53,18 @@ export function createKnowledgeGraphApi(t: string | undefined) {
       // depth slider controls how many relations are returned — more relations =
       // more neighbor nodes visible = feels "deeper". True multi-hop would require
       // the Cypher traversal endpoint (feature-flagged, not in S9 currently).
-      // depth=1 → limit=15 (compact sidebar SVG, N+1 latency concern)
-      // depth=2 → limit=40 (Intelligence tab default, sigma.js WebGL)
-      // depth=3 → limit=80 (expanded view; S9 cap is 50, so request 50 safely)
-      const limitByDepth: Record<number, number> = { 1: 15, 2: 40, 3: 50 };
+      // PLAN-0088 P0-8 (2026-05-10): each slider step now actually moves the
+      // requested edge count. The previous ladder topped out at 50 and silently
+      // ignored slider values 4 and 5 (Slider min=1 max=5), so dragging the
+      // slider past 3 had no visible effect on the graph. The S9 gateway cap was
+      // also lifted from 50→200 in the same change so depth=5 can deliver up
+      // to 160 edges when the underlying KG supports it.
+      // depth=1 → limit=15  (compact sidebar SVG, N+1 latency concern)
+      // depth=2 → limit=40  (Intelligence tab default, sigma.js WebGL comfort)
+      // depth=3 → limit=80
+      // depth=4 → limit=120
+      // depth=5 → limit=160 (analyst "show me everything" extreme)
+      const limitByDepth: Record<number, number> = { 1: 15, 2: 40, 3: 80, 4: 120, 5: 160 };
       const limit = limitByDepth[depth] ?? 40;
 
       // WHY min_confidence for depth=1: sidebar SVG should show only high-quality

@@ -1981,7 +1981,7 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
 async def get_entity_graph(
     entity_id: UUID,  # WHY UUID not str: enforces 422 on malformed values before any downstream call
     request: Request,
-    limit: int = Query(default=40, ge=1, le=50),
+    limit: int = Query(default=40, ge=1, le=200),
     confidence_breakdown: bool = Query(default=False),
     focus_node: str | None = Query(default=None),
 ) -> Any:
@@ -2000,10 +2000,13 @@ async def get_entity_graph(
     The frontend now sends explicit limits (15 for sidebar depth=1, 40 for
     Intelligence tab depth=2) so the default of 40 is just a safety fallback.
 
-    WHY le=50 (not le=200 like S7 allows): S7 accepts up to 200 relations, but
-    the frontend graph renderers (SVG sidebar: 15 nodes, sigma.js full: 40 nodes)
-    have no benefit from more. Capping at 50 prevents accidental high-cost queries
-    while still leaving headroom above the frontend's 40-relation maximum.
+    WHY le=200 (PLAN-0088 P0-8, 2026-05-10 — was le=50): the previous cap of 50
+    silently truncated demo entities like AAPL whose entity neighborhood routinely
+    exceeds 50 high-confidence relations, and the FE depth slider was unable to
+    request more than that no matter what value the analyst dragged it to. Lifting
+    the gateway cap to 200 (S7's hard upper bound) lets the slider's "show more"
+    extreme actually deliver more edges. Each unit increment in the FE slider now
+    bumps `limit` linearly so the slider has visible effect at every step.
 
     WHY strip depth from params: S7 has no depth param — it silently ignores it.
     We explicitly forward only known, meaningful params to avoid confusion.
