@@ -799,8 +799,8 @@ function GraphDetailSidebar({
 
         {/* Hint text when graph is empty / still loading */}
         {nodeCount === 0 && (
-          <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
-            <Network className="h-6 w-6 text-muted-foreground/30" strokeWidth={1} />
+          <div className="flex flex-col items-center justify-center gap-2 py-4 text-center">
+            <Network className="h-5 w-5 text-muted-foreground/30" strokeWidth={1} />
             <p className="text-[11px] text-muted-foreground/60">Graph loading...</p>
           </div>
         )}

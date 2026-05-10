@@ -252,7 +252,7 @@ export function SemanticHoldingsTable({
   const allZeroQty = holdings.every((h) => Number(h.quantity) === 0);
   if (allZeroQty) {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 py-8 px-4 text-center">
+      <div className="flex flex-col items-center justify-center gap-2 py-4 px-4 text-center">
         <div className="text-[12px] font-medium text-foreground">
           No active positions reported
         </div>
