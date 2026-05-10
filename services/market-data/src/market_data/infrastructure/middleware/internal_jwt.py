@@ -181,7 +181,13 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         # (config.py F-007 guard), so dev convenience here doesn't widen
         # the prod attack surface.
         if self._skip_verification:
-            logger.critical(  # type: ignore[no-any-return]
+            # Demoted from CRITICAL → DEBUG (2026-05-10, PLAN-0088 SA-5):
+            # skip_verification=True is the expected, intentional dev/E2E path
+            # (documented in docker.env with rationale). Logging this at CRITICAL
+            # produced ~1800 CRITICAL lines per 10 min, drowning real alert signals.
+            # The startup log already records internal_jwt_skip_verification_enabled
+            # at CRITICAL once at boot, which is sufficient for ops awareness.
+            logger.debug(  # type: ignore[no-any-return]
                 "internal_jwt_unverified_decode",
                 detail="Decoding JWT WITHOUT signature verification (skip_verification=True).",
             )
