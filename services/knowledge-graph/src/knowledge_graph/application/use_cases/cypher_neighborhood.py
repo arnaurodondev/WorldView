@@ -65,10 +65,12 @@ def _build_neighborhood_sql(max_hops: int, limit: int) -> str:
     ``limit`` is a Pydantic-validated int [1, 200] — embedded as a numeric literal.
     The center entity_id is passed as ``$center_id`` (parameterized).
     """
+    # BP-SA5-001 (2026-05-10): use lowercase ``entity`` label to match the
+    # canonical label written by AgeSyncWorker and queried by PathDiscovery.
     return (
         "SELECT neighbor_id::text"  # noqa: S608 — max_hops/limit validated ints; center_id via $center_id param
         " FROM ag_catalog.cypher('worldview_graph', $$"
-        f" MATCH (center:Entity {{entity_id: $center_id}})-[r*1..{max_hops}]-(neighbor:Entity)"
+        f" MATCH (center:entity {{entity_id: $center_id}})-[r*1..{max_hops}]-(neighbor:entity)"
         " WHERE ALL(rel IN r WHERE rel.confidence >= $min_conf)"
         " RETURN DISTINCT neighbor.entity_id AS neighbor_id"
         f" LIMIT {limit}"

@@ -175,10 +175,9 @@ class TestGetConfidenceBreakdown:
         asyncio.run(repo.get_confidence_breakdown(entity_id=_ENTITY_ID))
 
         sql = _capture_sql(session)
-        assert "confidence_components" not in sql, (
-            "regression: confidence_components column was re-introduced "
-            "without the matching migration — 500 incoming"
-        )
+        assert (
+            "confidence_components" not in sql
+        ), "regression: confidence_components column was re-introduced without the matching migration — 500 incoming"
 
     def test_query_targets_relations_table_not_relation_evidence_raw(self) -> None:
         """The breakdown aggregates over `relations`, not `relation_evidence_raw`."""
@@ -374,3 +373,30 @@ class TestGetConfidenceTrend:
         bind_kwargs = session.execute.await_args.args[1]
         assert bind_kwargs["days"] == 42
         assert bind_kwargs["entity_id"] == str(_ENTITY_ID)
+
+    def test_query_uses_partitioned_table_not_raw(self) -> None:
+        """REGRESSION GUARD (SA-4 backfill 2026-05-10): confidence_trend must read
+        from `relation_evidence` (partitioned, has correct published_at dates after
+        backfill) — NOT from `relation_evidence_raw` which still stores evidence_date
+        = now() at extraction time.  Pinning this prevents a future refactor from
+        silently regressing the confidence trend chart back to a single-point line.
+        """
+        from knowledge_graph.infrastructure.intelligence_db.repositories.intelligence_aggregates_repository import (
+            IntelligenceAggregatesRepository,
+        )
+
+        session = _make_session(scalar_rows=None)
+        repo = IntelligenceAggregatesRepository(session)
+        asyncio.run(repo.get_confidence_trend(entity_id=_ENTITY_ID, days=90))
+
+        sql = _capture_sql(session)
+        # Must join via relation_id (the FK on the partitioned table), not the
+        # raw triple (subject+object+canonical_type used by relation_evidence_raw).
+        assert "FROM relation_evidence re" in sql, (
+            "regression: get_confidence_trend must read from `relation_evidence` "
+            "(partitioned), not from relation_evidence_raw"
+        )
+        assert "relation_evidence_raw" not in sql, (
+            "regression: relation_evidence_raw re-introduced in confidence_trend — "
+            "this table stores evidence_date=now() at extraction, not published_at"
+        )
