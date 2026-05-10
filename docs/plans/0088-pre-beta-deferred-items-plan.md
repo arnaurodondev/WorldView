@@ -14,6 +14,84 @@ supersedes: none
 
 ## 0. Status Log
 
+### 2026-05-10 demo-stabilization pass — all 13 Demo P0 closed
+
+All 13 Demo P0 items shipped and validated against the live local stack
+in a single orchestrated session (main + 2 worktree subagents). Final
+report: `docs/audits/2026-05-10-demo-stabilization-report.md`.
+
+**Done (commits, in order):**
+
+- `b1342e33` **P0-1, P0-4** — alert WS audience validation +
+  alert-dispatcher Postgres asyncpg pool recycle. WS upgrades now
+  succeed (101) with correct `aud=worldview-internal` +
+  `scope=alerts:stream`; wrong-audience tokens rejected with 403.
+  Tests: 447 alert unit pass.
+- `3915be23` **P0-2, P0-9, P0-12 (FE)** — AG Grid `theme="legacy"` prop
+  for v33+ legacy-CSS theming; NarrativeHistoryPage `versions` (not
+  `items`) aligned with canonical S7 schema; FundamentalSparkline
+  empty-state renders `null` instead of stray em-dash. Test fixture
+  realigned. Worldview-web rebuilt + deployed.
+- `3915be23` (backend deploy) **P0-12 (data)** — market-data container
+  rebuilt to deploy commit `55a06cd4` (sort-fix); AAPL revenue
+  timeseries now returns `[2025-09-30, 2025-12-31, 2026-03-31]` instead
+  of pre-IPO 1985 quarters.
+- *(no commit — operational)* **P0-3** — Polymarket consumer was stuck
+  at 0.6 msg/s with 48k pending lag after a 14h run. Restart raised
+  drain to 11 msg/s; offsets reset to LATEST since prediction snapshots
+  are upsert-keyed on `(market_id, snapshot_at)` — old events gain
+  nothing on replay. Lag now 0–1k steady-state.
+- `2e46c2c3` **P0-10** — Phase-A heuristic auto-titles on lazy
+  thread-create in `persist_chat.py`. Sentence-boundary truncation,
+  60-char ellipsis cap, "New Conversation" fallback only for
+  whitespace-only messages. Manual rename via PATCH still wins.
+  Tests: 26/26 chat persistence pass (6 new).
+- `1090dcef` **P0-5, P0-6, P0-11** — equity-curve catchup raised 30 →
+  252 trading days in `portfolio_snapshot_worker`; chart honestly
+  starts at 2026-03-27 since OHLCV is missing for 11 of the held ETFs
+  (audit notes the gap). `scripts/ops/backfill_watchlist_denorm.py`
+  resolved 9 NULL `watchlist_members` rows → 0 NULL. CashRow renders
+  em-dash + tooltip when broker balance unavailable; full SnapTrade
+  balance integration scoped in
+  `docs/audits/2026-05-10-demo-stabilization-cash-balance-state.md`.
+- `60642605` **P0-7, P0-8, P0-13** — root cause of template-v1 was the
+  shared `FallbackChainClient.extract` forcing JSON-mode for what is a
+  free-form prose task. New `DeepInfraNarrativeChatClient` bypasses
+  JSON mode; wired into both the scheduler and the manual trigger
+  route. Live: 0 → 80 narratives with `model_id=meta-llama/
+  Meta-Llama-3.1-8B-Instruct` (covers all 12 demo tickers). KG graph
+  cap raised 50 → 200 in S9; FE slider ladder extended to 5 stops
+  (15/40/80/120/160). AAPL has 128 relations available; previously
+  capped at 50. `scripts/ops/backfill_duplicate_clusters.py` populated
+  `duplicate_clusters` 0 → 791 rows (title-identity + minhash Jaccard
+  passes); streaming Stage C worker remains TBD.
+- `0582e3a5` **P1-19** — synthetic monitor probes corrected to canonical
+  S9 surface: `/healthz` (was `/health`), `/v1/quotes/{instrument_id}`
+  (was `/api/v1/market-data/AAPL/quote`),
+  `/v1/holdings/{portfolio_id}` (was `/api/v1/portfolio/holdings`).
+  Probes were silently 404'ing for an unknown duration.
+
+**Live evidence summary (2026-05-10 ~16:17 UTC, all from real stack):**
+- 76 containers up (only metrics-only sidecars without healthcheck;
+  all app services healthy).
+- Polymarket lag total: ~1.1k (steady state vs 48k baseline).
+- Alert-dispatcher last 5min DNS errors: 0.
+- Alert WS happy path: HTTP 101 + immediate `{"type":"ping"}`; wrong-aud
+  token: HTTP 403.
+- AAPL revenue timeseries: 2025-Q3 → 2026-Q1 (was 1985–1988).
+- Narratives: 80 LLM rows (was 0); 689 template-v1 are pre-existing
+  rows on long-tail entities.
+- AAPL relations available to FE graph: 128 (cap 200 honoured).
+- duplicate_clusters: 791 rows (was 0).
+- watchlist_members NULL ticker/instrument_id rows: 0 (was 9).
+
+**Beta blockers intentionally deferred (per user instruction):**
+Wave A (Zitadel SSO + MFA), Wave B (TDE + GDPR + PII), Wave C (PITR),
+Wave D (alerts + LLM-cost cap), F-1/F-2/G-1/G-4 frontend polish, full
+SnapTrade balance integration (P0-11 follow-up), streaming
+duplicate_clusters worker (P0-13 follow-up), OHLCV backfill for the 11
+ETFs blocking honest equity-curve history (P0-5 follow-up).
+
 ### 2026-05-10 second pass — Wave E + replay + QA
 
 Six parallel subagents shipped a substantial second batch:
