@@ -318,30 +318,32 @@ async def persist_enrichment(
     if canonical_name and embedding is not None:
         await _write_embedding(entity_id, canonical_name, embedding, emb_repo, embed_model_id)
 
-    # DEF-021 fix: the provisional entity may be either the SUBJECT or the
-    # OBJECT of a relation, not always the subject.  Using a plain assignment
-    # `subject_entity_id = :entity_id` would silently leave ~50 % of blocked
-    # relations with a null object_entity_id permanently.
+    # PLAN-0088 Wave I fix: the original DEF-021 patch referenced
+    # subject_provisional_id / object_provisional_id columns that do not exist
+    # on relation_evidence_raw — only a single provisional_queue_id column was
+    # ever shipped (see migration 0038 schema). The dual-column "DEF-021"
+    # claim was aspirational; entity_consumer._unblock_provisional_evidence()
+    # actually uses the single-column pattern. This worker now mirrors that
+    # pattern so promotion no longer crashes with UndefinedColumn at runtime.
     #
-    # The CASE pattern mirrors entity_consumer._unblock_provisional_evidence()
-    # which already had the correct dual-column logic:
-    #   subject_provisional_id / object_provisional_id columns record which
-    #   "slot" the provisional entity fills for each evidence row.  We update
-    #   only the matching slot; the other slot is left unchanged.
+    # Trade-off: when both endpoints of an evidence row are provisional, both
+    # subject_entity_id and object_entity_id are overwritten with the same
+    # canonical id. This is the same behaviour entity_consumer already
+    # produces; correcting it requires a schema extension tracked separately.
     await session.execute(
         text("""
 UPDATE relation_evidence_raw
 SET entity_provisional = false,
     subject_entity_id  = CASE
-        WHEN subject_provisional_id = :queue_id THEN :entity_id
+        WHEN provisional_queue_id = :queue_id THEN :entity_id
         ELSE subject_entity_id
     END,
     object_entity_id   = CASE
-        WHEN object_provisional_id  = :queue_id THEN :entity_id
+        WHEN provisional_queue_id = :queue_id THEN :entity_id
         ELSE object_entity_id
     END
-WHERE (subject_provisional_id = :queue_id OR object_provisional_id = :queue_id)
-  AND entity_provisional = true
+WHERE provisional_queue_id = :queue_id
+  AND entity_provisional   = true
 """),
         {"entity_id": str(entity_id), "queue_id": str(queue_id)},
     )
