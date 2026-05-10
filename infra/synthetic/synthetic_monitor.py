@@ -46,27 +46,42 @@ def _auth_headers() -> dict[str, str]:
 async def probe_api_gateway_health() -> None:
     """Check API gateway health endpoint returns 200."""
     async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(f"{API_BASE}/health")
+        # P1-19 PLAN-0088: real route is /healthz (FastAPI standard), not /health.
+        resp = await client.get(f"{API_BASE}/healthz")
         resp.raise_for_status()
         assert resp.status_code == 200
+
+
+# P1-19 PLAN-0088: probe targets corrected to canonical S9 surface.
+# - prefix is /v1, not /api/v1 (S9 mounts a single APIRouter(prefix="/v1") in proxy.py).
+# - market-data quote is /v1/quotes/{instrument_id} (UUIDv7), not /market-data/{ticker}/quote.
+# - portfolio holdings is /v1/holdings/{portfolio_id}, not /portfolio/holdings.
+# Configurable via env vars so the probe targets can be redirected per environment
+# (dev vs staging vs production) without code changes.
+SYNTHETIC_QUOTE_INSTRUMENT_ID = os.environ.get(
+    "SYNTHETIC_QUOTE_INSTRUMENT_ID",
+    # Default: AAPL canonical UUIDv7 from the seeded instruments table.
+    "01900000-0000-7000-8000-000000001001",
+)
+SYNTHETIC_PORTFOLIO_ID = os.environ.get("SYNTHETIC_PORTFOLIO_ID", "")
 
 
 async def probe_market_data_quote() -> None:
     """Check that market data quote endpoint returns a response."""
     async with httpx.AsyncClient(timeout=15.0, headers=_auth_headers()) as client:
-        resp = await client.get(f"{API_BASE}/api/v1/market-data/AAPL/quote")
-        # 200 OK or 404 (no data) are both acceptable — 5xx is the failure
+        resp = await client.get(f"{API_BASE}/v1/quotes/{SYNTHETIC_QUOTE_INSTRUMENT_ID}")
+        # 200 OK or 404 (no data) are both acceptable — 5xx is the failure.
         if resp.status_code >= 500:
             resp.raise_for_status()
 
 
 async def probe_portfolio_holdings() -> None:
     """Check that portfolio holdings endpoint returns a response."""
-    if not SYNTHETIC_JWT:
-        # Skip auth-required probes when no JWT configured
+    if not SYNTHETIC_JWT or not SYNTHETIC_PORTFOLIO_ID:
+        # Skip auth-required probes when no JWT or no demo portfolio_id configured.
         return
     async with httpx.AsyncClient(timeout=15.0, headers=_auth_headers()) as client:
-        resp = await client.get(f"{API_BASE}/api/v1/portfolio/holdings")
+        resp = await client.get(f"{API_BASE}/v1/holdings/{SYNTHETIC_PORTFOLIO_ID}")
         if resp.status_code >= 500:
             resp.raise_for_status()
 
