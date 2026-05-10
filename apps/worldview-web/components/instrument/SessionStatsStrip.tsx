@@ -87,7 +87,8 @@ function Stat({
   return (
     <span className="flex items-baseline gap-1 shrink-0">
       {/* WHY text-[10px] for label: §0.1 label typography — same as ALL column headers */}
-      <span className="text-[10px] text-muted-foreground font-sans">{label}</span>
+      {/* WHY font-mono: ADR-F-15 — all data labels use IBM Plex Mono */}
+      <span className="text-[10px] text-muted-foreground font-mono">{label}</span>
       {/* WHY font-mono tabular-nums: §0.1 data value typography — EVERY numeric value */}
       <span className={`text-[10px] font-mono tabular-nums ${valueClass}`}>{value}</span>
     </span>

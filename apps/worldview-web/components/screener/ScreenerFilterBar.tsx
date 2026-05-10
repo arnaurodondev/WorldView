@@ -159,7 +159,8 @@ export function ScreenerFilterBar({
       {/* ── Header row with result count + filter toggle ───────────────── */}
       <div className="flex h-9 items-center justify-between border-b border-border px-2">
         <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-sans">
+          {/* WHY font-mono: ADR-F-15 — section labels use IBM Plex Mono */}
+          <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
             SCREENER
           </span>
           {/*
