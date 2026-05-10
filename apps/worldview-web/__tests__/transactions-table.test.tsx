@@ -313,6 +313,82 @@ describe("TransactionsTable — totals row", () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+describe("TransactionsTable — dividend amount rendering", () => {
+  // Regression for SA-5 beta-hardening (2026-05-10):
+  // The TOTAL cell previously used `total > 0 ? formatPrice(total) : "—"`.
+  // For negative-amount dividends (tax withholdings like -$0.76) this
+  // silently showed "—" instead of the real amount, hiding the value.
+
+  it("shows positive dividend amount in the TOTAL cell", () => {
+    // A standard quarterly dividend payment — amount is positive.
+    const divTx = tx({
+      transaction_id: "div-pos",
+      type: "DIVIDEND",
+      quantity: 0,
+      price: 0,
+      amount: 7.81,
+      ticker: "AAPL",
+    });
+    render(<TransactionsTable transactions={[divTx]} />);
+    // The TOTAL cell should show the formatted amount, not "—".
+    // The value also appears in the totals-div strip, so we look for all
+    // occurrences and verify at least one is present.
+    // formatPrice(7.81) → "$7.81"
+    expect(screen.getAllByText("$7.81")).toHaveLength(2); // TOTAL cell + totals strip
+    // QTY and PRICE cells show "—" for DIVIDEND rows (no share quantity/price).
+    const row = screen.getByTestId("tx-type-div-pos").closest("tr");
+    expect(row).toBeTruthy();
+  });
+
+  it("shows negative dividend amount (withholding) in the TOTAL cell — not em-dash", () => {
+    // Tax withholding rows have a negative amount. Before this fix they
+    // rendered "—" because the `total > 0` guard failed.
+    const withholdTx = tx({
+      transaction_id: "div-neg",
+      type: "DIVIDEND",
+      quantity: 0,
+      price: 0,
+      amount: -0.76,
+      ticker: "AAPL",
+    });
+    render(<TransactionsTable transactions={[withholdTx]} />);
+    // Should show "-$0.76", not "—".
+    // formatPrice accepts negative values and renders with a leading minus.
+    // WHY getAllByText: the negative amount also feeds divIncome in the totals
+    // strip (bottom row), so the formatted text appears in both places.
+    const formatted = screen.getAllByText("-$0.76");
+    expect(formatted.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("shows em-dash in TOTAL cell when dividend amount is null (unknown)", () => {
+    // Historical rows that pre-date Alembic migration 0009 have amount=null.
+    // The row data cell should render "—", not "$0.00".
+    const nullAmountTx = tx({
+      transaction_id: "div-null",
+      type: "DIVIDEND",
+      quantity: 0,
+      price: 0,
+      amount: null,
+      ticker: "AAPL",
+    });
+    render(<TransactionsTable transactions={[nullAmountTx]} />);
+    // The row must be present (not empty-state).
+    const badge = screen.getByTestId("tx-type-div-null");
+    expect(badge).toBeInTheDocument();
+    // Find the data row's TOTAL cell (7th <td> in the row — index 6).
+    // We check the cell directly rather than querying for text to avoid the
+    // totals-strip "$0.00" confounding the assertion.
+    const row = badge.closest("tr");
+    expect(row).toBeTruthy();
+    const cells = row!.querySelectorAll("td");
+    // TOTAL is the 7th cell (index 6: DATE=0, TYPE=1, CLASS=2, TICKER=3, QTY=4, PRICE=5, TOTAL=6)
+    const totalCell = cells[6];
+    expect(totalCell?.textContent).toBe("—");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 describe("TransactionsTable — virtualisation", () => {
   it("does NOT virtualise below the 200-row threshold", () => {
     render(<TransactionsTable transactions={sampleData} />);
