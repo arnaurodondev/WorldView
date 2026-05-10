@@ -114,6 +114,10 @@ class Settings(BaseSettings):
     worker_confidence_interval_s: int = 900  # 15 min
     worker_contradiction_interval_s: int = 1800  # 30 min
     worker_summary_interval_s: int = 3600  # 60 min
+    # Worker 13B: relation_evidence_raw → relation_evidence promotion (SA-2).
+    # Runs every 5 minutes so freshly processed NLP batches are promotable
+    # within one short window.
+    worker_evidence_promote_interval_s: int = 300  # 5 min
     worker_definition_refresh_interval_s: int = 3600  # 60 min
     worker_narrative_refresh_interval_s: int = 3600  # 60 min
     worker_fundamentals_refresh_interval_s: int = 7200  # 2 h
@@ -222,6 +226,13 @@ class Settings(BaseSettings):
 
     # Admin token for DLQ endpoints (empty = no auth configured)
     admin_token: str = ""
+
+    # SummaryWorker Gemini fallback (SA-2 / PLAN-0088).
+    # When the primary extraction chain (DeepInfra → Ollama) is exhausted,
+    # SummaryWorker makes one additional attempt via Gemini 2.5 Flash Lite.
+    # "gemini" activates the fallback; "none" disables it.
+    summary_fallback_provider: str = "gemini"  # KNOWLEDGE_GRAPH_SUMMARY_FALLBACK_PROVIDER
+    summary_fallback_model_id: str = "gemini-2.5-flash-lite"  # KNOWLEDGE_GRAPH_SUMMARY_FALLBACK_MODEL_ID
 
     # Wave A-2 / DEF-022: embedding model tracking
     # Recorded alongside every relation_summaries.summary_embedding write so we

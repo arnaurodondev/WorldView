@@ -129,7 +129,7 @@ export default function SettingsPreferencesPage() {
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-3">
-            <Label htmlFor="pref-currency" className="text-sm text-foreground">
+            <Label htmlFor="pref-currency" className="text-xs text-foreground">
               Currency
             </Label>
             <Select
@@ -164,7 +164,7 @@ export default function SettingsPreferencesPage() {
         </CardHeader>
         <CardContent className="space-y-2">
           <div className="flex items-center gap-3">
-            <Label htmlFor="pref-timezone" className="text-sm text-foreground">
+            <Label htmlFor="pref-timezone" className="text-xs text-foreground">
               Timezone
             </Label>
             <Select value={timezone} onValueChange={setTimezone}>
