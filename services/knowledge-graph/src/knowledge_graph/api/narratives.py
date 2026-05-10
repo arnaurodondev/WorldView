@@ -18,6 +18,7 @@ BP-200 guard: uses set_nx() — NOT set(..., nx=True).
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -152,12 +153,38 @@ async def trigger_narrative_generation(
     _outbox_repo_class = getattr(request.app.state, "outbox_repo_class", None)
 
     settings = request.app.state.settings
+
+    # PLAN-0088 P0-7 (2026-05-10): construct a narrative chat client when a
+    # DeepInfra key is configured so the manual-trigger endpoint can produce
+    # real LLM narratives instead of falling through to template-v1. Constructed
+    # per-request because the route has no startup hook to register a singleton;
+    # AsyncOpenAI's per-instance pooling cost is negligible for a 1-per-hour
+    # rate-limited endpoint.
+    _narrative_chat_client: Any | None = None
+    try:
+        _api_key = settings.deepinfra_api_key.get_secret_value()
+    except Exception:
+        _api_key = ""
+    if _api_key:
+        from knowledge_graph.infrastructure.llm.narrative_chat import DeepInfraNarrativeChatClient
+
+        _narrative_chat_client = DeepInfraNarrativeChatClient(
+            api_key=_api_key,
+            model_id=getattr(settings, "narrative_llm_model_id", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
+            base_url=getattr(
+                settings,
+                "deepinfra_extraction_base_url",
+                "https://api.deepinfra.com/v1/openai",
+            ),
+        )
+
     generate_uc = GenerateNarrativeUseCase(
         write_session_factory=getattr(request.app.state, "write_factory", None),  # type: ignore[arg-type]
         read_session_factory=getattr(request.app.state, "read_factory", None),
         narrative_llm_model_id=getattr(settings, "narrative_llm_model_id", "template-v1"),
         narrative_repo_class=_narrative_repo_class,
         outbox_repo_class=_outbox_repo_class,
+        narrative_chat_client=_narrative_chat_client,
     )
 
     if valkey is not None:

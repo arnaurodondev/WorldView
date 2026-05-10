@@ -337,6 +337,28 @@ def build_workers(
     )
     from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import OutboxRepository as _ORepo
 
+    # PLAN-0088 P0-7 (2026-05-10): build a dedicated narrative chat client when a
+    # DeepInfra API key is available. The fallback-chain extraction client cannot
+    # serve narrative prompts because it hard-codes JSON-mode (causing hallucinated
+    # error envelopes that force the template-v1 fallback path for ~97% of entities).
+    _narrative_chat_client: Any | None = None
+    try:
+        _api_key = settings.deepinfra_api_key.get_secret_value()  # SecretStr
+    except Exception:
+        _api_key = ""
+    if _api_key:
+        from knowledge_graph.infrastructure.llm.narrative_chat import DeepInfraNarrativeChatClient
+
+        _narrative_chat_client = DeepInfraNarrativeChatClient(
+            api_key=_api_key,
+            model_id=getattr(settings, "narrative_llm_model_id", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
+            base_url=getattr(
+                settings,
+                "deepinfra_extraction_base_url",
+                "https://api.deepinfra.com/v1/openai",
+            ),
+        )
+
     _narrative_use_case = GenerateNarrativeUseCase(
         write_session_factory=write_session_factory,
         read_session_factory=_read_factory,
@@ -344,6 +366,7 @@ def build_workers(
         llm_client=llm_client,  # may be None — use case falls back to template-v1
         narrative_repo_class=_NarrRepo,
         outbox_repo_class=_ORepo,
+        narrative_chat_client=_narrative_chat_client,
     )
     workers["narrative_generation"] = NarrativeGenerationWorker(use_case=_narrative_use_case)
 
