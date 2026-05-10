@@ -1034,6 +1034,34 @@ services:
       retries: 3
       start_period: 30s
 
+  # H-5 Stage C streaming near-duplicate cluster writer (PLAN-0088).
+  # Reads content.article.stored.v1 (S5 outbox output) and writes
+  # near-duplicate pairs (Jaccard ≥ 0.65) into duplicate_clusters.
+  # Separate consumer group from content-store-consumer so it maintains
+  # its own independent offset on the stored.v1 topic.
+  content-store-dedup-consumer:
+    build:
+      context: ../..
+      dockerfile: services/content-store/Dockerfile
+    profiles: [infra, all]
+    depends_on:
+      content-store-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/content-store/configs/docker.env
+    command: ["python", "-m", "content_store.infrastructure.messaging.consumers.stored_article_dedup_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
   # ── Ollama — LLM inference (embeddings + Qwen2.5 extraction) ─────────────────
   # Serves:
   #   - BGE-large-en-v1.5  (embedding model, Block 7)

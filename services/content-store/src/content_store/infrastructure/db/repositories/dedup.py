@@ -3,19 +3,24 @@
 Uses ``INSERT ... ON CONFLICT DO NOTHING`` for idempotent inserts (BP-040).
 Duplicate hash inserts (e.g. Kafka consumer re-delivery) are silently ignored
 rather than raising ``UniqueViolationError``.
+
+Also contains ``DuplicateClusterRepository`` for Stage C (MinHash near-dup
+pair writes) and ``MinHashCorpusRepository`` for fetching recent signatures to
+compare against.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import common.ids  # type: ignore[import-untyped]
 from content_store.application.ports.repositories import DedupHashRepositoryPort
-from content_store.infrastructure.db.models import DedupHashModel
+from content_store.infrastructure.db.models import DedupHashModel, DuplicateClusterModel, MinHashSignatureModel
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -103,3 +108,94 @@ class DedupHashRepository(DedupHashRepositoryPort):
         """
         await self.insert(doc_id, "raw_sha256", raw_hash, tenant_id=tenant_id)
         await self.insert(doc_id, "normalized_sha256", normalized_hash, tenant_id=tenant_id)
+
+
+# ── Stage C: duplicate cluster persistence ────────────────────────────────────
+
+
+class DuplicateClusterRepository:
+    """Repository for writing near-duplicate pairs discovered by MinHash Stage C.
+
+    Uses ``ON CONFLICT DO NOTHING`` on the (primary_doc_id, duplicate_doc_id)
+    unique constraint so Kafka consumer re-delivery is fully idempotent.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def insert_pair(self, primary_doc_id: UUID, duplicate_doc_id: UUID, similarity: float) -> None:
+        """Insert a near-duplicate pair into ``duplicate_clusters``.
+
+        ``primary_doc_id`` is always the *lexicographically smaller* UUID so
+        the pair is stored canonically regardless of which doc was processed
+        first.  This prevents (A, B) and (B, A) from appearing as separate rows.
+
+        On conflict the existing row is kept — the similarity score of the first
+        detection is authoritative.
+        """
+        # Canonical ordering: smaller UUID is primary to prevent mirror pairs.
+        if str(primary_doc_id) > str(duplicate_doc_id):
+            primary_doc_id, duplicate_doc_id = duplicate_doc_id, primary_doc_id
+
+        stmt = (
+            pg_insert(DuplicateClusterModel)
+            .values(
+                cluster_id=common.ids.new_uuid7(),
+                primary_doc_id=primary_doc_id,
+                duplicate_doc_id=duplicate_doc_id,
+                similarity=similarity,
+                # Provide an explicit UTC timestamp so the server_default
+                # (func.now()) is NOT used — avoids DB clock drift on replays.
+                detected_at=datetime.now(tz=UTC),
+            )
+            .on_conflict_do_nothing(
+                constraint="uq_duplicate_clusters_pair",
+            )
+        )
+        await self._session.execute(stmt)
+
+
+# ── Corpus reader for MinHash near-dup candidate lookup ───────────────────────
+
+
+class MinHashCorpusRepository:
+    """Read recent MinHash signatures for pairwise Jaccard similarity checks.
+
+    Fetches ``limit`` most-recently-created signatures (excluding the one
+    belonging to ``exclude_doc_id``) so the Stage C consumer can compare the
+    new document against the recent corpus without loading the entire table.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get_recent_signatures(
+        self,
+        exclude_doc_id: UUID,
+        within_days: int = 14,
+        limit: int = 500,
+    ) -> list[tuple[UUID, list[int]]]:
+        """Return ``(doc_id, signature)`` pairs from the last *within_days* days.
+
+        Uses the ``idx_minhash_sig_created`` index (created_at DESC) for fast
+        time-window scans.  ``limit`` caps total rows to keep per-message
+        latency predictable even as the corpus grows.
+
+        Args:
+            exclude_doc_id: The doc_id of the incoming article — excluded from
+                results so we never compare a document against itself.
+            within_days: How many calendar days back to scan.  Default 14 gives
+                a 2-week recency window for news near-dup detection.
+            limit: Max rows to return.  500 rows x 128 ints ~= 250 KB per message.
+        """
+        result = await self._session.execute(
+            select(MinHashSignatureModel.doc_id, MinHashSignatureModel.signature)
+            .where(
+                MinHashSignatureModel.doc_id != exclude_doc_id,
+                # Use a raw interval expression so PostgreSQL can use the index.
+                MinHashSignatureModel.created_at >= text(f"NOW() - INTERVAL '{within_days} days'"),
+            )
+            .order_by(MinHashSignatureModel.created_at.desc())
+            .limit(limit)
+        )
+        return [(row.doc_id, row.signature) for row in result]

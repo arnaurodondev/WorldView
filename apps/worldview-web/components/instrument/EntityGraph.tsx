@@ -39,9 +39,17 @@ import forceAtlas2 from "graphology-layout-forceatlas2";
 // Without this, the canvas may not fill the container correctly on first render.
 import "@react-sigma/core/lib/style.css";
 import { useRouter } from "next/navigation";
-import { TrendingUp, Network } from "lucide-react";
+import { TrendingUp, Network, Maximize2 } from "lucide-react";
 import type { EntityGraph as EntityGraphData } from "@/types/api";
 import { Slider } from "@/components/ui/slider";
+
+// ── Dense-graph threshold ─────────────────────────────────────────────────────
+// WHY 50 edges: graphs with >50 edges (like AAPL at 128) become unreadable with
+// no filtering. Auto-applying a 30% strength floor removes the weakest-evidence
+// edges and makes the graph immediately readable on first load.
+// The user can then lower the threshold if they want to see all edges.
+const DENSE_GRAPH_EDGE_THRESHOLD = 50;
+const DENSE_GRAPH_AUTO_MIN_WEIGHT = 30; // percent
 
 // ── Node type → color map ─────────────────────────────────────────────────────
 // WHY these exact values: match the Midnight Pro palette (global.css --primary: #FFD60A).
@@ -560,6 +568,23 @@ export interface EntityGraphProps {
   ) => void;
 }
 
+// ── CameraResetButton — sigma hook to re-fit camera to the full graph ─────────
+// WHY inside SigmaContainer: useSigma is a context hook — must be a descendant.
+// Exposes a single "reset view" button that runs sigma.getCamera().animatedReset().
+function CameraResetButton() {
+  const sigma = useSigma();
+  return (
+    <button
+      onClick={() => sigma.getCamera().animatedReset()}
+      title="Reset camera to fit all nodes"
+      aria-label="Reset graph camera"
+      className="rounded-[2px] border border-border/40 p-1 text-muted-foreground transition-colors hover:border-border/70 hover:text-foreground"
+    >
+      <Maximize2 className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
 export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphProps) {
   const [nodeTooltip, setNodeTooltip] = useState<NodeTooltip | null>(null);
   const [edgeTooltip, setEdgeTooltip] = useState<EdgeTooltip | null>(null);
@@ -569,7 +594,12 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
   // WHY separate state atoms (not one object): React bails out on re-render when
   // the specific atom doesn't change — coarse-grained objects always re-render.
   const [activeRelFilter, setActiveRelFilter] = useState<RelationFilter>("all");
-  const [minWeight, setMinWeight] = useState(0);
+  // WHY lazy init for minWeight: if the graph is dense (>50 edges) auto-apply
+  // a 30% strength floor so AAPL-scale graphs are readable on first load.
+  // The analyst can always drag the slider back to 0 to see all edges.
+  const [minWeight, setMinWeight] = useState<number>(() =>
+    data.edges.length > DENSE_GRAPH_EDGE_THRESHOLD ? DENSE_GRAPH_AUTO_MIN_WEIGHT : 0
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [layout, setLayout] = useState<"force" | "hierarchical">("force");
 
@@ -665,11 +695,22 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
           className="h-7 rounded-[2px] border border-border/40 bg-card px-2 text-[11px] text-foreground placeholder:text-muted-foreground/50 focus:border-border focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
 
-        {/* ── Layout switcher ────────────────────────────────────────────────── */}
+        {/* ── Layout switcher + camera reset ─────────────────────────────────── */}
         {/* WHY two layouts: force (FA2) surfaces organic clusters (useful for
             discovering communities); hierarchical reveals org structure (useful
             for exec/ownership analysis where tier matters). */}
-        <div className="ml-auto flex gap-1">
+        {/* WHY dense-graph badge: AAPL-scale graphs (128 edges) have an auto-
+            applied 30% strength floor. The badge makes this visible so analysts
+            don't wonder why they can't see all edges by default. */}
+        <div className="ml-auto flex items-center gap-1">
+          {data.edges.length > DENSE_GRAPH_EDGE_THRESHOLD && (
+            <span
+              title={`Dense graph (${data.edges.length} edges) — strength filter auto-applied`}
+              className="rounded-[2px] bg-warning/15 px-1.5 py-0.5 font-mono text-[9px] text-warning"
+            >
+              {data.edges.length} edges
+            </span>
+          )}
           <button
             onClick={() => setLayout("force")}
             data-testid="layout-force"
@@ -764,6 +805,14 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
             searchQuery={searchQuery}
             graphData={data}
           />
+
+          {/* CameraResetButton — rendered INSIDE SigmaContainer because it uses
+              useSigma() context hook. Positioned absolute top-right within the
+              canvas so it floats over the graph without interfering with mouse
+              events (via z-20 above the hint overlay at z-10). */}
+          <div className="absolute right-2 bottom-8 z-20">
+            <CameraResetButton />
+          </div>
         </SigmaContainer>
 
         {/* Tooltips — rendered inside the container div so position:absolute
@@ -774,10 +823,17 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
         {/* Legend — bottom-left corner */}
         <GraphLegend data={data} />
 
-        {/* Controls hint — top-right corner, very small opacity text */}
-        <div className="absolute right-2 top-2 z-10 rounded-[2px] border border-border/40 bg-card/80 px-2 py-1 backdrop-blur-sm">
+        {/* Controls hint + camera reset — top-right corner */}
+        {/* WHY CameraResetButton inside SigmaContainer context is hoisted outside:
+            The button is DOM-level — we render it as a floating overlay on the canvas.
+            The camera reset logic uses useSigma() which requires SigmaContainer context.
+            We use a dedicated CameraResetButton component that renders the sigma hook
+            INSIDE the SigmaContainer above — but we place its trigger in the overlay
+            via the separate SigmaContainer child (declared above). The overlay here
+            is purely a hint label. */}
+        <div className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-[2px] border border-border/40 bg-card/80 px-2 py-1 backdrop-blur-sm">
           <span className="text-[9px] text-muted-foreground/60">
-            Scroll to zoom · Drag to pan · Click to navigate
+            Scroll · Drag · Click
           </span>
         </div>
       </div>

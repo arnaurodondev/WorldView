@@ -32,8 +32,11 @@
 "use client";
 // WHY "use client": reads context + uses query hooks.
 
+import { useMemo } from "react";
 import { useSelectedEntity } from "@/contexts/SelectedEntityContext";
 import { useEntityIntelligence } from "@/lib/api/intelligence";
+import { useApiClient } from "@/lib/api-client";
+import { useQuery } from "@tanstack/react-query";
 import { HealthScoreBadge } from "@/components/intelligence/HealthScoreBadge";
 import { ConfidenceTrendSparkline } from "@/components/intelligence/ConfidenceTrendSparkline";
 import { SourceDistributionList } from "@/components/intelligence/SourceDistributionList";
@@ -42,6 +45,7 @@ import { KeyMetricsGrid } from "@/components/intelligence/KeyMetricsGrid";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, BarChart2 } from "lucide-react";
+import type { EntityGraph } from "@/types/api";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -84,6 +88,7 @@ function SidebarSkeleton() {
 export function EntitySidebar({ entityId }: EntitySidebarProps) {
   const { selectedEntityId, setSelectedEntityId, anchorEntityId } = useSelectedEntity();
   const isShowingSelected = selectedEntityId !== anchorEntityId;
+  const gw = useApiClient();
 
   // Always fetch the anchor entity's intelligence (for fallback + quick "back")
   const { data: anchorIntel, isLoading: anchorLoading } = useEntityIntelligence(entityId);
@@ -99,6 +104,29 @@ export function EntitySidebar({ entityId }: EntitySidebarProps) {
   const displayIntel = isShowingSelected ? selectedIntel : anchorIntel;
   const isLoading = isShowingSelected ? selectedLoading : anchorLoading;
   const displayEntityId = isShowingSelected ? selectedEntityId : entityId;
+
+  // ── Top-3 relations with summaries ─────────────────────────────────────────
+  // Read from the graph query cache — GraphPanel already fetched this data.
+  // WHY depth=2 in queryKey: matches GraphPanel's default, so the cache hit is
+  // guaranteed when GraphPanel is mounted (which it always is on the intelligence page).
+  const { data: graphData } = useQuery<EntityGraph>({
+    queryKey: ["intelligence-graph", displayEntityId, 2, false],
+    queryFn: () => gw.getEntityGraph(displayEntityId, 2, "all"),
+    // WHY staleTime 60_000: matches GraphPanel's staleTime so both components
+    // share the same cache entry without any re-fetch.
+    staleTime: 60_000,
+    enabled: !!displayEntityId,
+  });
+
+  // Top-3 relations sorted by confidence (weight), filtered to edges that include
+  // the display entity, with summaries if available.
+  const topRelations = useMemo(() => {
+    if (!graphData?.edges) return [];
+    return [...graphData.edges]
+      .filter((e) => e.source === displayEntityId || e.target === displayEntityId)
+      .sort((a, b) => b.weight - a.weight)
+      .slice(0, 3);
+  }, [graphData, displayEntityId]);
 
   if (isLoading) {
     return (
@@ -264,6 +292,65 @@ export function EntitySidebar({ entityId }: EntitySidebarProps) {
               <SourceDistributionList
                 distribution={displayIntel.confidence_breakdown.source_distribution}
               />
+            </div>
+          )}
+
+          {/* ── Top-3 relations with summaries ───────────────────────────── */}
+          {/* WHY top-3 (not all): the sidebar column is narrow (~200px). Showing
+              only the 3 highest-confidence relations keeps the section scannable.
+              The full relations list is in the IntelligencePanel Relations tab.
+              WHY show when empty: once SummaryWorker runs, summaries will appear.
+              Until then, we still show the relation type + confidence to surface
+              "what does the KG know about this entity" without needing summaries. */}
+          {topRelations.length > 0 && (
+            <div>
+              <SectionHeader title="Top Relations" />
+              <div className="space-y-1.5">
+                {topRelations.map((edge) => {
+                  // Determine the "other" entity in the relation
+                  const otherEntityId = edge.source === displayEntityId ? edge.target : edge.source;
+                  // Find the neighbor label from the graph nodes
+                  const neighborNode = graphData?.nodes.find((n) => n.id === otherEntityId);
+                  const neighborLabel = neighborNode?.label ?? otherEntityId.slice(0, 8) + "…";
+                  // Pretty-print the relation label (CEO_OF → ceo of)
+                  const relLabel = edge.label.replace(/_/g, " ").toLowerCase();
+                  const confidencePct = Math.round(edge.weight * 100);
+
+                  return (
+                    <div
+                      key={edge.id}
+                      className="rounded-[2px] border border-border/30 bg-muted/20 px-2 py-1.5"
+                    >
+                      {/* Relation header: type + confidence badge */}
+                      <div className="flex items-center justify-between gap-1 mb-0.5">
+                        <span className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground truncate">
+                          {relLabel}
+                        </span>
+                        <span
+                          className={[
+                            "shrink-0 font-mono text-[9px] tabular-nums rounded-[2px] px-1 py-0.5",
+                            edge.weight >= 0.7
+                              ? "bg-positive/15 text-positive"
+                              : edge.weight >= 0.4
+                                ? "bg-warning/15 text-warning"
+                                : "bg-muted text-muted-foreground",
+                          ].join(" ")}
+                        >
+                          {confidencePct}%
+                        </span>
+                      </div>
+                      {/* Neighbor entity name */}
+                      <p className="text-[10px] text-foreground/90 truncate">{neighborLabel}</p>
+                      {/* LLM summary when available */}
+                      {edge.relation_summary && (
+                        <p className="mt-0.5 text-[9px] leading-relaxed text-muted-foreground line-clamp-2">
+                          {edge.relation_summary}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
