@@ -24,6 +24,38 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
 
+# P0-10 PLAN-0088 — Phase-A heuristic auto-title.
+# WHY heuristic over LLM: first-message auto-titling needs to be deterministic
+# and zero-latency. The chat sidebar must show a title the moment the user
+# hits Enter, before any model call returns. An LLM-refined title can be
+# computed asynchronously in a later phase if desired.
+_AUTO_TITLE_MAX_CHARS = 60
+_AUTO_TITLE_FALLBACK = "New Conversation"
+
+
+def _heuristic_title_from_user_message(user_message: str) -> str:
+    """Derive a stable thread title from the first user message.
+
+    Rules:
+      - strip leading/trailing whitespace;
+      - collapse internal whitespace runs to a single space;
+      - truncate at the first sentence boundary if it falls within the limit;
+      - otherwise truncate at the limit and add a single ellipsis.
+    Returns the fallback if the message is empty or whitespace-only.
+    """
+    cleaned = " ".join((user_message or "").split()).strip()
+    if not cleaned:
+        return _AUTO_TITLE_FALLBACK
+    # Try a sentence boundary first — yields nicer titles on questions.
+    for terminator in ("? ", "! ", ". "):
+        idx = cleaned.find(terminator)
+        if 0 < idx <= _AUTO_TITLE_MAX_CHARS:
+            return cleaned[: idx + 1].strip()
+    if len(cleaned) <= _AUTO_TITLE_MAX_CHARS:
+        return cleaned
+    return cleaned[: _AUTO_TITLE_MAX_CHARS - 1].rstrip() + "…"
+
+
 @dataclass
 class AssistantResponse:
     """Structured output from a completed chat pipeline run."""
@@ -90,11 +122,18 @@ class ChatPersistenceUseCase:
             if existing is None:
                 from rag_chat.domain.entities.conversation import ConversationThread
 
+                # P0-10 PLAN-0088 — derive a Phase-A heuristic title from the
+                # first user message so the sidebar never shows
+                # "New Conversation" for an actively-used thread. Manual
+                # rename via PATCH /v1/threads/{id} still wins because that
+                # path runs after this lazy-create.
+                auto_title = _heuristic_title_from_user_message(user_message)
+
                 thread = ConversationThread(
                     thread_id=thread_id,
                     tenant_id=tenant_id,
                     user_id=user_id,
-                    title=None,
+                    title=auto_title,
                     entity_ids=(),
                     created_at=now,
                     updated_at=now,
