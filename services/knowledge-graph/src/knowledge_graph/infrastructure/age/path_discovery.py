@@ -89,6 +89,12 @@ async def _setup_age_session(session: AsyncSession) -> None:
 
 # The Cypher pattern ``*2..5`` is a static integer range literal — safe to embed.
 # Entity IDs are passed via the ``$id`` Cypher parameter (never f-strung in).
+#
+# BP-442 (2026-05-10): ``end`` is a reserved keyword in Apache AGE / PostgreSQL.
+# Using ``end`` as a node alias causes PostgresSyntaxError every run, which was
+# preventing the path-insight-worker from computing ANY paths and causing
+# repeated fatal restarts (6 restarts visible in docker inspect).
+# Fix: renamed the destination node alias from ``end`` → ``tgt`` throughout.
 _CYPHER_FIND_PATHS = (
     "SELECT "  # noqa: S608 — only static int literals (*2..5, LIMIT 200) embedded; entity_id is :params JSON
     "  edges_col::text, "
@@ -97,8 +103,8 @@ _CYPHER_FIND_PATHS = (
     "  node_ids_col::text, "
     "  node_names_col::text "
     "FROM ag_catalog.cypher('worldview_graph', $$"
-    "  MATCH p=(start:entity {entity_id: $id})-[*2..5]-(end:entity)"
-    "  WHERE id(start) <> id(end)"
+    "  MATCH p=(start:entity {entity_id: $id})-[*2..5]-(tgt:entity)"
+    "  WHERE id(start) <> id(tgt)"
     "  RETURN"
     "    [rel IN relationships(p) | rel.confidence]      AS edges_col,"
     "    [n   IN nodes(p)         | n.entity_type]       AS node_types_col,"

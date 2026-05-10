@@ -114,6 +114,22 @@ class TestPathDiscovery:
         # Malformed row is skipped, valid row returns a path
         assert len(paths) == 1
 
+    def test_cypher_query_does_not_use_end_as_node_alias(self) -> None:
+        """BP-442: 'end' is a reserved keyword in Apache AGE / PostgreSQL.
+        Using it as a Cypher node alias causes PostgresSyntaxError on every run.
+        The destination node must be aliased as 'tgt' (or any non-reserved name).
+        """
+        from knowledge_graph.infrastructure.age.path_discovery import _CYPHER_FIND_PATHS
+
+        # The Cypher pattern must not use 'end:entity' (reserved keyword).
+        assert (
+            "end:entity" not in _CYPHER_FIND_PATHS
+        ), "BP-442: 'end' is a reserved AGE/Postgres keyword — use 'tgt' instead"
+        # The fix: destination node alias should be 'tgt'.
+        assert (
+            "tgt:entity" in _CYPHER_FIND_PATHS
+        ), "Destination node alias must be 'tgt' (not 'end') in the Cypher pattern"
+
     def test_valid_row_returns_raw_path_with_correct_hop_count(self) -> None:
         """A valid 2-hop path row maps to a RawPath with hop_count=2."""
         import json

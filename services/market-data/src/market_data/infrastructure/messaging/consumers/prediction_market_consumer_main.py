@@ -62,6 +62,16 @@ async def main() -> None:
             bootstrap_servers=settings.kafka_bootstrap_servers,
             group_id="market-data-prediction-markets",
             topics=["market.prediction.v1"],
+            # WHY latest: Polymarket snapshots are upsert-keyed on (market_id,
+            # snapshot_at). Replaying the full 60k+ history on restart doesn't
+            # add durable state (duplicate events return is_new=False from
+            # ingestion_events.create_if_not_exists and are discarded). Setting
+            # latest ensures a consumer-restart doesn't accumulate lag from
+            # replaying historical messages we've already materialised.
+            # Operational note: this only applies when the consumer group has NO
+            # committed offset (fresh start). Normal restarts resume from the
+            # committed offset regardless of this setting.
+            auto_offset_reset="latest",
         ),
     )
 
