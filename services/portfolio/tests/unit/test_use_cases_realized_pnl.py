@@ -635,3 +635,66 @@ class TestGetRealizedPnLUseCase:
         get_spy.assert_not_called()
         # Sanity-check the use case ran end-to-end.
         assert result.total_realized > 0
+
+
+class TestGetRealizedPnLNegativeQuantitySell:
+    """Regression: SnapTrade-sourced SELLs land in the DB with NEGATIVE
+    ``quantity`` (the broker's ``UniversalActivity.units`` is signed and the
+    sync worker passes it through without ``abs()``). The original FIFO walker
+    rejected ``tx.quantity <= 0`` and silently skipped every SELL, producing
+    ``total_realized = 0`` for every brokerage-synced portfolio (audit
+    2026-05-09 — 80/80 SELLs in the live demo portfolio dropped). The fix
+    normalises quantity via ``abs()``; this test pins the behaviour so the
+    contract never silently regresses.
+    """
+
+    async def test_negative_quantity_sell_matches_buy_lot(self) -> None:
+        """A SELL stored with negative qty realises the same P&L as a positive one."""
+        uow = FakeUnitOfWork()
+        owner = uuid4()
+        tenant = uuid4()
+        p = _make_portfolio(owner_id=owner, tenant_id=tenant)
+        await uow.portfolios.save(p)
+        inst = _make_instrument()
+        await uow.instruments.upsert(inst)
+
+        # BUY 10 @ 100, then SELL with NEGATIVE 5 (broker convention) @ 120.
+        # Expected realised = 5 * (120 - 100) = 100.
+        await uow.transactions.save(
+            _tx(
+                portfolio_id=p.id,
+                tenant_id=tenant,
+                instrument_id=inst.id,
+                ttype=TransactionType.BUY,
+                qty="10",
+                price="100",
+                executed_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+        )
+        await uow.transactions.save(
+            _tx(
+                portfolio_id=p.id,
+                tenant_id=tenant,
+                instrument_id=inst.id,
+                ttype=TransactionType.SELL,
+                qty="-5",  # NEGATIVE quantity — broker-truth shape.
+                price="120",
+                executed_at=datetime(2026, 3, 1, tzinfo=UTC),
+            ),
+        )
+
+        result = await GetRealizedPnLUseCase().execute(
+            GetRealizedPnLQuery(
+                portfolio_id=p.id,
+                owner_id=owner,
+                tenant_id=tenant,
+                from_date=datetime(2026, 1, 1, tzinfo=UTC).date(),
+                to_date=datetime(2026, 12, 31, tzinfo=UTC).date(),
+            ),
+            uow,
+        )
+        # Pre-fix: this was Decimal(0) and count=0. Post-fix: 100 / count=1.
+        assert result.total_realized == Decimal("100")
+        assert result.count == 1
+        assert result.realized_short_term == Decimal("100")
+        assert result.realized_long_term == Decimal("0")
