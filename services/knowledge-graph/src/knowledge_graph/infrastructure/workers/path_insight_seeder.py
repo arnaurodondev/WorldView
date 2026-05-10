@@ -68,10 +68,20 @@ class PathInsightSeeder:
             # Step 1: find hub entity IDs (> _HUB_MIN_RELATIONS outgoing relations)
             # that do NOT already have an active pending/running job AND do NOT
             # have fresh insights computed within the last _FRESHNESS_HOURS hours.
+            #
+            # BP-SA1-002: path_insight_jobs.entity_id has a FK constraint to
+            # canonical_entities.  relations.subject_entity_id may reference
+            # entities that were never promoted to canonical_entities (provisional
+            # enrichment, deleted entities, etc.), causing IntegrityError on INSERT.
+            # Filter to only canonical entities to prevent FK violations.
             hub_result = await session.execute(
                 text("""
 SELECT r.subject_entity_id AS entity_id
 FROM relations r
+WHERE EXISTS (
+    SELECT 1 FROM canonical_entities ce
+    WHERE ce.entity_id = r.subject_entity_id
+)
 GROUP BY r.subject_entity_id
 HAVING COUNT(*) > :min_relations
 """),
