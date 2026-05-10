@@ -337,7 +337,10 @@ LIMIT 5
             {
                 "relation_id": str(row[0]),
                 "canonical_type": str(row[1]),
-                "confidence": float(row[2]),
+                # BP-SA1-001: relations.confidence may be NULL before ConfidenceWorker
+                # has processed the first evidence batch.  Guard with 'or 0.0' so
+                # float() never receives None (would raise TypeError).
+                "confidence": float(row[2] or 0.0),
                 "evidence_count": int(row[3]),
                 "latest_evidence_at": row[4].isoformat() if row[4] else None,
                 "object_name": str(row[5]) if row[5] else "",
@@ -345,7 +348,11 @@ LIMIT 5
             }
             for row in relation_rows
         ]
-        contradictions = [{"canonical_type": str(row[0]), "confidence": float(row[1])} for row in contra_rows]
+        contradictions = [
+            # BP-SA1-001: same NULL guard for contra_rows confidence column.
+            {"canonical_type": str(row[0]), "confidence": float(row[1] or 0.0)}
+            for row in contra_rows
+        ]
 
         return {
             "entity": {
