@@ -727,12 +727,16 @@ ON CONFLICT DO NOTHING
             return None
 
     async def _resolve_instrument_id(self, http: httpx.AsyncClient, ticker: str) -> UUID | None:
-        """Resolve ticker → market-data instrument_id via /api/v1/instruments/symbol/{ticker}.
+        """Resolve ticker → market-data instrument_id via /api/v1/instruments/lookup?symbol=.
 
         KG entity_id ≠ market-data instrument_id — must look up by symbol before fetching data.
         Returns None if the ticker is not found in market-data.
+
+        SA-3 fix (2026-05-10): the endpoint is a query-param lookup, not a path-param route.
+        Old (broken):  /api/v1/instruments/symbol/{ticker}  → 404 always
+        New (correct): /api/v1/instruments/lookup?symbol={ticker}
         """
-        data = await self._fetch_json(http, f"{self._market_data_url}/api/v1/instruments/symbol/{ticker}")
+        data = await self._fetch_json(http, f"{self._market_data_url}/api/v1/instruments/lookup?symbol={ticker}")
         if data is None:
             return None
         try:
