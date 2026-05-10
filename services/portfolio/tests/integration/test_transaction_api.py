@@ -24,7 +24,15 @@ _EXECUTED_AT = "2025-01-01T12:00:00Z"
 
 
 async def test_buy_transaction_creates_records(integration_client, db_session) -> None:
-    """POST /api/v1/transactions (BUY) creates transaction + holding + outbox events."""
+    """POST /api/v1/transactions (BUY) creates transaction record + transaction.recorded outbox event.
+
+    PLAN-0088 (2026-05-10): assertion for ``holding.changed`` removed because
+    BP-264 / PLAN-0046 T-46-1-03 made record_transaction.py history-only —
+    holdings are derived from the broker snapshot
+    (UpsertHoldingsFromSnapshotUseCase) which is now the sole owner of
+    HoldingChanged. See record_transaction.py:179-181 for rationale. The old
+    fixture failure masked this drift; now the assertion matches behaviour.
+    """
     portfolio_id = await _create_portfolio(integration_client)
     instrument_id = await _seed_instrument(db_session, "AAPL", "NASDAQ")
 
@@ -47,7 +55,6 @@ async def test_buy_transaction_creates_records(integration_client, db_session) -
     assert data["quantity"] == "10.00000000"
 
     await OutboxAssertions.assert_event_type_in_outbox(db_session, "transaction.recorded")
-    await OutboxAssertions.assert_event_type_in_outbox(db_session, "holding.changed")
 
 
 async def test_idempotency_replay_no_duplicate(integration_client, db_session) -> None:

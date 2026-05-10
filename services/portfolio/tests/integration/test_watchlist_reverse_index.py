@@ -38,10 +38,13 @@ async def cache_client(postgres_container: str):  # type: ignore[no-untyped-def]
     """
     import os
 
-    from portfolio.api.dependencies import get_uow, get_watchlist_cache
+    from portfolio.api.dependencies import get_read_uow, get_uow, get_watchlist_cache
     from portfolio.infrastructure.db.models.tenant import TenantModel
     from portfolio.infrastructure.db.models.user import UserModel
-    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
+    from portfolio.infrastructure.db.unit_of_work import (
+        SqlAlchemyReadOnlyUnitOfWork,
+        SqlAlchemyUnitOfWork,
+    )
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
 
@@ -67,15 +70,23 @@ async def cache_client(postgres_container: str):  # type: ignore[no-untyped-def]
         async with SqlAlchemyUnitOfWork(session_factory) as uow:
             yield uow
 
+    # PLAN-0088: see services/portfolio/tests/conftest.py — same R27 fix.
+    async def _test_read_uow() -> AsyncGenerator:
+        async with SqlAlchemyReadOnlyUnitOfWork(session_factory) as uow:
+            yield uow
+
     cache = _make_cache_with_fakeredis()
 
     # Skip RS256 verification — no JWKS endpoint in integration test environment
     os.environ["PORTFOLIO_INTERNAL_JWT_SKIP_VERIFICATION"] = "true"
     app = create_app()
     app.dependency_overrides[get_uow] = _test_uow
+    app.dependency_overrides[get_read_uow] = _test_read_uow
     app.dependency_overrides[get_watchlist_cache] = lambda: cache
     app.state.session_factory = session_factory
     app.state.engine = engine
+    app.state.write_factory = session_factory
+    app.state.read_factory = session_factory
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test", headers=_INTERNAL_HEADERS) as ac:
