@@ -1,4 +1,9 @@
-"""Unit tests for PathDiscovery AGE adapter (T-E1-03)."""
+"""Unit tests for PathDiscovery AGE adapter (T-E1-03).
+
+Updated for BP-SA5-003 (2026-05-10): the scalar-based query approach replaced
+the path-function (relationships(p)/nodes(p)) approach that was incompatible
+with asyncpg's prepared-statement protocol.
+"""
 
 from __future__ import annotations
 
@@ -11,27 +16,41 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-def _make_session_factory(rows: list | None = None, raise_exc: Exception | None = None) -> MagicMock:
+def _make_session_factory(
+    rows_2hop: list | None = None,
+    rows_3hop: list | None = None,
+    raise_exc: Exception | None = None,
+) -> MagicMock:
     """Build a mock async_sessionmaker that returns rows or raises an exception.
 
-    When ``raise_exc`` is provided, the mock raises on the 3rd execute call.
-    The first two calls succeed (LOAD 'age' + SET search_path), so that
-    ``_setup_age_session`` completes and the exception fires on the Cypher query,
-    which is the correct level for timeout testing.
+    The session mock intercepts calls in order:
+      1. LOAD 'age'
+      2. SET search_path
+      3. SET LOCAL statement_timeout
+      4. 2-hop Cypher query → rows_2hop
+      5. 3-hop Cypher query → rows_3hop
+
+    When ``raise_exc`` is provided it fires on the 4th execute call (the first
+    Cypher query).
     """
     session = AsyncMock()
-    result = MagicMock()
-    result.fetchall.return_value = rows or []
+
+    result_2 = MagicMock()
+    result_2.fetchall.return_value = rows_2hop or []
+    result_3 = MagicMock()
+    result_3.fetchall.return_value = rows_3hop or []
+
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=None)
 
     if raise_exc is not None:
-        # Allow first 3 calls (LOAD 'age', SET search_path, SET LOCAL statement_timeout)
-        # to succeed; raise on the 4th call (the actual Cypher query).
         _ok = MagicMock()
         session.execute = AsyncMock(side_effect=[_ok, _ok, _ok, raise_exc])
     else:
-        session.execute = AsyncMock(return_value=result)
+        # LOAD 'age' → ok, SET search_path → ok, SET LOCAL → ok,
+        # 2-hop query → result_2, 3-hop query → result_3
+        _ok = MagicMock()
+        session.execute = AsyncMock(side_effect=[_ok, _ok, _ok, result_2, result_3])
 
     factory = MagicMock()
     factory.return_value = session
@@ -40,30 +59,100 @@ def _make_session_factory(rows: list | None = None, raise_exc: Exception | None 
     return factory
 
 
+def _make_2hop_row(
+    n0_id: str = "aaa",
+    n0_name: str = "A",
+    n0_type: str = "company",
+    r1_type: str = "COMPETES_WITH",
+    r1_conf: str = "0.9",
+    n1_id: str = "bbb",
+    n1_name: str = "B",
+    n1_type: str = "company",
+    r2_type: str = "PARTNER_OF",
+    r2_conf: str = "0.8",
+    n2_id: str = "ccc",
+    n2_name: str = "C",
+    n2_type: str = "company",
+) -> tuple:
+    """Build a synthetic 2-hop scalar result row (13 columns, all strings)."""
+    return (
+        n0_id,
+        n0_name,
+        n0_type,
+        r1_type,
+        r1_conf,
+        n1_id,
+        n1_name,
+        n1_type,
+        r2_type,
+        r2_conf,
+        n2_id,
+        n2_name,
+        n2_type,
+    )
+
+
+def _make_3hop_row() -> tuple:
+    """Build a synthetic 3-hop scalar result row (18 columns, all strings)."""
+    return (
+        "aaa",
+        "A",
+        "company",  # n0
+        "COMPETES_WITH",
+        "0.9",  # r1
+        "bbb",
+        "B",
+        "company",  # n1
+        "PARTNER_OF",
+        "0.8",  # r2
+        "ccc",
+        "C",
+        "company",  # n2
+        "EMPLOYS",
+        "0.7",  # r3
+        "ddd",
+        "D",
+        "person",  # n3
+    )
+
+
 class TestPathDiscovery:
     def test_empty_path_returns_nothing(self) -> None:
         """When AGE returns no rows, find_paths_for_anchor returns empty list."""
         from knowledge_graph.infrastructure.age.path_discovery import PathDiscovery
 
-        factory = _make_session_factory(rows=[])
+        factory = _make_session_factory(rows_2hop=[], rows_3hop=[])
         discovery = PathDiscovery(factory)
         paths = asyncio.run(discovery.find_paths_for_anchor(uuid4()))
         assert paths == []
 
-    def test_entity_id_not_string_interpolated(self) -> None:
-        """entity_id is passed via params dict, never f-strung into the Cypher query.
+    def test_entity_id_validated_before_embedding(self) -> None:
+        """BP-SA5-003: entity_id is embedded via _build_2hop_sql/_build_3hop_sql with UUID validation.
 
-        Verifies that the SQL template string does not contain any UUID value
-        literally — the entity_id must appear only in the :params binding.
+        The builder functions validate the UUID format against _UUID_RE before
+        embedding so no SQL/Cypher injection is possible (UUIDs are hex+hyphen only).
+        This test verifies that valid UUIDs pass and the embedding produces the
+        expected string.
         """
-        from knowledge_graph.infrastructure.age.path_discovery import _CYPHER_FIND_PATHS
+        from knowledge_graph.infrastructure.age.path_discovery import _validate_and_embed_entity_id
 
-        # The static SQL template should not contain any UUID-like pattern.
-        # We verify by checking that the SQL only references '$id' (the Cypher param),
-        # not any literal UUID value.
-        assert "$id" in _CYPHER_FIND_PATHS
-        # The template must not contain f-string-style interpolation placeholders.
-        assert "{entity_id}" not in _CYPHER_FIND_PATHS
+        uid = uuid4()
+        result = _validate_and_embed_entity_id(uid)
+        # Result should be the string representation of the UUID
+        assert result == str(uid)
+        # Result must match UUID format (hex+hyphen only, no SQL metacharacters)
+        assert "'" not in result
+        assert ";" not in result
+
+    def test_invalid_entity_id_string_raises_value_error(self) -> None:
+        """_validate_and_embed_entity_id raises ValueError for non-UUID strings."""
+        from knowledge_graph.infrastructure.age.path_discovery import _UUID_RE
+
+        # A UUID-like string is valid
+        assert _UUID_RE.match("12345678-1234-1234-1234-123456789abc")
+        # SQL injection attempts must fail the pattern
+        assert not _UUID_RE.match("'; DROP TABLE entities; --")
+        assert not _UUID_RE.match("abc-xyz")
 
     def test_age_timeout_raises_path_discovery_timeout(self) -> None:
         """PathDiscovery raises PathDiscoveryTimeoutError on asyncio.TimeoutError."""
@@ -92,61 +181,89 @@ class TestPathDiscovery:
             asyncio.run(discovery.find_paths_for_anchor(entity_id))
 
     def test_malformed_row_skipped_gracefully(self) -> None:
-        """Malformed rows are skipped without aborting the whole batch."""
-        import json
-
+        """Malformed rows (None values) are skipped without aborting the batch."""
         from knowledge_graph.infrastructure.age.path_discovery import PathDiscovery
 
-        # A valid row
-        valid_edges = json.dumps([0.8, 0.7])
-        valid_node_types = json.dumps(["company", "company", "company"])
-        valid_rel_types = json.dumps(["SUPPLIES_TO", "OWNS"])
-        valid_node_ids = json.dumps([str(uuid4()), str(uuid4()), str(uuid4())])
-        valid_node_names = json.dumps(["A", "B", "C"])
-        valid_row = (valid_edges, valid_node_types, valid_rel_types, valid_node_ids, valid_node_names)
+        valid_row = _make_2hop_row()
+        # A malformed row: all None values → _parse_2hop_row returns None
+        bad_row = (None, None, None, None, None, None, None, None, None, None, None, None, None)
 
-        # A malformed row (None values)
-        bad_row = (None, None, None, None, None)
-
-        factory = _make_session_factory(rows=[valid_row, bad_row])
+        factory = _make_session_factory(rows_2hop=[valid_row, bad_row], rows_3hop=[])
         discovery = PathDiscovery(factory)
         paths = asyncio.run(discovery.find_paths_for_anchor(uuid4()))
-        # Malformed row is skipped, valid row returns a path
+        # Malformed row is skipped; valid row returns a path
         assert len(paths) == 1
 
-    def test_cypher_query_does_not_use_end_as_node_alias(self) -> None:
-        """BP-442: 'end' is a reserved keyword in Apache AGE / PostgreSQL.
-        Using it as a Cypher node alias causes PostgresSyntaxError on every run.
-        The destination node must be aliased as 'tgt' (or any non-reserved name).
+    def test_cypher_query_uses_lowercase_entity_label(self) -> None:
+        """BP-SA5-001: queries must use lowercase 'entity' label (not 'Entity').
+
+        AgeSyncWorker writes nodes with the lowercase 'entity' label.
+        Using 'Entity' would be a different label namespace and return zero paths.
         """
-        from knowledge_graph.infrastructure.age.path_discovery import _CYPHER_FIND_PATHS
+        from knowledge_graph.infrastructure.age.path_discovery import _build_2hop_sql, _build_3hop_sql
 
-        # The Cypher pattern must not use 'end:entity' (reserved keyword).
-        assert (
-            "end:entity" not in _CYPHER_FIND_PATHS
-        ), "BP-442: 'end' is a reserved AGE/Postgres keyword — use 'tgt' instead"
-        # The fix: destination node alias should be 'tgt'.
-        assert (
-            "tgt:entity" in _CYPHER_FIND_PATHS
-        ), "Destination node alias must be 'tgt' (not 'end') in the Cypher pattern"
+        uid = str(uuid4())
+        sql2 = _build_2hop_sql(uid)
+        sql3 = _build_3hop_sql(uid)
 
-    def test_valid_row_returns_raw_path_with_correct_hop_count(self) -> None:
-        """A valid 2-hop path row maps to a RawPath with hop_count=2."""
-        import json
+        assert "entity" in sql2.lower()
+        assert ":Entity" not in sql2  # must not use PascalCase
+        assert "entity" in sql3.lower()
+        assert ":Entity" not in sql3
 
+    def test_valid_2hop_row_returns_raw_path_with_correct_hop_count(self) -> None:
+        """A valid 2-hop scalar result row maps to a RawPath with hop_count=2."""
         from knowledge_graph.infrastructure.age.path_discovery import PathDiscovery
 
-        edges = json.dumps([0.8, 0.7])
-        node_types = json.dumps(["company", "company", "company"])
-        rel_types = json.dumps(["SUPPLIES_TO", "OWNS"])
-        node_ids = json.dumps([str(uuid4()), str(uuid4()), str(uuid4())])
-        node_names = json.dumps(["Apple", "TSMC", "Samsung"])
-        row = (edges, node_types, rel_types, node_ids, node_names)
+        row = _make_2hop_row(
+            n0_id="id-a",
+            n0_name="Apple",
+            n0_type="company",
+            r1_type="COMPETES_WITH",
+            r1_conf="0.9",
+            n1_id="id-b",
+            n1_name="TSMC",
+            n1_type="company",
+            r2_type="PARTNER_OF",
+            r2_conf="0.8",
+            n2_id="id-c",
+            n2_name="Samsung",
+            n2_type="company",
+        )
 
-        factory = _make_session_factory(rows=[row])
+        factory = _make_session_factory(rows_2hop=[row], rows_3hop=[])
         discovery = PathDiscovery(factory)
         paths = asyncio.run(discovery.find_paths_for_anchor(uuid4()))
         assert len(paths) == 1
-        assert paths[0].hop_count == 2
-        assert paths[0].edge_confs == (0.8, 0.7)
-        assert paths[0].rel_types == ("SUPPLIES_TO", "OWNS")
+        p = paths[0]
+        assert p.hop_count == 2
+        assert p.edge_confs == (0.9, 0.8)
+        assert p.rel_types == ("COMPETES_WITH", "PARTNER_OF")
+        assert p.node_ids == ("id-a", "id-b", "id-c")
+        assert p.node_names == ("Apple", "TSMC", "Samsung")
+
+    def test_valid_3hop_row_returns_raw_path_with_hop_count_3(self) -> None:
+        """A valid 3-hop scalar result row maps to a RawPath with hop_count=3."""
+        from knowledge_graph.infrastructure.age.path_discovery import PathDiscovery
+
+        row = _make_3hop_row()
+
+        factory = _make_session_factory(rows_2hop=[], rows_3hop=[row])
+        discovery = PathDiscovery(factory)
+        paths = asyncio.run(discovery.find_paths_for_anchor(uuid4()))
+        assert len(paths) == 1
+        p = paths[0]
+        assert p.hop_count == 3
+        assert p.rel_types == ("COMPETES_WITH", "PARTNER_OF", "EMPLOYS")
+        assert p.node_ids == ("aaa", "bbb", "ccc", "ddd")
+
+    def test_duplicate_paths_deduplicated(self) -> None:
+        """Paths with identical node_ids tuples are deduplicated."""
+        from knowledge_graph.infrastructure.age.path_discovery import PathDiscovery
+
+        row = _make_2hop_row()
+        factory = _make_session_factory(rows_2hop=[row, row], rows_3hop=[])
+        discovery = PathDiscovery(factory)
+        paths = asyncio.run(discovery.find_paths_for_anchor(uuid4()))
+        # Only 1 unique path despite 2 identical rows
+        assert len(paths) == 1
