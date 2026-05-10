@@ -82,10 +82,17 @@ export function StaleBadge({ status, staleReason, dataAsOf }: StaleBadgeProps) {
 
   // Tooltip text: prefer stale_reason from backend, fall back to dataAsOf,
   // then a generic explanation.
+  // POLISH PASS 2026-05-09: Invalid-Date guard. dataAsOf occasionally arrives as
+  // an empty string from S3 when the OHLCV adapter fills NULL into the response.
+  // `new Date("").toLocaleString(...)` is the literal string "Invalid Date" — we
+  // would have whispered that into the tooltip. Validate with `getTime()` before
+  // formatting and fall through to the generic copy.
+  const dataAsOfDate = dataAsOf ? new Date(dataAsOf) : null;
+  const dataAsOfValid = dataAsOfDate && !Number.isNaN(dataAsOfDate.getTime());
   const tooltipContent = staleReason
     ? staleReason
-    : dataAsOf
-      ? `Price as of ${new Date(dataAsOf).toLocaleString("en-GB", {
+    : dataAsOfValid && dataAsOfDate
+      ? `Price as of ${dataAsOfDate.toLocaleString("en-GB", {
           dateStyle: "short",
           timeStyle: "short",
           timeZone: "UTC",

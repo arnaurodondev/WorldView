@@ -41,6 +41,13 @@ import { CitationBar } from "@/components/chat/CitationBar";
 import type { Message } from "@/types/api";
 import { CitationList } from "./CitationList";
 import type { StreamingMessage } from "../lib/types";
+// POLISH PASS 2026-05-09: shared "Invalid Date"-safe wall-clock formatter.
+// WHY: a `new Date(undefined).toLocaleTimeString(...)` previously rendered the
+// literal string "Invalid Date" inside the timestamp footer of optimistic
+// messages (where `created_at` hasn't been server-stamped yet) and inside
+// pre-PRD-0028 cached messages whose `created_at` was empty. The helper
+// centralizes the NaN guard so we don't leak that string anywhere.
+import { safeFormatClockTime } from "@/lib/utils";
 // PLAN-0067 W11-5: ToolCallIndicator shows per-tool progress spinners during
 // the tool-use phase (before token chunks arrive). Imported here because
 // StreamingBubble owns the "in-flight assistant response" visual region.
@@ -137,10 +144,11 @@ export function MessageBubble({ message }: { message: Message }) {
           )}
 
           <p className="mt-1 font-mono text-[10px] text-muted-foreground">
-            {new Date(message.created_at).toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
+            {/* POLISH PASS 2026-05-09: route through safeFormatClockTime to
+                avoid leaking "Invalid Date" when message.created_at is null
+                (optimistic stream not yet stamped) or a non-ISO string
+                (legacy cached threads). Falls through to "—". */}
+            {safeFormatClockTime(message.created_at)}
           </p>
         </div>
       </div>

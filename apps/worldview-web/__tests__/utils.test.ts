@@ -22,6 +22,14 @@ import {
   heatCellColor,
   severityColor,
   truncate,
+  // POLISH PASS 2026-05-09: regression-lock the Invalid-Date guards added to
+  // formatDate, formatDateTime, and the new safeFormatClockTime helper. The
+  // production bug we are guarding against was the literal string "Invalid
+  // Date" appearing in chat bubbles + table cells when the upstream payload
+  // had a null / "" / non-ISO `created_at`.
+  formatDate,
+  formatDateTime,
+  safeFormatClockTime,
 } from "@/lib/utils";
 
 // ── cn() ─────────────────────────────────────────────────────────────────────
@@ -284,5 +292,79 @@ describe("formatRelativeTime()", () => {
 
   it("returns dash for null", () => {
     expect(formatRelativeTime(null)).toBe("—");
+  });
+});
+
+// ── formatDate() / formatDateTime() / safeFormatClockTime() ─────────────
+//
+// POLISH PASS 2026-05-09: Invalid-Date regression guard. These tests fail if
+// anyone removes the `Number.isNaN(d.getTime())` short-circuit and the
+// formatter once again leaks the literal browser string "Invalid Date" into
+// the UI (the bug pattern that motivated this polish pass).
+
+describe("formatDate() — Invalid-Date guard", () => {
+  it("returns em-dash for null", () => {
+    expect(formatDate(null)).toBe("—");
+  });
+
+  it("returns em-dash for undefined", () => {
+    expect(formatDate(undefined)).toBe("—");
+  });
+
+  it("returns em-dash for empty string (not the literal 'Invalid Date')", () => {
+    // Empty string is the most common silent-bug path: `new Date("")` is an
+    // Invalid Date but `Intl.DateTimeFormat.format(...)` of one returns the
+    // literal 6-char string "Invalid Date" — visible to the user.
+    expect(formatDate("")).toBe("—");
+  });
+
+  it("returns em-dash for nonsense string", () => {
+    expect(formatDate("not-a-date")).toBe("—");
+  });
+
+  it("formats a real ISO date", () => {
+    // Sanity check — the guard must not regress the happy path.
+    expect(formatDate("2026-04-17T14:32:00Z")).toBe("Apr 17, 2026");
+  });
+});
+
+describe("formatDateTime() — Invalid-Date guard", () => {
+  it("returns em-dash for null/undefined/empty", () => {
+    expect(formatDateTime(null)).toBe("—");
+    expect(formatDateTime(undefined)).toBe("—");
+    expect(formatDateTime("")).toBe("—");
+  });
+
+  it("returns em-dash for nonsense string", () => {
+    expect(formatDateTime("not-a-date")).toBe("—");
+  });
+
+  it("formats a real ISO datetime in UTC", () => {
+    expect(formatDateTime("2026-04-17T14:32:00Z")).toBe("Apr 17, 14:32 UTC");
+  });
+});
+
+describe("safeFormatClockTime() — chat-bubble timestamp helper", () => {
+  it("returns em-dash for null/undefined/empty", () => {
+    expect(safeFormatClockTime(null)).toBe("—");
+    expect(safeFormatClockTime(undefined)).toBe("—");
+    expect(safeFormatClockTime("")).toBe("—");
+  });
+
+  it("returns em-dash for nonsense string (regression guard)", () => {
+    // The whole point of this helper: chat bubbles previously rendered the
+    // literal "Invalid Date" when message.created_at was null on optimistic
+    // sends. We must NEVER see that string again.
+    expect(safeFormatClockTime("not-a-date")).toBe("—");
+    expect(safeFormatClockTime("not-a-date")).not.toBe("Invalid Date");
+  });
+
+  it("formats a real ISO time", () => {
+    // We don't pin the exact wall-clock string because toLocaleTimeString is
+    // locale-dependent — but it must be non-empty and non-error.
+    const out = safeFormatClockTime("2026-04-17T14:32:00Z");
+    expect(out).not.toBe("—");
+    expect(out).not.toBe("Invalid Date");
+    expect(out.length).toBeGreaterThan(0);
   });
 });

@@ -17,6 +17,8 @@
 
 import { SlashCommandCard } from "@/components/chat/SlashCommandCard";
 import type { SlashTurn } from "../lib/types";
+// POLISH PASS 2026-05-09: see WHY in MessageBubble.tsx — same Invalid-Date guard.
+import { safeFormatClockTime } from "@/lib/utils";
 
 export function SlashTurnBlock({ turn }: { turn: SlashTurn }) {
   return (
@@ -27,10 +29,10 @@ export function SlashTurnBlock({ turn }: { turn: SlashTurn }) {
           <div className="rounded-[2px] bg-primary/10 px-4 py-3 text-[11px]">
             <pre className="whitespace-pre-wrap font-sans text-[11px]">{turn.input}</pre>
             <p className="mt-1 font-mono text-[10px] text-muted-foreground">
-              {new Date(turn.created_at).toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
+              {/* POLISH PASS 2026-05-09: safeFormatClockTime handles the
+                  null/Invalid-Date case so the timestamp footer is "—"
+                  instead of the literal string "Invalid Date". */}
+              {safeFormatClockTime(turn.created_at)}
             </p>
           </div>
         </div>
