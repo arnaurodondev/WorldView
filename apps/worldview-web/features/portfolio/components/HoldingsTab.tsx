@@ -1,31 +1,59 @@
 /**
  * features/portfolio/components/HoldingsTab.tsx — Holdings tab body.
  *
- * WHY THIS EXISTS (PLAN-0059 E-2 follow-up): the Holdings tab carried the
- * heaviest data surface in the portfolio page (~250 LOC inline) — Cash card,
- * Realized P&L chart, semantic holdings table, sector allocation panel,
- * recent activity feed, dividend timeline, analytics section. Lifting all
- * of it into a stateless component lets the page focus on tab routing.
+ * REDESIGNED in PLAN-0088 Wave E (audit `docs/audits/2026-05-09-qa-holdings-
+ * redesign.md`). The previous layout had 8 widgets stacked at ~1,400 px of
+ * scroll; this one delivers 12 widgets at ~700 px by replacing 6 oversized
+ * panels with single-row strips.
  *
- * BEHAVIOR PARITY: every conditional rendering rule, every layout class,
- * the F-205 sectors-projection inline shape, and the F-P-020 skeleton
- * dimensions are preserved verbatim.
+ * LAYOUT (top → bottom):
  *
- * WHO USES IT: only the portfolio page.
- * DESIGN REFERENCE: PRD-0031 §8 Portfolio, Holdings tab.
+ *   1. CashRow              — h-7  cash · buying power · sweep
+ *   2. ConcentrationStrip   — h-7  HHI · label · top-3 · #names
+ *   3. ExposureStrip        — h-7  invested · cash · leverage · beta-adj
+ *   4. DayPnLDistribution   — h-7  30-day Δ$ sparkline + avg/range
+ *   ───────────────────────────── (top strip cluster — 4×28 = 112 px)
+ *   5. SemanticHoldingsTable — h-auto, 12-column AG Grid (unchanged)
+ *   6. HoldingLotsPanel     — collapsible FIFO open-lots drilldown (NEW)
+ *   7. PositionBarHeat      — h-12 weight × pnl% mini-bars
+ *   8. RealizedPnLSparkline — h-12 cumulative realised + ST/LT split
+ *   9. DividendYTDStrip     — h-7  YTD · forward yield · next ex-date
+ *  10. SectorAllocationPanel — kept (still useful as a sector mix overview)
+ *  11. RecentActivityFeed   — kept ONLY when broker-connected (gated below)
+ *  12. PortfolioAnalyticsSection — kept (equity-curve + risk metrics)
+ *
+ * REMOVED (vs previous layout):
+ *   - CashManagementCard       (replaced by CashRow)
+ *   - RealizedPnLChart         (replaced by RealizedPnLSparkline)
+ *   - DividendIncomeTimeline   (replaced by DividendYTDStrip)
+ *   - ExposureBreakdown panel  (replaced by ExposureStrip)
+ *   - RecentActivityFeed always-on render (now gated on broker connection)
+ *
+ * Reason for each deletion lives in the audit; the short version is "every
+ * one was either F/D-rated empty-state or 200+ px tall for a single number".
  */
 
 "use client";
 // WHY "use client": children components are client components; this wrapper
 // inherits the directive so it can pass props through without extra boundary.
 
+import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CashManagementCard } from "@/components/portfolio/CashManagementCard";
-import { RealizedPnLChart } from "@/components/portfolio/RealizedPnLChart";
+import { useAuth } from "@/hooks/useAuth";
+import { createGateway } from "@/lib/gateway";
+// PLAN-0088 Wave E E-1 strips ────────────────────────────────────────────
+import { CashRow } from "@/components/portfolio/CashRow";
+import { ConcentrationStrip } from "@/components/portfolio/ConcentrationStrip";
+import { ExposureStrip } from "@/components/portfolio/ExposureStrip";
+import { DayPnLDistribution } from "@/components/portfolio/DayPnLDistribution";
+import { DividendYTDStrip } from "@/components/portfolio/DividendYTDStrip";
+import { RealizedPnLSparkline } from "@/components/portfolio/RealizedPnLSparkline";
+import { PositionBarHeat } from "@/components/portfolio/PositionBarHeat";
+import { HoldingLotsPanel } from "@/components/portfolio/HoldingLotsPanel";
+// Surviving components ────────────────────────────────────────────────────
 import { SemanticHoldingsTable } from "@/components/portfolio/SemanticHoldingsTable";
 import { SectorAllocationPanel } from "@/components/portfolio/SectorAllocationPanel";
 import { RecentActivityFeed } from "@/components/portfolio/RecentActivityFeed";
-import { DividendIncomeTimeline } from "@/components/portfolio/DividendIncomeTimeline";
 import { PortfolioAnalyticsSection } from "@/components/portfolio/PortfolioAnalyticsSection";
 import type { PeriodLabel } from "@/components/portfolio/EquityCurveChart";
 import type {
@@ -67,6 +95,26 @@ export function HoldingsTab({
   equityPeriod,
   setEquityPeriod,
 }: HoldingsTabProps) {
+  const { accessToken } = useAuth();
+
+  // PLAN-0088 E-1: gate RecentActivityFeed on a broker connection. The
+  // audit (§1 row 5) flagged it as empty-state for paper-traders. We do
+  // a lightweight brokerage-connection probe here and only render the
+  // feed when at least one connection exists. Cached for 60s.
+  const { data: brokerageConnections } = useQuery({
+    enabled: Boolean(activePortfolioId && accessToken),
+    queryKey: ["brokerage-connections", activePortfolioId],
+    queryFn: () =>
+      createGateway(accessToken!).getBrokerageConnections(activePortfolioId!),
+    staleTime: 60_000,
+  });
+  // WHY ?? false (not a truthy guard): the query returns undefined while
+  // loading; we want the feed hidden during that initial frame to avoid
+  // a flash-of-empty-feed for paper-traders.
+  const hasBrokerage = Boolean(
+    brokerageConnections && brokerageConnections.length > 0,
+  );
+
   if (holdingsLoading && !holdingsResp) {
     // WHY h-[22px] rows: matches the SemanticHoldingsTable <tr> height token
     // exactly. When the data lands, the skeletons fade out and the real rows
@@ -80,88 +128,85 @@ export function HoldingsTab({
     );
   }
 
-  // WHY bg-background (not min-h-full): min-height: 100% does NOT resolve
-  // reliably when the parent is an overflow-y:auto scroll container whose
-  // height is flex-derived (no explicit pixel height). The browser sees the
-  // scroll container's "content height" as the reference — not its visual
-  // height — so the child stays short and exposes the terminal-dark (#09090b)
-  // page background below the data. Painting bg-background on the wrapper
-  // covers that gap without fighting CSS height resolution semantics.
   return (
-    // WHY min-h-full: the TabsContent above uses flex-1 — without min-h-full this
-    // wrapper doesn't stretch to fill the tab area, leaving the bottom half of the
-    // viewport unpainted (shows as black in the dark theme).
-    <div className="p-2 bg-background min-h-full">
-      {/* PLAN-0053 T-B-2-04: Cash management card just below the KPI strip —
-          at-a-glance dry-powder + cash drag awareness. */}
-      <CashManagementCard portfolioId={activePortfolioId} />
+    <div className="bg-background min-h-full">
+      {/* ── Top strip cluster (4 × h-7 = 112 px total) ───────────────────────
+          Each row is a self-fetching component bound to activePortfolioId.
+          The cluster gives the trader a "right-now snapshot" at the top
+          of the page before they engage with the table. */}
+      <CashRow portfolioId={activePortfolioId} />
+      <ConcentrationStrip portfolioId={activePortfolioId} />
+      <ExposureStrip portfolioId={activePortfolioId} />
+      <DayPnLDistribution portfolioId={activePortfolioId} />
 
-      {/* PLAN-0053 T-D-4-03: Realized P&L chart with period toggle and
-          per-instrument breakdown. WHY above the holdings table: realised
-          P&L is a "look-back" cashflow signal — the user's digest order is
-          "what did I close?" → "what's open now?". */}
-      <div className="mt-2">
-        <RealizedPnLChart portfolioId={activePortfolioId} />
+      {/* ── Holdings table — the primary surface ────────────────────────────
+          Same 12-column AG Grid as before. Sectors are projected from the
+          holdingOverviews map at render time so the SECTOR column renders
+          correctly without a separate fetch. */}
+      <div className="p-2">
+        <SemanticHoldingsTable
+          holdings={enrichedHoldings}
+          quotes={holdingsQuotes}
+          sectors={Object.fromEntries(
+            Object.entries(holdingOverviews ?? {}).map(([id, ov]) => [
+              id,
+              ov?.sector ?? null,
+            ]),
+          )}
+          totalValue={kpi.totalValue}
+        />
       </div>
 
-      {/* WHY enrichedHoldings: raw holdings have empty ticker/name (S1
-          doesn't store them). enrichedHoldings merges ticker/name/entity_id
-          from company overviews so the TICKER and NAME columns render
-          correctly. */}
-      {/* F-205 fix (PLAN-0048 QA iter-1): the SECTOR column was rendering
-          "—" for every holding because we never passed `sectors`. The data
-          is already loaded for the allocation panel below — we just project
-          it into the instrument_id → sector shape SemanticHoldingsTable
-          expects. WHY inline (not useMemo): the projection is O(n) over a
-          small array (≤50 holdings) and runs only when overviews resolve;
-          memoising adds complexity without measurable benefit at this
-          size. */}
-      <SemanticHoldingsTable
+      {/* ── PLAN-0088 E-2: FIFO tax-lot drilldown ───────────────────────────
+          Standalone panel (not an inline AG Grid expand row) because the
+          table's onRowClicked already navigates to the instrument page —
+          we don't want to take that interaction over. The user picks a
+          ticker via the dropdown inside the panel. */}
+      <div className="px-2">
+        <HoldingLotsPanel
+          portfolioId={activePortfolioId}
+          holdings={enrichedHoldings}
+          quotes={holdingsQuotes}
+        />
+      </div>
+
+      {/* ── PLAN-0088 E-4: position-bar heat strip ──────────────────────────
+          Uses the props the parent already loaded — no extra fetch. Width =
+          weight, height = pnl%, color = sign. One-glance winners/losers. */}
+      <PositionBarHeat
         holdings={enrichedHoldings}
         quotes={holdingsQuotes}
-        sectors={Object.fromEntries(
-          Object.entries(holdingOverviews ?? {}).map(([id, ov]) => [
-            id,
-            ov?.sector ?? null,
-          ]),
-        )}
         totalValue={kpi.totalValue}
       />
 
-      {/* Sector allocation — populated once holdingOverviews resolves (the
-          query lives in usePortfolioData). Before that, bySector/byType are
-          empty and SectorAllocationPanel returns null. WHY no explicit
-          loading state here: the panel hides itself gracefully — no
-          jarring layout shift; it appears once overviews resolve (~300ms
-          after holdings). */}
+      {/* ── PLAN-0088 E-2: realised P&L sparkline (replaces 280 px chart) ──
+          Single h-12 row: total + ST/LT split + cumulative inline sparkline. */}
+      <RealizedPnLSparkline portfolioId={activePortfolioId} />
+
+      {/* ── PLAN-0088 E-1: dividend YTD strip (replaces 470 px timeline) ───
+          One h-7 row instead of a stacked monthly chart that was almost
+          always empty for paper-traders. */}
+      <DividendYTDStrip portfolioId={activePortfolioId} />
+
+      {/* ── Sector mix — KEPT (audit B-rated, useful) ───────────────────────
+          The bars-only mode is denser than the treemap; the panel itself
+          handles the toggle. */}
       <SectorAllocationPanel bySector={bySector} byType={byType} />
 
-      {/* PLAN-0053 T-B-2-05: Recent activity feed — transactions +
-          broker-sync events merged by timestamp. WHY here (not the
-          Transactions tab): Holdings is the "morning glance" surface;
-          users want to see what happened on their account without
-          leaving this view. */}
-      <div className="mt-3">
-        <RecentActivityFeed portfolioId={activePortfolioId} />
-      </div>
+      {/* ── Recent activity feed — GATED on broker connection ───────────────
+          Per audit §1 row 5: feed is empty for paper-traders so it should
+          not render. For broker-connected users it's still the right
+          "what happened on my account" surface. */}
+      {hasBrokerage && (
+        <div className="mt-3">
+          <RecentActivityFeed portfolioId={activePortfolioId} />
+        </div>
+      )}
 
-      {/* PLAN-0053 T-B-2-06: Dividend income YTD timeline with per-ticker
-          breakdown. WHY at the bottom: dividend cashflow is a "deeper
-          dive" answer — once positions and recent activity have been
-          scanned, users may want to know "how is my income running this
-          year?". */}
-      <div className="mt-3">
-        <DividendIncomeTimeline portfolioId={activePortfolioId} />
-      </div>
-
-      {/* PLAN-0046 Wave 5 / T-46-5-07: analytics section. WHY conditional
-          on activePortfolioId: the analytics queries need a real id to
-          fan out to S9. Without one we'd render three loading states
-          forever. */}
+      {/* ── Equity curve + risk metrics ─────────────────────────────────────
+          Existing analytics section — equity curve fix (F-H-1 from the
+          audit) is tracked separately. */}
       {activePortfolioId && (
-        // F-P-003: thread the hoisted period state down so the chart
-        // toggles update page-level state. Other panels can subscribe to
-        // ``equityPeriod`` to mirror the user's choice.
         <PortfolioAnalyticsSection
           portfolioId={activePortfolioId}
           period={equityPeriod}

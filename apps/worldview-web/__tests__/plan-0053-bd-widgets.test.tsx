@@ -1,11 +1,17 @@
 /**
- * __tests__/plan-0053-bd-widgets.test.tsx — PLAN-0053 Wave B + D widget smoke tests.
+ * __tests__/plan-0053-bd-widgets.test.tsx — Holdings tab widget smoke tests.
  *
- * One happy-path render check per new component, plus a regression that the
- * TransactionsTable surfaces the new asset-class badge. Heavy snapshotting is
- * intentionally avoided — these tests pin the contract that:
- *   1. Each component renders without throwing on a typical data shape.
- *   2. Key user-visible affordances (header label, primary number) appear.
+ * One happy-path render check per component on the Holdings tab. Heavy
+ * snapshotting is intentionally avoided — these tests pin the contract that
+ * each widget renders without throwing on a typical data shape and the key
+ * user-visible affordance (header label, primary number) appears.
+ *
+ * UPDATED in PLAN-0088 Wave E (2026-05-09): the tests for CashManagementCard,
+ * RealizedPnLChart, and DividendIncomeTimeline are replaced by tests for the
+ * single-row strips that took their place — CashRow, RealizedPnLSparkline,
+ * DividendYTDStrip. The deleted components are not reinstated; the
+ * replacement components carry forward the contract that each widget shows
+ * its header label + primary number on a typical data shape.
  *
  * Mocks the gateway and useAuth so we never hit the network.
  */
@@ -16,8 +22,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 // ── Shared gateway mocks ────────────────────────────────────────────────────
-// Each describe-block re-uses these by injecting the relevant fields onto
-// the mocked gateway implementation.
 
 const mockExposure = vi.fn();
 const mockTransactions = vi.fn();
@@ -26,6 +30,7 @@ const mockRealizedPnL = vi.fn();
 const mockTopNews = vi.fn();
 const mockPortfolios = vi.fn();
 const mockHoldings = vi.fn();
+const mockConcentration = vi.fn();
 
 vi.mock("@/lib/gateway", () => ({
   createGateway: () => ({
@@ -36,6 +41,7 @@ vi.mock("@/lib/gateway", () => ({
     getTopNews: mockTopNews,
     getPortfolios: mockPortfolios,
     getHoldings: mockHoldings,
+    getConcentration: mockConcentration,
   }),
 }));
 
@@ -47,10 +53,12 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
-import { CashManagementCard } from "@/components/portfolio/CashManagementCard";
+// PLAN-0088 Wave E: replacement strip components.
+import { CashRow } from "@/components/portfolio/CashRow";
 import { RecentActivityFeed } from "@/components/portfolio/RecentActivityFeed";
-import { DividendIncomeTimeline } from "@/components/portfolio/DividendIncomeTimeline";
-import { RealizedPnLChart } from "@/components/portfolio/RealizedPnLChart";
+import { DividendYTDStrip } from "@/components/portfolio/DividendYTDStrip";
+import { RealizedPnLSparkline } from "@/components/portfolio/RealizedPnLSparkline";
+import { ConcentrationStrip } from "@/components/portfolio/ConcentrationStrip";
 import { PortfolioNewsWidget } from "@/components/dashboard/PortfolioNewsWidget";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -64,13 +72,13 @@ function makeWrapper() {
   );
 }
 
-// ── CashManagementCard ──────────────────────────────────────────────────────
+// ── CashRow (PLAN-0088 E-1, replaces CashManagementCard) ────────────────────
 
-describe("CashManagementCard (PLAN-0053 T-B-2-04)", () => {
-  it("renders cash %, $ amount, and the cash-drag badge above 5%", async () => {
+describe("CashRow (PLAN-0088 E-1)", () => {
+  it("renders the cash label and the dollar amount from /exposure", async () => {
     mockExposure.mockResolvedValue({
       invested: 8000,
-      cash: 2000, // 20% cash → drag badge expected
+      cash: 2000,
       gross_exposure_pct: 0.8,
       net_exposure_pct: 0.8,
       leverage: 1,
@@ -78,18 +86,43 @@ describe("CashManagementCard (PLAN-0053 T-B-2-04)", () => {
       prices_as_of: null,
     });
 
-    render(<CashManagementCard portfolioId="p1" />, { wrapper: makeWrapper() });
+    render(<CashRow portfolioId="p1" />, { wrapper: makeWrapper() });
 
-    // Cash header label
+    // Cash header label appears as a small uppercase caption in the strip.
     await waitFor(() => expect(screen.getByText("CASH")).toBeInTheDocument());
-    // Cash drag badge (only renders when > 5%)
-    await waitFor(() => expect(screen.getByText("Cash drag")).toBeInTheDocument());
-    // Sweep APY placeholder
-    expect(screen.getByText("SWEEP APY")).toBeInTheDocument();
+    // BUYING POWER + SWEEP RATE are placeholder cells with em-dashes —
+    // verify their captions render so the row doesn't silently regress.
+    expect(screen.getByText("BUYING POWER")).toBeInTheDocument();
+    expect(screen.getByText("SWEEP RATE")).toBeInTheDocument();
   });
 });
 
-// ── RecentActivityFeed ──────────────────────────────────────────────────────
+// ── ConcentrationStrip (PLAN-0088 E-3) ──────────────────────────────────────
+
+describe("ConcentrationStrip (PLAN-0088 E-3)", () => {
+  it("renders HHI value and the diversified/moderate/concentrated label", async () => {
+    mockConcentration.mockResolvedValue({
+      portfolio_id: "p1",
+      hhi: 1847,
+      label: "moderate",
+      top_3_share_pct: 71.3,
+      positions_count: 5,
+      top_positions: [],
+      prices_stale: false,
+    });
+
+    render(<ConcentrationStrip portfolioId="p1" />, { wrapper: makeWrapper() });
+
+    // HHI label and number appear; "moderate" badge follows.
+    await waitFor(() => expect(screen.getByText("HHI")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("1,847")).toBeInTheDocument());
+    expect(screen.getByText("moderate")).toBeInTheDocument();
+    // Position count caption.
+    expect(screen.getByText(/5 names/)).toBeInTheDocument();
+  });
+});
+
+// ── RecentActivityFeed (kept; broker-gated in HoldingsTab) ──────────────────
 
 describe("RecentActivityFeed (PLAN-0053 T-B-2-05)", () => {
   it("merges transactions and sync events into one chronological feed", async () => {
@@ -130,15 +163,14 @@ describe("RecentActivityFeed (PLAN-0053 T-B-2-05)", () => {
 
     await waitFor(() => expect(screen.getByText("RECENT ACTIVITY")).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText("AAPL")).toBeInTheDocument());
-    // The sync row labels SYNC.
     await waitFor(() => expect(screen.getByText("SYNC")).toBeInTheDocument());
   });
 });
 
-// ── DividendIncomeTimeline ─────────────────────────────────────────────────
+// ── DividendYTDStrip (PLAN-0088 E-1, replaces DividendIncomeTimeline) ───────
 
-describe("DividendIncomeTimeline (PLAN-0053 T-B-2-06)", () => {
-  it("aggregates DIVIDEND transactions and renders a per-ticker table", async () => {
+describe("DividendYTDStrip (PLAN-0088 E-1)", () => {
+  it("aggregates DIVIDEND transactions into a single YTD total row", async () => {
     const thisYear = new Date().getUTCFullYear();
     mockTransactions.mockResolvedValue({
       transactions: [
@@ -154,29 +186,30 @@ describe("DividendIncomeTimeline (PLAN-0053 T-B-2-06)", () => {
           fee: 0,
           amount: 50,
           currency: "USD",
-          // Pin to current year so the YTD filter keeps the row.
           executed_at: `${thisYear}-02-15T10:00:00Z`,
           notes: null,
         },
       ],
       total: 1,
       offset: 0,
-      limit: 500,
+      limit: 200,
     });
 
-    render(<DividendIncomeTimeline portfolioId="p1" />, { wrapper: makeWrapper() });
+    render(<DividendYTDStrip portfolioId="p1" />, { wrapper: makeWrapper() });
 
+    // Strip caption appears.
+    await waitFor(() => expect(screen.getByText("DIV YTD")).toBeInTheDocument());
+    // 1-ticker caption appears.
     await waitFor(() =>
-      expect(screen.getByText(/DIVIDEND INCOME/)).toBeInTheDocument(),
+      expect(screen.getByText(/across 1 ticker/)).toBeInTheDocument(),
     );
-    await waitFor(() => expect(screen.getByText("VOO")).toBeInTheDocument());
   });
 });
 
-// ── RealizedPnLChart ───────────────────────────────────────────────────────
+// ── RealizedPnLSparkline (PLAN-0088 E-2, replaces RealizedPnLChart) ─────────
 
-describe("RealizedPnLChart (PLAN-0053 T-D-4-03)", () => {
-  it("renders the total readout and breakdown table", async () => {
+describe("RealizedPnLSparkline (PLAN-0088 E-2)", () => {
+  it("renders the realised total + ST/LT split + disposal count", async () => {
     mockRealizedPnL.mockResolvedValue({
       portfolio_id: "p1",
       from: "2025-01-01",
@@ -192,15 +225,17 @@ describe("RealizedPnLChart (PLAN-0053 T-D-4-03)", () => {
       currency: "USD",
     });
 
-    render(<RealizedPnLChart portfolioId="p1" />, { wrapper: makeWrapper() });
+    render(<RealizedPnLSparkline portfolioId="p1" />, { wrapper: makeWrapper() });
 
-    await waitFor(() => expect(screen.getByText(/REALIZED P&L/)).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText("AAPL")).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText("MSFT")).toBeInTheDocument());
+    // Headline caption + ST/LT/disposals captions.
+    await waitFor(() => expect(screen.getByText("REALISED YTD")).toBeInTheDocument());
+    expect(screen.getByText("ST")).toBeInTheDocument();
+    expect(screen.getByText("LT")).toBeInTheDocument();
+    expect(screen.getByText("DISPOSALS")).toBeInTheDocument();
   });
 });
 
-// ── PortfolioNewsWidget filter strip (T-D-4-01) ─────────────────────────────
+// ── PortfolioNewsWidget filter strip (PLAN-0053 T-D-4-01) ───────────────────
 
 describe("PortfolioNewsWidget filter strip (PLAN-0053 T-D-4-01)", () => {
   it("renders sort buttons + tier pills + ticker dropdown", async () => {
@@ -217,7 +252,7 @@ describe("PortfolioNewsWidget filter strip (PLAN-0053 T-D-4-01)", () => {
 
     render(<PortfolioNewsWidget />, { wrapper: makeWrapper() });
 
-    // Sort buttons
+    // Sort buttons — preserved from the original PLAN-0053 contract.
     await waitFor(() => expect(screen.getByText("IMPACT")).toBeInTheDocument());
     expect(screen.getByText("DATE")).toBeInTheDocument();
     // Tier pills — the four canonical tier labels.
