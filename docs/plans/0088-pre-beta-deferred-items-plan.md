@@ -271,6 +271,91 @@ density replay, A–D) remain.
 > data quality, UI deferred work, and LLM/prompt quality. PLAN-0087 closes
 > only the demo-grade subset; PLAN-0088 is the rest.
 
+### 2026-05-10 PM pre-beta second pass — Demo P1 + Wave F/G/H-5 + full QA
+
+Five parallel worktree subagents (SA-1..SA-5) + main-session integration +
+read-only QA (SA-6). 14 commits on top of the AM P0 batch.
+Final report: `docs/audits/2026-05-10-pre-beta-second-pass-report.md`.
+
+**Done (commits, in order):**
+
+- `e1b80e78` **SA-1 / Phase-1 demo risk** — OHLCV ETF backfill (2,750 bars
+  across XLE/MSTR/QQQ/PPA/XLK/TLT/IEF/IBIT/VTV/XLV/XLY); equity curve now
+  slopes $23,851–$26,351; 250 of 252 snapshots `data_quality=ok`. Cash/BP
+  remains truthful em-dash by design. SnapTrade signed-quantity verified
+  already correct (all 80 SELLs negative). Realized P&L fallback already
+  correctly em-dash on null. 680 portfolio unit tests pass.
+- `cbbf0a4b`, `0ee24338`, `96556a38` **SA-5 / runtime hygiene** —
+  market-data `internal_jwt_unverified_decode` CRITICAL→debug
+  (1,872/10m → 2/10m); BP-443 documented + AGE reserved-keyword `end`
+  → `tgt` in path_discovery; Polymarket `auto_offset_reset=latest`
+  config; alert `ALERT_S1_INTERNAL_JWT` regenerated with `aud:
+  worldview-internal` so portfolio aud-noise drops to ~1/10m.
+  Synthetic monitor revalidated probing `/healthz` 200. Service-health
+  matrix clean except known Wave-D `alloy`. 7 KG AGE unit + 646
+  market-data unit pass.
+- `1fe34cbd`, `164e57de` **SA-3 / Wave F-1, F-2, G-1, G-4** — Overview
+  right-rail densification (zones 9 EarningsHistoryChart + 10
+  TechnicalSnapshot + 11 OwnershipSnapshotPanel); Fundamentals tab
+  IncomeStatementFY (309 LOC) with last-4-FY columns; AnalystTargetSparkline
+  (250 LOC); EPS bars green=beat / red=miss vs `epsEstimate`. New gateway
+  proxy route `/v1/fundamentals/{id}/income-statement`. 407 api-gateway
+  unit pass; TS clean; 0 lint errors on changed files.
+- `17bc8f58`, `1d811437`, `46114f70`, `d61318b8`, `b0a50718` **SA-2 /
+  dashboard P1** — predictions classifier 4 → 7 buckets (added
+  ai/energy/tech with priority order); zero-count topic pills hidden
+  after category query resolves; predictions empty-state gap fixed via
+  `flex min-h-[88px]`; Movers segmented control with MARKET / HOLDINGS /
+  WATCHLIST tabs (MARKET default); Market Snapshot rewrite — INDICES
+  (QQQ/SPY/BTC) + EQUITIES (AAPL/MSFT/NVDA/AMZN/GOOGL/JPM) with
+  `hasPrice` em-dash guard; Daily Brief actions polish (220px strip,
+  icon alignment); density tokens on calendar widgets (`py-2` →
+  `py-1.5`). 89/89 SA-2 tests pass; TS clean.
+- `f5268efa`, `2493efd1` **SA-4 / KG / narratives / dedup** —
+  `prompt_templates` FK seed `00000000-...-000001` (relation_summary_v2)
+  applied (was the silent FK violation blocking SummaryWorker writes);
+  `scripts/ops/trigger_narrative_regen_longtail.py` ran for 100 entities
+  (LLM-generated narrative count climbing 80 → **345** at QA time);
+  AAPL dense-graph readability — 50-edge threshold, camera-reset button,
+  warning badge in `EntityGraph.tsx`; EntitySidebar top-3 relations
+  panel reads cached graph data (relation type + confidence + neighbour
+  + summary); H-5 streaming dup writer — `StoredArticleDedupConsumer`
+  (Kafka group `content-store-dedup-consumer` on `content.article.stored.v1`,
+  Jaccard ≥0.65, 14-day window) + `DuplicateClusterRepository` +
+  `MinHashCorpusRepository` + new compose service entry. 321 content-store
+  unit + 7 path-discovery regression pass.
+- `08f09fc1` **main / lint cleanup** — removed unused
+  `InlineEmptyState` import in `PredictionMarketsWidget.tsx` so next.js
+  production build passes the strict no-unused-vars rule.
+
+**Container rebuilds + recreations (30 containers):** api-gateway,
+worldview-web, market-data and 5 consumers, alert and 4 consumers/schedulers,
+knowledge-graph and 9 consumers/schedulers/workers (3 of which required
+`--no-cache` because compose's per-service-name image hash didn't bust
+on the SA-5 source change), content-store and 2 consumers + new
+`content-store-dedup-consumer`. All healthy except deferred Wave-D `alloy`.
+
+**Final QA (SA-6, read-only on real local stack):** verdict
+**BETA-READY for 2026-05-11 demo**. 76 containers up; only Wave-D
+`alloy` unhealthy. All 13 Demo P0s remain closed. 14 frontend routes
+200; 0 ERROR/CRITICAL log lines in 10-min window across all 11
+implementation services. DLQs offset 0. Polymarket lag steady ~6.7k
+(acceptable due to upsert semantics). Two known partials documented
+for follow-up: `content-store-dedup-consumer` MissingGreenlet at
+session disposal blocks offset commits on 11/12 partitions
+(backfill-writer is source of truth — `duplicate_clusters` = 791);
+`knowledge-graph-path-insight-worker` Cypher list-comprehension `|`
+syntax error breaks path computation downstream of BP-443 fix (3
+failed jobs; not on demo path). New P2: scheduler 6h tick attempts
+to insert path-insight job for orphaned `canonical_entities` row
+(FK violation; no UX impact).
+
+**Demo P1 backlog status:** 7 of 7 SA-2 items shipped; 4 of 4 SA-3
+PLAN-0088 items shipped; 8 of 11 SA-1 items resolved (4 already
+correct, 4 newly shipped, 3 deferred as not-load-bearing for demo);
+4 of 5 SA-5 hygiene items closed; 5 of 7 SA-4 items shipped (H-5
+streaming PARTIAL by design — backfill remains canonical).
+
 ---
 
 ## Phase 0 — What this plan does NOT cover
