@@ -149,6 +149,17 @@ const MOCK_FUND = {
   week_52_high: 199.62,
   week_52_low: 164.08,
   daily_return: 0.012,
+  // PLAN-0088 (2026-05-10): Fundamentals type was extended on 2026-05-09 with
+  // analyst_consensus fields (PLAN-0087 fix(fundamentals)). Tests need the
+  // full shape to satisfy TypeScript; nulls match the production "no analyst
+  // data" branch which Test fixtures should mirror.
+  analyst_strong_buy_count: null as number | null,
+  analyst_buy_count: null as number | null,
+  analyst_hold_count: null as number | null,
+  analyst_sell_count: null as number | null,
+  analyst_strong_sell_count: null as number | null,
+  analyst_rating: null as number | null,
+  analyst_target_price: null as number | null,
   updated_at: "2026-04-28T10:00:00Z",
 };
 
