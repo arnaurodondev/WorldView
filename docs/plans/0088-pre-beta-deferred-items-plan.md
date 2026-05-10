@@ -141,14 +141,27 @@ Six parallel subagents shipped a substantial second batch:
   - All 5 adapters producing; EODHD now 772 docs, NLP draining backlog
   - 0 DLQ messages; outbox dispatcher 100% delivered
 
+**Done (SA-3, commit 1fe34cbd):**
+- **F-1** EarningsHistoryChart + TechnicalSnapshot into Overview right rail
+  (zones 9+10 of 12-zone wireframe; same component instances, no double-fetch).
+- **F-2** OwnershipSnapshotPanel into Overview right rail (zone 11).
+- **G-1** IncomeStatementFY.tsx (NEW) — Finviz-style 4-FY column table
+  (Revenue / Gross Profit / Op. Income / Net Income / EBITDA / EPS); G-4
+  placeholder cleanup: rows where ALL FY columns null are collapsed. New
+  S9 proxy route `/fundamentals/{id}/income-statement`; gateway method
+  `getIncomeStatement`.
+- **G-4** EarningsHistoryChart beat/miss coloring — bars now green=beat /
+  red=miss vs epsEstimate when available (sign-based fallback when absent);
+  tooltip shows "Est: $X ▲ beat / ▼ miss".
+- **G-4** AnalystTargetSparkline.tsx (NEW) — visual low/consensus/high
+  distribution bar with current-price marker; ±15% fallback spread; mounted
+  at top of FundamentalsTab right sidebar.
+
 **Still open:**
 - Wave A (Zitadel SSO + MFA + Settings substance) — beta-blocking, ~25h
 - Wave B (Postgres TDE + MinIO SSE + GDPR + structlog PII) — ~22h
 - Wave C (PITR backups + MinIO mirror) — ~14h
 - Wave D (Grafana alerts + LLM-cost cap) — ~12h
-- Wave F/G remainders — F-1, F-2 (Earnings/Tech/Ownership move into
-  Overview), G-1 (FY-column income statement), G-4 (EPS beat/miss +
-  AnalystTargetSparkline)
 - Wave H-4 confirmed **moot** (existing entity_mentions path returns
   114+ articles for AAPL); Wave H-5 (duplicate_clusters worker) untouched
 - Wave I-3, I-4, I-5 — relation_summaries close-out, model bench,
