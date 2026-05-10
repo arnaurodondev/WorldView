@@ -24,6 +24,8 @@ import type {
   RealizedPnLResponse,
   PaginationParams,
   PortfolioBundleResponse,
+  HoldingLotsResponse,
+  ConcentrationResponse,
 } from "@/types/api";
 import { apiFetch } from "./_client";
 
@@ -662,6 +664,120 @@ export function createPortfoliosApi(t: string | undefined) {
         currency: raw.currency,
         executed_at: raw.executed_at,
         notes: null,
+      };
+    },
+
+    // ── PLAN-0088 Wave E — Holdings redesign ─────────────────────────────
+
+    /**
+     * getHoldingLots — FIFO open lots for ONE holding.
+     *
+     * WHY this exists: powers the holdings-table expand-row drilldown — when
+     * the user clicks an AAPL/MSFT/etc. row, the table fetches its open FIFO
+     * lots so it can show the standard brokerage "lot lookup" view (open
+     * date · qty · cost-per-share · days-held · ST/LT · unrealised).
+     *
+     * WHY pass currentPrice as a query param: when the caller already has
+     * a live quote, the backend computes per-lot unrealised_pnl in one round
+     * trip — avoiding a follow-up fetch + client-side join. When omitted the
+     * lots still come back; unrealised_pnl is null and the UI renders "—".
+     *
+     * WHY parse decimals to numbers here: same pattern as getHoldings — S1
+     * serialises Decimal as 8-dp strings; React arithmetic wants numbers.
+     *
+     * @param portfolioId    — portfolio UUID
+     * @param instrumentId   — instrument UUID (NOT entity_id; matches table row)
+     * @param currentPrice   — optional live price for unrealised computation
+     */
+    async getHoldingLots(
+      portfolioId: string,
+      instrumentId: string,
+      currentPrice?: number,
+    ): Promise<HoldingLotsResponse> {
+      // URLSearchParams skips undefined values so the qs is empty when no
+      // current price is supplied. Defensive: only set the key when we have
+      // a real number — `undefined` would coerce to "undefined" string.
+      const qs = new URLSearchParams();
+      if (currentPrice != null && Number.isFinite(currentPrice)) {
+        // 8-dp keeps parity with the backend Decimal precision so a price
+        // of 213.86 doesn't drift to 213.8599999 in transit.
+        qs.set("current_price", currentPrice.toFixed(8));
+      }
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      const path = `/v1/portfolios/${encodeURIComponent(portfolioId)}/holdings/${encodeURIComponent(instrumentId)}/lots${suffix}`;
+
+      const raw = await apiFetch<{
+        portfolio_id: string;
+        instrument_id: string;
+        lots: Array<{
+          open_date: string;
+          qty: string;
+          cost_per_share: string;
+          days_held: number;
+          is_long_term: boolean;
+          unrealised_pnl: string | null;
+        }>;
+        total_qty: string;
+        total_cost: string;
+        long_term_qty: string;
+        short_term_qty: string;
+        as_of: string;
+      }>(path, { token: t });
+
+      return {
+        portfolio_id: raw.portfolio_id,
+        instrument_id: raw.instrument_id,
+        lots: (raw.lots ?? []).map((lot) => ({
+          open_date: lot.open_date,
+          qty: parseFloat(lot.qty) || 0,
+          cost_per_share: parseFloat(lot.cost_per_share) || 0,
+          days_held: lot.days_held,
+          is_long_term: lot.is_long_term,
+          // Strict null preservation — null on the wire stays null so the UI
+          // can render "—" instead of forging a real $0 value.
+          unrealised_pnl: lot.unrealised_pnl != null ? parseFloat(lot.unrealised_pnl) : null,
+        })),
+        total_qty: parseFloat(raw.total_qty) || 0,
+        total_cost: parseFloat(raw.total_cost) || 0,
+        long_term_qty: parseFloat(raw.long_term_qty) || 0,
+        short_term_qty: parseFloat(raw.short_term_qty) || 0,
+        as_of: raw.as_of,
+      };
+    },
+
+    /**
+     * getConcentration — Herfindahl-Hirschman + top-3 + positions count.
+     *
+     * Powers the ConcentrationStrip single-row component. HHI is in the
+     * standard 0-10,000 percent² scale (NOT a fraction); top_3_share_pct
+     * is a 0-100 percent value. The frontend displays both as-is, no scaling.
+     *
+     * No request params — concentration is always portfolio-wide; date
+     * filtering is intentionally out of scope (the strip is a "right now"
+     * snapshot, not a historical trend).
+     */
+    async getConcentration(portfolioId: string): Promise<ConcentrationResponse> {
+      const raw = await apiFetch<{
+        portfolio_id: string;
+        hhi: number;
+        label: "diversified" | "moderate" | "concentrated" | "empty";
+        top_3_share_pct: string;
+        positions_count: number;
+        top_positions: Array<{ instrument_id: string; weight_pct: string }>;
+        prices_stale: boolean;
+      }>(`/v1/portfolios/${encodeURIComponent(portfolioId)}/concentration`, { token: t });
+
+      return {
+        portfolio_id: raw.portfolio_id,
+        hhi: raw.hhi,
+        label: raw.label,
+        top_3_share_pct: parseFloat(raw.top_3_share_pct) || 0,
+        positions_count: raw.positions_count,
+        top_positions: (raw.top_positions ?? []).map((p) => ({
+          instrument_id: p.instrument_id,
+          weight_pct: parseFloat(p.weight_pct) || 0,
+        })),
+        prices_stale: raw.prices_stale,
       };
     },
 

@@ -1983,3 +1983,78 @@ export interface SearchDocumentsParams {
   page?: number;
   page_size?: number;
 }
+
+// ── PLAN-0088 Wave E — Holdings redesign ──────────────────────────────────────
+
+/**
+ * HoldingLotItem — one open FIFO lot for a single holding.
+ *
+ * Surfaced inside the holdings-table expand-row. Each lot has the
+ * acquisition date, remaining quantity, fee-adjusted cost-per-share, the
+ * calendar-day holding period, the ST/LT tax classification (>365 days),
+ * and an optional unrealised P&L (only present when the gateway supplied
+ * a current_price).
+ *
+ * WHY decimals are numbers here (not strings): the lib/api/portfolios.ts
+ * gateway adapter parses S1's 8-dp decimal strings to JS numbers at the
+ * boundary so React components can do arithmetic without re-parsing on
+ * every render. See the same pattern for HoldingsResponse.
+ */
+export interface HoldingLotItem {
+  open_date: string;          // ISO date "YYYY-MM-DD"
+  qty: number;
+  cost_per_share: number;
+  days_held: number;
+  is_long_term: boolean;
+  unrealised_pnl: number | null;
+}
+
+/**
+ * HoldingLotsResponse — payload of GET /v1/portfolios/{id}/holdings/{instrument_id}/lots.
+ *
+ * Lots are oldest-first (FIFO order). Header summary fields let the UI
+ * render a "8 ST / 12 LT" caption above the lot table without iterating
+ * the lots client-side.
+ */
+export interface HoldingLotsResponse {
+  portfolio_id: string;
+  instrument_id: string;
+  lots: HoldingLotItem[];
+  total_qty: number;
+  total_cost: number;
+  long_term_qty: number;
+  short_term_qty: number;
+  /** UTC ISO-8601 timestamp the lots were materialised. */
+  as_of: string;
+}
+
+/**
+ * TopPositionItem — one row of the top-N positions list.
+ *
+ * weight_pct is in the 0-100 percent scale (NOT a fraction) so the strip
+ * can render "33.4%" by appending a '%' without scaling. Matches the HHI
+ * convention used everywhere else in the response.
+ */
+export interface TopPositionItem {
+  instrument_id: string;
+  weight_pct: number;
+}
+
+/**
+ * ConcentrationResponse — payload of GET /v1/portfolios/{id}/concentration.
+ *
+ * `hhi` is the Herfindahl-Hirschman index in the standard 0-10,000 scale;
+ * `label` is one of "diversified" | "moderate" | "concentrated" | "empty".
+ * `prices_stale` is the same flag the exposure endpoint emits — frontend
+ * shows a small caveat icon when true so the user knows the row is computed
+ * on cost basis.
+ */
+export interface ConcentrationResponse {
+  portfolio_id: string;
+  hhi: number;
+  label: "diversified" | "moderate" | "concentrated" | "empty";
+  top_3_share_pct: number;
+  positions_count: number;
+  top_positions: TopPositionItem[];
+  prices_stale: boolean;
+}

@@ -8,6 +8,7 @@ raw headers (PRD-0025, F-CRIT-001 remediation).
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
@@ -16,12 +17,16 @@ from fastapi.responses import Response
 
 from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
+    ConcentrationResponse,
     ExposureResponse,
+    HoldingLotItem,
+    HoldingLotsResponse,
     PaginatedResponse,
     PortfolioCreateRequest,
     PortfolioRenameRequest,
     PortfolioResponse,
     RealizedPnLResponse,
+    TopPositionItem,
     ValueHistoryMetadata,
     ValueHistoryPoint,
     ValueHistoryResponse,
@@ -29,8 +34,16 @@ from portfolio.api.schemas import (
 from portfolio.api.schemas import (
     RealizedPnLBreakdownItem as RealizedPnLBreakdownItemResponse,
 )
+from portfolio.application.use_cases.compute_concentration import (
+    ComputeConcentrationQuery,
+    ComputeConcentrationUseCase,
+)
 from portfolio.application.use_cases.create_portfolio import CreatePortfolioCommand, CreatePortfolioUseCase
 from portfolio.application.use_cases.get_exposure import GetExposureQuery, GetExposureUseCase
+from portfolio.application.use_cases.get_holding_lots import (
+    GetHoldingLotsQuery,
+    GetHoldingLotsUseCase,
+)
 from portfolio.application.use_cases.get_realized_pnl import (
     GetRealizedPnLQuery,
     GetRealizedPnLUseCase,
@@ -397,4 +410,125 @@ async def get_exposure(
         # stale" badge instead of pretending cost-basis is live market value.
         prices_stale=result.prices_stale,
         prices_as_of=result.prices_as_of,
+    )
+
+
+# ── PLAN-0088 Wave E — Holdings redesign ──────────────────────────────────────
+
+
+@router.get(
+    "/portfolios/{portfolio_id}/holdings/{instrument_id}/lots",
+    response_model=HoldingLotsResponse,
+)
+async def get_holding_lots(
+    portfolio_id: UUID,
+    instrument_id: UUID,
+    uow: ReadUoWDep,
+    request: Request,
+    current_price: Decimal | None = Query(
+        default=None,
+        description=(
+            "Optional current price override. When supplied, each lot's"
+            " ``unrealised_pnl`` is computed as qty*(current_price -"
+            " cost_per_share). When omitted the field is null and the UI"
+            " renders '—'."
+        ),
+    ),
+) -> HoldingLotsResponse:
+    """PLAN-0088 E-2 — return open FIFO lots for one holding.
+
+    Powers the holdings-table expand-row drill-down. Lots are oldest-first,
+    each with open-date / quantity / cost-per-share / days-held / ST-or-LT
+    classification (365-day boundary) and an optional unrealised P&L.
+
+    Authorisation matches the other portfolio reads — 404 when the
+    portfolio is missing, in another tenant, or owned by another user.
+
+    R27: read-only path → ``ReadOnlyUnitOfWork``.
+    """
+    owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
+
+    uc = GetHoldingLotsUseCase()
+    result = await uc.execute(
+        GetHoldingLotsQuery(
+            portfolio_id=portfolio_id,
+            instrument_id=instrument_id,
+            owner_id=owner_id,
+            tenant_id=x_tenant_id,
+            current_price=current_price,
+        ),
+        uow,
+    )
+
+    return HoldingLotsResponse(
+        portfolio_id=result.portfolio_id,
+        instrument_id=result.instrument_id,
+        lots=[
+            HoldingLotItem(
+                open_date=lot.open_date,
+                qty=lot.qty,
+                cost_per_share=lot.cost_per_share,
+                days_held=lot.days_held,
+                is_long_term=lot.is_long_term,
+                unrealised_pnl=lot.unrealised_pnl,
+            )
+            for lot in result.lots
+        ],
+        total_qty=result.total_qty,
+        total_cost=result.total_cost,
+        long_term_qty=result.long_term_qty,
+        short_term_qty=result.short_term_qty,
+        as_of=result.as_of,
+    )
+
+
+@router.get(
+    "/portfolios/{portfolio_id}/concentration",
+    response_model=ConcentrationResponse,
+)
+async def get_concentration(
+    portfolio_id: UUID,
+    uow: ReadUoWDep,
+    request: Request,
+) -> ConcentrationResponse:
+    """PLAN-0088 E-3 — Herfindahl-Hirschman concentration metrics.
+
+    Returns HHI (0-10,000), a "diversified|moderate|concentrated|empty"
+    label, top-3 cumulative weight, and the 5 largest positions for the
+    UI's ConcentrationStrip row. Empty portfolios return HHI=0/label="empty".
+
+    Uses the live price client when available; falls back to cost basis
+    per holding when individual quotes are missing (``prices_stale`` flips
+    True so the frontend can label the row as estimated).
+
+    R27: read-only path → ``ReadOnlyUnitOfWork``.
+    """
+    owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
+
+    # Reuse the same shared HTTP-backed price client from app.state. Pooled
+    # connection lifetime; constructed once at lifespan startup.
+    price_client = request.app.state.current_price_client
+
+    uc = ComputeConcentrationUseCase(price_client=price_client)
+    result = await uc.execute(
+        ComputeConcentrationQuery(
+            portfolio_id=portfolio_id,
+            owner_id=owner_id,
+            tenant_id=x_tenant_id,
+        ),
+        uow,
+    )
+
+    return ConcentrationResponse(
+        portfolio_id=result.portfolio_id,
+        hhi=result.hhi,
+        label=result.label,
+        top_3_share_pct=result.top_3_share_pct,
+        positions_count=result.positions_count,
+        top_positions=[
+            TopPositionItem(instrument_id=p.instrument_id, weight_pct=p.weight_pct) for p in result.top_positions
+        ],
+        prices_stale=result.prices_stale,
     )

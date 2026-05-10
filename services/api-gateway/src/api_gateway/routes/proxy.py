@@ -3157,6 +3157,78 @@ async def get_portfolio_exposure(portfolio_id: str, request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# ── PLAN-0088 Wave E — Holdings redesign ──────────────────────────────────────
+
+
+@router.get("/portfolios/{portfolio_id}/holdings/{instrument_id}/lots")
+async def get_holding_lots(portfolio_id: str, instrument_id: str, request: Request) -> Any:
+    """PLAN-0088 E-2 — proxy FIFO open-lots for a single holding.
+
+    Forwards optional ``current_price`` query param so each lot's
+    ``unrealised_pnl`` can be computed server-side without a follow-up
+    quote round-trip.
+
+    Cache hint: ``Cache-Control: max-age=60`` — lots rarely change between
+    transactions; 1 minute is safe for a drill-down view.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    # WHY UUID validation: both path params reach a downstream URL — defensive
+    # parsing prevents path injection if validation upstream is loosened.
+    try:
+        _uuid.UUID(portfolio_id)
+        _uuid.UUID(instrument_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="portfolio_id and instrument_id must be UUIDs")  # noqa: B904
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/portfolios/{portfolio_id}/holdings/{instrument_id}/lots",
+        params=dict(request.query_params),
+        headers=headers,
+    )
+    response_headers: dict[str, str] = {}
+    if resp.status_code == 200:
+        response_headers["Cache-Control"] = "max-age=60"
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type="application/json",
+        headers=response_headers,
+    )
+
+
+@router.get("/portfolios/{portfolio_id}/concentration")
+async def get_portfolio_concentration(portfolio_id: str, request: Request) -> Any:
+    """PLAN-0088 E-3 — proxy HHI + top-3 share concentration metrics.
+
+    No body params; no query params. Cached for 5 minutes — concentration
+    only meaningfully changes when the holdings table changes (rare in a
+    user-session window).
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        _uuid.UUID(portfolio_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="portfolio_id must be a UUID")  # noqa: B904
+    headers = _portfolio_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/portfolios/{portfolio_id}/concentration",
+        headers=headers,
+    )
+    response_headers: dict[str, str] = {}
+    if resp.status_code == 200:
+        response_headers["Cache-Control"] = "max-age=300"
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type="application/json",
+        headers=response_headers,
+    )
+
+
 @router.get("/transactions")
 async def list_transactions(request: Request) -> Any:
     """Proxy GET /api/v1/transactions → S1 Portfolio service.
