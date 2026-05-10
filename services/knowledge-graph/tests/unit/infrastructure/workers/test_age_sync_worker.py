@@ -278,8 +278,9 @@ class TestAgeSyncWorkerEntities:
         # The 4th call should be the Cypher MERGE for the entity
         cypher_call = session.execute.call_args_list[3]
         call_text = str(cypher_call[0][0])
+        # BP-SA5-001: label must be lowercase ``entity`` (matches path_discovery.py)
         assert "MERGE" in call_text
-        assert "Entity" in call_text
+        assert "entity" in call_text
         # Params JSON should contain entity_id
         params_arg = cypher_call[0][1]
         import json

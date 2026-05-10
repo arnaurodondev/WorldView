@@ -63,8 +63,13 @@ _WATERMARK_KEY = "s7:age:sync:watermark"
 # Pre-built AGE Cypher SQL strings — static graph name avoids S608 false positives.
 # Data values are always passed as :params (parameterized), never string-interpolated.
 _SQL_ENTITY_MERGE = (
+    # BP-SA5-001 (2026-05-10): AGE label MUST be lowercase ``entity`` to match
+    # the label used by PathDiscovery (path_discovery.py) and the existing
+    # hand-seeded test nodes.  Using ``Entity`` (capital) caused a label split
+    # where sync wrote to one label space and path_discovery queried another,
+    # leaving path_insight_jobs returning zero paths for all hub entities.
     "SELECT * FROM ag_catalog.cypher('worldview_graph', $$"
-    " MERGE (e:Entity {entity_id: $entity_id})"
+    " MERGE (e:entity {entity_id: $entity_id})"
     " SET e.canonical_name = $name,"
     "     e.entity_type = $type,"
     "     e.ticker = $ticker,"
@@ -85,9 +90,11 @@ _SQL_TEMPORAL_EVENT_MERGE = (
 )
 
 _SQL_EVENT_EXPOSES_MERGE = (
+    # BP-SA5-001: entity node uses lowercase ``entity`` label to match the
+    # canonical label used throughout (sync + path_discovery).
     "SELECT * FROM ag_catalog.cypher('worldview_graph', $$"
     " MATCH (t:TemporalEvent {event_id: $event_id}),"
-    "       (e:Entity {entity_id: $entity_id})"
+    "       (e:entity {entity_id: $entity_id})"
     " MERGE (t)-[r:EVENT_EXPOSES {exposure_id: $exposure_id}]->(e)"
     " SET r.exposure_type = $exposure_type,"
     "     r.confidence = $confidence"
@@ -514,9 +521,11 @@ def _build_relation_merge_sql(edge_label: str) -> str:
     """
     # SECURITY: edge_label must be whitelist-validated; assert here as defense-in-depth.
     assert edge_label in _VALID_EDGE_LABELS, f"Cypher label injection guard: {edge_label!r} not in whitelist"
+    # BP-SA5-001: use lowercase ``entity`` label (same as _SQL_ENTITY_MERGE and
+    # path_discovery.py) so MATCHes resolve to the correct label namespace.
     cypher = (
-        "MATCH (s:Entity {entity_id: $subject_id}),"
-        "      (o:Entity {entity_id: $object_id})"
+        "MATCH (s:entity {entity_id: $subject_id}),"
+        "      (o:entity {entity_id: $object_id})"
         f" MERGE (s)-[r:{edge_label} {{relation_id: $relation_id}}]->(o)"
         " SET r.confidence = $confidence,"
         "     r.updated_at = $updated_at"
