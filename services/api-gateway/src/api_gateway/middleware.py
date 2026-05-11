@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 # Paths that bypass OIDC auth and rate limiting entirely.
 # F-01: /health and /ready removed — only /healthz and /readyz exist on the health router.
+# PLAN-0088 P2-D (2026-05-10): /v1/health added as external uptime monitor alias.
 _AUTH_SKIP_PATHS: frozenset[str] = frozenset(
     [
         "/v1/auth/login",
@@ -31,6 +32,7 @@ _AUTH_SKIP_PATHS: frozenset[str] = frozenset(
         "/v1/auth/logout",
         "/healthz",
         "/readyz",
+        "/v1/health",
         "/metrics",
         "/internal/jwks",
     ]

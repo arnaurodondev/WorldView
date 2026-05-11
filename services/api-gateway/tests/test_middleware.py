@@ -168,6 +168,7 @@ def test_auth_skip_paths_contains_expected_entries() -> None:
         "/v1/auth/logout",
         "/healthz",
         "/readyz",
+        "/v1/health",  # PLAN-0088 P2-D: external uptime monitor alias
         "/metrics",
         "/internal/jwks",
     }

@@ -15,6 +15,19 @@ async def healthz() -> dict:
     return {"status": "ok"}
 
 
+@router.get("/v1/health")
+async def health_v1() -> dict:
+    """External uptime monitor probe — alias for /healthz.
+
+    PLAN-0088 fix P2-D (2026-05-10): external uptime monitors expect
+    GET /v1/health returning {"status": "ok"}.  This route is intentionally
+    unauthenticated (no OIDCAuthMiddleware bypass needed — the middleware
+    checks request.state.user which health checks never set, but health is
+    already excluded from auth in OIDCAuthMiddleware._is_public_path).
+    """
+    return {"status": "ok"}
+
+
 @router.get("/readyz")
 async def readyz(request: Request) -> Response:
     """Readiness probe — checks Valkey availability."""
