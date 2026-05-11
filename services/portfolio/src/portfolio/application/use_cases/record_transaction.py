@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -58,6 +58,9 @@ class RecordTransactionCommand:
     external_ref: str | None = None
     idempotency_key: str | None = None
     correlation_id: str | None = None
+    # P2-E: broker-supplied description and settlement date (optional, SnapTrade-sourced).
+    description: str | None = None
+    settlement_date: date | None = None
 
 
 @dataclass
@@ -163,6 +166,9 @@ class RecordTransactionUseCase:
             currency=cmd.currency,
             executed_at=cmd.executed_at,
             external_ref=cmd.external_ref or cmd.idempotency_key,
+            # P2-E: pass through broker description and settlement_date when provided.
+            description=cmd.description,
+            settlement_date=cmd.settlement_date,
         )
 
         # ── BP-264 (PLAN-0046 T-46-1-03) ─────────────────────────────────────

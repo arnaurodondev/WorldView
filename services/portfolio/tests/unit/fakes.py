@@ -680,6 +680,21 @@ class FakeBrokerageClient:
         positions_by_account: dict[str, list[SnapTradePosition]] = getattr(self, "positions_by_account", {})
         return list(positions_by_account.get(account_id, []))
 
+    async def get_account_balance(
+        self,
+        user: SnapTradeUser,
+        account_id: str,
+    ) -> dict | None:
+        """Return a fake balance dict or None for tests.
+
+        Defaults to None (balance unavailable). Tests can override by setting
+        ``self.balance_by_account = {account_id: {"cash": ..., "currency": "USD"}}``.
+        """
+        from typing import Any
+
+        balance_by_account: dict[str, dict[str, Any]] = getattr(self, "balance_by_account", {})
+        return balance_by_account.get(account_id)
+
 
 # Runtime Protocol check — asserts FakeBrokerageClient satisfies IBrokerageClient
 assert isinstance(
