@@ -871,10 +871,15 @@ def _map_fundamentals_sections(raw: dict, symbol: str, source: str) -> dict:
     Keys in the returned dict correspond to the ``_SECTION_HANDLERS`` mapping in
     the market-data ``FundamentalsConsumer``.  Missing sections are omitted so
     the consumer skips them cleanly.
+
+    ETF handling: EODHD returns a different top-level structure for ETFs/funds:
+    ``['General', 'Technicals', 'ETF_Data']`` instead of the stock sections.
+    We build a synthetic ``highlights`` dict from ``ETF_Data`` using the same
+    field names the metric_extractor already understands.
     """
-    financials = raw.get("Financials") or {}
-    earnings = raw.get("Earnings") or {}
-    splits_divs = raw.get("SplitsDividends") or {}
+    general = raw.get("General") or {}
+    instrument_type = (general.get("Type") or "").upper()
+    is_etf = instrument_type in ("ETF", "FUND", "MUTUALFUND", "MUTUAL FUND")
 
     sections: dict = {
         "symbol": symbol,
@@ -885,24 +890,57 @@ def _map_fundamentals_sections(raw: dict, symbol: str, source: str) -> dict:
         if value:
             sections[key] = value
 
-    _add("income_statement", financials.get("Income_Statement"))
-    _add("balance_sheet", financials.get("Balance_Sheet"))
-    _add("cash_flow", financials.get("Cash_Flow"))
-    _add("highlights", raw.get("Highlights"))  # FIX-F10: separated from valuation_ratios
-    _add("valuation_ratios", raw.get("Valuation"))  # FIX-F10: Valuation only
-    _add("technicals_snapshot", raw.get("Technicals"))
-    _add("share_statistics", raw.get("SharesStats"))
-    _add("splits_dividends", raw.get("SplitsDividends"))
-    _add("analyst_consensus", raw.get("AnalystRatings"))
-    _add("earnings_history", earnings.get("History"))
-    _add("earnings_trend", earnings.get("Trend"))
-    _add("earnings_annual_trend", earnings.get("Annual"))
-    _add("dividend_history", splits_divs.get("NumberDividendsByYear"))  # FIX-F5: was "Dividends"
-    _add("outstanding_shares", raw.get("outstandingShares"))
-    _add("company_profile", raw.get("General"))  # FIX-F4
-    _add("institutional_holders", (raw.get("Holders") or {}).get("Institutions"))  # FIX-F6
-    _add("fund_holders", (raw.get("Holders") or {}).get("Funds"))  # FIX-F6
-    _add("insider_transactions_snapshot", raw.get("InsiderTransactions"))  # FIX-F7
+    if is_etf:
+        # WHY separate branch: EODHD ETF responses omit Highlights/Valuation/Financials/
+        # Earnings entirely and replace them with ETF_Data. Without this branch, all
+        # fundamentals fields for ETFs like QQQ silently remain NULL in the DB.
+        etf_data = raw.get("ETF_Data") or {}
+
+        # Build a synthetic highlights dict using the exact key names metric_extractor.py
+        # looks for (FundamentalsSection.HIGHLIGHTS metric defs).
+        synthetic_highlights: dict = {}
+
+        # Yield → DividendYield (stored as "0.4200" string by EODHD; extractor coerces to float)
+        if etf_data.get("Yield") not in (None, "", "0.00", "0"):
+            synthetic_highlights["DividendYield"] = etf_data["Yield"]
+
+        # TotalAssets / Portfolio_Net_Assets → MarketCapitalization (AUM proxy for ETFs)
+        total_assets = etf_data.get("Total_Assets") or etf_data.get("Portfolio_Net_Assets")
+        if total_assets:
+            synthetic_highlights["MarketCapitalization"] = total_assets
+
+        # NaV → no canonical equivalent; skip
+        # Net_Expense_Ratio → no current metric def; skip (future: expense_ratio)
+
+        _add("highlights", synthetic_highlights or None)
+        _add("technicals_snapshot", raw.get("Technicals"))
+        _add("company_profile", general)
+        # ETF_Data contains sector weights and top holdings — store as fund_holders proxy
+        # so the data is persisted even if not yet surfaced in the UI
+        _add("fund_holders", etf_data if etf_data else None)
+    else:
+        financials = raw.get("Financials") or {}
+        earnings = raw.get("Earnings") or {}
+        splits_divs = raw.get("SplitsDividends") or {}
+
+        _add("income_statement", financials.get("Income_Statement"))
+        _add("balance_sheet", financials.get("Balance_Sheet"))
+        _add("cash_flow", financials.get("Cash_Flow"))
+        _add("highlights", raw.get("Highlights"))  # FIX-F10: separated from valuation_ratios
+        _add("valuation_ratios", raw.get("Valuation"))  # FIX-F10: Valuation only
+        _add("technicals_snapshot", raw.get("Technicals"))
+        _add("share_statistics", raw.get("SharesStats"))
+        _add("splits_dividends", raw.get("SplitsDividends"))
+        _add("analyst_consensus", raw.get("AnalystRatings"))
+        _add("earnings_history", earnings.get("History"))
+        _add("earnings_trend", earnings.get("Trend"))
+        _add("earnings_annual_trend", earnings.get("Annual"))
+        _add("dividend_history", splits_divs.get("NumberDividendsByYear"))  # FIX-F5: was "Dividends"
+        _add("outstanding_shares", raw.get("outstandingShares"))
+        _add("company_profile", general)  # FIX-F4
+        _add("institutional_holders", (raw.get("Holders") or {}).get("Institutions"))  # FIX-F6
+        _add("fund_holders", (raw.get("Holders") or {}).get("Funds"))  # FIX-F6
+        _add("insider_transactions_snapshot", raw.get("InsiderTransactions"))  # FIX-F7
 
     return sections
 

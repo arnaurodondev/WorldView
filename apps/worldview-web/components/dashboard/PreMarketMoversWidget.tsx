@@ -160,6 +160,21 @@ export function PreMarketMoversWidget() {
     return map;
   }, [allCandidates, overviewQueries]);
 
+  // WHY priceByInstrumentId: the S3 fundamentals screener only returns metrics stored
+  // in the fundamentals table (daily_return, pe_ratio, etc.) — price lives in the
+  // OHLCV table and is NOT included in screener metrics. Every mover therefore shows
+  // $0.00 from the screener alone. We reuse the overview queries already fired for
+  // sector filtering (same staleTime=10min, zero extra network cost) and extract
+  // quote.price from them so the mover rows show a real last-trade price.
+  const priceByInstrumentId = useMemo(() => {
+    const map = new Map<string, number>();
+    allCandidates.forEach((m, i) => {
+      const price = overviewQueries[i]?.data?.quote?.price;
+      if (typeof price === "number" && price > 0) map.set(m.instrument_id, price);
+    });
+    return map;
+  }, [allCandidates, overviewQueries]);
+
   // ── Filter helper ───────────────────────────────────────────────────────
   // WHY graceful "still loading" behaviour: if a row's overview hasn't
   // resolved yet (no entry in the map), we DON'T hide the row — that would
@@ -329,7 +344,13 @@ export function PreMarketMoversWidget() {
         {!isLoading && !isError && (
           <div className="flex-1 divide-y divide-border/30">
             {gainers.map((mover) => (
-              <MoverRow key={mover.instrument_id} mover={mover} side="gainer" />
+              <MoverRow
+                key={mover.instrument_id}
+                // WHY spread with priceOverride: overview query already fetched quote.price
+                // for sector filtering — reuse it so the row shows a real price instead of $0.00.
+                mover={{ ...mover, price: priceByInstrumentId.get(mover.instrument_id) ?? mover.price }}
+                side="gainer"
+              />
             ))}
             {gainers.length === 0 && (
               <div className="px-2">
@@ -343,7 +364,11 @@ export function PreMarketMoversWidget() {
         {!isLoading && !isError && (
           <div className="flex-1 divide-y divide-border/30 border-l border-border/30">
             {losers.map((mover) => (
-              <MoverRow key={mover.instrument_id} mover={mover} side="loser" />
+              <MoverRow
+                key={mover.instrument_id}
+                mover={{ ...mover, price: priceByInstrumentId.get(mover.instrument_id) ?? mover.price }}
+                side="loser"
+              />
             ))}
             {losers.length === 0 && (
               <div className="px-2">

@@ -1231,3 +1231,52 @@ And verify `kg-summary-v1` is mapped to a valid model in `FallbackChainClient` c
 **Prevention**: When writing evidence fallback filters with `or`, test with rows where the PRIMARY column is NULL — the `dict.get(key, "")` pattern evaluates the empty string (`""`) as falsy if converted back to bool, but here the filter checks `.get()` output directly before conversion.
 
 **File**: `services/knowledge-graph/src/knowledge_graph/infrastructure/workers/summary.py` — `SummaryWorker.run()` evidence text filter
+
+---
+
+## BP-462 — SEC EDGAR routing silently stuck at LIGHT tier — never LLM-scored
+
+**Date discovered**: 2026-05-11
+**Service affected**: `nlp-pipeline` (Block 5 routing, `ArticleRelevanceScoringWorker`)
+
+### Symptom
+
+All SEC EDGAR documents that passed through the NLP pipeline received `routing_tier = 'light'` regardless of their informational value, and zero had `llm_relevance_score` set. The `ArticleRelevanceScoringWorker` only scores MEDIUM/DEEP documents, so all SEC filings were permanently excluded from relevance scoring and therefore excluded from news feed ranking.
+
+### Root Cause (two combined gaps)
+
+**Gap 1 — Missing DOCUMENT_TYPE_SIGNAL entry**: `routing.py::DOCUMENT_TYPE_SIGNAL` had entries for `sec_8k` (0.95), `sec_10k` (0.90), `sec_10q` (0.90), `sec_def14a` (0.88), but NOT for `sec_edgar` — the actual source_type emitted by `content-ingestion/adapters/sec_edgar/adapter.py`. Because `source_type = "sec_edgar"` fell through to `_DEFAULT_DOCUMENT_TYPE_SIGNAL = 0.50`, the document_type contribution was 0.50 × 0.05 = 0.025 instead of the intended ~0.044.
+
+**Gap 2 — Missing source_trust_weights row**: The `source_trust_weights` table was seeded in migration 0001 with entries for specific form types (sec_10k, sec_8k, etc.) but not for the generic `sec_edgar` source type. The routing block used `_DEFAULT_SOURCE_TRUST = 0.5` (manual content level) instead of the 0.90+ that SEC regulatory filings warrant.
+
+Combined effect: SEC EDGAR docs scored ~0.32 composite (LIGHT) because entity_density is structurally low in raw EDGAR HTML (boilerplate content, not a signal of low value).
+
+### Fix
+
+1. Added `"sec_edgar": 0.88` to `DOCUMENT_TYPE_SIGNAL` in `routing.py`.
+2. Added `_AUTHORITATIVE_FILING_SOURCES` frozenset (`sec_edgar`, `sec_8k`, `sec_10k`, `sec_10q`, `sec_def14a`, `tenant_upload`) with a minimum-tier override in `compute_routing_score`: if `routing_tier == LIGHT and source_type in _AUTHORITATIVE_FILING_SOURCES` → upgrade to MEDIUM.
+3. Created migration `0039_add_sec_edgar_source_trust_weight.py` adding `sec_edgar → trust_weight=0.90`.
+4. Backfilled 130 pre-fix routing decisions via `UPDATE routing_decisions SET final_routing_tier = 'medium' WHERE source_type = 'sec_edgar' AND routing_tier = 'light'`.
+
+### Detection
+
+```sql
+-- Check for authoritative sources stuck at light tier
+SELECT dsm.source_type, rd.routing_tier, COUNT(*)
+FROM routing_decisions rd
+JOIN document_source_metadata dsm ON rd.doc_id = dsm.doc_id
+WHERE dsm.source_type IN ('sec_edgar', 'sec_8k', 'sec_10k', 'sec_10q', 'tenant_upload')
+  AND rd.routing_tier = 'light'
+  AND rd.final_routing_tier IS NULL
+GROUP BY dsm.source_type, rd.routing_tier;
+```
+
+### Prevention
+
+When adding a new source adapter in content-ingestion:
+1. Verify `source_type` is in `DOCUMENT_TYPE_SIGNAL` in `routing.py`.
+2. Verify `source_type` is in `source_trust_weights` table (or add via migration).
+3. If source is an authoritative filing, add to `_AUTHORITATIVE_FILING_SOURCES`.
+
+**File**: `services/nlp-pipeline/src/nlp_pipeline/application/blocks/routing.py` — `DOCUMENT_TYPE_SIGNAL`, `_AUTHORITATIVE_FILING_SOURCES`, `compute_routing_score`
+**Migration**: `services/intelligence-migrations/alembic/versions/0039_add_sec_edgar_source_trust_weight.py`

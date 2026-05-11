@@ -271,6 +271,16 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
   // blank space. Financial UI must NEVER silently fail — blank charts erode trust.
   const [chartError, setChartError] = useState(false);
 
+  // WHY isChartReady state (not a ref): the data-update effect must re-run when
+  // the chart finishes async initialization so it can call scrollToRealTime().
+  // If network data arrives BEFORE `await import("lightweight-charts")` resolves,
+  // the data-update effect returns early (seriesRef.current === null) and never
+  // calls scrollToRealTime(). Since data?.bars hasn't changed after that, the
+  // effect never re-runs — chart stays anchored at the oldest bar.
+  // A state change triggers a re-render and re-runs the effect with the latest
+  // data.bars so scrollToRealTime() fires correctly on that second run. (BP-450)
+  const [isChartReady, setIsChartReady] = useState(false);
+
   // WHY hasScrolledToRealTime ref: scrollToRealTime() must only fire ONCE on
   // first data load — not on every background refresh. Without this guard,
   // React Query's background refetch (staleTime=60s) re-fires the data-update
@@ -522,18 +532,13 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         chartRef.current = chart;
         seriesRef.current = series;
 
-        // WHY pendingScrollToRealTime check here: if bars arrived (via placeholderData)
-        // before this async initChart completed, the data effect deferred the scroll.
-        // Execute it now that the chart is ready. scrollToRealTime on a chart with no
-        // data is a silent no-op — safe to call unconditionally.
-        if (pendingScrollToRealTime.current) {
-          pendingScrollToRealTime.current = false;
-          // WHY no scrollToRealTime() here: chart has no data yet when initChart() fires the
-          // pending-scroll path. Calling scrollToRealTime() on an empty chart is a no-op, but
-          // setting hasScrolledToRealTime=true at this point would permanently block the real
-          // scroll when bars load in the data-update effect below. We clear the pending flag
-          // only — the data effect calls scrollToRealTime() once it has actual bar data. (BP-450)
-        }
+        // WHY setIsChartReady(true): signals the data-update effect to re-run.
+        // If OHLCV data arrived (placeholder or real) before this async import
+        // resolved, the data-update effect returned early (seriesRef was null) and
+        // never called scrollToRealTime(). Since data?.bars hasn't changed, the
+        // effect won't re-run on its own — isChartReady triggers the re-run so
+        // scrollToRealTime() fires with the already-loaded bars. (BP-450)
+        setIsChartReady(true);
 
         // QA iter-1 fix: apply the user's log-scale preference NOW. If the
         // user toggled `log` before the chart resolved, the dependent effect
@@ -898,7 +903,10 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         pendingScrollToRealTime.current = true;
       }
     }
-  }, [data?.bars]);
+  // WHY isChartReady in deps: if bars arrived before chart init, this effect
+  // returned early (seriesRef was null). isChartReady=true triggers a re-run
+  // with the already-loaded bars so scrollToRealTime() fires correctly.
+  }, [data?.bars, isChartReady]);
 
   // ── Volume visibility toggle ───────────────────────────────────────────────
   useEffect(() => {

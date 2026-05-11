@@ -33,6 +33,7 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { RankedArticle, Fundamentals, Instrument } from "@/types/api";
+import { useApiClient } from "@/lib/api-client";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -78,6 +79,20 @@ const mockGateway = {
 
 vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => mockGateway),
+}));
+
+// WHY mock @/lib/api-client: NewsTab and IntelligenceTab were migrated
+// (PLAN-0059-C) to call useApiClient() / useAccessToken() hooks instead of
+// createGateway() directly. Without this mock the hooks throw because no
+// ApiClientProvider wraps the test renders. We point useApiClient at the same
+// mockGateway object so both old (createGateway) and new (useApiClient) paths
+// receive identical fixtures.
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(),
+  useAccessToken: vi.fn(() => "test-token"),
+  ApiClientProvider: ({ children }: { children: React.ReactNode }) => children,
+  useAuthedQuery: vi.fn(),
+  useAuthedMutation: vi.fn(),
 }));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -147,6 +162,11 @@ beforeEach(() => {
     entity_id: "ent-001",
     contradictions: [],
   });
+
+  // WHY wire useApiClient to mockGateway: NewsTab/IntelligenceTab use the
+  // new useApiClient() hook (PLAN-0059-C). After vi.clearAllMocks() resets the
+  // spy, we must re-wire the return value so every test starts with valid data.
+  vi.mocked(useApiClient).mockReturnValue(mockGateway as any);
 
   // Clear sessionStorage between tests so persistence assertions start clean.
   if (typeof window !== "undefined") {
