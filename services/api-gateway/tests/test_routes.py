@@ -967,6 +967,8 @@ async def test_entity_graph_transforms_s7_response(authed_client, authed_mock_cl
                 "object_entity_id": _neighbor_id,
                 "canonical_type": "COMPETES_WITH",
                 "confidence": 0.85,
+                "relation_summary": "Apple competes directly with Microsoft in cloud and productivity.",
+                "evidence_snippets": ["Apple revenue rose 8%", "Microsoft cloud share grew"],
             }
         ],
         "entities": {
@@ -1027,6 +1029,77 @@ async def test_entity_graph_transforms_s7_response(authed_client, authed_mock_cl
     assert edge["target"] == _neighbor_id
     assert edge["label"] == "competes_with"  # proxy lowercases canonical_type (PLAN-0072 Wave 3)
     assert edge["weight"] == pytest.approx(0.85)
+    # WHY: relation_summary and evidence_snippets are forwarded from S7 so the
+    # frontend EntitySidebar Top Relations panel can display LLM summaries and
+    # evidence without a second API call (BP-fix 2026-05-11).
+    assert edge["relation_summary"] == "Apple competes directly with Microsoft in cloud and productivity."
+    assert edge["evidence_snippets"] == ["Apple revenue rose 8%", "Microsoft cloud share grew"]
+
+
+@pytest.mark.asyncio
+async def test_entity_graph_partial_s7_relation_uses_safe_defaults(authed_client, authed_mock_clients) -> None:
+    """_transform_graph_response() uses safe defaults when S7 omits relation_summary
+    or evidence_snippets (e.g. relations created before Worker 13C ran).
+
+    WHY: Not all relations in the DB have an LLM summary yet — Worker 13C runs
+    asynchronously. The gateway must never raise KeyError on absent optional fields.
+    Expected: relation_summary=None, evidence_snippets=[] in the transformed edge.
+    """
+    _center_id = "01900000-0000-7000-8000-000000002001"
+    _neighbor_id = "01900000-0000-7000-8000-000000002002"
+    _relation_id = "01900000-0000-7000-8000-000000009002"
+
+    # Relation has NO relation_summary and NO evidence_snippets (older DB row)
+    s7_payload = {
+        "center": {
+            "entity_id": _center_id,
+            "canonical_name": "Tesla Inc.",
+            "entity_type": "financial_instrument",
+        },
+        "relations": [
+            {
+                "relation_id": _relation_id,
+                "subject_entity_id": _center_id,
+                "object_entity_id": _neighbor_id,
+                "canonical_type": "SUPPLIER_OF",
+                "confidence": 0.7,
+                # relation_summary and evidence_snippets intentionally absent
+            }
+        ],
+        "entities": {
+            _neighbor_id: {
+                "entity_id": _neighbor_id,
+                "canonical_name": "Panasonic Corp.",
+                "entity_type": "company",
+            }
+        },
+    }
+
+    downstream_resp = MagicMock(spec=httpx.Response)
+    downstream_resp.status_code = 200
+    downstream_resp.json.return_value = s7_payload
+
+    authed_mock_clients.knowledge_graph.get = AsyncMock(return_value=downstream_resp)
+
+    import jwt as pyjwt
+
+    token = pyjwt.encode(
+        {"sub": "user-1", "user_id": "user-1", "tenant_id": "tenant-1"},
+        "test-secret",
+        algorithm="HS256",
+    )
+    response = await authed_client.get(
+        f"/v1/entities/{_center_id}/graph",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["edges"]) == 1
+    edge = body["edges"][0]
+    # Partial S7 response must never raise — safe defaults applied
+    assert edge["relation_summary"] is None, "Missing relation_summary must default to None"
+    assert edge["evidence_snippets"] == [], "Missing evidence_snippets must default to []"
 
 
 @pytest.mark.asyncio
