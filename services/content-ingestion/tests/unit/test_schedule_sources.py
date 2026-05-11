@@ -313,3 +313,99 @@ class TestScheduleTasksEnqueued:
         result = await uc.execute()
 
         assert result.tasks_enqueued == 3  # DB count, not candidate count
+
+
+# ---------------------------------------------------------------------------
+# BP-460: per-source-type polling interval override (NewsAPI quota fix)
+# ---------------------------------------------------------------------------
+
+
+class TestSourceTypeIntervalOverrideBP460:
+    """ScheduleDueSourcesUseCase must respect per-source-type interval overrides.
+
+    BP-460: NewsAPI free tier allows 100 req/day. The global scheduler_interval_seconds
+    is typically 300 s, which would exhaust the quota within minutes.  A per-type
+    override of 14 400 s (4 h) keeps usage well under the cap.
+    """
+
+    async def test_newsapi_source_not_due_within_override_interval(self) -> None:
+        """A NewsAPI source last run 2 h ago should be skipped when override = 4 h."""
+        from content_ingestion.domain.entities import SourceType
+
+        source = _make_source_model(name="newsapi-src", source_type="newsapi")
+        state = MagicMock()
+        # Last run was 2 hours ago — within the 4-hour (14 400 s) override
+        state.last_run_at = common.time.utc_now() - timedelta(hours=2)
+        uow = _make_uow(sources=[source], adapter_state=state)
+
+        uc = ScheduleDueSourcesUseCase(
+            uow=uow,
+            scheduler_interval_seconds=300.0,  # global default
+            max_tasks_per_tick=100,
+            source_type_intervals={SourceType.NEWSAPI: 14400.0},  # 4-hour override
+        )
+        result = await uc.execute()
+
+        # Must be skipped — 2 h elapsed < 4 h override
+        assert result.tasks_enqueued == 0
+
+    async def test_newsapi_source_is_due_after_override_interval(self) -> None:
+        """A NewsAPI source last run 5 h ago must be scheduled when override = 4 h."""
+        from content_ingestion.domain.entities import SourceType
+
+        source = _make_source_model(name="newsapi-src", source_type="newsapi")
+        state = MagicMock()
+        # Last run was 5 hours ago — past the 4-hour override
+        state.last_run_at = common.time.utc_now() - timedelta(hours=5)
+        uow = _make_uow(sources=[source], adapter_state=state, add_many_inserted=1)
+
+        uc = ScheduleDueSourcesUseCase(
+            uow=uow,
+            scheduler_interval_seconds=300.0,
+            max_tasks_per_tick=100,
+            source_type_intervals={SourceType.NEWSAPI: 14400.0},
+        )
+        result = await uc.execute()
+
+        # Must be enqueued — 5 h elapsed > 4 h override
+        assert result.tasks_enqueued == 1
+
+    async def test_eodhd_source_uses_global_interval_when_no_override(self) -> None:
+        """EODHD source (no override) uses the global interval, not the NewsAPI override."""
+        from content_ingestion.domain.entities import SourceType
+
+        source = _make_source_model(name="eodhd-src", source_type="eodhd")
+        state = MagicMock()
+        # Last run was 10 min ago — past the 300 s global, inside the 4-hour NewsAPI interval
+        state.last_run_at = common.time.utc_now() - timedelta(seconds=600)
+        uow = _make_uow(sources=[source], adapter_state=state, add_many_inserted=1)
+
+        uc = ScheduleDueSourcesUseCase(
+            uow=uow,
+            scheduler_interval_seconds=300.0,
+            max_tasks_per_tick=100,
+            source_type_intervals={SourceType.NEWSAPI: 14400.0},
+        )
+        result = await uc.execute()
+
+        # EODHD should be enqueued: 600 s elapsed > 300 s global interval
+        assert result.tasks_enqueued == 1
+
+    async def test_no_overrides_dict_falls_back_to_global_interval(self) -> None:
+        """When source_type_intervals is None, all sources use the global interval."""
+        source = _make_source_model(name="newsapi-src", source_type="newsapi")
+        state = MagicMock()
+        # Last run 2 min ago — past 60 s global but inside 14 400 s if override was active
+        state.last_run_at = common.time.utc_now() - timedelta(seconds=120)
+        uow = _make_uow(sources=[source], adapter_state=state, add_many_inserted=1)
+
+        uc = ScheduleDueSourcesUseCase(
+            uow=uow,
+            scheduler_interval_seconds=60.0,  # global 60 s
+            max_tasks_per_tick=100,
+            source_type_intervals=None,  # no overrides
+        )
+        result = await uc.execute()
+
+        # Must be enqueued: 120 s elapsed > 60 s global interval
+        assert result.tasks_enqueued == 1

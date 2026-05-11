@@ -33,6 +33,10 @@ class ScheduleDueSourcesUseCase:
     Idempotency: ``ON CONFLICT (source_id, window_start) DO NOTHING`` in the
     repository prevents duplicate tasks even when multiple scheduler instances
     run concurrently.
+
+    Per-source-type interval overrides (``source_type_intervals``) allow
+    rate-limited providers (e.g. NewsAPI 100 req/day) to use a longer polling
+    cadence than the global ``scheduler_interval_seconds``.  BP-460.
     """
 
     def __init__(
@@ -40,10 +44,23 @@ class ScheduleDueSourcesUseCase:
         uow: UnitOfWork,
         scheduler_interval_seconds: float = 300.0,
         max_tasks_per_tick: int = 100,
+        # BP-460: map SourceType → override interval in seconds.
+        # Keys absent from this dict fall back to scheduler_interval_seconds.
+        source_type_intervals: dict[SourceType, float] | None = None,
     ) -> None:
         self._uow = uow
         self._interval = scheduler_interval_seconds
         self._max_tasks_per_tick = max_tasks_per_tick
+        # Use an empty dict (not a mutable default) so callers can pass None safely.
+        self._source_type_intervals: dict[SourceType, float] = source_type_intervals or {}
+
+    def _interval_for(self, source_type: SourceType) -> float:
+        """Return the effective polling interval for a given source type.
+
+        Falls back to the global ``scheduler_interval_seconds`` when no
+        per-type override is registered.
+        """
+        return self._source_type_intervals.get(source_type, self._interval)
 
     async def execute(self) -> SchedulerTickResult:
         """Run one scheduler tick and return a summary."""
@@ -77,16 +94,19 @@ class ScheduleDueSourcesUseCase:
                     logger.debug("scheduler_skip_active_task", source=source.name)
                     continue
 
-                # Check watermark to determine if source is due
+                # Check watermark to determine if source is due.
+                # Use the per-source-type interval override when configured
+                # (e.g. NewsAPI uses 14 400 s instead of the global default).
+                effective_interval = self._interval_for(source.source_type)
                 state = await self._uow.adapter_state.get(source.id)
                 if state and state.last_run_at:
                     elapsed = (now - state.last_run_at).total_seconds()
-                    if elapsed < self._interval:
+                    if elapsed < effective_interval:
                         logger.debug(
                             "scheduler_skip_not_due",
                             source=source.name,
                             elapsed=round(elapsed, 1),
-                            interval=self._interval,
+                            interval=effective_interval,
                         )
                         continue
 

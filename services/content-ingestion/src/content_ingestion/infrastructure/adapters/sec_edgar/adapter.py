@@ -29,9 +29,15 @@ logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 def _parse_published_at(filing: dict[str, Any]) -> datetime | None:
-    """Extract published_at from ``period_of_report`` or ``file_date``."""
+    """Extract published_at from ``period_ending`` or ``file_date``.
+
+    BP-460: EFTS search-index API returns ``period_ending`` (not
+    ``period_of_report``) and ``file_date``.  The old field name was silently
+    missed, so every filing used None for published_at.
+    """
     source = filing.get("_source", filing)
-    for field in ("period_of_report", "file_date"):
+    # BP-460: EFTS uses "period_ending", not "period_of_report"
+    for field in ("period_ending", "file_date"):
         raw = source.get(field)
         if raw:
             try:
@@ -112,23 +118,46 @@ class SECEdgarAdapter(SourceAdapter):
         results: list[FetchResult] = []
         for filing in filings:
             source_data = filing.get("_source", filing)
-            accession_no = source_data.get("accession_no", "")
-            file_name = source_data.get("file_name", "")
+
+            # BP-460: EFTS returns "adsh" (not "accession_no") as the accession number.
+            # Example value: "0001477932-26-002885"
+            accession_no = source_data.get("adsh", "")
             if not accession_no:
                 continue
 
-            filing_hash = url_hash(f"{accession_no}{file_name}")
+            # BP-460: EFTS returns "ciks" as a list of strings with leading zeros.
+            # We need the bare numeric CIK (no leading zeros) for the Archives URL.
+            # Example: ["0000320193"] → "320193"
+            ciks_list = source_data.get("ciks", [])
+            cik = str(ciks_list[0]).lstrip("0") if ciks_list else ""
+
+            # Dedup key: accession number alone is sufficient — EFTS has one entry
+            # per filing (no per-document entries), so there is no file_name to
+            # include in the hash.  The old code concatenated an always-empty
+            # file_name, making the hash equivalent to hash(accession_no) anyway.
+            filing_hash = url_hash(accession_no)
 
             if self._exists_fn is not None and await self._exists_fn(filing_hash):
                 logger.debug("sec_edgar_dedup_skip", url_hash=filing_hash[:12])
                 continue
 
-            cik = str(source_data.get("cik", ""))
-            filing_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession_no.replace('-', '')}/{file_name}"
+            # BP-460: Construct the EDGAR filing index URL.
+            # Format: https://www.sec.gov/Archives/edgar/data/{cik}/{acc_no_dashes}/{acc_no_dashes}-index.htm
+            # where {cik} has no leading zeros and {acc_no_dashes} has no dashes.
+            # Example:
+            #   CIK 320193, adsh "0001477932-26-002885"
+            #   → https://www.sec.gov/Archives/edgar/data/320193/000147793226002885/0001477932-26-002885-index.htm
+            acc_no_no_dashes = accession_no.replace("-", "")
+            filing_url = (
+                f"https://www.sec.gov/Archives/edgar/data/{cik}" f"/{acc_no_no_dashes}/{accession_no}-index.htm"
+            )
 
             try:
+                # Fetch the index page for this filing as the raw document bytes.
+                # The filename for the index page follows the standard EDGAR pattern.
+                index_filename = f"{accession_no}-index.htm"
                 raw_bytes = await self._retry_request(
-                    lambda _an=accession_no, _fn=file_name, _cik=cik: self._client.fetch_filing_document(
+                    lambda _an=accession_no, _fn=index_filename, _cik=cik: self._client.fetch_filing_document(
                         cik=_cik,
                         accession_no=_an,
                         filename=_fn,

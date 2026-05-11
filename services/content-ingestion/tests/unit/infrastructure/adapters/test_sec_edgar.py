@@ -31,13 +31,21 @@ def _make_source(**kwargs: Any) -> Source:
     return Source(**defaults)
 
 
-def _filing(accession_no: str, file_name: str = "filing.htm") -> dict[str, Any]:
+def _filing(adsh: str, ciks: list[str] | None = None) -> dict[str, Any]:
+    """Build a realistic EFTS _source dict using the actual EFTS field names.
+
+    BP-460: EFTS returns ``adsh`` (not ``accession_no``), ``ciks`` as a list
+    (not ``cik`` as a string), and ``period_ending`` (not ``period_of_report``).
+    There is no ``file_name`` field in the EFTS response.
+    """
     return {
         "_source": {
-            "accession_no": accession_no,
-            "file_name": file_name,
-            "cik": "12345",
-            "period_of_report": "2026-01-15",
+            "adsh": adsh,
+            "ciks": ciks if ciks is not None else ["0000012345"],
+            "entity_name": "Test Corp",
+            "form_type": "10-Q",
+            "file_date": "2026-01-20",
+            "period_ending": "2026-01-15",
         }
     }
 
@@ -72,15 +80,28 @@ class TestSECEdgarUserAgentValidation:
 
 
 class TestParsePublishedAt:
-    def test_period_of_report(self) -> None:
-        result = _parse_published_at({"_source": {"period_of_report": "2026-01-15"}})
+    def test_period_ending(self) -> None:
+        """BP-460: EFTS uses 'period_ending', not 'period_of_report'."""
+        result = _parse_published_at({"_source": {"period_ending": "2026-01-15"}})
         assert result is not None
         assert result.day == 15
+
+    def test_old_period_of_report_not_recognised(self) -> None:
+        """BP-460 regression: old field name must produce None (so we catch regressions)."""
+        result = _parse_published_at({"_source": {"period_of_report": "2026-01-15"}})
+        assert result is None
 
     def test_file_date_fallback(self) -> None:
         result = _parse_published_at({"_source": {"file_date": "2026-02-20"}})
         assert result is not None
         assert result.month == 2
+
+    def test_period_ending_takes_priority_over_file_date(self) -> None:
+        """period_ending is primary; file_date is the fallback."""
+        result = _parse_published_at({"_source": {"period_ending": "2026-03-31", "file_date": "2026-04-15"}})
+        assert result is not None
+        assert result.month == 3
+        assert result.day == 31
 
     def test_no_date_fields(self) -> None:
         assert _parse_published_at({"_source": {}}) is None
@@ -90,6 +111,7 @@ class TestSECEdgarAdapterFetch:
     async def test_fetches_and_returns_results(self) -> None:
         mock_client = AsyncMock(spec=SECEdgarClient)
         mock_client.search_filings.return_value = [
+            # BP-460: use correct EFTS field names (adsh, ciks)
             _filing("0001234567-26-000001"),
         ]
         mock_client.fetch_filing_document.return_value = b"<html>Filing content</html>"
@@ -115,12 +137,13 @@ class TestSECEdgarAdapterFetch:
         results = await adapter.fetch(_make_source())
         assert len(results) == 0
 
-    async def test_dedup_hash_uses_accession_and_filename(self) -> None:
-        """Different filenames for same accession should produce different hashes."""
+    async def test_dedup_hash_uses_accession_number(self) -> None:
+        """BP-460: dedup hash is sha256(accession_number) — no file_name suffix."""
         from content_ingestion.infrastructure.adapters.base import url_hash
 
-        h1 = url_hash("0001234567-26-000001filing.htm")
-        h2 = url_hash("0001234567-26-000001xbrl.xml")
+        # Two different accession numbers must yield different hashes.
+        h1 = url_hash("0001234567-26-000001")
+        h2 = url_hash("0001234567-26-000002")
         assert h1 != h2
 
     async def test_is_backfill_propagated(self) -> None:
@@ -135,6 +158,163 @@ class TestSECEdgarAdapterFetch:
         results = await adapter.fetch(_make_source(), is_backfill=True)
         assert len(results) == 1
         assert results[0].is_backfill is True
+
+    async def test_skips_filing_without_adsh(self) -> None:
+        """BP-460: filings missing the adsh field must be silently skipped."""
+        mock_client = AsyncMock(spec=SECEdgarClient)
+        # A filing with no adsh key — should be skipped
+        mock_client.search_filings.return_value = [{"_source": {"entity_name": "No ADSH Corp"}}]
+
+        adapter = SECEdgarAdapter(
+            client=mock_client,
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+        )
+        results = await adapter.fetch(_make_source())
+        assert results == []
+
+
+class TestSECEdgarFieldMappingBP460:
+    """Regression tests for BP-460: EFTS field name mismatch.
+
+    These tests verify the exact field reads and URL construction logic
+    that was broken before the fix.
+    """
+
+    async def test_reads_adsh_not_accession_no(self) -> None:
+        """BP-460: adapter must read 'adsh', not 'accession_no'."""
+        mock_client = AsyncMock(spec=SECEdgarClient)
+        # Provide only the NEW correct field name; the old name ('accession_no')
+        # is absent.  If the adapter still reads the old name, it skips the filing
+        # and returns an empty list.
+        mock_client.search_filings.return_value = [
+            {
+                "_source": {
+                    "adsh": "0001477932-26-002885",
+                    "ciks": ["0000320193"],
+                    "entity_name": "Apple Inc.",
+                    "form_type": "10-Q",
+                    "file_date": "2026-04-15",
+                    "period_ending": "2026-03-31",
+                }
+            }
+        ]
+        mock_client.fetch_filing_document.return_value = b"<html>index</html>"
+
+        adapter = SECEdgarAdapter(
+            client=mock_client,
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+        )
+        results = await adapter.fetch(_make_source())
+        # Must find exactly 1 result — not 0 (which was the pre-fix behaviour)
+        assert len(results) == 1
+
+    async def test_cik_leading_zeros_stripped(self) -> None:
+        """BP-460: cik extracted from ciks[0] must have leading zeros removed."""
+        mock_client = AsyncMock(spec=SECEdgarClient)
+        mock_client.search_filings.return_value = [
+            {
+                "_source": {
+                    "adsh": "0001477932-26-002885",
+                    # Apple's CIK with leading zeros, as returned by EFTS
+                    "ciks": ["0000320193"],
+                    "entity_name": "Apple Inc.",
+                    "form_type": "10-Q",
+                    "file_date": "2026-04-15",
+                    "period_ending": "2026-03-31",
+                }
+            }
+        ]
+        mock_client.fetch_filing_document.return_value = b"<html>index</html>"
+
+        adapter = SECEdgarAdapter(
+            client=mock_client,
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+        )
+        results = await adapter.fetch(_make_source())
+        assert len(results) == 1
+        # URL must contain the bare CIK without leading zeros
+        assert "/320193/" in results[0].url
+        assert "/0000320193/" not in results[0].url
+
+    async def test_url_construction_matches_edgar_format(self) -> None:
+        """BP-460: URL must follow the EDGAR Archives index page format."""
+        mock_client = AsyncMock(spec=SECEdgarClient)
+        mock_client.search_filings.return_value = [
+            {
+                "_source": {
+                    "adsh": "0001477932-26-002885",
+                    "ciks": ["0000320193"],
+                    "entity_name": "Apple Inc.",
+                    "form_type": "10-Q",
+                    "file_date": "2026-04-15",
+                    "period_ending": "2026-03-31",
+                }
+            }
+        ]
+        mock_client.fetch_filing_document.return_value = b"<html>index</html>"
+
+        adapter = SECEdgarAdapter(
+            client=mock_client,
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+        )
+        results = await adapter.fetch(_make_source())
+        assert len(results) == 1
+        expected_url = (
+            "https://www.sec.gov/Archives/edgar/data/320193" "/000147793226002885/0001477932-26-002885-index.htm"
+        )
+        assert results[0].url == expected_url
+
+    async def test_period_ending_read_for_published_at(self) -> None:
+        """BP-460: published_at must come from 'period_ending', not 'period_of_report'."""
+        mock_client = AsyncMock(spec=SECEdgarClient)
+        mock_client.search_filings.return_value = [
+            {
+                "_source": {
+                    "adsh": "0001234567-26-000001",
+                    "ciks": ["0000012345"],
+                    "period_ending": "2026-03-31",  # correct EFTS field
+                    "file_date": "2026-04-15",
+                }
+            }
+        ]
+        mock_client.fetch_filing_document.return_value = b"<html>index</html>"
+
+        adapter = SECEdgarAdapter(
+            client=mock_client,
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+        )
+        results = await adapter.fetch(_make_source())
+        assert len(results) == 1
+        assert results[0].published_at is not None
+        assert results[0].published_at.month == 3
+        assert results[0].published_at.day == 31
+
+    async def test_empty_ciks_list_skips_filing_gracefully(self) -> None:
+        """BP-460: a filing with an empty ciks list must produce an empty CIK string."""
+        mock_client = AsyncMock(spec=SECEdgarClient)
+        mock_client.search_filings.return_value = [
+            {
+                "_source": {
+                    "adsh": "0001234567-26-000001",
+                    "ciks": [],  # edge case: empty list
+                    "entity_name": "Unknown Corp",
+                    "form_type": "8-K",
+                    "file_date": "2026-04-15",
+                    "period_ending": "2026-03-31",
+                }
+            }
+        ]
+        mock_client.fetch_filing_document.return_value = b"<html>index</html>"
+
+        adapter = SECEdgarAdapter(
+            client=mock_client,
+            retry_config=RetryConfig(max_retries=1, backoff_factors=(0.0,)),
+        )
+        # Should not raise — produces a result with an empty CIK in the URL
+        results = await adapter.fetch(_make_source())
+        assert len(results) == 1
+        # URL will have an empty CIK segment but must be syntactically valid
+        assert "0001234567-26-000001-index.htm" in results[0].url
 
 
 class TestSECEdgarAdapterMarketHours:
