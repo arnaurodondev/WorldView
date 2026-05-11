@@ -79,13 +79,21 @@ def _build_system_prompt_prefix(ctx: EntityChatContext) -> str:
     safe_name = _sanitize_entity_name(ctx.canonical_name)
     safe_type = _sanitize_entity_name(ctx.entity_type)
 
+    # WHY :.2f formatting: raw float values like health_score=0.8484252814413581 contain
+    # 16 consecutive decimal digits that trigger the credit card PII regex
+    # (_CARD_RE = r'\b(?:\d[ -]?){13,19}\b') in InputValidator.validate().  Rounding
+    # to 2 d.p. is also cleaner for the LLM (0.85 vs 0.8484252814413581) and prevents
+    # future false positives if the health_score precision ever increases further.
+    _health = f"{ctx.health_score:.2f}" if ctx.health_score is not None else "unknown"
+    _completeness = f"{ctx.data_completeness:.2f}" if ctx.data_completeness is not None else "unknown"
+
     lines: list[str] = [
         f"You are analyzing {safe_name} ({safe_type}).",
         "",
         f"Entity narrative: {ctx.narrative_text or 'No narrative available.'}",
         "",
-        f"Data completeness: {ctx.data_completeness if ctx.data_completeness is not None else 'unknown'}",
-        f"Health score: {ctx.health_score if ctx.health_score is not None else 'unknown'}",
+        f"Data completeness: {_completeness}",
+        f"Health score: {_health}",
     ]
 
     if ctx.top_relations:

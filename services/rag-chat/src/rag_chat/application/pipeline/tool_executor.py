@@ -2372,10 +2372,11 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="get_entity_graph",
             description=(
-                "Retrieves the egocentric knowledge graph for a named entity — the entity's "
-                "immediate neighbours, relationships, and their summaries. Use when the question "
-                "asks about connections, subsidiaries, partnerships, board members, or the "
-                "entity's place in a larger structure. Returns nodes and edges with confidence scores."
+                "Retrieves the egocentric knowledge graph for a named entity — its immediate "
+                "neighbours, relationships, and confidence scores. PREFER THIS TOOL for questions "
+                "like 'what is the relation between X and Y', 'how is X connected to Y', "
+                "'who are X's partners/competitors/subsidiaries'. Returns nodes and edges. "
+                "Use the entity map above to identify the primary entity for this call."
             ),
             parameters=[
                 ParameterSpec(
@@ -2412,10 +2413,11 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="traverse_graph",
             description=(
-                "Executes a targeted knowledge graph traversal to find multi-hop paths between "
-                "entities. More powerful than get_entity_graph for finding indirect connections, "
-                "competitive relationships, or shared investors. Use when the question requires "
-                "tracing a path or finding how two entities are linked."
+                "Executes a Cypher-based multi-hop graph traversal for complex path-finding "
+                "queries (3+ hops, shared investors, board-member chains). "
+                "IMPORTANT: prefer get_entity_graph for simple 'what is the relation between X and Y' "
+                "questions — traverse_graph is for advanced indirect path tracing only. "
+                "Requires a known starting entity resolved from the entity map above."
             ),
             parameters=[
                 ParameterSpec(name="start_entity", type="string", description="Starting entity name", required=True),
