@@ -1,15 +1,23 @@
-"""Batch document metadata and cluster-size endpoints — internal use."""
+"""Batch document metadata, cluster-size, and cluster-articles endpoints — internal use."""
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import APIRouter, HTTPException
 
-from content_store.api.dependencies import BatchClusterSizesUseCaseDep, BatchDocumentsUseCaseDep
+from content_store.api.dependencies import (
+    BatchClusterSizesUseCaseDep,
+    BatchDocumentsUseCaseDep,
+    ClusterArticlesUseCaseDep,
+)
 from content_store.api.schemas import (
     BatchClusterSizesRequest,
     BatchClusterSizesResponse,
     BatchDocumentsRequest,
     BatchDocumentsResponse,
+    ClusterArticleResponse,
+    ClusterArticlesResponse,
     ClusterSizeEntry,
     DocumentMetadataResponse,
 )
@@ -78,5 +86,55 @@ async def batch_cluster_sizes(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return BatchClusterSizesResponse(
-        entries=[ClusterSizeEntry(doc_id=doc_id, cluster_size=size) for doc_id, size in sizes.items()]
+        entries=[
+            ClusterSizeEntry(
+                doc_id=doc_id,
+                cluster_size=result.cluster_size,
+                # cluster_id=None when cluster_size=1 (no near-duplicate siblings)
+                cluster_id=result.cluster_id,
+            )
+            for doc_id, result in sizes.items()
+        ]
+    )
+
+
+@router.get("/documents/cluster/{cluster_id}/articles", response_model=ClusterArticlesResponse)
+async def get_cluster_articles(
+    cluster_id: UUID,
+    use_case: ClusterArticlesUseCaseDep,
+) -> ClusterArticlesResponse:
+    """Fetch all sibling articles in a near-duplicate cluster.
+
+    Internal endpoint — protected by InternalJWTMiddleware (PRD-0025, RS256).
+
+    WHY this endpoint: the frontend "+N sim" chip needs to show the sibling
+    articles when clicked.  The cluster_id comes from the existing
+    ``cluster_size`` enrichment in the news/top response — the frontend passes
+    it here to get the full article list for the drawer/sheet.
+
+    A cluster always has exactly 2 participants (primary_doc_id +
+    duplicate_doc_id in duplicate_clusters), so the response will contain
+    0 articles (cluster not found) or 2 articles.
+
+    Errors:
+    - 401: missing or invalid X-Internal-JWT
+    - 404: cluster_id not found in duplicate_clusters
+    - 422: malformed cluster_id (not a valid UUID)
+    """
+    dtos = await use_case.execute(cluster_id)
+    if not dtos:
+        raise HTTPException(status_code=404, detail=f"Cluster {cluster_id} not found")
+    return ClusterArticlesResponse(
+        articles=[
+            ClusterArticleResponse(
+                id=dto.id,
+                title=dto.title,
+                url=dto.url,
+                published_at=dto.published_at,
+                source_name=dto.source_name,
+                cluster_id=dto.cluster_id,
+                cluster_size=dto.cluster_size,
+            )
+            for dto in dtos
+        ]
     )

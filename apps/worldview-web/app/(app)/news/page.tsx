@@ -32,6 +32,7 @@ import { qk } from "@/lib/query/keys";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+import { ClusterArticlesModal } from "@/components/news/ClusterArticlesModal";
 import { cn } from "@/lib/utils";
 import type { RankedArticle, TopNewsParams } from "@/types/api";
 
@@ -69,6 +70,11 @@ export default function NewsHubPage() {
   // "Showing N of M" so silent truncation is impossible.
   const [pageSize, setPageSize] = useState<number>(50);
 
+  // P2-F: cluster modal — null = closed; non-null = open with that cluster_id.
+  // WHY a single state string | null (not separate isOpen + id): the cluster_id
+  // IS the open-state signal. null unambiguously means "closed".
+  const [clusterModalId, setClusterModalId] = useState<string | null>(null);
+
   const params: TopNewsParams = useMemo(() => {
     const hours = WINDOWS.find((w) => w.key === windowKey)?.hours ?? 24;
     return {
@@ -94,6 +100,14 @@ export default function NewsHubPage() {
   const articles = data?.articles ?? [];
 
   return (
+    <>
+    {/* P2-F: ClusterArticlesModal — rendered at page level so it can overlay
+        the full news list. The Sheet backdrop requires a portal root which
+        sits outside the flex column. Controlled by clusterModalId state. */}
+    <ClusterArticlesModal
+      clusterId={clusterModalId}
+      onClose={() => setClusterModalId(null)}
+    />
     <div className="flex h-full flex-col overflow-hidden">
       {/* Header */}
       <div className="flex h-7 shrink-0 items-center gap-2 border-b border-border px-3">
@@ -184,7 +198,8 @@ export default function NewsHubPage() {
             <ul className="divide-y divide-border/40">
               {articles.map((a) => (
                 <li key={a.article_id}>
-                  <ArticleRow article={a} />
+                  {/* P2-F: pass setClusterModalId so clicking "+N sim" opens the drawer */}
+                  <ArticleRow article={a} onClusterClick={setClusterModalId} />
                 </li>
               ))}
             </ul>
@@ -211,12 +226,21 @@ export default function NewsHubPage() {
         )}
       </div>
     </div>
+    </>
   );
 }
 
 // ── Article row ────────────────────────────────────────────────────────────
 
-function ArticleRow({ article: a }: { article: RankedArticle }) {
+function ArticleRow({
+  article: a,
+  onClusterClick,
+}: {
+  article: RankedArticle;
+  // P2-F: callback to open the cluster modal. Called with the cluster_id string.
+  // Optional — the chip is not rendered when cluster_size <= 1 anyway.
+  onClusterClick?: (clusterId: string) => void;
+}) {
   // QA-iter1: tier pill is now neutral so it doesn't visually compete with
   // the active-window selector (which uses bg-primary/20). Reserve primary
   // tint for user-controllable state; tiers are server-classified data.
@@ -305,18 +329,37 @@ function ArticleRow({ article: a }: { article: RankedArticle }) {
           </span>
         )}
 
-        {/* Cluster-size chip — "+N similar" when near-duplicates exist.
+        {/* Cluster-size chip — "+N sim" button when near-duplicates exist.
             WHY "similar" (not "dupes"): near-duplicates are corroboration
             signals, not garbage — "similar" is descriptive, "dupes" implies
             the article itself is a duplicate which it may not be.
-            WHY only when cluster_size > 1: cluster_size=1 means "alone". */}
-        {a.cluster_size != null && a.cluster_size > 1 && (
-          <span
-            className="shrink-0 rounded-[2px] bg-muted/40 px-1 font-mono text-[9px] tabular-nums text-muted-foreground/70"
-            title={`${a.cluster_size - 1} similar article${a.cluster_size - 1 !== 1 ? "s" : ""} cover the same story`}
+            WHY only when cluster_size > 1: cluster_size=1 means "alone".
+            P2-F: changed from <span> to <button> so clicking opens the
+            ClusterArticlesModal sheet. e.stopPropagation() prevents the outer
+            <a> href from firing (article would open externally instead). */}
+        {a.cluster_size != null && a.cluster_size > 1 && a.cluster_id && (
+          <button
+            type="button"
+            className={cn(
+              "shrink-0 rounded-[2px] bg-muted/40 px-1 font-mono text-[9px] tabular-nums text-muted-foreground/70",
+              // WHY cursor-pointer + hover ring: this is now interactive. The hover
+              // ring signals clickability without changing the terminal-density style.
+              "cursor-pointer hover:bg-muted/70 hover:text-muted-foreground transition-colors",
+              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60",
+            )}
+            title={`${a.cluster_size - 1} similar article${a.cluster_size - 1 !== 1 ? "s" : ""} cover the same story — click to view`}
+            onClick={(e) => {
+              // WHY stopPropagation: the button is nested inside an <a> tag.
+              // Without this, clicking the button would also trigger the <a>
+              // href (opening the article in a new tab at the same time).
+              e.stopPropagation();
+              e.preventDefault();
+              if (a.cluster_id) onClusterClick?.(a.cluster_id);
+            }}
+            aria-label={`View ${a.cluster_size - 1} similar article${a.cluster_size - 1 !== 1 ? "s" : ""}`}
           >
             +{a.cluster_size - 1} sim
-          </span>
+          </button>
         )}
 
         {/* Timestamp */}
