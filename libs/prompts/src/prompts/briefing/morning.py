@@ -71,6 +71,8 @@ MORNING_BRIEFING = PromptTemplate(
         "- Flag conflicting signals explicitly\n"
         "- If a context section is empty, skip that entire section entirely."
         " Never write 'No data available' or 'not available'.\n"
+        "- NEVER use 'REMOVED', 'N/A', or any placeholder as a section heading."
+        " If you would omit a section, simply omit it — do not include the heading at all.\n"
         "- Do not compute portfolio P&L, percentage returns, or position values"
         " unless they appear verbatim in the portfolio context\n"
         "- Do not use phrases like 'consider', 'you should', 'it may be worth'\n"
