@@ -150,6 +150,27 @@ class S7Client(BaseUpstreamClient):
             edges=edges,
         )
 
+    # ── Entity name resolution (PLAN-0078) ────────────────────────────────────
+
+    async def resolve_entity_by_name(
+        self,
+        name: str,
+        limit: int = 5,
+    ) -> list[dict]:
+        """GET /api/v1/entities/resolve → fuzzy alias match for a plain-text entity name.
+
+        Returns a list of candidates [{entity_id, alias_text, alias_type, similarity}]
+        ordered by trigram similarity descending. Empty list on error or no match.
+        """
+        raw = await self._get(
+            "/api/v1/entities/resolve",
+            params={"name": name, "limit": limit},
+        )
+        if not raw:
+            return []
+        result: list[dict] = raw.get("candidates", [])
+        return result
+
     # ── Claims search ──────────────────────────────────────────────────────────
 
     async def search_claims(

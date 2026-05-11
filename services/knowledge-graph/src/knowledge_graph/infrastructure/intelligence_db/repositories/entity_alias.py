@@ -166,16 +166,22 @@ ORDER BY alias_type, alias_text
 
         Returns aliases ordered by similarity descending.
         """
+        # WHY single % not %%: SQLAlchemy text() does NOT format % signs; asyncpg
+        # sends the SQL verbatim to PostgreSQL. The pg_trgm similarity operator is
+        # the single-percent character (%). Using %% was a bug — PostgreSQL saw the
+        # literal string "%%" which is not a recognized operator.
+        # BP-448 class: asyncpg infers :query as `text`; explicit CAST to varchar
+        # matches the `character varying` column type for the % operator.
         result = await self._session.execute(
-            text("""
-SELECT alias_id, entity_id, alias_text, normalized_alias_text, alias_type,
-       similarity(normalized_alias_text, :query) AS sim
-FROM entity_aliases
-WHERE normalized_alias_text %% :query
-  AND is_active = true
-ORDER BY sim DESC
-LIMIT :limit
-"""),
+            text(
+                "SELECT alias_id, entity_id, alias_text, normalized_alias_text, alias_type,"
+                "       similarity(normalized_alias_text, CAST(:query AS varchar)) AS sim"
+                " FROM entity_aliases"
+                " WHERE normalized_alias_text % CAST(:query AS varchar)"
+                "   AND is_active = true"
+                " ORDER BY sim DESC"
+                " LIMIT :limit"
+            ),
             {"query": query, "limit": limit},
         )
         rows = result.fetchall()

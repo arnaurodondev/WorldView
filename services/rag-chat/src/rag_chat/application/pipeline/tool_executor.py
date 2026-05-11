@@ -597,19 +597,48 @@ class ToolExecutor:
             log.warning("tool_handler_missing_port", tool="get_entity_graph", port="s7")
             return []
 
-        # Resolve entity_id: use injected context if available
+        # Resolve entity_id: use injected context only when entity_name matches it;
+        # otherwise always do name-based lookup so multi-entity queries (e.g. "Apple
+        # and Anthropic") each get their own graph, not the context entity's graph.
         entity_id: UUID | None = None
-        if self._entity_context is not None:
+        ctx_name_lower = self._entity_context.name.lower() if self._entity_context else ""
+        entity_name_lower = entity_name.lower()
+        use_context = self._entity_context is not None and (
+            entity_name_lower in ctx_name_lower
+            or ctx_name_lower in entity_name_lower
+            or entity_name_lower == ctx_name_lower
+        )
+        if use_context and self._entity_context is not None:
             entity_id = self._entity_context.entity_id
         else:
-            # Name-based resolution not yet wired (PLAN-0078); log and degrade.
-            log.warning(
-                "tool_entity_unresolved",
+            # PLAN-0078: name-based entity resolution via S7 alias fuzzy search.
+            candidates = await self._s7.resolve_entity_by_name(entity_name, limit=3)
+            if not candidates:
+                log.warning(
+                    "tool_entity_unresolved",
+                    tool="get_entity_graph",
+                    entity_name=entity_name,
+                    reason="no_alias_match",
+                )
+                return []
+            try:
+                entity_id = UUID(str(candidates[0]["entity_id"]))
+            except (ValueError, KeyError):
+                log.warning(
+                    "tool_entity_unresolved",
+                    tool="get_entity_graph",
+                    entity_name=entity_name,
+                    reason="invalid_entity_id_in_candidate",
+                )
+                return []
+            log.info(
+                "tool_entity_resolved_by_name",
                 tool="get_entity_graph",
                 entity_name=entity_name,
-                reason="no_entity_context_and_name_resolution_not_wired",
+                resolved_entity_id=str(entity_id),
+                alias_text=candidates[0].get("alias_text"),
+                similarity=candidates[0].get("similarity"),
             )
-            return []
 
         t0 = time.monotonic()
         try:

@@ -357,11 +357,15 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     _validator = InputValidator()
 
     # E-8: Layer 2 LLM semantic injection classifier.
-    # Uses the same DeepInfra API key as the completion model. The model is
-    # configurable via INJECTION_CLASSIFIER_MODEL env var (default: Qwen/Qwen3.5-0.8B).
-    # When deepinfra_api_key is absent the classifier disables itself (fail-open for
-    # the Layer 2 check — Layer 1 regex is always active).
-    _llm_classifier = LLMInjectionClassifier(api_key=_deepinfra_api_key)
+    # Uses the same DeepInfra API key as the completion model. Model is sourced
+    # from settings (RAG_CHAT_DEEPINFRA_CLASSIFICATION_MODEL, same field used by
+    # the intent classifier) so both stay in sync.  When deepinfra_api_key is
+    # absent the classifier disables itself (fail-open for Layer 2 check —
+    # Layer 1 regex is always active).
+    _llm_classifier = LLMInjectionClassifier(
+        api_key=_deepinfra_api_key,
+        model=settings.deepinfra_classification_model,
+    )
 
     _plan_builder = RetrievalPlanBuilder(cypher_enabled=settings.cypher_enabled)
     _hyde = HydeExpander(
