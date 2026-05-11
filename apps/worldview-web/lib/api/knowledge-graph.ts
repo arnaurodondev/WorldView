@@ -13,14 +13,11 @@ export function createKnowledgeGraphApi(t: string | undefined) {
     /**
      * getEntityGraph — egocentric knowledge graph for sigma.js
      *
-     * WHY limit is derived from depth, NOT sent to S7 as depth:
-     * S7's GET /api/v1/entities/{id}/graph does NOT have a `depth` param —
-     * it only has `limit` (max relations to return, default 50, max 200).
-     * The `depth` concept (1-hop vs 2-hop) does NOT exist in S7's SQL query;
-     * S7 returns all direct relations up to `limit`.
-     *
-     * Sending `?depth=2` is silently ignored by S7 (FastAPI discards unknown
-     * query params). The graph size is controlled entirely by `limit`.
+     * WHY depth is now sent as a query param (ISSUE-5 fix, 2026-05-10):
+     * S9 forwards depth to S7 which supports AGE Cypher multi-hop traversal.
+     * depth=1 → 1-hop direct relations (S7 SQL); depth=2/3 → AGE Cypher 2/3-hop.
+     * Requires KNOWLEDGE_GRAPH_CYPHER_ENABLED=true in knowledge-graph service.
+     * limit is still derived from depth to bound N+1 entity lookups.
      *
      * WHY cap by depth level:
      * - depth=1 (compact sidebar SVG in EntityGraphPanel): needs at most 15
@@ -36,7 +33,7 @@ export function createKnowledgeGraphApi(t: string | undefined) {
      * the full relationship picture.
      *
      * @param entityId - Entity UUID
-     * @param depth - Visual depth level: 1 = compact sidebar, 2 = full graph
+     * @param depth - Traversal depth: 1 = compact sidebar (SQL), 2/3 = AGE Cypher
      */
     getEntityGraph(
       entityId: string,
@@ -75,6 +72,18 @@ export function createKnowledgeGraphApi(t: string | undefined) {
         limit: String(limit),
         min_confidence: String(minConfidence),
       });
+
+      // WHY send depth as query param: S9 now forwards depth to S7 which uses it
+      // for AGE Cypher multi-hop traversal (depth=2/3). Previously stripped at S9.
+      // depth=1 is S7's default, so we only send when >1 to avoid redundant params.
+      if (depth > 1) {
+        params.set("depth", String(depth));
+      }
+
+      // WHY evidence_snippets_limit=2: limits evidence text returned per edge to
+      // 2 snippets. The GraphDetailSidebar renders up to 2 snippets per relation;
+      // requesting more wastes bandwidth (S7 default is 3).
+      params.set("evidence_snippets_limit", "2");
 
       // WHY only add time_window when not "all": S9 default is already "all" — sending
       // the parameter explicitly is unnecessary and adds URL noise. Omitting it for "all"
