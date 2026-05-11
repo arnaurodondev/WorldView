@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -31,6 +31,13 @@ class Transaction:
     # For BUY/SELL it usually equals ``quantity * price`` and is informational.
     amount: Decimal | None = None
     external_ref: str | None = None
+    # P2-E: broker-supplied human-readable description for the transaction
+    # (e.g. "Dividend Payment - AAPL"). Optional — not all brokers / activity
+    # types populate this field. None when SnapTrade omits it.
+    description: str | None = None
+    # P2-E: the date on which the trade settles (T+1 for equities, T+2 legacy).
+    # Distinct from ``executed_at`` (trade date). None when SnapTrade omits it.
+    settlement_date: date | None = None
     id: UUID = field(default_factory=new_uuid)
     created_at: datetime = field(default_factory=utc_now)
 

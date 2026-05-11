@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,12 @@ class SnapTradeActivity:
     # Broker fee charged on the activity (commission, regulatory fees, etc.).
     # Always None for DIVIDEND. None when SnapTrade omits the field.
     fee: Decimal | None = None
+    # P2-E: broker-supplied human-readable description (e.g. "Dividend Payment - AAPL").
+    # Null when SnapTrade omits the field or the activity type does not carry one.
+    description: str | None = None
+    # P2-E: the settlement date of the trade (T+1 equities, T+2 legacy).
+    # Distinct from ``executed_at`` (trade/execution date). None when omitted.
+    settlement_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -176,5 +182,23 @@ class IBrokerageClient(Protocol):
 
         Returns:
             A list of ``SnapTradePosition`` objects. May be empty.
+        """
+        ...
+
+    async def get_account_balance(
+        self,
+        user: SnapTradeUser,
+        account_id: str,
+    ) -> dict[str, Any] | None:
+        """Return cash/buying-power balance for one brokerage account.
+
+        Args:
+            user: SnapTrade credentials for this Worldview user.
+            account_id: SnapTrade account UUID (string).
+
+        Returns:
+            A dict with ``cash`` (Decimal), ``buying_power`` (Decimal|None),
+            and ``currency`` (str) when available, or ``None`` when the broker
+            does not expose balance data for this account type.
         """
         ...

@@ -424,6 +424,10 @@ class BrokerageTransactionSyncWorker:
             currency=activity.currency,
             executed_at=activity.executed_at,
             external_ref=activity.snaptrade_transaction_id,
+            # P2-E: propagate description and settlement_date from SnapTrade activity.
+            # Both default to None on SnapTradeActivity when the broker omits them.
+            description=activity.description,
+            settlement_date=activity.settlement_date,
         )
         try:
             await RecordTransactionUseCase().execute(cmd, uow)
