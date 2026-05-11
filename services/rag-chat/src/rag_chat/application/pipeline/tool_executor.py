@@ -519,6 +519,15 @@ class ToolExecutor:
                 log.warning("tool_invalid_date", tool="search_documents", value=s)
                 return None
 
+        # ISSUE-1 FIX: add entity_context.entity_id to entity_ids when available.
+        # The LLM may pass entity_tickers (name-based) but full ticker→UUID resolution
+        # is deferred to PLAN-0078. For the common case (entity-first query) we already
+        # have the UUID from EntityContext injected at request build time — use it so
+        # the S6 hybrid search filters to the correct entity's documents.
+        _entity_ids: list[UUID] | None = None
+        if self._entity_context is not None:
+            _entity_ids = [self._entity_context.entity_id]
+
         request = ChunkSearchRequest(
             query_text=query,
             top_k=20,
@@ -526,9 +535,9 @@ class ToolExecutor:
             date_from=_parse_dt(date_from),
             date_to=_parse_dt(date_to),
             source_types=source_types or [],
-            # TODO(PLAN-0078): pass entity_ids=resolved_entity_ids once ChunkSearchRequest
-            # entity ticker→id resolution is wired. Currently entity_tickers is accepted
-            # from the LLM but silently ignored here.
+            entity_ids=_entity_ids,
+            # NOTE(PLAN-0078): entity_tickers from the LLM is not yet resolved to UUIDs.
+            # For entity-first queries entity_context.entity_id is used above instead.
         )
 
         try:
