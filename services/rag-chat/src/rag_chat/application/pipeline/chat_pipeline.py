@@ -20,6 +20,7 @@ import structlog
 from rag_chat.application.metrics.prometheus import (
     rag_contradiction_surfaced,
     rag_injection_blocked,
+    rag_injection_blocked_layer2,
     rag_retrieval_items,
 )
 from rag_chat.application.pipeline.context_assembler import (
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
     from rag_chat.application.ports.unit_of_work import RagUnitOfWorkPort
     from rag_chat.application.ports.upstream_clients import S6Port
     from rag_chat.application.security.input_validator import InputValidator
+    from rag_chat.application.security.llm_injection_classifier import LLMInjectionClassifier
     from rag_chat.application.use_cases.get_thread import GetThreadUseCase
     from rag_chat.application.use_cases.persist_chat import AssistantResponse, ChatPersistenceUseCase
     from rag_chat.infrastructure.llm.provider_chain import LLMProviderChain
@@ -183,6 +185,12 @@ class ChatPipeline:
     plan_builder: RetrievalPlanBuilder | None = None  # type: ignore[assignment]
     retrieval: ParallelRetrievalOrchestrator | None = None  # type: ignore[assignment]
 
+    # ── E-8: Layer 2 LLM semantic injection classifier (optional) ─────────────
+    # When wired, runs after Layer 1 (regex + PII) passes. None → Layer 2 skipped.
+    # WHY optional: allows deployments without a DeepInfra API key to still run
+    # Layer 1 protection. Production deployments SHOULD set this.
+    llm_classifier: LLMInjectionClassifier | None = None  # type: ignore[assignment]
+
     # ── Stateless helper fields (default-instantiated) ────────────────────────
     # These hold no per-request state; constructing them here avoids
     # the caller needing to pass them explicitly.
@@ -196,17 +204,26 @@ class ChatPipeline:
     # ── Step 0: Input validation ──────────────────────────────────────────────
 
     async def validate_input(self, message: str) -> str:
-        """Step 0: Input validation (synchronous, wrapped as async for pipeline uniformity).
+        """Step 0: Input validation — Layer 1 (regex + PII) then optional Layer 2 (LLM).
+
+        Layer 1 (synchronous, InputValidator):
+          - HTML strip → truncate → PII check → regex injection heuristics → XML-wrap
+        Layer 2 (async, LLMInjectionClassifier, E-8):
+          - Semantic classification via small LLM (Qwen/Qwen3.5-0.8B on DeepInfra)
+          - Only runs when self.llm_classifier is wired AND Layer 1 passes
+          - Fail-closed: classifier errors → block the message
 
         Returns the sanitised, XML-wrapped message string.
 
         Raises:
-            PromptInjectionError: if an injection heuristic fires (counter incremented here).
+            PromptInjectionError: if Layer 1 heuristic or Layer 2 LLM fires
+                                  (rag_injection_blocked counter incremented).
             PIIDetectedError: if PII is detected in the message.
         """
+        # ── Layer 1: synchronous regex + PII ─────────────────────────────────
         try:
             # InputValidator.validate() is synchronous — no I/O occurs.
-            return self.validator.validate(message)
+            validated = self.validator.validate(message)
         except Exception as _exc:
             # Import locally to avoid circular imports at module level.
             from rag_chat.domain.errors import PromptInjectionError
@@ -216,6 +233,21 @@ class ChatPipeline:
                 # route handler receives the exception with the metric already recorded.
                 rag_injection_blocked.inc()
             raise
+
+        # ── Layer 2: LLM semantic classifier (E-8) ───────────────────────────
+        if self.llm_classifier is not None:
+            # Pass the RAW (pre-XML-wrap) message to the classifier so the LLM sees
+            # the actual user text, not the sanitised+wrapped version.
+            is_unsafe = await self.llm_classifier.classify(message)
+            if is_unsafe:
+                from rag_chat.domain.errors import PromptInjectionError
+
+                # Increment both the general blocked counter and the Layer 2 specific one.
+                rag_injection_blocked.inc()
+                rag_injection_blocked_layer2.inc()
+                raise PromptInjectionError("Semantic injection detected")
+
+        return validated
 
     # ── Step 1: Completion cache check ───────────────────────────────────────
 

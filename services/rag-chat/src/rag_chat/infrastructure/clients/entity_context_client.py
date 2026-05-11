@@ -244,28 +244,72 @@ class EntityContextClient(EntityContextLoaderPort):
 
 
 def _extract_top_relations(graph: dict, limit: int = 5) -> list[dict]:
-    """Map S7 graph response ``relations`` list into simplified dicts for the prompt.
+    """Map S7 graph response into simplified relation dicts for the system prompt.
 
-    S7 native format (same as in s7_client.py):
-      {center, relations: list[{relation_id, subject_entity_id, object_entity_id,
-       canonical_type, confidence}], entities: dict[str, {canonical_name, ...}]}
+    S7 egocentric graph endpoint (/api/v1/entities/{id}/graph) returns:
+      {entity_id, nodes: list[{id, label, type, size, ticker}],
+                  edges: list[{id, source, target, label, weight}]}
+
+    Note: the older S7 narrative endpoint uses a different format
+      {center, relations: list[...], entities: dict[...]}
+    We support both formats for forward-compatibility.
 
     Output format per relation:
       {relation_type: str, target_name: str, confidence: float}
 
     WHY this mapping: the system-prompt template needs human-readable names, not
-    raw UUIDs. We look up the canonical_name from the entities dict by UUID key.
+    raw UUIDs. We look up labels from the nodes list by UUID string.
     """
     if not graph:
         return []
 
+    result: list[dict] = []
+
+    # ── Format A: egocentric graph (nodes + edges) — current live format ──────
+    nodes = graph.get("nodes")
+    edges = graph.get("edges")
+    if isinstance(nodes, list) and isinstance(edges, list):
+        # Build a label lookup from the nodes list.
+        node_label: dict[str, str] = {}
+        for node in nodes:
+            if isinstance(node, dict):
+                node_label[str(node.get("id", ""))] = node.get("label") or node.get("id", "unknown")
+
+        # Identify the center entity id (the entity whose graph we loaded).
+        # Edges may point either TOWARD or AWAY FROM the center node, so we
+        # pick the endpoint that is NOT the center as the "neighbor" to display.
+        # WHY: without this, edges like "Taiwan Semiconductor → Apple (supplier_of)"
+        # would show "Apple Inc." as the target instead of "Taiwan Semiconductor",
+        # and Apple's own UUID would appear in the prefix and trip the PII detector.
+        center_id = str(graph.get("entity_id", ""))
+
+        for edge in edges[:limit]:
+            if not isinstance(edge, dict):
+                continue
+            source_id = str(edge.get("source", ""))
+            target_id = str(edge.get("target", ""))
+            relation_type = str(edge.get("label") or "related_to")
+            # Choose the neighbor endpoint (whichever is not the center).
+            # If neither matches (graph inconsistency), fall back to target.
+            neighbor_id = source_id if target_id == center_id else target_id
+            target_name = node_label.get(neighbor_id, neighbor_id or "unknown")
+            confidence = float(edge.get("weight") or 0.0)
+            result.append(
+                {
+                    "relation_type": relation_type,
+                    "target_name": target_name,
+                    "confidence": confidence,
+                }
+            )
+        return result
+
+    # ── Format B: narrative endpoint (relations + entities dict) — legacy ─────
     entities_by_id: dict[str, dict] = {}
     for eid, edata in graph.get("entities", {}).items():
         if isinstance(edata, dict):
             entities_by_id[str(eid)] = edata
 
     relations = graph.get("relations", [])
-    result: list[dict] = []
     for rel in relations[:limit]:
         if not isinstance(rel, dict):
             continue
