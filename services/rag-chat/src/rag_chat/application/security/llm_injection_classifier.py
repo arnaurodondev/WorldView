@@ -26,7 +26,7 @@ log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 # Default model for semantic injection classification. Chosen for low latency
 # (~200-500ms on DeepInfra GPU) and low cost ($0.0001/M tokens for 0.8B param).
 # Can be overridden via INJECTION_CLASSIFIER_MODEL env var.
-_DEFAULT_CLASSIFIER_MODEL = "Qwen/Qwen3.5-0.8B"
+_DEFAULT_CLASSIFIER_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
 
 # System prompt for the classifier. Explicitly lists the 4 threat categories
 # so the model has unambiguous criteria. JSON-only response prevents the model

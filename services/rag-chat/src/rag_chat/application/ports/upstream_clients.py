@@ -224,6 +224,14 @@ class S7Port(Protocol):
         """Multi-hop Cypher traversal (feature-flagged; empty list when disabled)."""
         ...
 
+    async def resolve_entity_by_name(
+        self,
+        name: str,
+        limit: int = 5,
+    ) -> list[dict]:
+        """Fuzzy alias search to resolve an entity name to entity_id candidates."""
+        ...
+
 
 @runtime_checkable
 class S3Port(Protocol):

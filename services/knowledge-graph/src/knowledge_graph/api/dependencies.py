@@ -205,6 +205,21 @@ def get_cypher_neighborhood_uc() -> CypherNeighborhoodUseCase:
 CypherNeighborhoodUseCaseDep = Annotated[CypherNeighborhoodUseCase, Depends(get_cypher_neighborhood_uc)]
 
 
+# ── Entity alias repo (name resolution) ──────────────────────────────────────
+
+
+def get_entity_alias_repo(session: ReadOnlyDbSessionDep) -> object:
+    """Build EntityAliasRepository for read-only name resolution queries."""
+    from knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias import (
+        EntityAliasRepository,
+    )
+
+    return EntityAliasRepository(session)
+
+
+EntityAliasRepoDep = Annotated[object, Depends(get_entity_alias_repo)]
+
+
 # ── R25-compliant repo factories for claims / events / search routes ──────────
 # Infrastructure imports are deferred inside each factory so that route files
 # never need to import from the infrastructure layer directly.
