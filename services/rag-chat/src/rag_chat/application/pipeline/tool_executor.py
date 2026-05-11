@@ -693,6 +693,11 @@ class ToolExecutor:
     ) -> list[RetrievedItem]:
         """Execute multi-hop Cypher traversal via S7.
 
+        BP-459-A FIX: Entity resolution now mirrors _handle_get_entity_graph logic.
+        When start_entity matches entity_context.name we use entity_context.entity_id
+        for the source; otherwise we resolve via S7 alias search.  target_entity is
+        always resolved via S7 alias search (entity_context only holds ONE entity).
+
         cypher_pattern is sanitized through the allowlist before forwarding to S7
         to guard against prompt injection (see _sanitize_cypher_pattern).
         """
@@ -715,41 +720,107 @@ class ToolExecutor:
         # SECURITY: sanitize cypher pattern before forwarding
         safe_pattern = self._sanitize_cypher_pattern(cypher_pattern)
 
-        # BUG-3 FIX: S7Client.cypher_traverse() reads params.get("id", "") to get
-        # the anchor entity UUID for the /api/v1/graph/cypher/neighborhood endpoint.
-        # The old code passed {"start": ..., "target": ...} which was silently ignored,
-        # causing the traversal to always return [] (entity_id="").
+        # BP-459-A FIX: Resolve source entity_id by name, not by blindly locking to
+        # entity_context.entity_id.  The entity_context only knows about ONE entity;
+        # for two-entity traversal queries (e.g. "Apple → Anthropic") we must resolve
+        # start_entity AND target_entity independently via the S7 alias search.
         #
-        # Resolution:
-        # - When entity_context is available, use entity_context.entity_id as "id".
-        # - When entity_context is absent, we cannot resolve start_entity to a UUID
-        #   without an S6/S7 lookup — degrade gracefully to [] (PLAN-0078 will add
-        #   name-based resolution).
-        #
-        # The cypher string is still passed but S7 currently ignores it (the S7
-        # neighborhood endpoint uses max_hops/min_confidence instead).  It is kept
-        # for forward-compatibility when S7 adds full Cypher execution.
-        if self._entity_context is not None:
-            entity_id_str = str(self._entity_context.entity_id)
-        else:
-            log.warning(
-                "tool_entity_unresolved",
-                tool="traverse_graph",
-                start_entity=start_entity,
-                reason="no_entity_context_and_name_resolution_not_wired",
-            )
-            return []
+        # Resolution strategy (mirrors _handle_get_entity_graph):
+        #   - If start_entity name fuzzy-matches entity_context.name → use context ID.
+        #   - Otherwise → resolve start_entity via S7 alias search.
+        #   - target_entity is always resolved via S7 alias search (context = 1 entity).
+        ctx_name_lower = self._entity_context.name.lower() if self._entity_context else ""
+        start_name_lower = start_entity.lower()
+        use_context_for_start = self._entity_context is not None and (
+            start_name_lower in ctx_name_lower
+            or ctx_name_lower in start_name_lower
+            or start_name_lower == ctx_name_lower
+        )
 
+        source_entity_id: UUID | None = None
+        if use_context_for_start and self._entity_context is not None:
+            source_entity_id = self._entity_context.entity_id
+        else:
+            candidates = await self._s7.resolve_entity_by_name(start_entity, limit=3)
+            if not candidates:
+                log.warning(
+                    "tool_entity_unresolved",
+                    tool="traverse_graph",
+                    entity_name=start_entity,
+                    reason="no_alias_match",
+                )
+                return []
+            try:
+                source_entity_id = UUID(str(candidates[0]["entity_id"]))
+            except (ValueError, KeyError):
+                log.warning(
+                    "tool_entity_unresolved",
+                    tool="traverse_graph",
+                    entity_name=start_entity,
+                    reason="invalid_entity_id_in_candidate",
+                )
+                return []
+            log.info(
+                "tool_entity_resolved_by_name",
+                tool="traverse_graph",
+                entity_name=start_entity,
+                resolved_entity_id=str(source_entity_id),
+            )
+
+        # Resolve target entity_id when a target is specified.
+        # entity_context holds only ONE entity, so we always do a name lookup for target.
+        target_entity_id: UUID | None = None
+        if target_entity:
+            target_candidates = await self._s7.resolve_entity_by_name(target_entity, limit=3)
+            if not target_candidates:
+                log.warning(
+                    "tool_entity_unresolved",
+                    tool="traverse_graph",
+                    entity_name=target_entity,
+                    reason="no_alias_match",
+                )
+                return []
+            try:
+                target_entity_id = UUID(str(target_candidates[0]["entity_id"]))
+            except (ValueError, KeyError):
+                log.warning(
+                    "tool_entity_unresolved",
+                    tool="traverse_graph",
+                    entity_name=target_entity,
+                    reason="invalid_entity_id_in_candidate",
+                )
+                return []
+            log.info(
+                "tool_entity_resolved_by_name",
+                tool="traverse_graph",
+                entity_name=target_entity,
+                resolved_entity_id=str(target_entity_id),
+            )
+
+        # Build the params dict for S7Client.cypher_traverse().
+        # BP-459-B FIX: cypher_traverse now calls /api/v1/graph/cypher/path when a
+        # target_entity_id is resolved (two-entity path query), or falls back to
+        # /api/v1/graph/cypher/neighborhood for egocentric traversal.
+        # The "source_id" / "target_id" keys are consumed by the updated S7Client.
+        params: dict[str, Any] = {
+            "source_id": str(source_entity_id),
+            "max_hops": clamped_depth,
+        }
+        if target_entity_id is not None:
+            params["target_id"] = str(target_entity_id)
+
+        # The cypher string encodes the LLM intent for logging; the actual query
+        # is executed server-side by /api/v1/graph/cypher/path or /neighborhood.
         if target_entity:
             cypher = (
-                f"MATCH p=(a {{name: $start}})-[r{safe_pattern or ''}*1..{clamped_depth}]-"
-                f"(b {{name: $target}}) RETURN p LIMIT 10"
+                f"MATCH p=(a:entity {{entity_id: $source}})-[r{safe_pattern or ''}*1..{clamped_depth}]-"
+                f"(b:entity {{entity_id: $target}}) RETURN p LIMIT 10"
             )
         else:
-            cypher = f"MATCH p=(a {{name: $start}})-[r{safe_pattern or ''}*1..{clamped_depth}]-() RETURN p LIMIT 20"
-
-        # Pass entity_id under "id" key as expected by S7Client.cypher_traverse()
-        params: dict[str, Any] = {"id": entity_id_str}
+            cypher = (
+                f"MATCH p=(a:entity {{entity_id: $source}})-[r{safe_pattern or ''}*1..{clamped_depth}]-() "
+                f"RETURN p LIMIT 20"
+            )
 
         t0 = time.monotonic()
         try:
@@ -2405,7 +2476,10 @@ def build_default_registry() -> ToolRegistry:
                 "neighbours, relationships, and confidence scores. PREFER THIS TOOL for questions "
                 "like 'what is the relation between X and Y', 'how is X connected to Y', "
                 "'who are X's partners/competitors/subsidiaries'. Returns nodes and edges. "
-                "Use the entity map above to identify the primary entity for this call."
+                "Use the entity map above to identify the primary entity for this call. "
+                "If this tool returns empty or sparse results for a well-known entity, you may supplement "
+                "with training knowledge but MUST label it 'Based on public knowledge: …' — never invent "
+                "confidence scores or graph metadata."
             ),
             parameters=[
                 ParameterSpec(
