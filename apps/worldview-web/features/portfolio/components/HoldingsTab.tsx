@@ -161,14 +161,16 @@ export function HoldingsTab({
           Standalone panel (not an inline AG Grid expand row) because the
           table's onRowClicked already navigates to the instrument page —
           we don't want to take that interaction over. The user picks a
-          ticker via the dropdown inside the panel. */}
-      <div className="px-2">
-        <HoldingLotsPanel
-          portfolioId={activePortfolioId}
-          holdings={enrichedHoldings}
-          quotes={holdingsQuotes}
-        />
-      </div>
+          ticker via the dropdown inside the panel.
+          WHY no px-2 wrapper: HoldingLotsPanel renders edge-to-edge like
+          PositionBarHeat and the other strip components below it. A px-2
+          inset made the card visually narrower than every adjacent strip,
+          breaking the horizontal rhythm. */}
+      <HoldingLotsPanel
+        portfolioId={activePortfolioId}
+        holdings={enrichedHoldings}
+        quotes={holdingsQuotes}
+      />
 
       {/* ── PLAN-0088 E-4: position-bar heat strip ──────────────────────────
           Uses the props the parent already loaded — no extra fetch. Width =

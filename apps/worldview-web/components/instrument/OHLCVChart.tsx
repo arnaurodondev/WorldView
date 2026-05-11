@@ -528,8 +528,11 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         // data is a silent no-op — safe to call unconditionally.
         if (pendingScrollToRealTime.current) {
           pendingScrollToRealTime.current = false;
-          hasScrolledToRealTime.current = true;
-          chart.timeScale().scrollToRealTime();
+          // WHY no scrollToRealTime() here: chart has no data yet when initChart() fires the
+          // pending-scroll path. Calling scrollToRealTime() on an empty chart is a no-op, but
+          // setting hasScrolledToRealTime=true at this point would permanently block the real
+          // scroll when bars load in the data-update effect below. We clear the pending flag
+          // only — the data effect calls scrollToRealTime() once it has actual bar data. (BP-450)
         }
 
         // QA iter-1 fix: apply the user's log-scale preference NOW. If the

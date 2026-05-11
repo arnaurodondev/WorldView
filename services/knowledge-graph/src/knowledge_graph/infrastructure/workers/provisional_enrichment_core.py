@@ -251,19 +251,51 @@ async def persist_enrichment(
     }
     avro_payload_bytes = serialize_confluent_avro(_ENTITY_CANONICAL_CREATED_SCHEMA_PATH, avro_record)
 
-    # ── Atomic dedup INSERT (DEF-014 / BP-384 — replaces find_exact race) ──
-    # Migration 0026 added a UNIQUE INDEX on lower(canonical_name).  The new
-    # ``create_or_get`` repo method issues an atomic
-    #     INSERT ... ON CONFLICT (lower(canonical_name)) DO NOTHING RETURNING ...
-    # and re-SELECTs the existing row when the conflict path fires.  This
-    # closes the find-then-create TOCTOU window: two concurrent workers seeing
-    # ``existing is None`` can no longer both INSERT and produce duplicate
-    # canonical rows for the same entity (e.g. four "Apple Inc." rows in
-    # production prior to this fix).
+    # ── Fuzzy pre-lookup — BP-459 provisional entity deduplication ───────────
+    # ``create_or_get`` handles exact-name conflicts atomically via ON CONFLICT,
+    # but the unique index only triggers when ``lower(canonical_name)`` matches
+    # exactly.  When the LLM returns a slight variation of an already-canonical
+    # name (e.g. "Amazon Business" for an entity we already have as "Amazon Inc.")
+    # no conflict fires, and a new duplicate row is inserted.
     #
-    # When ``was_created=False`` we skip alias inserts, embedding refresh, and
-    # the outbox event — the existing canonical row already has its aliases
-    # and a prior outbox event was emitted on its original creation.
+    # The fuzzy pre-lookup uses pg_trgm trigram similarity against the
+    # entity_aliases table.  A sim ≥ 0.75 threshold safely separates
+    # abbreviation/punctuation differences (e.g. "apple inc." vs "apple inc"
+    # scores ~0.95 → reuse) from genuinely different entities (e.g. "amazon
+    # business" vs "amazon inc." scores ~0.55 → create new).
+    #
+    # WHY this position: we run after entity_type normalization so the
+    # canonical_name we look up is the name we'd actually write to the DB.
+    # WHY not inside create_or_get: fuzzy search crosses table boundaries
+    # (entity_aliases) whereas create_or_get is scoped to canonical_entities.
+    alias_repo_prelookup = EntityAliasRepository(session)
+    lookup_name = canonical_name.lower().strip()
+    fuzzy_matches = await alias_repo_prelookup.fuzzy_search(lookup_name, limit=3)
+
+    existing_entity_id: UUID | None = None
+    for match in fuzzy_matches:
+        sim = float(match["similarity"])  # type: ignore[arg-type]
+        if sim >= 0.75:
+            existing_entity_id = UUID(str(match["entity_id"]))
+            logger.info(  # type: ignore[no-any-return]
+                "provisional_entity_deduplicated",
+                mention_text=mention_text,
+                canonical_name=canonical_name,
+                matched_entity_id=str(existing_entity_id),
+                similarity=sim,
+            )
+            break
+
+    if existing_entity_id is not None:
+        # Reuse the existing entity — skip all DB writes and return early.
+        # The caller (ProvisionalEnrichmentWorker / ProvisionalQueuedConsumer)
+        # will update provisional_entity_queue with this entity_id.
+        return existing_entity_id
+
+    # ── Atomic dedup INSERT (DEF-014 / BP-384 — replaces find_exact race) ──
+    # Migration 0026 added a UNIQUE INDEX on lower(canonical_name).  ``create_or_get``
+    # issues an atomic INSERT ... ON CONFLICT DO NOTHING and re-SELECTs on conflict.
+    # When ``was_created=False`` we skip alias inserts, embedding, and outbox.
     entity_repo = CanonicalEntityRepository(session)
     entity_id, was_created = await entity_repo.create_or_get(  # type: ignore[attr-defined]
         canonical_name=canonical_name,

@@ -39,6 +39,10 @@ class SignalData:
     evidence_text: str
     detected_at: datetime
     market_impact_score: float = 0.0
+    # Avro polarity field from nlp.signal.detected.v1
+    # ("positive" | "negative" | "neutral").  Defaults to "neutral" so
+    # legacy JSON rows (pre-Avro migration) degrade gracefully.
+    polarity: str = "neutral"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -135,6 +139,10 @@ class ListSignalsUseCase:
                         if "occurred_at" in payload
                         else row["created_at"],
                         market_impact_score=float(row.get("impact_score") or 0.0),
+                        # Read the polarity directly from the Avro payload
+                        # ("positive"|"negative"|"neutral").  Falls back to
+                        # "neutral" for legacy JSON rows that predate the field.
+                        polarity=str(payload.get("polarity", "neutral")),
                     ),
                 )
             except Exception:

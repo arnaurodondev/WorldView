@@ -985,10 +985,13 @@ async def get_market_heatmap(
     # The httpx client default timeout (5s per connect/read) fires first; the
     # outer budget only guards against the edge case where httpx itself stalls.
 
-    if period in ("1W", "1M"):
-        # For weekly/monthly periods, call the dedicated S3 aggregate endpoint
-        # rather than making 11 parallel screener calls. The S3 endpoint computes
-        # averages from OHLCV bars for these longer timeframes.
+    if period in ("1D", "1W", "1M"):
+        # For all periods, call the dedicated S3 aggregate endpoint which computes
+        # averages from OHLCV bars. 1D uses lookback_days=1 (bar from the previous
+        # trading day); 1W/1M use 7/30 calendar days respectively.
+        # WHY: the old screener-based 1D path used fundamental_metrics.daily_return
+        # which is not populated from real OHLCV data, causing null change_pct and
+        # 0 instrument_count tiles in the heatmap (BP-fix 2026-05-11).
         async def _compose_1wm() -> dict[str, Any]:
             resp = await clients.market_data.get(
                 f"/api/v1/market/sector-returns?period={period}",

@@ -91,7 +91,9 @@ export function HoldingLotsPanel({
   }
 
   return (
-    <div className="border-b border-border bg-card mt-2">
+    // WHY border-y: panel renders edge-to-edge (no px-2 wrapper in parent).
+    // border-y provides the visual separator from the table above and strip below.
+    <div className="border-y border-border bg-card">
       {/* Header strip: title + ticker dropdown + summary stats. */}
       <div className="flex h-7 items-center px-3 gap-3 border-b border-border bg-muted/20 font-mono text-[11px]">
         <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
@@ -159,7 +161,11 @@ export function HoldingLotsPanel({
         ) : (
           <div className="font-mono text-[11px]">
             {/* Column header row. */}
-            <div className="grid grid-cols-[100px_70px_90px_70px_70px_90px] gap-2 px-3 py-1 text-[9px] uppercase tracking-[0.08em] text-muted-foreground border-b border-border bg-muted/10">
+            {/* WHY 110px last column (was 90px): the UNREAL cell renders both
+                a dollar value (+$X,XXX.XX) and a percentage sub-label in a
+                text-[9px] span (+XX.XX%). Combined they exceed 90px on most
+                lots, causing visible overflow. 110px fits the widest case. */}
+            <div className="grid grid-cols-[100px_70px_90px_70px_70px_110px] gap-2 px-3 py-1 text-[9px] uppercase tracking-[0.08em] text-muted-foreground border-b border-border bg-muted/10">
               <div>OPEN DATE</div>
               <div className="text-right">QTY</div>
               <div className="text-right">COST/SHR</div>
@@ -170,7 +176,7 @@ export function HoldingLotsPanel({
             {data.lots.map((lot, i) => (
               <div
                 key={`${lot.open_date}-${i}`}
-                className="grid grid-cols-[100px_70px_90px_70px_70px_90px] gap-2 px-3 h-[22px] items-center hover:bg-muted/20 border-b border-border/50"
+                className="grid grid-cols-[100px_70px_90px_70px_70px_110px] gap-2 px-3 h-[22px] items-center hover:bg-muted/20 border-b border-border/50"
               >
                 <div className="tabular-nums text-foreground">{lot.open_date}</div>
                 <div className="text-right tabular-nums text-foreground">

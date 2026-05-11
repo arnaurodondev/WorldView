@@ -2648,3 +2648,35 @@ The `KeyBuilder` does not include a tenant segment. To ensure tenant isolation, 
 `resource_id` component MUST derive from a tenant-scoped entity ID (e.g., `doc_id` from the
 `documents` table after the `tenant_id` column is added). Do not use globally-scoped IDs
 (instrument tickers, schema version strings) as `resource_id` for tenant-attributable objects.
+
+---
+
+## 22. LLM Agent Loop Budget Standards
+
+Any agent loop implementation (S8 or future services) MUST enforce five independent budgets.
+These defaults are validated against worldview's query patterns and the Reference System
+investigation (2026-05-10-ai-architecture-enhancement-roi-analysis.md):
+
+```python
+@dataclass
+class AgentBudget:
+    max_tokens: int = 8_000          # soft — blocks further iterations; delivers current answer
+    max_tool_latency_s: float = 30.0 # soft — triggers surrender path; injects final-answer prompt
+    max_per_tool_s: float = 30.0     # hard — asyncio.wait_for per individual tool call
+    max_iterations: int = 6          # hard — unconditional cap independent of any framework
+    max_consecutive_errors: int = 2  # soft — consecutive tool failures → surrender
+```
+
+**Surrender path** (soft budget hit): inject system message
+`"You have reached the tool response budget for this turn. Provide your best answer with the information gathered so far."` — the LLM generates a final answer without further tool calls.
+
+**Token counting**: track cumulative prompt + completion tokens across all iterations of the
+loop. When `total_tokens >= max_tokens`, set a flag that breaks after the current LLM
+response completes (never mid-stream).
+
+**Consecutive error reset**: reset `consecutive_errors = 0` on any successful tool call.
+
+**Why these values**: `max_tool_latency_s=30.0` covers the known slow path (AGE Cypher
+queries on `traverse_graph` can reach 60s without a budget; 30s provides a meaningful partial
+answer). `max_iterations=6` matches the Reference System default and is sufficient for
+worldview's two-tool + summary pattern.

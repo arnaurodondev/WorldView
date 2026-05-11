@@ -233,12 +233,24 @@ function SnapshotRow({ ticker, instrumentId, quote }: SnapshotRowProps) {
   // returned yet, clicking would navigate to /instruments/null — a broken URL.
   const canNavigate = !!instrumentId;
 
+  // WHY heat tint: mirrors the SectorHeatmapWidget tile color convention.
+  // Rows with a meaningful move (|change%| ≥ 0.5) get a faint directional
+  // tint so the trader can scan direction at a glance without reading numbers.
+  // /5 opacity is subtle — the ticker label and change% are still primary.
+  const heatClass =
+    hasPrice && changePct != null && Math.abs(changePct) >= 0.5
+      ? isPositive
+        ? "bg-positive/5"
+        : "bg-negative/5"
+      : "";
+
   return (
     <div
       className={cn(
         "flex h-[22px] items-center justify-between px-2",
+        heatClass,
         // WHY cursor-pointer + hover:bg-muted/30 only when navigable.
-        canNavigate && "cursor-pointer transition-colors hover:bg-muted/30",
+        canNavigate && "cursor-pointer transition-colors hover:bg-muted/20",
       )}
       onClick={() => {
         if (canNavigate) router.push(`/instruments/${instrumentId}`);
