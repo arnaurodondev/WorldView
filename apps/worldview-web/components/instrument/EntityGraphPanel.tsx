@@ -26,7 +26,7 @@
 "use client";
 // WHY "use client": uses useQuery + useState for hover state and tooltip positioning.
 
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
@@ -157,6 +157,25 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
   // mouse events (from onMouseEnter on SVG children) to container-relative pixels.
   const svgRef = useRef<SVGSVGElement>(null);
 
+  // WHY containerRef + ResizeObserver: the SVG viewBox must match the rendered
+  // container dimensions so the graph fills the panel without letterboxing.
+  // A fixed viewBox="0 0 320 280" inside a taller container (grid min-h-[400px])
+  // produces transparent bands above/below the graph nodes because
+  // preserveAspectRatio="xMidYMid meet" centers the 320×280 content and leaves
+  // the rest of the SVG transparent (showing bg-card/30 = near-black). (BP-462)
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [svgDims, setSvgDims] = useState({ w: 320, h: 280 });
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) setSvgDims({ w: Math.round(width), h: Math.round(height) });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const { data: graph, isLoading, isError } = useQuery({
     queryKey: ["entity-graph", entityId, 1],
     // WHY depth=1: Overview sidebar is compact (~320px). Depth=1 = direct neighbors only.
@@ -222,8 +241,11 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
   }
 
   // ── Layout computation ─────────────────────────────────────────────────────
-  const WIDTH = 320;
-  const HEIGHT = 280;
+  // WHY svgDims (not hardcoded 320×280): node positions must scale with the
+  // actual container dimensions so the radial layout fills the available space
+  // without dead zones. svgDims is updated by the ResizeObserver above.
+  const WIDTH = svgDims.w;
+  const HEIGHT = svgDims.h;
   const cx = WIDTH / 2;
   const cy = HEIGHT / 2;
 
@@ -309,14 +331,18 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
           WHY flex-1 on the wrapper div: gives the SVG vertical room to grow.
           The previous fixed width={WIDTH} height={HEIGHT} pinned the SVG to
           320×280px regardless of container size — root cause of the void. */}
-      <div className="flex-1 min-h-[200px] relative">
+      {/* WHY ref={containerRef}: ResizeObserver tracks this div's dimensions so
+          the SVG viewBox always matches the rendered container. This eliminates
+          the letterboxing that created transparent (near-black) bands when the
+          container was taller than the 320×280 aspect ratio. */}
+      <div ref={containerRef} className="flex-1 min-h-[200px] relative">
       <svg
         ref={svgRef}
         width="100%"
         height="100%"
         className="absolute inset-0"
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        preserveAspectRatio="xMidYMid meet"
+        preserveAspectRatio="none"
         role="img"
         aria-label={`Entity relationship graph for ${centerLabel ?? entityId}`}
         // WHY onMouseLeave on SVG: clears tooltips when the cursor leaves the SVG

@@ -40,18 +40,30 @@ vi.mock("next/navigation", () => ({
   useParams: vi.fn(() => ({ entityId: "ent-001" })),
 }));
 
-// WHY mock useAuth: NewsTab calls useAuth() to get the access token.
+// WHY mock @/hooks/useAuth: NewsTab calls useAuth() to get the access token.
 // Mocking returns a stable token so the query is not disabled.
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: vi.fn(() => ({ accessToken: "test-token", user: null, isLoading: false })),
 }));
 
-// WHY mock createGateway: NewsTab calls gateway.getEntityNews() in a useQuery.
-// We override it per-test to control the returned articles.
+// WHY mock createGateway: NewsTab calls createGateway(accessToken).getEntityNews()
+// in a useQuery. We override it per-test to control the returned articles.
 vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => ({
     getEntityNews: vi.fn(),
   })),
+}));
+
+// WHY mock @/lib/api-client: some components co-rendered in the tree
+// (e.g. child components after PLAN-0059-C migration) call useApiClient() or
+// useAccessToken() hooks which throw if no ApiClientProvider is present.
+// Mocking the module short-circuits the context requirement for those consumers.
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => ({})),
+  useAccessToken: vi.fn(() => "test-token"),
+  ApiClientProvider: ({ children }: { children: React.ReactNode }) => children,
+  useAuthedQuery: vi.fn(),
+  useAuthedMutation: vi.fn(),
 }));
 
 // ── Test data factory ─────────────────────────────────────────────────────────

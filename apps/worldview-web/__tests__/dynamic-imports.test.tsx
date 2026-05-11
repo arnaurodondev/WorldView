@@ -96,8 +96,9 @@ vi.mock("@/lib/gateway", () => ({
   createGateway: vi.fn(() => ({
     // EntityGraph queries
     getEntityGraph: vi.fn().mockResolvedValue({ nodes: [], edges: [] }),
-    // OHLCVChart queries
-    getOHLCV: vi.fn().mockResolvedValue([]),
+    // OHLCVChart queries — must return OHLCVResponse shape (not bare array);
+    // OHLCVChart.tsx:1285 reads data.bars.length which throws if data is [].
+    getOHLCV: vi.fn().mockResolvedValue({ instrument_id: "ins-aapl", ticker: "", timeframe: "1D", bars: [] }),
     // AddPositionDialog queries
     searchInstruments: vi.fn().mockResolvedValue([]),
     addPosition: vi.fn().mockResolvedValue({}),

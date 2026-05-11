@@ -43,7 +43,10 @@ export function BriefDiffPanel({ diff, onClose }: BriefDiffPanelProps) {
       // WHY rounded-[2px] (was rounded-md=6px): the Terminal Dark scale
       // collapses all corner radii to 2px for the institutional sharp look.
       // 6px reads as a consumer-app pattern.
-      className="z-10 mt-1 w-72 rounded-[2px] border border-border bg-card p-3 text-[11px] shadow-md"
+      // WHY max-h-[60vh] overflow-y-auto: when the diff has many bullets (6+ new + removed),
+      // the unconstrained panel extends off-screen. Capping at 60vh with scroll keeps it
+      // fully readable without pushing it past the viewport boundary.
+      className="z-10 mt-1 w-72 max-h-[60vh] overflow-y-auto rounded-[2px] border border-border bg-card p-3 text-[11px] shadow-md"
       data-testid="brief-diff-panel"
     >
       {/* ── Delta summary ───────────────────────────────────────────────── */}
