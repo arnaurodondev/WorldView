@@ -201,3 +201,96 @@ class TestPromptBuilderIntentRouting:
             intent=QueryIntent.GENERAL,
         )
         assert "follow-up" not in prompt.lower() and "suggested" not in prompt.lower()
+
+
+# ── Training knowledge supplement guardrails ──────────────────────────────────
+
+
+class TestTrainingKnowledgeSupplement:
+    """Verify the training-knowledge supplement policy introduced in this change.
+
+    WHY: The previous _SAFETY footer used "Never speculate beyond the evidence
+    provided", which caused the LLM to refuse even well-known public relationships
+    (e.g. Apple-Anthropic investment) when the KG had sparse data.  The new policy
+    allows training-knowledge supplement with mandatory labelling and prohibits
+    inventing KG-specific metadata (confidence scores, extraction dates, etc.).
+    """
+
+    def test_safety_contains_public_knowledge_label(self) -> None:
+        """_SAFETY must teach the LLM to use 'Based on public knowledge:' prefix."""
+        from rag_chat.application.pipeline.prompts.intent_prompts import _SAFETY
+
+        assert "Based on public knowledge" in _SAFETY, (
+            "_SAFETY must instruct the LLM to label training-sourced facts " "with 'Based on public knowledge: ...'"
+        )
+
+    def test_safety_no_longer_bans_all_speculation(self) -> None:
+        """Old 'Never speculate beyond the evidence provided' must be removed.
+
+        That blanket ban was the root cause of the Apple-Anthropic blank response
+        bug -- it suppressed all training knowledge even for well-known public facts.
+        """
+        from rag_chat.application.pipeline.prompts.intent_prompts import _SAFETY
+
+        assert "Never speculate beyond the evidence provided" not in _SAFETY, (
+            "Old blanket speculation ban was removed; _SAFETY now allows labelled "
+            "training-knowledge supplement instead of refusing silently."
+        )
+
+    def test_safety_still_prohibits_inventing_kg_metadata(self) -> None:
+        """The new policy must still prohibit inventing KG-specific metadata."""
+        from rag_chat.application.pipeline.prompts.intent_prompts import _SAFETY
+
+        assert (
+            "confidence score" in _SAFETY.lower() or "confidence scores" in _SAFETY.lower()
+        ), "_SAFETY must still warn against inventing KG-specific fields like confidence scores"
+
+    def test_safety_instructs_retrieved_context_takes_precedence(self) -> None:
+        """When retrieved context exists it is authoritative -- the new policy says so."""
+        from rag_chat.application.pipeline.prompts.intent_prompts import _SAFETY
+
+        assert (
+            "authoritative" in _SAFETY.lower() or "trust the retrieved context" in _SAFETY.lower()
+        ), "_SAFETY must state that retrieved context is authoritative over training knowledge"
+
+    def test_relationship_prompt_instructs_supplement_when_incomplete(self) -> None:
+        """_RELATIONSHIP_PROMPT must tell the LLM to supplement when graph is incomplete."""
+        from rag_chat.application.pipeline.prompts.intent_prompts import _RELATIONSHIP_PROMPT
+
+        assert (
+            "Based on public knowledge" in _RELATIONSHIP_PROMPT
+        ), "_RELATIONSHIP_PROMPT must instruct supplement with labelling when KG links are missing"
+
+    def test_relationship_prompt_prohibits_inventing_kg_fields(self) -> None:
+        """_RELATIONSHIP_PROMPT must prohibit inventing confidence scores etc."""
+        from rag_chat.application.pipeline.prompts.intent_prompts import _RELATIONSHIP_PROMPT
+
+        prompt_lower = _RELATIONSHIP_PROMPT.lower()
+        assert (
+            "confidence score" in prompt_lower or "extraction date" in prompt_lower
+        ), "_RELATIONSHIP_PROMPT must still warn against inventing KG-specific fields"
+
+    def test_few_shot_example_shows_supplement_behaviour(self) -> None:
+        """The v2 preamble few-shot example must demonstrate the supplement pattern."""
+        from rag_chat.application.pipeline.prompts.intent_prompts import RetrievalCounts, _build_v2_preamble
+
+        preamble = _build_v2_preamble(RetrievalCounts(n_context_items=1, n_chunks=2))
+        assert (
+            "Based on public knowledge" in preamble
+        ), "Few-shot example must show 'Based on public knowledge: ...' labelling pattern"
+        assert "Anthropic" in preamble, "Few-shot example should use the Apple-Anthropic motivating case"
+
+    def test_get_entity_graph_description_contains_supplement_instruction(self) -> None:
+        """build_default_registry() get_entity_graph tool must include supplement guidance."""
+        from rag_chat.application.pipeline.tool_executor import build_default_registry
+
+        registry = build_default_registry()
+        spec = registry.get_spec("get_entity_graph")
+        assert spec is not None, "get_entity_graph must be registered"
+        assert "Based on public knowledge" in spec.description, (
+            "get_entity_graph description must instruct the LLM to label training-knowledge "
+            "supplement with 'Based on public knowledge: ...'"
+        )
+        assert (
+            "confidence score" in spec.description.lower() or "graph metadata" in spec.description.lower()
+        ), "get_entity_graph description must warn against inventing KG metadata"
