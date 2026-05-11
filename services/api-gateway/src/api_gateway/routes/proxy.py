@@ -2450,12 +2450,41 @@ async def get_news_top(request: Request) -> Any:
     to each article.  cluster_size=1 means no near-duplicates detected;
     cluster_size=N means N-1 near-duplicate siblings exist.  Enrichment
     failure is non-fatal (cluster_size defaults to null in the response).
+
+    PERF-001 (2026-05-11): this endpoint is on the dashboard critical path (every
+    page load + every 5-minute refetch).  Two sequential downstream hops (S6 SQL
+    with 3-CTE window pivot + content-store cluster enrichment) caused 3-5 s
+    cold latency.  Added a 2-minute Valkey cache keyed on all query params so
+    only the first request per 2-minute window pays the full cost; all others
+    return in <10 ms.  TTL=120 s is short enough to surface breaking news within
+    2 minutes and long enough to amortise the cost across all dashboard tabs.
+    Cache is skipped gracefully when Valkey is unavailable (fail-open pattern).
     """
+    # ── Valkey cache check ────────────────────────────────────────────────────
+    # WHY cache at S9 (not S6): S9 owns the composed response (S6 body +
+    # cluster-size enrichment). Caching at S6 would not capture the enrichment.
+    # WHY 120 s TTL: news relevance changes slowly within a 2-minute window.
+    # This collapses repeated dashboard loads/tab switches to a single S6 call.
+    _news_top_cache_ttl = 120
+    valkey = getattr(request.app.state, "valkey", None)
+    qp = dict(request.query_params)
+    # Cache key: sorted params so ?limit=20&hours=24 == ?hours=24&limit=20.
+    _cache_key = "news:top:v1:" + ":".join(f"{k}={v}" for k, v in sorted(qp.items()))
+
+    if valkey is not None:
+        try:
+            cached = await valkey.get(_cache_key)
+            if cached:
+                raw = cached.decode("utf-8") if isinstance(cached, bytes) else cached
+                return Response(content=raw, status_code=200, media_type="application/json")
+        except Exception as _e:
+            logger.warning("news_top_cache_read_failed", error=str(_e))
+
     clients = _clients(request)
     sys_headers = _system_headers(request)
     resp = await clients.nlp_pipeline.get(
         "/api/v1/news/top",
-        params=dict(request.query_params),
+        params=qp,
         headers=sys_headers,
     )
     if resp.status_code != 200:
@@ -2496,8 +2525,17 @@ async def get_news_top(request: Request) -> Any:
             article["cluster_size"] = cluster_size_map.get(aid, 1)
             article["cluster_id"] = cluster_id_map.get(aid)
         body["articles"] = articles
+        final_body = json.dumps(body)
+
+        # ── Write enriched response to Valkey cache ───────────────────────────
+        if valkey is not None:
+            try:
+                await valkey.set(_cache_key, final_body, ex=_news_top_cache_ttl)
+            except Exception as _e:
+                logger.warning("news_top_cache_write_failed", error=str(_e))
+
         return Response(
-            content=json.dumps(body),
+            content=final_body,
             status_code=200,
             media_type="application/json",
         )

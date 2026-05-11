@@ -78,8 +78,11 @@ export function PortfolioNewsWidget() {
     // empty the widget on most days.
     queryFn: () => createGateway(accessToken).getTopNews({ limit: 20 }),
     enabled: !!accessToken,
-    staleTime: 60_000,
-    refetchInterval: 60_000,
+    // WHY 5min: S9 now caches /v1/news/top for 120s in Valkey, so cold
+    // requests are already fast. 5min frontend staleTime avoids polling
+    // the cache more than once per session, reducing server load.
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
   });
 
   // ── 2. Holdings — populates the ticker filter dropdown ─────────────────

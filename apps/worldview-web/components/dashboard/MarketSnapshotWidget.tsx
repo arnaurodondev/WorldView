@@ -15,9 +15,12 @@
  * SPY is included but may show "—" until OHLCV is ingested (no daily price).
  * VIX, 10Y yield, DXY, gold require specialized data sources not yet integrated.
  *
- * WHY TWO-STEP FETCH (search → batch quotes): We need instrument_ids to call
- * getBatchQuotes(), but we only know tickers at build time. A single concurrent
- * search returns instrument_ids; we then batch-quote them.
+ * WHY TWO-STEP FETCH (search → overview per ticker): We need instrument_ids
+ * to call getCompanyOverview(), but we only know tickers at build time. Step 1
+ * resolves tickers → instrument_ids; Step 2 fans out CompanyOverview queries
+ * (one per ticker) via useQueries. getBatchQuotes was replaced because it hits
+ * S3 batch-price which returns price=0 for equities without seeded OHLCV data
+ * (BP-463). getCompanyOverview uses the full PriceSnapshot fallback chain.
  *
  * WHY SHOW CHANGE% + PRICE: price tells the trader the absolute level;
  * change% tells them today's move. Both are required for a quick morning scan.
@@ -30,7 +33,8 @@
 "use client";
 // WHY "use client": uses useQuery, useAuth, and useRouter (for row click navigation).
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueries } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -104,27 +108,47 @@ export function MarketSnapshotWidget() {
     staleTime: 30 * 60_000,
   });
 
-  // ── Step 2: Batch-quote all resolved instrument_ids ───────────────────────
-  // WHY enabled gate: only fetch quotes once instrument_ids are resolved.
-  // WHY 60s refetch: snapshot is a live market pulse; refresh every minute.
-  const instrumentIds = Object.values(instrumentMap ?? {});
-
-  const { data: quotesData, isLoading: quotesLoading } = useQuery({
-    queryKey: ["market-snapshot-quotes", instrumentIds],
-    queryFn: () => createGateway(accessToken).getBatchQuotes(instrumentIds),
-    enabled: !!accessToken && instrumentIds.length > 0,
-    staleTime: 60_000,
-    refetchInterval: 60_000,
+  // ── Step 2: Fetch CompanyOverview per ticker (parallel, one per instrument) ─
+  // WHY useQueries not getBatchQuotes: getBatchQuotes → S3 batch-price returns
+  // price=0 for equities that have no seeded OHLCV data (BP-463). By contrast,
+  // getCompanyOverview → S9 /v1/companies/{id}/overview → S3 single-instrument
+  // price uses the full PriceSnapshot fallback chain (FRESH_QUOTE → BULK_QUOTE
+  // → INTRADAY → DAILY_CLOSE → STALE), giving us the best available price.
+  // WHY staleTime 5min + refetchInterval 60s: overview sub-resources (fundamentals,
+  // ohlcv) are slow-moving and can stay cached; the quote is refetched live.
+  const overviewQueries = useQueries({
+    queries: ALL_TICKERS.map((ticker) => {
+      const instrumentId = instrumentMap?.[ticker] ?? null;
+      return {
+        queryKey: ["market-snapshot-overview", instrumentId ?? ticker],
+        queryFn: () =>
+          createGateway(accessToken).getCompanyOverview(instrumentId!),
+        enabled: !!accessToken && !!instrumentId,
+        staleTime: 5 * 60_000,
+        refetchInterval: 60_000,
+      };
+    }),
   });
 
-  const isLoading = idsLoading || quotesLoading;
+  const isLoading = idsLoading || overviewQueries.some((q) => q.isLoading);
+
+  // Ticker → quote map built from stable ALL_TICKERS index ordering.
+  // useMemo avoids map reconstruction on every render.
+  const quoteByTicker = useMemo(() => {
+    const map = new Map<string, { price: number; change: number; change_pct: number } | null>();
+    ALL_TICKERS.forEach((ticker, i) => {
+      const q = overviewQueries[i]?.data?.quote;
+      map.set(ticker, q ?? null);
+    });
+    return map;
+  }, [overviewQueries]);
 
   // Build display rows per group — include instrumentId so SnapshotRow can navigate.
   const groupRows = SNAPSHOT_GROUPS.map((group) => ({
     label: group.label,
     rows: group.tickers.map((ticker) => {
       const instrumentId = instrumentMap?.[ticker];
-      const quote = instrumentId ? quotesData?.quotes?.[instrumentId] : undefined;
+      const quote = quoteByTicker.get(ticker) ?? null;
       return { ticker, instrumentId: instrumentId ?? null, quote };
     }),
   }));
@@ -143,7 +167,7 @@ export function MarketSnapshotWidget() {
         </span>
         {/* LIVE badge — communicates that this widget shows real-time data,
             not static placeholders. */}
-        {!isLoading && instrumentIds.length > 0 && (
+        {!isLoading && Object.keys(instrumentMap ?? {}).length > 0 && (
           <span className="text-[10px] text-positive/70">LIVE</span>
         )}
       </div>
@@ -198,7 +222,7 @@ export function MarketSnapshotWidget() {
         <span className="text-[10px] text-muted-foreground/60">
           {isLoading
             ? "loading..."
-            : instrumentIds.length === 0
+            : Object.keys(instrumentMap ?? {}).length === 0
               ? "instruments not yet ingested"
               : "indices · equities · prior session"}
         </span>
