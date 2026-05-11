@@ -16,12 +16,18 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select, text, union_all
+from sqlalchemy import func, select, text, union_all
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import common.ids  # type: ignore[import-untyped]
 from content_store.application.ports.repositories import DedupHashRepositoryPort
-from content_store.infrastructure.db.models import DedupHashModel, DuplicateClusterModel, MinHashSignatureModel
+from content_store.application.use_cases.get_cluster_articles import ClusterArticleDTO
+from content_store.infrastructure.db.models import (
+    DedupHashModel,
+    DocumentModel,
+    DuplicateClusterModel,
+    MinHashSignatureModel,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -160,6 +166,88 @@ class DuplicateClusterRepository:
         )
         await self._session.execute(stmt)
 
+    async def get_cluster_article_dtos(self, cluster_id: UUID) -> list[ClusterArticleDTO]:
+        """Return all articles in a near-duplicate cluster.
+
+        Collects every distinct doc_id that appears in ``duplicate_clusters``
+        as either primary_doc_id or duplicate_doc_id for the given cluster_id,
+        then joins with ``documents`` to fetch article metadata.
+
+        WHY UNION (not just primary/duplicate split): a cluster_id is a row PK,
+        so there is exactly one row per cluster_id — primary_doc_id and
+        duplicate_doc_id are the two participants.  We union them to get both
+        doc_ids, then join documents to enrich.
+
+        WHY count via subquery: cluster_size is the total number of rows in
+        duplicate_clusters with this cluster_id.  Since cluster_id is a PK,
+        there is always exactly 1 row (2 articles).  We count participants
+        (primary + duplicate) to compute cluster_size = 2.  This is consistent
+        with the batch-cluster-sizes endpoint which counts appearances.
+
+        Args:
+            cluster_id: UUID of the duplicate cluster.
+
+        Returns:
+            List of ClusterArticleDTO (empty if cluster_id not found).
+        """
+        # Step 1: find the cluster row to get both doc_ids.
+        cluster_result = await self._session.execute(
+            select(DuplicateClusterModel.primary_doc_id, DuplicateClusterModel.duplicate_doc_id).where(
+                DuplicateClusterModel.cluster_id == cluster_id
+            )
+        )
+        row = cluster_result.one_or_none()
+        if row is None:
+            # Cluster does not exist — return empty list (not an error).
+            return []
+
+        primary_doc_id: UUID = row.primary_doc_id
+        duplicate_doc_id: UUID = row.duplicate_doc_id
+        doc_ids = [primary_doc_id, duplicate_doc_id]
+
+        # Step 2: count total appearances across all clusters for each doc_id
+        # to compute cluster_size consistently with the batch-cluster-sizes endpoint.
+        # WHY union_all: counts primary + duplicate appearances per doc_id.
+        combined = union_all(
+            select(
+                DuplicateClusterModel.primary_doc_id.label("doc_id"),
+            ).where(DuplicateClusterModel.primary_doc_id.in_(doc_ids)),
+            select(
+                DuplicateClusterModel.duplicate_doc_id.label("doc_id"),
+            ).where(DuplicateClusterModel.duplicate_doc_id.in_(doc_ids)),
+        ).subquery()
+        count_result = await self._session.execute(
+            select(combined.c.doc_id, func.count().label("cnt")).group_by(combined.c.doc_id)
+        )
+        # cluster_size = appearances + 1 (include the document itself)
+        size_map: dict[UUID, int] = {row.doc_id: row.cnt + 1 for row in count_result}
+
+        # Step 3: fetch document metadata for both doc_ids.
+        doc_result = await self._session.execute(
+            select(
+                DocumentModel.doc_id,
+                DocumentModel.title,
+                DocumentModel.source_url,
+                DocumentModel.published_at,
+                DocumentModel.source_type,
+            ).where(DocumentModel.doc_id.in_(doc_ids))
+        )
+        dtos = [
+            ClusterArticleDTO(
+                id=r.doc_id,
+                title=r.title,
+                url=r.source_url,
+                published_at=r.published_at,
+                # WHY None: documents table has no source_name column — same as
+                # DocumentMetadataDTO.source_name in the batch-documents endpoint.
+                source_name=None,
+                cluster_id=cluster_id,
+                cluster_size=size_map.get(r.doc_id, 2),
+            )
+            for r in doc_result
+        ]
+        return dtos
+
     async def get_cluster_sizes(self, doc_ids: list[UUID]) -> dict[UUID, int]:
         """Return the near-duplicate cluster size for each requested doc_id.
 
@@ -196,6 +284,52 @@ class DuplicateClusterRepository:
         counts: Counter[UUID] = Counter(row.doc_id for row in result)
         # cluster_size = number of *other* docs detected as near-duplicates + 1 (self)
         return {doc_id: counts.get(doc_id, 0) + 1 for doc_id in doc_ids}
+
+    async def get_cluster_ids(self, doc_ids: list[UUID]) -> dict[UUID, UUID]:
+        """Return one cluster_id per doc_id for docs that are in a cluster.
+
+        Docs that have no near-duplicate rows are absent from the result dict.
+
+        WHY a separate method (not inline in get_cluster_sizes): the cluster_id
+        lookup is only needed by the gateway enrichment path to populate the
+        ``cluster_id`` field in ranked article responses — keeping it separate
+        avoids adding a second subquery to the hot-path batch-cluster-sizes call.
+
+        WHY "one cluster_id per doc_id": a document could appear in multiple
+        cluster rows (e.g. near-duplicate of both doc A and doc B).  We pick
+        the cluster_id where the doc appears as primary (lexicographically
+        smaller UUID) first, falling back to the first duplicate-side row.
+        The frontend uses cluster_id only to fetch the sibling list, which is
+        fetched by cluster_id — any valid cluster_id for the doc is sufficient.
+
+        Args:
+            doc_ids: List of document UUIDs to look up.
+
+        Returns:
+            Mapping of doc_id → cluster_id for docs in at least one cluster.
+        """
+        if not doc_ids:
+            return {}
+
+        # Union primary and duplicate sides — select (doc_id, cluster_id) pairs.
+        # WHY DISTINCT ON: PostgreSQL picks one cluster_id per doc_id (first row
+        # in the union wins, which is the primary-side row if it exists).
+        combined = union_all(
+            select(
+                DuplicateClusterModel.primary_doc_id.label("doc_id"),
+                DuplicateClusterModel.cluster_id,
+            ).where(DuplicateClusterModel.primary_doc_id.in_(doc_ids)),
+            select(
+                DuplicateClusterModel.duplicate_doc_id.label("doc_id"),
+                DuplicateClusterModel.cluster_id,
+            ).where(DuplicateClusterModel.duplicate_doc_id.in_(doc_ids)),
+        ).subquery()
+
+        # Group by doc_id, take any cluster_id (min for determinism).
+        result = await self._session.execute(
+            select(combined.c.doc_id, func.min(combined.c.cluster_id).label("cluster_id")).group_by(combined.c.doc_id)
+        )
+        return {row.doc_id: row.cluster_id for row in result}
 
 
 # ── Corpus reader for MinHash near-dup candidate lookup ───────────────────────

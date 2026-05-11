@@ -139,6 +139,14 @@ _TEMPORAL_EVENT_TYPES: frozenset[str] = frozenset(
     {"MACRO", "REGULATORY_ACTION", "GEOPOLITICAL", "SANCTIONS", "NATURAL_DISASTER"}
 )
 
+# BP-448 (2026-05-11): DB check constraint allows "regulatory" not "regulatory_action".
+# Map the LLM-emitted value (trained on REGULATORY_ACTION) to the DB-valid value
+# without changing the extraction prompt schema — changing the prompt would require
+# re-training the model's output distribution.
+_TEMPORAL_EVENT_TYPE_DB_NAMES: dict[str, str] = {
+    "REGULATORY_ACTION": "regulatory",
+}
+
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 _TOPIC = "content.article.stored.v1"
@@ -1812,9 +1820,10 @@ async def _emit_temporal_events(
             "event_type": "intelligence.temporal_event",  # envelope field
             "schema_version": 1,
             "occurred_at": common.time.utc_now().isoformat(),
-            # Lowercase event type for the temporal_event_type column
-            # (e.g. "macro", "geopolitical") — consumer stores as-is.
-            "temporal_event_type": raw_type.lower(),
+            # Lowercase event type for the temporal_event_type column.
+            # BP-448: use _TEMPORAL_EVENT_TYPE_DB_NAMES to normalize LLM-emitted
+            # values (e.g. "REGULATORY_ACTION") to DB-valid values ("regulatory").
+            "temporal_event_type": _TEMPORAL_EVENT_TYPE_DB_NAMES.get(raw_type, raw_type.lower()),
             "scope": scope,
             # Region is unknown from article text alone; S7 converts "" → NULL.
             "region": "",

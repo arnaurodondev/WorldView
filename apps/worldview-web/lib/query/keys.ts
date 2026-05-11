@@ -189,6 +189,10 @@ export const qk = {
     // We preserve that exact shape so cache entries survive the migration.
     topToday: (params: Readonly<Record<string, unknown>>) =>
       ["news-top-today", params] as const,
+    // P2-F: cluster key for the ClusterArticlesModal. Scoped to the cluster_id
+    // so different clusters cache independently but share the "news" root for
+    // future invalidation via qk.news.all.
+    cluster: (clusterId: string) => ["news", "cluster", clusterId] as const,
   },
 
   // ── Screener ─────────────────────────────────────────────────────────────

@@ -611,6 +611,12 @@ export interface RankedArticle {
   // cluster_size=1 → no near-duplicates; cluster_size=N → N-1 sibling articles.
   // null when enrichment was skipped (e.g. content-store outage).
   cluster_size: number | null;
+  // P2-F: cluster_id is the UUID of the duplicate_clusters row that links this
+  // article to its near-duplicate siblings.  Null when cluster_size=1 (no dups)
+  // or when enrichment was skipped.  Optional (undefined) on older test fixtures
+  // or when the enrichment field has not been populated yet.
+  // Used to fetch GET /v1/news/cluster/{id}.
+  cluster_id?: string | null;
 }
 
 /**
@@ -621,6 +627,31 @@ export interface RankedArticle {
 export interface RankedNewsResponse {
   articles: RankedArticle[];
   total: number;
+}
+
+// ── Cluster articles (P2-F) ──────────────────────────────────────────────────
+
+/**
+ * A single article in a near-duplicate cluster.
+ * Returned by GET /v1/news/cluster/{cluster_id} (proxied from content-store).
+ */
+export interface ClusterArticle {
+  id: string;                    // content-store doc_id (UUID)
+  title: string | null;
+  url: string | null;
+  published_at: string | null;   // ISO-8601 UTC
+  source_name: string | null;    // always null (not in documents table)
+  cluster_id: string;            // UUID of the duplicate_clusters row
+  cluster_size: number;          // total articles in this cluster
+}
+
+/**
+ * Response from GET /v1/news/cluster/{cluster_id} (P2-F).
+ * articles list is empty when cluster_id not found (404 from content-store
+ * propagated through S9).
+ */
+export interface ClusterArticlesResponse {
+  articles: ClusterArticle[];
 }
 
 /** Query params for GET /v1/news/top (PRD-0026 §6.2 F-25) */

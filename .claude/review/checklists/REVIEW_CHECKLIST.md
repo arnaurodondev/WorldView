@@ -176,6 +176,14 @@
 - [ ] Pre-existing test failures encountered during this change were investigated and fixed — not ignored
 - [ ] Root cause is always assumed to be in the implementation first; test is only corrected after proving the test was wrong
 
+## 10i. LLM Agent Loop (when modifying S8 or any tool-calling loop)
+
+- [ ] **Tool scope injection**: `organization_id` and `user_id` are dispatch-injected (not LLM-visible in tool schema) — any tool accepting tenant scope as a positional arg is a cross-tenant injection vector (HR-046)
+- [ ] **Citation egress**: final LLM answer is scrubbed — any entity_id / article_id / source reference in the answer must appear in at least one tool result from the current turn; references not grounded in tool outputs must be redacted before delivery to the client
+- [ ] **Budget governance**: agent loop enforces token budget (per-turn), latency budget (cumulative tool wall-clock), per-tool timeout, iteration cap, and consecutive error limit — all five independently
+- [ ] **User message persisted before loop**: user message is written to DB before `AgentLoop` starts (so LLM crash does not silently drop the request)
+- [ ] **Input guard present**: at minimum regex-layer injection detection runs before agent loop entry; fail-closed on all error paths
+
 ## 10. Frontend / TypeScript (applies when `apps/frontend/` files are changed)
 
 Mark N/A for pure backend changes.

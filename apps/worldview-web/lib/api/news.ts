@@ -6,6 +6,7 @@
  */
 
 import type {
+  ClusterArticlesResponse,
   NewsResponse,
   RankedNewsResponse,
   TopNewsParams,
@@ -69,6 +70,20 @@ export function createNewsApi(t: string | undefined) {
      */
     getRelevantNews(limit = 20): Promise<NewsResponse> {
       return apiFetch<NewsResponse>(`/v1/news/relevant?limit=${limit}`);
+    },
+
+    /**
+     * getClusterArticles — fetch all sibling articles in a near-duplicate cluster (P2-F)
+     * Used by: ClusterArticlesModal (opened when the user clicks the "+N sim" chip)
+     *
+     * WHY no auth: cluster data is public (same posture as /v1/news/top).
+     * WHY separate method (not inline in the component): keeps all S9 calls in
+     * lib/api/news.ts for discoverability and mock-ability in tests.
+     *
+     * @param clusterId - UUID string of the duplicate cluster (from RankedArticle.cluster_id)
+     */
+    getClusterArticles(clusterId: string): Promise<ClusterArticlesResponse> {
+      return apiFetch<ClusterArticlesResponse>(`/v1/news/cluster/${encodeURIComponent(clusterId)}`);
     },
   };
 }
