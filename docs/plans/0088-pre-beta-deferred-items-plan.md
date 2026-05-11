@@ -1273,6 +1273,84 @@ DB delta this pass: `relation_evidence` 438→947, `relation_summaries` 5, `path
 
 Commits this pass: `ca089fbc`, `0832f4a2`, `1968ee24`, `c184e53e`, `1eb00225`, `9603059d`, `f191799d`, `eb913f4f`. Full audit: `docs/audits/2026-05-10-pre-beta-fourth-pass-report.md`.
 
+## 2026-05-10 night — investigation-report fix pass (18 bugs, 5 subagents)
+
+Five parallel subagents (SA-1..SA-5) + final QA (SA-7) fixed all bugs from
+`docs/audits/2026-05-10-investigation-report-bugs-and-ux.md`. Verdict: **VALIDATED**.
+
+**Done:**
+
+- `88214a91` **SA-1 — ISSUE-1 + P1-B** — entity_context wiring fix in rag-chat:
+  `ChatOrchestrator` now builds `EntityContext` from the primary resolved entity
+  and passes it to `ToolExecutor.for_request()`. Previously `entity_context` was
+  always `None` → every entity-scoped handler returned `[]` → `all_tools_failed`
+  → "Unable to retrieve relevant data" on ALL entity queries. Entity UUID map now
+  injected into system prompt for cross-entity queries. `search_documents` uses
+  `entity_context.entity_id` for entity-filtered chunk search.
+  `internal_jwt_unverified_decode` demoted CRITICAL→debug (was flooding logs on
+  every request in dev mode). 549 rag-chat tests pass.
+
+- `350478d3` **SA-2 — P1-A + P1-D + P2-D** — market-data quotes now return 422
+  for non-UUID ticker strings (same `_UUID_RE` guard as `fundamentals.py`). Batch
+  endpoint also validated. `ArticleConsumer._SessionUnitOfWork.__aexit__` adds
+  `await session.close()` before delegating to context manager (BP-443 pattern) —
+  MissingGreenlet 0/30min window. api-gateway: new `GET /v1/health` alias route
+  (no-auth, returns `{"status":"ok"}`) for external uptime monitors; added to
+  `_AUTH_SKIP_PATHS`. 383 api-gateway + 54 market-data + 42 content-store tests
+  pass.
+
+- `95e4f18d` **SA-3 — P1-E + P2-C + P1-C + P2-E** — KG scheduler: 4 jobs now
+  use `next_run_time=now+120s` (`definition_embedding`, `narrative_embedding`,
+  `fundamentals_embedding`, `age_sync`) — previously waited 60-120 min after
+  restart before first execution. Portfolio: `get_account_balance()` added to
+  `IBrokerageClient` + implemented in `SnapTradeClient` (via SDK balance endpoint,
+  returns `None` on any failure). New route `GET /brokerage-connections/{id}/balance`
+  in portfolio service + S9 proxy. SnapTrade Activity→Transaction adapter now maps
+  `description` and `settlement_date`. 724 portfolio + 407 api-gateway + 22 KG
+  scheduler tests pass.
+
+- `dda073d0` **SA-4 — ISSUE-5 + ISSUE-6 + ISSUE-7** — KG depth param fixed
+  end-to-end: S9 proxy now accepts `depth: int = Query(default=1, ge=1, le=3)` and
+  forwards to S7 when `depth > 1` (was explicitly stripped despite S7 supporting AGE
+  Cypher traversal). Frontend sends `depth` param + `evidence_snippets_limit=2`.
+  Stale "S7 has no depth param" comment corrected. CYPHER_ENABLED already `true`.
+  `GraphDetailSidebar` in Intelligence tab: mounts `<EntityDescriptionPanel>` for
+  selected nodes; relation type shown prominently; evidence snippets displayed
+  (max 2, 120 char truncation). Analyst sidebar: `defaultSize` 22→28, `minSize`
+  19→22; handle widened `w-1`→`w-1.5` with gripper dot; localStorage persistence
+  via `autoSaveId` pattern. TypeScript clean, S9 graph tests pass.
+
+- `79e0c2a6` **SA-5 — ISSUE-2 + ISSUE-3** — Dashboard: standalone
+  `<PreMarketMoversWidget>` removed from Row 3 (was duplicating MARKET tab inside
+  `MoversWidgetTabs`); `MoversWidgetTabs` moved to Row 3 for more space; Row 2
+  col-5 now hosts `AiSignalsWidget`. Morning brief: `MorningBriefCard` filters
+  sections with `title.toUpperCase().includes("REMOVED")` before passing to
+  `StructuredBrief`. Briefing prompts in `libs/prompts` updated to prohibit
+  "REMOVED" / "N/A" section placeholders. TypeScript clean.
+
+**Final QA (SA-7 read-only):**
+- 72 healthy containers (alloy Wave-D deferred as before).
+- 0 ERROR/CRITICAL in 30-min window across all 6 implementation services.
+- P1-A: `GET /v1/quotes/AAPL` → 422 live confirmed.
+- P2-D: `GET /v1/health` → 200 `{"status":"ok"}` live confirmed.
+- P1-C: balance route registered, resource-404 on seed UUID (correct).
+- P1-E: scheduler embedding jobs fired 120s after restart (live log confirmed).
+- MissingGreenlet: 0 errors in 30-min window.
+- Test suite: 549 rag-chat + 671 portfolio (unit) + 647 market-data (unit) + 334
+  content-store + 407 api-gateway + 1254 KG (unit, 5 pre-existing failures in
+  `fundamentals_refresh_worker` not introduced by this pass) — all pass.
+- Architecture tests: 738 pass / 3 pre-existing baseline-exempt failures.
+- `pnpm typecheck`: 0 errors.
+
+**Deferred (intentionally out of scope):**
+- P2-A: fundamentals backfill (ops task).
+- P2-B: Polymarket lag alert rule.
+- P2-F: cluster-expand backend + UI.
+- ISSUE-4: already fixed in prior pass (OverviewLayout min-h-[400px]).
+
+**New BP numbers from this pass: BP-444, BP-445, BP-446, BP-447.**
+Full report: `docs/audits/2026-05-10-investigation-report-bugs-and-ux.md` (root-cause doc).
+
 ---
 
 **End of PLAN-0088.**
