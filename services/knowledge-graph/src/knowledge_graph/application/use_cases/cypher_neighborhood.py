@@ -67,11 +67,14 @@ def _build_neighborhood_sql(max_hops: int, limit: int) -> str:
     """
     # BP-SA5-001 (2026-05-10): use lowercase ``entity`` label to match the
     # canonical label written by AgeSyncWorker and queried by PathDiscovery.
+    # BP-450 (2026-05-11): AGE 1.5 does not support ALL(rel IN r WHERE ...) on
+    # variable-length relationship lists — use ``relationships(path)`` on a named
+    # path instead, mirroring the working syntax in cypher_path.py.
     return (
         "SELECT neighbor_id::text"  # noqa: S608 — max_hops/limit validated ints; center_id via $center_id param
         " FROM ag_catalog.cypher('worldview_graph', $$"
-        f" MATCH (center:entity {{entity_id: $center_id}})-[r*1..{max_hops}]-(neighbor:entity)"
-        " WHERE ALL(rel IN r WHERE rel.confidence >= $min_conf)"
+        f" MATCH path = (center:entity {{entity_id: $center_id}})-[r*1..{max_hops}]-(neighbor:entity)"
+        " WHERE ALL(rel IN relationships(path) WHERE rel.confidence >= $min_conf)"
         " RETURN DISTINCT neighbor.entity_id AS neighbor_id"
         f" LIMIT {limit}"
         " $$, :params) AS (neighbor_id agtype)"

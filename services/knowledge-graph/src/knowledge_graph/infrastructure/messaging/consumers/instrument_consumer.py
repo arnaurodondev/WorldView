@@ -246,7 +246,7 @@ SET
     canonical_name = :canonical_name,
     isin           = COALESCE(:isin, isin),
     metadata       = (COALESCE(metadata, '{}'::jsonb) - 'needs_fundamentals_enrichment')
-                     || jsonb_build_object('enriched_at', :enriched_at)
+                     || jsonb_build_object('enriched_at', CAST(:enriched_at AS text))
 WHERE entity_id = :entity_id
   AND metadata->>'needs_fundamentals_enrichment' = 'true'
 """),

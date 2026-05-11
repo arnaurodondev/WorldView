@@ -860,4 +860,28 @@ rg "from fastapi import.*\bField\b" services/ libs/
 Must return nothing. A pre-commit hook for this exact pattern is high-value (prevention is
 cheap, the failure mode is catastrophic).
 
+---
+
+## RED — Added from AI Architecture Investigation (2026-05-10)
+
+### HR-046: Agent Tool Dispatch Accepting Tenant/Org Scope from LLM Payload
+```python
+# BAD — LLM controls which tenant's data is queried
+async def find_entities_tool(entity_name: str, organization_id: str) -> dict:
+    return await repo.search(entity_name, organization_id=organization_id)
+```
+**Risk**: Under prompt injection, the LLM can override the authenticated user's tenant scope by passing a foreign `organization_id` in the tool arguments. This enables cross-tenant data access without any authentication bypass.
+**Fix**: Inject `organization_id` and `user_id` at dispatch time from the authenticated request context — never advertise them in the tool's JSON schema (they must not be LLM-visible parameters). Use keyword-only args enforced at dispatch registration:
+```python
+# CORRECT — organization_id injected by dispatcher, not LLM
+async def find_entities_tool(entity_name: str, *, organization_id: str) -> dict:
+    return await repo.search(entity_name, organization_id=organization_id)
+# registered with: registry.register(find_entities_tool, inject=["organization_id", "user_id"])
+```
+**Detection**:
+```bash
+rg "organization_id.*str" services/rag-chat/src/ --include="*.py" | grep "def.*tool"
+```
+Any tool handler that accepts `organization_id` as a non-injected positional parameter is vulnerable.
+
 **Compounding**: BP-428 documents the same pattern with bug-history references.

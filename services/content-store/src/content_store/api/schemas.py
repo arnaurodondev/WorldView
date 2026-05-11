@@ -63,16 +63,50 @@ class BatchClusterSizesRequest(BaseModel):
 
 
 class ClusterSizeEntry(BaseModel):
-    """Cluster size for a single document."""
+    """Cluster size and cluster_id for a single document.
+
+    WHY cluster_id added (P2-F): the frontend "+N sim" chip needs to open a
+    "similar articles" drawer.  To fetch the drawer contents, the frontend
+    calls GET /v1/news/cluster/{cluster_id}.  cluster_id is None when the
+    document has no near-duplicate siblings (cluster_size=1).
+    """
 
     doc_id: UUID
     # WHY cluster_size (not sibling_count): cluster_size includes the document
     # itself, so cluster_size=1 means "no duplicates" and cluster_size=3 means
     # "this doc + 2 near-duplicate siblings".
     cluster_size: int
+    # Forward-compatible addition — None when cluster_size == 1.
+    cluster_id: UUID | None = None
 
 
 class BatchClusterSizesResponse(BaseModel):
     """Response for POST /api/v1/documents/cluster-sizes."""
 
     entries: list[ClusterSizeEntry]
+
+
+# ── Cluster articles ──────────────────────────────────────────────────────────
+
+
+class ClusterArticleResponse(BaseModel):
+    """Single article in a near-duplicate cluster.
+
+    WHY id (not doc_id): the frontend uses "id" as the canonical field name
+    for article identifiers in the cluster modal context.  Consistent with
+    how /v1/news/cluster/{id} will expose these to the frontend via S9.
+    """
+
+    id: UUID
+    title: str | None
+    url: str | None
+    published_at: datetime | None
+    source_name: str | None
+    cluster_id: UUID
+    cluster_size: int
+
+
+class ClusterArticlesResponse(BaseModel):
+    """Response for GET /api/v1/documents/cluster/{cluster_id}/articles."""
+
+    articles: list[ClusterArticleResponse]

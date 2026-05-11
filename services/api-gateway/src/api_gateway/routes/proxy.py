@@ -2466,6 +2466,11 @@ async def get_news_top(request: Request) -> Any:
         articles = body.get("articles", [])
         doc_ids = [a["article_id"] for a in articles if a.get("article_id")]
         cluster_size_map: dict[str, int] = {}
+        # WHY cluster_id added (P2-F): the "+N sim" chip click opens a drawer
+        # that fetches GET /v1/news/cluster/{cluster_id}.  The frontend needs
+        # cluster_id on the article to make that call.  cluster_id is None when
+        # cluster_size=1 (no near-duplicates) — content-store contract.
+        cluster_id_map: dict[str, str | None] = {}
         if doc_ids:
             cs_resp = await clients.content_store.post(
                 "/api/v1/documents/cluster-sizes",
@@ -2475,12 +2480,15 @@ async def get_news_top(request: Request) -> Any:
             if cs_resp.status_code == 200:
                 cs_body = json.loads(cs_resp.content)
                 for entry in cs_body.get("entries", []):
-                    cluster_size_map[str(entry["doc_id"])] = entry["cluster_size"]
-        # Merge cluster_size into each article dict.
+                    aid_str = str(entry["doc_id"])
+                    cluster_size_map[aid_str] = entry["cluster_size"]
+                    # cluster_id present since P2-F; None for isolated articles.
+                    cluster_id_map[aid_str] = entry.get("cluster_id")
         for article in articles:
             aid = str(article.get("article_id", ""))
             # cluster_size=1 means "alone in cluster" (no near-duplicates)
             article["cluster_size"] = cluster_size_map.get(aid, 1)
+            article["cluster_id"] = cluster_id_map.get(aid)
         body["articles"] = articles
         return Response(
             content=json.dumps(body),
@@ -2491,6 +2499,31 @@ async def get_news_top(request: Request) -> Any:
         # Enrichment failed — return the original S6 response unchanged.
         logger.warning("news_top_cluster_size_enrichment_failed", exc_info=True)
         return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.get("/news/cluster/{cluster_id}")
+async def get_news_cluster(cluster_id: str, request: Request) -> Any:
+    """Proxy GET /v1/news/cluster/{cluster_id} → content-store cluster articles.
+
+    No authentication required — same public-read posture as /v1/news/top.
+    Issues a system JWT so content-store's InternalJWTMiddleware accepts the
+    request.
+
+    WHY this endpoint (P2-F): the frontend "+N sim" chip click opens a Sheet
+    (side panel) showing all articles in the same near-duplicate cluster.
+    The frontend passes the cluster_id it received from the enriched news/top
+    response to fetch the cluster member list.
+
+    Returns the content-store response unchanged (200 with articles list, or
+    404 if the cluster_id is not found).
+    """
+    clients = _clients(request)
+    sys_headers = _system_headers(request)
+    resp = await clients.content_store.get(
+        f"/api/v1/documents/cluster/{cluster_id}/articles",
+        headers=sys_headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
 @router.get("/news/entity/{entity_id}")

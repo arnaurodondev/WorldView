@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from content_store.application.use_cases.batch_cluster_sizes import BatchClusterSizesUseCase
 from content_store.application.use_cases.batch_documents import BatchDocumentsUseCase
 from content_store.application.use_cases.dlq_admin import DLQAdminUseCase
+from content_store.application.use_cases.get_cluster_articles import GetClusterArticlesUseCase
 
 
 async def get_db_session(request: Request) -> AsyncSession:  # type: ignore[misc]
@@ -67,5 +68,18 @@ DbSessionDep = Annotated[AsyncSession, Depends(get_db_session)]
 ReadDbSessionDep = Annotated[AsyncSession, Depends(get_read_db_session)]
 AdminAuthDep = Annotated[None, Depends(verify_admin_token)]
 DLQUseCaseDep = Annotated[DLQAdminUseCase, Depends(get_dlq_use_case)]
+
+
+def get_cluster_articles_use_case(
+    session: Annotated[AsyncSession, Depends(get_read_db_session)],
+) -> GetClusterArticlesUseCase:
+    """Build a GetClusterArticlesUseCase backed by the read replica (R27)."""
+    # Lazy import keeps infrastructure out of the API module namespace (R25 / IG-LAYER-002).
+    from content_store.infrastructure.db.repositories.dedup import DuplicateClusterRepository
+
+    return GetClusterArticlesUseCase(DuplicateClusterRepository(session))
+
+
 BatchDocumentsUseCaseDep = Annotated[BatchDocumentsUseCase, Depends(get_batch_documents_use_case)]
 BatchClusterSizesUseCaseDep = Annotated[BatchClusterSizesUseCase, Depends(get_batch_cluster_sizes_use_case)]
+ClusterArticlesUseCaseDep = Annotated[GetClusterArticlesUseCase, Depends(get_cluster_articles_use_case)]

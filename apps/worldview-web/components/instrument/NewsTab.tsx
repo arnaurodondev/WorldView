@@ -37,6 +37,7 @@ import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
+import { ClusterArticlesModal } from "@/components/news/ClusterArticlesModal";
 import { formatRelativeTime, cn, safeExternalUrl } from "@/lib/utils";
 import { ExternalLink } from "lucide-react";
 import type { RankedArticle } from "@/types/api";
@@ -326,9 +327,13 @@ function ImpactPill({ score }: { score: number }) {
 function ArticleRow({
   article,
   onEntityClick,
+  onClusterClick,
 }: {
   article: RankedArticle;
   onEntityClick: (entityId: string) => void;
+  // P2-F: called with cluster_id when the user clicks the "+N similar" chip.
+  // Optional — chip is not rendered when cluster_size <= 1 or cluster_id is null.
+  onClusterClick?: (clusterId: string) => void;
 }) {
   // Derive monogram and narrative chips from article data.
   // WHY computed inside ArticleRow (not in the parent useMemo): narrative chips
@@ -468,20 +473,30 @@ function ArticleRow({
           </button>
         )}
 
-        {/* Cluster-size chip — "+N similar" for near-duplicate corroboration.
-            WHY only cluster_size > 1: cluster_size=1 = no siblings, nothing to show.
+        {/* Cluster-size chip — "+N similar" button for near-duplicate corroboration.
+            WHY only cluster_size > 1 and cluster_id: cluster_size=1 = no siblings.
             WHY muted style (not primary): this is informational metadata, not
-            an actionable signal like the entity chip or narrative chips. */}
-        {article.cluster_size != null && article.cluster_size > 1 && (
-          <span
+            an actionable signal like the entity chip or narrative chips.
+            P2-F: changed from <span> to <button> — clicking opens the
+            ClusterArticlesModal sheet. */}
+        {article.cluster_size != null && article.cluster_size > 1 && article.cluster_id && (
+          <button
+            type="button"
             className={cn(
               "shrink-0 rounded-[2px] px-1.5 py-0.5 font-mono text-[9px] tabular-nums",
               "bg-muted/50 text-muted-foreground border border-border/30",
+              // WHY cursor-pointer + hover: now interactive, signals clickability.
+              "cursor-pointer hover:bg-muted/80 hover:text-foreground transition-colors",
+              "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60",
             )}
-            title={`${article.cluster_size - 1} similar article${article.cluster_size - 1 !== 1 ? "s" : ""} detected`}
+            title={`${article.cluster_size - 1} similar article${article.cluster_size - 1 !== 1 ? "s" : ""} detected — click to view`}
+            onClick={() => {
+              if (article.cluster_id) onClusterClick?.(article.cluster_id);
+            }}
+            aria-label={`View ${article.cluster_size - 1} similar article${article.cluster_size - 1 !== 1 ? "s" : ""}`}
           >
             +{article.cluster_size - 1} similar
-          </span>
+          </button>
         )}
       </div>
     </article>
@@ -653,6 +668,11 @@ export function NewsTab({ entityId }: NewsTabProps) {
     return map;
   }, [sorted]);
 
+  // P2-F: cluster modal — null = closed; non-null = open with that cluster_id.
+  // WHY defined here (not in ArticleCard): the modal needs to be mounted outside
+  // the scrollable news list so the Sheet portal can overlay the full tab panel.
+  const [clusterModalId, setClusterModalId] = useState<string | null>(null);
+
   // ── Navigate to entity instrument page ─────────────────────────────────────
   // WHY separate handler (not inline): makes the intent explicit and prevents
   // the JSX from becoming too verbose with routing logic inline.
@@ -663,6 +683,13 @@ export function NewsTab({ entityId }: NewsTabProps) {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
+    <>
+    {/* P2-F: ClusterArticlesModal — mounted outside the scrollable list so the
+        Sheet portal can overlay the full tab panel without being clipped. */}
+    <ClusterArticlesModal
+      clusterId={clusterModalId}
+      onClose={() => setClusterModalId(null)}
+    />
     <div className="flex flex-col">
 
       {/* ── Filter + sort toolbar ─────────────────────────────────────────── */}
@@ -777,6 +804,8 @@ export function NewsTab({ entityId }: NewsTabProps) {
                     key={article.article_id}
                     article={article}
                     onEntityClick={handleEntityClick}
+                    // P2-F: wire cluster chip → modal
+                    onClusterClick={setClusterModalId}
                   />
                 ))}
               </div>
@@ -801,5 +830,6 @@ export function NewsTab({ entityId }: NewsTabProps) {
         </div>
       )}
     </div>
+    </>
   );
 }
