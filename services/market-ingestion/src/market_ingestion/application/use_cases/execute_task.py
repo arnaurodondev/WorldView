@@ -904,8 +904,13 @@ def _map_fundamentals_sections(raw: dict, symbol: str, source: str) -> dict:
         if etf_data.get("Yield") not in (None, "", "0.00", "0"):
             synthetic_highlights["DividendYield"] = etf_data["Yield"]
 
-        # TotalAssets / Portfolio_Net_Assets → MarketCapitalization (AUM proxy for ETFs)
-        total_assets = etf_data.get("Total_Assets") or etf_data.get("Portfolio_Net_Assets")
+        # TotalAssets → MarketCapitalization (AUM proxy for ETFs).
+        # WHY two key spellings: EODHD uses "TotalAssets" (camelCase without separator)
+        # in QQQ/SPY responses. "Total_Assets" and "Portfolio_Net_Assets" are present
+        # in some older / non-US fund responses — keep all three as fallback.
+        total_assets = (
+            etf_data.get("TotalAssets") or etf_data.get("Total_Assets") or etf_data.get("Portfolio_Net_Assets")
+        )
         if total_assets:
             synthetic_highlights["MarketCapitalization"] = total_assets
 

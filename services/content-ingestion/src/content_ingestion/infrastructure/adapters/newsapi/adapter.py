@@ -8,7 +8,7 @@ Retry: No retry on QuotaExhaustedError (breaks immediately).
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import common.ids
@@ -60,6 +60,8 @@ class NewsAPIAdapter(SourceAdapter):
         self._exists_fn = exists_fn
         self._retry_config = retry_config or RetryConfig()
 
+    _FREE_TIER_LOOKBACK_DAYS: int = 29  # NewsAPI free tier: max 30-day lookback
+
     async def fetch(self, source: Source, *, is_backfill: bool = False, from_date: str = "") -> list[FetchResult]:
         """Fetch and deduplicate NewsAPI articles.
 
@@ -68,6 +70,16 @@ class NewsAPIAdapter(SourceAdapter):
         config = source.config
         query = config.get("query", "")
         effective_from = from_date or config.get("from_date", "")
+
+        # BP-464: NewsAPI free tier rejects dates older than 30 days with HTTP 426.
+        # Cap effective_from to prevent this regardless of source config or watermark.
+        if effective_from:
+            try:
+                cutoff = (common.time.utc_now() - timedelta(days=self._FREE_TIER_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+                if effective_from < cutoff:
+                    effective_from = cutoff
+            except (ValueError, TypeError):
+                effective_from = ""
 
         try:
             articles = await self._client.fetch_all_pages(query=query, from_date=effective_from)

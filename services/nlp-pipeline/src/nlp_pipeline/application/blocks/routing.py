@@ -49,9 +49,12 @@ DOCUMENT_TYPE_SIGNAL: dict[str, float] = {
     "earnings_call": 0.80,
     "analyst_report": 0.80,
     "press_release": 0.70,
-    "eodhd_news": 0.55,
-    "finnhub_news": 0.55,
-    "newsapi_news": 0.55,
+    "eodhd": 0.55,  # actual source_type emitted by content-ingestion EODHD adapter
+    "eodhd_news": 0.55,  # legacy alias (seed data)
+    "finnhub": 0.55,  # actual source_type emitted by content-ingestion Finnhub adapter
+    "finnhub_news": 0.55,  # legacy alias (seed data)
+    "newsapi": 0.55,  # actual source_type emitted by content-ingestion NewsAPI adapter
+    "newsapi_news": 0.55,  # legacy alias
     "manual": 0.50,
 }
 _DEFAULT_DOCUMENT_TYPE_SIGNAL: float = 0.50

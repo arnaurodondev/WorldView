@@ -2,7 +2,7 @@
 
 > **Category**: worker-scheduler
 > **Description**: Task scheduling, worker lease patterns, backfill logic, rate limiting, watermarks, ingestion pipeline correctness
-> **Count**: 37 patterns
+> **Count**: 43 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -1280,3 +1280,65 @@ When adding a new source adapter in content-ingestion:
 
 **File**: `services/nlp-pipeline/src/nlp_pipeline/application/blocks/routing.py` — `DOCUMENT_TYPE_SIGNAL`, `_AUTHORITATIVE_FILING_SOURCES`, `compute_routing_score`
 **Migration**: `services/intelligence-migrations/alembic/versions/0039_add_sec_edgar_source_trust_weight.py`
+
+---
+
+## BP-464 — NewsAPI `from_date` static config causes HTTP 426 — all tasks silently succeed with 0 articles
+
+**Date discovered**: 2026-05-11
+**Service affected**: `content-ingestion` (NewsAPIAdapter, source configs in `content_ingestion_db.sources`)
+
+### Symptom
+
+3,445 NewsAPI tasks all show status `succeeded` in `content_ingestion_tasks`, yet `article_fetch_log` has zero NewsAPI rows. `source_adapter_state.last_watermark` is always NULL for NewsAPI sources despite thousands of "successful" runs. The `article_count` Prometheus metric for NewsAPI is permanently zero.
+
+### Root Cause (two interacting issues)
+
+**Issue 1 — Static `from_date` exceeds free-tier lookback**: Source configs were seeded with `{"from_date": "2026-01-01"}` (4.5 months in the past). NewsAPI free tier only allows 30-day lookback; requests with `from` older than 30 days return HTTP 426 "Upgrade Required". `fetch_articles()` raises `AdapterError` on HTTP 426. `fetch_all_pages()` only catches `QuotaExhaustedError`, so `AdapterError` propagates and the task is marked RETRY/FAILED.
+
+**Issue 2 — Quota exhaustion marks tasks SUCCEEDED with 0 articles**: The daily quota (100 req/day) is tracked in Valkey. `_check_quota()` is called BEFORE each HTTP request. Once the day's 100 requests are consumed, `_check_quota()` raises `QuotaExhaustedError`. `fetch_all_pages()` catches `QuotaExhaustedError` and breaks its loop, returning `[]`. The adapter returns an empty list. `execute_task.py` sees `not fetch_output.results` → marks task SUCCEEDED with no articles written. The task's old `error_detail` (from a previous RETRY) is NOT cleared by the SUCCEEDED status update, so tasks appear SUCCEEDED but with stale error_detail.
+
+Combined: First ~100 requests/day hit HTTP 426 → RETRY, then FAILED after max_attempts. All subsequent requests hit the daily quota silently → SUCCEEDED with 0 articles. Net result: permanently 0 articles and a watermark that never advances (watermark only updates when `fetched > 0`).
+
+### Fix
+
+1. **DB fix** — Remove static `from_date` from source configs:
+   ```sql
+   UPDATE sources SET config = config - 'from_date'
+   WHERE source_type = 'newsapi' AND config ? 'from_date';
+   ```
+2. **Adapter fix** — Cap `effective_from` to max 29 days ago in `NewsAPIAdapter.fetch()`:
+   ```python
+   if effective_from:
+       cutoff = (utc_now() - timedelta(days=29)).strftime("%Y-%m-%d")
+       if effective_from < cutoff:
+           effective_from = cutoff
+   ```
+   This prevents the cap from being bypassed by a watermark that has drifted old.
+
+### Detection
+
+```bash
+# Check NewsAPI article counts
+docker exec worldview-postgres-1 psql -U postgres -d content_ingestion_db -c "
+SELECT COUNT(*) FROM article_fetch_log fl JOIN sources s ON fl.source_id = s.id
+WHERE s.source_type = 'newsapi';"
+
+# Check source configs for stale from_date
+docker exec worldview-postgres-1 psql -U postgres -d content_ingestion_db -c "
+SELECT name, config FROM sources
+WHERE source_type = 'newsapi' AND config ? 'from_date';"
+
+# Check Valkey quota
+docker exec worldview-valkey-1 valkey-cli GET "newsapi:daily_requests:$(date +%Y-%m-%d)"
+```
+
+### Prevention
+
+- Never seed a source config with a static `from_date` for an API with a rolling lookback window.
+- The adapter should defensively cap `from_date` to the provider's maximum lookback.
+- When `QuotaExhaustedError` causes `fetch_all_pages` to return `[]` and the task to be marked SUCCEEDED, the DB should still log a quota-exhausted event (structured log is insufficient — it's not queryable).
+- Monitor `article_fetch_log` row counts per source type to detect silently-zero sources.
+
+**File**: `services/content-ingestion/src/content_ingestion/infrastructure/adapters/newsapi/adapter.py` — `NewsAPIAdapter.fetch()`
+**Config fix**: `content_ingestion_db.sources` — removed `from_date` from NewsAPI source configs
