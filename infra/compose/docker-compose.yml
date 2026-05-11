@@ -624,7 +624,10 @@ services:
       # WHY env var expansion: credentials must not be hardcoded; docker.env sets
       # POSTGRES_USER/POSTGRES_PASSWORD at runtime.  Defaults match the dev values
       # in postgres init so `--profile monitoring` works out-of-the-box.
-      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/worldview_db?sslmode=disable"
+      # BP-452 fix: worldview_db does not exist; connect to the built-in postgres
+      # superuser DB instead. Instance-wide stats (pg_stat_activity, pg_stat_database,
+      # pg_stat_bgwriter, etc.) are always visible regardless of which DB is used.
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/postgres?sslmode=disable"
     ports:
       - "127.0.0.1:9187:9187"
     depends_on:
