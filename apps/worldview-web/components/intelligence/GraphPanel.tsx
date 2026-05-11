@@ -92,18 +92,37 @@ export function GraphPanel({ entityId }: GraphPanelProps) {
   // structure; breakdown mode is opt-in for deep evidence investigation.
   const [showConfidenceBreakdown, setShowConfidenceBreakdown] = useState(false);
 
-  // ── Data fetch ────────────────────────────────────────────────────────────
+  // ── Data fetch (progressive loading) ─────────────────────────────────────
+  //
+  // WHY TWO QUERIES (not one):
+  // depth=3 triggers an AGE Cypher traversal in S7 that can take 6-10s and
+  // sometimes returns a 504 timeout. depth=1 and depth=2 use a faster SQL
+  // path and reliably complete in <500ms.
+  //
+  // Strategy: always fetch depth=min(depth,2) (fast, shows something) and
+  // separately attempt depth when >2. If the extended fetch fails or is still
+  // loading, we show the base data. The user sees the graph growing
+  // progressively rather than staring at a spinner or error screen.
+  //
+  // WHY retry:false on extendedQuery: 504s should not be retried — the server
+  // will always time out. A single attempt is enough; if it fails, fall back.
 
-  const { data: graphData, isLoading, isError, refetch } = useQuery<EntityGraphData>({
-    // WHY [depth, showConfidenceBreakdown] in key:
-    // Changing depth or breakdown mode changes the response — each combination
-    // gets its own cache slot so toggling back to a previous setting is instant.
-    queryKey: ["intelligence-graph", entityId, depth, showConfidenceBreakdown],
+  // Base query — always runs, always reliable (depth ≤ 2)
+  // WHY cast to 1|2: getEntityGraph's depth param is typed as 1|2|3|4|5 and
+  // Math.min always returns a number; the cast is safe because we clamp to 2.
+  const baseDepth = Math.min(depth, 2) as 1 | 2;
+  const {
+    data: baseData,
+    isLoading: baseLoading,
+    isError: baseError,
+    refetch: refetchBase,
+  } = useQuery<EntityGraphData>({
+    queryKey: ["intelligence-graph", entityId, baseDepth, showConfidenceBreakdown],
     queryFn: () =>
       gw.getEntityGraph(
         entityId,
-        depth,
-        // WHY pass "all" for time_window: the intelligence page shows the full
+        baseDepth,
+        // WHY "all" for time_window: the intelligence page shows the full
         // relationship picture across all time. Time-windowed graphs belong in
         // a future filter toolbar, not the default view.
         "all",
@@ -113,6 +132,38 @@ export function GraphPanel({ entityId }: GraphPanelProps) {
     staleTime: 60_000,
     enabled: !!entityId,
   });
+
+  // Extended query — only when user requests depth > 2
+  const {
+    data: extData,
+    isLoading: extLoading,
+    isError: extError,
+  } = useQuery<EntityGraphData>({
+    queryKey: ["intelligence-graph", entityId, depth, showConfidenceBreakdown],
+    queryFn: () =>
+      gw.getEntityGraph(
+        entityId,
+        depth as 1 | 2 | 3 | 4 | 5,
+        "all",
+      ),
+    staleTime: 300_000,   // WHY 5min: extended graphs are expensive; cache longer
+    enabled: !!entityId && depth > 2,
+    retry: false,         // WHY no retry: 504 timeouts don't recover on retry
+    gcTime: 600_000,      // WHY 10min gcTime: extended data is worth keeping
+  });
+
+  // Compose: use extended data when available; fall back to base
+  // WHY nullish coalescing (??): extData is undefined until the extended query
+  // resolves. ?? falls through to baseData so users see content immediately.
+  const graphData = depth > 2 ? (extData ?? baseData) : baseData;
+  const isLoading = baseLoading;
+  const isError = baseError;
+  const isExtendedLoading = depth > 2 && extLoading;
+  const isExtendedUnavailable = depth > 2 && extError && !extLoading;
+
+  // Unified refetch: retry the base query (extended won't recover from 504, so
+  // retrying base is the best recovery path for users)
+  const refetch = refetchBase;
 
   // ── Node click handler ────────────────────────────────────────────────────
 
@@ -186,6 +237,24 @@ export function GraphPanel({ entityId }: GraphPanelProps) {
             {depth}
           </span>
         </div>
+
+        {/* Extended graph status — shown only when depth > 2 */}
+        {/* WHY inline in the toolbar (not the footer): the analyst just moved the
+            slider to depth 3+, so the most contextually relevant feedback is right
+            next to the slider they touched, not at the bottom of the panel. */}
+        {isExtendedLoading && (
+          <span className="text-[9px] font-mono text-muted-foreground animate-pulse shrink-0">
+            loading extended graph…
+          </span>
+        )}
+        {isExtendedUnavailable && (
+          <span
+            className="text-[9px] font-mono text-warning/70 shrink-0"
+            title="depth=3 timed out — showing 2-hop graph"
+          >
+            2-hop only (timeout)
+          </span>
+        )}
 
         {/* Confidence breakdown toggle */}
         <div className="flex items-center gap-1.5">
