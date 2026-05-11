@@ -105,6 +105,21 @@ export function EntitySidebar({ entityId }: EntitySidebarProps) {
   const isLoading = isShowingSelected ? selectedLoading : anchorLoading;
   const displayEntityId = isShowingSelected ? selectedEntityId : entityId;
 
+  // ── Entity detail (description from Worker 13J) ────────────────────────────
+  //
+  // WHY separate getEntityDetail call: useEntityIntelligence() returns
+  // intelligence aggregates (confidence, narrative, relations).
+  // getEntityDetail() returns the entity's own enrichment fields
+  // (description from Worker 13J, metadata like sector/industry/founded_year).
+  // These two endpoints have different stale times — descriptions are
+  // stable for hours; intelligence metrics refresh every few minutes.
+  const { data: entityDetail } = useQuery({
+    queryKey: ["entity-detail", displayEntityId],
+    queryFn: () => gw.getEntityDetail(displayEntityId),
+    staleTime: 300_000, // WHY 5min: entity descriptions rarely change
+    enabled: !!displayEntityId,
+  });
+
   // ── Top-3 relations with summaries ─────────────────────────────────────────
   // Read from the graph query cache — GraphPanel already fetched this data.
   // WHY depth=2 in queryKey: matches GraphPanel's default, so the cache hit is
@@ -179,6 +194,16 @@ export function EntitySidebar({ entityId }: EntitySidebarProps) {
             {displayIntel?.data_completeness != null && (
               <p className="text-[10px] font-mono text-muted-foreground mt-0.5 tabular-nums">
                 {Math.round(displayIntel.data_completeness * 100)}% complete
+              </p>
+            )}
+            {/* Entity description from Worker 13J (StructuredEnrichmentWorker).
+                WHY show here (not a separate section): the description is a one-line
+                or two-line human-readable label that gives context before the analyst
+                reads the intelligence narrative. Placing it in the header makes it
+                scannable at a glance. */}
+            {entityDetail?.description && (
+              <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+                {entityDetail.description}
               </p>
             )}
           </div>
@@ -346,6 +371,23 @@ export function EntitySidebar({ entityId }: EntitySidebarProps) {
                         <p className="mt-0.5 text-[9px] leading-relaxed text-muted-foreground line-clamp-2">
                           {edge.relation_summary}
                         </p>
+                      )}
+                      {/* Evidence snippets — direct quotes from articles that
+                          established this relation (forwarded from S9 once the
+                          S9 transform fix is deployed). WHY limit to 2: the
+                          sidebar column is narrow — two snippets give enough
+                          primary-source context without overwhelming the view. */}
+                      {edge.evidence_snippets && edge.evidence_snippets.length > 0 && (
+                        <div className="mt-1 space-y-0.5">
+                          {edge.evidence_snippets.slice(0, 2).map((snippet, i) => (
+                            <p
+                              key={i}
+                              className="text-[9px] leading-relaxed text-muted-foreground/70 italic line-clamp-2"
+                            >
+                              &ldquo;{snippet}&rdquo;
+                            </p>
+                          ))}
+                        </div>
                       )}
                     </div>
                   );
