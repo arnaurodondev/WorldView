@@ -488,9 +488,24 @@ export function MorningBriefCard() {
             // expansion". The marker set is a superset of the old inline markers.
             // PLAN-0066 Wave F T-W10-F-03: briefId + token for BulletFeedback.
             // briefId is optional — null/undefined suppresses feedback widgets.
+            //
+            // ISSUE-2: Filter out LLM "REMOVED" placeholder sections.
+            // WHY filter here: some LLM completions emit "REMOVED" as a literal
+            // section heading instead of omitting the section entirely (prompt
+            // artifact — the model has seen training data where sections were
+            // marked REMOVED rather than deleted). Rendering such a section
+            // shows a confusing empty-looking heading with no bullets.
+            // Filter at the call-site (not inside StructuredBrief) so the
+            // shared component stays agnostic of this prompt quirk and the
+            // filtered list is not mistaken for a logic error in the renderer.
             <StructuredBrief
               lead={brief.lead}
-              sections={brief.sections}
+              sections={
+                // WHY toUpperCase(): match any case variant ("removed", "Removed", "REMOVED")
+                brief.sections?.filter(
+                  (s) => !s.title?.toUpperCase().includes("REMOVED")
+                ) ?? []
+              }
               confidence={brief.confidence}
               variant="full"
               briefId={brief.id ?? undefined}
