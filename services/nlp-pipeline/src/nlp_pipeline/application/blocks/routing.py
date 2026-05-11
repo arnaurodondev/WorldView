@@ -44,6 +44,7 @@ DOCUMENT_TYPE_SIGNAL: dict[str, float] = {
     "sec_8k": 0.95,
     "sec_10k": 0.90,
     "sec_10q": 0.90,
+    "sec_edgar": 0.88,  # generic SEC filing — all form types (10-K/10-Q/8-K/DEF14A)
     "sec_def14a": 0.88,
     "earnings_call": 0.80,
     "analyst_report": 0.80,
@@ -54,6 +55,21 @@ DOCUMENT_TYPE_SIGNAL: dict[str, float] = {
     "manual": 0.50,
 }
 _DEFAULT_DOCUMENT_TYPE_SIGNAL: float = 0.50
+
+# Authoritative regulatory filings are guaranteed at least MEDIUM routing even when
+# entity density is low — structural SEC filings contain high-value factual disclosures
+# whose value is not captured by the entity_density signal (low ORGANIZATION/FI mention
+# counts in raw HTML do not indicate low informational value).
+_AUTHORITATIVE_FILING_SOURCES: frozenset[str] = frozenset(
+    {
+        "sec_edgar",
+        "sec_8k",
+        "sec_10k",
+        "sec_10q",
+        "sec_def14a",
+        "tenant_upload",
+    }
+)
 
 # ── Signal computation helpers ────────────────────────────────────────────────
 
@@ -167,6 +183,11 @@ def compute_routing_score(
     composite = max(0.0, min(1.0, composite))
 
     tier = _assign_tier(composite, tier_deep=tier_deep, tier_medium=tier_medium, tier_light=tier_light)
+
+    # Authoritative filings are upgraded from LIGHT to MEDIUM — their low entity_density
+    # scores do not reflect low informational value; it's a structural artifact of raw HTML.
+    if tier == RoutingTier.LIGHT and source_type in _AUTHORITATIVE_FILING_SOURCES:
+        tier = RoutingTier.MEDIUM
 
     return RoutingDecision(
         decision_id=decision_id,

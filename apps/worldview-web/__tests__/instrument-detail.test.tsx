@@ -23,6 +23,7 @@ import { LiveQuoteBadge } from "@/components/instrument/LiveQuoteBadge";
 import { OHLCVChart } from "@/components/instrument/OHLCVChart";
 import { createGateway } from "@/lib/gateway";
 import type { Fundamentals, Quote, ContradictionsResponse } from "@/types/api";
+import { useApiClient, useAccessToken } from "@/lib/api-client";
 
 // ── @react-sigma/core mock ────────────────────────────────────────────────────
 // WHY mock @react-sigma/core: sigma.js uses WebGL which is unavailable in jsdom.
@@ -291,6 +292,20 @@ vi.mock("@/hooks/useAuth", () => ({
   })),
 }));
 
+// WHY mock @/lib/api-client: IntelligenceTab uses useAccessToken() (via the
+// useEntityIntelligence hook in @/lib/api/intelligence.ts) which throws if no
+// ApiClientProvider wraps the component. Mocking the module replaces the hook
+// with a stable stub that returns a token without needing a real provider.
+// useApiClient returns an empty object — IntelligenceTab's direct gateway calls
+// still go through the @/lib/gateway mock above.
+vi.mock("@/lib/api-client", () => ({
+  useApiClient: vi.fn(() => ({})),
+  useAccessToken: vi.fn(() => "test-token"),
+  ApiClientProvider: ({ children }: { children: React.ReactNode }) => children,
+  useAuthedQuery: vi.fn(),
+  useAuthedMutation: vi.fn(),
+}));
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeQueryClient() {
@@ -384,7 +399,10 @@ describe("FundamentalsTab", () => {
     });
 
     // Target price and delta — current=187.43, target=220 → +17.4%
-    expect(screen.getByText("$220.00")).toBeInTheDocument();
+    // WHY getAllByText: $220.00 may appear in both the AnalystConsensusStrip
+    // and a metrics grid row. getAllByText asserts at least one match exists
+    // without failing if the value is legitimately rendered in two places.
+    expect(screen.getAllByText("$220.00").length).toBeGreaterThan(0);
     // Total analyst count shown as "· 48 analysts"
     expect(screen.getByText(/48 analysts/)).toBeInTheDocument();
   });
@@ -521,12 +539,8 @@ describe("IntelligenceTab", () => {
 
   it("renders empty state when no contradictions", async () => {
     // WHY mockReturnValue (not Once): IntelligenceTab calls createGateway(accessToken)
-    // TWICE — once for getEntityGraph and once for getContradictions. We need both
-    // invocations to return the empty-state mocks. Using mockReturnValue overrides
-    // ALL subsequent calls for this test. We restore via vi.restoreAllMocks() or
-    // by calling mockReturnValue again with the original mock in afterEach if needed.
-    // Since each describe block's tests use a fresh QueryClient (makeQueryClient),
-    // and vi.mock module-level restores between test files, this approach is safe.
+    // for getEntityGraph, getInstrumentBrief, getContradictions, and getEntityDetail.
+    // We need all invocations to return the empty-state mocks.
     const emptyGateway = {
       getContradictions: vi.fn().mockResolvedValue({ entity_id: "ent-001", contradictions: [] }),
       getEntityGraph: vi.fn().mockResolvedValue({ entity_id: "ent-001", nodes: [], edges: [] }),
@@ -555,9 +569,19 @@ describe("IntelligenceTab", () => {
 
     render(<IntelligenceTab entityId="ent-001" />, { wrapper });
 
+    // WHY assert "Detected Contradictions" is absent (not a "no contradictions" message):
+    // Audit 2026-05-09 §6 fix #3 changed the empty-state behaviour — when there are
+    // zero contradictions the entire contradictions <section> is hidden (not replaced
+    // with a "no contradictions detected" tile). The section heading "Detected
+    // Contradictions" is therefore absent from the DOM. We verify the component
+    // correctly renders without the section rather than asserting a stale text node.
+    // R19: do not delete — update assertion to match current component behaviour.
     await waitFor(() => {
-      expect(screen.getByText(/No contradictions detected/i)).toBeInTheDocument();
+      // Entity Knowledge Graph section always renders
+      expect(screen.getByText("Entity Knowledge Graph")).toBeInTheDocument();
     });
+    // The contradictions section heading must NOT be present when there are no contradictions
+    expect(screen.queryByText("Detected Contradictions")).not.toBeInTheDocument();
   });
 
   it("renders entity graph section header", async () => {

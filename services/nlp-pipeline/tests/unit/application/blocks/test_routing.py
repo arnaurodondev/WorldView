@@ -382,3 +382,44 @@ class TestComputeRoutingScore:
             watched_entity_ids=frozenset(),
         )
         assert "price_impact" in decision.feature_scores
+
+    def test_sec_edgar_minimum_medium_tier(self) -> None:
+        """sec_edgar docs with low entity density must be upgraded from LIGHT to MEDIUM.
+
+        BP-461: SEC EDGAR filings are authoritative regulatory disclosures.  Low
+        entity density is a structural artifact of raw EDGAR HTML (filing boilerplate
+        has few ORGANIZATION/FINANCIAL_INSTITUTION mentions), not a signal of low value.
+        The authoritative-source tier floor ensures they reach ArticleRelevanceScoringWorker.
+        """
+        decision = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="sec_edgar",
+            published_at=_now() - timedelta(days=30),  # old filing — low recency
+            extracted_at=_now(),
+            mentions=[],  # no entity mentions — worst-case entity density
+            section_count=2,
+            source_trust_weight=0.90,  # from migration 0039
+            novelty_score=0.70,
+            watched_entity_ids=frozenset(),
+            price_impact_score=0.0,
+        )
+        # Composite will be ~0.42 (LIGHT without override), must be upgraded to MEDIUM
+        assert decision.routing_tier == RoutingTier.MEDIUM
+
+    def test_non_authoritative_source_not_upgraded(self) -> None:
+        """newsapi_news with low signals must remain LIGHT (or SUPPRESS), not be upgraded."""
+        decision = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="newsapi_news",
+            published_at=_now() - timedelta(hours=500),
+            extracted_at=_now(),
+            mentions=[],
+            section_count=0,
+            source_trust_weight=0.55,
+            novelty_score=0.10,
+            watched_entity_ids=frozenset(),
+        )
+        # newsapi_news is not in the authoritative-source set — stays LIGHT or SUPPRESS
+        assert decision.routing_tier in {RoutingTier.LIGHT, RoutingTier.SUPPRESS}
