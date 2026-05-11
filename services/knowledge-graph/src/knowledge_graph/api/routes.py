@@ -19,7 +19,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, HTTPException, Query
 
-from knowledge_graph.api.dependencies import CypherBundleDep, CypherNeighborhoodUseCaseDep, EntityGraphReposDep
+from knowledge_graph.api.dependencies import (
+    CypherBundleDep,
+    CypherNeighborhoodUseCaseDep,
+    EntityAliasRepoDep,
+    EntityGraphReposDep,
+)
 from knowledge_graph.api.schemas import (
     EntitySummary,
     GraphNeighborhoodResponse,
@@ -188,6 +193,37 @@ async def get_entity_by_ticker(
     if row is None:
         raise HTTPException(status_code=404, detail=f"No entity found for ticker: {ticker}")
     return {"entity_id": str(row["entity_id"]), "ticker": str(row.get("ticker") or ticker)}
+
+
+@router.get("/entities/resolve")
+async def resolve_entity_by_name(
+    name: str = Query(..., min_length=1, max_length=200),
+    limit: int = Query(default=5, ge=1, le=20),
+    alias_repo: EntityAliasRepoDep = ...,  # type: ignore[assignment]
+) -> dict[str, list[dict[str, object]]]:
+    """Fuzzy-match an entity name against entity_aliases and return candidate entity_ids.
+
+    Used by the RAG-chat tool executor for name-based entity resolution (PLAN-0078).
+    Returns up to *limit* candidates ordered by trigram similarity descending.
+    Empty list when no alias matches the trigram threshold (~0.3 similarity).
+    """
+    from knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias import (
+        EntityAliasRepository,
+    )
+
+    repo: EntityAliasRepository = alias_repo  # type: ignore[assignment]
+    hits = await repo.fuzzy_search(name.lower(), limit=limit)
+    return {
+        "candidates": [
+            {
+                "entity_id": str(h["entity_id"]),
+                "alias_text": h["alias_text"],
+                "alias_type": h["alias_type"],
+                "similarity": h["similarity"],
+            }
+            for h in hits
+        ]
+    }
 
 
 # ── Neighbourhood query ───────────────────────────────────────────────────────
