@@ -104,31 +104,32 @@ class TestCypherPathUseCase:
             )
 
     async def test_entity_id_embedded_as_uuid_literal_not_params(self) -> None:
-        """Entity IDs are UUID-validated string literals in SQL — NOT $params.
+        """Entity IDs are UUID-validated string literals in AGE Cypher — NOT $params.
 
-        BP-461 (2026-05-11): The SQL path query bypasses AGE entirely and queries
-        the relations table directly. Entity IDs must still be embedded as UUID
-        string literals (UUID-validated, only [0-9a-fA-F-] chars) — no $params.
-
-        Security invariant: only UUID-validated values are embedded — no arbitrary
-        user strings can be injected because _UUID_RE rejects non-UUID inputs.
+        BP-459-C / BP-450 (2026-05-11): asyncpg's prepared-statement protocol fails
+        when AGE Cypher SQL mixes a PostgreSQL $1 param with Cypher-level $var refs.
+        The fix embeds entity UUIDs directly as Cypher string literals after strict
+        _UUID_RE validation (only [0-9a-fA-F-] characters — no injection possible).
         """
         from knowledge_graph.application.use_cases.cypher_path import (
             CypherPathUseCase,
-            _build_direct_sql,
+            _build_path_sql,
         )
 
         src_str = str(_SRC)
         tgt_str = str(_TGT)
 
-        # The SQL must embed entity_ids as UUID string literals (BP-461 / BP-459-C)
-        sql = _build_direct_sql(src_str, tgt_str, limit=1)
-        assert src_str in sql, "source entity_id must be embedded as a UUID literal in SQL"
-        assert tgt_str in sql, "target entity_id must be embedded as a UUID literal in SQL"
+        # The AGE Cypher SQL must embed entity_ids as UUID string literals
+        sql = _build_path_sql(src_str, tgt_str, max_hops=3, all_paths=False)
+        assert src_str in sql, "source entity_id must be embedded as a UUID literal in AGE Cypher"
+        assert tgt_str in sql, "target entity_id must be embedded as a UUID literal in AGE Cypher"
 
-        # The SQL must NOT use PostgreSQL $params (asyncpg extended-query conflict)
+        # The Cypher SQL must NOT use PostgreSQL $params (asyncpg extended-query conflict)
         assert "$source" not in sql, "entity_ids must be literal strings, not $params (BP-450)"
         assert "$target" not in sql, "entity_ids must be literal strings, not $params (BP-450)"
+        # AGE 1.5.0 incompatible functions must not appear
+        assert "shortestPath" not in sql
+        assert "allShortestPaths" not in sql
 
         # Verify that when execute() is called, NO positional $params dict is passed
         session = _make_session()
@@ -151,16 +152,18 @@ class TestCypherPathUseCase:
             if len(args) >= 2 and isinstance(args[1], dict) and "params" in args[1]:
                 pytest.fail(
                     "execute() must NOT pass a {'params': ...} dict — "
-                    "entity_ids are embedded as UUID literals (BP-461 / BP-450)"
+                    "entity_ids are embedded as UUID literals (BP-459-C / BP-450)"
                 )
 
     async def test_raises_timeout_error_on_db_exception(self) -> None:
-        """DB exception containing 'timeout' → CypherTimeoutError.
+        """DB exception containing 'timeout' on the AGE Cypher query → CypherTimeoutError.
 
-        BP-461: the new SQL-only implementation has no AGE session setup; the
-        first execute() call IS the 1-hop SQL query.  A timeout on that call
-        must still be surfaced as CypherTimeoutError.
+        execute() makes 3 AGE setup calls (LOAD 'age', SET search_path, SET timeout)
+        that succeed, then the 4th call (AGE Cypher query) raises a statement timeout.
+        CypherTimeoutError must be raised regardless of which call fails.
         """
+        from unittest.mock import MagicMock
+
         from knowledge_graph.application.use_cases.cypher_path import (
             CypherPathUseCase,
             CypherTimeoutError,
@@ -169,9 +172,18 @@ class TestCypherPathUseCase:
         uc = CypherPathUseCase()
         entity_repo = _make_entity_repo(exists=True)
 
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = []
         session = AsyncMock()
-        # The first (and only) execute is the 1-hop SQL query — it raises timeout.
-        session.execute = AsyncMock(side_effect=Exception("canceling statement due to statement timeout"))
+        # First 3 calls (AGE session setup) succeed; 4th (AGE Cypher query) times out.
+        session.execute = AsyncMock(
+            side_effect=[
+                mock_result,  # LOAD 'age'
+                mock_result,  # SET search_path
+                mock_result,  # SET LOCAL statement_timeout
+                Exception("canceling statement due to statement timeout"),
+            ]
+        )
 
         with pytest.raises(CypherTimeoutError):
             await uc.execute(
@@ -203,77 +215,73 @@ class TestCypherPathUseCase:
         assert result.source_entity_id == _SRC
         assert result.target_entity_id == _TGT
 
-    async def test_max_hops_controls_two_hop_phase(self) -> None:
-        """max_hops=1 skips 2-hop query; max_hops>=2 attempts it when 1-hop returns nothing.
+    async def test_max_hops_embedded_in_cypher_literal(self) -> None:
+        """max_hops is embedded as a numeric literal *1..N in the AGE Cypher pattern.
 
-        BP-461: the new SQL-only implementation uses two separate queries
-        (_build_direct_sql for 1-hop, _build_twohop_sql for 2-hop).  max_hops
-        determines whether the 2-hop phase is attempted, not a Cypher *1..N literal.
+        BP-461 (2026-05-11): confirmed-working AGE 1.5.0 syntax uses variable-length
+        matching with ``ORDER BY length(p)`` instead of ``shortestPath()`` or list
+        comprehensions (both unsupported in AGE 1.5.0).
         """
         from knowledge_graph.application.use_cases.cypher_path import (
             CypherPathUseCase,
-            _build_direct_sql,
-            _build_twohop_sql,
+            _build_path_sql,
         )
 
         src_str = str(_SRC)
         tgt_str = str(_TGT)
 
-        # Entity IDs must appear in both SQL helpers (UUID literal embedding).
-        sql1 = _build_direct_sql(src_str, tgt_str, limit=1)
-        sql2 = _build_twohop_sql(src_str, tgt_str, limit=1)
-        for sql in (sql1, sql2):
-            assert src_str in sql
-            assert tgt_str in sql
-            assert "$max_hops" not in sql
+        # max_hops is embedded as *1..N in the Cypher variable-length path pattern.
+        sql2 = _build_path_sql(src_str, tgt_str, max_hops=2, all_paths=False)
+        sql3 = _build_path_sql(src_str, tgt_str, max_hops=3, all_paths=False)
+        assert "*1..2" in sql2, "max_hops=2 must appear as *1..2 in Cypher pattern"
+        assert "*1..3" in sql3, "max_hops=3 must appear as *1..3 in Cypher pattern"
+        assert "$max_hops" not in sql2, "max_hops must be a literal, not a $param"
+        assert "shortestPath" not in sql2, "shortestPath() is not supported by AGE 1.5.0"
+        assert "allShortestPaths" not in sql3, "allShortestPaths() is not supported by AGE 1.5.0"
 
-        # max_hops=1 → only one execute() call (1-hop SQL only, 2-hop skipped).
-        session_1hop = _make_session(execute_returns=[])
+        # execute() always makes exactly 4 calls: LOAD 'age', SET search_path,
+        # SET LOCAL statement_timeout, then the AGE Cypher query.
+        session = _make_session(execute_returns=[])
         entity_repo = _make_entity_repo(exists=True)
         uc = CypherPathUseCase()
         await uc.execute(
-            session_1hop,
-            entity_repo,
-            cypher_enabled=True,
-            source_entity_id=_SRC,
-            target_entity_id=_TGT,
-            max_hops=1,
-        )
-        assert session_1hop.execute.call_count == 1, "max_hops=1 must run only the 1-hop query"
-
-        # max_hops=2 → two execute() calls (1-hop returns nothing, then 2-hop tried).
-        session_2hop = _make_session(execute_returns=[])
-        await uc.execute(
-            session_2hop,
+            session,
             entity_repo,
             cypher_enabled=True,
             source_entity_id=_SRC,
             target_entity_id=_TGT,
             max_hops=2,
         )
-        assert session_2hop.execute.call_count == 2, "max_hops=2 must attempt the 2-hop query too"
+        assert session.execute.call_count == 4, (
+            "execute() must make exactly 4 calls: LOAD 'age', SET search_path, "
+            "SET LOCAL statement_timeout, and the AGE Cypher query"
+        )
 
-    async def test_all_paths_uses_limit_in_sql(self) -> None:
-        """all_paths=True → limit=5 rows; all_paths=False → limit=1 row.
+    async def test_all_paths_uses_limit_in_cypher(self) -> None:
+        """all_paths=True → LIMIT 5 in AGE Cypher; all_paths=False → LIMIT 1.
 
-        BP-461: the new SQL-only implementation passes a ``limit`` argument to
-        _build_direct_sql / _build_twohop_sql.  Neither shortestPath() nor
-        allShortestPaths() are used — they are not supported by AGE 1.5.0.
+        AGE 1.5.0 does not support ``allShortestPaths()`` or ``shortestPath()``.
+        The result count is controlled via a LIMIT clause in the Cypher body.
+        ``ORDER BY length(p)`` ensures shorter paths come first.
         """
-        from knowledge_graph.application.use_cases.cypher_path import _build_direct_sql
+        from knowledge_graph.application.use_cases.cypher_path import _build_path_sql
 
         src_str = str(_SRC)
         tgt_str = str(_TGT)
-        sql_single = _build_direct_sql(src_str, tgt_str, limit=1)
-        sql_all = _build_direct_sql(src_str, tgt_str, limit=5)
+        sql_single = _build_path_sql(src_str, tgt_str, max_hops=3, all_paths=False)
+        sql_all = _build_path_sql(src_str, tgt_str, max_hops=3, all_paths=True)
 
         # AGE 1.5.0-incompatible functions must never appear
         assert "shortestPath" not in sql_single
         assert "allShortestPaths" not in sql_all
 
-        # LIMIT is embedded as a numeric literal in the SQL
-        assert "LIMIT 5" in sql_all
+        # LIMIT is embedded as a numeric literal in the Cypher body
         assert "LIMIT 1" in sql_single
+        assert "LIMIT 5" in sql_all
+
+        # ORDER BY length(p) must be present (shortest-first ordering)
+        assert "ORDER BY length(p)" in sql_single
+        assert "ORDER BY length(p)" in sql_all
 
     async def test_relation_types_filter_applied_post_hoc(self) -> None:
         """relation_types filter excludes paths whose edges don't match."""
@@ -541,6 +549,41 @@ class TestAgtypeParser:
         raw = b'[{"id": 1, "label": "Entity", "properties": {"entity_id": "abc"}}]'
         result = _parse_agtype_text(raw)
         assert len(result) == 1
+
+    def test_parse_strips_per_element_vertex_annotations(self) -> None:
+        """AGE arrays with per-element ::vertex annotations → parsed correctly (BP-461).
+
+        The old rfind('::') approach failed for multi-element arrays because it only
+        stripped the last :: occurrence, leaving inner ::vertex tokens as invalid JSON.
+        The regex fix strips ALL }::word and ]::word type annotations.
+        """
+        from knowledge_graph.application.use_cases.cypher_path import _parse_agtype_text
+
+        raw = (
+            '[{"id":1,"label":"entity","properties":{"entity_id":"abc",'
+            '"canonical_name":"Apple","entity_type":"company"}}::vertex,'
+            '{"id":2,"label":"entity","properties":{"entity_id":"xyz",'
+            '"canonical_name":"Anthropic","entity_type":"company"}}::vertex]'
+        )
+        result = _parse_agtype_text(raw)
+        assert len(result) == 2
+        assert result[0]["properties"]["entity_id"] == "abc"
+        assert result[1]["properties"]["entity_id"] == "xyz"
+
+    def test_parse_strips_per_element_edge_annotations(self) -> None:
+        """AGE edge arrays with per-element ::edge annotations → parsed correctly (BP-461)."""
+        from knowledge_graph.application.use_cases.cypher_path import _parse_agtype_text
+
+        raw = (
+            '[{"id":10,"label":"owns_stake_in","end_id":2,"start_id":1,'
+            '"properties":{"confidence":1.0,"relation_id":"r1"}}::edge,'
+            '{"id":11,"label":"partner_of","end_id":3,"start_id":2,'
+            '"properties":{"confidence":0.9,"relation_id":"r2"}}::edge]'
+        )
+        result = _parse_agtype_text(raw)
+        assert len(result) == 2
+        assert result[0]["label"] == "owns_stake_in"
+        assert result[1]["label"] == "partner_of"
 
     def test_extract_nodes_from_vertex_dicts(self) -> None:
         """_extract_nodes parses entity_id/canonical_name/entity_type from AGE vertex dicts."""
