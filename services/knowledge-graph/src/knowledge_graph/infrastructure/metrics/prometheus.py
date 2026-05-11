@@ -159,3 +159,10 @@ s7_provisional_noise_llm_filtered_total = Counter(
     "s7_provisional_noise_llm_filtered_total",
     "Provisional queue rows rejected by the Layer 2 cheap LLM classifier.",
 )
+
+# ── E-3 Evidence Quality Gate (Worker 13B) ────────────────────────────────────
+
+kg_evidence_quality_gated_total = Counter(
+    "kg_evidence_quality_gated_total",
+    "Relation evidence rows blocked by quality gate (low confidence + low density).",
+)

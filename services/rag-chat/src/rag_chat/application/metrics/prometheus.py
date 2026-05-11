@@ -82,6 +82,13 @@ rag_injection_blocked = Counter(
     "Number of prompt injection attempts blocked",
 )
 
+# E-8: Layer 2 (LLM semantic) injection blocks specifically.
+# Distinct from rag_injection_blocked (which covers Layer 1 regex + Layer 2).
+rag_injection_blocked_layer2 = Counter(
+    "rag_injection_blocked_layer2_total",
+    "Number of prompt injection attempts blocked by Layer 2 LLM semantic classifier",
+)
+
 # ── Context management (PRD-0016 §13) ────────────────────────────────────────
 
 rag_chunk_cache_hits = Counter(
@@ -190,4 +197,32 @@ rag_tool_use_first_turn_latency_seconds = Histogram(
     "rag_tool_use_first_turn_latency_seconds",
     "Latency of the first LLM turn (blocking, non-streaming) in the tool-use path",
     buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
+)
+
+# ── E-6: Multi-turn agent loop (AgentBudget) ──────────────────────────────────
+
+rag_agent_iterations = Histogram(
+    "rag_agent_iterations",
+    "Number of tool-use iterations per query",
+    buckets=[1, 2, 3, 4, 5, 6, 7, 8],
+)
+
+rag_budget_exceeded_total = Counter(
+    "rag_budget_exceeded_total",
+    "Budget exceeded events by type",
+    ["budget_type"],  # "latency" | "iterations" | "consecutive_errors"
+)
+
+# ── E-7: Citation egress allowlist ────────────────────────────────────────────
+
+rag_citations_scrubbed_total = Counter(
+    "rag_citations_scrubbed_total",
+    "Citation references scrubbed from answers (not grounded in tool results)",
+)
+
+# ── E-12: Per-turn audit log ──────────────────────────────────────────────────
+
+rag_audit_entries_total = Counter(
+    "rag_audit_entries_total",
+    "Number of chat audit log entries written",
 )
