@@ -35,6 +35,12 @@ class NewsAPIProviderSettings(BaseModel):
     base_url: str = "https://newsapi.org/v2/everything"
     page_size: int = 100
     quota_ttl_seconds: int = 86400
+    # BP-460: NewsAPI free tier allows only 100 requests/day.
+    # With 2 enabled sources polling every 60 s (the global scheduler_interval_seconds),
+    # the daily quota is exhausted within minutes.  Override polling to 4 hours
+    # (14 400 s): 2 sources x 6 polls/day = 12 requests, well under the 100-request cap.
+    # Configurable via CONTENT_INGESTION_NEWSAPI__POLL_INTERVAL_SECONDS.
+    poll_interval_seconds: int = 14400
 
 
 class SECEdgarProviderSettings(BaseModel):

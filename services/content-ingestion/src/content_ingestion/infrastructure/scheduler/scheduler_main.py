@@ -133,11 +133,23 @@ class SchedulerProcess:
             logger.error("scheduler_lease_recovery_error", error=str(exc))
 
         # 2. Evaluate sources and enqueue new tasks.
+        #
+        # BP-460: inject per-source-type interval overrides so rate-limited
+        # providers (NewsAPI: 100 req/day free tier) are not polled at the
+        # global tick cadence.  The override is read from provider settings so
+        # it remains configurable via env vars without touching this file.
+        from content_ingestion.domain.entities import SourceType
+
+        source_type_intervals: dict[SourceType, float] = {
+            SourceType.NEWSAPI: float(self._settings.newsapi.poll_interval_seconds),
+        }
+
         uow = SqlaUnitOfWork(self._write_factory, self._read_factory)
         use_case = ScheduleDueSourcesUseCase(
             uow=uow,
             scheduler_interval_seconds=self._settings.scheduler_interval_seconds,
             max_tasks_per_tick=self._max_tasks_per_tick,
+            source_type_intervals=source_type_intervals,
         )
         try:
             result = await use_case.execute()
