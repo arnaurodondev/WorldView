@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -11,6 +12,8 @@ from content_ingestion.domain.exceptions import QuotaExhaustedError
 from content_ingestion.infrastructure.adapters.base import RetryConfig
 from content_ingestion.infrastructure.adapters.newsapi.adapter import NewsAPIAdapter, _parse_published_at
 from content_ingestion.infrastructure.adapters.newsapi.client import NewsAPIClient
+
+import common.time
 
 pytestmark = pytest.mark.unit
 
@@ -133,6 +136,68 @@ class TestNewsAPIAdapterFetch:
         )
         results = await adapter.fetch(_make_source())
         assert len(results) == 0
+
+
+class TestNewsAPIAdapterFromDateCap:
+    """BP-464: from_date older than 30 days triggers HTTP 426 on NewsAPI free tier.
+
+    The adapter must cap effective_from to at most FREE_TIER_LOOKBACK_DAYS days ago
+    regardless of source config or watermark value.
+    """
+
+    async def test_stale_config_from_date_is_capped(self) -> None:
+        """A static from_date older than 29 days must be capped to the cutoff date."""
+        mock_client = AsyncMock(spec=NewsAPIClient)
+        mock_client.fetch_all_pages.return_value = []
+
+        adapter = NewsAPIAdapter(client=mock_client)
+        source = _make_source(config={"query": "stocks", "from_date": "2026-01-01"})
+        await adapter.fetch(source)
+
+        call_kwargs = mock_client.fetch_all_pages.call_args.kwargs
+        passed_from = call_kwargs["from_date"]
+        cutoff = (common.time.utc_now() - timedelta(days=adapter._FREE_TIER_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+        assert passed_from >= cutoff, f"Expected from_date >= {cutoff}, got {passed_from}"
+
+    async def test_recent_from_date_is_not_capped(self) -> None:
+        """A from_date within the 29-day window is passed through unchanged."""
+        mock_client = AsyncMock(spec=NewsAPIClient)
+        mock_client.fetch_all_pages.return_value = []
+
+        adapter = NewsAPIAdapter(client=mock_client)
+        recent_date = (common.time.utc_now() - timedelta(days=5)).strftime("%Y-%m-%d")
+        source = _make_source(config={"query": "stocks", "from_date": recent_date})
+        await adapter.fetch(source)
+
+        call_kwargs = mock_client.fetch_all_pages.call_args.kwargs
+        assert call_kwargs["from_date"] == recent_date
+
+    async def test_empty_from_date_is_not_modified(self) -> None:
+        """An empty from_date (no date filter) is passed through unchanged."""
+        mock_client = AsyncMock(spec=NewsAPIClient)
+        mock_client.fetch_all_pages.return_value = []
+
+        adapter = NewsAPIAdapter(client=mock_client)
+        source = _make_source(config={"query": "stocks"})
+        await adapter.fetch(source)
+
+        call_kwargs = mock_client.fetch_all_pages.call_args.kwargs
+        assert call_kwargs["from_date"] == ""
+
+    async def test_watermark_from_date_older_than_29d_is_capped(self) -> None:
+        """from_date passed as watermark (not from config) is also capped if too old."""
+        mock_client = AsyncMock(spec=NewsAPIClient)
+        mock_client.fetch_all_pages.return_value = []
+
+        adapter = NewsAPIAdapter(client=mock_client)
+        source = _make_source(config={"query": "stocks"})
+        # Simulate a watermark that's 60 days old
+        old_watermark = (common.time.utc_now() - timedelta(days=60)).strftime("%Y-%m-%d")
+        await adapter.fetch(source, from_date=old_watermark)
+
+        call_kwargs = mock_client.fetch_all_pages.call_args.kwargs
+        cutoff = (common.time.utc_now() - timedelta(days=adapter._FREE_TIER_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+        assert call_kwargs["from_date"] >= cutoff
 
 
 class TestNewsAPIClientQuota:

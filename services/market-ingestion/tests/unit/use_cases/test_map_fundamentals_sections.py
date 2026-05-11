@@ -76,7 +76,9 @@ _ETF_RAW: dict = {
     "Technicals": {"Beta": 1.15, "AverageVolume": 40_000_000},
     "ETF_Data": {
         "Yield": "0.4200",
-        "Total_Assets": 244_521_498_000,
+        # WHY TotalAssets (not Total_Assets): EODHD returns camelCase without separator
+        # in US ETF responses (confirmed against live QQQ/SPY responses 2026-05-11).
+        "TotalAssets": 244_521_498_000,
         "Net_Expense_Ratio": "0.20",
         "NaV": "477.67",
         "Holdings_Count": 101,
@@ -138,7 +140,7 @@ def test_etf_missing_total_assets_not_in_highlights() -> None:
     raw = {
         "General": {"Type": "ETF", "Name": "Test ETF"},
         "Technicals": {},
-        "ETF_Data": {"Yield": "1.20"},  # No Total_Assets
+        "ETF_Data": {"Yield": "1.20"},  # No TotalAssets / Total_Assets / Portfolio_Net_Assets
     }
     sections = _map_fundamentals_sections(raw, symbol="TEST", source="eodhd")
     assert "MarketCapitalization" not in sections.get("highlights", {})
