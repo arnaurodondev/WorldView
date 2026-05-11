@@ -2012,6 +2012,12 @@ def _transform_graph_response(raw: dict[str, Any]) -> dict[str, Any]:
                 "target": tgt,
                 "label": (rel.get("canonical_type") or "").lower(),
                 "weight": float(rel.get("confidence") or 0.5),
+                # WHY: S7 returns these from relation_summaries (Worker 13C) and
+                # relation_evidence_raw respectively. They are forwarded here so
+                # the frontend EntitySidebar can render LLM summaries and evidence
+                # snippets in the Top Relations panel without a second API call.
+                "relation_summary": rel.get("relation_summary"),  # str | None
+                "evidence_snippets": rel.get("evidence_snippets") or [],  # list[str]
             }
         )
 
