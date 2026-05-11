@@ -38,12 +38,25 @@ s6_claims_extracted_total = prometheus_client.Counter(
     "Total claims extracted by deep LLM extraction (Block 10)",
 )
 
+s6_extraction_entity_ref_hallucinated_total = prometheus_client.Counter(
+    "s6_extraction_entity_ref_hallucinated_total",
+    "Entity refs produced by the extraction LLM that were not in the entities list "
+    "(hallucination signal — refs invented by the model rather than copied from input)",
+)
+
 nlp_sectioning_fallback_total = prometheus_client.Counter(
     "nlp_sectioning_fallback_total",
     "Times the synthetic (fallback) sectioner was used because source_type was unknown",
 )
 
 # ── Backpressure gauge (polled from BackpressureController) ──────────────────
+
+s6_intel_commit_failures_total = prometheus_client.Counter(
+    "s6_intel_commit_failures_total",
+    "Total times the intel_session.commit() failed after nlp_session.commit() succeeded "
+    "(D-004 dual-commit path). Non-zero values indicate intelligence-db write failures "
+    "that require message re-delivery for provisional-entity-queue recovery.",
+)
 
 s6_ollama_queue_depth_current = prometheus_client.Gauge(
     "s6_ollama_queue_depth_current",
@@ -59,3 +72,51 @@ def record_article_processed(routing_tier: str) -> None:
 def record_entity_resolved(method: str) -> None:
     """Increment per-method entity resolution counter."""
     s6_entity_resolved_total.labels(method=method).inc()
+
+
+# ── Display relevance score path tracking (PLAN-0063 W5-5 T-W5-5-01) ─────────
+
+news_display_score_path_total = prometheus_client.Counter(
+    "news_display_score_path_total",
+    "Tracks which display_relevance_score formula path was used per article row",
+    ["path"],  # full_formula | no_price_impact | no_llm_score | routing_only
+)
+
+
+def record_display_score_path(
+    market_impact_score: float | None,
+    llm_relevance_score: float | None,
+) -> None:
+    """Classify and increment the display-score path counter."""
+    if market_impact_score is not None and market_impact_score > 0 and llm_relevance_score is not None:
+        path = "full_formula"
+    elif market_impact_score is not None and market_impact_score > 0:
+        path = "no_llm_score"
+    elif llm_relevance_score is not None:
+        path = "no_price_impact"
+    else:
+        path = "routing_only"
+    news_display_score_path_total.labels(path=path).inc()
+
+
+# ── Full-text document search (PLAN-0064 W6) ─────────────────────────────────
+
+s6_search_documents_total = prometheus_client.Counter(
+    "s6_search_documents_total",
+    "Total document search requests by source_type and status",
+    ["source_type", "status"],  # status: ok | error | empty
+)
+
+s6_search_documents_duration_seconds = prometheus_client.Histogram(
+    "s6_search_documents_duration_seconds",
+    "Document search end-to-end duration in seconds",
+    ["source_type"],
+    buckets=[0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0],
+)
+
+s6_search_documents_results_count = prometheus_client.Histogram(
+    "s6_search_documents_results_count",
+    "Distribution of result counts per search request",
+    ["source_type"],
+    buckets=[0, 1, 5, 10, 25, 50, 100, 500, 1000],
+)

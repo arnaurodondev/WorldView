@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import ClassVar
 from unittest.mock import AsyncMock
 
 import pytest
@@ -21,15 +22,30 @@ def _make_source(
 
 
 class TestAdapterRegistry:
+    # Source types whose adapters are registered in ADAPTER_REGISTRY.
+    # MANUAL: not polled — delivered via webhook/submit endpoint, no adapter needed.
+    # POLYMARKET: adapter added in Wave A-2 (PLAN-0019); excluded here until then.
+    # TENANT_UPLOAD: not polled — documents arrive via REST upload API (PLAN-0086).
+    _NO_ADAPTER: ClassVar[set[SourceType]] = {SourceType.MANUAL, SourceType.POLYMARKET, SourceType.TENANT_UPLOAD}
+
     def test_all_source_types_have_adapters(self) -> None:
-        """Every SourceType except MANUAL should have an adapter."""
+        """Every SourceType except non-polled types should have an adapter."""
         for st in SourceType:
-            if st == SourceType.MANUAL:
+            if st in self._NO_ADAPTER:
                 continue
             assert st in ADAPTER_REGISTRY, f"Missing adapter for {st}"
 
     def test_manual_not_in_registry(self) -> None:
         assert SourceType.MANUAL not in ADAPTER_REGISTRY
+
+    def test_polymarket_not_in_registry(self) -> None:
+        """POLYMARKET is intentionally excluded from ADAPTER_REGISTRY (F-407).
+
+        Polymarket tasks are handled by _execute_polymarket_task() in worker.py
+        (R24 compliance: batch-collect all results first, then short-lived DB session
+        for dedup).  They do NOT go through the standard SourceAdapter path.
+        """
+        assert SourceType.POLYMARKET not in ADAPTER_REGISTRY
 
 
 class TestIngestionScheduler:

@@ -1,13 +1,13 @@
-"""Consumer 13D-5: Fundamentals description change detector (PRD §6.7 Block 13D-5).
+"""Consumer 13D-5: Fundamentals description change detector + metadata enrichment.
 
 Consumer group: ``kg-fundamentals-group``.
 Consumes: ``market.dataset.fetched`` WHERE dataset_type='fundamentals'.
 
 Processing:
   1. Download payload from MinIO claim-check.
-  2. Extract General.Description field.
-  3. SHA-256 compare: if description changed → trigger definition re-embed.
-  4. If unchanged → skip (no-op).
+  2. Extract General.Description field → trigger definition re-embed on change.
+  3. Extract structured metadata fields (B-1: employee_count, revenue_ttm_usd,
+     pct_insiders, pct_institutions) → partial JSONB patch on canonical_entities.
 """
 
 from __future__ import annotations
@@ -16,13 +16,16 @@ import json
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import sha256_hex
+from knowledge_graph.infrastructure.intelligence_db.repositories.entity_repository import (
+    EntityRepository,
+)
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     BaseKafkaConsumer,
     ConsumerConfig,
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -33,11 +36,42 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
+_DATASET_FETCHED_SCHEMA_PATH = get_schema_path("market.dataset.fetched.avsc")
+
+
+def _extract_metadata_updates(payload: dict[str, Any]) -> dict[str, object]:
+    """Extract structured metadata fields from an EODHD fundamentals payload.
+
+    Only includes fields that are present and truthy in the payload.
+    Returns an empty dict if no recognised fields are found.
+
+    Fields extracted:
+    - ``General.FullTimeEmployees``   → ``employee_count`` (int)
+    - ``Highlights.RevenueTTM``       → ``revenue_ttm_usd`` (int)
+    - ``SharesStats.PercentInsiders`` → ``pct_insiders`` (float)
+    - ``SharesStats.PercentInstitutions`` → ``pct_institutions`` (float)
+    """
+    general = payload.get("General") or {}
+    highlights = payload.get("Highlights") or {}
+    shares_stats = payload.get("SharesStats") or {}
+
+    updates: dict[str, object] = {}
+    if emp := general.get("FullTimeEmployees"):
+        updates["employee_count"] = int(emp)
+    if rev := highlights.get("RevenueTTM"):
+        updates["revenue_ttm_usd"] = int(rev)
+    if pct_ins := shares_stats.get("PercentInsiders"):
+        updates["pct_insiders"] = float(pct_ins)
+    if pct_inst := shares_stats.get("PercentInstitutions"):
+        updates["pct_institutions"] = float(pct_inst)
+    return updates
+
+
 class _NoOpUoW:
     async def __aenter__(self) -> _NoOpUoW:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     async def commit(self) -> None:
@@ -48,15 +82,29 @@ class _NoOpUoW:
 
 
 class FundamentalsDescriptionConsumer(BaseKafkaConsumer[None]):
-    """Detects description changes in fundamentals data and triggers re-embedding.
+    """Detects description changes in fundamentals data and enriches entity metadata.
+
+    Processing per message:
+    1. Description change detection: delegates to ``DefinitionRefreshWorker``
+       (which handles SHA-256 dedup internally).
+    2. Metadata enrichment: extracts structured fields (employee_count,
+       revenue_ttm_usd, pct_insiders, pct_institutions) and patches
+       ``canonical_entities.metadata`` via JSONB merge (idempotent).
 
     Args:
-        config:           Consumer configuration.
-        session_factory:  async_sessionmaker for intelligence_db.
+    ----
+        config:            Consumer configuration.
+        session_factory:   async_sessionmaker for intelligence_db.
         definition_worker: DefinitionRefreshWorker to trigger re-embed on change.
-        storage_client:   Object storage client to download claim-check payloads.
-        dedup_client:     Optional Valkey dedup client.
+        storage_client:    Object storage client to download claim-check payloads.
+        dedup_client:      Optional Valkey dedup client.
+
     """
+
+    # Class-level default; specialised in __init__ with config.group_id for
+    # uniqueness across consumer replicas.  The architecture test checks that
+    # this attribute exists at the class level (DP-002/DP-003).
+    _dedup_prefix: str = "kg:fund"
 
     def __init__(
         self,
@@ -94,65 +142,56 @@ class FundamentalsDescriptionConsumer(BaseKafkaConsumer[None]):
             return
 
         instrument_id = UUID(str(instrument_id_raw))
-        object_key = value.get("object_key")
+        bucket = value.get("canonical_ref_bucket")
+        object_key = value.get("canonical_ref_key")
 
-        # Download payload from MinIO
-        description = await self._extract_description(object_key)
-        if description is None:
+        # Download full payload from MinIO once
+        payload = await self._download_payload(bucket, object_key)
+        if payload is None:
             logger.warning(  # type: ignore[no-any-return]
-                "fundamentals_consumer_no_description",
+                "fundamentals_consumer_no_payload",
                 instrument_id=str(instrument_id),
                 object_key=object_key,
             )
             return
 
-        # SHA-256 change detection
-        new_hash = sha256_hex(description)
-        old_hash = await self._get_current_hash(instrument_id)
-
-        if old_hash == new_hash:
-            logger.debug(  # type: ignore[no-any-return]
-                "fundamentals_consumer_description_unchanged",
+        # 1. Description change detection (existing behaviour — SHA-256 dedup in worker)
+        description: str | None = (payload.get("General") or {}).get("Description")
+        if description:
+            await self._def_worker.refresh_for_entity(instrument_id, description)
+            logger.info(  # type: ignore[no-any-return]
+                "fundamentals_consumer_description_processed",
                 instrument_id=str(instrument_id),
             )
-            return
 
-        # Description changed — trigger definition re-embed
-        await self._def_worker.refresh_for_entity(instrument_id, description)
+        # 2. Metadata enrichment (B-1) — idempotent JSONB merge, no entity.dirtied event
+        metadata_updates = _extract_metadata_updates(payload)
+        if metadata_updates:
+            async with self._sf() as session:
+                repo = EntityRepository(session)
+                await repo.update_metadata(instrument_id, metadata_updates)
+                await session.commit()
+            logger.info(  # type: ignore[no-any-return]
+                "fundamentals_consumer_metadata_updated",
+                instrument_id=str(instrument_id),
+                fields=sorted(metadata_updates.keys()),
+            )
 
-        logger.info(  # type: ignore[no-any-return]
-            "fundamentals_consumer_description_changed",
-            instrument_id=str(instrument_id),
-        )
-
-    async def _extract_description(self, object_key: str | None) -> str | None:
-        """Download the claim-check payload and extract General.Description."""
-        if not object_key or not self._storage:
+    async def _download_payload(self, bucket: str | None, object_key: str | None) -> dict[str, Any] | None:
+        """Download the MinIO claim-check payload and return the full JSON dict."""
+        if not bucket or not object_key or not self._storage:
             return None
         try:
-            data = await self._storage.get_json(object_key)
-            if data is None:
-                return None
-            return data.get("General", {}).get("Description")  # type: ignore[return-value, no-any-return]
+            data: dict[str, Any] | None = await self._storage.get_json(bucket, object_key)
+            return data
         except Exception as exc:
             logger.warning(  # type: ignore[no-any-return]
                 "fundamentals_consumer_storage_error",
+                bucket=bucket,
                 object_key=object_key,
                 error=str(exc),
             )
             return None
-
-    async def _get_current_hash(self, entity_id: UUID) -> str | None:
-        """Fetch the stored source_hash for the definition view."""
-        from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
-            VIEW_DEFINITION,
-            EntityEmbeddingStateRepository,
-        )
-
-        async with self._sf() as session:
-            emb_repo = EntityEmbeddingStateRepository(session)
-            row = await emb_repo.get(entity_id, VIEW_DEFINITION)
-            return str(row["source_hash"]) if row and row.get("source_hash") else None
 
     # ------------------------------------------------------------------
     # Idempotency
@@ -180,7 +219,6 @@ class FundamentalsDescriptionConsumer(BaseKafkaConsumer[None]):
             event_id=failure.event_id,
             error=str(failure.last_error),
         )
-        return None
 
     async def update_failure(self, failure: FailureInfo[None]) -> None:
         logger.warning(  # type: ignore[no-any-return]
@@ -189,7 +227,7 @@ class FundamentalsDescriptionConsumer(BaseKafkaConsumer[None]):
             attempt=failure.attempt,
         )
 
-    async def dead_letter(self, failure: FailureInfo[None]) -> None:
+    async def _dead_letter_impl(self, failure: FailureInfo[None]) -> None:
         logger.error(  # type: ignore[no-any-return]
             "fundamentals_consumer_dead_lettered",
             event_id=failure.event_id,
@@ -213,9 +251,21 @@ class FundamentalsDescriptionConsumer(BaseKafkaConsumer[None]):
     # ------------------------------------------------------------------
 
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
+        """Deserialise Confluent Avro wire-format or fall back to JSON.
+
+        BP-122: market.dataset.fetched messages are produced with the Confluent
+        Avro wire format (5-byte header: magic 0x00 + 4-byte schema ID).
+        Fall back to JSON for plain payloads.
+        """
+        if raw and raw[0:1] == b"\x00" and schema_path:
+            from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
+
+            return deserialize_confluent_avro(schema_path, raw)  # type: ignore[no-any-return]
         return json.loads(raw)  # type: ignore[no-any-return]
 
     def get_schema_path(self, topic: str) -> str | None:
+        if topic == "market.dataset.fetched":
+            return _DATASET_FETCHED_SCHEMA_PATH
         return None
 
     def extract_event_id(self, value: dict[str, Any]) -> str:

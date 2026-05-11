@@ -34,10 +34,11 @@ async def main() -> None:
     from knowledge_graph.infrastructure.messaging.consumers.enriched_consumer import (
         EnrichedArticleConsumer,
     )
+    from knowledge_graph.infrastructure.messaging.direct_producer import ConfluentDirectProducer
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     configure_logging(
         service_name="knowledge-graph-enriched-consumer",
         level=settings.log_level,
@@ -58,20 +59,38 @@ async def main() -> None:
         loop.add_signal_handler(sig, _handle_signal, sig)
 
     # Session factory — write factory for hot-path graph writes
-    engine, write_factory, _read_factory = _build_factories(settings)
+    engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
     # Valkey for dedup
     valkey = create_valkey_client_from_url(settings.valkey_url)
 
-    # Embedding client (required — exits if unavailable)
-    embedding_client = OllamaEmbeddingAdapter(
-        base_url=settings.otlp_endpoint or "http://ollama:11434",
-        model_id="nomic-embed-text",
+    # Embedding client (required — exits if unavailable).
+    # _EmbeddingBridgeClient wraps OllamaEmbeddingAdapter (batch EmbeddingInput API)
+    # to satisfy the canonicalization block's embed(str) -> list[float] protocol.
+    # The adapter's embed() takes list[EmbeddingInput]; passing a bare str causes it
+    # to iterate characters, crashing with "'str' has no attribute 'instruction_prefix'".
+    _raw_embedding_adapter = OllamaEmbeddingAdapter(
+        base_url=settings.ollama_base_url,
+        model_id=settings.embedding_model_id,
         semaphore=asyncio.Semaphore(4),
     )
+    _embedding_model_id = settings.embedding_model_id
 
-    # Direct Kafka producer for entity.dirtied.v1 (produced outside outbox)
-    direct_producer = Producer({"bootstrap.servers": settings.kafka_bootstrap_servers})
+    from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-not-found]
+
+    class _EmbeddingBridgeClient:
+        async def embed(self, text: str) -> list[float]:  # type: ignore[override]
+            outputs = await _raw_embedding_adapter.embed([EmbeddingInput(text=text, model_id=_embedding_model_id)])
+            return outputs[0].embedding
+
+    embedding_client: object = _EmbeddingBridgeClient()
+
+    # Direct Kafka producer for entity.dirtied.v1 (produced outside outbox).
+    # ConfluentDirectProducer wraps confluent_kafka.Producer to expose
+    # produce_bytes() — confluent_kafka.Producer itself does not have this
+    # method (BP-130).
+    raw_producer = Producer({"bootstrap.servers": settings.kafka_bootstrap_servers})
+    direct_producer = ConfluentDirectProducer(raw_producer)
 
     config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,
@@ -82,7 +101,7 @@ async def main() -> None:
         config=config,
         session_factory=write_factory,
         embedding_client=embedding_client,  # type: ignore[arg-type]
-        direct_producer=direct_producer,  # type: ignore[arg-type]
+        direct_producer=direct_producer,
         entity_dirtied_topic=settings.kafka_topic_entity_dirtied,
         canonicalization_threshold=settings.relation_canonicalization_threshold,
         dedup_client=valkey,
@@ -92,9 +111,12 @@ async def main() -> None:
         consumer_task = asyncio.create_task(consumer.run())
         await stop_event.wait()
         consumer.stop()  # type: ignore[attr-defined]
-        consumer_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await consumer_task
+        try:
+            await asyncio.wait_for(consumer_task, timeout=30.0)
+        except TimeoutError:
+            consumer_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await consumer_task
     except Exception as exc:
         log.error("enriched_consumer_fatal_error", error=str(exc))
         sys.exit(1)

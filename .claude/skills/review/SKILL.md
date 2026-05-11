@@ -3,6 +3,7 @@ name: review
 description: "Perform a structured code review on current changes using the investigation protocol, failure mode analysis, checklists, and heuristics. Use after implementing changes to catch bugs, security issues, and quality problems before committing."
 user-invocable: true
 argument-hint: "[optional: specific files or service to review]"
+effort: medium
 ---
 
 # Code Review — Structured Multi-Layer Analysis

@@ -1,0 +1,56 @@
+---
+title: Polymarket
+description: Prediction market data — categories, update frequency, and how markets are displayed.
+section: Data Sources
+order: 4
+updated: 2026-05-05
+---
+
+[Polymarket](https://polymarket.com) is the largest on-chain prediction market platform. Worldview integrates Polymarket data to display real-time market-implied probabilities for economic, political, and financial events.
+
+## What prediction markets show
+
+Each Polymarket market is a binary outcome question. Traders buy YES or NO shares, and the market price converges to the probability (0–100%) the crowd assigns to the outcome.
+
+Example markets relevant to finance:
+- "Will the Fed cut rates in June 2026?" — YES: 62%
+- "Will US CPI exceed 3.5% in Q2 2026?" — YES: 38%
+- "Will BTC reach $120K by end of 2026?" — YES: 55%
+
+<Callout type="info" title="Market pricing vs. probability">
+Polymarket prices are expressed as cents per contract (0–100). A YES price of 62 cents means the market assigns a 62% probability to the event occurring. This is a market-implied probability, not an expert forecast.
+</Callout>
+
+## Categories
+
+Worldview organizes Polymarket events into categories:
+
+| Category | Examples |
+|----------|---------|
+| Economics | Fed rate decisions, CPI prints, GDP beats/misses |
+| Politics | Election outcomes, policy decisions, geopolitical events |
+| Crypto | BTC/ETH price targets, protocol upgrades |
+| Equities | Stock price targets, index levels |
+| Sports | *(filtered out by default in the finance context)* |
+
+Use the category dropdown on the dashboard Prediction Markets widget or the full prediction markets page to filter by category.
+
+## Data freshness
+
+Worldview polls the Polymarket API every 5 minutes. The dashboard widget shows:
+- **Current YES probability** (%)
+- **24-hour volume** (USD)
+- **24-hour probability change** (direction and magnitude)
+- **Resolution date** (when the market closes)
+
+## Resolved markets
+
+After a market resolves (YES or NO), it stays in the Worldview database with its resolution outcome. This historical data is used to track prediction market accuracy over time — a useful calibration signal when evaluating current open markets.
+
+## Prediction markets page
+
+Navigate to `/prediction-markets` from the left rail or via `G` then `M` to see the full prediction markets browser with:
+- All active markets
+- Filters by category, volume, and resolution date
+- Sorting by probability, volume, or recent change
+- Market detail page with probability history chart

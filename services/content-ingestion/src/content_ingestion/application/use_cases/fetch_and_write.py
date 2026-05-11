@@ -17,6 +17,7 @@ import hashlib
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import common.ids
 import common.time as ct
@@ -24,7 +25,6 @@ from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
-    from uuid import UUID
 
     from content_ingestion.application.ports import BronzeStoragePort, FetchLogPort, OutboxPort, SourceAdapterPort
     from content_ingestion.domain.entities import FetchResult, Source
@@ -42,6 +42,7 @@ def build_raw_article_payload(
     fetch_id: UUID,
     published_at: str | None,
     is_backfill: bool,
+    title: str | None = None,
 ) -> dict[str, Any]:
     """Build outbox payload matching ``content.article.raw.v1`` Avro schema exactly."""
     return {
@@ -55,7 +56,7 @@ def build_raw_article_payload(
         "minio_bronze_key": minio_bronze_key,
         "content_hash": hashlib.sha256(raw_bytes).hexdigest(),
         "fetch_id": str(fetch_id),
-        "title": None,
+        "title": title,
         "published_at": published_at,
         "is_backfill": is_backfill,
         "correlation_id": None,
@@ -146,12 +147,17 @@ class FetchAndWriteUseCase:
                 )
 
         # 2. Process each result with batch commits
+        seen_url_hashes: set[str] = set()  # intra-batch dedup (prevents UNIQUE violation on batched commits)
         for result in results:
             try:
-                # 2a. Dedup check
+                # 2a. Dedup check (DB + intra-batch)
                 if await self._fetch_log.exists_by_url_hash(result.url_hash):
                     skipped += 1
                     continue
+                if result.url_hash in seen_url_hashes:
+                    skipped += 1
+                    continue
+                seen_url_hashes.add(result.url_hash)
 
                 # 2b. Write to MinIO bronze
                 minio_key = await self._bronze.put_object(
@@ -188,6 +194,7 @@ class FetchAndWriteUseCase:
                     fetch_id=fetch_log_id,
                     published_at=ct.to_iso8601(result.published_at) if result.published_at else None,
                     is_backfill=result.is_backfill,
+                    title=result.title,
                 )
 
                 await self._outbox.append(

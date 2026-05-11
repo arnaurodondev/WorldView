@@ -13,6 +13,7 @@ Usage (standalone)::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import signal
 from typing import TYPE_CHECKING
 
@@ -20,17 +21,27 @@ import httpx
 
 from content_ingestion.application.use_cases.claim_tasks import ClaimTasksUseCase
 from content_ingestion.application.use_cases.execute_task import ExecuteContentTaskUseCase
+from content_ingestion.application.use_cases.fetch_and_write_prediction_markets import (
+    FetchAndWritePredictionMarketsUseCase,
+)
 from content_ingestion.config import Settings
+from content_ingestion.domain.entities import SourceType
 from content_ingestion.domain.exceptions import AdapterError
+from content_ingestion.infrastructure.adapters.polymarket.adapter import PolymarketAdapter
+from content_ingestion.infrastructure.adapters.polymarket.client import PolymarketClient
 from content_ingestion.infrastructure.db.repositories.adapter_state import AdapterStateRepository
 from content_ingestion.infrastructure.db.repositories.fetch_log import FetchLogRepository
 from content_ingestion.infrastructure.db.repositories.outbox import OutboxRepository
+from content_ingestion.infrastructure.db.repositories.prediction_market_fetch_log import (
+    PredictionMarketFetchLogRepository,
+)
 from content_ingestion.infrastructure.db.repositories.task import TaskRepository
 from content_ingestion.infrastructure.db.session import _build_factories
 from content_ingestion.infrastructure.db.unit_of_work import SqlaUnitOfWork
 from content_ingestion.infrastructure.metrics.prometheus import record_fetch
 from content_ingestion.infrastructure.scheduler.scheduler import ADAPTER_REGISTRY
 from content_ingestion.infrastructure.storage.minio_bronze import MinioBronzeAdapter
+from messaging.pg.advisory_lock import pg_advisory_lock  # type: ignore[import-untyped]
 from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 from storage.factory import build_object_storage  # type: ignore[import-untyped]
@@ -40,7 +51,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from content_ingestion.application.ports.source_adapter import SourceAdapterPort
-    from content_ingestion.domain.entities import ContentIngestionTask, SourceType
+    from content_ingestion.domain.entities import ContentIngestionTask
 
 logger = get_logger(__name__)
 
@@ -81,9 +92,11 @@ class WorkerProcess:
         self._stop_event = asyncio.Event()
         self._semaphore = asyncio.Semaphore(settings.worker_concurrency)
         self._task_timeout = settings.worker_task_timeout_seconds
+        # D-04: Polymarket tasks require a longer timeout (paginated API + MinIO writes)
+        self._polymarket_task_timeout = settings.worker_polymarket_task_timeout_seconds
 
         # Build own infrastructure (one instance per worker process — R22)
-        _, self._write_factory, self._read_factory = _build_factories(settings)
+        _, _, self._write_factory, self._read_factory = _build_factories(settings)
         self._valkey = create_valkey_client_from_url(settings.valkey_url)
 
         storage_settings = StorageSettings(
@@ -120,11 +133,25 @@ class WorkerProcess:
                 concurrency=self._settings.worker_concurrency,
             )
             while not self._stop_event.is_set():
-                claimed = await self._claim_batch()
-                if not claimed:
-                    await asyncio.sleep(self._idle_sleep)
-                    continue
-                await asyncio.gather(*[self._execute_with_semaphore(task) for task in claimed])
+                # WHY try/except here: an unhandled exception in _claim_batch or
+                # asyncio.gather would silently kill the worker loop — the container
+                # stays up (exit code 0) but ingestion stops completely.  Catching
+                # at the loop level ensures transient errors (DB blip, OOM in a
+                # single task) cause a short pause + retry rather than a silent death.
+                # CancelledError must be re-raised so SIGTERM / task cancellation
+                # still propagates correctly (the worker's stop() sets _stop_event,
+                # but the async framework also cancels the coroutine).
+                try:
+                    claimed = await self._claim_batch()
+                    if not claimed:
+                        await asyncio.sleep(self._idle_sleep)
+                        continue
+                    await asyncio.gather(*[self._execute_with_semaphore(task) for task in claimed])
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("worker_loop_error", worker_id=self._worker_id)
+                    await asyncio.sleep(5)
 
             logger.info("worker_stopped", worker_id=self._worker_id)
 
@@ -151,32 +178,80 @@ class WorkerProcess:
     async def _execute_with_semaphore(self, task: ContentIngestionTask) -> None:
         """Acquire the concurrency semaphore then execute the task.
 
-        A timeout guards against indefinite blocking when all semaphore
-        permits are held.
+        Semaphore is acquired first so timeout only measures actual execution.
+        On timeout, the task is explicitly marked FAILED to avoid the 5-minute
+        lease-expiry delay before the scheduler can recover it.
+
+        D-04: Polymarket tasks use a dedicated, longer timeout because they
+        paginate the entire Gamma API catalogue and write to MinIO.
         """
-        try:
-            async with asyncio.timeout(self._task_timeout):
-                async with self._semaphore:
+        timeout = self._polymarket_task_timeout if task.source_type == SourceType.POLYMARKET else self._task_timeout
+        async with self._semaphore:
+            try:
+                async with asyncio.timeout(timeout):
                     await self._execute_task(task)
-        except TimeoutError:
-            logger.warning(
-                "worker_task_timeout",
+            except TimeoutError:
+                logger.warning(
+                    "worker_task_timeout",
+                    task_id=str(task.id),
+                    worker_id=self._worker_id,
+                    timeout=timeout,
+                )
+                # Mark the task as failed immediately so the scheduler
+                # doesn't have to wait for lease expiry to re-queue it.
+                await self._mark_task_timed_out(task)
+
+    async def _mark_task_timed_out(self, task: ContentIngestionTask) -> None:
+        """Write FAILED/RETRY status to DB for a timed-out task.
+
+        Opens a fresh write session (the original task session was rolled back
+        by the timeout cancellation).  If the task never reached RUNNING state
+        (timeout fired before task.start() completed), falls back to writing
+        RETRY directly via update_status so the domain state machine is not
+        violated.
+        """
+        from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+        try:
+            async with self._write_factory() as session:
+                task_repo = TaskRepository(session)
+                new_status: IngestionTaskStatus
+                if task.status == IngestionTaskStatus.RUNNING:
+                    task.fail("task_timeout")  # increments attempt_count, sets RETRY or FAILED
+                    new_status = task.status
+                else:
+                    # Task never reached RUNNING (timeout fired very early); write RETRY directly
+                    new_status = IngestionTaskStatus.RETRY
+                await task_repo.update_status(task.id, new_status, error_detail="task_timeout")
+                await session.commit()
+                logger.info(
+                    "worker_task_timed_out_marked",
+                    task_id=str(task.id),
+                    new_status=new_status.value,
+                    worker_id=self._worker_id,
+                )
+        except Exception as exc:
+            # Best-effort — if this fails, lease expiry will recover the task
+            logger.error(
+                "worker_task_timeout_mark_failed",
                 task_id=str(task.id),
-                worker_id=self._worker_id,
-                timeout=self._task_timeout,
+                error=str(exc),
             )
 
     async def _execute_task(self, task: ContentIngestionTask) -> None:
         """Execute a single claimed task through the pipeline.
 
-        Uses a dedicated write session for task status updates so the
-        ExecuteContentTaskUseCase can manage its own sessions internally
-        (R24 session optimization).
+        Routes POLYMARKET tasks to the prediction-market-specific pipeline;
+        all other source types use the standard FetchAndWriteUseCase path.
 
         Infrastructure concerns (metrics recording, adapter client
         construction) are handled here in the infra layer, keeping the
         use case free of infrastructure imports (R25).
         """
+        if task.source_type == SourceType.POLYMARKET:
+            await self._execute_polymarket_task(task)
+            return
+
         bronze = MinioBronzeAdapter(self._storage)
         use_case = ExecuteContentTaskUseCase(
             write_factory=self._write_factory,
@@ -186,6 +261,7 @@ class WorkerProcess:
             fetch_log_factory=FetchLogRepository,
             outbox_factory=OutboxRepository,
             adapter_builder=self._build_adapter,
+            task_factory=TaskRepository,  # D-9: atomic task-status + data commit
         )
         async with self._write_factory() as session:
             task_repo = TaskRepository(session)
@@ -202,13 +278,26 @@ class WorkerProcess:
                         duration=summary.duration_seconds,
                     )
             except Exception as exc:
-                await session.rollback()
+                # BP-XXX: when the session is poisoned (e.g. "Can't reconnect until
+                # invalid transaction is rolled back"), rollback may also fail —
+                # swallow that error and still attempt the rescue below so the task
+                # doesn't stay stuck in CLAIMED state until lease expiry.
+                # SIM105: contextlib.suppress is the idiomatic form for intentional swallow.
+                # WHY suppress rollback errors: if the session is poisoned (e.g. "Can't
+                # reconnect until invalid transaction is rolled back") the rollback call
+                # itself raises. We still need to attempt the rescue path below so the
+                # task doesn't stay stuck in CLAIMED state until lease expiry.
+                with contextlib.suppress(Exception):
+                    await session.rollback()
                 logger.error(
                     "worker_task_error",
                     task_id=str(task.id),
                     error=str(exc),
                     worker_id=self._worker_id,
                 )
+                # Best-effort: update task status via a fresh connection so the task
+                # doesn't stay stuck in CLAIMED for the full lease period (5-10 min).
+                await self._rescue_stuck_task(task, str(exc))
 
     def _build_adapter(
         self,
@@ -282,8 +371,14 @@ class WorkerProcess:
         else:
             raise AdapterError(f"Unknown source type: {source_type_val}")
 
-        # Build adapter — newsapi does not use rate_limiter
-        if source_type_val == "newsapi":
+        # Build adapter — newsapi and sec_edgar do not accept `rate_limiter`.
+        # WHY sec_edgar excluded (2026-05-09 fix): SECEdgarAdapter relies on
+        # `provider_cfg.market_hours_interval_seconds` for its own pacing
+        # (see `SECEdgarAdapter._compute_next_request_at`) and never accepts
+        # a TokenBucket. Passing `rate_limiter=` raised TypeError which
+        # surfaced as "got an unexpected keyword argument 'rate_limiter'"
+        # and put every freshly-seeded SEC EDGAR task into FAILED.
+        if source_type_val in ("newsapi", "sec_edgar"):
             return adapter_cls(  # type: ignore[call-arg]
                 client=client,
                 exists_fn=exists_fn,
@@ -293,6 +388,156 @@ class WorkerProcess:
             rate_limiter=rate_limiter,
             exists_fn=exists_fn,
         )
+
+    async def _rescue_stuck_task(self, task: ContentIngestionTask, error: str) -> None:
+        """Mark a stuck-CLAIMED task RETRY/FAILED via a fresh DB connection.
+
+        Called when the main session is poisoned and the normal execute() error
+        handler couldn't write the final status. Without this, the task waits
+        for lease expiry (typically 5-10 min) before recover_expired_leases
+        reclaims it. This is a best-effort path — lease expiry remains the
+        ultimate safety net if this also fails.
+        """
+        from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+        # execute() already called task.fail() which sets task.status to RETRY
+        # or FAILED. Use that if set; otherwise default to RETRY.
+        terminal_statuses = {IngestionTaskStatus.RETRY, IngestionTaskStatus.FAILED}
+        target_status = task.status if task.status in terminal_statuses else IngestionTaskStatus.RETRY
+
+        try:
+            async with self._write_factory() as rescue_session:
+                task_repo = TaskRepository(rescue_session)
+                await task_repo.update_status(
+                    task.id,
+                    target_status,
+                    error_detail=f"[rescued] {error[:200]}",
+                )
+                await rescue_session.commit()
+                logger.info(
+                    "worker_task_rescued",
+                    task_id=str(task.id),
+                    new_status=target_status.value,
+                    worker_id=self._worker_id,
+                )
+        except Exception as rescue_exc:
+            logger.error(
+                "worker_task_rescue_failed",
+                task_id=str(task.id),
+                error=str(rescue_exc),
+                worker_id=self._worker_id,
+            )
+
+    async def _execute_polymarket_task(self, task: ContentIngestionTask) -> None:
+        """Execute a Polymarket prediction-market task through the dedicated pipeline.
+
+        Pipeline (mirrors ExecuteContentTaskUseCase but uses prediction-market repos):
+        1. Mark RUNNING.
+        2. Build PolymarketAdapter with fetch_log_exists_fn from a short-lived session.
+        3. Fetch from Gamma API (no session held during I/O — R24).
+        4. If no results → mark SUCCEEDED.
+        5. Under advisory lock: write fetch_log + outbox rows atomically; mark SUCCEEDED.
+        """
+        from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+        async with self._write_factory() as session:
+            task_repo = TaskRepository(session)
+            try:
+                # 1. Mark RUNNING
+                task.start()
+                await task_repo.update_status(task.id, task.status)
+                await session.commit()
+            except Exception as exc:
+                await session.rollback()
+                logger.error("polymarket_task_start_failed", task_id=str(task.id), error=str(exc))
+                return
+
+        # 2. Build adapter with dedup function from a short-lived session
+        from content_ingestion.domain.entities import Source
+
+        source = Source(
+            id=task.source_id,
+            name=task.source_name,
+            source_type=task.source_type,
+            enabled=True,
+            config={},
+        )
+        settings = self._settings
+
+        async with self._write_factory() as dedup_session:
+            pm_log_repo = PredictionMarketFetchLogRepository(dedup_session)
+            polymarket_client = PolymarketClient(
+                http_client=self._http_client,
+                settings=settings.polymarket,
+            )
+            adapter = PolymarketAdapter(
+                client=polymarket_client,
+                fetch_log_exists_fn=pm_log_repo.exists_by_market_snapshot,
+                settings=settings.polymarket,
+                storage=self._storage,
+            )
+
+            # 3. Fetch (no session held during Gamma API I/O)
+            try:
+                results = await adapter.fetch(source)
+            except Exception as exc:
+                logger.error("polymarket_fetch_failed", task_id=str(task.id), error=str(exc))
+                async with self._write_factory() as fail_session:
+                    task_repo = TaskRepository(fail_session)
+                    task.fail(str(exc))
+                    await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+                    await fail_session.commit()
+                return
+
+        # 4. Empty results → SUCCEEDED immediately
+        if not results:
+            async with self._write_factory() as session:
+                task_repo = TaskRepository(session)
+                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                await session.commit()
+                task.succeed()
+            return
+
+        # 5. Write under advisory lock — fetch_log + outbox atomically
+        async with (
+            self._write_factory() as session,
+            pg_advisory_lock(session, f"s4:fetch:{task.source_name}") as acquired,
+        ):
+            if not acquired:
+                task_repo = TaskRepository(session)
+                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                await session.commit()
+                task.succeed()
+                return
+
+            pm_log_repo_write = PredictionMarketFetchLogRepository(session)
+            outbox_repo = OutboxRepository(session)
+            write_use_case = FetchAndWritePredictionMarketsUseCase(
+                fetch_log_repo=pm_log_repo_write,
+                outbox_repo=outbox_repo,
+                commit_fn=session.commit,
+                rollback_fn=session.rollback,  # M-02: required to unpoison session on failure
+            )
+            summary = await write_use_case.execute(results, source_id=task.source_id)
+
+            task_repo = TaskRepository(session)
+            # F-302: if ALL results failed (no successful writes at all), treat the
+            # task as failed so the scheduler can retry rather than silently succeed.
+            if summary.failed > 0 and summary.fetched == 0:
+                task.fail(f"all_{summary.failed}_markets_failed")
+                await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+            else:
+                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+                task.succeed()
+            await session.commit()
+
+            record_fetch(
+                task.source_name,
+                fetched=summary.fetched,
+                skipped=summary.skipped,
+                failed=summary.failed,
+                duration=summary.duration_seconds,
+            )
 
 
 async def _run_worker() -> None:

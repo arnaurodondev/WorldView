@@ -1,0 +1,96 @@
+---
+title: News API
+description: GET /v1/news/top and GET /v1/entities/{id}/articles endpoint reference.
+section: API Reference
+order: 5
+updated: 2026-05-05
+---
+
+The news endpoints expose the processed article corpus with AI relevance scores, sentiment, and routing tiers.
+
+## Top news
+
+```
+GET /v1/news/top
+```
+
+Returns the highest-relevance articles across all entities, scoped to the authenticated user's watchlist when the `scope=watchlist` parameter is set.
+
+**Query parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | integer | 20 | Articles to return (max: 100) |
+| `offset` | integer | 0 | Pagination offset |
+| `scope` | string | `all` | `all` or `watchlist` |
+| `min_relevance` | float | 0.0 | Minimum display_relevance_score (0–1) |
+| `tier` | string | `all` | `tier1`, `tier1_2`, or `all` |
+| `sentiment` | string | `all` | `positive`, `negative`, or `all` |
+| `from` | ISO datetime | 24h ago | Oldest article to include |
+| `to` | ISO datetime | now | Newest article to include |
+
+**Response:**
+
+```json
+{
+  "items": [
+    {
+      "doc_id": "01h9...",
+      "headline": "Apple reports record Q2 revenue, raises guidance",
+      "source": "Reuters",
+      "published_at": "2026-05-05T11:32:00Z",
+      "url": "https://reuters.com/...",
+      "display_relevance_score": 0.91,
+      "sentiment": "positive",
+      "routing_tier": "TIER_2",
+      "entities": [
+        { "entity_id": "01h8...", "ticker": "AAPL", "name": "Apple Inc." }
+      ],
+      "summary": "Apple Inc. reported Q2 revenue of $95.4B, beating..."
+    }
+  ],
+  "total": 342,
+  "has_more": true
+}
+```
+
+## Entity articles
+
+```
+GET /v1/entities/{entity_id}/articles
+```
+
+Returns articles mentioning a specific entity, ranked by relevance score.
+
+**Path parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `entity_id` | Worldview entity UUID |
+
+**Query parameters:** Same as `/v1/news/top` plus:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `with_impact_windows` | boolean | Include price impact window data (default: false) |
+
+**Response:** Same structure as `/v1/news/top`. When `with_impact_windows=true`, each item includes:
+
+```json
+{
+  "impact_windows": {
+    "day_t0": 0.012,
+    "day_t1": -0.008,
+    "day_t2": 0.003,
+    "day_t5": 0.021
+  }
+}
+```
+
+Values are decimal price returns (e.g. `0.012` = +1.2%). `null` if the window has not yet elapsed.
+
+<Callout type="info" title="Relevance score formula">
+`display_relevance_score = 0.5 × market_score + 0.4 × llm_relevance_score + 0.1 × routing_tier_weight`
+
+Routing tier weights: TIER_1 = 1.0, TIER_2 = 0.8, TIER_3 = 0.5, TIER_4 = 0.2.
+</Callout>

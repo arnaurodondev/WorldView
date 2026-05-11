@@ -1,13 +1,19 @@
-"""SQLAlchemy Unit of Work implementation."""
+"""SQLAlchemy Unit of Work implementations.
+
+Two classes:
+- ``SqlAlchemyReadOnlyUnitOfWork`` — read replica session, no commit/rollback (R27).
+- ``SqlaUnitOfWork`` — full write+read session split, supports commit/rollback.
+"""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from market_ingestion.application.ports.unit_of_work import UnitOfWork
+from market_ingestion.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
 from market_ingestion.infrastructure.db.repositories.budget_repository import SqlaProviderBudgetRepository
 from market_ingestion.infrastructure.db.repositories.outbox_repository import SqlaOutboxRepository
 from market_ingestion.infrastructure.db.repositories.policy_repository import SqlaPollingPolicyRepository
+from market_ingestion.infrastructure.db.repositories.symbol_tier_repository import SqlaSymbolTierRepository
 from market_ingestion.infrastructure.db.repositories.task_repository import SqlaTaskRepository
 from market_ingestion.infrastructure.db.repositories.watermark_repository import SqlaWatermarkRepository
 from observability.logging import get_logger  # type: ignore[import-untyped]
@@ -19,6 +25,61 @@ if TYPE_CHECKING:
 
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+
+class SqlAlchemyReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
+    """Read-only Unit of Work backed by a single SQLAlchemy async read session.
+
+    Used by query routes (readyz, ingest_status, list_policies) — R27 compliant.
+    Never opens a write session; no commit or rollback.
+
+    Args:
+    ----
+        read_factory: ``async_sessionmaker`` for the replica (or primary) engine.
+
+    """
+
+    def __init__(self, read_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._read_factory = read_factory
+        self._read_session: AsyncSession | None = None
+
+        # Lazily-initialised repository instances (same as SqlaUnitOfWork pattern).
+        self._tasks: SqlaTaskRepository | None = None
+        self._policies: SqlaPollingPolicyRepository | None = None
+
+    # ── Context manager ───────────────────────────────────────────────────────
+
+    async def __aenter__(self) -> SqlAlchemyReadOnlyUnitOfWork:
+        self._read_session = self._read_factory()
+        await self._read_session.__aenter__()
+        self._tasks = SqlaTaskRepository(self._read_session, self._read_session)
+        self._policies = SqlaPollingPolicyRepository(self._read_session, self._read_session)
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object | None,
+    ) -> None:
+        if self._read_session is not None:
+            try:
+                await self._read_session.__aexit__(None, None, None)
+            except Exception as err:
+                logger.warning("read_uow_close_failed", error=str(err))
+            self._read_session = None
+
+    # ── Repository properties ─────────────────────────────────────────────────
+
+    @property
+    def tasks(self) -> SqlaTaskRepository:
+        assert self._tasks is not None, "ReadOnlyUnitOfWork not entered"
+        return self._tasks
+
+    @property
+    def policies(self) -> SqlaPollingPolicyRepository:
+        assert self._policies is not None, "ReadOnlyUnitOfWork not entered"
+        return self._policies
 
 
 class SqlaUnitOfWork(UnitOfWork):
@@ -57,6 +118,7 @@ class SqlaUnitOfWork(UnitOfWork):
         self._policies: SqlaPollingPolicyRepository | None = None
         self._budgets: SqlaProviderBudgetRepository | None = None
         self._outbox: SqlaOutboxRepository | None = None
+        self._symbol_tiers: SqlaSymbolTierRepository | None = None
 
     # ── Repository properties ─────────────────────────────────────────────────
 
@@ -85,6 +147,11 @@ class SqlaUnitOfWork(UnitOfWork):
         assert self._outbox is not None, "UnitOfWork not entered"
         return self._outbox
 
+    @property
+    def symbol_tiers(self) -> SqlaSymbolTierRepository:
+        assert self._symbol_tiers is not None, "UnitOfWork not entered"
+        return self._symbol_tiers
+
     # ── Context manager ───────────────────────────────────────────────────────
 
     async def __aenter__(self) -> SqlaUnitOfWork:
@@ -99,6 +166,7 @@ class SqlaUnitOfWork(UnitOfWork):
         self._policies = SqlaPollingPolicyRepository(self._write_session, self._read_session)
         self._budgets = SqlaProviderBudgetRepository(self._write_session, self._read_session)
         self._outbox = SqlaOutboxRepository(self._write_session, self._read_session)
+        self._symbol_tiers = SqlaSymbolTierRepository(self._write_session, self._read_session)
         self._callbacks = []
         self._outbox_events_added = False
         return self

@@ -16,17 +16,34 @@ if TYPE_CHECKING:
     from nlp_pipeline.config import Settings
 
 
+def _same_db_endpoint(url1: str, url2: str) -> bool:
+    """True if two DB URLs connect to the same host, port, and database."""
+    from urllib.parse import urlparse
+
+    try:
+        p1, p2 = urlparse(url1), urlparse(url2)
+        return (
+            p1.scheme == p2.scheme
+            and (p1.hostname or "").lower() == (p2.hostname or "").lower()
+            and p1.port == p2.port
+            and p1.path.rstrip("/") == p2.path.rstrip("/")
+        )
+    except Exception:
+        return url1 == url2
+
+
 def _build_nlp_factories(
     settings: Settings,
-) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession], async_sessionmaker[AsyncSession]]:
+) -> tuple[AsyncEngine, AsyncEngine, async_sessionmaker[AsyncSession], async_sessionmaker[AsyncSession]]:
     """Build write + read session factories for nlp_db from *settings*.
 
     Returns:
-        ``(write_engine, write_factory, read_factory)`` — caller owns the engine
-        for disposal on shutdown.
+        ``(write_engine, read_engine, write_factory, read_factory)`` — caller owns
+        both engines for disposal on shutdown.  When no read replica is configured,
+        ``read_engine is write_engine``.
     """
     write_engine = create_async_engine(
-        settings.database_url,
+        settings.database_url.get_secret_value(),
         echo=False,
         future=True,
         pool_pre_ping=True,
@@ -39,8 +56,13 @@ def _build_nlp_factories(
         expire_on_commit=False,
     )
 
-    read_url: str = settings.database_url_read or settings.database_url
-    if read_url == settings.database_url:
+    read_url: str = (
+        settings.database_url_read.get_secret_value()
+        if settings.database_url_read
+        else settings.database_url.get_secret_value()
+    )
+    if _same_db_endpoint(read_url, settings.database_url.get_secret_value()):
+        read_engine = write_engine
         read_factory = write_factory
     else:
         read_engine = create_async_engine(
@@ -57,7 +79,7 @@ def _build_nlp_factories(
             expire_on_commit=False,
         )
 
-    return write_engine, write_factory, read_factory
+    return write_engine, read_engine, write_factory, read_factory
 
 
 def create_session_factory(url: str) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:

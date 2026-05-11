@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from market_data.application.ports.uow import UnitOfWork
+    from market_data.application.ports.uow import ReadOnlyUnitOfWork
     from market_data.domain.entities import FundamentalsRecord
     from market_data.domain.enums import FundamentalsSection
 
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 class GetFundamentalsSectionUseCase:
     """Return fundamentals records for one instrument section, or all sections."""
 
-    def __init__(self, uow: UnitOfWork) -> None:
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
 
     async def execute(

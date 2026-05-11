@@ -14,4 +14,9 @@ COPY seeds/ seeds/
 COPY scripts/ scripts/
 COPY entrypoint.sh .
 
+# Security: run as non-root (F-009)
+RUN useradd --create-home --uid 1001 appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
 ENTRYPOINT ["/app/entrypoint.sh"]

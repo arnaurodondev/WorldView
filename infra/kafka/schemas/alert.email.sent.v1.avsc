@@ -1,0 +1,19 @@
+{
+  "type": "record",
+  "name": "AlertEmailSent",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S10 Alert Service after a weekly digest email is successfully sent to a user (audit trail).",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "alert.email.sent"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "user_id", "type": "string"},
+    {"name": "tenant_id", "type": "string"},
+    {"name": "email_type", "type": "string"},
+    {"name": "provider", "type": "string"},
+    {"name": "provider_message_id", "type": ["null", "string"], "default": null},
+    {"name": "sent_at", "type": "string"},
+    {"name": "subject", "type": "string"}
+  ]
+}

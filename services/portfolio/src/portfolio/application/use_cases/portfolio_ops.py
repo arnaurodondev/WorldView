@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
@@ -14,16 +15,14 @@ from portfolio.domain.errors import AuthorizationError, PortfolioNotFoundError
 from portfolio.domain.events import PortfolioArchived, PortfolioRenamed
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
-    from portfolio.application.ports.unit_of_work import UnitOfWork
+    from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
     from portfolio.domain.entities import Portfolio
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 
 class GetPortfolioUseCase:
-    async def execute(self, portfolio_id: UUID, owner_id: UUID, tenant_id: UUID, uow: UnitOfWork) -> Portfolio:
+    async def execute(self, portfolio_id: UUID, owner_id: UUID, tenant_id: UUID, uow: ReadOnlyUnitOfWork) -> Portfolio:
         portfolio = await uow.portfolios.get(portfolio_id, tenant_id)
         if portfolio is None:
             raise PortfolioNotFoundError(f"Portfolio {portfolio_id} not found")
@@ -37,7 +36,7 @@ class ListPortfoliosUseCase:
         self,
         owner_id: UUID,
         tenant_id: UUID,
-        uow: UnitOfWork,
+        uow: ReadOnlyUnitOfWork,
         limit: int = 100,
         offset: int = 0,
     ) -> tuple[list[Portfolio], int]:

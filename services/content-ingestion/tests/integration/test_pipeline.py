@@ -111,8 +111,8 @@ async def test_pipeline_creates_fetch_log_and_outbox(session_factory):
         outbox_row = (await session.execute(select(OutboxEventModel))).scalar_one()
         assert outbox_row.event_type == "content.article.raw.v1"
         assert outbox_row.status == "pending"
-        assert outbox_row.payload["url_hash"] == result.url_hash
         assert outbox_row.payload["source_type"] == "eodhd"
+        assert outbox_row.payload["doc_id"] is not None
 
 
 @pytest.mark.asyncio

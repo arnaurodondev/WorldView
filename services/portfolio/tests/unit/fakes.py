@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
+from portfolio.application.ports.brokerage_client import (
+    IBrokerageClient,
+    SnapTradeActivity,
+    SnapTradePosition,
+    SnapTradeUser,
+)
 from portfolio.application.ports.repositories import (
     AlertPreferenceRepository,
+    AuthAuditLogRepository,
+    BrokerageConnectionRepository,
+    BrokerageTransactionSyncErrorRepository,
     EntitySuppressionRepository,
     HoldingRepository,
     IdempotencyRepository,
@@ -13,6 +24,7 @@ from portfolio.application.ports.repositories import (
     OutboxRecord,
     OutboxRepository,
     PortfolioRepository,
+    PortfolioValueSnapshotRepository,
     TenantRepository,
     TransactionRepository,
     UserRepository,
@@ -21,15 +33,19 @@ from portfolio.application.ports.repositories import (
     WatchlistRepository,
 )
 from portfolio.application.ports.unit_of_work import UnitOfWork
+from portfolio.application.use_cases.read_models import EnrichedHolding
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
+    from datetime import date
 
     from portfolio.domain.entities import Holding, InstrumentRef, Portfolio, Tenant, Transaction, User
     from portfolio.domain.entities.alert_preference import AlertPreference, EntitySuppression
+    from portfolio.domain.entities.brokerage_connection import BrokerageConnection
+    from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
+    from portfolio.domain.entities.portfolio_value_snapshot import PortfolioValueSnapshot
     from portfolio.domain.entities.watchlist import Watchlist
     from portfolio.domain.entities.watchlist_member import WatchlistMember
+    from portfolio.domain.value_objects import AuthAuditEvent
 
 
 class FakeTenantRepository(TenantRepository):
@@ -66,6 +82,78 @@ class FakeUserRepository(UserRepository):
     async def save(self, user: User) -> None:
         self._store[user.id] = user
 
+    async def find_by_external_id(self, external_id: str) -> User | None:
+        for user in self._store.values():
+            if user.external_id == external_id:
+                return user
+        return None
+
+    async def find_by_email_without_external_id(self, email: str) -> User | None:
+        for user in self._store.values():
+            if user.email == email and user.external_id is None:
+                return user
+        return None
+
+    async def link_external_id(self, user_id: UUID, external_id: str) -> None:
+        user = self._store.get(user_id)
+        if user is not None:
+            from dataclasses import replace
+
+            self._store[user_id] = replace(user, external_id=external_id)
+
+    async def find_by_email_with_conflicting_external_id(self, email: str, current_sub: str) -> User | None:
+        for user in self._store.values():
+            if user.email == email and user.external_id is not None and user.external_id != current_sub:
+                return user
+        return None
+
+
+class FakeAuthAuditLogRepository(AuthAuditLogRepository):
+    """In-memory audit log store (append-only)."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[AuthAuditEvent, UUID | None]] = []
+
+    async def create(self, event: AuthAuditEvent, user_id: UUID | None) -> None:
+        self.events.append((event, user_id))
+
+    def events_by_type(self, event_type: object) -> list[tuple[AuthAuditEvent, UUID | None]]:
+        return [(e, uid) for e, uid in self.events if e.event_type == event_type]
+
+
+class FakePortfolioValueSnapshotRepository(PortfolioValueSnapshotRepository):
+    """In-memory snapshot store keyed on ``(portfolio_id, snapshot_date)``.
+
+    PLAN-0046 Wave 4 / T-46-4-01. Idempotent upsert is faithful to the
+    SQL implementation: a second call for the same key replaces the
+    prior row entirely (latest-wins).
+    """
+
+    def __init__(self) -> None:
+        # WHY a tuple key: emulates the unique constraint exactly so test
+        # assertions for "no duplicate row" mean what they say in SQL.
+        self._store: dict[tuple[UUID, date], PortfolioValueSnapshot] = {}
+
+    async def upsert(self, snapshot: PortfolioValueSnapshot) -> None:
+        self._store[(snapshot.portfolio_id, snapshot.snapshot_date)] = snapshot
+
+    async def list_range(
+        self,
+        portfolio_id: UUID,
+        from_date: date,
+        to_date: date,
+    ) -> list[PortfolioValueSnapshot]:
+        rows = [s for (pid, d), s in self._store.items() if pid == portfolio_id and from_date <= d <= to_date]
+        rows.sort(key=lambda s: s.snapshot_date)
+        return rows
+
+    async def get_latest(self, portfolio_id: UUID) -> PortfolioValueSnapshot | None:
+        rows = [s for (pid, _), s in self._store.items() if pid == portfolio_id]
+        if not rows:
+            return None
+        rows.sort(key=lambda s: s.snapshot_date, reverse=True)
+        return rows[0]
+
 
 class FakePortfolioRepository(PortfolioRepository):
     """In-memory portfolio store with tenant-scoped queries."""
@@ -93,6 +181,45 @@ class FakePortfolioRepository(PortfolioRepository):
     async def save(self, portfolio: Portfolio) -> None:
         self._store[portfolio.id] = portfolio
 
+    async def find_root_by_owner(self, owner_id: UUID, tenant_id: UUID) -> Portfolio | None:
+        # PLAN-0046 Wave 3 / T-46-3-02. Mirrors the SQL repo: filter by
+        # owner+tenant+kind=root. The DB enforces uniqueness via a partial
+        # index; here we just return the first match.
+        from portfolio.domain.enums import PortfolioKind
+
+        for p in self._store.values():
+            if p.owner_id == owner_id and p.tenant_id == tenant_id and p.kind == PortfolioKind.ROOT:
+                return p
+        return None
+
+    async def list_all_non_root_active(self) -> list[Portfolio]:
+        # PLAN-0046 Wave 4 / T-46-4-02. Worker-scoped: every non-root active
+        # portfolio across tenants. Mirrors the SQL repo predicate.
+        from portfolio.domain.enums import PortfolioKind, PortfolioStatus
+
+        return [p for p in self._store.values() if p.kind != PortfolioKind.ROOT and p.status == PortfolioStatus.ACTIVE]
+
+    async def list_active_root(self) -> list[Portfolio]:
+        # PLAN-0046 Wave 4 / T-46-4-03.
+        from portfolio.domain.enums import PortfolioKind, PortfolioStatus
+
+        return [p for p in self._store.values() if p.kind == PortfolioKind.ROOT and p.status == PortfolioStatus.ACTIVE]
+
+    async def list_non_root_active_ids_by_owner(self, owner_id: UUID, tenant_id: UUID) -> list[UUID]:
+        # PLAN-0046 Wave 3 / T-46-3-03. Used by holdings/transactions fan-out
+        # for ROOT portfolios — returns the ids of the sub-portfolios whose
+        # rows should be unioned together.
+        from portfolio.domain.enums import PortfolioKind, PortfolioStatus
+
+        return [
+            p.id
+            for p in self._store.values()
+            if p.owner_id == owner_id
+            and p.tenant_id == tenant_id
+            and p.kind != PortfolioKind.ROOT
+            and p.status == PortfolioStatus.ACTIVE
+        ]
+
 
 class FakeInstrumentRepository(InstrumentRepository):
     """In-memory instrument store."""
@@ -103,9 +230,19 @@ class FakeInstrumentRepository(InstrumentRepository):
     async def get(self, instrument_id: UUID) -> InstrumentRef | None:
         return self._store.get(instrument_id)
 
+    async def list_by_ids(self, instrument_ids: list[UUID]) -> list[InstrumentRef]:
+        # QA-iter1 MIN-4 — batch fetch (mirrors the SqlAlchemy impl).
+        return [self._store[i] for i in instrument_ids if i in self._store]
+
     async def get_by_symbol_exchange(self, symbol: str, exchange: str) -> InstrumentRef | None:
         for inst in self._store.values():
             if inst.symbol == symbol and inst.exchange == exchange:
+                return inst
+        return None
+
+    async def get_by_symbol(self, symbol: str) -> InstrumentRef | None:
+        for inst in self._store.values():
+            if inst.symbol.upper() == symbol.upper():
                 return inst
         return None
 
@@ -114,13 +251,14 @@ class FakeInstrumentRepository(InstrumentRepository):
         total = len(items)
         return items[offset : offset + limit], total
 
-    async def upsert(self, instrument: InstrumentRef) -> None:
+    async def upsert(self, instrument: InstrumentRef) -> InstrumentRef:
         # Check for existing by (symbol, exchange)
         for key, existing in list(self._store.items()):
             if existing.symbol == instrument.symbol and existing.exchange == instrument.exchange:
                 del self._store[key]
                 break
         self._store[instrument.id] = instrument
+        return instrument
 
 
 class FakeTransactionRepository(TransactionRepository):
@@ -161,6 +299,35 @@ class FakeTransactionRepository(TransactionRepository):
         total = len(items)
         return items[offset : offset + limit], total
 
+    async def list_by_portfolio_ids(
+        self,
+        portfolio_ids: list[UUID],
+        tenant_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[Transaction], int]:
+        # PLAN-0046 Wave 3 / T-46-3-03: union across multiple portfolios,
+        # sorted newest-first to mirror the SQL ORDER BY.
+        if not portfolio_ids:
+            return [], 0
+        pid_set = set(portfolio_ids)
+        items = [t for t in self._store.values() if t.portfolio_id in pid_set and t.tenant_id == tenant_id]
+        items.sort(key=lambda t: (t.executed_at, t.created_at), reverse=True)
+        total = len(items)
+        return items[offset : offset + limit], total
+
+    async def list_all_for_portfolio_asc(
+        self,
+        portfolio_id: UUID,
+        tenant_id: UUID,
+    ) -> list[Transaction]:
+        items = [t for t in self._store.values() if t.portfolio_id == portfolio_id and t.tenant_id == tenant_id]
+        # Mirror the SQL ORDER BY exactly so unit tests faithfully reproduce
+        # the production walk order; ``created_at`` breaks ties when two trades
+        # land on the same timestamp (very common with backfills).
+        items.sort(key=lambda t: (t.executed_at, t.created_at))
+        return items
+
     async def save(self, transaction: Transaction) -> None:
         self._store[transaction.id] = transaction
 
@@ -177,8 +344,51 @@ class FakeHoldingRepository(HoldingRepository):
     async def list_by_portfolio(self, portfolio_id: UUID) -> list[Holding]:
         return [h for (pid, _), h in self._store.items() if pid == portfolio_id]
 
+    async def list_by_portfolio_enriched(self, portfolio_id: UUID) -> list[EnrichedHolding]:
+        holdings = [h for (pid, _), h in self._store.items() if pid == portfolio_id]
+        return [EnrichedHolding(holding=h, ticker=None, name=None, entity_id=None) for h in holdings]
+
+    async def list_by_portfolio_ids_aggregated_enriched(
+        self,
+        portfolio_ids: list[UUID],
+    ) -> list[EnrichedHolding]:
+        # PLAN-0046 Wave 3 / T-46-3-03: mirror the SQL repo behaviour —
+        # group by instrument_id, sum quantity, qty-weighted average cost.
+        from collections import defaultdict
+        from dataclasses import replace
+        from decimal import Decimal
+
+        if not portfolio_ids:
+            return []
+
+        pid_set = set(portfolio_ids)
+        qty_sum: dict[UUID, Decimal] = defaultdict(lambda: Decimal(0))
+        cost_qty_sum: dict[UUID, Decimal] = defaultdict(lambda: Decimal(0))
+        first_seen: dict[UUID, Holding] = {}
+
+        for (pid, _), h in self._store.items():
+            if pid not in pid_set:
+                continue
+            qty_sum[h.instrument_id] += h.quantity
+            cost_qty_sum[h.instrument_id] += h.quantity * h.average_cost
+            first_seen.setdefault(h.instrument_id, h)
+
+        enriched: list[EnrichedHolding] = []
+        for iid, total_qty in qty_sum.items():
+            base = first_seen[iid]
+            weighted_cost = (cost_qty_sum[iid] / total_qty) if total_qty != 0 else Decimal(0)
+            aggregated = replace(base, quantity=total_qty, average_cost=weighted_cost)
+            enriched.append(EnrichedHolding(holding=aggregated, ticker=None, name=None, entity_id=None))
+        return enriched
+
     async def save(self, holding: Holding) -> None:
         self._store[(holding.portfolio_id, holding.instrument_id)] = holding
+
+    async def delete(self, portfolio_id: UUID, instrument_id: UUID) -> None:
+        # PLAN-0046 / BP-264: snapshot-based holdings need a delete path so
+        # closed positions disappear from the local DB. No-op when the key is
+        # absent (the production repo behaves identically — see SqlAlchemy impl).
+        self._store.pop((portfolio_id, instrument_id), None)
 
 
 class FakeOutboxRepository(OutboxRepository):
@@ -257,6 +467,21 @@ class FakeWatchlistMemberRepository(WatchlistMemberRepository):
     async def list_by_watchlist(self, watchlist_id: UUID) -> list[WatchlistMember]:
         return [m for (wid, _), m in self._store.items() if wid == watchlist_id]
 
+    async def list_by_watchlist_paginated(
+        self,
+        watchlist_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[WatchlistMember], int]:
+        # PLAN-0046 / T-46-2-02: paginated read used by ListWatchlistMembersUseCase.
+        # Sort by added_at to mirror the SQL repo's ORDER BY for stable paging.
+        members = sorted(
+            (m for (wid, _), m in self._store.items() if wid == watchlist_id),
+            key=lambda m: m.added_at,
+        )
+        total = len(members)
+        return members[offset : offset + limit], total
+
     async def list_by_entity(self, entity_id: UUID) -> list[WatchlistMember]:
         return [m for (_, eid), m in self._store.items() if eid == entity_id]
 
@@ -317,6 +542,167 @@ class FakeEntitySuppressionRepository(EntitySuppressionRepository):
         self._store.pop((user_id, entity_id), None)
 
 
+class FakeBrokerageConnectionRepository(BrokerageConnectionRepository):
+    """In-memory brokerage connection store."""
+
+    def __init__(self) -> None:
+        self._store: dict[UUID, BrokerageConnection] = {}
+
+    async def get(self, connection_id: UUID, tenant_id: UUID) -> BrokerageConnection | None:
+        c = self._store.get(connection_id)
+        if c is None or c.tenant_id != tenant_id:
+            return None
+        return c
+
+    async def get_by_user(self, connection_id: UUID, user_id: UUID, tenant_id: UUID) -> BrokerageConnection | None:
+        c = self._store.get(connection_id)
+        if c is None or c.user_id != user_id or c.tenant_id != tenant_id:
+            return None
+        return c
+
+    async def list_by_user(
+        self,
+        user_id: UUID,
+        tenant_id: UUID,
+        portfolio_id: UUID | None = None,
+    ) -> list[BrokerageConnection]:
+        results = [c for c in self._store.values() if c.user_id == user_id and c.tenant_id == tenant_id]
+        if portfolio_id is not None:
+            results = [c for c in results if c.portfolio_id == portfolio_id]
+        return sorted(results, key=lambda c: c.created_at, reverse=True)
+
+    async def list_active_or_error(self) -> list[BrokerageConnection]:
+        from portfolio.domain.enums import ConnectionStatus
+
+        return [c for c in self._store.values() if c.status in (ConnectionStatus.ACTIVE, ConnectionStatus.ERROR)]
+
+    async def save(self, connection: BrokerageConnection) -> None:
+        self._store[connection.id] = connection
+
+
+class FakeBrokerageTransactionSyncErrorRepository(BrokerageTransactionSyncErrorRepository):
+    """In-memory sync error store (append-only)."""
+
+    def __init__(self) -> None:
+        self._store: list[BrokerageTransactionSyncError] = []
+
+    async def save(self, error: BrokerageTransactionSyncError) -> None:
+        self._store.append(error)
+
+    async def list_by_connection(self, connection_id: UUID, limit: int = 50) -> list[BrokerageTransactionSyncError]:
+        results = [e for e in self._store if e.connection_id == connection_id]
+        return sorted(results, key=lambda e: e.created_at, reverse=True)[:limit]
+
+
+class FakeBrokerageClient:
+    """In-memory brokerage client for unit and integration tests.
+
+    All methods are async and record calls so tests can assert on interactions.
+    Configure ``should_raise_on_*`` to simulate failure scenarios.
+    """
+
+    def __init__(
+        self,
+        register_user_result: SnapTradeUser | None = None,
+        portal_url: str = "https://fake-snaptrade.example.com/connect",
+        activities: list[SnapTradeActivity] | None = None,
+    ) -> None:
+        self.register_user_result = register_user_result or SnapTradeUser(
+            snaptrade_user_id="fake-snap-user",
+            snaptrade_user_secret="fake-snap-secret",
+        )
+        self.portal_url = portal_url
+        self.activities: list[SnapTradeActivity] = activities if activities is not None else []
+
+        # Call recording
+        self.register_calls: list[str] = []
+        self.delete_calls: list[str] = []
+        self.portal_url_calls: list[str] = []
+        self.revoke_calls: list[tuple[SnapTradeUser, str]] = []
+
+        # Failure controls
+        self.should_raise_on_revoke: bool = False
+        self.should_raise_on_activities: bool = False
+        self.should_raise_on_register: bool = False
+        self.register_already_exists: bool = False
+
+    async def register_user(self, user_id_hint: str) -> SnapTradeUser:
+        if self.register_already_exists and not self.delete_calls:
+            # Simulate "already registered" on the first call; reset after delete_user
+            from portfolio.domain.errors import BrokerageApiError
+
+            raise BrokerageApiError(
+                "SnapTrade user already registered",
+                details={"user_id_hint": user_id_hint, "reason": "already_exists"},
+            )
+        self.register_calls.append(user_id_hint)
+        return self.register_user_result
+
+    async def delete_user(self, user_id_hint: str) -> None:
+        self.delete_calls.append(user_id_hint)
+
+    async def generate_portal_url(self, user: SnapTradeUser, redirect_uri: str) -> str:
+        self.portal_url_calls.append(redirect_uri)
+        return self.portal_url
+
+    async def revoke_authorization(self, user: SnapTradeUser, authorization_id: str) -> None:
+        if self.should_raise_on_revoke:
+            from portfolio.domain.errors import BrokerageApiError
+
+            raise BrokerageApiError("fake revoke failure")
+        self.revoke_calls.append((user, authorization_id))
+
+    async def get_activities(
+        self,
+        user: SnapTradeUser,
+        start: object,
+        end: object,
+    ) -> list[SnapTradeActivity]:
+        if self.should_raise_on_activities:
+            from portfolio.domain.errors import BrokerageApiError
+
+            raise BrokerageApiError("fake activities failure")
+        return list(self.activities)
+
+    # ── Snapshot path (PLAN-0046 T-46-1-02 / BP-264) ─────────────────────────
+    # The new methods are defined as no-ops by default (no accounts, no
+    # positions). Tests that exercise the snapshot path inject ``account_ids``
+    # and ``positions_by_account`` directly.
+
+    async def list_account_ids(self, user: SnapTradeUser) -> list[str]:
+        return list(getattr(self, "account_ids", []))
+
+    async def get_account_positions(
+        self,
+        user: SnapTradeUser,
+        account_id: str,
+    ) -> list[SnapTradePosition]:
+        positions_by_account: dict[str, list[SnapTradePosition]] = getattr(self, "positions_by_account", {})
+        return list(positions_by_account.get(account_id, []))
+
+    async def get_account_balance(
+        self,
+        user: SnapTradeUser,
+        account_id: str,
+    ) -> dict | None:
+        """Return a fake balance dict or None for tests.
+
+        Defaults to None (balance unavailable). Tests can override by setting
+        ``self.balance_by_account = {account_id: {"cash": ..., "currency": "USD"}}``.
+        """
+        from typing import Any
+
+        balance_by_account: dict[str, dict[str, Any]] = getattr(self, "balance_by_account", {})
+        return balance_by_account.get(account_id)
+
+
+# Runtime Protocol check — asserts FakeBrokerageClient satisfies IBrokerageClient
+assert isinstance(
+    FakeBrokerageClient(),
+    IBrokerageClient,
+), "FakeBrokerageClient does not satisfy IBrokerageClient Protocol"
+
+
 class FakeUnitOfWork(UnitOfWork):
     """Fully in-memory unit of work — commits and rollbacks are no-ops."""
 
@@ -333,6 +719,10 @@ class FakeUnitOfWork(UnitOfWork):
         self._watchlist_members = FakeWatchlistMemberRepository(watchlist_store=self._watchlists._store)
         self._alert_preferences = FakeAlertPreferenceRepository()
         self._entity_suppressions = FakeEntitySuppressionRepository()
+        self._brokerage_connections = FakeBrokerageConnectionRepository()
+        self._brokerage_sync_errors = FakeBrokerageTransactionSyncErrorRepository()
+        self._auth_audit_log = FakeAuthAuditLogRepository()
+        self._portfolio_value_snapshots = FakePortfolioValueSnapshotRepository()
         self.committed = False
         self.rolled_back = False
         self.commit_count = 0
@@ -385,12 +775,31 @@ class FakeUnitOfWork(UnitOfWork):
     def entity_suppressions(self) -> FakeEntitySuppressionRepository:
         return self._entity_suppressions
 
+    @property
+    def brokerage_connections(self) -> FakeBrokerageConnectionRepository:
+        return self._brokerage_connections
+
+    @property
+    def brokerage_sync_errors(self) -> FakeBrokerageTransactionSyncErrorRepository:
+        return self._brokerage_sync_errors
+
+    @property
+    def auth_audit_log(self) -> FakeAuthAuditLogRepository:
+        return self._auth_audit_log
+
+    @property
+    def portfolio_value_snapshots(self) -> FakePortfolioValueSnapshotRepository:
+        return self._portfolio_value_snapshots
+
     async def commit(self) -> None:
         self.committed = True
         self.commit_count += 1
 
     async def rollback(self) -> None:
         self.rolled_back = True
+
+    async def flush(self) -> None:
+        pass  # In-memory — no-op
 
     # ── Helpers for test setup ────────────────────────────────────────────────
 
@@ -405,3 +814,319 @@ class FakeUnitOfWork(UnitOfWork):
 
     def seed_instrument(self, instrument: InstrumentRef) -> None:
         self._instruments._store[instrument.id] = instrument
+
+    # Feedback subsystem (PLAN-0052 Wave D) — repos plumbed via __getattr__
+    # below so we don't have to retro-fit every existing FakeUnitOfWork
+    # construction site (the new repos are lazily created on first access).
+
+
+# ── Feedback fakes (PLAN-0052 Wave D) ────────────────────────────────────────
+
+
+from datetime import timedelta as _timedelta
+
+from portfolio.application.ports.feedback import (
+    BetaEnrollmentRecord,
+    BetaEnrollmentRepo,
+    FeatureRequestRecord,
+    FeatureRequestRepo,
+    FeatureVoteRecord,
+    FeatureVoteRepo,
+    FeedbackSubmissionRecord,
+    FeedbackSubmissionRepo,
+    MicroSurveyRecord,
+    MicroSurveyRepo,
+    NPSScoreRecord,
+    NPSScoreRepo,
+)
+from portfolio.domain.errors import NPSRateLimitError
+
+from common.time import utc_now as _utc_now  # type: ignore[import-untyped]
+
+
+class FakeFeedbackSubmissionRepo(FeedbackSubmissionRepo):
+    def __init__(self) -> None:
+        self._store: dict[UUID, FeedbackSubmissionRecord] = {}
+
+    async def add(self, record: FeedbackSubmissionRecord) -> None:
+        self._store[record.id] = record
+
+    async def get(self, submission_id: UUID, tenant_id: UUID) -> FeedbackSubmissionRecord | None:
+        rec = self._store.get(submission_id)
+        if rec is None or rec.tenant_id != tenant_id:
+            return None
+        return rec
+
+    async def list(
+        self,
+        tenant_id: UUID,
+        *,
+        user_id: UUID | None = None,
+        status: str | None = None,
+        kind: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[FeedbackSubmissionRecord], int]:
+        rows = [r for r in self._store.values() if r.tenant_id == tenant_id]
+        if user_id is not None:
+            rows = [r for r in rows if r.user_id == user_id]
+        if status is not None:
+            rows = [r for r in rows if r.status == status]
+        if kind is not None:
+            rows = [r for r in rows if r.kind == kind]
+        rows.sort(key=lambda r: r.created_at, reverse=True)
+        total = len(rows)
+        return rows[offset : offset + limit], total
+
+    async def update(
+        self,
+        submission_id: UUID,
+        tenant_id: UUID,
+        *,
+        status: str | None = None,
+        tags: list[str] | None = None,
+        assigned_to: UUID | None = None,
+    ) -> FeedbackSubmissionRecord | None:
+        rec = self._store.get(submission_id)
+        if rec is None or rec.tenant_id != tenant_id:
+            return None
+        from dataclasses import replace as _replace
+
+        new_rec = _replace(
+            rec,
+            status=status if status is not None else rec.status,
+            tags=tags if tags is not None else rec.tags,
+            assigned_to=assigned_to if assigned_to is not None else rec.assigned_to,
+            updated_at=_utc_now(),
+        )
+        self._store[submission_id] = new_rec
+        return new_rec
+
+    async def delete(self, submission_id: UUID, tenant_id: UUID) -> bool:
+        rec = self._store.get(submission_id)
+        if rec is None or rec.tenant_id != tenant_id:
+            return False
+        del self._store[submission_id]
+        return True
+
+
+class FakeNPSScoreRepo(NPSScoreRepo):
+    def __init__(self) -> None:
+        self._store: list[NPSScoreRecord] = []
+
+    async def add(self, record: NPSScoreRecord) -> None:
+        # The use case enforces the 30-day rate limit via find_recent_by_user,
+        # but we mirror the belt-and-suspenders behaviour of the SQL repo:
+        # if a duplicate slips through, raise NPSRateLimitError.
+        cutoff = _utc_now() - _timedelta(days=30)
+        for existing in self._store:
+            if (
+                existing.tenant_id == record.tenant_id
+                and existing.user_id == record.user_id
+                and existing.created_at >= cutoff
+            ):
+                raise NPSRateLimitError(
+                    f"User {record.user_id} already submitted NPS within 30 days",
+                )
+        self._store.append(record)
+
+    async def find_recent_by_user(
+        self,
+        tenant_id: UUID,
+        user_id: UUID,
+        since: datetime,
+    ) -> NPSScoreRecord | None:
+        matches = [
+            r for r in self._store if r.tenant_id == tenant_id and r.user_id == user_id and r.created_at >= since
+        ]
+        if not matches:
+            return None
+        # Most recent first — matches the SQL ORDER BY created_at DESC LIMIT 1.
+        matches.sort(key=lambda r: r.created_at, reverse=True)
+        return matches[0]
+
+    async def aggregate(
+        self,
+        tenant_id: UUID,
+        *,
+        days: int = 30,
+    ) -> tuple[int, int, int]:
+        cutoff = _utc_now() - _timedelta(days=days)
+        rows = [r for r in self._store if r.tenant_id == tenant_id and r.created_at >= cutoff]
+        promoter = sum(1 for r in rows if r.score >= 9)
+        passive = sum(1 for r in rows if 7 <= r.score <= 8)
+        detractor = sum(1 for r in rows if r.score <= 6)
+        return promoter, passive, detractor
+
+
+class FakeFeatureRequestRepo(FeatureRequestRepo):
+    def __init__(self, vote_store: list[FeatureVoteRecord]) -> None:
+        # Share vote store with FakeFeatureVoteRepo so refresh_vote_count is correct.
+        self._store: dict[UUID, FeatureRequestRecord] = {}
+        self._vote_store = vote_store
+
+    async def add(self, record: FeatureRequestRecord) -> None:
+        self._store[record.id] = record
+
+    async def get(self, feature_request_id: UUID, tenant_id: UUID) -> FeatureRequestRecord | None:
+        rec = self._store.get(feature_request_id)
+        if rec is None or rec.tenant_id != tenant_id:
+            return None
+        return rec
+
+    async def list(
+        self,
+        tenant_id: UUID,
+        *,
+        status: str | None = None,
+        category: str | None = None,
+        is_public: bool | None = True,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[FeatureRequestRecord], int]:
+        rows = [r for r in self._store.values() if r.tenant_id == tenant_id]
+        if status is not None:
+            rows = [r for r in rows if r.status == status]
+        if category is not None:
+            rows = [r for r in rows if r.category == category]
+        if is_public is not None:
+            rows = [r for r in rows if r.is_public == is_public]
+        rows.sort(key=lambda r: (-r.vote_count, r.created_at), reverse=False)
+        # Sort: highest votes first, then most-recent-first as tiebreaker.
+        rows.sort(key=lambda r: (r.vote_count, r.created_at), reverse=True)
+        total = len(rows)
+        return rows[offset : offset + limit], total
+
+    async def update(
+        self,
+        feature_request_id: UUID,
+        tenant_id: UUID,
+        *,
+        status: str | None = None,
+        category: str | None = None,
+        is_public: bool | None = None,
+    ) -> FeatureRequestRecord | None:
+        rec = self._store.get(feature_request_id)
+        if rec is None or rec.tenant_id != tenant_id:
+            return None
+        from dataclasses import replace as _replace
+
+        new_rec = _replace(
+            rec,
+            status=status if status is not None else rec.status,
+            category=category if category is not None else rec.category,
+            is_public=is_public if is_public is not None else rec.is_public,
+            updated_at=_utc_now(),
+        )
+        self._store[feature_request_id] = new_rec
+        return new_rec
+
+    async def refresh_vote_count(self, feature_request_id: UUID) -> int:
+        count = sum(1 for v in self._vote_store if v.feature_request_id == feature_request_id)
+        rec = self._store.get(feature_request_id)
+        if rec is not None:
+            from dataclasses import replace as _replace
+
+            self._store[feature_request_id] = _replace(rec, vote_count=count)
+        return count
+
+
+class FakeFeatureVoteRepo(FeatureVoteRepo):
+    def __init__(self) -> None:
+        self._store: list[FeatureVoteRecord] = []
+
+    async def upsert(self, record: FeatureVoteRecord) -> bool:
+        for v in self._store:
+            if v.feature_request_id == record.feature_request_id and v.user_id == record.user_id:
+                return False
+        self._store.append(record)
+        return True
+
+    async def has_voted(self, feature_request_id: UUID, user_id: UUID, tenant_id: UUID) -> bool:
+        # F-Q1-09: tenant_id MUST be filtered (mirrors SQL repo).
+        return any(
+            v.feature_request_id == feature_request_id and v.user_id == user_id and v.tenant_id == tenant_id
+            for v in self._store
+        )
+
+
+class FakeMicroSurveyRepo(MicroSurveyRepo):
+    def __init__(self) -> None:
+        self._store: list[MicroSurveyRecord] = []
+
+    async def add(self, record: MicroSurveyRecord) -> None:
+        self._store.append(record)
+
+
+class FakeBetaEnrollmentRepo(BetaEnrollmentRepo):
+    def __init__(self) -> None:
+        self._store: dict[tuple[UUID, UUID], BetaEnrollmentRecord] = {}
+
+    async def get(self, tenant_id: UUID, user_id: UUID) -> BetaEnrollmentRecord | None:
+        return self._store.get((tenant_id, user_id))
+
+    async def upsert(self, record: BetaEnrollmentRecord) -> BetaEnrollmentRecord:
+        from dataclasses import replace as _replace
+
+        now = _utc_now()
+        existing = self._store.get((record.tenant_id, record.user_id))
+        if existing is None:
+            stored = _replace(
+                record,
+                enrolled_at=record.enrolled_at or now,
+                updated_at=now,
+            )
+        else:
+            stored = _replace(existing, enrolled=record.enrolled, programs=record.programs, updated_at=now)
+        self._store[(record.tenant_id, record.user_id)] = stored
+        return stored
+
+
+# ── Patch FakeUnitOfWork to expose feedback repos ───────────────────────────
+
+
+def _install_feedback_on_fake_uow() -> None:
+    """Augment FakeUnitOfWork with feedback repository properties.
+
+    Done as a function rather than editing the original class body so the
+    existing test imports of FakeUnitOfWork keep working unchanged. Each
+    instance gets its own fakes (lazy via __getattr__-style property).
+    """
+    original_init = FakeUnitOfWork.__init__
+
+    def patched_init(self: FakeUnitOfWork) -> None:  # type: ignore[no-redef]
+        original_init(self)
+        self._feature_votes = FakeFeatureVoteRepo()
+        self._feature_requests = FakeFeatureRequestRepo(self._feature_votes._store)
+        self._feedback_submissions = FakeFeedbackSubmissionRepo()
+        self._nps_scores = FakeNPSScoreRepo()
+        self._micro_surveys = FakeMicroSurveyRepo()
+        self._beta_enrollments = FakeBetaEnrollmentRepo()
+
+    FakeUnitOfWork.__init__ = patched_init  # type: ignore[method-assign]
+
+    FakeUnitOfWork.feedback_submissions = property(  # type: ignore[assignment]
+        lambda self: self._feedback_submissions,
+    )
+    FakeUnitOfWork.nps_scores = property(  # type: ignore[assignment]
+        lambda self: self._nps_scores,
+    )
+    FakeUnitOfWork.feature_requests = property(  # type: ignore[assignment]
+        lambda self: self._feature_requests,
+    )
+    FakeUnitOfWork.feature_votes = property(  # type: ignore[assignment]
+        lambda self: self._feature_votes,
+    )
+    FakeUnitOfWork.micro_surveys = property(  # type: ignore[assignment]
+        lambda self: self._micro_surveys,
+    )
+    FakeUnitOfWork.beta_enrollments = property(  # type: ignore[assignment]
+        lambda self: self._beta_enrollments,
+    )
+    # Drop the new abstract methods from __abstractmethods__ so the class
+    # can be instantiated. Setting properties on a class doesn't auto-clear
+    # the ABCMeta cache.
+    FakeUnitOfWork.__abstractmethods__ = frozenset()
+
+
+_install_feedback_on_fake_uow()

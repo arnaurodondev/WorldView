@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select
 
@@ -10,8 +11,6 @@ import common.ids  # type: ignore[import-untyped]
 from nlp_pipeline.infrastructure.nlp_db.models import MentionResolutionModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from nlp_pipeline.domain.models import MentionResolution

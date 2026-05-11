@@ -1,0 +1,15 @@
+{
+  "name": "worldview",
+  "private": true,
+  "description": "Worldview platform — pnpm workspace root",
+  "pnpm": {
+    "overrides": {
+      "vite": "6.4.2",
+      "@eslint/plugin-kit": "0.3.4"
+    },
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "sharp"
+    ]
+  }
+}

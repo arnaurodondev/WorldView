@@ -5,23 +5,97 @@ from __future__ import annotations
 import hmac
 from collections.abc import AsyncGenerator
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from alert.application.use_cases.acknowledge_alert import AcknowledgeAlertUseCase as AcknowledgeAlertEntityUseCase
+from alert.application.use_cases.create_alert import CreateAlertUseCase
 from alert.application.use_cases.dlq_admin import DLQAdminUseCase
-from alert.infrastructure.db.repositories.dlq import DLQRepository
+from alert.application.use_cases.email_preferences import GetEmailPreferencesUseCase, UpdateEmailPreferencesUseCase
+from alert.application.use_cases.list_alert_history import ListAlertHistoryUseCase
+from alert.application.use_cases.pending_alerts import AcknowledgeAlertUseCase, GetPendingAlertsUseCase
+from alert.application.use_cases.snooze_alert import SnoozeAlertUseCase
 
-# ── Database session ─────────────────────────────────────────────────────────
+# ── Current user (PRD-0025 §T-D-1-10) ────────────────────────────────────────
+
+
+def get_current_user_id(request: Request) -> UUID:
+    """Extract and validate user_id from InternalJWT state (PRD-0025 §T-D-1-10).
+
+    InternalJWTMiddleware sets request.state.user_id from the verified RS256 JWT.
+    Returns 401 if not set (unauthenticated request).
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        return UUID(str(user_id))
+    except (ValueError, AttributeError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid user identity in JWT") from exc
+
+
+CurrentUserIdDep = Annotated[UUID, Depends(get_current_user_id)]
+
+
+# ── Database session (write) ─────────────────────────────────────────────────
 
 
 async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
-    """Yield a scoped database session from the app's session factory."""
+    """Yield a scoped write-side database session."""
     async with request.app.state.session_factory() as session:
         yield session
 
 
 DbSessionDep = Annotated[AsyncSession, Depends(get_db_session)]
+
+
+# ── Database session (read-only, R27) ─────────────────────────────────────────
+
+
+async def get_read_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
+    """Yield a scoped read-replica session (R27 — read use cases use read replica)."""
+    factory = getattr(request.app.state, "read_factory", request.app.state.session_factory)
+    async with factory() as session:
+        yield session
+
+
+ReadDbSessionDep = Annotated[AsyncSession, Depends(get_read_db_session)]
+
+
+# ── Tenant + User auth ────────────────────────────────────────────────────────
+
+
+async def extract_tenant_user(request: Request) -> tuple[UUID, UUID]:
+    """Extract tenant_id and user_id from request.state set by InternalJWTMiddleware.
+
+    Returns
+    -------
+        ``(tenant_id, user_id)`` as UUIDs.
+
+    Raises
+    ------
+        HTTPException 401: If either value is absent or not a valid UUID.
+
+    PRD-0025: backends MUST use JWT-derived request.state, never raw headers
+    (F-CRIT-001 remediation).
+    """
+    raw_tenant_id = getattr(request.state, "tenant_id", None)
+    raw_user_id = getattr(request.state, "user_id", None)
+
+    if not raw_tenant_id or not raw_user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing required auth context (tenant_id / user_id not set by JWT middleware)",
+        )
+    try:
+        return UUID(str(raw_tenant_id)), UUID(str(raw_user_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="tenant_id and user_id must be valid UUIDs") from exc
+
+
+TenantUserDep = Annotated[tuple[UUID, UUID], Depends(extract_tenant_user)]
 
 
 # ── Admin auth ────────────────────────────────────────────────────────────────
@@ -48,7 +122,145 @@ AdminAuthDep = Annotated[None, Depends(verify_admin_token)]
 
 def get_dlq_use_case(session: Annotated[AsyncSession, Depends(get_db_session)]) -> DLQAdminUseCase:
     """Build a DLQAdminUseCase for the current request session."""
+    from alert.infrastructure.db.repositories.dlq import DLQRepository
+
     return DLQAdminUseCase(DLQRepository(session))
 
 
 DLQUseCaseDep = Annotated[DLQAdminUseCase, Depends(get_dlq_use_case)]
+
+
+# ── Email preference use case factories (R25 — infra wiring lives in DI, not routes) ─────
+
+
+def get_email_prefs_get_uc(
+    session: Annotated[AsyncSession, Depends(get_read_db_session)],
+) -> GetEmailPreferencesUseCase:
+    """Build a GetEmailPreferencesUseCase wired to the read-only DB session (R27).
+
+    Read-only use case — uses read replica per R27.
+    """
+    from alert.infrastructure.db.repositories.email_preference import EmailPreferenceRepository
+
+    return GetEmailPreferencesUseCase(EmailPreferenceRepository(session))
+
+
+GetEmailPrefsUseCaseDep = Annotated[GetEmailPreferencesUseCase, Depends(get_email_prefs_get_uc)]
+
+
+def get_email_prefs_update_uc(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> UpdateEmailPreferencesUseCase:
+    """Build an UpdateEmailPreferencesUseCase wired to the write DB session."""
+    from alert.infrastructure.db.repositories.email_preference import EmailPreferenceRepository
+
+    return UpdateEmailPreferencesUseCase(EmailPreferenceRepository(session))
+
+
+UpdateEmailPrefsUseCaseDep = Annotated[UpdateEmailPreferencesUseCase, Depends(get_email_prefs_update_uc)]
+
+
+# ── Pending alerts + ack use case factories (R25 — infra wiring lives in DI, not routes) ─────
+
+
+def get_pending_alerts_uc(
+    session: Annotated[AsyncSession, Depends(get_read_db_session)],
+) -> GetPendingAlertsUseCase:
+    """Build a GetPendingAlertsUseCase wired to the read-replica session (R27).
+
+    Uses ``get_read_db_session`` (read replica) because this is a query-only use case.
+    Lazy repo imports keep infrastructure out of the route layer (R25).
+    """
+    from alert.infrastructure.db.repositories.alert import AlertRepository
+    from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
+
+    return GetPendingAlertsUseCase(PendingAlertRepository(session), AlertRepository(session))  # type: ignore[arg-type]
+
+
+GetPendingAlertsUseCaseDep = Annotated[GetPendingAlertsUseCase, Depends(get_pending_alerts_uc)]
+
+
+def get_ack_uc(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AcknowledgeAlertUseCase:
+    """Build an AcknowledgeAlertUseCase wired to the write session.
+
+    Write session required — the use case commits on success (N-04).
+    """
+    from alert.infrastructure.db.repositories.pending_alert import PendingAlertRepository
+
+    return AcknowledgeAlertUseCase(PendingAlertRepository(session), session)  # type: ignore[arg-type]
+
+
+AckUseCaseDep = Annotated[AcknowledgeAlertUseCase, Depends(get_ack_uc)]
+
+
+# ── Alert-entity ack/snooze/history use case factories (PLAN-0051 T-D-4-02) ──
+
+
+def get_ack_alert_uc(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> AcknowledgeAlertEntityUseCase:
+    """Build the alert-entity AcknowledgeAlertUseCase (writes ``alerts.acknowledged_at``).
+
+    NOTE: not to be confused with ``get_ack_uc`` which acks a *pending_alert*
+    row (per-user delivery acknowledgement). This use case acks the *alert*
+    itself (tenant-level) — used by PATCH /api/v1/alerts/{id}/acknowledge.
+    """
+    from alert.infrastructure.db.repositories.alert import AlertRepository
+
+    return AcknowledgeAlertEntityUseCase(AlertRepository(session), session)  # type: ignore[arg-type]
+
+
+AckAlertUseCaseDep = Annotated[AcknowledgeAlertEntityUseCase, Depends(get_ack_alert_uc)]
+
+
+def get_snooze_uc(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SnoozeAlertUseCase:
+    """Build a SnoozeAlertUseCase wired to the write session."""
+    from alert.infrastructure.db.repositories.alert import AlertRepository
+
+    return SnoozeAlertUseCase(AlertRepository(session), session)  # type: ignore[arg-type]
+
+
+SnoozeUseCaseDep = Annotated[SnoozeAlertUseCase, Depends(get_snooze_uc)]
+
+
+def get_history_uc(
+    session: Annotated[AsyncSession, Depends(get_read_db_session)],
+) -> ListAlertHistoryUseCase:
+    """Build a ListAlertHistoryUseCase wired to the READ-replica session (R27).
+
+    Pure read use case — uses ``get_read_db_session`` because no writes occur.
+    """
+    from alert.infrastructure.db.repositories.alert import AlertRepository
+
+    return ListAlertHistoryUseCase(AlertRepository(session))  # type: ignore[arg-type]
+
+
+HistoryUseCaseDep = Annotated[ListAlertHistoryUseCase, Depends(get_history_uc)]
+
+
+# ── Create alert use case factory (PLAN-0082 Wave B) ──────────────────────────
+
+
+def get_create_alert_uc(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> CreateAlertUseCase:
+    """Build a CreateAlertUseCase wired to the write session.
+
+    R25: injects concrete repository objects (infrastructure layer) here, in the
+    DI factory (API layer), not inside the use case itself. The use case only
+    sees port interfaces (AlertSaveRepositoryPort, OutboxRepositoryPort).
+    """
+    from alert.infrastructure.db.repositories.alert import AlertRepository
+    from alert.infrastructure.db.repositories.outbox import OutboxRepository
+
+    return CreateAlertUseCase(
+        alert_repo=AlertRepository(session),  # type: ignore[arg-type]
+        outbox_repo=OutboxRepository(session),  # type: ignore[arg-type]
+    )
+
+
+CreateAlertUseCaseDep = Annotated[CreateAlertUseCase, Depends(get_create_alert_uc)]

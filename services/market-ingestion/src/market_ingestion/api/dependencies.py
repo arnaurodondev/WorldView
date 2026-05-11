@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-import hmac
 from collections.abc import AsyncGenerator
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated
 
-import httpx
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, Request
 
 from market_ingestion.config import Settings
 
 if TYPE_CHECKING:
     from market_ingestion.application.ports.adapters import CanonicalSerializer, ObjectStoreAdapter
-    from market_ingestion.application.ports.unit_of_work import UnitOfWork
+    from market_ingestion.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
     from market_ingestion.infrastructure.adapters.providers.registry import ProviderRegistry
 
 
@@ -42,6 +40,23 @@ async def get_uow(
         yield uow
 
 
+async def get_read_uow(
+    request: Request,
+) -> AsyncGenerator[ReadOnlyUnitOfWork, None]:
+    """Provide a read-only UnitOfWork for query routes (R27).
+
+    Uses the read replica session factory so readyz/ingest_status/list_policies
+    never hold a write-session connection during read-only traffic.
+    Falls back to the write factory when no dedicated read URL is configured.
+    """
+    from market_ingestion.infrastructure.db.unit_of_work import SqlAlchemyReadOnlyUnitOfWork
+
+    # read_session_factory falls back to write_session_factory when no replica URL is set.
+    read_factory = request.app.state.read_session_factory
+    async with SqlAlchemyReadOnlyUnitOfWork(read_factory) as uow:
+        yield uow
+
+
 def get_object_store(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ObjectStoreAdapter:
@@ -56,8 +71,8 @@ def get_object_store(
 
     storage_settings = StorageSettings(
         endpoint=settings.storage_endpoint,
-        access_key=settings.storage_access_key,
-        secret_key=settings.storage_secret_key,
+        access_key=settings.storage_access_key.get_secret_value(),
+        secret_key=settings.storage_secret_key.get_secret_value(),
     )
     storage = S3ObjectStorage(storage_settings)
     return S3ObjectStoreAdapter(storage=storage, default_bucket=settings.storage_bucket)
@@ -66,17 +81,10 @@ def get_object_store(
 def get_provider_registry(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ProviderRegistry:
-    """Provide the provider registry (EODHD + stubs)."""
-    from market_ingestion.infrastructure.adapters.providers.registry import ProviderRegistry
+    """Provide the provider registry (all configured providers)."""
+    from market_ingestion.infrastructure.adapters.providers import build_provider_registry
 
-    registry = ProviderRegistry()
-    from market_ingestion.infrastructure.adapters.providers.eodhd import EODHDProviderAdapter
-
-    client = httpx.AsyncClient()
-    registry.register(
-        EODHDProviderAdapter(api_key=settings.eodhd_api_key, client=client, base_url=settings.eodhd_base_url)
-    )
-    return registry
+    return build_provider_registry(settings)
 
 
 def get_canonical_serializer() -> CanonicalSerializer:
@@ -84,16 +92,3 @@ def get_canonical_serializer() -> CanonicalSerializer:
     from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
 
     return DefaultCanonicalSerializer()
-
-
-async def verify_internal_token(
-    x_internal_token: Annotated[str | None, Header()] = None,
-    settings: Annotated[Settings, Depends(get_settings)] = ...,  # type: ignore[assignment]
-) -> None:
-    """Validate X-Internal-Token against the configured service token (QA-018)."""
-    expected = settings.internal_service_token
-    if not expected or not x_internal_token or not hmac.compare_digest(x_internal_token, expected):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal token")
-
-
-InternalAuthDep = Annotated[None, Depends(verify_internal_token)]

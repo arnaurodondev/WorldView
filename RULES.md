@@ -42,6 +42,27 @@ without forward compatibility, all consumers break simultaneously. Rules:
 - Bump `schema_version` in the event envelope
 - Run `scripts/gen-contracts.sh` to validate compatibility before merging
 
+### R28: MUST use Avro for all Kafka contracts (no JSON on the wire)
+**Why**: Pure JSON on Kafka silently accepts schema drift — a renamed or removed
+field is invisible until the consumer crashes in production. Avro on the wire
+with a registered `.avsc` makes every contract change explicit, validated by
+`scripts/gen-contracts.sh`, and enforced by the architecture test
+`tests/architecture/test_kafka_avro_enforcement.py` (which fails the build for
+any consumer using `json.loads` without a paired `deserialize_confluent_avro`
+path). PLAN-0062 codified this after every JSON-only consumer on the platform
+was migrated. Rules:
+- Every topic has exactly one `.avsc` file in `infra/kafka/schemas/`,
+  registered with the schema registry by `register-schemas.py` at startup
+- Every topic has a canonical model in `libs/contracts` mirroring the schema
+  field-for-field (entity-shaped → `canonical/<event>.py`; trigger-event-shaped
+  → `events/<domain>/<event>.py`)
+- Producers serialise via `messaging.kafka.serialization_utils.serialize_confluent_avro`
+  (or `serialize_avro` for non-Confluent envelopes) — never `json.dumps(...).encode()`
+- Consumers' `deserialize_value` calls `deserialize_confluent_avro` (or
+  `deserialize_avro`); a JSON fallback is allowed only as a temporary migration
+  aid and must log every fallback hit so the residual JSON traffic is measurable
+- The architecture test is unconditional — no baseline / escape hatch
+
 ### R6: MUST version REST API paths for breaking changes
 **Why**: Clients (frontend, other services) depend on stable API contracts.
 Non-breaking additions (new endpoints, new optional fields) are fine. Breaking changes
@@ -68,9 +89,11 @@ transaction, then let the dispatcher publish it to Kafka.
 ### R9: MUST make Kafka consumers idempotent
 **Why**: Kafka guarantees at-least-once delivery. Consumers will see duplicate events
 during rebalances, retries, or network hiccups. Every consumer must:
-- Check `event_id` against a processed-events table before processing
-- Use upsert (INSERT ON CONFLICT) for materializations
-- Be safe to re-run on the same event
+- Inherit `ValkeyDedupMixin` from `libs/messaging.kafka.consumer.dedup` and set `_dedup_prefix` (unique per consumer class) and optionally `_dedup_ttl_seconds` (default 86 400 s) — this satisfies the `is_duplicate` / `mark_processed` contract with at-least-once fallback when Valkey is unavailable
+- Use upsert (INSERT ON CONFLICT) for materializations so that Valkey fallback mode is safe
+- Be safe to re-run on the same event (deterministic IDs or `INSERT … ON CONFLICT DO NOTHING`)
+
+**Architecture test**: `tests/architecture/test_consumer_dedup_mixin_enforcement.py` (CONSUMER-DEDUP-001) enforces this rule automatically. Consumers that bypass `ValkeyDedupMixin` and instead rely solely on natural-key `INSERT … ON CONFLICT` idempotency must document this guarantee in a docstring near the class definition **and** be explicitly added to `tests/architecture/_consumer_dedup_allowlist.yaml` with an ADR justification. The allowlist has 14 grandfathered entries (legacy hand-rolled consumers, allowlisted in PLAN-0084 B-2); new entries beyond these require explicit architecture approval with justification. Hand-rolled `is_duplicate(…) → return False` stubs are forbidden and will be caught by the architecture test. See BP-415 for the failure pattern.
 
 ### R10: MUST use UUIDv7 for all entity IDs
 **Why**: UUIDv7 is time-sortable (natural ordering in indexes), globally unique
@@ -226,6 +249,101 @@ the primary. The `ReadOnlyUnitOfWork` has no `commit()` or `rollback()` methods 
 will catch any misuse at type-check time. API route handlers MUST use `ReadUoWDep` for
 read-only endpoints and `UoWDep` for mutating endpoints.
 
+### R29: MUST update `libs/tools/capability_manifest.yaml` for every tool change
+**Why**: The capability manifest is the contract between the LLM and the tool layer.
+When a tool is added, removed, or its parameters change, the LLM's system prompt must
+reflect the current state — an out-of-sync manifest causes silent capability failures
+where the LLM calls tools that no longer exist or passes invalid parameters (producing
+a malformed tool response with no error surfaced to the user). Enforcement:
+- Adding a new tool → add a YAML entry with `name`, `description`, `parameters`,
+  `since` (manifest version), and at least 2 `example_queries` before the PR is merged.
+  **Note**: as of PLAN-0079, per-tool `trust_weight` is no longer set on manifest
+  entries — `TrustScorer` computes trust per-item at retrieval time from
+  `SOURCE_AUTHORITY` × recency_decay × corroboration × extraction_confidence. The
+  manifest references `source_type` so `TrustScorer` can look up authority.
+- Changing a tool's parameters → update the YAML entry in the same commit
+- Removing a tool → set `deprecated_at: <version>` on the YAML entry (do NOT delete —
+  prior thread histories may reference it for replay/explanation); remove the handler
+  from the executor in a follow-up release after deprecation window
+Enforced by `tests/architecture/test_tool_manifest_sync.py` (checks that every function
+registered in `ToolRegistry` has a corresponding YAML entry with a matching parameter
+schema, and every YAML entry has a registered implementation OR is `deprecated_at`-set).
+
+### R30: Per-request auth/scope context MUST NOT live in singleton `__init__`
+**Why**: Per-request fields (`user_id`, `tenant_id`, `internal_jwt`, `entity_context`,
+or any field that varies per HTTP request) can never be passed through a long-lived
+singleton's constructor — they will be `None` (or stale) for every request after the
+first. The result is silent: cross-tenant data leak risks, auth strips, scope
+enforcement bypasses (M-1 entity-context bypass), and feature short-circuits that
+return empty results without an error. Pattern: split into `<Class>Factory` (singleton,
+holds shared collaborators) + `<Class>` (per-request, holds auth/scope). The factory
+exposes `for_request(*, user_id, tenant_id, internal_jwt, entity_context, ...) -> Class`
+and the route handler calls it once at the top of every request. Per-LLM-call (or
+per-RPC-call) signatures stay clean — auth is bound at executor construction.
+**Detection**: any `__init__` that takes `Optional[user_id|tenant_id|jwt]` is suspect;
+either the class is stateless and shouldn't carry it, or the class is request-scoped
+and needs a factory. See BP-406 for the canonical example (PLAN-0067 `ToolExecutor`).
+
+---
+
+## Operational Rules
+
+### R31: MUST rebuild and verify containers after runtime fixes
+**Why**: The running Docker container contains the image that was built at last `docker compose
+build` time. Editing source files does NOT update the running container. Declaring a fix "done"
+without rebuilding and verifying means the live system still has the old (broken) code, creating
+a false sense of completion that is only discovered during the next session or demo.
+After any fix that affects runtime behaviour (Python code, config, entrypoints):
+1. `docker compose build <svc>` — rebuild the affected service image
+2. `docker compose up -d <svc>` — replace the running container with the new image
+3. `docker compose exec <svc> python -c "import <module>; ..."` or inspect logs to confirm
+   the new code is present (e.g., check a new log line or function signature)
+4. Only then declare the fix live in any session report or commit message
+Applies equally to worker containers, scheduler containers, and consumer containers.
+
+### R32: MUST check for the highest existing ID before assigning new IDs
+**Why**: Assigning a rule number (R##), plan number (PLAN-XXXX), or worker/spec ID without
+checking existing IDs causes collisions. Collisions force mid-edit renumbering that propagates
+across plan files, TRACKING.md, BUG_PATTERNS.md, and commit messages — multiplying the cost
+of a 30-second oversight into 30+ minutes of cleanup. The R18/R28 collision in this repository
+(branching rule vs Avro rule, both originally assigned R18) is a documented example.
+Before assigning any new ID:
+- R##: `grep -n "^### R" RULES.md | sort -t'R' -k2 -n | tail -3` to find the current maximum
+- PLAN-XXXX: check `docs/plans/TRACKING.md` for the highest plan row
+- Worker IDs / spec IDs: check the relevant plan file section before adding a new worker
+Pick `max + 1`. Never re-use or guess.
+
+### R33: MUST run the full relevant test suite after every fix
+**Why**: Targeted "touched-file only" testing misses cross-file regressions. When a fix
+changes a mock, a shared fixture, a side_effect list, a global constant, or a serialisation
+format, tests in unrelated files can break. These break silently when only the edited file's
+tests are run, and surface only during the next full test run — typically at an inconvenient
+moment (demo, CI, QA pass). Classification discipline:
+1. Run the full suite for the affected service (`python -m pytest tests/ -v` from the service root)
+2. Classify every new failure as one of:
+   - **(a) Pre-existing** — was already failing before this session (document and skip if unrelated)
+   - **(b) Fix-induced regression** — the fix broke something that was passing (FIX IMMEDIATELY)
+   - **(c) Stale test expectation** — test was testing outdated behaviour that the fix correctly changes (update the test)
+3. Resolve all (b) and (c) failures before reporting completion
+4. Never report "all tests pass" without having run the full suite
+
+### R34: Subagents MUST commit before returning; orchestrator MUST run full suite after all return
+**Why**: Parallel subagents (fix agents, wave agents, QA agents) work in isolation. If a
+subagent stalls, is interrupted, or its worktree is discarded, any uncommitted work is
+permanently lost. Additionally, parallel subagents can introduce cross-agent regressions
+(Agent A changes a shared fixture; Agent B adds a test depending on the old fixture;
+each passes in isolation but the combined state fails).
+Rules:
+1. Every subagent MUST create a git commit (or at minimum stage all changes) before returning
+   control to the orchestrator — not just "apply files"
+2. If a subagent returns without committing, the orchestrator must immediately reapply the
+   subagent's work directly from the reported diff before proceeding
+3. After all parallel subagents return, the orchestrator MUST run the full test suite across
+   all affected services to catch cross-agent regressions
+4. Cross-agent regressions are the orchestrator's responsibility — never the subagent's
+5. Worktree isolation is a convenience, not a safety net; commits are the only reliable
+   persistence mechanism
+
 ---
 
 ## Summary Table
@@ -259,3 +377,9 @@ read-only endpoints and `UoWDep` for mutating endpoints.
 | R25 | Architecture | MUST NOT |
 | R26 | Infrastructure | MUST NOT |
 | R27 | Architecture | MUST |
+| R29 | Architecture | MUST |
+| R30 | Architecture | MUST NOT |
+| R31 | Operational | MUST |
+| R32 | Operational | MUST |
+| R33 | Operational | MUST |
+| R34 | Operational | MUST |

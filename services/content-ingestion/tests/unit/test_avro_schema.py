@@ -91,6 +91,7 @@ class TestAvroRoundtrip:
             "published_at": common.time.to_iso8601(now),
             "is_backfill": False,
             "correlation_id": None,
+            "tenant_id": None,
         }
 
         payload_fields = set(payload.keys())

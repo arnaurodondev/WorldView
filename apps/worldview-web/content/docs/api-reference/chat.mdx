@@ -1,0 +1,136 @@
+---
+title: Chat API
+description: POST /v1/chat/stream — server-sent events (SSE) streaming, threads, and messages.
+section: API Reference
+order: 6
+updated: 2026-05-05
+---
+
+The Chat API provides a streaming conversation interface powered by the RAG pipeline and DeepSeek R1 Distill 32B.
+
+## Create or continue a thread
+
+```
+POST /v1/chat/threads
+```
+
+Creates a new conversation thread and returns its ID.
+
+```json
+// Request body (optional)
+{ "title": "AAPL earnings analysis" }
+
+// Response
+{
+  "thread_id": "01hb...",
+  "title": "AAPL earnings analysis",
+  "created_at": "2026-05-05T10:00:00Z"
+}
+```
+
+## Stream a message (SSE)
+
+```
+POST /v1/chat/stream
+Content-Type: application/json
+Accept: text/event-stream
+```
+
+**Request body:**
+
+```json
+{
+  "thread_id": "01hb...",
+  "message": "What drove AAPL's Q2 beat?",
+  "context": {
+    "instruments": ["01h8..."],
+    "include_portfolio": false
+  }
+}
+```
+
+**Response — Server-Sent Events stream:**
+
+```
+event: thinking
+data: {"delta": "Let me analyze Apple's Q2 results...", "type": "reasoning"}
+
+event: token
+data: {"delta": "Apple reported", "type": "answer"}
+
+event: token
+data: {"delta": " Q2 revenue of $95.4B [1],", "type": "answer"}
+
+event: sources
+data: {"sources": [{"n": 1, "doc_id": "01h9...", "headline": "Apple reports...", "url": "..."}]}
+
+event: done
+data: {"message_id": "01hc...", "tokens_used": 1842}
+```
+
+<Callout type="info" title="Event types">
+- `thinking` — chain-of-thought reasoning (shown as a collapsible "Thinking..." block in the UI)
+- `token` — answer token stream (append to the current message)
+- `sources` — citation list (render after all tokens)
+- `done` — stream complete; includes token usage
+- `error` — error occurred; stream terminates
+</Callout>
+
+## Consuming the SSE stream
+
+<CodeBlock filename="stream-chat.ts">
+```ts
+const response = await fetch("http://localhost:8000/v1/chat/stream", {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+    Accept: "text/event-stream",
+  },
+  body: JSON.stringify({
+    thread_id: threadId,
+    message: "What drove AAPL's Q2 beat?",
+  }),
+});
+
+const reader = response.body!.getReader();
+const decoder = new TextDecoder();
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+
+  const text = decoder.decode(value);
+  for (const line of text.split("\n")) {
+    if (line.startsWith("data: ")) {
+      const event = JSON.parse(line.slice(6));
+      // Handle event.type: "token", "sources", "done", "error"
+    }
+  }
+}
+```
+</CodeBlock>
+
+## List threads
+
+```
+GET /v1/chat/threads?limit=20&offset=0
+```
+
+Returns the authenticated user's conversation threads, newest first.
+
+## Get thread messages
+
+```
+GET /v1/chat/threads/{thread_id}/messages
+```
+
+Returns all messages in a thread, including assistant reasoning blocks and citation sources.
+
+## Delete thread
+
+```
+DELETE /v1/chat/threads/{thread_id}
+```
+
+Permanently deletes the thread and all its messages. Returns `200 OK` on success.

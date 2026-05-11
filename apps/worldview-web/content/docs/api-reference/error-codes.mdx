@@ -1,0 +1,163 @@
+---
+title: Error Codes
+description: HTTP error shapes for 400, 401, 403, 404, 422, 429, and 500 responses.
+section: API Reference
+order: 7
+updated: 2026-05-05
+---
+
+All API errors return a consistent JSON body:
+
+```json
+{
+  "detail": "Human-readable error message",
+  "code": "MACHINE_READABLE_CODE",
+  "status": 404
+}
+```
+
+Some errors include additional fields (`errors` for validation failures, `retry_after` for rate limits).
+
+## HTTP status codes
+
+### 400 Bad Request
+
+The request body or query parameters are malformed.
+
+```json
+{
+  "detail": "Invalid date format for 'from' parameter",
+  "code": "INVALID_PARAMETER",
+  "status": 400,
+  "field": "from"
+}
+```
+
+### 401 Unauthorized
+
+The request is missing a token or the token is expired/invalid.
+
+```json
+{
+  "detail": "Token has expired",
+  "code": "TOKEN_EXPIRED",
+  "status": 401
+}
+```
+
+**Common 401 codes:**
+
+| Code | Cause |
+|------|-------|
+| `TOKEN_MISSING` | `Authorization` header not present |
+| `TOKEN_EXPIRED` | JWT `exp` claim is in the past |
+| `TOKEN_INVALID` | Signature verification failed |
+| `TOKEN_ISSUER_MISMATCH` | JWT `iss` does not match expected issuer |
+
+### 403 Forbidden
+
+The token is valid but the authenticated user does not have permission for this resource.
+
+```json
+{
+  "detail": "Insufficient permissions for this resource",
+  "code": "PERMISSION_DENIED",
+  "status": 403
+}
+```
+
+### 404 Not Found
+
+The requested resource does not exist.
+
+```json
+{
+  "detail": "Instrument not found",
+  "code": "INSTRUMENT_NOT_FOUND",
+  "status": 404
+}
+```
+
+**Common 404 codes:** `INSTRUMENT_NOT_FOUND`, `THREAD_NOT_FOUND`, `ALERT_NOT_FOUND`, `WATCHLIST_NOT_FOUND`.
+
+### 422 Unprocessable Entity
+
+Request body is valid JSON but fails schema validation.
+
+```json
+{
+  "detail": "Validation error",
+  "code": "VALIDATION_ERROR",
+  "status": 422,
+  "errors": [
+    {
+      "loc": ["body", "severity"],
+      "msg": "value is not a valid enumeration member",
+      "type": "type_error.enum"
+    }
+  ]
+}
+```
+
+### 429 Too Many Requests
+
+The rate limit has been exceeded.
+
+```json
+{
+  "detail": "Rate limit exceeded",
+  "code": "RATE_LIMIT_EXCEEDED",
+  "status": 429,
+  "retry_after": 42
+}
+```
+
+The `retry_after` value is the number of seconds until the rate limit window resets. Honor this value — repeated requests during backoff count toward future rate limiting.
+
+### 500 Internal Server Error
+
+An unexpected error occurred in the server. These are logged automatically.
+
+```json
+{
+  "detail": "Internal server error",
+  "code": "INTERNAL_ERROR",
+  "status": 500,
+  "request_id": "req_01hb..."
+}
+```
+
+Include the `request_id` when reporting bugs — it links to the server-side log trace.
+
+<Callout type="tip" title="Idempotency for 5xx errors">
+If you receive a 500 or 503, it is safe to retry most read operations immediately. For write operations (POST/PUT/PATCH/DELETE), wait at least 1 second before retrying to avoid duplicate writes.
+</Callout>
+
+## Error handling example
+
+<CodeBlock filename="error-handling.ts">
+```ts
+async function apiCall<T>(url: string, options: RequestInit): Promise<T> {
+  const response = await fetch(url, options);
+
+  if (!response.ok) {
+    const error = await response.json();
+    switch (response.status) {
+      case 401:
+        // Attempt token refresh, then retry
+        await refreshAccessToken();
+        return apiCall<T>(url, options);
+      case 429:
+        // Honor Retry-After header
+        const retryAfter = parseInt(response.headers.get("Retry-After") ?? "60");
+        await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+        return apiCall<T>(url, options);
+      default:
+        throw new Error(`API error ${response.status}: ${error.detail}`);
+    }
+  }
+
+  return response.json() as Promise<T>;
+}
+```
+</CodeBlock>

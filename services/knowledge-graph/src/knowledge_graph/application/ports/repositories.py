@@ -8,21 +8,21 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
+from datetime import datetime
+from typing import Any
+from uuid import UUID
 
 # ── Outbox topic constants ───────────────────────────────────────────────────
 # Defined at the application layer so blocks and use cases can reference them
-# without importing from infrastructure.
+# without importing from infrastructure.  Canonical KG topics re-exported from
+# messaging.topics so callers can import from a single application-layer source.
+from messaging.topics import (  # type: ignore[import-untyped]
+    GRAPH_STATE_CHANGED,
+)
 
-TOPIC_GRAPH_STATE_CHANGED = "graph.state.changed.v1"
+TOPIC_GRAPH_STATE_CHANGED = GRAPH_STATE_CHANGED
 TOPIC_CONTRADICTION = "intelligence.contradiction.v1"
 TOPIC_RELATION_PROPOSED = "relation.type.proposed.v1"
-
 
 # ── DLQ data transfer object ──────────────────────────────────────────────────
 
@@ -163,12 +163,28 @@ class RelationRepositoryPort(ABC):
     @abstractmethod
     async def get_stats(self) -> dict[str, Any]: ...
 
+    @abstractmethod
+    async def find_competes_with_batch(
+        self,
+        entity_id: UUID,
+        candidate_ids: list[UUID],
+        min_confidence: float = 0.3,
+    ) -> dict[UUID, tuple[bool, float | None]]:
+        """Return a mapping of candidate_id → (has_relation, confidence).
+
+        Checks both directions (entity_id → candidate AND candidate → entity_id).
+        Only candidates with an active ``competes_with`` relation meeting
+        ``min_confidence`` are included in the result dict.
+
+        Returns an empty dict when ``candidate_ids`` is empty.
+        """
+
 
 # ── Relation evidence repository port ────────────────────────────────────────
 
 
 class RelationEvidenceRepositoryPort(ABC):
-    """Port for relation evidence inserts (hot-path staging)."""
+    """Port for relation evidence inserts (hot-path staging) and read queries."""
 
     @abstractmethod
     async def insert_raw(
@@ -187,7 +203,21 @@ class RelationEvidenceRepositoryPort(ABC):
         is_backfill: bool = False,
         entity_provisional: bool = False,
         provisional_queue_id: UUID | None = None,
+        evidence_text: str | None = None,
     ) -> UUID: ...
+
+    @abstractmethod
+    async def get_evidence_snippets_batch(
+        self,
+        relation_ids: list[UUID],
+        limit_per_relation: int = 3,
+    ) -> dict[UUID, list[str]]:
+        """Return top-N evidence snippets per relation in a single CTE query.
+
+        Ordered by extraction_confidence DESC NULLS LAST, evidence_date DESC NULLS LAST.
+        Returns {} for any relation_id with no evidence text.
+        # TODO(PRD-0074): upgrade to denormalized top_evidence_snippets JSONB on relations
+        """
 
 
 # ── Canonical entity repository port ─────────────────────────────────────────
@@ -201,3 +231,103 @@ class CanonicalEntityRepositoryPort(ABC):
 
     @abstractmethod
     async def exists(self, entity_id: UUID) -> bool: ...
+
+    @abstractmethod
+    async def get_batch(self, entity_ids: list[UUID]) -> list[dict[str, object]]:
+        """Fetch multiple canonical entities in a single WHERE entity_id = ANY(:ids) query.
+
+        Returns only entities that exist — missing IDs are silently omitted.
+        """
+
+    @abstractmethod
+    async def find_by_ticker(self, ticker: str) -> dict[str, object] | None:
+        """Find entity by ticker symbol (case-insensitive). Returns None if not found."""
+
+    @abstractmethod
+    async def create_or_get(
+        self,
+        canonical_name: str,
+        entity_type: str,
+        *,
+        entity_id: UUID | None = None,
+        isin: str | None = None,
+        ticker: str | None = None,
+        exchange: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> tuple[UUID, bool]:
+        """Insert a canonical entity idempotently; return (entity_id, was_created).
+
+        DEF-014 / BP-384: closes the find-then-create dedup race in
+        ``persist_enrichment``.  Implementations MUST issue an atomic
+        ``INSERT ... ON CONFLICT (lower(canonical_name)) DO NOTHING RETURNING ...``
+        and, if the conflict path fired, re-SELECT the existing row.
+
+        Returns:
+        -------
+            tuple[UUID, bool]:
+              - First element is the canonical ``entity_id`` (the new row's
+                generated UUID, OR the existing row's UUID on conflict).
+              - Second element is ``True`` when this call inserted the row
+                and ``False`` when an existing row was returned.
+
+        The boolean lets callers log dedup outcomes (``entity_deduped=True``)
+        and skip downstream side effects (alias inserts, outbox events) that
+        only make sense for genuinely new canonical rows.
+        """
+
+
+# ── Entity embedding ANN port (PRD-0017 §6.5) ────────────────────────────────
+
+
+@dataclass(frozen=True)
+class AnnResult:
+    """Single nearest-neighbour result from a pgvector ANN query.
+
+    ``distance`` is cosine distance in [0, 2]: 0 = identical, 2 = opposite.
+    To convert to similarity: ``similarity = 1.0 - distance``.
+    """
+
+    entity_id: UUID
+    distance: float
+
+
+class EntityEmbeddingANNRepositoryPort(ABC):
+    """Port for pgvector ANN queries on ``entity_embedding_state`` (PRD-0017 §6.5)."""
+
+    @abstractmethod
+    async def find_nearest(
+        self,
+        query_embedding: list[float],
+        view_type: str,
+        limit: int = 40,
+        exclude_entity_id: UUID | None = None,
+        entity_types: list[str] | None = None,
+    ) -> list[AnnResult]:
+        """Return nearest neighbours by cosine distance, ascending.
+
+        Args:
+        ----
+            query_embedding: The query vector (must match stored embedding dimension).
+            view_type:        Which embedding view to search (e.g. ``'fundamentals_ohlcv'``).
+            limit:            Maximum number of results to return.
+            exclude_entity_id: If provided, exclude this entity from results (self-exclusion).
+            entity_types:     If provided, restrict results to entities with these types.
+                              Applied via JOIN on ``canonical_entities``.
+
+        Returns:
+        -------
+            Sorted ascending by ``distance`` (nearest first).
+
+        """
+
+    @abstractmethod
+    async def get_embedding(
+        self,
+        entity_id: UUID,
+        view_type: str,
+    ) -> list[float] | None:
+        """Fetch the stored embedding vector for a given entity + view, or None.
+
+        Returns None when no row exists or the embedding column is NULL.
+        Used by the use case to check embedding availability before ANN search.
+        """

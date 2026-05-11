@@ -18,11 +18,13 @@ class HoldingModel(Base):
     __table_args__ = (
         UniqueConstraint("portfolio_id", "instrument_id", name="uq_holdings_portfolio_instrument"),
         Index("ix_holdings_portfolio_id", "portfolio_id"),
+        Index("ix_holdings_tenant_id", "tenant_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
     portfolio_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("portfolios.id"))
     instrument_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True))
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(Numeric(18, 8), server_default="0")
     average_cost: Mapped[Decimal] = mapped_column(Numeric(18, 8), server_default="0")
     currency: Mapped[str]

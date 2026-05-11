@@ -331,7 +331,7 @@ S7 materializes a temporally-aware, evidence-backed knowledge graph from S6 enri
 | T-D-3-12 | `build_fundamentals_narrative()` utility | impl | `application/utils/fundamentals_narrative.py` | Deterministic template function per PRD §6.7 Block 13D-3: converts structured financial data (revenue, margins, P/E, price, 52-week range) into embeddable narrative with interpretive words ("growing", "expensive", "near highs"). Zero LLM cost. |
 | T-D-3-06 | Workers 13G–H: Partition management | impl | `infrastructure/workers/partitions.py` | 13G (1st of month + startup): create current + next month partitions for relation_evidence, events, claims; `IF NOT EXISTS` idempotent. 13H (1st of year + startup): yearly partitions; idempotent |
 | T-D-3-07 | Outbox dispatcher | impl | `infrastructure/outbox/dispatcher.py` | Polls `intelligence_db.outbox_events`; publishes 3 topics: `graph.state.changed.v1`, `intelligence.contradiction.v1`, `relation.type.proposed.v1`; entity.dirtied.v1 NOT via outbox (direct produce in Block 12a); warning log if found in outbox |
-| T-D-3-08 | Block 14: Shadow migration design memo | docs | `docs/plans/block-14-shadow-migration-design.md` | 4-phase design: shadow column, dual write, backfill, cutover; env vars documented; implementation status: DEFERRED |
+| T-D-3-08 | Block 14: Shadow migration design memo | docs | `docs/audits/2026-03-28-block-14-shadow-migration-design.md` | 4-phase design: shadow column, dual write, backfill, cutover; env vars documented; implementation status: DEFERRED |
 | T-D-3-13 | Unit tests for workers + consumers + outbox | test | `tests/unit/infrastructure/workers/`, `tests/unit/infrastructure/consumer/`, `tests/unit/infrastructure/outbox/` | ≥35 tests: confidence formula (bounded ≤1.0), summary evidence_hash skip, narrative template 512-token truncation, definition SHA-256 change detection (same hash → skip), fundamentals_narrative deterministic output, instrument consumer creates 3 embedding_state rows, LLM alias validation (collision → reject), fallback chain (Ollama fail → Gemini called → logged), llm_usage_log insert, fundamentals description change detection (changed → re-embed, unchanged → skip), S3 REST failure → retry backoff, partition idempotency, outbox routing (3 topics) |
 
 #### Pre-Read
@@ -602,7 +602,7 @@ Tasks T-C-4-04, T-D-4-02, and T-E-3-02 specify the exact requirements per servic
 | `services/nlp-pipeline/.claude-context.md` | Endpoints, topics, entities, pitfalls |
 | `services/knowledge-graph/.claude-context.md` | Endpoints, topics, entities, pitfalls |
 | `services/alert/.claude-context.md` | Endpoints, topics, entities, pitfalls |
-| `docs/plans/block-14-shadow-migration-design.md` | Shadow migration design memo (deferred) |
+| `docs/audits/2026-03-28-block-14-shadow-migration-design.md` | Shadow migration design memo (deferred) |
 
 ---
 

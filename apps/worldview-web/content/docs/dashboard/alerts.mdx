@@ -1,0 +1,57 @@
+---
+title: Flash Alerts
+description: Real-time flash alert banners on the dashboard — severity tiers, WebSocket delivery, and dismiss behavior.
+section: Dashboard
+order: 4
+updated: 2026-05-05
+---
+
+Flash alerts are real-time notifications delivered to the dashboard (and any other active app page) via a persistent WebSocket connection. They appear as banner overlays at the top of the viewport.
+
+## Severity tiers
+
+Worldview uses four severity levels:
+
+| Severity | Color | Use case |
+|----------|-------|---------|
+| LOW | Muted blue | Informational — instrument entered watchlist range |
+| MEDIUM | Amber | Notable move — price above/below key level |
+| HIGH | Orange | Significant event — earnings surprise, Fed statement |
+| CRITICAL | Red | Market-wide shock — circuit breaker, flash crash signal |
+
+<Callout type="warn" title="CRITICAL alerts">
+CRITICAL-severity alerts cannot be auto-dismissed. They require an explicit click on the X button. This is intentional: you should acknowledge a market-wide shock before continuing work.
+</Callout>
+
+## WebSocket delivery
+
+The alert WebSocket connects at `wss://api.worldview.local/v1/alerts/ws` after sign-in. The frontend authenticates with your access token during the handshake.
+
+Reconnection logic:
+- Exponential backoff starting at 1 second, capping at 30 seconds
+- Alert queue replays missed alerts from the last 5 minutes on reconnect
+- A "Reconnecting…" badge appears in the TopBar if the connection drops
+
+## Alert banner behavior
+
+When an alert triggers:
+
+1. The banner slides in from the top with a brief animation
+2. An audio chime plays (respects browser mute and OS Do Not Disturb)
+3. The alert stays visible until dismissed or until 30 seconds pass (for LOW/MEDIUM) or 2 minutes pass (for HIGH)
+4. CRITICAL alerts persist until manually dismissed
+
+Multiple simultaneous alerts stack vertically with the most recent on top.
+
+## Viewing alert history
+
+All triggered alerts are logged in the **Alerts** section (`/alerts`). Navigate there with `G` then `A` to see the full history, filter by severity, and review the alert rule that triggered each event.
+
+## Setting up alerts
+
+Alert rules are configured in the dedicated Alerts section. See:
+
+- [Alert rule builder](/docs/alerts/rule-builder) — condition syntax and comparators
+- [Price alerts](/docs/alerts/price-alerts) — price above/below and % move triggers
+- [News alerts](/docs/alerts/news-alerts) — keyword and entity-based triggers
+- [Channels](/docs/alerts/channels) — in-app WebSocket plus email digest options

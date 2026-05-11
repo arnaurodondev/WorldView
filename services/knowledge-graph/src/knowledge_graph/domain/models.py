@@ -5,14 +5,40 @@ All models are frozen dataclasses — pure domain layer, no infrastructure impor
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, ClassVar
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
+    from knowledge_graph.domain.enums import EventScope, EventType, ExposureType, SemanticMode
 
-    from knowledge_graph.domain.enums import SemanticMode
+# ---------------------------------------------------------------------------
+# Similarity search (PRD-0017 §6.5)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SimilarEntityResult:
+    """Result item from the ``FindSimilarEntitiesUseCase`` (PRD-0017 §6.5).
+
+    Invariants (enforced by use case before construction):
+    - ``0.0 ≤ ann_similarity_score ≤ 1.0``
+    - ``0.0 ≤ final_score ≤ 1.0``
+    - ``final_score == min(ann_similarity_score + (0.15 if has_competes_with_relation else 0.0), 1.0)``
+    - ``has_competes_with_relation == (competes_with_confidence is not None)``
+    """
+
+    entity_id: UUID
+    canonical_name: str
+    entity_type: str
+    ticker: str | None
+    exchange: str | None
+    ann_similarity_score: float  # 0-1; 1 = identical (transformed from cosine distance)
+    competes_with_confidence: float | None  # None if no competes_with relation
+    final_score: float  # min(ann_similarity_score + 0.15 boost, 1.0)
+    has_competes_with_relation: bool  # True iff competes_with_confidence is not None
 
 
 @dataclass(frozen=True)
@@ -118,6 +144,89 @@ class Contradiction:
     detected_at: datetime
 
 
+# ---------------------------------------------------------------------------
+# Temporal events (PRD-0018 §6.6)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TemporalEvent:
+    """A geopolitical, regulatory, macro, or other temporal event (PRD-0018 §6.6).
+
+    Stored in ``temporal_events``.  Unlike relations (continuous confidence decay),
+    events have a binary activation lifecycle managed entirely in the application layer:
+
+        PENDING_ACTIVE → ACTIVE (at active_from) → ENDED (at active_until)
+        → RESIDUAL (residual_impact_days) → EXPIRED
+
+    The DB stores only active_from, active_until (nullable), and residual_impact_days.
+    ``lifecycle_phase`` and ``current_impact_weight`` are computed properties.
+    """
+
+    event_id: UUID
+    event_type: EventType
+    scope: EventScope
+    title: str
+    confidence: float
+    active_from: datetime  # UTC-aware
+    residual_impact_days: int
+    created_at: datetime  # UTC-aware
+    source_article_ids: tuple[UUID, ...] = ()
+    region: str | None = None
+    description: str | None = None
+    source_url: str | None = None
+    active_until: datetime | None = None  # None = still active
+
+    @property
+    def lifecycle_phase(self) -> str:
+        """Current lifecycle phase based on wall-clock UTC time.
+
+        PENDING_ACTIVE — event has not yet started (active_from is in the future)
+        ACTIVE         — event is ongoing (active_until is None or in the future)
+        RESIDUAL       — event ended; within residual_impact_days window
+        EXPIRED        — event ended; residual window has elapsed
+        """
+        now = datetime.now(UTC)
+        if now < self.active_from:
+            return "PENDING_ACTIVE"
+        if self.active_until is None or now <= self.active_until:
+            return "ACTIVE"
+        days_since_end = (now - self.active_until).days
+        if days_since_end <= self.residual_impact_days:
+            return "RESIDUAL"
+        return "EXPIRED"
+
+    @property
+    def current_impact_weight(self) -> float:
+        """Scalar impact weight: 1.0 if ACTIVE, exp(-0.02 * days_since_end) if RESIDUAL, 0.0 otherwise.
+
+        50-day half-life for RESIDUAL decay: weight = exp(-0.02 * days_since_end).
+        """
+        phase = self.lifecycle_phase
+        if phase == "ACTIVE":
+            return 1.0
+        if phase == "RESIDUAL":
+            days_since_end = (datetime.now(UTC) - self.active_until).days  # type: ignore[operator]
+            return math.exp(-0.02 * days_since_end)
+        return 0.0
+
+
+@dataclass(frozen=True)
+class EntityEventExposure:
+    """Maps a canonical entity to a temporal event with exposure type (PRD-0018 §6.6).
+
+    Stored in ``entity_event_exposures``.  GLOBAL-scope events link only to
+    sector/industry canonical entities (not individual companies) — see PRD-0018 §6.2.
+    """
+
+    exposure_id: UUID
+    event_id: UUID
+    entity_id: UUID
+    exposure_type: ExposureType
+    confidence: float
+    evidence_text: str | None = None
+
+
 @dataclass
 class ConfidenceComponents:
     """Holds the intermediate and final values of the 4-step confidence formula.
@@ -150,9 +259,39 @@ class ConfidenceComponents:
             raise ConfidenceBoundsViolation(f"final confidence {self.final:.4f} is outside [0, 1]")
         if self.corroboration > self.CORROBORATION_CAP + 1e-9:
             raise ConfidenceBoundsViolation(
-                f"corroboration {self.corroboration:.4f} exceeds cap {self.CORROBORATION_CAP}"
+                f"corroboration {self.corroboration:.4f} exceeds cap {self.CORROBORATION_CAP}",
             )
         if self.contradiction > self.CONTRADICTION_CAP + 1e-9:
             raise ConfidenceBoundsViolation(
-                f"contradiction {self.contradiction:.4f} exceeds cap {self.CONTRADICTION_CAP}"
+                f"contradiction {self.contradiction:.4f} exceeds cap {self.CONTRADICTION_CAP}",
             )
+
+
+# ---------------------------------------------------------------------------
+# Canonical entity (PRD-0073 — enrichment pipeline)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CanonicalEntity:
+    """Represents a row from ``canonical_entities`` with enrichment fields.
+
+    Used by Worker 13J (StructuredEnrichmentWorker) and related use cases.
+    Fields that were added in migration 0024 default to None/0 for rows created
+    before that migration ran.
+    """
+
+    entity_id: UUID
+    canonical_name: str
+    entity_type: str
+    ticker: str | None = None
+    isin: str | None = None
+    exchange: str | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
+    enrichment_attempts: int = 0
+    description: str | None = None
+    data_completeness: float | None = None
+    enriched_at: datetime | None = None
+    # Added by migration 0031 (Wave A — NarrativeGenerationWorker health score).
+    # Optional for backward-compat with rows created before the migration ran.
+    health_score: float | None = None

@@ -1,24 +1,34 @@
 """Internal API endpoints for service-to-service communication (S10 -> S1).
 
 These endpoints are NOT exposed through S9 API Gateway.
-Auth: X-Internal-Token header validated against INTERNAL_SERVICE_TOKEN env var.
-PRD reference: §6.2.7.
+Auth: InternalJWTMiddleware validates X-Internal-JWT (RS256) on every request.
+PRD reference: §6.2.7; auth updated by PRD-0025 Wave C.
+
+F-CRIT-002: tenant_id and user_id are now read from request.state set by
+InternalJWTMiddleware, not from query strings or headers.
 """
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
-from portfolio.api.dependencies import InternalAuthDep, UoWDep
+from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
     BatchEntityLookupRequest,
     BatchEntityLookupResponse,
+    HoldingContextItem,
+    PortfolioContextResponse,
+    UserInternalResponse,
     WatcherInfo,
     WatchersByEntityResponse,
+    WatchlistContextItem,
     WatchlistEntitiesResponse,
 )
+from portfolio.application.use_cases.portfolio_context import PortfolioContextUseCase
+from portfolio.application.use_cases.user import GetUserUseCase
+from portfolio.domain.errors import EntityNotFoundError
 
 internal_router = APIRouter(prefix="/internal/v1", tags=["internal"])
 
@@ -32,7 +42,6 @@ async def internal_health() -> dict[str, str]:
 @internal_router.get("/watchlists/by-entity/{entity_id}")
 async def get_watchers_by_entity(
     entity_id: UUID,
-    _auth: InternalAuthDep,
     uow: UoWDep,
 ) -> WatchersByEntityResponse:
     """Return all users watching a specific entity."""
@@ -44,7 +53,6 @@ async def get_watchers_by_entity(
 @internal_router.post("/watchlists/by-entities")
 async def get_watchers_by_entities(
     body: BatchEntityLookupRequest,
-    _auth: InternalAuthDep,
     uow: UoWDep,
 ) -> BatchEntityLookupResponse:
     """Batch lookup: given entity_ids, return watcher map."""
@@ -64,10 +72,94 @@ async def get_watchers_by_entities(
 @internal_router.get("/watchlists/{watchlist_id}/entities")
 async def get_watchlist_entities(
     watchlist_id: UUID,
-    _auth: InternalAuthDep,
     uow: UoWDep,
 ) -> WatchlistEntitiesResponse:
     """List all entity_ids in a specific watchlist."""
     members = await uow.watchlist_members.list_by_watchlist(watchlist_id)
     entity_ids = [m.entity_id for m in members]
     return WatchlistEntitiesResponse(watchlist_id=watchlist_id, entity_ids=entity_ids)
+
+
+@internal_router.get("/users/{user_id}/portfolio/context", response_model=PortfolioContextResponse)
+async def get_portfolio_context(
+    user_id: UUID,
+    uow: ReadUoWDep,
+    request: Request,
+) -> PortfolioContextResponse:
+    """Return portfolio context (holdings + watchlist) for S8 PORTFOLIO-intent queries.
+
+    Auth: InternalJWTMiddleware (RS256) sets request.state.user_id / tenant_id.
+    Ownership: JWT user_id must match the path user_id (F-CRIT-002).
+    """
+    jwt_user_id = getattr(request.state, "user_id", None)
+    jwt_tenant_id = getattr(request.state, "tenant_id", None)
+
+    if jwt_user_id is None or str(jwt_user_id) != str(user_id):
+        raise HTTPException(status_code=403, detail="JWT user_id must match path user_id")
+
+    if not jwt_tenant_id:
+        raise HTTPException(status_code=401, detail="Missing tenant_id in JWT")
+
+    tenant_id = UUID(str(jwt_tenant_id))
+
+    uc = PortfolioContextUseCase()
+    try:
+        dto = await uc.execute(user_id, tenant_id, uow)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return PortfolioContextResponse(
+        user_id=dto.user_id,
+        tenant_id=dto.tenant_id,
+        holdings=[
+            HoldingContextItem(
+                ticker=h.ticker,
+                entity_id=h.entity_id,
+                canonical_name=h.canonical_name,
+                quantity=h.quantity,
+                current_weight=h.current_weight,
+            )
+            for h in dto.holdings
+        ],
+        watchlist=[
+            WatchlistContextItem(
+                ticker=w.ticker,
+                entity_id=w.entity_id,
+                canonical_name=w.canonical_name,
+            )
+            for w in dto.watchlist
+        ],
+        total_positions=dto.total_positions,
+    )
+
+
+@internal_router.get("/users/{user_id}", response_model=UserInternalResponse)
+async def get_user_for_digest(
+    user_id: UUID,
+    uow: ReadUoWDep,
+    request: Request,
+) -> UserInternalResponse:
+    """Return user email for S10 email digest delivery (PRD-0016 §6.2).
+
+    Used by S10 EmailScheduler when ``email_preferences.email_address`` is null.
+    Auth: InternalJWTMiddleware (RS256) sets request.state.tenant_id (F-CRIT-002).
+    Returns 404 if the user is not found in the tenant.
+    """
+    raw_tenant_id = getattr(request.state, "tenant_id", None)
+    if not raw_tenant_id:
+        raise HTTPException(status_code=401, detail="Missing tenant_id in JWT")
+    tenant_id = UUID(str(raw_tenant_id))
+
+    uc = GetUserUseCase()
+    try:
+        user = await uc.execute(user_id, tenant_id, uow)
+    except EntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return UserInternalResponse(
+        user_id=user.id,
+        tenant_id=user.tenant_id,
+        email_address=user.email,
+        username=user.email,  # S1 uses email as username; extend when username field added
+        created_at=user.created_at,
+    )

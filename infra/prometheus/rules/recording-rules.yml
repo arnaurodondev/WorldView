@@ -2,38 +2,93 @@ groups:
   - name: worldview_red
     interval: 30s
     rules:
+      # ── Request rate (per job) ────────────────────────────────────────────
+      # Anchored regex avoids matching unrelated metrics like
+      # s4_fetches_total (not an HTTP requests counter). (audit finding)
       - record: job:http_requests:rate5m
-        expr: sum(rate({__name__=~".+_requests_total"}[5m])) by (job)
+        expr: >
+          sum by (job) (
+            rate({__name__=~"[a-z][a-z0-9_]*_requests_total"}[5m])
+          )
 
+      # ── Error rate (per job) ──────────────────────────────────────────────
       - record: job:http_errors:rate5m
-        expr: sum(rate({__name__=~".+_requests_total", status=~"5.."}[5m])) by (job)
+        expr: >
+          sum by (job) (
+            rate({__name__=~"[a-z][a-z0-9_]*_requests_total", status=~"5.."}[5m])
+          )
 
+      # ── Error ratio — NaN-safe ────────────────────────────────────────────
+      # Divide only when denominator > 0. Without this guard, a quiescent
+      # service (zero traffic) produces NaN, which Prometheus propagates to
+      # HighErrorRate and CriticalErrorRate alerts, causing phantom fires
+      # whenever a service has no traffic. (audit finding)
       - record: job:http_error_ratio:rate5m
-        expr: job:http_errors:rate5m / job:http_requests:rate5m
+        expr: >
+          job:http_errors:rate5m
+            /
+          on(job) (job:http_requests:rate5m > 0)
 
+      # ── Per-path breakdown ────────────────────────────────────────────────
       - record: job_path:http_requests:rate5m
-        expr: sum(rate({__name__=~".+_requests_total"}[5m])) by (job, path, method)
+        expr: >
+          sum by (job, path, method) (
+            rate({__name__=~"[a-z][a-z0-9_]*_requests_total"}[5m])
+          )
 
+      # ── Latency percentiles (per job) ─────────────────────────────────────
+      # Sum by (job, le) BEFORE histogram_quantile. The prior version summed
+      # all services' buckets together before computing the quantile, which
+      # is methodologically wrong when services have different bucket
+      # boundaries (the merged histogram has incorrect bucket boundaries).
+      # (audit finding)
       - record: job:http_duration_p50:rate5m
-        expr: histogram_quantile(0.50, sum(rate({__name__=~".+_request_duration_seconds_bucket"}[5m])) by (job, le))
+        expr: >
+          histogram_quantile(0.50,
+            sum by (job, le) (
+              rate({__name__=~"[a-z][a-z0-9_]*_request_duration_seconds_bucket"}[5m])
+            )
+          )
 
       - record: job:http_duration_p95:rate5m
-        expr: histogram_quantile(0.95, sum(rate({__name__=~".+_request_duration_seconds_bucket"}[5m])) by (job, le))
+        expr: >
+          histogram_quantile(0.95,
+            sum by (job, le) (
+              rate({__name__=~"[a-z][a-z0-9_]*_request_duration_seconds_bucket"}[5m])
+            )
+          )
 
       - record: job:http_duration_p99:rate5m
-        expr: histogram_quantile(0.99, sum(rate({__name__=~".+_request_duration_seconds_bucket"}[5m])) by (job, le))
+        expr: >
+          histogram_quantile(0.99,
+            sum by (job, le) (
+              rate({__name__=~"[a-z][a-z0-9_]*_request_duration_seconds_bucket"}[5m])
+            )
+          )
 
   - name: worldview_kafka
     interval: 30s
     rules:
       - record: job_topic:kafka_consumed:rate5m
-        expr: sum(rate({__name__=~".+_kafka_messages_consumed_total"}[5m])) by (job, topic, consumer_group)
+        expr: >
+          sum by (job, topic, consumer_group) (
+            rate({__name__=~"[a-z][a-z0-9_]*_kafka_messages_consumed_total"}[5m])
+          )
 
       - record: job:kafka_produced:rate5m
-        expr: sum(rate({__name__=~".+_kafka_messages_produced_total"}[5m])) by (job, topic)
+        expr: >
+          sum by (job, topic) (
+            rate({__name__=~"[a-z][a-z0-9_]*_kafka_messages_produced_total"}[5m])
+          )
 
       - record: job:outbox_dispatched:rate5m
-        expr: sum(rate({__name__=~".+_outbox_dispatched_total"}[5m])) by (job)
+        expr: >
+          sum by (job) (
+            rate({__name__=~"[a-z][a-z0-9_]*_outbox_dispatched_total"}[5m])
+          )
 
       - record: job:outbox_errors:rate5m
-        expr: sum(rate({__name__=~".+_outbox_dispatch_errors_total"}[5m])) by (job)
+        expr: >
+          sum by (job) (
+            rate({__name__=~"[a-z][a-z0-9_]*_outbox_dispatch_errors_total"}[5m])
+          )

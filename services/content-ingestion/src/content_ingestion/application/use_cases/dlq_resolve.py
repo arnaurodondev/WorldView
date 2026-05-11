@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from content_ingestion.application.ports.unit_of_work import UnitOfWork
 
 logger = get_logger(__name__)

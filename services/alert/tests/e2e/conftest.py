@@ -85,6 +85,8 @@ def _run_create_tables_in_thread(db_url: str) -> None:
 
     async def _apply(engine: AsyncEngine) -> None:
         async with engine.begin() as conn:
+            # Drop and recreate so that column additions (e.g. severity) are reflected.
+            await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
         await engine.dispose()
 

@@ -13,15 +13,12 @@ stored in ``value_text`` and optionally parsed to ``value_numeric``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from market_data.domain.enums import FundamentalsSection
 from observability.logging import get_logger  # type: ignore[import-untyped]
-
-if TYPE_CHECKING:
-    from datetime import date, datetime
-
 
 logger = get_logger(__name__)
 
@@ -81,6 +78,17 @@ def _coerce_numeric(val: Any) -> Decimal | None:
 # key aliases to try (first match wins).
 
 _METRIC_CATALOG: dict[FundamentalsSection, list[_MetricDef]] = {
+    # WHY TECHNICALS_SNAPSHOT: beta, moving averages, and short interest are stored
+    # in the EODHD "Technicals" section.  We add beta + avg_volume_30d here so the
+    # backfill script can read them from the fundamental_metrics key-value table
+    # when computing the snapshot row (no extra EODHD call required).
+    FundamentalsSection.TECHNICALS_SNAPSHOT: [
+        _MetricDef("beta", ("Beta", "beta")),
+        # EODHD exposes the 30-day average volume as "AverageDailyVolumeLTM"
+        # in the Technicals.AverageVolume field (varies by API version).
+        # All alias forms are tried in order; first match wins.
+        _MetricDef("avg_volume_30d", ("AverageVolume", "averageVolume", "AvgVolume", "avg_volume")),
+    ],
     FundamentalsSection.ANALYST_CONSENSUS: [
         _MetricDef("target_price", ("TargetPrice", "targetPrice", "target_price")),
         _MetricDef(

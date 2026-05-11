@@ -1,4 +1,4 @@
-alembic>=1.13
-psycopg2-binary>=2.9
-sqlalchemy>=2.0
-structlog>=24.0
+alembic>=1.13,<2
+psycopg2-binary>=2.9,<3
+sqlalchemy>=2.0,<3
+structlog>=24.0,<25

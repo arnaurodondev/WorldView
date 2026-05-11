@@ -21,6 +21,8 @@ from nlp_pipeline.application.blocks.routing import (
 from nlp_pipeline.domain.enums import MentionClass, RoutingTier
 from nlp_pipeline.domain.models import EntityMention
 
+pytestmark = pytest.mark.unit
+
 
 def _now() -> datetime:
     return datetime.now(tz=UTC)
@@ -47,8 +49,8 @@ class TestSignalWeights:
         total = sum(SIGNAL_WEIGHTS.values())
         assert abs(total - 1.0) < 1e-9, f"Weights sum to {total}, expected 1.0"
 
-    def test_seven_signals(self) -> None:
-        assert len(SIGNAL_WEIGHTS) == 7
+    def test_eight_signals(self) -> None:
+        assert len(SIGNAL_WEIGHTS) == 8
 
     def test_all_positive(self) -> None:
         assert all(v > 0 for v in SIGNAL_WEIGHTS.values())
@@ -213,7 +215,7 @@ class TestComputeRoutingScore:
             watched_entity_ids=frozenset([entity_id]),
         )
         assert decision.routing_tier == RoutingTier.DEEP
-        assert len(decision.feature_scores) == 7
+        assert len(decision.feature_scores) == 8
 
     def test_suppress_tier_low_signal(self) -> None:
         decision = compute_routing_score(
@@ -230,7 +232,7 @@ class TestComputeRoutingScore:
         )
         assert decision.routing_tier == RoutingTier.SUPPRESS
 
-    def test_feature_scores_dict_has_7_keys(self) -> None:
+    def test_feature_scores_dict_has_8_keys(self) -> None:
         decision = compute_routing_score(
             doc_id=uuid.uuid4(),
             decision_id=uuid.uuid4(),
@@ -243,7 +245,7 @@ class TestComputeRoutingScore:
             novelty_score=0.50,
             watched_entity_ids=frozenset(),
         )
-        assert len(decision.feature_scores) == 7
+        assert len(decision.feature_scores) == 8
 
     def test_composite_score_clamped_to_0_1(self) -> None:
         decision = compute_routing_score(
@@ -259,3 +261,165 @@ class TestComputeRoutingScore:
             watched_entity_ids=frozenset(),
         )
         assert 0.0 <= decision.composite_score <= 1.0
+
+    def test_price_impact_zero_when_not_provided(self) -> None:
+        """Omitting price_impact_score defaults to 0.0 in feature_scores."""
+        decision = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="eodhd_news",
+            published_at=None,
+            extracted_at=_now(),
+            mentions=[],
+            section_count=2,
+            source_trust_weight=0.50,
+            novelty_score=0.50,
+            watched_entity_ids=frozenset(),
+        )
+        assert decision.feature_scores["price_impact"] == 0.0
+
+    def test_price_impact_included_in_composite(self) -> None:
+        """price_impact_score=1.0 increases composite by approximately 0.10 (weight * 1.0)."""
+        base = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="eodhd_news",
+            published_at=None,
+            extracted_at=_now(),
+            mentions=[],
+            section_count=2,
+            source_trust_weight=0.50,
+            novelty_score=0.50,
+            watched_entity_ids=frozenset(),
+            price_impact_score=0.0,
+        )
+        with_impact = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="eodhd_news",
+            published_at=None,
+            extracted_at=_now(),
+            mentions=[],
+            section_count=2,
+            source_trust_weight=0.50,
+            novelty_score=0.50,
+            watched_entity_ids=frozenset(),
+            price_impact_score=1.0,
+        )
+        diff = with_impact.composite_score - base.composite_score
+        assert abs(diff - 0.10) < 1e-9
+
+    def test_price_impact_clamped_below_zero(self) -> None:
+        """Negative price_impact_score is clamped to 0.0."""
+        decision = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="eodhd_news",
+            published_at=None,
+            extracted_at=_now(),
+            mentions=[],
+            section_count=2,
+            source_trust_weight=0.50,
+            novelty_score=0.50,
+            watched_entity_ids=frozenset(),
+            price_impact_score=-0.5,
+        )
+        assert decision.feature_scores["price_impact"] == 0.0
+
+    def test_price_impact_clamped_above_one(self) -> None:
+        """price_impact_score > 1.0 is clamped to 1.0."""
+        decision = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="eodhd_news",
+            published_at=None,
+            extracted_at=_now(),
+            mentions=[],
+            section_count=2,
+            source_trust_weight=0.50,
+            novelty_score=0.50,
+            watched_entity_ids=frozenset(),
+            price_impact_score=1.5,
+        )
+        assert decision.feature_scores["price_impact"] == 1.0
+
+    def test_weights_sum_to_one_after_rebalance(self) -> None:
+        """Explicit rebalance check: new weights still sum to exactly 1.0."""
+        from nlp_pipeline.application.blocks.routing import SIGNAL_WEIGHTS
+
+        total = sum(SIGNAL_WEIGHTS.values())
+        assert abs(total - 1.0) < 1e-9
+
+    def test_price_impact_partial_value(self) -> None:
+        """price_impact_score=0.5 is stored as-is in feature_scores."""
+        decision = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="eodhd_news",
+            published_at=None,
+            extracted_at=_now(),
+            mentions=[],
+            section_count=2,
+            source_trust_weight=0.50,
+            novelty_score=0.50,
+            watched_entity_ids=frozenset(),
+            price_impact_score=0.5,
+        )
+        assert decision.feature_scores["price_impact"] == 0.5
+
+    def test_feature_scores_contains_price_impact_key(self) -> None:
+        """feature_scores dict must include the 'price_impact' key."""
+        decision = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="finnhub_news",
+            published_at=None,
+            extracted_at=_now(),
+            mentions=[],
+            section_count=1,
+            source_trust_weight=0.60,
+            novelty_score=0.40,
+            watched_entity_ids=frozenset(),
+        )
+        assert "price_impact" in decision.feature_scores
+
+    def test_sec_edgar_minimum_medium_tier(self) -> None:
+        """sec_edgar docs with low entity density must be upgraded from LIGHT to MEDIUM.
+
+        BP-461: SEC EDGAR filings are authoritative regulatory disclosures.  Low
+        entity density is a structural artifact of raw EDGAR HTML (filing boilerplate
+        has few ORGANIZATION/FINANCIAL_INSTITUTION mentions), not a signal of low value.
+        The authoritative-source tier floor ensures they reach ArticleRelevanceScoringWorker.
+        """
+        decision = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="sec_edgar",
+            published_at=_now() - timedelta(days=30),  # old filing — low recency
+            extracted_at=_now(),
+            mentions=[],  # no entity mentions — worst-case entity density
+            section_count=2,
+            source_trust_weight=0.90,  # from migration 0039
+            novelty_score=0.70,
+            watched_entity_ids=frozenset(),
+            price_impact_score=0.0,
+        )
+        # Composite will be ~0.42 (LIGHT without override), must be upgraded to MEDIUM
+        assert decision.routing_tier == RoutingTier.MEDIUM
+
+    def test_non_authoritative_source_not_upgraded(self) -> None:
+        """newsapi_news with low signals must remain LIGHT (or SUPPRESS), not be upgraded."""
+        decision = compute_routing_score(
+            doc_id=uuid.uuid4(),
+            decision_id=uuid.uuid4(),
+            source_type="newsapi_news",
+            published_at=_now() - timedelta(hours=500),
+            extracted_at=_now(),
+            mentions=[],
+            section_count=0,
+            source_trust_weight=0.55,
+            novelty_score=0.10,
+            watched_entity_ids=frozenset(),
+        )
+        # newsapi_news is not in the authoritative-source set — stays LIGHT or SUPPRESS
+        assert decision.routing_tier in {RoutingTier.LIGHT, RoutingTier.SUPPRESS}

@@ -16,7 +16,6 @@ Test scenarios:
 from __future__ import annotations
 
 import contextlib
-import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -33,22 +32,28 @@ from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-
 class _MockNERClient:
     """Returns one organization mention per call, deterministically."""
 
-    async def extract_entities(self, inp: Any) -> Any:
+    async def batch_extract_entities(self, inputs: list[Any]) -> list[Any]:
         from ml_clients.dataclasses import EntityMention as MLMention  # type: ignore[import-not-found]
         from ml_clients.dataclasses import NEROutput  # type: ignore[import-not-found]
 
-        if not inp.text.strip():
-            return NEROutput(mentions=[])
-        return NEROutput(mentions=[MLMention(text="TestCorp", label="organization", start=0, end=8, score=0.95)])
+        results = []
+        for inp in inputs:
+            if not inp.text.strip():
+                results.append(NEROutput(mentions=[]))
+            else:
+                results.append(
+                    NEROutput(mentions=[MLMention(text="TestCorp", label="organization", start=0, end=8, score=0.95)])
+                )
+        return results
 
 
 class _MockZeroNERClient:
     """Returns no mentions — zero-NER scenario."""
 
-    async def extract_entities(self, inp: Any) -> Any:
+    async def batch_extract_entities(self, inputs: list[Any]) -> list[Any]:
         from ml_clients.dataclasses import NEROutput  # type: ignore[import-not-found]
 
-        return NEROutput(mentions=[])
+        return [NEROutput(mentions=[]) for _ in inputs]
 
 
 class _MockEmbeddingClient:
@@ -94,6 +99,21 @@ def _make_settings() -> MagicMock:
     s.topic_signal_detected = "nlp.signal.detected.v1"
     s.max_ollama_queue_depth = 20
     s.resume_ollama_queue_depth = 10
+    # WHY: all numeric/string settings accessed by the consumer pipeline must be
+    # real values — MagicMock auto-attributes cause TypeError when compared with
+    # floats or used as string arguments in downstream blocks.
+    s.routing_tier_deep = 0.70
+    s.routing_tier_medium = 0.45
+    s.routing_tier_light = 0.20
+    s.novelty_minhash_threshold = 0.80
+    s.novelty_embedding_threshold = 0.90
+    s.entity_resolution_auto_resolve_threshold = 0.72
+    s.entity_resolution_provisional_threshold = 0.45
+    s.silver_bucket = "worldview-silver"
+    # WHY: gliner_mention_floor is used in _build_chunk_entity_mentions to filter
+    # entity mentions by confidence.  Without an explicit float value the MagicMock
+    # auto-attribute causes TypeError when compared with mention.confidence float.
+    s.gliner_mention_floor = 0.6
     return s
 
 
@@ -103,6 +123,14 @@ def _make_mock_session() -> AsyncMock:
     session.__aexit__ = AsyncMock(return_value=None)
     session.add = MagicMock()
     session.commit = AsyncMock()
+    # WHY: session.execute() is async, but its return value is a synchronous
+    # SQLAlchemy Result — scalar_one_or_none() / all() are sync methods.
+    # An AsyncMock return value makes those calls return coroutines instead of
+    # values, breaking ArticleImpactWindowRepository.get_max_impact_for_doc.
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = None
+    result_mock.all.return_value = []
+    session.execute = AsyncMock(return_value=result_mock)
     return session
 
 
@@ -137,10 +165,17 @@ def _make_consumer(
         watchlist_cache = wc
 
     if storage is None:
+        import json as _json
+
         st = MagicMock()
-        st.get_object_bytes = MagicMock(
-            return_value=b"Apple Inc. posted strong quarterly earnings. "
-            b"Revenue grew 12% year-over-year driven by services."
+        st.get_bytes = AsyncMock(
+            return_value=_json.dumps(
+                {
+                    "body": "Apple Inc. posted strong quarterly earnings. "
+                    "Revenue grew 12% year-over-year driven by services.",
+                    "source_type": "article",
+                }
+            ).encode()
         )
         storage = st
 
@@ -169,7 +204,7 @@ def _make_event(doc_id: uuid.UUID | None = None) -> dict[str, Any]:
     return {
         "event_id": str(uuid.uuid4()),
         "doc_id": str(doc_id or uuid.uuid4()),
-        "minio_silver_key": "silver/articles/test.txt",
+        "minio_silver_key": "silver/eodhd/2026/01/15/0195c7b4-a9f2-7b3e-8d1c-3f2e1a4b5c6d.txt",
         "source_type": "eodhd",
         "published_at": datetime.now(tz=UTC).isoformat(),
         "is_backfill": False,
@@ -181,15 +216,33 @@ def _make_event(doc_id: uuid.UUID | None = None) -> dict[str, Any]:
 _MOD = "nlp_pipeline.infrastructure.messaging.consumers.article_consumer"
 
 
-def _repo_patches(outbox_mock: Any = None) -> list[Any]:
+def _make_routing_mock(get_by_doc_side_effect: list[Any] | None = None) -> AsyncMock:
+    """Return a RoutingDecisionRepository mock.
+
+    By default ``get_by_doc`` returns ``None`` (article not yet processed),
+    so the idempotency guard in ``_run_pipeline`` lets the pipeline run.
+    Pass ``get_by_doc_side_effect`` for tests that need different call-by-call
+    return values (e.g. None on first delivery, a result on re-delivery).
+    """
+    rm = AsyncMock()
+    if get_by_doc_side_effect is not None:
+        rm.get_by_doc = AsyncMock(side_effect=get_by_doc_side_effect)
+    else:
+        rm.get_by_doc = AsyncMock(return_value=None)
+    return rm
+
+
+def _repo_patches(outbox_mock: Any = None, routing_mock: Any = None) -> list[Any]:
     """Return patch context managers for all repos used inside _run_pipeline."""
     om = outbox_mock or AsyncMock()
+    # Default routing mock has get_by_doc → None so the idempotency guard passes.
+    rm = routing_mock if routing_mock is not None else _make_routing_mock()
     return [
         patch(f"{_MOD}.SectionRepository", return_value=AsyncMock()),
         patch(f"{_MOD}.ChunkRepository", return_value=AsyncMock()),
         patch(f"{_MOD}.EntityMentionRepository", return_value=AsyncMock()),
         patch(f"{_MOD}.DocumentEntityStatsRepository", return_value=AsyncMock()),
-        patch(f"{_MOD}.RoutingDecisionRepository", return_value=AsyncMock()),
+        patch(f"{_MOD}.RoutingDecisionRepository", return_value=rm),
         patch(f"{_MOD}.ChunkEntityMentionRepository", return_value=AsyncMock()),
         patch(f"{_MOD}.OutboxRepository", return_value=om),
         patch(f"{_MOD}.MentionResolutionRepository", return_value=AsyncMock()),
@@ -226,7 +279,15 @@ class TestFullPipeline:
         outbox_add.assert_called_once()
         call_kwargs = outbox_add.call_args.kwargs
         assert call_kwargs["topic"] == "nlp.article.enriched.v1"
-        payload = json.loads(call_kwargs["payload_avro"])
+        # PLAN-0062 Wave B: payload is now Confluent-Avro on the wire.
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import _SCHEMA_DIR
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        wire_bytes = call_kwargs["payload_avro"]
+        assert wire_bytes[:1] == b"\x00"
+        schema_path = str(_SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
+        payload = deserialize_confluent_avro(schema_path, wire_bytes)
         assert payload["doc_id"] == event["doc_id"]
         assert payload["event_type"] == "nlp.article.enriched"
         assert "routing_tier" in payload
@@ -242,7 +303,9 @@ class TestFullPipeline:
                 stack.enter_context(p)
             await consumer.process_message(key=None, value=_make_event(), headers={})
 
-        _nlp_sess.commit.assert_called_once()
+        # Two commits on the nlp session factory: main pipeline + best-effort
+        # source-metadata write (_write_source_metadata, added in Wave B-1)
+        assert _nlp_sess.commit.await_count == 2
 
 
 @pytest.mark.integration
@@ -266,7 +329,17 @@ class TestZeroNER:
         # Enriched event must still be written
         outbox_add.assert_called_once()
         call_kwargs = outbox_add.call_args.kwargs
-        payload = json.loads(call_kwargs["payload_avro"])
+        # PLAN-0062 Wave B: payload is now Confluent-Avro on the wire (5-byte
+        # magic header + Avro body) — match the helper used in the sibling
+        # test at TestEnrichedEventWriteToOutbox.
+        from nlp_pipeline.infrastructure.messaging.consumers.article_consumer import _SCHEMA_DIR
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        wire_bytes = call_kwargs["payload_avro"]
+        assert wire_bytes[:1] == b"\x00"
+        schema_path = str(_SCHEMA_DIR / "nlp.article.enriched.v1.avsc")
+        payload = deserialize_confluent_avro(schema_path, wire_bytes)
         assert payload["mention_count"] == 0
 
 
@@ -287,6 +360,9 @@ class TestBackpressure:
             async def __aexit__(self, *args: Any) -> None:
                 pass
 
+            def gauge_value(self) -> int:
+                return 0
+
         consumer, _nlp, _intel = _make_consumer(backpressure=_TrackingBP())
 
         with contextlib.ExitStack() as stack:
@@ -299,27 +375,34 @@ class TestBackpressure:
 
 @pytest.mark.integration
 class TestIdempotency:
-    """T-C-4-05-D: Same message delivered twice → outbox.add called both times.
+    """T-C-4-05-D: Re-delivery is skipped when routing_decision already exists.
 
-    The consumer uses at-least-once semantics; DB-level constraints (e.g., unique
-    primary keys) are responsible for deduplication, not the consumer itself.
+    Section/chunk IDs are generated with new_uuid7() (non-deterministic), so
+    DB ON CONFLICT guards on the primary key do NOT prevent duplicate rows on
+    re-delivery.  The consumer therefore performs an explicit pre-check: if a
+    routing_decision row already exists for the doc_id the full pipeline is
+    skipped — outbox.add is NOT called a second time.
     """
 
     @pytest.mark.asyncio
-    async def test_same_message_twice_calls_outbox_add_twice(self) -> None:
-        """Re-delivery must not be silently dropped at the consumer level."""
+    async def test_second_delivery_skipped_when_already_processed(self) -> None:
+        """Re-delivery is a no-op when the pipeline already committed for this doc_id."""
         consumer, _nlp_sess, _intel_sess = _make_consumer()
 
         outbox_add = AsyncMock()
         outbox_mock = AsyncMock()
         outbox_mock.add = outbox_add
 
-        event = _make_event()  # same event delivered twice
+        event = _make_event()  # same doc_id delivered twice
+
+        # First call: no routing_decision → pipeline runs → outbox.add called.
+        # Second call: routing_decision exists → idempotency guard fires → skip.
+        routing_mock = _make_routing_mock(get_by_doc_side_effect=[None, MagicMock()])
 
         with contextlib.ExitStack() as stack:
-            for p in _repo_patches(outbox_mock=outbox_mock):
+            for p in _repo_patches(outbox_mock=outbox_mock, routing_mock=routing_mock):
                 stack.enter_context(p)
             await consumer.process_message(key=None, value=event, headers={})
             await consumer.process_message(key=None, value=event, headers={})
 
-        assert outbox_add.call_count == 2, "outbox.add must be called for each delivery; DB constraint handles dedup"
+        assert outbox_add.call_count == 1, "Second delivery must be skipped: routing_decision already exists for doc_id"

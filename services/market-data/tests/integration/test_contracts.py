@@ -190,6 +190,6 @@ class TestSchemaVersionConsistency:
     def test_domain_events_have_schema_version(self) -> None:
         from market_data.domain.events import InstrumentCreated, InstrumentUpdated
 
-        # InstrumentCreated bumped to schema_version=2 in Wave 5 (QA-016): added name, isin, instrument_type
-        assert InstrumentCreated().schema_version == 2
+        # InstrumentCreated bumped to schema_version=3 (QA-016 → current)
+        assert InstrumentCreated().schema_version == 3
         assert InstrumentUpdated().schema_version == 1

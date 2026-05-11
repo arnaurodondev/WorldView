@@ -1,0 +1,214 @@
+# Retrieval-eval CI workflow — PLAN-0063 W5-1-04
+#
+# Status: SCAFFOLDED, GATE DISABLED (per §0-bis.0 v2 lock L3).
+#
+# In W5-1, this workflow:
+#   - Runs the eval-script unit tests on every PR that touches retrieval paths
+#   - Validates the golden-set JSONL schema (parses, no duplicate query_ids)
+#   - Lint-checks the script
+#   - On manual workflow_dispatch only: runs the full eval against a live
+#     dev-stack (no scheduled run; on-demand cost only).
+#
+# In W5-3, the `disabled-gate` step below flips to a real failing gate by
+# removing the `continue-on-error: true` line and pointing --baseline at
+# the captured `results/baseline_pre_hybrid.json`.
+#
+# The `[skip-eval]` keyword in the commit message bypasses the workflow.
+
+name: Retrieval Eval
+
+on:
+  pull_request:
+    paths:
+      - "services/rag-chat/**"
+      - "services/nlp-pipeline/src/nlp_pipeline/infrastructure/nlp_db/**"
+      - "services/nlp-pipeline/src/nlp_pipeline/application/use_cases/chunk_search.py"
+      - "libs/ml-clients/**"
+      - "tests/eval/golden/**"
+      - "scripts/eval_retrieval.py"
+      - "scripts/generate_query_embeddings.py"
+      - ".github/workflows/retrieval-eval.yml"
+  workflow_dispatch:
+    inputs:
+      run_full_eval:
+        description: "Run full eval against live dev stack (requires DEEPINFRA_API_KEY secret + running infra)"
+        required: false
+        default: "false"
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Always-on jobs (real gates in W5-1)
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  validate-golden-set:
+    name: Validate golden-set schema
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip-eval]')"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Validate JSONL parses + unique query_ids
+        run: |
+          python -c "
+          import json, sys
+          from pathlib import Path
+          rows = []
+          ids = set()
+          for i, line in enumerate(Path('tests/eval/golden/queries.jsonl').read_text().splitlines(), 1):
+              line = line.strip()
+              if not line:
+                  continue
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError as e:
+                  print(f'line {i}: invalid JSON: {e}', file=sys.stderr); sys.exit(1)
+              qid = row.get('query_id')
+              if not qid:
+                  print(f'line {i}: missing query_id', file=sys.stderr); sys.exit(1)
+              if qid in ids:
+                  print(f'line {i}: duplicate query_id {qid}', file=sys.stderr); sys.exit(1)
+              ids.add(qid)
+              rows.append(row)
+          print(f'OK: {len(rows)} queries, {len(ids)} unique IDs')
+          "
+
+  unit-tests:
+    name: Eval-script unit tests
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip-eval]')"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio httpx pyarrow
+      - name: Run unit tests
+        run: |
+          python -m pytest tests/scripts/test_eval_retrieval.py -v
+
+  lint:
+    name: Lint eval script
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip-eval]')"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install ruff
+        run: python -m pip install "ruff==0.6.9"
+      - name: Ruff check
+        run: ruff check scripts/eval_retrieval.py scripts/generate_query_embeddings.py tests/scripts/test_eval_retrieval.py
+      - name: Ruff format check
+        run: ruff format --check scripts/eval_retrieval.py scripts/generate_query_embeddings.py tests/scripts/test_eval_retrieval.py
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Disabled-gate job — scaffolded for W5-3 to enable
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  full-eval:
+    name: Full eval (gate ENABLED — E-3 instability resolved)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.run_full_eval == 'true'
+    needs: [validate-golden-set, unit-tests, lint]
+    # PLAN-0084 E-3: gate enabled after instability investigation (2026-05-07).
+    # Investigation findings: ANN (HNSW) + BM25 are deterministic given fixed
+    # query embeddings; LLM intent classifier adds ≤0.02 NDCG variance between
+    # runs — well within the 0.03 regression threshold. BP-416 (phone-regex
+    # false positive on SEC CIK numbers) fixed in same commit. eval-stack
+    # baseline at results/baseline_post_hybrid.json (NDCG@10=0.577, n=63,
+    # hybrid mode). CI gate compares against baseline_pre_hybrid.json (0.508,
+    # n=20, ANN-only) — hybrid consistently exceeds this floor.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 2
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install httpx pyarrow
+
+      # The full-eval path needs a live rag-chat at $RAG_CHAT_URL.
+      # In W5-3 the gate enables; in W5-1 we scaffold the call so the
+      # workflow shape is reviewable.
+
+      # PLAN-0084 E-1: Smoke probe — fast-fail before the expensive eval run.
+      # Sends a single retrieve request and checks that at least one candidate
+      # is returned.  If the endpoint is down or the index is empty the probe
+      # exits 1 with a diagnostic message, preventing a misleading "all queries
+      # failed" eval result.
+      - name: Smoke probe — verify endpoint before eval
+        env:
+          RAG_CHAT_URL: ${{ vars.RAG_CHAT_URL || 'http://localhost:8003' }}
+          EVAL_INTERNAL_JWT: ${{ secrets.EVAL_INTERNAL_JWT }}
+        run: |
+          # Build the curl command; include the internal JWT header when set.
+          PROBE_RESPONSE=$(curl --silent --fail-with-body \
+            --max-time 15 \
+            --header "Content-Type: application/json" \
+            ${EVAL_INTERNAL_JWT:+--header "X-Internal-JWT: ${EVAL_INTERNAL_JWT}"} \
+            --data '{"query_text":"Apple Q4 earnings","top_k":5}' \
+            "${RAG_CHAT_URL}/v1/internal/retrieve" 2>&1) || {
+              echo "SMOKE PROBE FAILED: could not reach ${RAG_CHAT_URL}. Check service health before running eval."
+              exit 1
+            }
+
+          N_CANDIDATES=$(echo "${PROBE_RESPONSE}" | jq -r '.n_candidates // 0')
+          if [ "${N_CANDIDATES}" -lt 1 ]; then
+            echo "SMOKE PROBE FAILED: endpoint returned 0 candidates. Check that rag-chat is running and indexed. Aborting eval."
+            exit 1
+          fi
+          echo "Smoke probe OK — ${N_CANDIDATES} candidates returned."
+
+      - name: Run eval (gate ENABLED — regression ≥0.03 NDCG@10 fails the build)
+        env:
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          RAG_CHAT_URL: ${{ vars.RAG_CHAT_URL || 'http://localhost:8003' }}
+          EVAL_INTERNAL_JWT: ${{ secrets.EVAL_INTERNAL_JWT }}
+          # S-013: EVAL_JWT_REFRESH_URL moved from vars → secrets so the URL
+          # (which includes any embedded tokens or path-based auth) is masked
+          # in GitHub Actions logs.
+          EVAL_JWT_REFRESH_URL: ${{ secrets.EVAL_JWT_REFRESH_URL || '' }}
+        run: |
+          # PLAN-0084 E-3: gate ENABLED. Regression > 0.03 absolute NDCG@10
+          # exits 1 and fails the build. Baseline: baseline_pre_hybrid.json
+          # (0.508 NDCG@10, 20 queries, ANN-only). Hybrid consistently exceeds
+          # this floor; eval-stack post-hybrid baseline at 0.577 (n=63).
+          python scripts/eval_retrieval.py \
+            --rag-url "${RAG_CHAT_URL}" \
+            --golden tests/eval/golden/queries.jsonl \
+            --query-embeddings tests/eval/golden/query_embeddings.parquet \
+            --baseline results/baseline_pre_hybrid.json \
+            --fail-on-regression 0.03 \
+            --fail-on-regression-per-class 0.05 \
+            --max-failures 50 \
+            --output-dir results/
+
+      - name: Upload eval artifacts
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4
+        with:
+          name: retrieval-eval-${{ github.run_id }}
+          path: |
+            results/eval_*.json
+            results/eval_*.csv
+          retention-days: 14
+          if-no-files-found: warn

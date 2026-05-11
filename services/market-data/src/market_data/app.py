@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -12,15 +13,202 @@ import structlog.contextvars
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from market_data.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
+from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
+
 
 _VALID_REQUEST_ID_RE = re.compile(r"^[a-zA-Z0-9\-]{1,64}$")
+
+# Refresh screen field metadata in Valkey every 6 hours (PRD-0017 §6.2).
+_SCREEN_FIELDS_REFRESH_INTERVAL_SECONDS = 6 * 3600
+
+
+def _get_static_screen_fields() -> list:
+    """Return the 12 static ScreenFieldMetadata instances (PRD-0017 §6.5)."""
+    from market_data.domain.entities import ScreenFieldMetadata
+
+    return [
+        ScreenFieldMetadata(
+            name="pe_ratio",
+            label="P/E Ratio",
+            field_type="numeric",
+            unit="x",
+            description="Trailing P/E (TTM)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="revenue_usd",
+            label="Revenue",
+            field_type="numeric",
+            unit="USD M",
+            description="Annual revenue (USD millions)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="gross_margin_pct",
+            label="Gross Margin",
+            field_type="numeric",
+            unit="%",
+            description="Gross profit / revenue x 100",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="net_margin_pct",
+            label="Net Margin",
+            field_type="numeric",
+            unit="%",
+            description="Net income / revenue x 100",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="ev_ebitda",
+            label="EV/EBITDA",
+            field_type="numeric",
+            unit="x",
+            description="Enterprise value / EBITDA",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="debt_to_equity",
+            label="Debt/Equity",
+            field_type="numeric",
+            unit="x",
+            description="Total debt / shareholders equity",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="return_on_equity",
+            label="ROE",
+            field_type="numeric",
+            unit="%",
+            description="Net income / avg. equity x 100",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="dividend_yield_pct",
+            label="Dividend Yield",
+            field_type="numeric",
+            unit="%",
+            description="Annual dividends / price x 100",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="market_cap_usd",
+            label="Market Cap",
+            field_type="numeric",
+            unit="USD M",
+            description="Market capitalisation (USD millions)",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="price_to_book",
+            label="Price/Book",
+            field_type="numeric",
+            unit="x",
+            description="Market price / book value per share",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="operating_margin_pct",
+            label="Operating Margin",
+            field_type="numeric",
+            unit="%",
+            description="Operating income / revenue x 100",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+        ScreenFieldMetadata(
+            name="current_ratio",
+            label="Current Ratio",
+            field_type="numeric",
+            unit="x",
+            description="Current assets / current liabilities",
+            observed_min=None,
+            observed_max=None,
+            null_fraction=0.0,
+        ),
+    ]
+
+
+async def _do_screen_fields_refresh(
+    write_factory: async_sessionmaker,
+    valkey_client: ValkeyClient,
+    log: object,
+) -> None:
+    """Upsert 12 static field definitions to DB and warm Valkey cache (PRD-0017 §6.2)."""
+    from common.time import utc_now  # type: ignore[import-untyped]
+    from market_data.infrastructure.cache.screen_fields_cache import ScreenFieldsCache
+    from market_data.infrastructure.db.repositories.screen_field_metadata_repo import (
+        PgScreenFieldMetadataRepository,
+    )
+
+    fields = _get_static_screen_fields()
+    now = utc_now()
+
+    async with write_factory() as session:
+        repo = PgScreenFieldMetadataRepository(session)
+        await repo.upsert_batch(fields, now)
+        await session.commit()
+
+    cache = ScreenFieldsCache(valkey_client)
+    await cache.set_all(fields)
+
+    log.info("screen_fields_refreshed", field_count=len(fields))  # type: ignore[attr-defined]
+
+
+_SCREEN_FIELDS_REFRESH_RETRY_SECONDS = 60  # Back-off on first-run / transient failure
+
+
+async def _screen_fields_refresh_loop(
+    write_factory: async_sessionmaker,
+    valkey_client: ValkeyClient,
+    log: object,
+) -> None:
+    """Background task: seed + refresh screen field metadata every 6 hours.
+
+    Sleeps ``_SCREEN_FIELDS_REFRESH_INTERVAL_SECONDS`` (6 h) after a successful
+    refresh.  On failure, backs off ``_SCREEN_FIELDS_REFRESH_RETRY_SECONDS`` (60 s)
+    so the initial warm-up is not delayed by 6 h if the DB or Valkey is momentarily
+    unavailable at startup.
+    """
+    while True:
+        try:
+            await _do_screen_fields_refresh(write_factory, valkey_client, log)
+            await asyncio.sleep(_SCREEN_FIELDS_REFRESH_INTERVAL_SECONDS)
+        except Exception as exc:
+            log.error("screen_fields_refresh_error", error=str(exc))  # type: ignore[attr-defined]
+            await asyncio.sleep(_SCREEN_FIELDS_REFRESH_RETRY_SECONDS)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -50,7 +238,6 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Async context manager that starts and stops all service infrastructure."""
     from market_data.infrastructure.db.session import build_read_engine, build_session_factory, build_write_engine
-    from market_data.infrastructure.messaging.outbox.dispatcher import create_dispatcher
 
     settings = app.state.settings
 
@@ -62,9 +249,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     log = get_logger("market_data.app")
 
+    # 2. Internal JWT middleware startup — fetch JWKS from S9 (PRD-0025)
+    jwt_middleware = InternalJWTMiddleware(
+        app,
+        jwks_url=f"{settings.api_gateway_url}/internal/jwks",
+        skip_verification=settings.internal_jwt_skip_verification,
+        service_name=settings.service_name,
+        jti_replay_check_enabled=settings.internal_jwt_jti_check_enabled,
+    )
+    await jwt_middleware.startup()
+
     # 2. Tracing (optional — middleware already registered in create_app)
     if settings.otlp_endpoint:
         configure_tracing(service_name=settings.service_name, otlp_endpoint=settings.otlp_endpoint)
+
+    # 2b. Sentry — fourth observability pillar (default-off: SENTRY_ENABLED=false)
+    init_sentry(service_name=settings.service_name, settings=SentrySettings())
 
     # 4. DB — write engine + optional read engine
     write_engine = build_write_engine(settings)
@@ -81,9 +281,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     valkey_client = create_valkey_client_from_url(settings.valkey_url)
     app.state.valkey_client = valkey_client
 
+    from market_data.infrastructure.cache.price_snapshot_cache import PriceSnapshotCache
     from market_data.infrastructure.cache.quote_cache import QuoteCache
+    from market_data.infrastructure.cache.screen_fields_cache import ScreenFieldsCache
 
     app.state.quote_cache = QuoteCache(valkey_client)
+    app.state.screen_fields_cache = ScreenFieldsCache(valkey_client)
+    # PriceSnapshotCache: 2-hour TTL cache for resolved price snapshots (W1-6)
+    app.state.price_snapshot_cache = PriceSnapshotCache(valkey_client)
 
     # 6. Object storage
     object_storage = None
@@ -96,78 +301,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             endpoint = f"http://{endpoint}"
         storage_settings = StorageSettings(
             endpoint=endpoint,
-            access_key=settings.storage_access_key,
-            secret_key=settings.storage_secret_key,
+            access_key=settings.storage_access_key.get_secret_value(),
+            secret_key=settings.storage_secret_key.get_secret_value(),
         )
         object_storage = build_object_storage(storage_settings)
     except Exception:
         log.warning("object_storage_init_failed_degrading")
     app.state.object_storage = object_storage
 
-    # 7. UoW factory
-    from market_data.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    # 7. EODHD HTTP client (on-demand profile enrichment, PLAN-0073 Worker 13J)
+    from market_data.infrastructure.eodhd.client import EodhHdClient
 
-    def uow_factory() -> SqlAlchemyUnitOfWork:
-        return SqlAlchemyUnitOfWork(write_factory, read_factory)
-
-    # 8. Outbox dispatcher
-    dispatcher = create_dispatcher(settings=settings, session_factory=write_factory)
-
-    # 9. Consumers
-    from market_data.infrastructure.messaging.consumers.fundamentals_consumer import FundamentalsConsumer
-    from market_data.infrastructure.messaging.consumers.ohlcv_consumer import OHLCVConsumer
-    from market_data.infrastructure.messaging.consumers.quotes_consumer import QuotesConsumer
-    from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
-
-    ohlcv_consumer = OHLCVConsumer(
-        uow_factory=uow_factory,
-        object_storage=object_storage,
-        config=ConsumerConfig(
-            bootstrap_servers=settings.kafka_bootstrap_servers,
-            group_id="market-data-ohlcv",
-            topics=["market.dataset.fetched"],
-        ),
-    )
-    quotes_consumer = QuotesConsumer(
-        uow_factory=uow_factory,
-        object_storage=object_storage,
-        valkey_client=valkey_client,
-        config=ConsumerConfig(
-            bootstrap_servers=settings.kafka_bootstrap_servers,
-            group_id="market-data-quotes",
-            topics=["market.dataset.fetched"],
-        ),
-    )
-    fundamentals_consumer = FundamentalsConsumer(
-        uow_factory=uow_factory,
-        object_storage=object_storage,
-        config=ConsumerConfig(
-            bootstrap_servers=settings.kafka_bootstrap_servers,
-            group_id="market-data-fundamentals",
-            topics=["market.dataset.fetched"],
-        ),
+    app.state.eodhd_client = EodhHdClient(
+        api_key=settings.eodhd_api_key.get_secret_value(),
+        base_url=settings.eodhd_base_url,
     )
 
-    # Start background tasks
-    ohlcv_task = asyncio.create_task(ohlcv_consumer.run())
-    quotes_task = asyncio.create_task(quotes_consumer.run())
-    fundamentals_task = asyncio.create_task(fundamentals_consumer.run())
-    dispatcher_task = asyncio.create_task(dispatcher.run())
+    # 8. Background task: seed screen field metadata to DB + Valkey, then refresh every 6h
+    # R22 exemption: screen fields cache-warmer is explicitly exempted from the
+    # "no asyncio.create_task in lifespan" rule per PRD-0017 §6.2.
+    refresh_task = asyncio.create_task(_screen_fields_refresh_loop(write_factory, valkey_client, log))
 
     log.info("service_started", service=settings.service_name)
     yield
 
-    # Shutdown
-    ohlcv_consumer.stop()
-    quotes_consumer.stop()
-    fundamentals_consumer.stop()
-    dispatcher.stop()
+    refresh_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await refresh_task
 
-    for task in [ohlcv_task, quotes_task, fundamentals_task, dispatcher_task]:
-        try:
-            await asyncio.wait_for(task, timeout=5.0)
-        except (TimeoutError, asyncio.CancelledError, Exception):
-            task.cancel()
+    eodhd_client = getattr(app.state, "eodhd_client", None)
+    if eodhd_client is not None:
+        await eodhd_client.aclose()
 
     await valkey_client.close()
     await write_engine.dispose()
@@ -190,7 +354,18 @@ def create_app() -> FastAPI:
     )
     app.state.settings = settings
 
+    # Exception handlers — must be registered before middleware so that handler
+    # responses are still processed by middleware layers (e.g. Prometheus timing).
+    register_error_handlers(app)
+
     # Middleware — must be registered before app starts (Starlette requirement)
+    app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url=f"{settings.api_gateway_url}/internal/jwks",
+        skip_verification=settings.internal_jwt_skip_verification,
+        service_name=settings.service_name,
+        jti_replay_check_enabled=settings.internal_jwt_jti_check_enabled,
+    )
     app.add_middleware(RequestIdMiddleware)
     metrics = create_metrics(service_name=settings.service_name)
     add_prometheus_middleware(app, metrics)
@@ -211,12 +386,23 @@ def create_app() -> FastAPI:
         checks: dict[str, str] = {}
         all_ok = True
 
+        # F-003B: JWKS public key must be loaded before accepting traffic.
+        if getattr(app.state, "_internal_jwt_public_key", None) is None:
+            checks["jwks"] = "not_loaded"
+            all_ok = False
+        else:
+            checks["jwks"] = "ok"
+
         # DB check
         try:
-            sf = app.state.session_factory
-            async with sf() as session:
-                await session.execute(text("SELECT 1"))
-            checks["db"] = "ok"
+            sf = getattr(app.state, "session_factory", None)
+            if sf is not None:
+                async with sf() as session:
+                    await session.execute(text("SELECT 1"))
+                checks["db"] = "ok"
+            else:
+                checks["db"] = "not_ready"
+                all_ok = False
         except Exception as exc:
             _log.error("readyz_db_check_failed", error_type=type(exc).__name__, error=str(exc))
             checks["db"] = "error"
@@ -224,10 +410,14 @@ def create_app() -> FastAPI:
 
         # Valkey check
         try:
-            valkey = app.state.valkey_client
-            ok = await valkey.ping()
-            checks["valkey"] = "ok" if ok else "error"
-            if not ok:
+            valkey = getattr(app.state, "valkey_client", None)
+            if valkey is not None:
+                ok = await valkey.ping()
+                checks["valkey"] = "ok" if ok else "error"
+                if not ok:
+                    all_ok = False
+            else:
+                checks["valkey"] = "not_ready"
                 all_ok = False
         except Exception as exc:
             _log.error("readyz_valkey_check_failed", error_type=type(exc).__name__, error=str(exc))
@@ -249,8 +439,6 @@ def create_app() -> FastAPI:
             checks["storage"] = "error"
             all_ok = False
 
-        checks["kafka"] = "ok"  # consumers managed as background tasks
-
         if not all_ok:
             raise HTTPException(
                 status_code=503,
@@ -260,13 +448,25 @@ def create_app() -> FastAPI:
 
     @app.get("/metrics")
     async def metrics_endpoint() -> Response:
+        """Prometheus metrics — protected by InternalJWTMiddleware (PRD-0025)."""
         data = prometheus_client.generate_latest()
         return Response(content=data, media_type=prometheus_client.CONTENT_TYPE_LATEST)
 
     # Register API routers
-    from market_data.api.routers import fundamental_metrics, fundamentals, instruments, ohlcv, quotes, securities
+    from market_data.api.routers import (
+        fundamental_metrics,
+        fundamentals,
+        instruments,
+        market,
+        ohlcv,
+        prediction_markets,
+        price_snapshot,
+        quotes,
+        securities,
+    )
 
     app.include_router(instruments.router, prefix="/api/v1")
+    app.include_router(market.router, prefix="/api/v1")
     app.include_router(ohlcv.router, prefix="/api/v1")
     app.include_router(quotes.router, prefix="/api/v1")
     # fundamental_metrics MUST be registered before fundamentals to avoid
@@ -274,5 +474,11 @@ def create_app() -> FastAPI:
     app.include_router(fundamental_metrics.router, prefix="/api/v1")
     app.include_router(fundamentals.router, prefix="/api/v1")
     app.include_router(securities.router, prefix="/api/v1")
+    # prediction_markets: /prediction-markets/{market_id}/history registered
+    # before /{market_id} inside the router to avoid path-param conflicts
+    app.include_router(prediction_markets.router, prefix="/api/v1")
+    # price_snapshot: internal endpoints — only S9 (api-gateway) calls these
+    # via the internal JWT mechanism (PRD-0025)
+    app.include_router(price_snapshot.router, prefix="/internal/v1")
 
     return app

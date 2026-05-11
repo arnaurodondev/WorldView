@@ -27,8 +27,8 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch):
     assert s.port == 8002
     assert s.host == Settings.model_fields["host"].default
     assert s.debug is False
-    assert "postgresql" in s.database_url
-    assert s.eodhd_api_key == "demo"
+    assert "postgresql" in s.database_url.get_secret_value()
+    assert s.eodhd_api_key.get_secret_value() == "demo"
     assert s.eodhd_base_url == "https://eodhd.com/api"
     assert s.storage_bucket == "market-ingestion"
     assert s.bronze_bucket == "market-bronze"
@@ -44,7 +44,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch):
     assert s.dispatcher_max_attempts == 5
     assert s.otlp_endpoint == ""
     assert s.log_level == "INFO"
-    assert s.internal_service_token == ""
+    assert s.api_gateway_url == "http://api-gateway:8000"
 
 
 def test_settings_env_prefix(monkeypatch):
@@ -65,7 +65,7 @@ def test_settings_eodhd_api_key_from_env(monkeypatch):
     from market_ingestion.config import Settings
 
     s = Settings()
-    assert s.eodhd_api_key == "live-key-123"
+    assert s.eodhd_api_key.get_secret_value() == "live-key-123"
 
 
 def test_settings_scheduler_fields_from_env(monkeypatch):
@@ -136,9 +136,9 @@ def test_settings_provider_keys_optional():
     from market_ingestion.config import Settings
 
     s = Settings()
-    assert s.finnhub_api_key == ""
-    assert s.polygon_api_key == ""
-    assert s.alpha_vantage_api_key == ""
+    assert s.finnhub_api_key.get_secret_value() == ""
+    assert s.polygon_api_key.get_secret_value() == ""
+    assert s.alpha_vantage_api_key.get_secret_value() == ""
 
 
 def test_settings_eodhd_base_url_default():

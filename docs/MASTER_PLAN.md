@@ -116,13 +116,13 @@ S1 ──portfolio.watchlist.updated.v1──► S10
 | S3 | **Market Data** | 8003 | `market_data_db` (TimescaleDB) | ✅ Mature | Materialize OHLCV/quotes/fundamentals; 30 query API routes |
 | S4 | **Content Ingestion** | 8004 | `content_ingestion_db` | ✅ Mature | Poll EODHD news, SEC EDGAR, Finnhub, NewsAPI; MinIO bronze |
 | S5 | **Content Store** | 8005 | `content_store_db` | ✅ Mature | HTML cleaning, 3-stage dedup, canonical IDs, MinIO silver |
-| S6 | **NLP Pipeline** | 8006 | `nlp_db` + `intelligence_db` | ✅ Mature | 8-block enrichment: NER, routing, embedding, entity resolution, LLM extraction |
+| S6 | **NLP Pipeline** | 8006 | `nlp_db` + `intelligence_db` | ✅ Mature | 8-block enrichment: NER, routing, embedding, entity resolution, LLM extraction. Full-text document search (`GET /api/v1/search/documents`) — tsvector GIN on chunks.tsv_english, entity facets via S7 batch, recency×source blend ranking (PLAN-0064 W6) |
 | S7 | **Knowledge Graph** | 8007 | `intelligence_db` | 🔄 In-progress | Relation canonicalization, graph materialization, async workers |
-| S8 | **RAG / Chat** | 8008 | None (stateless) | ⏳ Planned | Hybrid retrieval, LLM completion, streaming SSE, citations |
+| S8 | **RAG / Chat** | 8008 | `rag_db` | 🔄 In-progress | Hybrid retrieval (ANN+BM25+KG+SQL via RRF; hybrid default for entity-anchored intents — PLAN-0063 W5-3), HyDE, graph-enriched context, contradiction detection, LLM fallback chain, streaming SSE, citations, retrieval quality metrics + weekly citation-accuracy cron (W5-5) |
 | S9 | **API Gateway** | 8000 | None (stateless) | 🔄 In-progress | BFF entry point, auth, rate limiting, caching, CORS |
 | S10 | **Alert Service** | 8010 | `alert_db` | ✅ Mature | Fan-out alerts via WebSocket, watchlist resolution, dedup, REST API, health, metrics |
 | -- | **intelligence-migrations** | -- | `intelligence_db` (DDL owner) | 🔄 In-progress | Init container: DDL, seeds, exits after completion |
-| -- | **Frontend** | 5173 | -- | ⏳ Scaffolded | React + Vite + TypeScript web app |
+| -- | **worldview-web** | 3001 | -- | ✅ Mature | Next.js 15 App Router + shadcn/ui · PLAN-0028 complete |
 
 **Status key**: ✅ Mature (production-ready, tested) | 🔄 In-progress (compliant scaffold, active PRD 0014) | ⏳ Planned (scaffolded only)
 
@@ -160,7 +160,7 @@ Six shared Python packages in `libs/`, installable via `pip install -e libs/<nam
 
 1. **S4** polls EODHD/EDGAR/Finnhub/NewsAPI (15-30 min); raw to MinIO bronze; `content.article.raw.v1` via outbox
 2. **S5** cleans HTML (readability-lxml + bleach), 3-stage dedup (URL hash, normalized hash, Valkey LSH), canonical text to MinIO silver; `content.article.stored.v1` via outbox
-3. **S6** (Blocks 3-10): sectioning --> GLiNER NER (10 classes) --> routing score (7 signals) --> suppression --> embeddings (BGE 1024-dim) --> novelty gate (MinHash) --> entity resolution (4-step cascade) --> LLM extraction (Qwen2.5-7B). Writes to `nlp_db` + `intelligence_db`; emits `nlp.article.enriched.v1` + `nlp.signal.detected.v1`
+3. **S6** (Blocks 3-10): sectioning --> GLiNER NER (11 classes) --> routing score (8 signals, incl. price_impact) --> suppression --> embeddings (BGE 1024-dim) --> novelty gate (MinHash) --> entity resolution (4-step cascade) --> LLM extraction (Qwen2.5-7B). Background `PriceImpactLabellingWorker` retroactively scores articles vs OHLCV bars. Writes to `nlp_db` + `intelligence_db`; emits `nlp.article.enriched.v1` + `nlp.signal.detected.v1` (with `market_impact_score`)
 4. **S7** (Blocks 11-14): relation canonicalization --> graph materialization + evidence staging --> async workers (confidence recomputation, contradiction detection, summary generation, embedding refresh) --> shadow AGE migration. Emits `graph.state.changed.v1` + `intelligence.contradiction.v1`
 5. **S10** consumes intelligence + watchlist events, resolves affected users, deduplicates, pushes via WebSocket
 
@@ -200,22 +200,39 @@ All Kafka events carry: `event_id` (UUIDv7), `event_type` (`domain.entity.verb_p
 
 ### 7.2 Kafka Topics
 
+**Time-retention topics** (21 total — created by `infra/kafka/init/create-topics.sh`):
+
 | Topic | Part. | Retention | Producer | Consumer(s) | Key |
 |-------|-------|-----------|----------|-------------|-----|
-| `portfolio.events.v1` | 3 | 7d | S1 | -- | `aggregate_id` |
-| `portfolio.watchlist.updated.v1` | 12 | 7d | S1 | S10 | `watchlist_id` |
-| `market.dataset.fetched` | 6 | 7d | S2 | S3 | `symbol` |
-| `market.instrument.created` | 3 | 7d | S3 | S1 | `instrument_id` |
-| `market.instrument.updated` | 3 | 7d | S3 | S1 | `instrument_id` |
-| `content.article.raw.v1` | 12 | 7d | S4 | S5 | `url_hash` |
-| `content.article.stored.v1` | 12 | 7d | S5 | S6 | `article_id` |
-| `nlp.article.enriched.v1` | 12 | 14d | S6 | S7 | `article_id` |
-| `nlp.signal.detected.v1` | 24 | 14d | S6 | S10 | `entity_id` |
-| `graph.state.changed.v1` | 12 | 14d | S7 | S10, S8 | `primary_entity_id` |
-| `intelligence.contradiction.v1` | 12 | 30d | S7 | S10 | `subject_entity_id` |
-| `relation.type.proposed.v1` | 4 | 30d | S7 | Human review | `proposed_type` |
-| `entity.dirtied.v1` | 24 | compact | S7 | S7 (async) | `entity_id` |
-| `alert.delivered.v1` | 12 | 7d | S10 | Audit | `alert_id` |
+| `portfolio.events.v1` | 3 | 7d | S1 Portfolio | -- | `aggregate_id` |
+| `portfolio.watchlist.updated.v1` | 12 | 7d | S1 Portfolio | S6 NLP Pipeline (watchlist cache), S10 Alert | `watchlist_id` |
+| `market.dataset.fetched` | 6 | 30d | S2 Market Ingestion | S3 Market Data, S7 Knowledge Graph | `symbol` |
+| `market.instrument.created` | 3 | 7d | S2 Market Ingestion | S7 Knowledge Graph | `instrument_id` |
+| `market.instrument.updated` | 3 | 7d | S2 Market Ingestion | S7 Knowledge Graph | `instrument_id` |
+| `content.article.raw.v1` | 12 | 30d | S4 Content Ingestion | S5 Content Store | `url_hash` |
+| `content.article.stored.v1` | 12 | 30d | S5 Content Store | S6 NLP Pipeline | `article_id` |
+| `nlp.article.enriched.v1` | 12 | 30d | S6 NLP Pipeline | S7 Knowledge Graph | `article_id` |
+| `nlp.signal.detected.v1` | 24 | 14d | S6 NLP Pipeline | S10 Alert | `entity_id` |
+| `claim.extracted.v1` | 12 | 7d | S6 NLP Pipeline | S7 Knowledge Graph | `article_id` |
+| `graph.state.changed.v1` | 12 | 14d | S7 Knowledge Graph | S10 Alert | `primary_entity_id` |
+| `intelligence.contradiction.v1` | 12 | 30d | S7 Knowledge Graph | S10 Alert | `subject_entity_id` |
+| `relation.type.proposed.v1` | 4 | 30d | S7 Knowledge Graph | (internal review) | `proposed_type` |
+| `entity.canonical.created.v1` | 12 | 7d | S7 Knowledge Graph | S7 internal consumers | `entity_id` |
+| `alert.delivered.v1` | 12 | 7d | S10 Alert | (audit/analytics) | `alert_id` |
+| `market.prediction.v1` | 8 | 30d | S4 Content Ingestion (Polymarket adapter) | S3 Market Data | `market_id` |
+| `kg.dead-letter.v1` | 12 | 7d | S7 Knowledge Graph (DLQ) | (ops) | -- |
+| `alert.dead-letter.v1` | 12 | 7d | S10 Alert (DLQ) | (ops) | -- |
+| `nlp.dead-letter.v1` | 12 | 7d | S6 NLP Pipeline (DLQ) | (ops) | -- |
+| `content.dead-letter.v1` | 12 | 7d | S4/S5 (DLQ) | (ops) | -- |
+| `market.dead-letter.v1` | 8 | 7d | S2/S3 (DLQ) | (ops) | -- |
+
+**Compacted topic** (1 total — log compaction, NOT time-retention):
+
+| Topic | Part. | Config | Producer | Consumer(s) | Key |
+|-------|-------|--------|----------|-------------|-----|
+| `entity.dirtied.v1` | 24 | `cleanup.policy=compact`, `min.cleanable.dirty.ratio=0.01`, `segment.ms=3600000` | S7 Knowledge Graph | S7 workers (re-embed trigger) | `entity_id` |
+
+> **Note on `entity.dirtied.v1`**: This is a compacted topic — after compaction only the latest message per `entity_id` key is retained. Consumers (S7 async workers) MUST treat each message as a "refresh entity X" trigger, NOT as a historical event sequence. Never consume this topic expecting a complete changelog of all mutations.
 
 ### 7.3 Core Patterns
 
@@ -360,7 +377,11 @@ Session outcomes in `.claude/evals/sessions/`. Monthly review compounds improvem
 
 ## 13. Frontend Architecture
 
-React 18 + TypeScript strict + Vite 5 + TanStack Query v5 + lightweight-charts v4. Tests: Vitest (unit) + Playwright (E2E). Lint: ESLint 9 + Prettier. Port 5173. **Hard rule**: Frontend talks **only** to S9 (API Gateway) at `:8000`.
+**✅ Mature — PLAN-0028 complete (2026-04-17)**
+
+`apps/worldview-web/` — Next.js 15 App Router + shadcn/ui + TanStack Query v5 + lightweight-charts v4. Tests: Vitest (unit, 206 pass) + Playwright (E2E, 15 specs). Lint: ESLint 9 + TypeScript strict. Port 3001 in dev. **Hard rule**: Frontend talks **only** to S9 (API Gateway) via `/api/*` proxy rewrites.
+
+Pages: Landing · Login/Register · Dashboard (9 widgets) · Instrument Detail (4 tabs: chart/fundamentals/news/intelligence) · Screener · Portfolio · Alerts · Chat (SSE streaming) · Workspace (8 panel types) · Settings. Auth: Zitadel OIDC/PKCE, RS256 token in React state only.
 
 ---
 
@@ -373,8 +394,8 @@ React 18 + TypeScript strict + Vite 5 + TanStack Query v5 + lightweight-charts v
 | Contract | Avro schema compat | pytest `-m contract` | `tests/contract/` |
 | Architecture | Layer deps, import guards, structure | CI jobs | Repo-wide |
 | E2E | Multi-service | pytest + docker compose | `docker-compose.test.yml` |
-| Frontend unit | Components, hooks | Vitest | `apps/frontend/` |
-| Frontend E2E | User flows | Playwright | `apps/frontend/` |
+| Frontend unit | Components, hooks | Vitest | `apps/worldview-web/` |
+| Frontend E2E | User flows | Playwright | `apps/worldview-web/` |
 
 ---
 

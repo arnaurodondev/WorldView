@@ -6,16 +6,12 @@ Entities are plain dataclasses with no infrastructure dependencies.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from datetime import datetime
+from uuid import UUID
 
 import common.ids  # type: ignore[import-untyped]
 import common.time  # type: ignore[import-untyped]
 from content_store.domain.enums import DedupOutcome, DocumentStatus, SourceType
-
-if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
 
 # ── Dedup thresholds (per-source) ──────────────────────────────────────────────
 
@@ -121,6 +117,9 @@ class CanonicalDocument:
     language: str = "en"
     corroborates_doc_id: UUID | None = None
     is_backfill: bool = False
+    # PLAN-0086 Wave C-1: tenant isolation — None = public/global news;
+    # non-None = private tenant content uploaded via TENANT_UPLOAD source.
+    tenant_id: UUID | None = None
 
 
 # ── MinHash signature ──────────────────────────────────────────────────────────

@@ -24,6 +24,29 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# EODHD charges different API-credit amounts per endpoint type.
+# The budget system consumes this many tokens per task so that the provider
+# budget actually reflects real API cost rather than task count.
+# Source: https://eodhd.com/financial-apis/api-limits
+_EODHD_CREDIT_COST: dict[str, float] = {
+    DatasetType.FUNDAMENTALS.value: 10.0,  # /api/fundamentals/:ticker = 10 credits
+    DatasetType.OHLCV.value: 1.0,  # /api/eod/:ticker = 1 credit
+    DatasetType.QUOTES.value: 1.0,  # /api/real-time/:ticker = 1 credit
+    # Intraday endpoints (/api/intraday/:ticker) cost 5 credits each.
+    # These use DatasetType.OHLCV with timeframe ∈ {"1h","5m","1m"}.
+    # The per-task cost is overridden in _apply_budgets for intraday timeframes.
+    DatasetType.NEWS_SENTIMENT.value: 5.0,  # /api/news = 5 credits
+    DatasetType.EARNINGS_CALENDAR.value: 1.0,
+    DatasetType.ECONOMIC_EVENTS.value: 1.0,
+    DatasetType.MACRO_INDICATOR.value: 1.0,
+    DatasetType.INSIDER_TRANSACTIONS.value: 1.0,
+    DatasetType.YIELD_CURVE.value: 1.0,
+    DatasetType.MARKET_CAP.value: 1.0,
+}
+
+# Intraday timeframes that hit /api/intraday (5 credits each).
+_INTRADAY_TIMEFRAMES: frozenset[str] = frozenset({"1m", "5m", "1h"})
+
 
 @dataclass
 class SchedulerTickResult:
@@ -244,6 +267,59 @@ class ScheduleDueTasksUseCase:
                 date_range=date_range,
                 exchange=policy.exchange,
             )
+        if policy.dataset_type == DatasetType.EARNINGS_CALENDAR:
+            # WHY no symbol/exchange args: earnings calendar is a global fetch —
+            # symbol and exchange are encoded as fixed "CALENDAR"/"EARNINGS" inside
+            # create_earnings_calendar_task so the dedupe_key stays stable per day.
+            return IngestionTask.create_earnings_calendar_task(
+                provider=policy.provider,
+                date_range=date_range,
+            )
+        if policy.dataset_type == DatasetType.NEWS_SENTIMENT:
+            return IngestionTask.create_news_sentiment_task(
+                provider=policy.provider,
+                symbol=symbol,
+                date_range=date_range,
+                exchange=policy.exchange,
+            )
+        if policy.dataset_type == DatasetType.ECONOMIC_EVENTS:
+            # WHY no exchange: economic events are global/country-level, not per-exchange.
+            # symbol encodes the country code as "EVENTS.<ISO3>" (e.g. "EVENTS.USA").
+            return IngestionTask.create_economic_events_task(
+                provider=policy.provider,
+                symbol=symbol,
+                date_range=date_range,
+            )
+        if policy.dataset_type == DatasetType.MACRO_INDICATOR:
+            # WHY no exchange: macro indicators are country-level World Bank / EODHD data.
+            # symbol encodes "COUNTRY.indicator_name" (e.g. "USA.gdp_current_usd").
+            return IngestionTask.create_macro_indicator_task(
+                provider=policy.provider,
+                symbol=symbol,
+                date_range=date_range,
+            )
+        if policy.dataset_type == DatasetType.INSIDER_TRANSACTIONS:
+            return IngestionTask.create_insider_transactions_task(
+                provider=policy.provider,
+                symbol=symbol,
+                date_range=date_range,
+                exchange=policy.exchange,
+            )
+        if policy.dataset_type == DatasetType.YIELD_CURVE:
+            # WHY no exchange: yield curve series are global identifiers (e.g. "US10Y"),
+            # not per-exchange. execute_task.py passes symbol directly to fetch_yield_curve().
+            return IngestionTask.create_yield_curve_task(
+                provider=policy.provider,
+                symbol=symbol,
+                date_range=date_range,
+            )
+        if policy.dataset_type == DatasetType.MARKET_CAP:
+            return IngestionTask.create_market_cap_task(
+                provider=policy.provider,
+                symbol=symbol,
+                date_range=date_range,
+                exchange=policy.exchange,
+            )
         logger.debug(
             "scheduler_unsupported_dataset_type",
             dataset_type=str(policy.dataset_type),
@@ -325,13 +401,21 @@ class ScheduleDueTasksUseCase:
                 budget.refill(elapsed)
 
             for task in ptasks:
-                if budget.try_consume(1.0):
+                # Consume credits proportional to the EODHD endpoint cost so
+                # the budget accurately throttles expensive endpoints (e.g.
+                # fundamentals = 10 credits) not just task count (BP-183).
+                cost = _EODHD_CREDIT_COST.get(str(task.dataset_type), 1.0)
+                # Intraday timeframes hit a different EODHD endpoint (5 credits).
+                if str(task.dataset_type) == DatasetType.OHLCV.value and task.timeframe in _INTRADAY_TIMEFRAMES:
+                    cost = 5.0
+                if budget.try_consume(cost):
                     kept.append(task)
                 else:
                     logger.debug(
                         "scheduler_budget_exhausted",
                         provider=provider_str,
                         remaining_tasks=len(ptasks),
+                        credit_cost=cost,
                     )
                     break  # budget exhausted for this provider
 

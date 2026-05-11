@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
-from fastapi import FastAPI
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
 from fastapi.testclient import TestClient
 
 
@@ -16,7 +18,7 @@ class OpenAPIContractTestBase:
     - endpoint_cases: list of request/expected status dictionaries
     """
 
-    endpoint_cases: list[dict[str, Any]] = []
+    endpoint_cases: ClassVar[list[dict[str, Any]]] = []
 
     @classmethod
     def app_factory(cls) -> FastAPI:

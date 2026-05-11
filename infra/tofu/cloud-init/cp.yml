@@ -1,0 +1,38 @@
+#cloud-config
+# cloud-init for k3s control-plane node
+# Templated by OpenTofu — k3s_token and floating_ip are substituted at apply time
+
+package_update: true
+package_upgrade: true
+packages:
+  - curl
+  - socat
+  - conntrack
+  - jq
+  - netcat-openbsd
+
+runcmd:
+  # Install k3s server (control-plane) with:
+  #   - Traefik disabled (we install our own via Helm)
+  #   - ServiceLB disabled (we use Hetzner CCM LoadBalancer)
+  #   - TLS SAN = floating IP (so kubeconfig works with the stable IP)
+  #   - NoSchedule taint on CP (app workloads go to workers)
+  - |
+    curl -sfL https://get.k3s.io | \
+      INSTALL_K3S_VERSION="v1.31.4+k3s1" \
+      K3S_TOKEN="${k3s_token}" \
+      sh -s - server \
+        --disable traefik \
+        --disable servicelb \
+        --tls-san "${floating_ip}" \
+        --node-label "node-role=control-plane" \
+        --node-taint "node-role/control-plane:NoSchedule" \
+        --write-kubeconfig-mode "0644"
+
+  # Wait until the node is Ready
+  - until kubectl get nodes 2>/dev/null | grep -q " Ready"; do sleep 5; done
+
+  # Rewrite kubeconfig to use the floating IP (accessible from developer machine)
+  - |
+    sed "s/127.0.0.1/${floating_ip}/g" /etc/rancher/k3s/k3s.yaml > /tmp/kubeconfig
+    chmod 0600 /tmp/kubeconfig

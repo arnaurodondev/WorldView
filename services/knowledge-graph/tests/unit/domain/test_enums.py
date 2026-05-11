@@ -37,11 +37,12 @@ class TestDecayClass:
 
 
 class TestRelationType:
-    def test_exactly_eight_values(self) -> None:
-        assert len(RelationType) == 8
+    def test_exactly_eleven_values(self) -> None:
+        # 8 original (PRD §6.7 Block 11) + 3 new from PRD-0018 §6.4 (migration 0004)
+        assert len(RelationType) == 11
 
-    def test_well_known_types_present(self) -> None:
-        expected = {
+    def test_original_eight_types_present(self) -> None:
+        original = {
             "employs",
             "board_member_of",
             "subsidiary_of",
@@ -52,7 +53,17 @@ class TestRelationType:
             "competes_with",
         }
         actual = {rt.value for rt in RelationType}
-        assert actual == expected
+        assert original.issubset(actual)
+
+    def test_prd_0018_new_types_present(self) -> None:
+        # PRD-0018 §6.4 — seeded in migration 0004
+        assert RelationType.HAS_EXECUTIVE == "has_executive"
+        assert RelationType.REVENUE_FROM_COUNTRY == "revenue_from_country"
+        assert RelationType.OPERATES_IN_COUNTRY == "operates_in_country"
+
+    def test_all_values_unique(self) -> None:
+        values = [rt.value for rt in RelationType]
+        assert len(values) == len(set(values))
 
     def test_is_str_enum(self) -> None:
         assert isinstance(RelationType.EMPLOYS, str)

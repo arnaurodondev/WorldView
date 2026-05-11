@@ -117,6 +117,11 @@ async def test_fundamentals_consumer_creates_instrument_on_first_seen() -> None:
     """Consumer creates a new Instrument if symbol/exchange not found.
 
     QA-016: InstrumentCreated is written atomically to outbox_events (not collect_event).
+
+    PLAN-0057 QA-iter1 F-DS-07: emission is gated on a real EODHD ``Name`` —
+    without one, KG would re-create the placeholder canonical_name pattern
+    that Wave D-2 was supposed to eliminate. The test now supplies a real
+    Name via ``company_profile`` to exercise the create-and-emit happy path.
     """
     new_instrument = _make_instrument()
     mock_uow = AsyncMock()
@@ -124,8 +129,14 @@ async def test_fundamentals_consumer_creates_instrument_on_first_seen() -> None:
     mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
     mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-001")
     mock_uow.fundamentals.upsert_income_statement = AsyncMock()
+    # Skip the FIX-F4 security-enrichment branch (not under test here).
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
 
-    raw = _make_fundamentals_json(["income_statement"])
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {"Name": "Alphabet Inc."},
+    }
+    raw = json.dumps(payload).encode()
     mock_storage = AsyncMock()
     mock_storage.get_bytes = AsyncMock(return_value=raw)
 
@@ -137,6 +148,35 @@ async def test_fundamentals_consumer_creates_instrument_on_first_seen() -> None:
     call_kwargs = mock_uow.outbox_events.create.call_args
     assert call_kwargs.kwargs["event_type"] == "market.instrument.created"
     assert call_kwargs.kwargs["topic"] == "market.instrument.created"
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_skips_emission_when_no_name() -> None:
+    """PLAN-0057 QA-iter1 F-DS-07: missing EODHD Name → no InstrumentCreated emission.
+
+    Without a real ``Name`` the KG canonical would fall into the
+    ``synthesised_name`` path. We instead defer publication and emit a
+    ``fundamentals_skipped_no_name`` warning so the next refresh can pick it
+    up once EODHD has the Name populated.
+    """
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-skip")
+    mock_uow.fundamentals.upsert_income_statement = AsyncMock()
+
+    raw = _make_fundamentals_json(["income_statement"])  # no company_profile
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    # Instrument row still upserted (so OHLCV/quotes that arrive next don't
+    # create a duplicate), but NO InstrumentCreated outbox event.
+    mock_uow.instruments.upsert.assert_awaited_once()
+    mock_uow.outbox_events.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -168,10 +208,23 @@ async def test_fundamentals_consumer_enriches_instrument_created_with_company_pr
 
 
 @pytest.mark.asyncio
-async def test_fundamentals_consumer_emits_instrument_updated_when_flag_missing() -> None:
-    """Consumer emits InstrumentUpdated to outbox when instrument lacks has_fundamentals.
+async def test_fundamentals_consumer_emits_instrument_created_on_first_fundamentals_for_existing_instrument() -> None:
+    """PLAN-0057 QA-iter1 F-DS-02 / F-DATA-02 — closes a BLOCKING bug.
 
-    QA-016: the flag-change path previously emitted nothing; now atomically writes to outbox.
+    When OHLCV/Quotes arrive *before* fundamentals (the dominant production
+    ordering), the instrument row already exists with
+    ``has_fundamentals=False``. The legacy implementation emitted only
+    ``InstrumentUpdated`` on this path — which KG ``InstrumentEntityConsumer``
+    does NOT subscribe to — so the rich enrichment payload (Name / ISIN /
+    CUSIP / FIGI / LEI / PRIMARY_TICKER / Description) never reached the
+    knowledge graph and the placeholder canonical seeded by
+    ``InstrumentDiscoveredConsumer`` (Wave D-2) stayed un-enriched forever.
+
+    The fix: on every False→True transition of ``has_fundamentals`` (whether
+    the row was just created or already existed) emit
+    ``market.instrument.created`` so KG runs the UPSERT-after-discover
+    branch. ``InstrumentUpdated`` is no longer emitted on this path — its
+    payload didn't carry the enrichment fields anyway.
     """
     instrument = _make_instrument(has_fundamentals=False)
     mock_uow = AsyncMock()
@@ -179,20 +232,29 @@ async def test_fundamentals_consumer_emits_instrument_updated_when_flag_missing(
     mock_uow.instruments.update_flags = AsyncMock()
     mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-003")
     mock_uow.fundamentals.upsert_income_statement = AsyncMock()
+    # Skip the FIX-F4 security-enrichment branch (not under test here).
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
 
-    raw = _make_fundamentals_json(["income_statement"])
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {"Name": "Alphabet Inc.", "ISIN": "US02079K3059"},
+    }
+    raw = json.dumps(payload).encode()
     mock_storage = AsyncMock()
     mock_storage.get_bytes = AsyncMock(return_value=raw)
 
     consumer = _make_consumer(mock_uow, mock_storage)
     await consumer.process_message(None, _make_message(), {})
 
+    # Flag was flipped (so the instrument row reflects fundamentals presence).
     mock_uow.instruments.update_flags.assert_awaited_once()
+    # And the rich InstrumentCreated event was published — NOT InstrumentUpdated.
     mock_uow.outbox_events.create.assert_awaited_once()
     call_kwargs = mock_uow.outbox_events.create.call_args
-    assert call_kwargs.kwargs["event_type"] == "market.instrument.updated"
-    assert call_kwargs.kwargs["payload"]["has_fundamentals"] is True
-    assert call_kwargs.kwargs["payload"]["fields_updated"] == ["has_fundamentals"]
+    assert call_kwargs.kwargs["event_type"] == "market.instrument.created"
+    assert call_kwargs.kwargs["topic"] == "market.instrument.created"
+    assert call_kwargs.kwargs["payload"]["name"] == "Alphabet Inc."
+    assert call_kwargs.kwargs["payload"]["isin"] == "US02079K3059"
 
 
 @pytest.mark.asyncio
@@ -445,9 +507,19 @@ async def test_consumer_calls_upsert_metrics_for_valuation_ratios() -> None:
 
 
 @pytest.mark.asyncio
-async def test_consumer_does_not_call_upsert_metrics_for_uncatalogued_section() -> None:
-    """Sections not in the metric catalog (e.g. technicals_snapshot) do not
-    trigger a fundamental_metrics.upsert_metrics call."""
+async def test_consumer_calls_upsert_metrics_for_technicals_snapshot() -> None:
+    """TECHNICALS_SNAPSHOT is now catalogued (PLAN-0050 Wave D — beta + avg_volume_30d
+    added to _METRIC_CATALOG).  The consumer MUST call upsert_metrics when it
+    processes a technicals_snapshot payload that contains 'Beta'.
+
+    WHY UPDATED (not deleted): R19 — fix implementation, never delete tests.
+    The old assertion (upsert_metrics NOT called) was correct when TECHNICALS_SNAPSHOT
+    was uncatalogued.  After adding it to the catalog the test name and assertion
+    must reflect the new behaviour.
+
+    WHY technicals_snapshot in the catalog: beta and avg_volume_30d are used by
+    the screener; they must be materialised into fundamental_metrics for that
+    to work.  The snapshot backfill also reads them from there."""
     instrument = _make_instrument()
     mock_uow = AsyncMock()
     mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
@@ -461,8 +533,8 @@ async def test_consumer_does_not_call_upsert_metrics_for_uncatalogued_section() 
     consumer = _make_consumer(mock_uow, mock_storage)
     await consumer.process_message(None, _make_message(), {})
 
-    # upsert_metrics should NOT have been called (empty rows → skipped)
-    mock_uow.fundamental_metrics.upsert_metrics.assert_not_awaited()
+    # upsert_metrics MUST be called — Beta maps to "beta" in the catalog
+    mock_uow.fundamental_metrics.upsert_metrics.assert_awaited()
 
 
 @pytest.mark.asyncio
@@ -774,6 +846,121 @@ async def test_fundamentals_consumer_description_none_when_absent() -> None:
     assert outbox_payload["description"] is None
 
 
+# ---------------------------------------------------------------------------
+# PLAN-0057 Wave C-2: EODHD identifier extras (cusip / figi / lei / primary_ticker)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_populates_v3_identifiers() -> None:
+    """PLAN-0057 Wave C-2: EODHD General CUSIP/OpenFigi/LEI/PrimaryTicker
+    flow into the InstrumentCreated outbox payload.
+
+    OpenFigi maps to ``figi`` (the Avro schema uses the OpenFIGI consortium
+    name without the 'Open' prefix).
+    """
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-v3-001")
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
+
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {
+            "Name": "Apple Inc.",
+            "ISIN": "US0378331005",
+            "Description": "Apple designs consumer electronics.",
+            "CUSIP": "037833100",
+            "OpenFigi": "BBG000B9XRY4",  # EODHD field name — maps to schema field "figi"
+            "LEI": "HWUPKR0MPOU8FGXBT394",
+            "PrimaryTicker": "AAPL.US",
+        },
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    mock_uow.outbox_events.create.assert_awaited_once()
+    outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
+    assert outbox_payload["cusip"] == "037833100"
+    assert outbox_payload["figi"] == "BBG000B9XRY4"
+    assert outbox_payload["lei"] == "HWUPKR0MPOU8FGXBT394"
+    assert outbox_payload["primary_ticker"] == "AAPL.US"
+    # And v2 fields still flow through.
+    assert outbox_payload["name"] == "Apple Inc."
+    assert outbox_payload["isin"] == "US0378331005"
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_v3_identifiers_default_none_when_absent() -> None:
+    """PLAN-0057 Wave C-2: missing fields in EODHD General → event fields default to None."""
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-v3-002")
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
+
+    # Only Name+ISIN — no v3 identifiers.
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {"Name": "Apple Inc.", "ISIN": "US0378331005"},
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
+    assert outbox_payload["cusip"] is None
+    assert outbox_payload["figi"] is None
+    assert outbox_payload["lei"] is None
+    assert outbox_payload["primary_ticker"] is None
+
+
+@pytest.mark.asyncio
+async def test_fundamentals_consumer_v3_identifiers_empty_strings_become_none() -> None:
+    """PLAN-0057 Wave C-2: EODHD often returns empty strings — those must coerce to None
+    so the Avro union[null, string] is emitted correctly and S7 doesn't insert
+    empty-string aliases.
+    """
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-v3-003")
+    mock_uow.securities.find_by_id = AsyncMock(return_value=None)
+
+    payload = {
+        "income_statement": _make_section_data("income_statement"),
+        "company_profile": {
+            "Name": "Apple Inc.",
+            "CUSIP": "",  # empty string — coerce to None
+            "OpenFigi": "   ",  # whitespace only — coerce to None
+            "LEI": "HWUPKR0MPOU8FGXBT394",  # real value
+        },
+    }
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
+    assert outbox_payload["cusip"] is None
+    assert outbox_payload["figi"] is None
+    assert outbox_payload["lei"] == "HWUPKR0MPOU8FGXBT394"
+    assert outbox_payload["primary_ticker"] is None
+
+
 @pytest.mark.asyncio
 async def test_fundamentals_consumer_description_none_for_empty_string() -> None:
     """Empty string Description → None (falsy coercion, no empty strings in event)."""
@@ -797,3 +984,424 @@ async def test_fundamentals_consumer_description_none_for_empty_string() -> None
 
     outbox_payload = mock_uow.outbox_events.create.call_args.kwargs["payload"]
     assert outbox_payload["description"] is None
+
+
+# ── F-Q1-03: instrument_fundamentals_snapshot continuous UPSERT ─────────────
+
+
+@pytest.mark.asyncio
+async def test_consumer_calls_upsert_fundamentals_snapshot_on_highlights() -> None:
+    """F-Q1-03 regression: consumer calls _upsert_fundamentals_snapshot when
+    highlights data is present in the payload.
+
+    WHY mock _upsert_fundamentals_snapshot (not upsert_snapshot):
+    The protected method is the seam between process_message and the DB write.
+    Mocking it avoids needing a live SQLAlchemy session while still verifying
+    that process_message invokes the snapshot path.
+    """
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.fundamentals.upsert_highlights = AsyncMock()
+
+    payload = {"highlights": {"EarningsShare": 6.42, "RevenueTTM": 385_000_000_000.0}}
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+
+    # Patch the protected method so we can assert it was invoked without a live DB
+    snapshot_calls: list[tuple[str, dict]] = []
+
+    async def _capture_snapshot(uow: object, instrument_id: str, payload: dict) -> None:
+        snapshot_calls.append((instrument_id, payload))
+
+    consumer._upsert_fundamentals_snapshot = _capture_snapshot  # type: ignore[method-assign]
+    await consumer.process_message(None, _make_message(), {})
+
+    # _upsert_fundamentals_snapshot was called once with the instrument id
+    assert len(snapshot_calls) == 1
+    called_iid, called_payload = snapshot_calls[0]
+    assert called_iid == "instr-fund-001"
+    assert called_payload.get("highlights", {}).get("EarningsShare") == pytest.approx(6.42)
+
+
+@pytest.mark.asyncio
+async def test_consumer_snapshot_failure_does_not_propagate() -> None:
+    """F-Q1-03: snapshot UPSERT failure is best-effort — does not raise or
+    dead-letter the Kafka message."""
+    instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=instrument)
+    mock_uow.fundamentals.upsert_highlights = AsyncMock()
+
+    payload = {"highlights": {"EarningsShare": 6.42}}
+    raw = json.dumps(payload).encode()
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=raw)
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+
+    async def _raise_snapshot(uow: object, instrument_id: str, payload: dict) -> None:
+        raise RuntimeError("DB connection lost")
+
+    consumer._upsert_fundamentals_snapshot = _raise_snapshot  # type: ignore[method-assign]
+
+    # Must NOT raise — snapshot failure is best-effort
+    await consumer.process_message(None, _make_message(), {})
+
+
+@pytest.mark.asyncio
+async def test_upsert_snapshot_ohlcv_fallback_for_avg_volume() -> None:
+    """OHLCV fallback: when EODHD Technicals lacks AverageVolume, _upsert_fundamentals_snapshot
+    queries ohlcv_bars for the last 30 daily bars and writes the computed avg to the snapshot.
+
+    WHY this test: EODHD Technicals rarely includes AverageVolume for non-US-large-cap
+    instruments. The fallback was added to compute it from ohlcv_bars instead of leaving
+    avg_volume_30d permanently NULL. This test verifies the fallback SQL path fires and
+    the computed value reaches upsert_snapshot.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from market_data.infrastructure.messaging.consumers.fundamentals_consumer import FundamentalsConsumer
+
+    instrument_id = "instr-ohlcv-test-001"
+
+    # Mock UoW with a write session that returns a computed avg_vol row.
+    # WHY MagicMock for result_proxy: session.execute() is awaited (AsyncMock),
+    # but the returned CursorResult has a SYNCHRONOUS .one_or_none() method —
+    # wrapping it in AsyncMock would return a coroutine and break attribute access.
+    mock_session = AsyncMock()
+    mock_row = MagicMock()
+    mock_row.avg_vol = 25_571_060  # realistic AAPL-like avg volume
+    result_proxy = MagicMock()
+    result_proxy.one_or_none.return_value = mock_row
+    mock_session.execute = AsyncMock(return_value=result_proxy)
+
+    mock_uow = AsyncMock()
+    # _write() must return the session; the consumer calls it multiple times
+    mock_uow._write = MagicMock(return_value=mock_session)
+
+    # Payload: no AverageVolume in technicals → avg_volume_30d starts as None
+    payload = {
+        "highlights": {"EarningsShare": 7.89},
+        "technicals_snapshot": {"Beta": 1.1},  # no AverageVolume
+    }
+
+    consumer = FundamentalsConsumer.__new__(FundamentalsConsumer)
+
+    captured_snaps: list[dict] = []
+
+    async def _mock_upsert_snapshot(session: object, iid: str, snap: dict) -> None:
+        captured_snaps.append(snap)
+
+    with patch(
+        "market_data.infrastructure.messaging.consumers.fundamentals_consumer.upsert_snapshot",
+        side_effect=_mock_upsert_snapshot,
+    ):
+        await consumer._upsert_fundamentals_snapshot(mock_uow, instrument_id, payload)
+
+    assert len(captured_snaps) == 1, "upsert_snapshot must be called once"
+    snap = captured_snaps[0]
+    # Fallback should have populated avg_volume_30d from the OHLCV query result
+    assert (
+        snap["avg_volume_30d"] == 25_571_060
+    ), f"Expected OHLCV fallback value 25_571_060 but got {snap['avg_volume_30d']!r}"
+    # Other fields derived from payload should still be set correctly
+    assert snap["beta"] == pytest.approx(1.1)
+
+
+@pytest.mark.asyncio
+async def test_upsert_snapshot_ohlcv_fallback_skipped_when_eodhd_provides_volume() -> None:
+    """OHLCV fallback is NOT queried when EODHD already provides AverageVolume.
+
+    WHY: avoid an unnecessary DB round-trip when the field is already populated.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from market_data.infrastructure.messaging.consumers.fundamentals_consumer import FundamentalsConsumer
+
+    instrument_id = "instr-ohlcv-test-002"
+
+    mock_session = AsyncMock()
+    mock_uow = AsyncMock()
+    mock_uow._write = MagicMock(return_value=mock_session)
+
+    # Payload WITH AverageVolume in technicals → avg_volume_30d will be set by derive_fundamentals_snapshot
+    payload = {
+        "highlights": {"EarningsShare": 7.89},
+        "technicals_snapshot": {"Beta": 1.1, "AverageVolume": 60_000_000},
+    }
+
+    consumer = FundamentalsConsumer.__new__(FundamentalsConsumer)
+    captured_snaps: list[dict] = []
+
+    async def _mock_upsert_snapshot(session: object, iid: str, snap: dict) -> None:
+        captured_snaps.append(snap)
+
+    with patch(
+        "market_data.infrastructure.messaging.consumers.fundamentals_consumer.upsert_snapshot",
+        side_effect=_mock_upsert_snapshot,
+    ):
+        await consumer._upsert_fundamentals_snapshot(mock_uow, instrument_id, payload)
+
+    assert len(captured_snaps) == 1
+    snap = captured_snaps[0]
+    # EODHD value takes precedence — no OHLCV DB query needed
+    assert snap["avg_volume_30d"] == 60_000_000
+    # The OHLCV fallback query should NOT have been called (session.execute is from _write,
+    # but since avg_volume_30d was already set, the execute block is skipped)
+    mock_session.execute.assert_not_called()
+
+
+# ── Unit tests for fundamentals_snapshot_writer helpers ─────────────────────
+
+
+def test_most_recent_financial_row_prefers_yearly() -> None:
+    """_most_recent_financial_row returns the most-recent yearly entry."""
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import _most_recent_financial_row
+
+    data = {
+        "yearly": {
+            "2022-12-31": {"operatingCashFlow": 100.0},
+            "2023-12-31": {"operatingCashFlow": 200.0},
+        },
+        "quarterly": {
+            "2024-09-30": {"operatingCashFlow": 50.0},
+        },
+    }
+    row = _most_recent_financial_row(data)
+    assert row == {"operatingCashFlow": 200.0}
+
+
+def test_most_recent_financial_row_falls_back_to_quarterly() -> None:
+    """_most_recent_financial_row falls back to quarterly when yearly is empty."""
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import _most_recent_financial_row
+
+    data = {
+        "yearly": {},
+        "quarterly": {
+            "2024-06-30": {"operatingCashFlow": 40.0},
+            "2024-09-30": {"operatingCashFlow": 55.0},
+        },
+    }
+    row = _most_recent_financial_row(data)
+    assert row == {"operatingCashFlow": 55.0}
+
+
+def test_most_recent_financial_row_empty_input() -> None:
+    """_most_recent_financial_row returns {} for None/empty/non-dict input."""
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import _most_recent_financial_row
+
+    assert _most_recent_financial_row(None) == {}
+    assert _most_recent_financial_row({}) == {}
+    assert _most_recent_financial_row({"yearly": {}, "quarterly": {}}) == {}
+    assert _most_recent_financial_row("not a dict") == {}
+
+
+def test_derive_fundamentals_snapshot_full_data() -> None:
+    """derive_fundamentals_snapshot computes all 10 fields from a complete dataset."""
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import derive_fundamentals_snapshot
+
+    snap = derive_fundamentals_snapshot(
+        highlights={
+            "EarningsShare": 6.42,
+            "RevenueTTM": 400_000_000_000.0,
+            "EBITDA": 120_000_000_000.0,
+        },
+        cash_flow={
+            "operatingCashFlow": 110_000_000_000.0,
+            "capitalExpenditures": -10_000_000_000.0,
+        },
+        income={
+            "ebit": 100_000_000_000.0,
+            "interestExpense": -2_000_000_000.0,
+        },
+        balance={
+            "netDebt": 60_000_000_000.0,
+        },
+        technicals={
+            "Beta": 1.25,
+            "AverageVolume": 80_000_000,
+        },
+    )
+
+    assert snap["eps_ttm"] == pytest.approx(6.42)
+    assert snap["beta"] == pytest.approx(1.25)
+    assert snap["avg_volume_30d"] == 80_000_000
+    assert snap["operating_cash_flow"] == pytest.approx(110e9)
+    assert snap["capex"] == pytest.approx(10e9)  # stored as absolute value
+    assert snap["free_cash_flow"] == pytest.approx(100e9)
+    assert snap["fcf_margin"] == pytest.approx(100e9 / 400e9)
+    assert snap["interest_coverage"] == pytest.approx(100e9 / 2e9)
+    assert snap["net_debt_to_ebitda"] == pytest.approx(60e9 / 120e9)
+    assert snap["credit_rating"] is None  # always NULL — EODHD does not provide it
+
+
+def test_derive_fundamentals_snapshot_missing_data_returns_nones() -> None:
+    """derive_fundamentals_snapshot returns None for all derived fields when data is empty."""
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import derive_fundamentals_snapshot
+
+    snap = derive_fundamentals_snapshot(
+        highlights={},
+        cash_flow={},
+        income={},
+        balance={},
+        technicals={},
+    )
+
+    assert snap["eps_ttm"] is None
+    assert snap["beta"] is None
+    assert snap["avg_volume_30d"] is None
+    assert snap["operating_cash_flow"] is None
+    assert snap["capex"] is None
+    assert snap["free_cash_flow"] is None
+    assert snap["fcf_margin"] is None
+    assert snap["interest_coverage"] is None
+    assert snap["net_debt_to_ebitda"] is None
+    assert snap["credit_rating"] is None
+
+
+def test_derive_fundamentals_snapshot_null_semantics_na_strings() -> None:
+    """'N/A' and empty string values are coerced to None, not 0.0."""
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import derive_fundamentals_snapshot
+
+    snap = derive_fundamentals_snapshot(
+        highlights={"EarningsShare": "N/A", "RevenueTTM": ""},
+        cash_flow={},
+        income={},
+        balance={},
+        technicals={"Beta": "-"},
+    )
+
+    assert snap["eps_ttm"] is None
+    assert snap["beta"] is None
+
+
+# ── F-Q2-03: COALESCE UPSERT policy (PLAN-0050 QA iter-2) ────────────────────
+
+
+def test_upsert_snapshot_sql_uses_coalesce_for_all_10_nullable_columns() -> None:
+    """F-Q2-03: The UPSERT SQL must use COALESCE(EXCLUDED.col, table.col) for all
+    10 nullable data columns so that a partial EODHD poll never silently clobbers
+    previously-valid data with NULL.
+
+    WHY white-box SQL inspection: upsert_snapshot() wraps a SQLAlchemy text()
+    query that executes against a real DB.  A unit test cannot run that query
+    without a running Postgres instance.  Instead, we inspect the generated SQL
+    string to verify the COALESCE contract is honoured for each nullable column.
+    This is a structural guarantee — it will fail the moment someone accidentally
+    reverts to a bare ``EXCLUDED.col`` assignment (the regression pattern from
+    PLAN-0049 iter-1 F-QAC-02 and the bug that motivated this finding).
+    """
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import _UPSERT_SQL
+
+    sql_text = str(_UPSERT_SQL)
+
+    # All 10 nullable data columns must use COALESCE; updated_at is intentionally
+    # unconditional (it tracks when the snapshot was last seen, not data freshness).
+    nullable_columns = [
+        "eps_ttm",
+        "beta",
+        "avg_volume_30d",
+        "operating_cash_flow",
+        "capex",
+        "free_cash_flow",
+        "fcf_margin",
+        "interest_coverage",
+        "net_debt_to_ebitda",
+        "credit_rating",
+    ]
+    for col in nullable_columns:
+        # Each column must appear in a COALESCE(EXCLUDED.col, ...) expression
+        assert f"COALESCE(EXCLUDED.{col}" in sql_text, (
+            f"Column '{col}' is not wrapped in COALESCE in the UPSERT SQL — "
+            f"a partial EODHD poll would silently overwrite the stored value with NULL. "
+            f"Fix: use COALESCE(EXCLUDED.{col}, instrument_fundamentals_snapshot.{col})"
+        )
+
+    # updated_at should NOT use COALESCE — it must always be refreshed unconditionally
+    assert "COALESCE(EXCLUDED.updated_at" not in sql_text, (
+        "updated_at must be set unconditionally (now()), not via COALESCE — "
+        "it tracks when the snapshot row was last seen by the pipeline."
+    )
+
+
+@pytest.mark.asyncio
+async def test_upsert_snapshot_partial_payload_preserves_existing_values() -> None:
+    """F-Q2-03: Verify COALESCE semantics via mock session.
+
+    Scenario:
+      1. Full payload — all 10 fields populated.
+      2. Partial re-poll — only eps_ttm, beta, avg_volume_30d set; the 7 remaining
+         fields are None (e.g. cash-flow section was absent from the response).
+      3. Assert: after the second UPSERT the 7 fields NOT in the partial payload
+         are still the original values (COALESCE fell back to the stored value).
+
+    Implementation note: upsert_snapshot() calls session.execute(text(...), params).
+    We capture the params dict from both calls and verify that the COALESCE logic
+    in the SQL string would produce the correct result (the test validates the
+    *contract* of the params — both None and non-None values are passed through;
+    it is the DB-side COALESCE that decides which wins).  Verifying the SQL text
+    itself (see test above) is the complementary structural check.
+    """
+    from unittest.mock import AsyncMock
+
+    from market_data.infrastructure.db.fundamentals_snapshot_writer import upsert_snapshot
+
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=None)
+
+    instrument_id = "0190f3a0-dead-beef-cafe-000000000001"
+
+    # ── Call 1: full payload ──────────────────────────────────────────────────
+    full_snap = {
+        "eps_ttm": 6.42,
+        "beta": 1.25,
+        "avg_volume_30d": 80_000_000,
+        "operating_cash_flow": 110_000_000_000.0,
+        "capex": 10_000_000_000.0,
+        "free_cash_flow": 100_000_000_000.0,
+        "fcf_margin": 0.25,
+        "interest_coverage": 50.0,
+        "net_debt_to_ebitda": 0.5,
+        "credit_rating": None,  # always None — EODHD limitation
+    }
+    await upsert_snapshot(session, instrument_id, full_snap)
+
+    # ── Call 2: partial payload (only 3 of 10 fields present) ────────────────
+    partial_snap = {
+        "eps_ttm": 6.80,  # updated
+        "beta": 1.30,  # updated
+        "avg_volume_30d": 85_000_000,  # updated
+        # All other fields are None — simulates cash-flow section missing from EODHD poll
+        "operating_cash_flow": None,
+        "capex": None,
+        "free_cash_flow": None,
+        "fcf_margin": None,
+        "interest_coverage": None,
+        "net_debt_to_ebitda": None,
+        "credit_rating": None,
+    }
+    await upsert_snapshot(session, instrument_id, partial_snap)
+
+    # Verify execute was called twice
+    assert session.execute.await_count == 2
+
+    # The params from call 2 must contain None for the 7 absent fields.
+    # The COALESCE in the SQL ensures those None params fall back to the DB value.
+    # We assert that the params dict correctly reflects the partial payload so
+    # the DB-side COALESCE receives the right inputs.
+    _sql_stmt, params_2 = session.execute.call_args_list[1].args
+    assert params_2["eps_ttm"] == pytest.approx(6.80)
+    assert params_2["beta"] == pytest.approx(1.30)
+    assert params_2["avg_volume_30d"] == 85_000_000
+    # The 7 absent fields are sent as None — COALESCE in SQL will keep existing DB value
+    assert params_2["operating_cash_flow"] is None
+    assert params_2["capex"] is None
+    assert params_2["free_cash_flow"] is None
+    assert params_2["fcf_margin"] is None
+    assert params_2["interest_coverage"] is None
+    assert params_2["net_debt_to_ebitda"] is None
+    assert params_2["credit_rating"] is None

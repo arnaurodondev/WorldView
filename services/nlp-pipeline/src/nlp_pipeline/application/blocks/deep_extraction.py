@@ -6,20 +6,26 @@ Uses Qwen2.5-7B-Instruct via ExtractionClient for structured extraction.
 Output:
   - events, claims, relations (structured per PRD §6.7 Block 10 schema)
   - Emits nlp.signal.detected.v1 for high-confidence (≥0.80) resolved entities
-  - Claims written via nlp_db outbox (NEVER directly to intelligence_db)
+  - Claims flow downstream via the enriched event's ``raw_claims`` array.
+    PLAN-0057 D-1 (F-CRIT-08): the legacy ``claim.extracted`` outbox topic
+    was an orphan — no consumer group ever subscribed (verified via
+    ``kafka-consumer-groups --describe``). KG ingests claims via
+    ``nlp.article.enriched.v1.raw_claims`` (see KG enriched_consumer).
+    The ClaimsRepository + per-claim outbox write loop have been removed.
   - Relations with provisional entities → entity_provisional=true + provisional_queue_id
 
 Window strategy (PRD §6.7 Block 10):
   ≤24,000 tokens → single window
   >24,000 tokens → 6,000-token windows with 500-token overlap
-
-evidence_date heuristic: coalesce(published_at, extracted_at) — NEVER use now().
 """
 
 from __future__ import annotations
 
 import json
+import time
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import structlog  # type: ignore[import-untyped]
 
@@ -29,14 +35,11 @@ from nlp_pipeline.application.blocks.suppression import should_run_deep_extracti
 from nlp_pipeline.domain.models import SignalEvent
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from ml_clients.protocols import ExtractionClient  # type: ignore[import-not-found]
+    from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
 
     from nlp_pipeline.application.blocks.suppression import ProcessingPath
     from nlp_pipeline.domain.models import Chunk, EntityMention
-    from nlp_pipeline.infrastructure.intelligence_db.repositories.claims import ClaimsRepository
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -59,7 +62,25 @@ _EXTRACTION_SCHEMA: dict[str, object] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "event_type": {"type": "string"},
+                    "event_type": {
+                        "type": "string",
+                        "enum": [
+                            "EARNINGS_RELEASE",
+                            "M_AND_A",
+                            "REGULATORY_ACTION",
+                            "MACRO",
+                            "MANAGEMENT_CHANGE",
+                            "PRODUCT_LAUNCH",
+                            "CAPITAL_RAISE",
+                            "LEGAL",
+                            "ANALYST_RATING",
+                            "GUIDANCE_RAISE",
+                            "NATURAL_DISASTER",
+                            "GEOPOLITICAL",
+                            "SANCTIONS",
+                            "OTHER",
+                        ],
+                    },
                     "description": {"type": "string"},
                     "entity_refs": {"type": "array", "items": {"type": "string"}},
                     "valid_from": {"type": ["string", "null"]},
@@ -92,6 +113,7 @@ _EXTRACTION_SCHEMA: dict[str, object] = {
                     "predicate": {"type": "string"},
                     "object_ref": {"type": "string"},
                     "confidence": {"type": "number"},
+                    "evidence_text": {"type": "string"},
                     "entity_provisional": {"type": "boolean"},
                     "provisional_queue_id": {"type": ["string", "null"]},
                 },
@@ -101,7 +123,6 @@ _EXTRACTION_SCHEMA: dict[str, object] = {
     },
     "required": ["events", "claims", "relations"],
 }
-
 
 # ── Window splitting ──────────────────────────────────────────────────────────
 
@@ -138,14 +159,14 @@ def _build_windows(chunks: list[Chunk], max_tokens: int, overlap_tokens: int) ->
 
 
 def _build_prompt(window_text: str, mention_names: list[str]) -> str:
-    """Build the extraction prompt for Qwen2.5-7B-Instruct."""
+    """Build the extraction prompt for Qwen2.5-7B-Instruct.
+
+    Delegates to the centralised DEEP_EXTRACTION template in libs/prompts.
+    """
+    from prompts.extraction.deep import DEEP_EXTRACTION  # type: ignore[import-untyped]
+
     entities_str = ", ".join(mention_names) if mention_names else "none identified"
-    return (
-        f"Extract structured financial intelligence from the following document passage.\n"
-        f"Identified entities: {entities_str}\n\n"
-        f"Document:\n{window_text}\n\n"
-        f"Return JSON matching the schema with events, claims, and relations."
-    )
+    return DEEP_EXTRACTION.render(entities=entities_str, text=window_text)  # type: ignore[no-any-return]
 
 
 async def _run_extraction_window(
@@ -153,11 +174,37 @@ async def _run_extraction_window(
     mentions: list[EntityMention],
     extraction_client: ExtractionClient,
     model_id: str,
+    *,
+    doc_id: UUID | None = None,
+    usage_logger: LlmUsageLogProtocol | None = None,
 ) -> ExtractionResult:
-    """Run extraction on a single window, return parsed result dict."""
+    """Run extraction on a single window, return parsed result dict.
+
+    PLAN-0057 A-5 / F-CRIT-03: when ``usage_logger`` is provided, every call
+    to ``extraction_client.extract()`` (success OR failure) appends one row
+    to ``nlp_db.llm_usage_log``. Latency is captured around the LLM call
+    only — not the JSON-parse path.
+    """
     from ml_clients.dataclasses import ExtractionInput  # type: ignore[import-not-found]
 
-    mention_names = [m.mention_text for m in mentions]
+    # PLAN-0057 B-1: dedup mention_names while preserving order. The prompt
+    # tells the LLM to pick entity_ref values from this list; duplicate
+    # surfaces (same text appearing in multiple mention rows) waste prompt
+    # tokens and don't add signal. ``dict.fromkeys`` preserves insertion order.
+    #
+    # PLAN-0052 platform-QA round 9 (2026-05-01): pass ALL mentions back to
+    # the LLM (reverting round-8's resolved-only filter). Round 9 added
+    # ``synthesize_provisional_refs`` in the article-consumer that creates
+    # an inline ``provisional_entity_queue`` row for any LLM-referenced
+    # UNRESOLVED mention BEFORE ``_build_raw_*`` runs. With that wired,
+    # the consumer's ``entity_id_by_ref`` lookup gets a synthetic UUID for
+    # every referenced surface, so filtering here is no longer necessary —
+    # and is harmful, because a mining article is mostly UNRESOLVED entities
+    # that should still surface as ``entity_provisional=True`` relations
+    # with ``provisional_queue_id`` set. KG enriched_consumer already
+    # promotes those to canonicals when the unresolved-resolution-worker
+    # canonicalises the queue row.
+    mention_names = list(dict.fromkeys(m.mention_text for m in mentions))
     prompt = _build_prompt(window_text, mention_names)
 
     inp = ExtractionInput(
@@ -167,7 +214,47 @@ async def _run_extraction_window(
         model_id=model_id,
     )
 
-    output = await extraction_client.extract(inp)
+    # PLAN-0057 A-5: capture latency for the LLM call. We log success based on
+    # whether extract() returns without raising; the JSON-parse outcome is
+    # independent (a model can return text that we fail to parse — that is
+    # still a successful HTTP round-trip from the LLM provider's POV).
+    t0 = time.perf_counter()
+    output = None
+    extract_succeeded = False
+    try:
+        output = await extraction_client.extract(inp)
+        extract_succeeded = True
+    finally:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        if usage_logger is not None:
+            try:
+                await usage_logger.log(
+                    model_id=model_id,
+                    # The deep-extraction provider is selected at consumer
+                    # wiring time (DeepInfra when extraction_api_key set,
+                    # Ollama otherwise). Without a hint on the client we tag
+                    # generically; tokens_in/out are word-split estimates per
+                    # protocol guidance.
+                    provider=getattr(extraction_client, "provider", "unknown"),
+                    capability="extraction",
+                    tokens_in=len(prompt.split()) + len(window_text.split()),
+                    tokens_out=len(str(getattr(output, "raw_response", "") or "").split()),
+                    latency_ms=latency_ms,
+                    estimated_cost_usd=0.0,
+                    success=extract_succeeded,
+                    error_code=None if extract_succeeded else "model_error",
+                    doc_id=doc_id,
+                )
+            except Exception as exc:  # protocol forbids raising; belt-and-braces
+                logger.warning(
+                    "deep_extraction.usage_log_failed",
+                    doc_id=str(doc_id) if doc_id is not None else None,
+                    error=str(exc),
+                    exc_info=True,
+                )
+
+    if output is None:
+        return {"events": [], "claims": [], "relations": []}
 
     # Parse the structured result
     raw = output.result
@@ -230,18 +317,22 @@ async def run_deep_extraction_block(
     processing_path: ProcessingPath,
     *,
     extraction_client: ExtractionClient,
-    claims_repo: ClaimsRepository,
     model_id: str,
     published_at: datetime | None,
     extracted_at: datetime,
     outbox_topic_signal: str,
+    usage_logger: LlmUsageLogProtocol | None = None,
 ) -> tuple[ExtractionResult, list[SignalEvent]]:
     """Run Block 10: Deep LLM extraction for MEDIUM and DEEP tiers.
 
     For LIGHT/SUPPRESS tiers returns empty results immediately — callers
     must guard via ``should_run_deep_extraction(processing_path)``.
 
-    evidence_date = coalesce(published_at, extracted_at) — NEVER uses now().
+    PLAN-0057 D-1 (F-CRIT-08): the per-claim outbox write loop that produced
+    to the orphan ``claim.extracted`` topic has been removed. Claims still
+    leave this function via the returned ``extraction_result["claims"]``;
+    the article consumer wraps them as ``raw_claims`` inside the
+    ``nlp.article.enriched.v1`` payload, which KG's enriched_consumer reads.
 
     Args:
         doc_id: Document being processed.
@@ -249,7 +340,6 @@ async def run_deep_extraction_block(
         mentions: Resolved entity mentions for context injection.
         processing_path: Current routing path (HALT/SECTION_EMBEDDINGS_ONLY/FULL_PIPELINE).
         extraction_client: Injected ExtractionClient (OllamaExtractionAdapter).
-        claims_repo: Writes claims via nlp_db outbox.
         model_id: Extraction model ID (e.g. "qwen2.5:7b-instruct").
         published_at: Article publication datetime (UTC or None).
         extracted_at: Extraction datetime (UTC).
@@ -268,8 +358,13 @@ async def run_deep_extraction_block(
     if not chunks:
         return _empty, []
 
-    # evidence_date = coalesce(published_at, extracted_at) — NEVER now()
-    evidence_date = published_at if published_at is not None else extracted_at
+    # PLAN-0057 D-1 (F-CRIT-08): the previous code path used
+    # ``evidence_date = coalesce(published_at, extracted_at)`` to populate the
+    # per-claim ``claim.extracted`` outbox payload. That topic had ZERO
+    # subscribers (verified) so the value was dropped on the floor. Claims
+    # downstream (KG enriched_consumer reading raw_claims) take their evidence
+    # date from the article's published_at carried in the enriched envelope —
+    # so we no longer compute it here.
 
     # Build text windows
     windows = _build_windows(chunks, max_tokens=WINDOW_SIZE_TOKENS, overlap_tokens=WINDOW_OVERLAP_TOKENS)
@@ -283,10 +378,12 @@ async def run_deep_extraction_block(
                 mentions=mentions,
                 extraction_client=extraction_client,
                 model_id=model_id,
+                doc_id=doc_id,
+                usage_logger=usage_logger,
             )
             window_results.append(result)
         except Exception:
-            logger.warning("deep_extraction.window_failed", doc_id=str(doc_id))
+            logger.warning("deep_extraction.window_failed", doc_id=str(doc_id), exc_info=True)
             window_results.append({"events": [], "claims": [], "relations": []})
 
     # Merge deduplicated results
@@ -298,26 +395,10 @@ async def run_deep_extraction_block(
         if mention.resolved_entity_id is not None:
             entity_id_by_ref[mention.mention_text.lower()] = mention.resolved_entity_id
 
-    # Write claims via outbox (never directly to intelligence_db)
-    for claim in merged.get("claims", []):
-        claim_d = dict(claim)  # type: ignore[call-overload]
-        entity_ref = str(claim_d.get("entity_ref", "")).lower()
-        entity_id = entity_id_by_ref.get(entity_ref)
-        if entity_id is None:
-            continue  # skip unresolved claims
-
-        try:
-            await claims_repo.write_via_outbox(
-                doc_id=doc_id,
-                entity_id=entity_id,
-                claim_type=str(claim_d.get("claim_type", "")),
-                polarity=str(claim_d.get("polarity", "")),
-                confidence=float(claim_d.get("confidence", 0.0)),
-                evidence_text=str(claim_d.get("evidence_text", "")),
-                evidence_date=evidence_date,
-            )
-        except Exception:
-            logger.warning("deep_extraction.claim_write_failed", doc_id=str(doc_id))
+    # PLAN-0057 D-1 (F-CRIT-08): claims used to be enqueued to the orphan
+    # ``claim.extracted`` outbox topic here. Removed — the topic had zero
+    # subscribers and KG already consumes claims via the ``raw_claims`` array
+    # built from ``merged["claims"]`` in the article consumer.
 
     # Build SignalEvent list for high-confidence signals
     now = common.time.utc_now()  # type: ignore[no-any-return]

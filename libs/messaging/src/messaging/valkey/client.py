@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from contextlib import asynccontextmanager
 from typing import Any
 
 import structlog
@@ -121,6 +122,11 @@ class ValkeyClient:
         }
         pool_kwargs: dict[str, object] = {
             "max_connections": self._config.max_connections,
+            # Proactively ping idle connections every 30 s so reconnect happens
+            # during health-check (background) rather than during a pipeline call
+            # (BP-239: lazy reconnect blocks asyncio event loop via
+            # non-cancellable socket.getaddrinfo thread).
+            "health_check_interval": 30,
         }
         if self._config.ssl:
             pool_kwargs["connection_class"] = SSLConnection
@@ -133,13 +139,38 @@ class ValkeyClient:
         """Return the string value stored at *key*, or ``None`` if missing."""
         return await self._redis.get(key)  # type: ignore[no-any-return]
 
-    async def set(self, key: str, value: str, ttl: int | None = None) -> None:
-        """Set *key* to *value*, optionally with a TTL in seconds."""
-        await self._redis.set(key, value, ex=ttl)
+    async def set(self, key: str, value: str, ttl: int | None = None, *, ex: int | None = None) -> None:
+        """Set *key* to *value*, optionally with a TTL in seconds.
+
+        The TTL may be specified as either ``ttl`` (wrapper convention) or
+        ``ex`` (Redis/valkey convention). ``ex`` takes priority if both are given.
+        """
+        expire = ex if ex is not None else ttl
+        await self._redis.set(key, value, ex=expire)
+
+    async def set_nx(self, key: str, value: str, ex: int) -> bool:
+        """Set *key* to *value* with TTL *ex* only if the key does not exist.
+
+        Wraps Redis ``SET key value EX ex NX``.
+
+        Returns:
+            ``True``  — key was newly created (was not present before).
+            ``False`` — key already existed; no change was made.
+        """
+        result = await self._redis.set(key, value, ex=ex, nx=True)
+        return result is not None
 
     async def delete(self, key: str) -> int:
         """Delete *key* and return the number of keys removed."""
         return await self._redis.delete(key)  # type: ignore[no-any-return]
+
+    async def getdel(self, key: str) -> str | None:
+        """Atomically GET and DELETE *key* (Redis 6.2+ / Valkey).
+
+        Returns the value that was stored, or ``None`` if the key did not exist.
+        Unlike GET + DEL in a pipeline, this is a single atomic command.
+        """
+        return await self._redis.getdel(key)  # type: ignore[no-any-return]
 
     async def exists(self, key: str) -> bool:
         """Return ``True`` if *key* exists."""
@@ -148,6 +179,10 @@ class ValkeyClient:
     async def incr(self, key: str, amount: int = 1) -> int:
         """Atomically increment *key* by *amount*.  Returns the new value."""
         return await self._redis.incr(key, amount)  # type: ignore[no-any-return]
+
+    async def incrbyfloat(self, name: str, amount: float) -> float:
+        """Atomically increment *name* by float *amount*.  Returns the new value."""
+        return await self._redis.incrbyfloat(name, amount)  # type: ignore[no-any-return]
 
     async def expire(self, key: str, seconds: int) -> bool:
         """Set a TTL of *seconds* on *key*.  Returns ``True`` on success."""
@@ -230,6 +265,114 @@ class ValkeyClient:
         """Return the length of the list stored at *key*."""
         return await self._redis.llen(key)  # type: ignore[no-any-return, misc]
 
+    # ── Pub/sub operations ────────────────────────────────────────────────────
+
+    async def publish(self, channel: str, message: str) -> int:
+        """Publish *message* to *channel*.
+
+        Returns the number of subscribers that received the message.
+
+        Args:
+            channel: Pub/sub channel name.
+            message: Message payload (string; serialise before calling if needed).
+        """
+        return await self._redis.publish(channel, message)  # type: ignore[no-any-return]
+
+    @asynccontextmanager  # type: ignore[misc]
+    async def subscribe(self, *channels: str) -> Any:
+        """Async context manager — subscribe to *channels* and yield the ``PubSub`` object.
+
+        Unsubscribes and closes the ``PubSub`` connection on context exit.
+
+        Args:
+            *channels: One or more channel names to subscribe to.
+
+        Yields:
+            A ``PubSub`` object.  Iterate it with ``async for message in pubsub`` or
+            call ``await pubsub.get_message(ignore_subscribe_messages=True, timeout=…)``.
+
+        Example::
+
+            async with client.subscribe("alert:user-123") as pubsub:
+                async for message in pubsub.listen():
+                    if message["type"] == "message":
+                        handle(message["data"])
+        """
+        pubsub = self._redis.pubsub()
+        await pubsub.subscribe(*channels)
+        try:
+            yield pubsub
+        finally:
+            await pubsub.unsubscribe(*channels)
+            await pubsub.close()
+
+    # ── Sorted-set / pipeline ─────────────────────────────────────────────────
+
+    async def execute_lua_script(
+        self,
+        script: str,
+        keys: list[str],
+        args: list[str],
+    ) -> Any:
+        """Execute a Lua script atomically on Valkey/Redis.
+
+        Wraps ``redis.asyncio.Redis.eval()``. Use this when a multi-step
+        sorted-set / counter sequence (e.g. ZADD → ZREMRANGEBYSCORE → ZCARD)
+        must be atomic and isolated from concurrent writers — pipelines with
+        ``transaction=False`` only batch the round-trips, they do not provide
+        atomicity. Lua scripts run on the Redis server with no interleaving
+        from other clients (BP-403, PLAN-0076 Wave B-2 / DEF-031).
+
+        Args:
+            script: Lua source code. ``KEYS`` / ``ARGV`` are 1-indexed.
+            keys: Keys touched by the script (passed as ``KEYS[1..N]``).
+            args: Positional script arguments (passed as ``ARGV[1..M]``).
+
+        Returns:
+            Whatever the Lua script returns (int, str, list, or nil → ``None``).
+        """
+        return await self._redis.eval(script, len(keys), *keys, *args)  # type: ignore[no-any-return, misc]
+
+    @asynccontextmanager  # type: ignore[misc]
+    async def pipeline(self, *, transaction: bool = False) -> Any:
+        """Async context manager that yields the underlying redis pipeline.
+
+        Allows callers to use sorted-set commands (zadd, zremrangebyscore,
+        zcard) and other pipelined operations not natively exposed by
+        :class:`ValkeyClient`.
+
+        Args:
+            transaction: If ``True``, wrap commands in a MULTI/EXEC block.
+                         Defaults to ``False`` (non-transactional pipeline).
+
+        Yields:
+            The ``redis.asyncio`` pipeline object.  Call ``await pipe.execute()``
+            inside the context to flush the buffered commands.
+
+        Example::
+
+            async with client.pipeline(transaction=False) as pipe:
+                pipe.zadd("myset", {"member": 1.0})
+                pipe.expire("myset", 60)
+                results = await pipe.execute()
+        """
+        async with self._redis.pipeline(transaction=transaction) as pipe:  # type: ignore[misc]
+            yield pipe
+
+    async def setex(self, key: str, seconds: int, value: str) -> None:
+        """Set *key* to *value* with an expiry of *seconds*.
+
+        Alias for ``set(key, value, ttl=seconds)`` provided for
+        backward-compatibility with callers using the ``redis.asyncio``
+        ``setex`` API.
+
+        Args:
+            key:     Valkey key.
+            seconds: TTL in seconds.
+            value:   String value to store.
+        """
+        await self._redis.set(key, value, ex=seconds)
+
     # ── Connection management ─────────────────────────────────────────────────
 
     async def ping(self) -> bool:
@@ -237,7 +380,14 @@ class ValkeyClient:
         try:
             return await self._redis.ping()  # type: ignore[no-any-return]
         except Exception:
-            logger.warning("valkey_ping_failed", url=self._config.url)
+            # F-S010: Do not log self._config.url — it may contain a password
+            # (redis://:password@host:port/db). Log safe components only.
+            logger.warning(
+                "valkey_ping_failed",
+                host=self._config.host,
+                port=self._config.port,
+                db=self._config.db,
+            )
             return False
 
     async def close(self) -> None:

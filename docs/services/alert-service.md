@@ -26,6 +26,29 @@ The Alert service fans out intelligence signals to users who are watching releva
 Core entity stored in `alerts` table. Key fields:
 - `alert_id` (UUIDv7), `entity_id`, `alert_type`, `source_event_id`, `source_topic`
 - `payload` (JSONB), `dedup_key` (sha256, UNIQUE), `created_at` (UTC)
+- **Enrichment columns** (PLAN-0049 T-A-1-01, migration `0006`):
+  - `title` (VARCHAR(255), NULL) — pre-composed UI subject (entity / ticker + signal label)
+  - `ticker` (VARCHAR(20), NULL) — denormalised ticker; partial index `idx_alerts_ticker` covers non-NULL rows
+  - `entity_name` (VARCHAR(500), NULL) — denormalised display name
+  - `signal_label` (VARCHAR(200), NULL) — derived label, e.g. `Bullish guidance`
+
+#### Title composition (signal_label fallback contract — PLAN-0049 T-A-1-03 / F-D-006)
+
+`AlertFanoutUseCase` populates `title` deterministically from
+`(claim_type, polarity)` → `signal_label` and the resolved entity context.
+Fallback chain (top to bottom; first non-empty wins):
+
+1. `"<entity_name>: <signal_label>"` — both present and `signal_label` is not bare-severity.
+2. `"<ticker>: <signal_label>"` — ticker present, `signal_label` not bare-severity.
+3. `signal_label` — meaningful label but no entity / ticker context.
+4. `entity_name` (when `signal_label` was the bare-severity fallback).
+5. `ticker` (when neither entity_name nor a meaningful label is available).
+6. Humanised `alert_type` (`"Graph Change Alert"`) — final fallback.
+
+**Invariant:** `title` MUST NEVER expose the bare `"<SEVERITY> signal"` string
+(e.g. `"LOW signal"`).  Frontend widgets (`RecentAlerts`, `AlarmsPanel`) read
+`title` first; the fallback chain above guarantees they never have to render
+severity-as-label themselves.
 
 ### Dedup Key (AD-9)
 ```
@@ -48,7 +71,7 @@ User→entity subscription: `subscription_id`, `user_id`, `entity_id`, `watchlis
 
 6 tables — owned by S10, Alembic IS enabled:
 - `alert_subscriptions` — user watchlist subscriptions
-- `alerts` — materialized alerts with dedup_key UNIQUE
+- `alerts` — materialized alerts with dedup_key UNIQUE; columns include `acknowledged_at`/`acknowledged_by_user_id`/`snooze_until` (PLAN-0051 T-D-4-01) for tenant-level ack + snooze
 - `alert_deliveries` — per-user delivery tracking
 - `pending_alerts` — unacknowledged alerts queue
 - `outbox_events` — transactional outbox for Kafka
@@ -90,6 +113,7 @@ Environment prefix: `ALERT_`
 | `ALERT_KAFKA_WATCHLIST_CONSUMER_GROUP` | `alert-service-watchlist-group` | Watchlist consumer group |
 | `ALERT_S1_PORTFOLIO_BASE_URL` | `http://localhost:8001` | S1 base URL |
 | `INTERNAL_SERVICE_TOKEN` | `` | Shared inter-service token (no prefix) |
+| `ALERT_VALKEY_URL` | `redis://localhost:6379/0` | Valkey connection URL (pub/sub + cache) |
 | `ALERT_ALERT_DEDUP_WINDOW_SECONDS` | `300` | Dedup window in seconds |
 | `ALERT_WATCHLIST_CACHE_TTL_SECONDS` | `300` | Valkey cache TTL |
 | `ALERT_SERVICE_NAME` | `alert` | For observability |
@@ -138,15 +162,45 @@ Default window: 300 s. Same entity+type within one window → single alert.
 2. Resolve watchers via `WatchlistCache` → S1 fallback
 3. Dedup check via `DedupRepository.exists(dedup_key)`
 4. **Single transaction**: INSERT alert + INSERT pending_alert (per watcher) + INSERT outbox_event (per watcher)
-5. **Post-commit**: WebSocket push via `ConnectionManager` (never inside transaction)
+5. **Post-commit**: WebSocket push via `INotificationPublisher` → `ValkeyNotificationPublisher` publishes JSON to Valkey channel `alert:{user_id}` (never inside transaction)
 
 ---
 
-## WebSocket Delivery (Wave E-2)
+## WebSocket Delivery (Wave E-2 + PLAN-0013 Wave C-2)
 
-`ConnectionManager` stores active connections in memory (keyed by `user_id`).
+### Cross-Process Architecture (PLAN-0013 Wave C-2)
 
-**⚠ Single-replica constraint**: connections are in-process memory. Scaling to ≥2 replicas requires an out-of-process fan-out layer (e.g. Redis Pub/Sub).
+Real-time WebSocket delivery uses a **Valkey pub/sub bridge** to cross the process boundary between the standalone consumer process and the API process:
+
+```
+intelligence_consumer_main (OS process)
+  └─ AlertFanoutUseCase
+       └─ ValkeyNotificationPublisher.send_to_user(user_id, payload)
+            └─ PUBLISH alert:{user_id} <JSON>
+                                          │  Valkey
+                                          ▼
+                        API process (FastAPI / alerts_stream WS route)
+                          └─ ValkeyClient.subscribe("alert:{user_id}")
+                               └─ async for msg in pubsub.listen():
+                                    └─ websocket.send_text(msg["data"])
+```
+
+**Delivery is best-effort**: if no client is connected when a message is published, the message is dropped. Clients catch up on reconnect via `GET /api/v1/alerts/pending`.
+
+### INotificationPublisher Port
+
+`AlertFanoutUseCase` depends on the `INotificationPublisher` Protocol (application layer), not on any concrete infrastructure class:
+
+```python
+class INotificationPublisher(Protocol):
+    async def send_to_user(self, user_id: UUID, payload: dict[str, Any]) -> None: ...
+```
+
+`ValkeyNotificationPublisher` (infrastructure) implements this port; it publishes to channel `alert:{user_id}` and swallows all exceptions (publish failures are logged but never raise into the use case).
+
+### ConnectionManager (in-process)
+
+`ConnectionManager` is retained for direct in-process pushes (e.g., integration tests, future in-process paths):
 
 | Method | Behaviour |
 |--------|-----------|
@@ -154,6 +208,8 @@ Default window: 300 s. Same entity+type within one window → single alert.
 | `disconnect(user_id)` | Remove; no-op if not connected |
 | `send_to_user(user_id, data)` | JSON push; cleans up stale connections on failure |
 | `broadcast(data)` | Push to all connected users |
+
+The API process stores a `ws_manager` (`ConnectionManager`) on `app.state` and a `valkey` (`ValkeyClient`) on `app.state`. The WebSocket route subscribes to Valkey and calls `manager.disconnect(user_id)` on cleanup.
 
 ---
 
@@ -176,10 +232,67 @@ Returns paginated unacknowledged alerts for a user.
 **Response**: `{ alerts: PendingAlertResponse[], total, limit, offset }`
 
 ### DELETE /api/v1/alerts/{alert_id}/ack
-Marks an alert as acknowledged for a user.
+Marks a per-user pending-alert delivery row as acknowledged (`pending_alerts.delivered_at`).
 
 **Query params**: `user_id` (UUID, required)
 **Returns**: 200 `{"status": "acknowledged"}` on success; 404 when not found or wrong user (avoids user enumeration, per AD-11)
+
+### PATCH /api/v1/alerts/{alert_id}/acknowledge (PLAN-0051 T-D-4-02)
+Tenant-level alert acknowledgement — sets `alerts.acknowledged_at` and
+`alerts.acknowledged_by_user_id`. Distinct from `DELETE .../ack` (which acks
+a per-user *delivery* row, not the alert itself).
+
+**Auth**: requires JWT (tenant_id + user_id come from `request.state`, never headers).
+**Body** (optional): `{"note": string | null}` — currently informational; reserved for a future audit log.
+**Behaviour**:
+- **Idempotent** — re-acking returns the existing `acknowledged_at` and `acknowledged_by_user_id` unchanged (no overwrite).
+- 404 when the alert is missing OR belongs to another tenant (collapsed to avoid enumeration).
+**Response** (200): full `AlertResponse` including `acknowledged_at`, `acknowledged_by_user_id`, `snooze_until`.
+
+### PATCH /api/v1/alerts/{alert_id}/snooze (PLAN-0051 T-D-4-02)
+Sets `alerts.snooze_until` so the alert disappears from the active list
+until the supplied timestamp.
+
+**Auth**: requires JWT.
+**Body** (required): `{"until": "<ISO-8601 timezone-aware datetime>"}`
+**Validation**:
+- `until` MUST be timezone-aware.
+- `until > now` (past values are rejected with 422).
+- `until <= now + 30 days` (max snooze window — long-term silencing should use a rule-level mute).
+**Response** (200): full `AlertResponse` with the new `snooze_until` set.
+**Errors**: 422 invalid until; 404 missing/cross-tenant.
+
+### GET /api/v1/alerts/history (PLAN-0051 T-D-4-02)
+Paginated, tenant-scoped alert history. Read-only — uses `ReadOnlyUnitOfWork` (R27).
+
+**Query params**:
+| Param | Type | Description |
+|-------|------|-------------|
+| `severity` | `low\|medium\|high\|critical` | Optional severity filter |
+| `entity_id` | UUID | Optional entity filter |
+| `from` | datetime | Optional `created_at >=` lower bound |
+| `to` | datetime | Optional `created_at <=` upper bound |
+| `status` | `active\|acknowledged\|snoozed\|all` (default `all`) | Status bucket — see below |
+| `limit` | int (1–200, default 50) | Page size |
+| `offset` | int (default 0) | Pagination offset |
+
+**Status semantics**:
+- `active` — `acknowledged_at IS NULL AND (snooze_until IS NULL OR snooze_until < NOW())`
+- `acknowledged` — `acknowledged_at IS NOT NULL`
+- `snoozed` — `snooze_until IS NOT NULL AND snooze_until >= NOW() AND acknowledged_at IS NULL`
+- `all` — no status filter
+
+**Response** (200): `{ alerts: AlertResponse[], total, limit, offset, has_more }` where:
+- `total` is the **universe count** of all rows matching the same filters (NOT the page-row count). Computed via a separate `count(*)` query that mirrors `list_history`'s WHERE clause exactly. QA-iter1 C-3 changed the semantics from page-size to universe so the frontend's `rows.length < total` test (and the "Load more" affordance) actually works.
+- `has_more` is `offset + len(alerts) < total` (server-derived for client convenience).
+
+Tenant filter is enforced server-side from the JWT-derived `tenant_id` —
+clients cannot override.
+
+**Wire contract**:
+- `severity` query param MUST be lowercase (`high`, not `HIGH`) — backend `AlertSeverity` is a lowercase StrEnum (QA-iter1 C-2).
+- Snooze body field is `until` (NOT `snooze_until`) — `SnoozeAlertRequest.until: datetime` (QA-iter1 C-1).
+- ACK and snooze on rows with `tenant_id IS NULL` return `forbidden` (NOT `ok`) — symmetric with the read path which excludes NULL-tenant rows from tenant-scoped queries (QA-iter1 MAJ-1).
 
 ### WebSocket /api/v1/alerts/stream
 Real-time alert stream pushed to connected users.
@@ -215,13 +328,13 @@ Admin endpoints protected by `X-Admin-Token` header (`ALERT_ADMIN_TOKEN` env var
 
 ## Deployment Constraints
 
-### Single-Replica Requirement (WebSocket)
+### WebSocket Fan-out (PLAN-0013 Wave C-2 — Resolved)
 
-The `ConnectionManager` stores active WebSocket connections in process memory (`_connections: dict[UUID, WebSocket]`). Running ≥2 replicas of S10 would mean a push arriving at replica A cannot reach a user connected to replica B.
+The original single-replica WebSocket constraint (connections stored in `ConnectionManager` in-process memory) has been **resolved** by the Valkey pub/sub bridge introduced in PLAN-0013 Wave C-2.
 
-**Current deployment**: single-replica only.  Scaling to ≥2 replicas requires an out-of-process fan-out layer (e.g. Redis Pub/Sub) to broadcast push notifications across all replicas.
+The `intelligence_consumer_main` standalone process now uses `ValkeyNotificationPublisher` (not `ConnectionManager`) to publish alerts. The API process subscribes to `alert:{user_id}` and forwards messages to the connected WebSocket client. Any number of API replicas can handle WebSocket connections independently — each subscribes to its own Valkey channel for the user it is serving.
 
-This constraint is documented in the `.. warning::` docstring of `services/alert/src/alert/infrastructure/websocket/manager.py`.
+**Current deployment**: multi-replica capable. The `ConnectionManager` warning docstring in `manager.py` is retained for historical context but no longer applies to the primary delivery path.
 
 ### S9 Auth-Injection (user_id Parameter)
 
@@ -233,8 +346,51 @@ This is noted in the docstrings of the REST and WebSocket route handlers in `ser
 
 ---
 
+## Migration Ops
+
+### Backfilling enrichment columns on legacy alerts
+
+Migration `0006_add_alert_enrichment_columns` is purely additive (nullable
+columns), so existing rows have `title IS NULL` until either:
+
+1. They are superseded by a newer alert with the same `dedup_key` (no-op for
+   real production data — alerts are immutable), or
+2. The one-shot backfill script populates them from each row's `payload` JSON.
+
+**Backfill script:** `services/alert/src/alert/scripts/backfill_alert_titles.py`
+(lives inside the importable package so it can be invoked via `python -m`).
+
+```bash
+# Required: ALERT_DB_URL points at the alert_db (postgres:// or
+# postgresql+asyncpg:// — the script normalises both).
+export ALERT_DB_URL="postgres://alert:alertpw@localhost:5443/alert_db"
+
+# Dry-run — counts rows with NULL title without mutating anything.
+python -m alert.scripts.backfill_alert_titles --dry-run
+
+# Live — backfills in 1000-row batches, logs progress every 10k rows.
+python -m alert.scripts.backfill_alert_titles
+```
+
+**Idempotency:** the SELECT and the UPDATE are both guarded by `title IS NULL`,
+so the script is safe to re-run; rows already populated (by the consumer or by
+a previous backfill run) are filtered out.  A racing fan-out write that
+populates `title` in between the SELECT and the UPDATE wins — the `WHERE
+title IS NULL` clause causes our update to no-op for that row.
+
+The script reuses the **same derivation helpers** (`_derive_signal_label`,
+`_compose_alert_title`) as `AlertFanoutUseCase`, so backfilled titles are
+indistinguishable from natively-enriched ones.
+
+---
+
 ## Implementation Status
 
 - [x] Wave E-1: Service setup, domain, DB, S1 client, tests (43 tests)
 - [x] Wave E-2: Consumers, alert fan-out, WebSocket, outbox (97 tests, ruff + mypy clean)
 - [x] Wave E-3: REST API, health, integration tests, full pipeline validation (114 unit tests, ruff + mypy clean — 2026-03-29)
+- [x] PLAN-0013 Wave A-1: Strip background tasks from S3 lifespan (market-data service)
+- [x] PLAN-0013 Waves B-1+B-2: Entrypoint unit tests for S3/S5/S6/S7
+- [x] PLAN-0013 Wave B-3: Entrypoint unit tests for S10 (136 unit tests)
+- [x] PLAN-0013 Wave C-1: `INotificationPublisher` port + `ValkeyNotificationPublisher` adapter; `AlertFanoutUseCase` decoupled from `ConnectionManager`; `intelligence_consumer_main.py` uses Valkey pub/sub
+- [x] PLAN-0013 Wave C-2: WebSocket route subscribes to `alert:{user_id}` Valkey channel; `ValkeyClient.publish()` + `subscribe()` added to `libs/messaging`; integration tests via `fakeredis.FakeServer`

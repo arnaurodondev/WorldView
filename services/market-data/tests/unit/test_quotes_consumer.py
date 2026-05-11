@@ -104,9 +104,10 @@ async def test_quotes_consumer_skips_non_quote() -> None:
 
 @pytest.mark.asyncio
 async def test_quotes_consumer_creates_instrument_on_first_seen() -> None:
-    """Consumer creates a new Instrument when symbol/exchange is unknown.
+    """Consumer creates a new Instrument and emits InstrumentDiscovered.
 
-    QA-016: InstrumentCreated is written atomically to outbox_events (not collect_event).
+    PLAN-0057 Wave D-2 (F-CRIT-12): emits ``market.instrument.discovered.v1``
+    instead of ``market.instrument.created`` (which had ``name=None``).
     """
     new_instrument = _make_instrument()
     mock_uow = AsyncMock()
@@ -124,8 +125,29 @@ async def test_quotes_consumer_creates_instrument_on_first_seen() -> None:
     mock_uow.instruments.upsert.assert_awaited_once()
     mock_uow.outbox_events.create.assert_awaited_once()
     call_kwargs = mock_uow.outbox_events.create.call_args
-    assert call_kwargs.kwargs["event_type"] == "market.instrument.created"
-    assert call_kwargs.kwargs["topic"] == "market.instrument.created"
+    assert call_kwargs.kwargs["event_type"] == "market.instrument.discovered"
+    assert call_kwargs.kwargs["topic"] == "market.instrument.discovered.v1"
+    assert call_kwargs.kwargs["payload"]["symbol"] == "MSFT"
+
+
+@pytest.mark.asyncio
+async def test_quotes_consumer_does_not_emit_instrument_created() -> None:
+    """Quotes consumer must NEVER emit ``market.instrument.created`` (Wave D-2)."""
+    new_instrument = _make_instrument()
+    mock_uow = AsyncMock()
+    mock_uow.instruments.find_by_symbol_exchange = AsyncMock(return_value=None)
+    mock_uow.instruments.upsert = AsyncMock(return_value=new_instrument)
+    mock_uow.outbox_events.create = AsyncMock(return_value="outbox-id-001")
+    mock_uow.quotes.upsert = AsyncMock(return_value=None)
+
+    mock_storage = AsyncMock()
+    mock_storage.get_bytes = AsyncMock(return_value=_make_quote_json())
+
+    consumer = _make_consumer(mock_uow, mock_storage)
+    await consumer.process_message(None, _make_message(), {})
+
+    emitted_event_types = [c.kwargs["event_type"] for c in mock_uow.outbox_events.create.call_args_list]
+    assert "market.instrument.created" not in emitted_event_types
 
 
 @pytest.mark.asyncio

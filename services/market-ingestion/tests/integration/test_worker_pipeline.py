@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import SecretStr
 
 pytestmark = pytest.mark.integration
 
@@ -23,7 +24,7 @@ _NEEDS_INFRA = pytest.mark.skipif(
 
 
 @_NEEDS_INFRA
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_trigger_use_case_persists_tasks():
     """TriggerIngestionUseCase creates tasks that are readable from the DB."""
     from market_ingestion.application.use_cases.trigger_ingestion import TriggerIngestionUseCase
@@ -48,7 +49,7 @@ async def test_trigger_use_case_persists_tasks():
 
 
 @_NEEDS_INFRA
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_claim_tasks_returns_empty_when_none_pending():
     """ClaimTasksUseCase returns empty list when no tasks are pending."""
     from market_ingestion.application.use_cases.claim_tasks import ClaimTasksUseCase
@@ -70,7 +71,7 @@ async def test_claim_tasks_returns_empty_when_none_pending():
 
 
 @_NEEDS_INFRA
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_backfill_use_case_creates_chunked_tasks():
     """BackfillUseCase creates multiple chunked tasks for a date range."""
     from market_ingestion.application.use_cases.backfill import BackfillUseCase
@@ -104,8 +105,8 @@ async def test_backfill_use_case_creates_chunked_tasks():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
-@pytest.mark.asyncio
+@pytest.mark.unit()
+@pytest.mark.asyncio()
 async def test_worker_pipeline_end_to_end_mocked():
     """WorkerProcess claims a task and executes the pipeline end-to-end with mocks."""
     from unittest.mock import patch
@@ -115,10 +116,10 @@ async def test_worker_pipeline_end_to_end_mocked():
     settings = MagicMock()
     settings.database_url = "postgresql+asyncpg://x:x@localhost/test"
     settings.database_url_read = ""
-    settings.eodhd_api_key = "demo"
+    settings.eodhd_api_key = SecretStr("demo")
     settings.storage_endpoint = "http://localhost:7480"
-    settings.storage_access_key = "key"
-    settings.storage_secret_key = "test-secret"  # noqa: S105
+    settings.storage_access_key = SecretStr("key")
+    settings.storage_secret_key = SecretStr("test-secret")
     settings.storage_bucket = "bucket"
     settings.kafka_bootstrap_servers = "localhost:9092"
 
@@ -127,7 +128,7 @@ async def test_worker_pipeline_end_to_end_mocked():
             "market_ingestion.infrastructure.workers.worker._build_factories",
             return_value=(MagicMock(), MagicMock()),
         ),
-        patch("market_ingestion.infrastructure.workers.worker.EODHDProviderAdapter"),
+        patch("market_ingestion.infrastructure.workers.worker.build_provider_registry"),
         patch("market_ingestion.infrastructure.workers.worker.S3ObjectStoreAdapter"),
         patch("market_ingestion.infrastructure.workers.worker.ExecuteTaskUseCase") as mock_exec,
         patch("market_ingestion.infrastructure.workers.worker.ClaimTasksUseCase") as mock_claim,

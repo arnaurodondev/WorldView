@@ -26,36 +26,54 @@ _MIGRATION_DIR = Path(__file__).parent.parent.parent.parent / "alembic/versions"
 
 
 def _extract_ddl_columns(migration_text: str, table_name: str) -> set[str]:
-    """Extract column names from a CREATE TABLE statement in migration SQL."""
+    """Extract column names from CREATE TABLE + subsequent ADD COLUMN statements.
+
+    Parses both the initial CREATE TABLE DDL and any later ``op.add_column()``
+    Alembic calls that target the same table, so columns added in follow-up
+    migrations (e.g. 0005_add_next_attempt_at_cit) are included.
+    """
+    columns: set[str] = set()
+
+    # ── 1. Parse CREATE TABLE ────────────────────────────────────────────────
     pattern = rf"CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+{table_name}\s*\("
     match = re.search(pattern, migration_text, re.IGNORECASE)
-    if not match:
-        return set()
+    if match:
+        start = match.end()
+        depth = 1
+        pos = start
+        while pos < len(migration_text) and depth > 0:
+            if migration_text[pos] == "(":
+                depth += 1
+            elif migration_text[pos] == ")":
+                depth -= 1
+            pos += 1
 
-    # Walk forward counting parens to find the balanced closing paren
-    start = match.end()
-    depth = 1
-    pos = start
-    while pos < len(migration_text) and depth > 0:
-        if migration_text[pos] == "(":
-            depth += 1
-        elif migration_text[pos] == ")":
-            depth -= 1
-        pos += 1
+        body = migration_text[start : pos - 1]
+        for line in body.split("\n"):
+            line = line.strip().rstrip(",")
+            if not line:
+                continue
+            upper = line.upper()
+            if any(upper.startswith(kw) for kw in ("PRIMARY KEY", "UNIQUE", "CONSTRAINT", "FOREIGN KEY", "CHECK")):
+                continue
+            parts = line.split()
+            if parts:
+                columns.add(parts[0].strip('"'))
 
-    body = migration_text[start : pos - 1]
-    columns: set[str] = set()
-    for line in body.split("\n"):
-        line = line.strip().rstrip(",")
-        if not line:
-            continue
-        upper = line.upper()
-        if any(upper.startswith(kw) for kw in ("PRIMARY KEY", "UNIQUE", "CONSTRAINT", "FOREIGN KEY", "CHECK")):
-            continue
-        # First word is the column name (constraint lines already skipped above)
-        parts = line.split()
-        if parts:
-            columns.add(parts[0].strip('"'))
+    # ── 2. Parse op.add_column() calls targeting the same table ──────────────
+    # Matches patterns like:  op.add_column("table_name", sa.Column("col_name", ...))
+    add_col_pattern = rf'op\.add_column\(\s*"{table_name}"\s*,\s*sa\.Column\(\s*"([^"]+)"'
+    for m in re.finditer(add_col_pattern, migration_text):
+        columns.add(m.group(1))
+
+    # ── 3. Parse raw "ALTER TABLE <table> ADD COLUMN <col>" statements ───────
+    # PLAN-0055 B-1 added `config_hash` via raw SQL ALTER (Alembic's add_column
+    # lacks GENERATED-column support). Extend the regex so the alignment guard
+    # recognises columns introduced this way.
+    alter_pattern = rf"ALTER\s+TABLE\s+{table_name}\s+ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_]*)"
+    for m in re.finditer(alter_pattern, migration_text, re.IGNORECASE):
+        columns.add(m.group(1))
+
     return columns
 
 

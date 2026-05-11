@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
@@ -15,9 +16,7 @@ from portfolio.domain.errors import EntityAlreadyExistsError, EntityNotFoundErro
 from portfolio.domain.events import UserCreated
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
-    from portfolio.application.ports.unit_of_work import UnitOfWork
+    from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -66,7 +65,7 @@ class CreateUserUseCase:
 
 
 class GetUserUseCase:
-    async def execute(self, user_id: UUID, tenant_id: UUID, uow: UnitOfWork) -> User:
+    async def execute(self, user_id: UUID, tenant_id: UUID, uow: ReadOnlyUnitOfWork) -> User:
         user = await uow.users.get(user_id, tenant_id)
         if user is None:
             raise EntityNotFoundError(

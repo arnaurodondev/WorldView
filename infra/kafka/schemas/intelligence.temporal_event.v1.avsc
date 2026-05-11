@@ -1,0 +1,122 @@
+{
+  "type": "record",
+  "name": "IntelligenceTemporalEvent",
+  "namespace": "com.worldview",
+  "doc": "Emitted by S6 NLP Pipeline (Block 13E) when a geopolitical/macro/regulatory event is detected with confidence >= 0.5. Consumed by S7 TemporalEventConsumer to upsert temporal_events and entity_event_exposures tables.",
+  "fields": [
+    {
+      "name": "event_id",
+      "type": "string",
+      "doc": "UUIDv7 — used as partition key and deduplication key"
+    },
+    {
+      "name": "event_type",
+      "type": "string",
+      "default": "intelligence.temporal_event",
+      "doc": "Kafka event type envelope field"
+    },
+    {
+      "name": "schema_version",
+      "type": "int",
+      "default": 1
+    },
+    {
+      "name": "occurred_at",
+      "type": "string",
+      "doc": "ISO-8601 UTC datetime when this Kafka event was produced"
+    },
+    {
+      "name": "temporal_event_type",
+      "type": "string",
+      "doc": "Event category: geopolitical | regulatory | macro | sanctions | natural_disaster | other"
+    },
+    {
+      "name": "scope",
+      "type": "string",
+      "doc": "Impact scope: LOCAL | REGIONAL | NATIONAL | GLOBAL"
+    },
+    {
+      "name": "region",
+      "type": "string",
+      "default": "",
+      "doc": "ISO-3166 alpha-2 country/region tag or special values: EU, APAC, LatAm, MENA, GLOBAL. Empty string means no region (LOCAL events). Consumer MUST convert empty string to NULL before DB insert."
+    },
+    {
+      "name": "title",
+      "type": "string",
+      "doc": "Short event title (max 500 chars)"
+    },
+    {
+      "name": "description",
+      "type": "string",
+      "default": "",
+      "doc": "Narrative description. For MACRO events includes surprise magnitude (actual - estimate)."
+    },
+    {
+      "name": "source_article_ids",
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "default": [],
+      "doc": "CanonicalDocument UUIDs that evidence this event. Empty for structured EODHD events."
+    },
+    {
+      "name": "source_url",
+      "type": "string",
+      "default": "",
+      "doc": "Primary source URL or EODHD API reference. Empty string if no URL."
+    },
+    {
+      "name": "active_from",
+      "type": "string",
+      "doc": "ISO-8601 UTC datetime when the event becomes active"
+    },
+    {
+      "name": "active_until",
+      "type": "string",
+      "default": "",
+      "doc": "ISO-8601 UTC datetime when the event ends. Empty string means still active (ongoing)."
+    },
+    {
+      "name": "residual_impact_days",
+      "type": "int",
+      "default": 90,
+      "doc": "Days of residual market impact after active_until. 0 means no residual."
+    },
+    {
+      "name": "confidence",
+      "type": "float",
+      "doc": "Extraction confidence [0.0, 1.0]. 1.0 for structured EODHD events (no NLP uncertainty)."
+    },
+    {
+      "name": "exposed_entities",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "ExposedEntity",
+          "fields": [
+            {
+              "name": "entity_id",
+              "type": "string",
+              "doc": "UUIDv7 of the exposed canonical entity"
+            },
+            {
+              "name": "exposure_type",
+              "type": "string",
+              "doc": "How the entity is exposed: directly_affected | operationally_impacted | supply_chain | revenue_geography | sector_exposure"
+            },
+            {
+              "name": "confidence",
+              "type": "float",
+              "doc": "Exposure confidence [0.0, 1.0]"
+            }
+          ]
+        }
+      },
+      "default": [],
+      "doc": "Entities already resolved in the source article that are exposed to this event. For GLOBAL-scope events, only sector/industry canonical entities are included."
+    }
+  ]
+}

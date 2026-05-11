@@ -3,7 +3,16 @@
 from __future__ import annotations
 
 import pytest
-from nlp_pipeline.domain.enums import EmbeddingStatus, MentionClass, ResolutionOutcome, RoutingTier
+from nlp_pipeline.domain.enums import (
+    DataQuality,
+    EmbeddingStatus,
+    MentionClass,
+    ResolutionOutcome,
+    RoutingTier,
+    WindowType,
+)
+
+pytestmark = pytest.mark.unit
 
 
 @pytest.mark.unit
@@ -78,10 +87,61 @@ class TestEmbeddingStatus:
 
 @pytest.mark.unit
 class TestResolutionOutcome:
-    def test_has_3_outcomes(self) -> None:
-        assert len(ResolutionOutcome) == 3
+    def test_has_6_outcomes(self) -> None:
+        """PLAN-0033 T-C-1-01: extended from 3 to 6 values."""
+        assert len(ResolutionOutcome) == 6
 
-    def test_values(self) -> None:
+    def test_original_values(self) -> None:
         assert ResolutionOutcome.AUTO_RESOLVED == "auto_resolved"
         assert ResolutionOutcome.PROVISIONAL == "provisional"
         assert ResolutionOutcome.UNRESOLVED == "unresolved"
+
+    def test_new_values(self) -> None:
+        """PLAN-0033 T-C-1-01: three new values added for re-resolution worker."""
+        assert ResolutionOutcome.ESCALATED == "escalated"
+        assert ResolutionOutcome.ENTITY_CREATED == "entity_created"
+        assert ResolutionOutcome.NOISE == "noise"
+
+    def test_membership_by_value(self) -> None:
+        assert ResolutionOutcome("noise") == ResolutionOutcome.NOISE
+        assert ResolutionOutcome("escalated") == ResolutionOutcome.ESCALATED
+        assert ResolutionOutcome("entity_created") == ResolutionOutcome.ENTITY_CREATED
+
+
+@pytest.mark.unit
+class TestWindowType:
+    """PRD-0026 T-A-1-01: WindowType enum for article_impact_windows table."""
+
+    def test_has_6_members(self) -> None:
+        """4 active daily windows + 2 reserved intraday = 6 total."""
+        assert len(WindowType) == 6
+
+    def test_day_window_values(self) -> None:
+        assert WindowType.DAY_T0 == "day_t0"
+        assert WindowType.DAY_T1 == "day_t1"
+        assert WindowType.DAY_T2 == "day_t2"
+        assert WindowType.DAY_T5 == "day_t5"
+
+    def test_reserved_intraday_values_exist(self) -> None:
+        """Reserved values must exist in the enum even though not computed yet."""
+        assert WindowType.INTRADAY_1H == "intraday_1h"
+        assert WindowType.INTRADAY_4H == "intraday_4h"
+
+    def test_membership_by_value(self) -> None:
+        assert WindowType("day_t0") == WindowType.DAY_T0
+        assert WindowType("intraday_1h") == WindowType.INTRADAY_1H
+
+
+@pytest.mark.unit
+class TestDataQuality:
+    """PRD-0026 T-A-1-01: DataQuality enum for price measurement source."""
+
+    def test_has_2_members(self) -> None:
+        assert len(DataQuality) == 2
+
+    def test_values(self) -> None:
+        assert DataQuality.DAILY_PROXY == "daily_proxy"
+        assert DataQuality.EXACT_INTRADAY == "exact_intraday"
+
+    def test_membership_by_value(self) -> None:
+        assert DataQuality("daily_proxy") == DataQuality.DAILY_PROXY

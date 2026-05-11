@@ -1,0 +1,57 @@
+# ── .dockerignore ──────────────────────────────────────────────────────────────
+# Whitelist-style: exclude everything, then allow only paths needed by Dockerfiles.
+# Applies when build context is the repo root (services use context: ../.. ).
+#
+# worldview-web also builds from repo root (context: ../..); its files are
+# whitelisted below. intelligence-migrations uses its own build context.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Exclude everything by default
+*
+
+# ── Shared libraries (pyproject.toml + src only) ──────────────────────────────
+!libs/common/pyproject.toml
+!libs/common/src/
+!libs/contracts/pyproject.toml
+!libs/contracts/src/
+!libs/messaging/pyproject.toml
+!libs/messaging/src/
+!libs/observability/pyproject.toml
+!libs/observability/src/
+!libs/storage/pyproject.toml
+!libs/storage/src/
+!libs/ml-clients/pyproject.toml
+!libs/ml-clients/src/
+!libs/prompts/pyproject.toml
+!libs/prompts/src/
+!libs/tools/pyproject.toml
+!libs/tools/src/
+
+# ── Service source + build metadata ──────────────────────────────────────────
+!services/*/pyproject.toml
+!services/*/src/
+!services/*/alembic/
+!services/*/alembic.ini
+!services/*/Dockerfile
+# F-502 (QA iter-5): ship operator one-shots (backfills, repairs) into the
+# image so SREs can run them via `docker compose exec` rather than `docker cp`.
+# Whitelisted at the service level — any service that has a scripts/ directory
+# gets it baked into its image automatically.
+!services/*/scripts/
+
+# ── Kafka Avro schemas (needed by consumers at runtime) ──────────────────────
+!infra/kafka/schemas/
+
+# ── Frontend (worldview-web Dockerfile also uses repo root context) ──────────
+!package.json
+!pnpm-workspace.yaml
+!pnpm-lock.yaml
+!apps/worldview-web/
+
+# ── Re-exclude dev artifacts that snuck through the above globs ──────────────
+**/.mypy_cache
+**/.pytest_cache
+**/.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo

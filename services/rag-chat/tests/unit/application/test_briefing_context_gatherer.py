@@ -1,0 +1,423 @@
+"""Unit tests for BriefingContextGatherer (T-B-2-01, PLAN-0034 Wave B-2).
+
+All upstream client calls are mocked — no real HTTP requests.
+Tests verify correct assembly of BriefingContext from multiple sources,
+graceful degradation on individual failures, and ContextGatheringError
+when ALL sources fail.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID
+
+import pytest
+from rag_chat.application.models.briefing_context import (
+    AlertSummary,
+    QuoteSummary,
+)
+from rag_chat.application.ports.upstream_clients import EgocentricGraph, EventResult, PortfolioContext
+from rag_chat.application.use_cases.briefing_context import BriefingContextGatherer
+from rag_chat.domain.enums import BriefingType
+from rag_chat.domain.errors import ContextGatheringError, EntityNotFoundError
+
+pytestmark = pytest.mark.unit
+
+_USER_ID = "00000000-0000-0000-0000-000000000099"
+_TENANT_ID = "00000000-0000-0000-0000-000000000088"
+_ENTITY_ID = "00000000-0000-0000-0000-000000000001"
+_INSTRUMENT_ID = UUID("00000000-0000-0000-0000-000000000077")
+
+
+def _make_s1(portfolio: PortfolioContext | None = None, fail: bool = False) -> MagicMock:
+    """Create a mock S1Client with configurable portfolio response."""
+    s1 = MagicMock()
+    if fail:
+        s1.get_portfolio_context = AsyncMock(side_effect=RuntimeError("S1 down"))
+    else:
+        s1.get_portfolio_context = AsyncMock(return_value=portfolio)
+    return s1
+
+
+def _make_s3(
+    batch_quotes: dict | None = None,
+    instrument_id: UUID | None = None,
+    quote: dict | None = None,
+    fundamentals: dict | None = None,
+) -> MagicMock:
+    """Create a mock S3Client with configurable responses."""
+    s3 = MagicMock()
+    s3.get_batch_quotes = AsyncMock(return_value=batch_quotes or {})
+    s3.find_instrument_by_ticker = AsyncMock(return_value=instrument_id)
+    s3.get_quote = AsyncMock(return_value=quote or {})
+    s3.get_fundamentals_highlights = AsyncMock(return_value=fundamentals or {})
+    return s3
+
+
+def _make_s5(
+    alerts: list[AlertSummary] | None = None,
+    fail: bool = False,
+) -> MagicMock:
+    """Create a mock S5Client with configurable alerts response."""
+    s5 = MagicMock()
+    if fail:
+        s5.get_pending_alerts = AsyncMock(side_effect=RuntimeError("S5 down"))
+    else:
+        s5.get_pending_alerts = AsyncMock(return_value=alerts or [])
+    return s5
+
+
+def _make_s6(
+    news_articles: list[dict] | None = None,
+    fail: bool = False,
+) -> MagicMock:
+    """Create a mock S6Client with configurable news response."""
+    s6 = MagicMock()
+    if fail:
+        s6._get = AsyncMock(side_effect=RuntimeError("S6 down"))
+    else:
+        s6._get = AsyncMock(return_value={"articles": news_articles or []})
+    return s6
+
+
+def _make_s7(
+    events: list[EventResult] | None = None,
+    graph: EgocentricGraph | None = None,
+    fail: bool = False,
+) -> MagicMock:
+    """Create a mock S7Client with configurable responses."""
+    s7 = MagicMock()
+    if fail:
+        s7.search_events = AsyncMock(side_effect=RuntimeError("S7 down"))
+        s7.get_egocentric_graph = AsyncMock(side_effect=RuntimeError("S7 down"))
+        s7._get = AsyncMock(side_effect=RuntimeError("S7 down"))
+    else:
+        s7.search_events = AsyncMock(return_value=events or [])
+        s7.get_egocentric_graph = AsyncMock(
+            return_value=graph or EgocentricGraph(entity_id=_ENTITY_ID),
+        )
+    return s7
+
+
+def _sample_portfolio() -> PortfolioContext:
+    """Create a sample portfolio context for testing."""
+    return PortfolioContext(
+        user_id=_USER_ID,
+        tenant_id=_TENANT_ID,
+        holdings=[
+            {
+                "ticker": "AAPL",
+                "entity_id": "00000000-0000-0000-0000-000000000010",
+                "name": "Apple Inc.",
+                "quantity": 100,
+                "weight": 0.6,
+            },
+            {
+                "ticker": "MSFT",
+                "entity_id": "00000000-0000-0000-0000-000000000011",
+                "name": "Microsoft Corp.",
+                "quantity": 50,
+                "weight": 0.4,
+            },
+        ],
+        watchlist=[
+            {
+                "ticker": "TSLA",
+                "entity_id": "00000000-0000-0000-0000-000000000012",
+                "name": "Tesla Inc.",
+            },
+        ],
+        total_positions=2,
+    )
+
+
+def _sample_news_raw() -> list[dict]:
+    """Create sample raw news article dicts from S6 response."""
+    return [
+        {
+            "article_id": "00000000-0000-0000-0000-000000000020",
+            "title": "Apple Q3 Earnings Beat",
+            "url": "https://example.com/apple-q3",
+            "published_at": "2026-04-23T10:00:00+00:00",
+            "source_type": "news",
+            "display_relevance_score": 0.85,
+            "primary_entity_id": "00000000-0000-0000-0000-000000000010",
+            "primary_entity_name": "Apple Inc.",
+        },
+    ]
+
+
+def _sample_alerts() -> list[AlertSummary]:
+    """Create sample alert summaries."""
+    return [
+        AlertSummary(
+            alert_id=UUID("00000000-0000-0000-0000-000000000030"),
+            entity_id=UUID("00000000-0000-0000-0000-000000000010"),
+            alert_type="price_drop",
+            severity="high",
+            payload={"threshold": -5.0},
+            created_at=datetime.now(tz=UTC),
+        ),
+    ]
+
+
+def _sample_quotes() -> dict[str, QuoteSummary]:
+    """Create sample batch quotes."""
+    return {
+        str(_INSTRUMENT_ID): QuoteSummary(
+            instrument_id=str(_INSTRUMENT_ID),
+            last="175.50",
+            timestamp=datetime.now(tz=UTC),
+        ),
+    }
+
+
+def _sample_events() -> list[EventResult]:
+    """Create sample event results from S7."""
+    return [
+        EventResult(
+            event_id="00000000-0000-0000-0000-000000000040",
+            event_type="earnings",
+            event_text="Apple Q3 earnings report released",
+            subject_entity_id="00000000-0000-0000-0000-000000000010",
+            event_date="2026-04-20",
+            extraction_confidence=0.95,
+        ),
+    ]
+
+
+def _sample_graph() -> EgocentricGraph:
+    """Create a sample egocentric graph with nodes and edges."""
+    return EgocentricGraph(
+        entity_id=_ENTITY_ID,
+        nodes=[
+            {
+                "entity_id": _ENTITY_ID,
+                "canonical_name": "Apple Inc.",
+                "entity_type": "company",
+                "ticker": "AAPL",
+            },
+            {
+                "entity_id": "00000000-0000-0000-0000-000000000002",
+                "canonical_name": "Microsoft Corp.",
+                "entity_type": "company",
+                "ticker": "MSFT",
+            },
+        ],
+        edges=[
+            {
+                "relation_type": "competitor",
+                "target": "00000000-0000-0000-0000-000000000002",
+                "target_name": "Microsoft Corp.",
+                "confidence": 0.9,
+            },
+        ],
+    )
+
+
+# ── Test: All sources succeed ────────────────────────────────────────────────
+
+
+async def test_gather_morning_all_succeed() -> None:
+    """All 4 parallel sources return data — BriefingContext is fully populated."""
+    s1 = _make_s1(portfolio=_sample_portfolio())
+    s3 = _make_s3(batch_quotes=_sample_quotes(), instrument_id=_INSTRUMENT_ID)
+    s5 = _make_s5(alerts=_sample_alerts())
+    s6 = _make_s6(news_articles=_sample_news_raw())
+    s7 = _make_s7(events=_sample_events())
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    ctx = await gatherer.gather_morning_context(_USER_ID, _TENANT_ID)
+
+    assert ctx.briefing_type == BriefingType.MORNING
+    assert ctx.user_id == UUID(_USER_ID)
+    assert ctx.tenant_id == UUID(_TENANT_ID)
+    assert ctx.portfolio is not None
+    assert len(ctx.portfolio.holdings) == 2
+    assert ctx.portfolio.holdings[0].ticker == "AAPL"
+    assert ctx.portfolio.holdings[0].quantity == Decimal("100")
+    assert len(ctx.portfolio.watchlist) == 1
+    assert len(ctx.news_articles) == 1
+    assert ctx.news_articles[0].title == "Apple Q3 Earnings Beat"
+    assert len(ctx.active_alerts) == 1
+    assert len(ctx.recent_events) == 1
+
+
+# ── Test: S1 fails — portfolio is None ───────────────────────────────────────
+
+
+async def test_gather_morning_s1_fails() -> None:
+    """S1 raises exception — portfolio=None, rest of the context populated."""
+    s1 = _make_s1(fail=True)
+    s3 = _make_s3()
+    s5 = _make_s5(alerts=_sample_alerts())
+    s6 = _make_s6(news_articles=_sample_news_raw())
+    s7 = _make_s7()
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    ctx = await gatherer.gather_morning_context(_USER_ID, _TENANT_ID)
+
+    # Portfolio failed — should be None
+    assert ctx.portfolio is None
+    # Other sources should still succeed
+    assert len(ctx.active_alerts) == 1
+    assert len(ctx.news_articles) == 1
+
+
+# ── Test: S5 fails — alerts empty ───────────────────────────────────────────
+
+
+async def test_gather_morning_s5_fails() -> None:
+    """S5 returns [] — active_alerts=[], rest OK."""
+    s1 = _make_s1(portfolio=_sample_portfolio())
+    s3 = _make_s3(instrument_id=_INSTRUMENT_ID, batch_quotes=_sample_quotes())
+    s5 = _make_s5(fail=True)
+    s6 = _make_s6(news_articles=_sample_news_raw())
+    s7 = _make_s7(events=_sample_events())
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    ctx = await gatherer.gather_morning_context(_USER_ID, _TENANT_ID)
+
+    # S5 failed — alerts should be empty
+    assert ctx.active_alerts == []
+    # Portfolio and other sources should succeed
+    assert ctx.portfolio is not None
+    assert len(ctx.news_articles) == 1
+    assert len(ctx.recent_events) == 1
+
+
+# ── Test: ALL sources fail — raises ContextGatheringError ────────────────────
+
+
+async def test_gather_morning_all_fail() -> None:
+    """All sources fail — raises ContextGatheringError."""
+    s1 = _make_s1(fail=True)
+    s3 = _make_s3()
+    s5 = _make_s5(fail=True)
+    s6 = _make_s6(fail=True)
+    s7 = _make_s7(fail=True)
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+
+    with pytest.raises(ContextGatheringError, match="All upstream context sources failed"):
+        await gatherer.gather_morning_context(_USER_ID, _TENANT_ID)
+
+
+# ── Test: No tickers — quotes dict empty ────────────────────────────────────
+
+
+async def test_gather_morning_no_tickers() -> None:
+    """Holdings without tickers — quotes dict should be empty."""
+    portfolio_no_tickers = PortfolioContext(
+        user_id=_USER_ID,
+        tenant_id=_TENANT_ID,
+        holdings=[
+            {
+                "entity_id": "00000000-0000-0000-0000-000000000010",
+                "name": "Some Entity",
+                "quantity": 100,
+                "weight": 1.0,
+                # Note: no "ticker" key
+            },
+        ],
+        watchlist=[],
+        total_positions=1,
+    )
+    s1 = _make_s1(portfolio=portfolio_no_tickers)
+    s3 = _make_s3()
+    s5 = _make_s5()
+    s6 = _make_s6()
+    s7 = _make_s7()
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    ctx = await gatherer.gather_morning_context(_USER_ID, _TENANT_ID)
+
+    # No tickers means no instrument_ids, so batch quotes was never called with IDs
+    assert ctx.quotes == {}
+    assert ctx.portfolio is not None
+    assert ctx.portfolio.holdings[0].ticker is None
+
+
+# ── Test: Instrument — full context ─────────────────────────────────────────
+
+
+async def test_gather_instrument_full() -> None:
+    """S7 returns entity with ticker — all data populated."""
+    graph = _sample_graph()
+    s1 = _make_s1()
+    s3 = _make_s3(
+        instrument_id=_INSTRUMENT_ID,
+        quote={"last": "175.50", "timestamp": datetime.now(tz=UTC).isoformat()},
+        fundamentals={"pe_ratio": 25.0, "market_cap": "2.8T"},
+    )
+    s5 = _make_s5()
+    s6 = _make_s6(news_articles=_sample_news_raw())
+    s7 = _make_s7(graph=graph, events=_sample_events())
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    ctx = await gatherer.gather_instrument_context(_ENTITY_ID)
+
+    assert ctx.briefing_type == BriefingType.INSTRUMENT
+    assert ctx.entity_id == _ENTITY_ID
+    assert ctx.entity_graph is not None
+    assert ctx.entity_graph.canonical_name == "Apple Inc."
+    assert ctx.entity_graph.ticker == "AAPL"
+    assert len(ctx.entity_graph.relationships) == 1
+    assert ctx.fundamentals is not None
+    assert ctx.fundamentals.data["pe_ratio"] == 25.0
+    assert len(ctx.news_articles) == 1
+    assert len(ctx.recent_events) == 1
+
+
+# ── Test: Instrument — no ticker (non-financial entity) ─────────────────────
+
+
+async def test_gather_instrument_no_ticker() -> None:
+    """Non-financial entity (no ticker) — S3 calls skipped."""
+    graph = EgocentricGraph(
+        entity_id=_ENTITY_ID,
+        nodes=[
+            {
+                "entity_id": _ENTITY_ID,
+                "canonical_name": "European Union",
+                "entity_type": "organization",
+                # No ticker — not a financial instrument
+            },
+        ],
+        edges=[],
+    )
+    s1 = _make_s1()
+    s3 = _make_s3()
+    s5 = _make_s5()
+    s6 = _make_s6()
+    s7 = _make_s7(graph=graph)
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+    ctx = await gatherer.gather_instrument_context(_ENTITY_ID)
+
+    assert ctx.entity_graph is not None
+    assert ctx.entity_graph.ticker is None
+    # S3 find_instrument_by_ticker should not have been called
+    s3.find_instrument_by_ticker.assert_not_called()
+    assert ctx.fundamentals is None
+    assert ctx.quotes == {}
+
+
+# ── Test: Instrument — entity not found ─────────────────────────────────────
+
+
+async def test_gather_instrument_entity_not_found() -> None:
+    """S7 returns empty graph (no nodes) — raises EntityNotFoundError."""
+    empty_graph = EgocentricGraph(entity_id=_ENTITY_ID, nodes=[], edges=[])
+    s1 = _make_s1()
+    s3 = _make_s3()
+    s5 = _make_s5()
+    s6 = _make_s6()
+    s7 = _make_s7(graph=empty_graph)
+
+    gatherer = BriefingContextGatherer(s1=s1, s3=s3, s5=s5, s6=s6, s7=s7)
+
+    with pytest.raises(EntityNotFoundError, match="not found"):
+        await gatherer.gather_instrument_context(_ENTITY_ID)

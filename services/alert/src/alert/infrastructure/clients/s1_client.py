@@ -38,7 +38,8 @@ class S1Client:
 
     def __init__(self, settings: Settings, client: AsyncClient | None = None) -> None:
         self._base_url = settings.s1_portfolio_base_url.rstrip("/")
-        self._token = settings.internal_service_token
+        # PRD-0025: S1 Portfolio requires RS256 X-Internal-JWT. Set ALERT_S1_INTERNAL_JWT.
+        self._jwt = settings.s1_internal_jwt
         self._client = client or AsyncClient(timeout=5.0)
 
     async def close(self) -> None:
@@ -49,10 +50,12 @@ class S1Client:
     async def get_watchers_by_entity(self, entity_id: str) -> tuple[list[WatcherInfo], bool]:
         """GET /internal/v1/watchlists/by-entity/{entity_id} → (watchers, success).
 
-        Returns:
+        Returns
+        -------
             A 2-tuple ``(watchers, ok)`` where ``ok`` is ``True`` when the
             request succeeded (even if the entity has no watchers) and
             ``False`` on any network or HTTP error.
+
         """
         url = f"{self._base_url}/internal/v1/watchlists/by-entity/{entity_id}"
         data = await self._get_json(url)
@@ -85,6 +88,19 @@ class S1Client:
             ]
         return result
 
+    async def get_user_email(self, user_id: str) -> str | None:
+        """GET /internal/v1/users/{user_id} → email address or None.
+
+        Returns the user's email address from S1 Portfolio.  Returns None
+        when S1 is unreachable, returns 4xx/5xx, or the field is absent.
+        """
+        url = f"{self._base_url}/internal/v1/users/{user_id}"
+        data = await self._get_json(url)
+        if data is None:
+            return None
+        email = data.get("email_address", "")
+        return str(email) if email else None
+
     async def health_check(self) -> bool:
         """GET /internal/v1/health — returns True if S1 is healthy."""
         url = f"{self._base_url}/internal/v1/health"
@@ -95,8 +111,9 @@ class S1Client:
 
     def _headers(self) -> dict[str, str]:
         headers: dict[str, str] = {}
-        if self._token:
-            headers["X-Internal-Token"] = self._token
+        if self._jwt:
+            headers["X-Internal-JWT"] = self._jwt
+        # X-Internal-Token fallback removed — PRD-0025 mandates RS256 JWT on all services.
         return headers
 
     async def _get_json(self, url: str) -> dict | None:  # type: ignore[type-arg]

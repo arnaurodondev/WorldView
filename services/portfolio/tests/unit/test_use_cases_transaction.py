@@ -20,6 +20,7 @@ from portfolio.application.ports.repositories import (
     UserRepository,
 )
 from portfolio.application.ports.unit_of_work import UnitOfWork
+from portfolio.application.use_cases.read_models import EnrichedHolding
 from portfolio.application.use_cases.record_transaction import (
     RecordTransactionCommand,
     RecordTransactionUseCase,
@@ -43,7 +44,6 @@ from portfolio.domain.errors import (
     CurrencyMismatchError,
     IdempotencyKeyInvalidError,
     InstrumentNotFoundError,
-    InsufficientHoldingsError,
 )
 
 pytestmark = pytest.mark.unit
@@ -76,6 +76,18 @@ class FakeUserRepo(UserRepository):
 
     async def save(self, user): ...
 
+    async def find_by_external_id(self, external_id):
+        return None
+
+    async def find_by_email_without_external_id(self, email):
+        return None
+
+    async def link_external_id(self, user_id, external_id):
+        pass
+
+    async def find_by_email_with_conflicting_external_id(self, email, current_sub):
+        return None
+
 
 class FakePortfolioRepo(PortfolioRepository):
     def __init__(self, portfolio: Portfolio) -> None:
@@ -91,6 +103,22 @@ class FakePortfolioRepo(PortfolioRepository):
 
     async def save(self, portfolio): ...
 
+    # PLAN-0046 Wave 3 / T-46-3-02 — required by abstract base.
+    async def find_root_by_owner(self, owner_id, tenant_id):
+        return None
+
+    # PLAN-0046 Wave 3 / T-46-3-03 — required by abstract base.
+    async def list_non_root_active_ids_by_owner(self, owner_id, tenant_id):
+        return []
+
+    # PLAN-0046 Wave 4 / T-46-4-02 — required by abstract base.
+    async def list_all_non_root_active(self):
+        return []
+
+    # PLAN-0046 Wave 4 / T-46-4-03 — required by abstract base.
+    async def list_active_root(self):
+        return []
+
 
 class FakeInstrumentRepo(InstrumentRepository):
     def __init__(self, instrument: InstrumentRef | None = None) -> None:
@@ -99,7 +127,16 @@ class FakeInstrumentRepo(InstrumentRepository):
     async def get(self, instrument_id):
         return self._instrument if self._instrument and self._instrument.id == instrument_id else None
 
+    async def list_by_ids(self, instrument_ids):
+        # QA-iter1 MIN-4 — single-instrument fake; return list.
+        if self._instrument and self._instrument.id in instrument_ids:
+            return [self._instrument]
+        return []
+
     async def get_by_symbol_exchange(self, symbol, exchange):
+        return None
+
+    async def get_by_symbol(self, symbol):
         return None
 
     async def list_all(self):
@@ -132,6 +169,18 @@ class FakeTransactionRepo(TransactionRepository):
     async def save(self, transaction):
         self.saved.append(transaction)
 
+    # PLAN-0046 Wave 3 / T-46-3-03 — required by abstract base.
+    async def list_by_portfolio_ids(self, portfolio_ids, tenant_id, limit: int = 100, offset: int = 0):
+        return [], 0
+
+    # PLAN-0051 / T-A-1-04 — required by abstract base. Returns ASC-sorted
+    # transactions for the portfolio; this fake doesn't filter by tenant
+    # because the existing tests construct a single-tenant world.
+    async def list_all_for_portfolio_asc(self, portfolio_id, tenant_id):
+        items = [t for t in self.saved if t.portfolio_id == portfolio_id and t.tenant_id == tenant_id]
+        items.sort(key=lambda t: (t.executed_at, t.created_at))
+        return items
+
 
 class FakeHoldingRepo(HoldingRepository):
     def __init__(self) -> None:
@@ -143,8 +192,21 @@ class FakeHoldingRepo(HoldingRepository):
     async def list_by_portfolio(self, portfolio_id):
         return [h for (pid, _), h in self._holdings.items() if pid == portfolio_id]
 
+    async def list_by_portfolio_enriched(self, portfolio_id):
+        holdings = [h for (pid, _), h in self._holdings.items() if pid == portfolio_id]
+        return [EnrichedHolding(holding=h, ticker=None, name=None, entity_id=None) for h in holdings]
+
     async def save(self, holding):
         self._holdings[(holding.portfolio_id, holding.instrument_id)] = holding
+
+    async def delete(self, portfolio_id, instrument_id):
+        # PLAN-0046 / BP-264: parity with the production repo; required to
+        # satisfy the new HoldingRepository.delete abstract method.
+        self._holdings.pop((portfolio_id, instrument_id), None)
+
+    # PLAN-0046 Wave 3 / T-46-3-03 — required by abstract base.
+    async def list_by_portfolio_ids_aggregated_enriched(self, portfolio_ids):
+        return []
 
 
 class FakeOutboxRepo(OutboxRepository):
@@ -244,12 +306,56 @@ class FakeUoW(UnitOfWork):
     def entity_suppressions(self):
         return None
 
+    @property
+    def brokerage_connections(self):
+        return None
+
+    @property
+    def brokerage_sync_errors(self):
+        return None
+
+    @property
+    def auth_audit_log(self):
+        return None
+
+    @property
+    def portfolio_value_snapshots(self):
+        return None
+
+    # PLAN-0052 Wave D — feedback subsystem repos (unused by transaction
+    # tests but required to satisfy the UnitOfWork ABC).
+    @property
+    def feedback_submissions(self):
+        return None
+
+    @property
+    def nps_scores(self):
+        return None
+
+    @property
+    def feature_requests(self):
+        return None
+
+    @property
+    def feature_votes(self):
+        return None
+
+    @property
+    def micro_surveys(self):
+        return None
+
+    @property
+    def beta_enrollments(self):
+        return None
+
     commit_count: int = 0
 
     async def commit(self) -> None:
         self.commit_count += 1
 
     async def rollback(self): ...
+
+    async def flush(self) -> None: ...
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -321,7 +427,7 @@ def cmd(tenant_id, owner_id, portfolio_id, instrument_id):
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         price=Decimal("150.00"),
         currency="USD",
         executed_at=_NOW,
@@ -333,13 +439,17 @@ def cmd(tenant_id, owner_id, portfolio_id, instrument_id):
 
 @pytest.mark.asyncio
 async def test_buy_creates_transaction_and_holding(uow, cmd) -> None:
+    # PLAN-0046 / BP-264: this test now verifies that recording a transaction
+    # is HISTORY-ONLY — the holdings table is no longer mutated. Holdings are
+    # derived from the broker's position snapshot via UpsertHoldingsFromSnapshot.
+    # The transaction itself is still persisted with quantity/price/etc.
     uc = RecordTransactionUseCase()
     result = await uc.execute(cmd, uow)
-    assert result.transaction.quantity == Decimal("10")
+    assert result.transaction.quantity == Decimal(10)
     assert len(uow._transactions.saved) == 1
     holdings = await uow._holdings.list_by_portfolio(cmd.portfolio_id)
-    assert len(holdings) == 1
-    assert holdings[0].quantity == Decimal("10")
+    # Holdings are NOT created by record_transaction anymore — snapshot owns this.
+    assert len(holdings) == 0
     # T-G-1-01: verify commit was called exactly once (not zero, not two)
     assert uow.commit_count == 1
 
@@ -350,9 +460,10 @@ async def test_sell_decreases_holding(uow, cmd, portfolio_id, instrument_id) -> 
     holding = Holding(
         portfolio_id=portfolio_id,
         instrument_id=instrument_id,
+        tenant_id=cmd.tenant_id,
         currency="USD",
-        quantity=Decimal("20"),
-        average_cost=Decimal("100"),
+        quantity=Decimal(20),
+        average_cost=Decimal(100),
     )
     uow._holdings._holdings[(portfolio_id, instrument_id)] = holding
 
@@ -363,16 +474,20 @@ async def test_sell_decreases_holding(uow, cmd, portfolio_id, instrument_id) -> 
         instrument_id=instrument_id,
         transaction_type=TransactionType.SELL,
         direction=TransactionDirection.OUTFLOW,
-        quantity=Decimal("5"),
-        price=Decimal("200"),
+        quantity=Decimal(5),
+        price=Decimal(200),
         currency="USD",
         executed_at=_NOW,
     )
     uc = RecordTransactionUseCase()
     await uc.execute(sell_cmd, uow)
 
+    # PLAN-0046 / BP-264: SELL no longer mutates holdings. The pre-seeded holding
+    # is left untouched — broker snapshots are now the source of truth and will
+    # update it on the next sync. Verify the transaction was still recorded.
     holdings = await uow._holdings.list_by_portfolio(portfolio_id)
-    assert holdings[0].quantity == Decimal("15")
+    assert holdings[0].quantity == Decimal(20)
+    assert len(uow._transactions.saved) == 1
 
 
 @pytest.mark.asyncio
@@ -393,8 +508,8 @@ async def test_missing_instrument_raises(tenant, user, portfolio, tenant_id, own
         instrument_id=uuid4(),
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("1"),
-        price=Decimal("100"),
+        quantity=Decimal(1),
+        price=Decimal(100),
         currency="USD",
         executed_at=_NOW,
     )
@@ -409,9 +524,10 @@ async def test_insufficient_holdings_raises(uow, cmd, portfolio_id, instrument_i
     holding = Holding(
         portfolio_id=portfolio_id,
         instrument_id=instrument_id,
+        tenant_id=cmd.tenant_id,
         currency="USD",
-        quantity=Decimal("1"),
-        average_cost=Decimal("100"),
+        quantity=Decimal(1),
+        average_cost=Decimal(100),
     )
     uow._holdings._holdings[(portfolio_id, instrument_id)] = holding
 
@@ -422,14 +538,22 @@ async def test_insufficient_holdings_raises(uow, cmd, portfolio_id, instrument_i
         instrument_id=instrument_id,
         transaction_type=TransactionType.SELL,
         direction=TransactionDirection.OUTFLOW,
-        quantity=Decimal("999"),
-        price=Decimal("100"),
+        quantity=Decimal(999),
+        price=Decimal(100),
         currency="USD",
         executed_at=_NOW,
     )
+    # PLAN-0046 / BP-264: insufficient-holdings is no longer enforced inside
+    # RecordTransactionUseCase. Recording a SELL transaction is now history-only
+    # and does NOT mutate or validate the holding row. The broker is the source
+    # of truth — if a sell is reported for an unheld position the next snapshot
+    # will simply show the corrected quantity. The test now asserts the use case
+    # succeeds (transaction is recorded) and the pre-seeded holding is unchanged.
     uc = RecordTransactionUseCase()
-    with pytest.raises(InsufficientHoldingsError):
-        await uc.execute(sell_cmd, uow)
+    result = await uc.execute(sell_cmd, uow)
+    assert result.transaction.quantity == Decimal(999)
+    holdings = await uow._holdings.list_by_portfolio(portfolio_id)
+    assert holdings[0].quantity == Decimal(1)  # untouched
 
 
 @pytest.mark.asyncio
@@ -448,12 +572,13 @@ async def test_idempotency_same_key_twice_returns_first(uow, cmd) -> None:
     assert result1.transaction.id == result2.transaction.id
     # Only one transaction should have been saved (idempotency prevents a second save)
     assert len(uow._transactions.saved) == 1
-    # T-G-1-02: outbox must have exactly 2 records (1x TransactionRecorded + 1x HoldingChanged from
-    # first call only; the duplicate second call must not add more)
-    assert len(uow._outbox.saved) == 2, "outbox must not be doubled by a duplicate idempotent call"
-    # T-G-1-02: holdings must be unchanged (same quantity as after first call)
+    # T-G-1-02 (PLAN-0046 update): outbox must have exactly 1 record now —
+    # only TransactionRecorded. HoldingChanged is no longer emitted by this
+    # use case (BP-264; ownership moved to UpsertHoldingsFromSnapshotUseCase).
+    assert len(uow._outbox.saved) == 1, "outbox must not be doubled by a duplicate idempotent call"
+    # PLAN-0046 / BP-264: holdings table is no longer touched here.
     holdings = await uow._holdings.list_by_portfolio(cmd_with_key.portfolio_id)
-    assert holdings[0].quantity == result1.transaction.quantity
+    assert len(holdings) == 0
 
 
 @pytest.mark.asyncio
@@ -554,6 +679,8 @@ class _IntegrityErrorUoW(FakeUoW):
         # Clear all pending saves — simulates the DB rollback undoing the writes.
         self._transactions.saved.clear()
 
+    async def flush(self) -> None: ...
+
 
 class _IntegrityErrorUoWWithWinner(FakeUoW):
     """FakeUoW where the 'winner' concurrent request already committed its transaction.
@@ -577,10 +704,19 @@ class _IntegrityErrorUoWWithWinner(FakeUoW):
         self._transactions.saved.clear()
         self._transactions.saved.append(self._winner_tx)
 
+    async def flush(self) -> None: ...
+
 
 @pytest.mark.asyncio
 async def test_integrity_error_on_commit_with_idempotency_key_returns_existing(
-    tenant, user, portfolio, instrument, tenant_id, owner_id, portfolio_id, instrument_id
+    tenant,
+    user,
+    portfolio,
+    instrument,
+    tenant_id,
+    owner_id,
+    portfolio_id,
+    instrument_id,
 ) -> None:
     """When commit() races with an IntegrityError and the winner's transaction exists,
     the loser returns the existing transaction (idempotent 200, not 500).
@@ -599,15 +735,19 @@ async def test_integrity_error_on_commit_with_idempotency_key_returns_existing(
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         price=Decimal("150.00"),
-        fees=Decimal("0"),
+        fees=Decimal(0),
         currency="USD",
         executed_at=_NOW,
         external_ref=idem_key,
     )
     uow = _IntegrityErrorUoWWithWinner(
-        tenant=tenant, user=user, portfolio=portfolio, instrument=instrument, winner_tx=winner_tx
+        tenant=tenant,
+        user=user,
+        portfolio=portfolio,
+        instrument=instrument,
+        winner_tx=winner_tx,
     )
 
     cmd_with_key = RecordTransactionCommand(
@@ -617,7 +757,7 @@ async def test_integrity_error_on_commit_with_idempotency_key_returns_existing(
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         price=Decimal("150.00"),
         currency="USD",
         executed_at=_NOW,
@@ -632,7 +772,14 @@ async def test_integrity_error_on_commit_with_idempotency_key_returns_existing(
 
 @pytest.mark.asyncio
 async def test_integrity_error_on_commit_without_idempotency_key_raises_conflict(
-    tenant, user, portfolio, instrument, tenant_id, owner_id, portfolio_id, instrument_id
+    tenant,
+    user,
+    portfolio,
+    instrument,
+    tenant_id,
+    owner_id,
+    portfolio_id,
+    instrument_id,
 ) -> None:
     """When commit() raises IntegrityError and no idempotency key is present,
     IdempotencyConflictError is raised (maps to HTTP 409).
@@ -648,7 +795,7 @@ async def test_integrity_error_on_commit_without_idempotency_key_raises_conflict
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         price=Decimal("150.00"),
         currency="USD",
         executed_at=_NOW,
@@ -661,7 +808,14 @@ async def test_integrity_error_on_commit_without_idempotency_key_raises_conflict
 
 @pytest.mark.asyncio
 async def test_integrity_error_on_commit_with_key_but_no_existing_raises_conflict(
-    tenant, user, portfolio, instrument, tenant_id, owner_id, portfolio_id, instrument_id
+    tenant,
+    user,
+    portfolio,
+    instrument,
+    tenant_id,
+    owner_id,
+    portfolio_id,
+    instrument_id,
 ) -> None:
     """When commit() raises IntegrityError with an idempotency key but the winner's
     transaction is not yet visible (e.g. not flushed), IdempotencyConflictError is raised.
@@ -679,7 +833,7 @@ async def test_integrity_error_on_commit_with_key_but_no_existing_raises_conflic
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("10"),
+        quantity=Decimal(10),
         price=Decimal("150.00"),
         currency="USD",
         executed_at=_NOW,
@@ -717,7 +871,13 @@ async def test_f_ds_002_idem_key_recorded_transaction_missing_raises_conflict(uo
 
 @pytest.mark.asyncio
 async def test_inactive_tenant_raises_domain_error(
-    tenant_id, owner_id, portfolio_id, instrument_id, user, portfolio, instrument
+    tenant_id,
+    owner_id,
+    portfolio_id,
+    instrument_id,
+    user,
+    portfolio,
+    instrument,
 ) -> None:
     """Inactive tenant must raise TenantInactiveError (T-G-1-03)."""
     from portfolio.domain.errors import TenantInactiveError
@@ -731,8 +891,8 @@ async def test_inactive_tenant_raises_domain_error(
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("1"),
-        price=Decimal("100"),
+        quantity=Decimal(1),
+        price=Decimal(100),
         currency="USD",
         executed_at=_NOW,
     )
@@ -742,7 +902,13 @@ async def test_inactive_tenant_raises_domain_error(
 
 @pytest.mark.asyncio
 async def test_inactive_user_raises_domain_error(
-    tenant_id, owner_id, portfolio_id, instrument_id, tenant, portfolio, instrument
+    tenant_id,
+    owner_id,
+    portfolio_id,
+    instrument_id,
+    tenant,
+    portfolio,
+    instrument,
 ) -> None:
     """Suspended user must raise UserInactiveError (T-G-1-03)."""
     from portfolio.domain.errors import UserInactiveError
@@ -756,8 +922,8 @@ async def test_inactive_user_raises_domain_error(
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("1"),
-        price=Decimal("100"),
+        quantity=Decimal(1),
+        price=Decimal(100),
         currency="USD",
         executed_at=_NOW,
     )
@@ -767,7 +933,12 @@ async def test_inactive_user_raises_domain_error(
 
 @pytest.mark.asyncio
 async def test_portfolio_not_found_raises_domain_error(
-    tenant_id, owner_id, instrument_id, tenant, user, instrument
+    tenant_id,
+    owner_id,
+    instrument_id,
+    tenant,
+    user,
+    instrument,
 ) -> None:
     """Portfolio not found → PortfolioNotFoundError (T-G-1-03)."""
     from portfolio.domain.errors import PortfolioNotFoundError
@@ -788,8 +959,8 @@ async def test_portfolio_not_found_raises_domain_error(
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("1"),
-        price=Decimal("100"),
+        quantity=Decimal(1),
+        price=Decimal(100),
         currency="USD",
         executed_at=_NOW,
     )
@@ -799,7 +970,13 @@ async def test_portfolio_not_found_raises_domain_error(
 
 @pytest.mark.asyncio
 async def test_wrong_owner_raises_authorization_error(
-    tenant_id, owner_id, portfolio_id, instrument_id, tenant, user, instrument
+    tenant_id,
+    owner_id,
+    portfolio_id,
+    instrument_id,
+    tenant,
+    user,
+    instrument,
 ) -> None:
     """Portfolio owned by a different user → AuthorizationError (T-G-1-03)."""
     from portfolio.domain.errors import AuthorizationError
@@ -821,8 +998,8 @@ async def test_wrong_owner_raises_authorization_error(
         instrument_id=instrument_id,
         transaction_type=TransactionType.BUY,
         direction=TransactionDirection.INFLOW,
-        quantity=Decimal("1"),
-        price=Decimal("100"),
+        quantity=Decimal(1),
+        price=Decimal(100),
         currency="USD",
         executed_at=_NOW,
     )

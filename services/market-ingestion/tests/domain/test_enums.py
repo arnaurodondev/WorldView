@@ -32,7 +32,7 @@ def test_provider_string_conversion() -> None:
 @pytest.mark.unit
 def test_provider_membership_exhaustive() -> None:
     members = {p.value for p in Provider}
-    assert members == {"eodhd", "alpha_vantage", "polygon", "yahoo_finance"}
+    assert members == {"eodhd", "alpha_vantage", "polygon", "yahoo_finance", "finnhub", "alpaca"}
 
 
 @pytest.mark.unit

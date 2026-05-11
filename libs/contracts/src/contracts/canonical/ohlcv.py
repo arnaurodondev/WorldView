@@ -39,15 +39,26 @@ class CanonicalOHLCVBar:
         )
         # FIX-O1: normalise separator before parsing (compatible with Python 3.10+).
         # EODHD EOD uses key "date"; intraday uses key "datetime".
-        raw_date = d.get("date") or d.get("datetime", "")
+        # Alpaca uses "datetime" (normalised by _normalize_bars in the adapter).
+        # Defense-in-depth: also fall back to "timestamp" key for legacy/raw records.
+        raw_date = d.get("date") or d.get("datetime") or d.get("timestamp", "")
         if isinstance(raw_date, datetime):
             bar_date = raw_date
+        elif not raw_date:
+            raise ValueError(f"OHLCV bar dict has no date/datetime/timestamp key: {list(d.keys())}")
         else:
             bar_date = datetime.fromisoformat(str(raw_date).replace(" ", "T"))
 
         # adjusted_close: populated only for EOD bars from EODHD (/eod/ endpoint).
         # Intraday bars (/intraday/ endpoint) return no adjusted price — stored as None.
         # This is expected behaviour, not a data quality issue. (FIX-O2)
+
+        # FIX-O3: EODHD (and some other providers) return "volume": null for bars
+        # where no trades were recorded (e.g. ETFs on foreign exchanges, data gaps).
+        # int(None) raises TypeError; coerce to 0 so canonicalization succeeds and
+        # downstream consumers can filter zero-volume bars rather than losing the bar.
+        raw_volume = d.get("volume")
+        volume = int(raw_volume) if raw_volume is not None else 0
 
         return cls(
             symbol=d["symbol"],
@@ -57,7 +68,7 @@ class CanonicalOHLCVBar:
             high=float(d["high"]),
             low=float(d["low"]),
             close=float(d["close"]),
-            volume=int(d["volume"]),
+            volume=volume,
             adjusted_close=float(d["adjusted_close"]) if d.get("adjusted_close") is not None else None,
             source=d.get("source", ""),
             provider=d.get("provider", ""),

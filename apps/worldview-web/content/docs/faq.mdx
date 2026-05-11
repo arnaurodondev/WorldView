@@ -1,0 +1,53 @@
+---
+title: FAQ
+description: Frequently asked questions about Worldview — data, pricing, accounts, and integrations.
+section: Help
+order: 1
+updated: 2026-05-05
+---
+
+## Is Worldview a real product?
+
+Yes. It is a fully working terminal — 10 production microservices, a Next.js frontend, and live data integrations — built as a university final thesis demonstrating modern microservice architecture and AI integration. You can sign up free and use it today.
+
+## What data sources do you use?
+
+- **EODHD** — end-of-day and intraday equities, ETFs, and fundamentals
+- **Finnhub** — real-time quotes, news, and earnings calendar
+- **SEC EDGAR** — regulatory filings (8-K, 10-K, 10-Q, Form 4)
+- **Polymarket** — prediction market probabilities
+- **SnapTrade / TastyTrade** — read-only brokerage sync
+
+## How current is the price data?
+
+During US market hours (09:30–16:00 ET), prices update every 60 seconds from EODHD intraday data. Live quotes in instrument headers update every 1–2 seconds using Finnhub's WebSocket feed (with a 15-second delay for the free plan). This is sufficient for research and monitoring — not for trading execution.
+
+## Is my brokerage account safe to connect?
+
+Yes. Worldview uses SnapTrade as the brokerage connection layer. The OAuth token is scoped to read-only access — Worldview cannot place trades, transfer funds, or modify your brokerage account. Your brokerage credentials are never transmitted to or stored by Worldview.
+
+## What is the morning brief and when does it generate?
+
+The morning brief is an AI-generated daily digest that runs at 06:00 ET each trading day. It covers the market tone, top news themes, watchlist-specific commentary, and key economic events. It uses DeepSeek R1 Distill 32B via DeepInfra and caches the result for the rest of the day.
+
+## Can I access Worldview via API?
+
+Yes. The S9 API Gateway exposes 55+ documented REST endpoints. See the [API Reference](/docs/api-reference) for the full documentation. All endpoints require a JWT from Zitadel OIDC or the dev-login endpoint for local testing.
+
+## What are the pricing tiers?
+
+- **Free** — 1 watchlist (25 instruments), 5 alert rules, 60 API requests/min
+- **Pro** — unlimited watchlists and alerts, 600 API requests/min, real-time quote streaming
+- **Enterprise** — everything in Pro plus custom rate limits, SSO/SAML, SLA, and dedicated support
+
+## Can I host Worldview myself?
+
+The codebase is a monorepo with Docker Compose for local development. Self-hosting requires configuring Zitadel, Kafka, 5 Postgres databases, and the EODHD/Finnhub API keys. See the repository README for setup instructions.
+
+## How do I report a bug?
+
+Use the floating feedback button (bottom-right of any authenticated page) to open the bug report flow. Include steps to reproduce, the URL, and any error messages. Public roadmap and feature voting at [/feedback](/feedback).
+
+## Why do some instruments show "—" instead of a value?
+
+A dash ("—") means the data is unavailable or not applicable, not that the value is zero. Common causes: newly-listed company with no earnings history, ETF where an income statement metric is not applicable, or a data gap between EODHD update cycles. If you believe data is incorrectly missing, use the feedback button to report it.

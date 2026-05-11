@@ -16,7 +16,7 @@ import common.ids
 import common.time
 from content_ingestion.domain.entities import FetchResult
 from content_ingestion.infrastructure.adapters.base import RetryConfig, SourceAdapter, url_hash
-from content_ingestion.infrastructure.adapters.finnhub.client import RateLimitError
+from content_ingestion.infrastructure.adapters.finnhub.client import PremiumEndpointError, RateLimitError
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -65,10 +65,21 @@ class FinnhubAdapter(SourceAdapter):
 
         Dedup uses sha256(str(article_id)). On 429, backs off to next minute boundary.
         """
+        from datetime import timedelta
+
         config = source.config
         symbol = config.get("symbol", "")
         effective_from = from_date or config.get("from_date", "")
         to_date = config.get("to_date", "")
+
+        # Finnhub company-news requires both from and to date parameters.
+        # Default to today's date when to_date is missing; default from_date
+        # to 30 days ago when also absent (incremental mode fetches recent news).
+        now_utc = datetime.now(tz=UTC)
+        if not to_date:
+            to_date = now_utc.strftime("%Y-%m-%d")
+        if not effective_from:
+            effective_from = (now_utc - timedelta(days=30)).strftime("%Y-%m-%d")
 
         results: list[FetchResult] = []
 
@@ -96,14 +107,12 @@ class FinnhubAdapter(SourceAdapter):
                     logger.debug("finnhub_dedup_skip", url_hash=article_hash[:12])
                     continue
 
-                if not self._rate_limiter.consume():
-                    wait = self._rate_limiter.wait_time()
-                    logger.debug("finnhub_rate_limit_wait", wait_seconds=wait)
-                    await asyncio.sleep(wait)
-                    self._rate_limiter.consume()
-
+                # NOTE: No rate-limit consumption per news article — all articles
+                # come from a single API call, not one call per article.
+                # Rate limiting is applied only to transcript fetches below.
                 raw_bytes = json.dumps(article).encode("utf-8")
                 article_url = article.get("url", f"https://finnhub.io/news/{article_id}")
+                title = article.get("headline") or None  # Finnhub uses "headline" not "title"
 
                 results.append(
                     FetchResult(
@@ -116,20 +125,50 @@ class FinnhubAdapter(SourceAdapter):
                         content_type="application/json",
                         published_at=_parse_published_at(article),
                         is_backfill=is_backfill,
+                        title=title,
                     ),
                 )
 
-        # Fetch transcripts
+        # Fetch transcripts (premium feature — gracefully skip if account lacks access).
+        # F-104 fix: PremiumEndpointError now short-circuits before the retry loop,
+        # so a free-tier account no longer wastes 3 retries x backoff per symbol per
+        # cycle. Any other error still falls through to the existing soft-skip path.
+        transcript_list: list[dict[str, Any]] = []
         try:
-            transcript_list = await self._retry_request(
+            transcript_list = await self._retry_request(  # type: ignore[assignment]
                 lambda: self._client.fetch_transcript_list(symbol=symbol),
                 retry_config=self._retry_config,
                 context=f"finnhub:transcripts:{symbol}",
             )
+        except PremiumEndpointError as exc:
+            # Permanent licensing failure — log once at info, do NOT retry.
+            logger.info(
+                "finnhub_transcripts_unavailable",
+                symbol=symbol,
+                reason="premium_endpoint",
+                endpoint=exc.endpoint,
+            )
         except RateLimitError as e:
             logger.warning("finnhub_rate_limited_transcripts", sleep_secs=e.sleep_secs)
             await asyncio.sleep(e.sleep_secs)
-            transcript_list = await self._client.fetch_transcript_list(symbol=symbol)
+            try:
+                transcript_list = await self._client.fetch_transcript_list(symbol=symbol)  # type: ignore[assignment]
+            except PremiumEndpointError as exc:
+                logger.info(
+                    "finnhub_transcripts_unavailable",
+                    symbol=symbol,
+                    reason="premium_endpoint",
+                    endpoint=exc.endpoint,
+                )
+        except Exception as exc:
+            # Non-403, non-429 errors — keep the soft-skip behaviour but log at warning
+            # so the operator notices a real adapter regression (vs. premium licensing).
+            logger.warning(
+                "finnhub_transcripts_unavailable",
+                symbol=symbol,
+                reason="adapter_error",
+                error=str(exc),
+            )
 
         if isinstance(transcript_list, list):
             for transcript_meta in transcript_list:

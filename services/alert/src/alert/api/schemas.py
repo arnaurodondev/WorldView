@@ -5,13 +5,19 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 # ── Pending Alerts ────────────────────────────────────────────────────────────
 
 
 class PendingAlertResponse(BaseModel):
-    """A single pending (unacknowledged) alert for a user."""
+    """A single pending (unacknowledged) alert for a user.
+
+    PLAN-0049 T-A-1-02 / T-D-4-04: surface the persisted enrichment fields
+    (title, ticker, entity_name, signal_label) so the frontend never has to
+    fall back to bare-severity strings like ``"LOW signal"`` (F-D-006).
+    All four are optional for forward-compat — old rows persist NULL.
+    """
 
     pending_id: UUID
     alert_id: UUID
@@ -20,6 +26,11 @@ class PendingAlertResponse(BaseModel):
     source_topic: str
     payload: dict  # type: ignore[type-arg]
     created_at: datetime
+    severity: str  # "low" | "medium" | "high" | "critical" (PRD-0021 §6.5)
+    title: str | None = None
+    ticker: str | None = None
+    entity_name: str | None = None
+    signal_label: str | None = None
 
 
 class PendingAlertsResponse(BaseModel):
@@ -58,3 +69,143 @@ class DLQResolveRequest(BaseModel):
     """Request body for resolving a DLQ entry."""
 
     note: str = Field(default="", max_length=2000, description="Resolution note")
+
+
+# ── Email Preferences ─────────────────────────────────────────────────────────
+
+
+class EmailPreferencesResponse(BaseModel):
+    """Response schema for GET/PUT /api/v1/email/preferences."""
+
+    user_id: UUID
+    weekly_digest_enabled: bool
+    send_day_of_week: int = Field(ge=0, le=6)
+    send_hour_utc: int = Field(ge=0, le=23)
+    email_address: EmailStr | None
+    last_digest_sent_at: datetime | None
+
+
+class UpdateEmailPreferencesRequest(BaseModel):
+    """Request body for PUT /api/v1/email/preferences."""
+
+    weekly_digest_enabled: bool | None = None
+    send_day_of_week: int | None = Field(default=None, ge=0, le=6)
+    send_hour_utc: int | None = Field(default=None, ge=0, le=23)
+    email_address: EmailStr | None = Field(default=..., description="Delivery address; null clears override")
+
+
+class DigestTriggerRequest(BaseModel):
+    """Request body for POST /admin/email/digest/trigger."""
+
+    user_id: UUID
+    tenant_id: UUID
+
+
+class DigestTriggerResponse(BaseModel):
+    """Response for POST /admin/email/digest/trigger."""
+
+    job_id: UUID
+    status: str = "queued"
+
+
+# ── Alert acknowledgement / snooze / history (PLAN-0051 T-D-4-02) ─────────────
+
+
+class AcknowledgeAlertRequest(BaseModel):
+    """Body for ``PATCH /api/v1/alerts/{alert_id}/acknowledge``.
+
+    ``note`` is informational only and not currently persisted (reserved for a
+    future audit_log table). Accepted today so frontends can already pass it
+    forward-compatibly.
+    """
+
+    # Optional free-text note describing why the alert was acked.
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class SnoozeAlertRequest(BaseModel):
+    """Body for ``PATCH /api/v1/alerts/{alert_id}/snooze``.
+
+    ``until`` MUST be timezone-aware and in the future, no more than 30 days
+    out (enforced server-side in SnoozeAlertUseCase, not Pydantic, because
+    the upper bound depends on ``utc_now()`` at request time).
+    """
+
+    until: datetime
+
+
+class AlertResponse(BaseModel):
+    """Full alert response — used by ack/snooze responses + history list."""
+
+    alert_id: UUID
+    entity_id: UUID
+    alert_type: str
+    source_topic: str
+    payload: dict  # type: ignore[type-arg]
+    created_at: datetime
+    severity: str  # "low" | "medium" | "high" | "critical"
+    tenant_id: UUID | None
+    title: str | None = None
+    ticker: str | None = None
+    entity_name: str | None = None
+    signal_label: str | None = None
+    acknowledged_at: datetime | None = None
+    acknowledged_by_user_id: UUID | None = None
+    snooze_until: datetime | None = None
+
+
+# ── User-initiated alert creation (PLAN-0082 Wave B) ──────────────────────────
+
+
+class CreateAlertRequest(BaseModel):
+    """Request body for ``POST /api/v1/alerts``.
+
+    ``condition`` identifies the trigger type. ``threshold`` holds
+    condition-specific parameters (e.g. ``{"value": 200.0}``). Both are
+    required — a condition without a threshold cannot be evaluated.
+
+    ``entity_id`` is the UUID of the entity to watch.  It is required
+    because alert rules are always entity-scoped (no global alerts).
+    """
+
+    entity_id: UUID = Field(description="UUID of the entity to watch")
+    condition: str = Field(
+        description="Trigger condition: price_below | price_above | volume_spike | percent_change",
+        min_length=1,
+        max_length=100,
+    )
+    threshold: dict = Field(  # type: ignore[type-arg]
+        description="JSON threshold parameters, e.g. {'value': 200.0}"
+    )
+    severity: str = Field(
+        default="low",
+        description="Initial severity tier: low | medium | high | critical",
+    )
+
+
+class AlertCreatedResponse(BaseModel):
+    """Response body for ``POST /api/v1/alerts`` on success."""
+
+    alert_id: UUID
+    entity_id: UUID
+    condition: str
+    threshold: dict  # type: ignore[type-arg]
+    severity: str
+    created_at: str  # ISO-8601 UTC
+
+
+class AlertHistoryResponse(BaseModel):
+    """Paginated list of alerts in a tenant's history."""
+
+    alerts: list[AlertResponse]
+    # ``total`` is the universe count for the filtered tenant history (every
+    # row matching the same filters), NOT the page size. Frontends use
+    # ``rows.length < total`` to detect more-pages-available. QA-iter1 C-3
+    # changed this from page-size semantics to universe semantics so the
+    # "Load more" affordance actually appears.
+    total: int
+    limit: int
+    offset: int
+    # ``has_more`` is computed as ``offset + len(alerts) < total`` server-side
+    # so the client can render "Load more" without re-deriving it.
+    has_more: bool

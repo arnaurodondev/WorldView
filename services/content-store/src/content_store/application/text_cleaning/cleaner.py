@@ -85,7 +85,7 @@ def sanitize(html: str) -> str:
     Returns:
         Sanitized HTML with only safe tags.
     """
-    return bleach.clean(html, tags=_SAFE_TAGS, strip=True)  # type: ignore[no-any-return]
+    return bleach.clean(html, tags=_SAFE_TAGS, attributes={}, strip=True)  # type: ignore[no-any-return]
 
 
 def normalize(text: str) -> str:

@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
+from uuid import UUID
 
 from common.ids import new_uuid, new_uuid7_str  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
-
-if TYPE_CHECKING:
-    from uuid import UUID
 
 
 @dataclass
@@ -249,6 +247,21 @@ class WatchlistItemAdded(DomainEvent):
     user_id: UUID = field(default_factory=new_uuid)
     entity_id: UUID = field(default_factory=new_uuid)
     entity_type: str = "company"
+
+    @property
+    def aggregate_id(self) -> UUID:
+        return self.watchlist_id
+
+
+@dataclass
+class WatchlistRenamed(DomainEvent):
+    EVENT_TYPE: ClassVar[str] = "watchlist.renamed"
+    AGGREGATE_TYPE: ClassVar[str] = "watchlist"
+
+    watchlist_id: UUID = field(default_factory=new_uuid)
+    user_id: UUID = field(default_factory=new_uuid)
+    old_name: str = ""
+    new_name: str = ""
 
     @property
     def aggregate_id(self) -> UUID:

@@ -73,6 +73,20 @@ class TestRepositoriesImplementPorts:
 
         assert issubclass(SilverStorageAdapter, SilverStoragePort), "SilverStorageAdapter must extend SilverStoragePort"
 
+    def test_bronze_storage_adapter_is_subclass_of_port(self) -> None:
+        """D-2: BronzeStorageAdapter must implement BronzeStoragePort (R25 compliance)."""
+        from content_store.application.ports.storage import BronzeStoragePort
+        from content_store.infrastructure.storage.minio_bronze import BronzeStorageAdapter
+
+        assert issubclass(BronzeStorageAdapter, BronzeStoragePort), "BronzeStorageAdapter must extend BronzeStoragePort"
+
+    def test_bronze_storage_port_is_abstract(self) -> None:
+        """BronzeStoragePort is an ABC — callers depend on the abstraction, not the concrete class."""
+        from content_store.application.ports.storage import BronzeStoragePort
+
+        assert hasattr(BronzeStoragePort, "__abstractmethods__")
+        assert "get_bytes" in BronzeStoragePort.__abstractmethods__
+
     def test_lsh_client_satisfies_port(self) -> None:
         from content_store.application.ports.lsh import LSHClientPort
         from content_store.infrastructure.valkey.lsh_client import ValkeyLSHClient

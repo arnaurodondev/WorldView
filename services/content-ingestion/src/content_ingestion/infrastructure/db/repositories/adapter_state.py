@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, cast
+from uuid import UUID
 
 from sqlalchemy import select
 
@@ -10,9 +12,6 @@ import common.time
 from content_ingestion.infrastructure.db.models import SourceAdapterStateModel
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -40,8 +39,14 @@ class AdapterStateRepository:
         next_run_at: datetime | None = None,
         error_count: int | None = None,
         last_error: str | None = None,
+        last_run_config_hash: str | None = None,
     ) -> SourceAdapterStateModel:
-        """Create or update the adapter state for a source."""
+        """Create or update the adapter state for a source.
+
+        PLAN-0055 B-1: ``last_run_config_hash`` snapshots the live
+        ``sources.config_hash`` at the moment of a successful fetch — compared
+        at startup to detect drift (operator changed config between runs).
+        """
         row = await self.get(source_id)
         if row is None:
             row = SourceAdapterStateModel(source_id=source_id)
@@ -59,6 +64,8 @@ class AdapterStateRepository:
             row.error_count = error_count
         if last_error is not None:
             row.last_error = last_error
+        if last_run_config_hash is not None:
+            row.last_run_config_hash = last_run_config_hash
 
         row.updated_at = common.time.utc_now()
         await self._session.flush()

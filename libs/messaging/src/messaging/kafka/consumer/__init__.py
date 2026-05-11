@@ -1,11 +1,16 @@
 """Kafka consumer base class and error hierarchy."""
 
+from messaging.kafka.consumer.backpressure import (
+    BackpressurePolicy,
+    LagCalculator,
+)
 from messaging.kafka.consumer.base import (
     BaseKafkaConsumer,
     ConsumerConfig,
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin
 from messaging.kafka.consumer.errors import (
     BusinessRuleViolationError,
     ConsumerError,
@@ -22,6 +27,7 @@ from messaging.kafka.consumer.errors import (
 )
 
 __all__ = [
+    "BackpressurePolicy",
     "BaseKafkaConsumer",
     "BusinessRuleViolationError",
     "ConsumerConfig",
@@ -29,6 +35,7 @@ __all__ = [
     "DatabaseConnectionError",
     "FailureInfo",
     "FatalError",
+    "LagCalculator",
     "MalformedDataError",
     "MissingRequiredFieldError",
     "NetworkTimeoutError",
@@ -38,4 +45,5 @@ __all__ = [
     "ServiceUnavailableError",
     "StorageUnavailableError",
     "UnitOfWorkProtocol",
+    "ValkeyDedupMixin",
 ]

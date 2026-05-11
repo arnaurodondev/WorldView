@@ -29,7 +29,14 @@ class FakeInstrumentRepository(InstrumentRepository):
     async def get(self, instrument_id):
         return None
 
+    async def list_by_ids(self, instrument_ids):
+        # QA-iter1 MIN-4 — never used by this consumer test suite, return empty.
+        return []
+
     async def get_by_symbol_exchange(self, symbol, exchange):
+        return None
+
+    async def get_by_symbol(self, symbol):
         return None
 
     async def list_all(self):
@@ -111,15 +118,65 @@ class FakeUoW(UnitOfWork):
     def entity_suppressions(self):
         return MagicMock()
 
+    @property
+    def brokerage_connections(self):
+        return MagicMock()
+
+    @property
+    def brokerage_sync_errors(self):
+        return MagicMock()
+
+    @property
+    def auth_audit_log(self):
+        return MagicMock()
+
+    @property
+    def portfolio_value_snapshots(self):
+        return MagicMock()
+
+    # PLAN-0052 Wave D — feedback subsystem repos (unused by this consumer
+    # but required to satisfy the UnitOfWork ABC).
+    @property
+    def feedback_submissions(self):
+        return MagicMock()
+
+    @property
+    def nps_scores(self):
+        return MagicMock()
+
+    @property
+    def feature_requests(self):
+        return MagicMock()
+
+    @property
+    def feature_votes(self):
+        return MagicMock()
+
+    @property
+    def micro_surveys(self):
+        return MagicMock()
+
+    @property
+    def beta_enrollments(self):
+        return MagicMock()
+
     async def commit(self) -> None:
         self._committed = True
 
     async def rollback(self) -> None:
         pass
 
+    async def flush(self) -> None:
+        pass
+
 
 _CONSUMER_GROUP = "portfolio-instrument-sync"
-_TOPICS = ["market.instrument.created", "market.instrument.updated"]
+# PLAN-0057 Wave D-2: portfolio S2 also subscribes to the new discovered.v1 topic.
+_TOPICS = [
+    "market.instrument.discovered.v1",
+    "market.instrument.created",
+    "market.instrument.updated",
+]
 
 
 def _make_config():
@@ -173,6 +230,44 @@ async def test_process_message_upserts_instrument() -> None:
     assert ref.name == "Apple Inc."
     assert ref.currency == "USD"
     assert ref.asset_class == "equity"
+
+
+@pytest.mark.asyncio
+async def test_process_message_handles_discovered_v1_payload() -> None:
+    """PLAN-0057 Wave D-2: a market.instrument.discovered.v1 payload (which has
+    no ``name``/``currency``/``asset_class`` fields) must still upsert an
+    InstrumentRef using ``symbol``/``exchange``/``entity_id`` from the small
+    discovery envelope.  This is the new wire-format the ohlcv/quotes
+    consumers emit before fundamentals enrichment is available.
+    """
+    fake_uow = FakeUoW()
+    consumer = _make_consumer_with_fake_uow(fake_uow)
+
+    event_id = str(uuid4())
+    entity_id = str(uuid4())
+    discovered_payload = {
+        "event_id": event_id,
+        "event_type": "market.instrument.discovered",
+        "schema_version": 1,
+        "occurred_at": "2026-04-30T12:00:00Z",
+        "instrument_id": entity_id,
+        "symbol": "MSFT",
+        "exchange": "NASDAQ",
+        # entity_id is set by event_to_outbox_payload (M-017)
+        "entity_id": entity_id,
+        # name/currency/asset_class intentionally absent — discovered.v1 is small.
+    }
+
+    await consumer.process_message(key=None, value=discovered_payload, headers={})
+
+    assert len(fake_uow._instruments_repo.upserted) == 1
+    ref = fake_uow._instruments_repo.upserted[0]
+    assert ref.symbol == "MSFT"
+    assert ref.exchange == "NASDAQ"
+    # ``name`` is None on the discovered path — fundamentals enrichment fills it later.
+    assert ref.name is None
+    # M-017 stable ID: instrument id == entity_id
+    assert str(ref.id) == entity_id
 
 
 @pytest.mark.asyncio

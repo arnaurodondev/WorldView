@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import fakeredis.aioredis
+import jwt as _jwt
 import pytest
 from alert.app import create_app
 from alert.config import Settings
@@ -33,6 +35,37 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from pytest_httpserver import HTTPServer
+
+
+# ── Internal JWT (PRD-0025) ───────────────────────────────────────────────────
+
+# Fixed UUID for the integration-test "system" user — used as JWT sub so that
+# CurrentUserIdDep can parse it as a valid UUID (BP-165).
+INTEGRATION_USER_ID: str = "00000000-0000-0000-0000-000000000099"
+
+
+def _make_system_jwt(user_id: str = INTEGRATION_USER_ID) -> str:
+    """HS256 JWT with role=system for integration tests.
+
+    InternalJWTMiddleware decodes without signature verification when
+    internal_jwt_skip_verification=True and public_key is None
+    (JWKS server not running in integration test environment).
+
+    ``sub`` must be a valid UUID so that CurrentUserIdDep can parse it (BP-165).
+    """
+    payload = {
+        "iss": "worldview-gateway",
+        "sub": user_id,
+        "tenant_id": "",
+        "role": "system",
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 3600,
+    }
+    return _jwt.encode(payload, "integration-test-secret", algorithm="HS256")
+
+
+_SYSTEM_JWT = _make_system_jwt()
+_INTERNAL_HEADERS: dict[str, str] = {"X-Internal-JWT": _SYSTEM_JWT}
 
 
 # ── Postgres (testcontainer) ──────────────────────────────────────────────────
@@ -108,6 +141,8 @@ def s1_client_stub(s1_base_url: str) -> S1Client:
     settings = Settings(
         s1_portfolio_base_url=s1_base_url,
         database_url="postgresql+asyncpg://x:x@localhost/x",  # not used
+        s8_internal_jwt="test-s8-token",
+        s1_internal_token="test-s1-token",
     )
     return S1Client(settings)
 
@@ -132,6 +167,11 @@ def integration_settings(postgres_container: str, s1_base_url: str) -> Settings:
         admin_token="test-admin-token",
         service_name="alert-test",
         log_json=False,
+        s8_internal_jwt="test-s8-token",
+        s1_internal_token="test-s1-token",
+        # F-001: skip_verification=True because JWKS server is not running
+        # in integration test environment (public_key stays None).
+        internal_jwt_skip_verification=True,
     )
 
 
@@ -177,7 +217,7 @@ async def integration_app(
     app.state.fanout_use_case = AlertFanoutUseCase(
         session_factory=factory,
         watchlist_cache=app.state.watchlist_cache,
-        connection_manager=app.state.ws_manager,
+        notification_publisher=app.state.ws_manager,
         repo_factory=_repo_factory,
         dedup_window_seconds=integration_settings.alert_dedup_window_seconds,
         alert_delivered_topic=integration_settings.kafka_topic_alert_delivered,
@@ -187,9 +227,14 @@ async def integration_app(
 
 @pytest.fixture
 async def integration_client(integration_app: Any) -> AsyncGenerator[AsyncClient, None]:
-    """ASGI httpx client wired to the integration app."""
+    """ASGI httpx client wired to the integration app.
+
+    Includes ``X-Internal-JWT`` for InternalJWTMiddleware (PRD-0025, BP-158).
+    InternalJWTMiddleware accepts any well-formed JWT when skip_verification=True
+    and public_key is None (JWKS server not running in integration test environment).
+    """
     transport = ASGITransport(app=integration_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test", headers=_INTERNAL_HEADERS) as client:
         yield client
 
 

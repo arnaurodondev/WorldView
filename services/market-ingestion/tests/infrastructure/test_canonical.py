@@ -119,6 +119,27 @@ def test_serialize_ohlcv_invalid_missing_field_raises(serializer):
 
 
 @pytest.mark.unit
+def test_serialize_ohlcv_null_volume_coerced_to_zero(serializer):
+    """Regression for FIX-O3 / BP-182: EODHD returns volume:null for some bars.
+
+    int(None) previously raised TypeError, crashing the canonicalize step and
+    leaving the task stuck in RUNNING state (BP-113).  After FIX-O3,
+    CanonicalOHLCVBar.from_dict() coerces null volume to 0 so the canonical
+    model (volume: int) remains valid.  Downstream consumers treat 0 as
+    "no trades" — the distinction is lost at the canonical layer by design.
+    """
+    row = _ohlcv_row(volume=None)  # simulate EODHD null-volume bar
+
+    result = serializer.serialize_ohlcv([row])
+
+    assert isinstance(result, bytes)
+    lines = result.decode("utf-8").strip().splitlines()
+    assert len(lines) == 1
+    parsed = json.loads(lines[0])
+    assert parsed["volume"] == 0  # coerced to 0 by CanonicalOHLCVBar.from_dict()
+
+
+@pytest.mark.unit
 def test_serialize_ohlcv_roundtrip_preserves_values(serializer):
     row = _ohlcv_row(open=100.5, high=110.0, low=99.0, close=108.0, volume=42_000)
 
@@ -242,3 +263,134 @@ def test_serialize_fundamentals_schema_version_present(serializer):
     result = serializer.serialize_fundamentals(_fundamentals_row())
     parsed = json.loads(result.decode("utf-8").strip())
     assert "schema_version" in parsed
+
+
+# ---------------------------------------------------------------------------
+# serialize_passthrough
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_serialize_passthrough_returns_bytes(serializer):
+    """serialize_passthrough() returns bytes."""
+    result = serializer.serialize_passthrough(
+        raw_data={"key": "value"},
+        dataset_type="economic_events",
+        symbol="EVENTS.USA",
+        source="eodhd",
+    )
+    assert isinstance(result, bytes)
+
+
+@pytest.mark.unit
+def test_serialize_passthrough_newline_terminated(serializer):
+    """Output must end with a newline (NDJSON convention)."""
+    result = serializer.serialize_passthrough(
+        raw_data=[{"event": "CPI"}],
+        dataset_type="economic_events",
+        symbol="EVENTS.USA",
+        source="eodhd",
+    )
+    assert result.endswith(b"\n")
+
+
+@pytest.mark.unit
+def test_serialize_passthrough_single_line(serializer):
+    """Exactly one NDJSON line is produced per call."""
+    result = serializer.serialize_passthrough(
+        raw_data={"rate": 4.5},
+        dataset_type="macro_indicator",
+        symbol="USA.gdp_current_usd",
+        source="eodhd",
+    )
+    lines = result.decode("utf-8").strip().splitlines()
+    assert len(lines) == 1
+
+
+@pytest.mark.unit
+def test_serialize_passthrough_envelope_fields(serializer):
+    """Envelope contains all required self-describing fields."""
+    payload = [{"date": "2026-01-01", "actual": 3.2}]
+    result = serializer.serialize_passthrough(
+        raw_data=payload,
+        dataset_type="economic_events",
+        symbol="EVENTS.GBR",
+        source="eodhd",
+    )
+    parsed = json.loads(result.decode("utf-8").strip())
+
+    assert parsed["dataset_type"] == "economic_events"
+    assert parsed["symbol"] == "EVENTS.GBR"
+    assert parsed["source"] == "eodhd"
+    assert parsed["payload"] == payload
+    assert "fetched_at" in parsed
+
+
+@pytest.mark.unit
+def test_serialize_passthrough_fetched_at_is_iso8601(serializer):
+    """fetched_at must be a valid ISO-8601 UTC timestamp string."""
+    from datetime import datetime
+
+    result = serializer.serialize_passthrough(
+        raw_data={},
+        dataset_type="insider_transactions",
+        symbol="AAPL",
+        source="eodhd",
+    )
+    parsed = json.loads(result.decode("utf-8").strip())
+    # Must parse without error and be timezone-aware
+    ts = datetime.fromisoformat(parsed["fetched_at"])
+    assert ts.utcoffset() is not None  # must be timezone-aware (UTC)
+
+
+@pytest.mark.unit
+def test_serialize_passthrough_list_payload(serializer):
+    """Payload can be a JSON list (typical for economic events / insider txns)."""
+    payload = [{"symbol": "AAPL", "shares": 1000}, {"symbol": "AAPL", "shares": 500}]
+    result = serializer.serialize_passthrough(
+        raw_data=payload,
+        dataset_type="insider_transactions",
+        symbol="AAPL",
+        source="eodhd",
+    )
+    parsed = json.loads(result.decode("utf-8").strip())
+    assert isinstance(parsed["payload"], list)
+    assert len(parsed["payload"]) == 2
+
+
+@pytest.mark.unit
+def test_serialize_passthrough_dict_payload(serializer):
+    """Payload can be a JSON dict (typical for macro indicators / yield curve)."""
+    payload = {"series": "UST.yield", "value": 4.25, "date": "2026-04-24"}
+    result = serializer.serialize_passthrough(
+        raw_data=payload,
+        dataset_type="yield_curve",
+        symbol="UST.yield",
+        source="eodhd",
+    )
+    parsed = json.loads(result.decode("utf-8").strip())
+    assert isinstance(parsed["payload"], dict)
+    assert parsed["payload"]["value"] == 4.25
+
+
+@pytest.mark.unit
+def test_serialize_passthrough_dataset_types(serializer):
+    """Each passthrough dataset type correctly sets dataset_type in the envelope."""
+    passthrough_types = [
+        "economic_events",
+        "macro_indicator",
+        "insider_transactions",
+        "earnings_calendar",
+        "news_sentiment",
+        "yield_curve",
+        "market_cap",
+    ]
+    for dt in passthrough_types:
+        result = serializer.serialize_passthrough(
+            raw_data={},
+            dataset_type=dt,
+            symbol="TEST",
+            source="eodhd",
+        )
+        parsed = json.loads(result.decode("utf-8").strip())
+        assert parsed["dataset_type"] == dt, f"Wrong dataset_type for {dt}"

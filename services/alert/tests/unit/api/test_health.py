@@ -23,6 +23,8 @@ from httpx import ASGITransport, AsyncClient
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+pytestmark = pytest.mark.unit
+
 # ── Setup helpers ─────────────────────────────────────────────────────────────
 
 
@@ -32,6 +34,8 @@ def _make_app(*, s1_healthy: bool = True) -> FastAPI:
         admin_token="test-admin",
         service_name="alert-unit-test",
         log_json=False,
+        s8_internal_jwt="test-s8-token",
+        s1_internal_token="test-s1-token",
     )
     app = create_app(settings)
 
@@ -46,12 +50,10 @@ def _make_app(*, s1_healthy: bool = True) -> FastAPI:
     app.state.session_factory = mock_factory
     app.state.ws_manager = ConnectionManager()
 
-    # Dispatcher (for Kafka readyz check)
+    # Kafka health producer (for /readyz Kafka connectivity check)
     mock_producer = MagicMock()
     mock_producer.list_topics = MagicMock(return_value=None)
-    mock_dispatcher = MagicMock()
-    mock_dispatcher._get_producer = MagicMock(return_value=mock_producer)
-    app.state.dispatcher = mock_dispatcher
+    app.state.kafka_health_producer = mock_producer
 
     # Valkey
     mock_valkey = AsyncMock()

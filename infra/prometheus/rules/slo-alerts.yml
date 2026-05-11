@@ -1,0 +1,53 @@
+groups:
+  - name: slo_burn_rate_alerts
+    rules:
+      - alert: APIGatewayFastBurnRate
+        expr: |
+          (
+            sum(rate(api_gateway_requests_total{status=~"5.."}[1h]))
+            /
+            sum(rate(api_gateway_requests_total[1h]))
+          ) > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: critical
+          slo: api_gateway_availability
+        annotations:
+          summary: "API Gateway fast burn rate — error budget exhausts in <2h"
+          runbook: "Check Grafana → Service Overview → api-gateway row"
+
+      - alert: APIGatewaySlowBurnRate
+        expr: |
+          (
+            sum(rate(api_gateway_requests_total{status=~"5.."}[6h]))
+            /
+            sum(rate(api_gateway_requests_total[6h]))
+          ) > (6 * 0.001)
+        for: 15m
+        labels:
+          severity: warning
+          slo: api_gateway_availability
+        annotations:
+          summary: "API Gateway slow burn rate — error budget exhausts in <1d"
+
+      - alert: PortfolioFastBurnRate
+        expr: |
+          (
+            sum(rate(portfolio_requests_total{status=~"5.."}[1h]))
+            /
+            sum(rate(portfolio_requests_total[1h]))
+          ) > (14.4 * 0.005)
+        for: 2m
+        labels:
+          severity: critical
+          slo: portfolio_availability
+        annotations:
+          summary: "Portfolio service fast burn rate"
+
+      - alert: ValkeyDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Valkey (Redis) is down — rate limiting and caching unavailable"

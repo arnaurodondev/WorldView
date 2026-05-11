@@ -7,7 +7,7 @@ and writes the VECTOR(1024) result back.
 Requires:
     INTELLIGENCE_DB_URL  — Postgres connection string
     EMBEDDING_BASE_URL   — Ollama API base (default http://ollama:11434)
-    EMBEDDING_MODEL      — model name (default bge-large-en-v1.5)
+    EMBEDDING_MODEL      — model name (default bge-large:latest — Ollama model tag)
 
 Tolerates embedding service unavailability: logs a warning and exits 0
 so the init container does not block S6/S7 startup. Embeddings will be
@@ -35,7 +35,7 @@ structlog.configure(
 log = structlog.get_logger("populate_embeddings")
 
 EMBEDDING_BASE_URL = os.environ.get("EMBEDDING_BASE_URL", "http://ollama:11434")
-EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "bge-large-en-v1.5")
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "bge-large:latest")
 EXPECTED_DIM = 1024
 
 
@@ -99,8 +99,10 @@ def main() -> None:
                 )
                 continue
 
+            # Explicit ::vector cast required — psycopg2 binds the param as
+            # text and pgvector won't implicitly coerce without the cast.
             conn.execute(
-                text("UPDATE relation_type_registry SET embedding = :embedding WHERE type_id = :type_id"),
+                text("UPDATE relation_type_registry SET embedding = :embedding::vector WHERE type_id = :type_id"),
                 {"embedding": str(embedding), "type_id": type_id},
             )
             updated += 1

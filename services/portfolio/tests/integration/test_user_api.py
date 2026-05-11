@@ -50,16 +50,23 @@ async def test_create_user_duplicate_email_returns_409(integration_client) -> No
 
 
 async def test_get_user_happy_path(integration_client) -> None:
-    """GET /api/v1/users/{id} returns the user."""
-    tenant = await make_tenant(integration_client)
-    user = await make_user(integration_client, tenant["id"], email="charlie@test.com")
-    user_id = user["id"]
-    tenant_id = tenant["id"]
+    """GET /api/v1/users/{id} returns the user.
 
-    resp = await integration_client.get(
-        f"/api/v1/users/{user_id}",
-        headers={"X-Tenant-ID": tenant_id},
+    The GET /users/{id} route reads tenant_id from JWT state (INTEGRATION_TENANT_ID).
+    The user must be created under that same tenant_id so uow.users.get() finds it.
+    """
+    from tests.integration.helpers import INTEGRATION_TENANT_ID
+
+    # Create the user under INTEGRATION_TENANT_ID (passed as body, not JWT).
+    # The GET route will look up with tenant_id=INTEGRATION_TENANT_ID from JWT state.
+    resp_create = await integration_client.post(
+        "/api/v1/users",
+        json={"tenant_id": INTEGRATION_TENANT_ID, "email": "charlie@test.com"},
     )
+    assert resp_create.status_code == 201
+    user_id = resp_create.json()["id"]
+
+    resp = await integration_client.get(f"/api/v1/users/{user_id}")
     assert resp.status_code == 200
     data = resp.json()
     assert data["email"] == "charlie@test.com"

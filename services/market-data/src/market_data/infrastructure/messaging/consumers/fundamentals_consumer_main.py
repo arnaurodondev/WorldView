@@ -26,6 +26,7 @@ async def main() -> None:
     from market_data.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from market_data.infrastructure.messaging.consumers.fundamentals_consumer import FundamentalsConsumer
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+    from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
     from storage.factory import build_object_storage  # type: ignore[import-untyped]
     from storage.settings import StorageSettings  # type: ignore[import-untyped]
 
@@ -62,10 +63,12 @@ async def main() -> None:
     object_storage = build_object_storage(
         StorageSettings(
             endpoint=endpoint,
-            access_key=settings.storage_access_key,
-            secret_key=settings.storage_secret_key,
+            access_key=settings.storage_access_key.get_secret_value(),
+            secret_key=settings.storage_secret_key.get_secret_value(),
         )
     )
+
+    valkey = create_valkey_client_from_url(settings.valkey_url)
 
     consumer = FundamentalsConsumer(
         uow_factory=uow_factory,
@@ -75,19 +78,24 @@ async def main() -> None:
             group_id="market-data-fundamentals",
             topics=["market.dataset.fetched"],
         ),
+        dedup_client=valkey,
     )
 
     try:
         consumer_task = asyncio.create_task(consumer.run())
         await stop_event.wait()
         consumer.stop()
-        consumer_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await consumer_task
+        try:
+            await asyncio.wait_for(consumer_task, timeout=30.0)
+        except TimeoutError:
+            consumer_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await consumer_task
     except Exception as exc:
         log.error("fundamentals_consumer_fatal_error", error=str(exc))
         sys.exit(1)
     finally:
+        await valkey.close()
         await write_engine.dispose()
         if read_engine is not write_engine:
             await read_engine.dispose()

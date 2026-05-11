@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from common.ids import new_uuid  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
@@ -19,10 +20,7 @@ from portfolio.domain.enums import AlertType
 from portfolio.domain.errors import AlertPreferenceNotFoundError, ValidationError
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
-    from portfolio.application.ports.unit_of_work import UnitOfWork
-
+    from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
 
 # ── GetAlertPreferencesUseCase ─────────────────────────────────────────────────
 
@@ -34,7 +32,7 @@ class GetAlertPreferencesUseCase:
         self,
         user_id: UUID,
         tenant_id: UUID,
-        uow: UnitOfWork,
+        uow: ReadOnlyUnitOfWork,
     ) -> tuple[list[AlertPreference], list[EntitySuppression]]:
         existing = await uow.alert_preferences.get_by_user(user_id, tenant_id)
         suppressions = await uow.entity_suppressions.list_by_user(user_id, tenant_id)
@@ -54,7 +52,7 @@ class GetAlertPreferencesUseCase:
                         alert_type=alert_type,
                         enabled=True,
                         updated_at=utc_now(),
-                    )
+                    ),
                 )
         return preferences, suppressions
 
@@ -129,7 +127,7 @@ class RemoveEntitySuppressionUseCase:
         existing = await uow.entity_suppressions.get(cmd.user_id, cmd.entity_id)
         if existing is None:
             raise AlertPreferenceNotFoundError(
-                f"No suppression found for entity {cmd.entity_id} and user {cmd.user_id}"
+                f"No suppression found for entity {cmd.entity_id} and user {cmd.user_id}",
             )
         await uow.entity_suppressions.delete(cmd.user_id, cmd.entity_id)
         await uow.commit()

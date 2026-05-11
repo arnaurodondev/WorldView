@@ -28,10 +28,13 @@ class DefaultCanonicalSerializer(CanonicalSerializer):
         """Validate and serialize OHLCV bars to NDJSON bytes.
 
         Args:
+        ----
             data: List of raw bar dicts from the provider adapter.
 
         Returns:
+        -------
             UTF-8 NDJSON — one JSON line per bar, newline-terminated.
+
         """
         lines: list[str] = []
         for row in data:
@@ -46,10 +49,13 @@ class DefaultCanonicalSerializer(CanonicalSerializer):
         """Validate and serialize quote snapshots to NDJSON bytes.
 
         Args:
+        ----
             data: List of raw quote dicts from the provider adapter.
 
         Returns:
+        -------
             UTF-8 NDJSON — one JSON line per quote, newline-terminated.
+
         """
         lines: list[str] = []
         for row in data:
@@ -68,11 +74,52 @@ class DefaultCanonicalSerializer(CanonicalSerializer):
         """Validate and serialize a fundamentals dict to a single NDJSON line.
 
         Args:
+        ----
             data: Raw fundamentals dict from the provider adapter.
             variant: ``"annual"`` or ``"quarterly"`` (informational only).
 
         Returns:
+        -------
             UTF-8 NDJSON — one JSON line, newline-terminated.
+
         """
         fund = CanonicalFundamentals.from_dict(data)
         return (json.dumps(fund.to_dict()) + "\n").encode("utf-8")
+
+    def serialize_passthrough(
+        self,
+        raw_data: Any,
+        dataset_type: str,
+        symbol: str,
+        source: str,
+    ) -> bytes:
+        """Wrap raw provider data in a canonical envelope for passthrough dataset types.
+
+        Used for dataset types that have no domain-specific canonical model
+        (economic_events, macro_indicator, insider_transactions,
+        earnings_calendar, news_sentiment, yield_curve, market_cap). The
+        envelope is self-describing so downstream consumers can identify and
+        parse it without additional context.
+
+        Args:
+        ----
+            raw_data: The parsed JSON payload from the provider (dict or list).
+            dataset_type: String value of the DatasetType enum (e.g. "economic_events").
+            symbol: The task symbol (e.g. "EVENTS.USA", "AAPL").
+            source: String value of the Provider enum (e.g. "eodhd").
+
+        Returns:
+        -------
+            UTF-8 NDJSON — one envelope line, newline-terminated.
+
+        """
+        from common.time import utc_now  # type: ignore[import-untyped]
+
+        envelope = {
+            "dataset_type": dataset_type,
+            "symbol": symbol,
+            "source": source,
+            "payload": raw_data,
+            "fetched_at": utc_now().isoformat(),
+        }
+        return (json.dumps(envelope) + "\n").encode("utf-8")

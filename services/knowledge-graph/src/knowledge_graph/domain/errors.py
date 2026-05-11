@@ -82,3 +82,42 @@ class EntityAliasCollisionError(EntityError):
 
 class ContradictionError(KnowledgeGraphError):
     """Base for contradiction-detection errors."""
+
+
+# ---------------------------------------------------------------------------
+# Embedding errors
+# ---------------------------------------------------------------------------
+
+
+class EmbeddingNotAvailableError(EntityError):
+    """Raised when an entity has no embedding for the requested view type.
+
+    Typically occurs when ``entity_type != 'financial_instrument'`` and the
+    caller requests a ``fundamentals_ohlcv`` embedding (PRD-0017 §6.5).
+    """
+
+    def __init__(self, entity_id: object, view_type: str) -> None:
+        super().__init__(f"No embedding available for entity {entity_id!r}, view_type={view_type!r}")
+
+
+# ---------------------------------------------------------------------------
+# Enrichment errors (PRD-0073 §9.5, §13)
+# ---------------------------------------------------------------------------
+
+
+class EnrichmentError(KnowledgeGraphError):
+    """Base for Worker 13J enrichment errors."""
+
+
+class RetryableEnrichmentError(EnrichmentError):
+    """Transient failure — Kafka consumer should redeliver; enrichment_attempts NOT incremented.
+
+    Used for: HTTP 429 (rate limit), HTTP 503, asyncio.TimeoutError on LLM call.
+    """
+
+
+class FatalEnrichmentError(EnrichmentError):
+    """Non-retryable failure — enrichment_attempts IS incremented.
+
+    Used for: LLM response < 20 chars, JSON parse error, persistent 400 from EODHD.
+    """

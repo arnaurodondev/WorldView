@@ -1,0 +1,108 @@
+# docker-compose.eval.yml — Eval stack overlay
+#
+# Adds the ``eval`` profile to the minimal subset of services required for
+# the retrieval evaluation harness (scripts/eval_retrieval.py).
+#
+# What's included:
+#   Infrastructure: postgres, valkey, minio, kafka, schema-registry, ollama
+#   Service API servers: portfolio, market-data, nlp-pipeline, knowledge-graph,
+#                        rag-chat, api-gateway
+#
+# What's EXCLUDED (intentional — prevents live data flooding the test corpus):
+#   All *-consumer, *-dispatcher, *-worker containers
+#   content-ingestion, market-ingestion, alert, worldview-web, gliner-server
+#
+# Usage:
+#   docker compose -f infra/compose/docker-compose.yml \
+#                  -f infra/compose/docker-compose.eval.yml \
+#                  --profile eval up -d --wait
+#
+# Or via Makefile:
+#   make test          # boot eval stack (env files must be in place first)
+#   make test-rebuild  # rebuild images then boot
+#
+# Prerequisites:
+#   Run worldview-gitops/scripts/setup-eval.sh to copy eval env files into
+#   services/*/configs/docker.env before starting the stack.
+#
+# Seeding the eval corpus:
+#   make seed-eval     # runs seed-dev-data.sh + seed_demo_data.py + seed-eval-corpus.py
+#
+# Running the eval:
+#   make eval          # runs eval_retrieval.py vs http://localhost:8008
+
+name: worldview
+
+services:
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  postgres:
+    profiles: [infra, all, eval]
+
+  minio:
+    profiles: [infra, lib-test, all, eval]
+
+  minio-init:
+    profiles: [infra, lib-test, all, eval]
+
+  valkey:
+    profiles: [infra, all, eval]
+
+  kafka:
+    profiles: [infra, all, eval]
+
+  schema-registry:
+    profiles: [infra, all, eval]
+
+  kafka-init:
+    profiles: [infra, all, eval]
+
+  schema-registry-init:
+    profiles: [infra, all, eval]
+
+  schema-compat-init:
+    profiles: [infra, all, eval]
+
+  intelligence-migrations:
+    profiles: [infra, all, eval]
+
+  # Ollama — only bge-large is needed for eval corpus seeding.
+  # qwen3:0.6b (intent classification) is not needed for the retrieve-only
+  # eval path but is small enough to include to avoid divergence from dev.
+  ollama:
+    profiles: [infra, all, eval]
+
+  ollama-init:
+    profiles: [infra, all, eval]
+
+  # ── Service API servers (no workers/consumers/dispatchers) ─────────────────
+
+  portfolio-migrate:
+    profiles: [infra, all, eval]
+
+  portfolio:
+    profiles: [infra, all, eval]
+
+  market-data-migrate:
+    profiles: [infra, all, eval]
+
+  market-data:
+    profiles: [infra, all, eval]
+
+  nlp-pipeline-migrate:
+    profiles: [infra, all, eval]
+
+  nlp-pipeline:
+    profiles: [infra, all, eval]
+
+  knowledge-graph:
+    profiles: [infra, all, eval]
+
+  rag-chat-migrate:
+    profiles: [infra, all, eval]
+
+  rag-chat:
+    profiles: [infra, all, eval]
+
+  api-gateway:
+    profiles: [infra, all, eval]

@@ -1,0 +1,7 @@
+# pnpm workspace — defines the worldview-web frontend as a managed package.
+#
+# WHY a workspace: the `pnpm --filter worldview-web` validation commands in
+# PLAN-0028 require workspace resolution. The filter key matches the "name"
+# field in apps/worldview-web/package.json.
+packages:
+  - 'apps/worldview-web'

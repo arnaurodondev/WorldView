@@ -12,7 +12,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import distinct, func, select
+from sqlalchemy import distinct, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from market_data.application.ports.repositories import OHLCVRepository
@@ -47,6 +47,8 @@ class PgOHLCVRepository(OHLCVRepository):
             adjusted_close=Decimal(str(row.adjusted_close)) if row.adjusted_close is not None else None,
             source=row.source or "",
             provider_priority=ProviderPriority(provider="unknown", priority=int(row.provider_priority)),
+            is_derived=bool(row.is_derived),
+            is_partial=bool(row.is_partial),
         )
 
     # ── commands ───────────────────────────────────────────────────────────────
@@ -72,10 +74,11 @@ class PgOHLCVRepository(OHLCVRepository):
                 "high": bar.high,
                 "low": bar.low,
                 "close": bar.close,
-                "volume": bar.volume,
+                "volume": bar.volume if bar.volume is not None else 0,
                 "adjusted_close": bar.adjusted_close,
                 "source": bar.source,
                 "provider_priority": bar.provider_priority.priority,
+                "is_partial": bar.is_partial,
             }
             for bar in bars
         ]
@@ -94,6 +97,7 @@ class PgOHLCVRepository(OHLCVRepository):
                     "adjusted_close": insert(OHLCVBarModel).excluded.adjusted_close,
                     "source": insert(OHLCVBarModel).excluded.source,
                     "provider_priority": insert(OHLCVBarModel).excluded.provider_priority,
+                    "is_partial": insert(OHLCVBarModel).excluded.is_partial,
                 },
                 where=(insert(OHLCVBarModel).excluded.provider_priority >= OHLCVBarModel.provider_priority),
             )
@@ -145,3 +149,191 @@ class PgOHLCVRepository(OHLCVRepository):
         if min_date is None or max_date is None:
             return None
         return (min_date.date(), max_date.date())
+
+    async def bulk_upsert_derived(self, bars: list[OHLCVBar]) -> None:
+        """Upsert locally-derived bars unconditionally (no priority guard).
+
+        Derived bars are always the authoritative source for their timeframe —
+        no external provider will ever supply competing 1w/1M data via the
+        normal ingestion path after PLAN-0036.  The ON CONFLICT clause always
+        overwrites so that a fresh derivation pass replaces stale aggregates.
+        """
+        if not bars:
+            return
+
+        values = [
+            {
+                "instrument_id": bar.instrument_id,
+                "timeframe": str(bar.timeframe),
+                "bar_date": bar.bar_date,
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+                "volume": bar.volume if bar.volume is not None else 0,
+                "adjusted_close": bar.adjusted_close,
+                "source": bar.source,
+                "provider_priority": bar.provider_priority.priority,
+                "is_derived": True,
+                "is_partial": bar.is_partial,
+            }
+            for bar in bars
+        ]
+
+        stmt = (
+            insert(OHLCVBarModel)
+            .values(values)
+            .on_conflict_do_update(
+                index_elements=["instrument_id", "timeframe", "bar_date"],
+                set_={
+                    "open": insert(OHLCVBarModel).excluded.open,
+                    "high": insert(OHLCVBarModel).excluded.high,
+                    "low": insert(OHLCVBarModel).excluded.low,
+                    "close": insert(OHLCVBarModel).excluded.close,
+                    "volume": insert(OHLCVBarModel).excluded.volume,
+                    "adjusted_close": insert(OHLCVBarModel).excluded.adjusted_close,
+                    "source": insert(OHLCVBarModel).excluded.source,
+                    "provider_priority": insert(OHLCVBarModel).excluded.provider_priority,
+                    "is_derived": insert(OHLCVBarModel).excluded.is_derived,
+                    "is_partial": insert(OHLCVBarModel).excluded.is_partial,
+                },
+            )
+        )
+        await self._session.execute(stmt)
+
+    async def find_by_instrument_timeframe_datetime_range(
+        self,
+        instrument_id: str,
+        timeframe: Timeframe,
+        start_dt: datetime,
+        end_dt: datetime,
+    ) -> list[OHLCVBar]:
+        """Return bars within ``[start_dt, end_dt]`` (inclusive), ordered ascending."""
+        result = await self._session.execute(
+            select(OHLCVBarModel)
+            .where(
+                OHLCVBarModel.instrument_id == instrument_id,
+                OHLCVBarModel.timeframe == str(timeframe),
+                OHLCVBarModel.bar_date >= start_dt,
+                OHLCVBarModel.bar_date <= end_dt,
+            )
+            .order_by(OHLCVBarModel.bar_date.asc())
+        )
+        return [self._to_domain(row) for row in result.scalars().all()]
+
+    async def find_derived(
+        self,
+        instrument_id: str,
+        timeframe: Timeframe,
+        *,
+        limit: int = 200,
+    ) -> list[OHLCVBar]:
+        """Return derived bars sorted by bar_date descending, capped at ``limit``."""
+        result = await self._session.execute(
+            select(OHLCVBarModel)
+            .where(
+                OHLCVBarModel.instrument_id == instrument_id,
+                OHLCVBarModel.timeframe == str(timeframe),
+                OHLCVBarModel.is_derived.is_(True),
+            )
+            .order_by(OHLCVBarModel.bar_date.desc())
+            .limit(limit)
+        )
+        return [self._to_domain(row) for row in result.scalars().all()]
+
+    async def get_sector_period_returns(self, lookback_days: int) -> list[dict]:
+        """Compute average period return per GICS sector from daily OHLCV bars.
+
+        WHY daily bars + calendar lookback: derived weekly/monthly bars require at
+        least 2 such bars per instrument to exist, which is rarely the case in
+        production (only the current period's bar is available). Using daily bars
+        with a calendar-based lookback (7 or 30 days) works with any instrument
+        that has ≥2 trading days of history, making 1W and 1M viable.
+
+        Uses LATERAL JOINs: first subquery finds the latest daily bar, second finds
+        the closest daily bar at-or-before the lookback horizon.
+        """
+        sql = text(
+            """
+            SELECT
+                i.sector AS name,
+                AVG(
+                    (latest.close - prev.close) / NULLIF(prev.close, 0)
+                ) * 100 AS change_pct,
+                COUNT(DISTINCT i.id)::int AS instrument_count
+            FROM instruments i
+            JOIN LATERAL (
+                SELECT close, bar_date FROM ohlcv_bars
+                WHERE instrument_id = i.id AND timeframe = '1d'
+                ORDER BY bar_date DESC LIMIT 1
+            ) latest ON true
+            JOIN LATERAL (
+                SELECT close FROM ohlcv_bars
+                WHERE instrument_id = i.id AND timeframe = '1d'
+                  AND bar_date <= latest.bar_date - (INTERVAL '1 day' * :lookback_days)
+                ORDER BY bar_date DESC LIMIT 1
+            ) prev ON true
+            WHERE i.sector IS NOT NULL
+            GROUP BY i.sector
+            ORDER BY change_pct DESC NULLS LAST
+            """
+        )
+        result = await self._session.execute(sql, {"lookback_days": lookback_days})
+        rows = result.mappings().all()
+        return [
+            {
+                "name": row["name"],
+                "change_pct": round(float(row["change_pct"]), 2) if row["change_pct"] is not None else None,
+                "instrument_count": int(row["instrument_count"]),
+            }
+            for row in rows
+        ]
+
+    async def get_period_movers(
+        self,
+        lookback_days: int,
+        mover_type: str,
+        limit: int,
+    ) -> list[dict]:
+        """Return top gainers or losers by period return from daily OHLCV bars.
+
+        WHY daily bars + calendar lookback: see get_sector_period_returns docstring.
+        """
+        order = "DESC" if mover_type == "gainers" else "ASC"
+        sql = text(
+            f"""
+            SELECT
+                i.id AS instrument_id,
+                i.symbol AS ticker,
+                i.name AS name,
+                (latest.close - prev.close) / NULLIF(prev.close, 0) * 100 AS period_return_pct
+            FROM instruments i
+            JOIN LATERAL (
+                SELECT close, bar_date FROM ohlcv_bars
+                WHERE instrument_id = i.id AND timeframe = '1d'
+                ORDER BY bar_date DESC LIMIT 1
+            ) latest ON true
+            JOIN LATERAL (
+                SELECT close FROM ohlcv_bars
+                WHERE instrument_id = i.id AND timeframe = '1d'
+                  AND bar_date <= latest.bar_date - (INTERVAL '1 day' * :lookback_days)
+                ORDER BY bar_date DESC LIMIT 1
+            ) prev ON true
+            WHERE i.sector IS NOT NULL
+            ORDER BY period_return_pct {order} NULLS LAST
+            LIMIT :lim
+            """
+        )
+        result = await self._session.execute(sql, {"lookback_days": lookback_days, "lim": limit})
+        rows = result.mappings().all()
+        return [
+            {
+                "instrument_id": row["instrument_id"],
+                "ticker": row["ticker"],
+                "name": row["name"],
+                "period_return_pct": (
+                    round(float(row["period_return_pct"]), 2) if row["period_return_pct"] is not None else None
+                ),
+            }
+            for row in rows
+        ]

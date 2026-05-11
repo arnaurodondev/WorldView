@@ -134,6 +134,19 @@ allowlist:
       concern.  The import is the cache client type for dependency injection annotation
       only — no infrastructure query logic is used in the router.
 
+  # The SSE chat route creates a fresh UoW scoped to the generator lifetime.
+  # The import is a local import inside a nested async generator function (not
+  # module-level), following the same pattern as api/dependencies.py.  Moving
+  # this into an application-layer factory would require passing the session
+  # factory through multiple layers for a single SSE endpoint — disproportionate
+  # complexity.  Tracked in: F-508 (PLAN-0070 QA iter-2, pre-existing pattern).
+  - rule_id: IG-LAYER-002
+    path: "services/rag-chat/src/rag_chat/api/routes/chat.py"
+    reason: >
+      Local import inside a nested async generator to scope RagUnitOfWork to the
+      SSE stream lifetime.  Not a module-level import.  Same pattern as
+      api/dependencies.py which is correctly not flagged.
+
   # ─── Service-level utility scripts ─────────────────────────────────────
   # Standalone scripts in services/*/scripts/ are init-container or CLI
   # utilities — they may use stdlib patterns for minimal dependencies.

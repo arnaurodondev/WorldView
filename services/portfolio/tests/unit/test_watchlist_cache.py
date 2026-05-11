@@ -74,3 +74,49 @@ async def test_get_user_ids_returns_empty_on_miss(fake_redis) -> None:
 
     result = await cache.get_user_ids(entity_id)
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_invalidate_entity_fail_open_on_redis_error() -> None:
+    """invalidate_entity must NOT raise when Valkey is down (fail-open, Option C).
+
+    The use case already committed the DB write. A cache error must not propagate
+    and cause a 500 or prevent the HTTP response from being sent.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    broken_redis = MagicMock()
+    broken_redis.delete = AsyncMock(side_effect=ConnectionError("valkey unreachable"))
+
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
+
+    client = ValkeyClient.__new__(ValkeyClient)
+    client._redis = broken_redis
+    cache = ValkeyWatchlistCache(client=client, ttl=60)
+
+    entity_id = uuid4()
+    # Must not raise — fail-open behaviour
+    await cache.invalidate_entity(entity_id)
+
+
+@pytest.mark.asyncio
+async def test_invalidate_entity_failure_increments_prometheus_counter() -> None:
+    """invalidate_entity failure must increment the Prometheus failure counter (Option C observability)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from portfolio.infrastructure.metrics.prometheus import s1_watchlist_cache_invalidation_failures_total
+
+    broken_redis = MagicMock()
+    broken_redis.delete = AsyncMock(side_effect=ConnectionError("valkey unreachable"))
+
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
+
+    client = ValkeyClient.__new__(ValkeyClient)
+    client._redis = broken_redis
+    cache = ValkeyWatchlistCache(client=client, ttl=60)
+
+    before = s1_watchlist_cache_invalidation_failures_total._value.get()
+    await cache.invalidate_entity(uuid4())
+    after = s1_watchlist_cache_invalidation_failures_total._value.get()
+
+    assert after == before + 1, f"Expected counter to increment by 1 (before={before}, after={after})"

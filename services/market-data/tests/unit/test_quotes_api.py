@@ -18,8 +18,13 @@ from market_data.infrastructure.cache.quote_cache import QuoteCache
 
 pytestmark = pytest.mark.unit
 
+# P1-A fix: instrument IDs must be valid UUIDs; tests use a deterministic UUID sentinel.
+_INSTR_UUID = "01900000-0000-7000-8000-000000001001"
+_INSTR_UUID_2 = "01900000-0000-7000-8000-000000001002"
+_INSTR_UUID_MISSING = "01900000-0000-7000-8000-000000001999"
 
-def _make_quote(instrument_id: str = "instr-001") -> Quote:
+
+def _make_quote(instrument_id: str = _INSTR_UUID) -> Quote:
     return Quote(
         instrument_id=instrument_id,
         bid=Decimal("309.90"),
@@ -78,10 +83,10 @@ def test_get_quote_found_from_db() -> None:
     mock_uc, mock_cache = _make_mocks(quote=quote, cache_hit=False)
     _, client = _make_app(mock_uc, mock_cache)
 
-    resp = client.get("/api/v1/quotes/instr-001")
+    resp = client.get(f"/api/v1/quotes/{_INSTR_UUID}")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["instrument_id"] == "instr-001"
+    assert data["instrument_id"] == _INSTR_UUID
     assert data["bid"] == "309.90"
 
 
@@ -91,45 +96,63 @@ def test_get_quote_found_from_cache() -> None:
     mock_uc, mock_cache = _make_mocks(quote=quote, cache_hit=True)
     _, client = _make_app(mock_uc, mock_cache)
 
-    resp = client.get("/api/v1/quotes/instr-001")
+    resp = client.get(f"/api/v1/quotes/{_INSTR_UUID}")
     assert resp.status_code == 200
     mock_uc.execute.assert_not_awaited()
 
 
 def test_get_quote_not_found() -> None:
-    """GET /api/v1/quotes/{id} returns 404 when no quote exists."""
+    """GET /api/v1/quotes/{id} returns 404 when no quote exists (valid UUID, no record)."""
     mock_uc, mock_cache = _make_mocks(quote=None)
     _, client = _make_app(mock_uc, mock_cache)
 
-    resp = client.get("/api/v1/quotes/nonexistent")
+    resp = client.get(f"/api/v1/quotes/{_INSTR_UUID_MISSING}")
     assert resp.status_code == 404
+
+
+def test_get_quote_non_uuid_returns_422() -> None:
+    """GET /api/v1/quotes/{id} returns 422 for non-UUID instrument_id (P1-A fix)."""
+    mock_uc, mock_cache = _make_mocks(quote=None)
+    _, client = _make_app(mock_uc, mock_cache)
+
+    resp = client.get("/api/v1/quotes/AAPL")
+    assert resp.status_code == 422
 
 
 def test_batch_quotes_post() -> None:
     """POST /api/v1/quotes/batch returns quotes for all requested instruments."""
-    quote = _make_quote("instr-001")
+    quote = _make_quote(_INSTR_UUID)
     mock_uc, mock_cache = _make_mocks(quote=quote)
-    mock_uc.execute = AsyncMock(side_effect=lambda iid: quote if iid == "instr-001" else None)
+    mock_uc.execute = AsyncMock(side_effect=lambda iid: quote if iid == _INSTR_UUID else None)
     _, client = _make_app(mock_uc, mock_cache)
 
-    resp = client.post("/api/v1/quotes/batch", json={"instrument_ids": ["instr-001", "instr-missing"]})
+    resp = client.post("/api/v1/quotes/batch", json={"instrument_ids": [_INSTR_UUID, _INSTR_UUID_MISSING]})
     assert resp.status_code == 200
     data = resp.json()["quotes"]
-    assert "instr-001" in data
-    assert "instr-missing" in data
+    assert _INSTR_UUID in data
+    assert _INSTR_UUID_MISSING in data
+
+
+def test_batch_quotes_post_rejects_non_uuid() -> None:
+    """POST /api/v1/quotes/batch returns 422 for non-UUID instrument_ids."""
+    mock_uc, mock_cache = _make_mocks(quote=None)
+    _, client = _make_app(mock_uc, mock_cache)
+
+    resp = client.post("/api/v1/quotes/batch", json={"instrument_ids": ["SPY"]})
+    assert resp.status_code == 422
 
 
 def test_batch_quotes_get_latest() -> None:
     """GET /api/v1/quotes/latest returns quotes for all query-param instruments."""
-    quote = _make_quote("instr-001")
+    quote = _make_quote(_INSTR_UUID)
     mock_uc, mock_cache = _make_mocks(quote=quote)
-    mock_uc.execute = AsyncMock(side_effect=lambda iid: quote if iid == "instr-001" else None)
+    mock_uc.execute = AsyncMock(side_effect=lambda iid: quote if iid == _INSTR_UUID else None)
     _, client = _make_app(mock_uc, mock_cache)
 
-    resp = client.get("/api/v1/quotes/latest?instrument_ids=instr-001&instrument_ids=instr-002")
+    resp = client.get(f"/api/v1/quotes/latest?instrument_ids={_INSTR_UUID}&instrument_ids={_INSTR_UUID_2}")
     assert resp.status_code == 200
     data = resp.json()["quotes"]
-    assert "instr-001" in data
+    assert _INSTR_UUID in data
 
 
 def test_get_quote_sets_cache_on_db_hit() -> None:
@@ -138,14 +161,14 @@ def test_get_quote_sets_cache_on_db_hit() -> None:
     mock_uc, mock_cache = _make_mocks(quote=quote, cache_hit=False)
     _, client = _make_app(mock_uc, mock_cache)
 
-    client.get("/api/v1/quotes/instr-001")
+    client.get(f"/api/v1/quotes/{_INSTR_UUID}")
     mock_cache.set.assert_awaited_once()
 
 
 def test_get_quote_response_null_fields() -> None:
     """GET /api/v1/quotes/{id} returns null for bid/ask/last/volume when entity fields are None (D-004)."""
     null_quote = Quote(
-        instrument_id="instr-001",
+        instrument_id=_INSTR_UUID,
         bid=None,
         ask=None,
         last=None,
@@ -156,7 +179,7 @@ def test_get_quote_response_null_fields() -> None:
     mock_uc, mock_cache = _make_mocks(quote=null_quote, cache_hit=False)
     _, client = _make_app(mock_uc, mock_cache)
 
-    resp = client.get("/api/v1/quotes/instr-001")
+    resp = client.get(f"/api/v1/quotes/{_INSTR_UUID}")
     assert resp.status_code == 200
     data = resp.json()
     assert data["bid"] is None
@@ -171,4 +194,4 @@ def test_get_quote_cache_key_format() -> None:
 
     cache = QuoteCache.__new__(QuoteCache)
     cache._client = None  # type: ignore[assignment]
-    assert cache._key("instr-001") == "quote:v1:instr-001"
+    assert cache._key(_INSTR_UUID) == f"quote:v1:{_INSTR_UUID}"

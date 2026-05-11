@@ -5,11 +5,13 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from content_ingestion.domain.entities import RawArticle, SourceType
+from content_ingestion.domain.entities import ContentIngestionTask, RawArticle, SourceType
+from content_ingestion.domain.exceptions import InvalidStateTransition
 from content_ingestion.domain.value_objects import TokenBucket
 
 import common.ids
 import common.time
+from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
 
 pytestmark = pytest.mark.unit
 
@@ -106,3 +108,48 @@ class TestRawArticle:
         )
         with pytest.raises(AttributeError):
             article.url = "https://other.com"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# ContentIngestionTask.retry()
+# ---------------------------------------------------------------------------
+
+
+def _make_running_task() -> ContentIngestionTask:
+    """Create a task in RUNNING state (ready for retry/fail/succeed)."""
+    task = ContentIngestionTask(
+        source_id=common.ids.new_uuid7(),
+        source_name="retry-test",
+        source_type=SourceType.EODHD,
+        status=IngestionTaskStatus.CLAIMED,
+        worker_id="w-test",
+    )
+    task.start()
+    return task
+
+
+class TestContentIngestionTaskRetry:
+    def test_retry_transitions_running_to_retry(self) -> None:
+        task = _make_running_task()
+        task.retry("advisory_lock_held_by_another_worker")
+        assert task.status == IngestionTaskStatus.RETRY
+        assert task.error_detail == "advisory_lock_held_by_another_worker"
+        assert task.worker_id is None
+        assert task.lease_expires is None
+
+    def test_retry_always_retries_regardless_of_attempt_count(self) -> None:
+        """Unlike fail(), retry() does not check max_attempts."""
+        task = _make_running_task()
+        task.attempt_count = task.max_attempts  # Exhausted
+        task.retry("contention")
+        assert task.status == IngestionTaskStatus.RETRY
+
+    def test_retry_raises_on_non_running_status(self) -> None:
+        task = ContentIngestionTask(
+            source_id=common.ids.new_uuid7(),
+            source_name="test",
+            source_type=SourceType.EODHD,
+            status=IngestionTaskStatus.PENDING,
+        )
+        with pytest.raises(InvalidStateTransition, match="RUNNING"):
+            task.retry("reason")

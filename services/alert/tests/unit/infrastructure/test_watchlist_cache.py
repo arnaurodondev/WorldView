@@ -9,6 +9,8 @@ import pytest
 from alert.infrastructure.cache.watchlist_cache import WatchlistCache
 from alert.infrastructure.clients.s1_client import S1Client, WatcherInfo
 
+pytestmark = pytest.mark.unit
+
 
 def _mock_valkey() -> AsyncMock:
     """Return a mock Valkey client."""

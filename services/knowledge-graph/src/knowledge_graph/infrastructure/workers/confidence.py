@@ -16,6 +16,7 @@ For each partition batch:
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -39,8 +40,10 @@ class ConfidenceWorker:
     """Recomputes confidence for all stale relations (Worker 13A).
 
     Args:
+    ----
         session_factory: Read/write sessionmaker for intelligence_db.
         settings:        Service settings (formula constants).
+
     """
 
     def __init__(
@@ -54,20 +57,29 @@ class ConfidenceWorker:
     async def run(self) -> None:
         """Process all 8 partitions, recomputing stale confidence scores."""
         total_updated = 0
+        total_evidence_rows = 0
+        empty_partitions = 0
+
         for partition_key in range(_NUM_PARTITIONS):
-            updated = await self._process_partition(partition_key)
+            updated, evidence_rows = await self._process_partition(partition_key)
             total_updated += updated
+            total_evidence_rows += evidence_rows
+            if evidence_rows == 0:
+                empty_partitions += 1
 
         logger.info(  # type: ignore[no-any-return]
             "confidence_worker_complete",
             relations_updated=total_updated,
+            evidence_rows_processed=total_evidence_rows,
+            empty_partitions=empty_partitions,
+            partitions_total=_NUM_PARTITIONS,
         )
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
-    async def _process_partition(self, partition_key: int) -> int:
+    async def _process_partition(self, partition_key: int) -> tuple[int, int]:
         from knowledge_graph.infrastructure.intelligence_db.repositories.contradiction import (
             ContradictionRepository,
         )
@@ -83,8 +95,20 @@ class ConfidenceWorker:
 
             # Fetch unprocessed rows for this partition
             unprocessed = await ev_repo.fetch_unprocessed_by_partition(partition_key, _PARTITION_BATCH_SIZE)
+            row_count = len(unprocessed)
             if not unprocessed:
-                return 0
+                logger.debug(  # type: ignore[no-any-return]
+                    "confidence_worker_partition_empty",
+                    partition_key=partition_key,
+                    message="no unprocessed evidence rows — may indicate data gap or fully caught-up partition",
+                )
+                return 0, 0
+
+            logger.debug(  # type: ignore[no-any-return]
+                "confidence_worker_partition_start",
+                partition_key=partition_key,
+                unprocessed_rows=row_count,
+            )
 
             # Group by triple to find unique relations to update
             triple_to_rows: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
@@ -155,6 +179,24 @@ class ConfidenceWorker:
                     components.final,
                     utc_now(),  # type: ignore[no-any-return]
                 )
+
+                # T-B-01: populate valid_from + relation_period_type from
+                # earliest evidence date in same transaction as confidence update.
+                valid_from = await ev_repo.get_earliest_evidence_date(  # type: ignore[attr-defined]
+                    subject_id, object_id, ctype
+                )
+                if valid_from is not None:
+                    # Derive period type from valid_to on the relation row.
+                    # rel_row comes from get() which does not include valid_to;
+                    # fetch it now with a lightweight supplementary query.
+                    valid_to = await rel_repo.get_valid_to(relation_id)  # type: ignore[arg-type, attr-defined]
+                    relation_period_type = _derive_period_type(valid_from, valid_to)
+                    await rel_repo.update_valid_from_and_period_type(  # type: ignore[attr-defined]
+                        relation_id,  # type: ignore[arg-type]
+                        valid_from,
+                        relation_period_type,
+                    )
+
                 all_raw_ids.extend(UUID(str(r["raw_id"])) for r in _)  # type: ignore[misc]
                 updated += 1
 
@@ -164,4 +206,47 @@ class ConfidenceWorker:
 
             await session.commit()
 
-        return updated
+            if updated == 0:
+                logger.warning(  # type: ignore[no-any-return]
+                    "confidence_worker_partition_zero_updates",
+                    partition_key=partition_key,
+                    unprocessed_rows=row_count,
+                    message="unprocessed rows found but 0 relations updated — possible relation lookup misses",
+                )
+            else:
+                logger.debug(  # type: ignore[no-any-return]
+                    "confidence_worker_partition_complete",
+                    partition_key=partition_key,
+                    relations_updated=updated,
+                    evidence_rows=row_count,
+                )
+
+        return updated, row_count
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _derive_period_type(
+    valid_from: object,
+    valid_to: object | None,
+) -> str:
+    """Derive ``relation_period_type`` from valid_from / valid_to timestamps.
+
+    Rules (T-B-01):
+    - ``valid_to IS NOT NULL AND (valid_to - valid_from) < 7 days`` → POINT_IN_TIME
+    - ``valid_to IS NOT NULL``                                        → HISTORICAL
+    - ``valid_to IS NULL``                                            → ONGOING
+    """
+    if valid_to is None:
+        return "ONGOING"
+    try:
+        delta: timedelta = valid_to - valid_from  # type: ignore[operator]
+        if delta < timedelta(days=7):
+            return "POINT_IN_TIME"
+    except TypeError:
+        # Unexpected types — fall back to HISTORICAL
+        pass
+    return "HISTORICAL"

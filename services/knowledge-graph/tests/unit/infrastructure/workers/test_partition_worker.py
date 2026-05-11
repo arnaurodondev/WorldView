@@ -45,9 +45,7 @@ class TestCreateMonthlyPartition:
         created = MagicMock()
         session.execute = AsyncMock(side_effect=[not_found, created])
 
-        result = asyncio.get_event_loop().run_until_complete(
-            _create_monthly_partition(session, "relation_evidence", 2026, 5)
-        )
+        result = asyncio.run(_create_monthly_partition(session, "relation_evidence", 2026, 5))
         assert result is True
         assert session.execute.call_count == 2
 
@@ -60,9 +58,7 @@ class TestCreateMonthlyPartition:
         found.fetchone.return_value = ("relation_evidence_2026_05",)
         session.execute = AsyncMock(return_value=found)
 
-        result = asyncio.get_event_loop().run_until_complete(
-            _create_monthly_partition(session, "relation_evidence", 2026, 5)
-        )
+        result = asyncio.run(_create_monthly_partition(session, "relation_evidence", 2026, 5))
         assert result is False
         session.execute.assert_awaited_once()  # Only the check query
 
@@ -86,5 +82,5 @@ class TestMonthlyPartitionWorkerIdempotency:
         sf.return_value = session
 
         worker = MonthlyPartitionWorker(sf)
-        asyncio.get_event_loop().run_until_complete(worker.run())
+        asyncio.run(worker.run())
         session.commit.assert_awaited()

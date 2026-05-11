@@ -29,7 +29,7 @@ async def main() -> None:
     )
     from nlp_pipeline.infrastructure.valkey.watchlist_cache import WatchlistCache
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     configure_logging(
         service_name="nlp-pipeline-watchlist-consumer",
         level=settings.log_level,
@@ -71,9 +71,12 @@ async def main() -> None:
         consumer_task = asyncio.create_task(consumer.run())
         await stop_event.wait()
         consumer.stop()  # type: ignore[attr-defined]
-        consumer_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await consumer_task
+        try:
+            await asyncio.wait_for(consumer_task, timeout=30.0)
+        except TimeoutError:
+            consumer_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await consumer_task
     except Exception as exc:
         log.error("watchlist_consumer_fatal_error", error=str(exc))
         sys.exit(1)

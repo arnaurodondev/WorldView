@@ -12,13 +12,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import ClassVar, cast
 
-from common.ids import new_ulid  # type: ignore[import-untyped]
+from common.ids import new_uuid7_str  # type: ignore[import-untyped]
 from common.time import to_iso8601, utc_now  # type: ignore[import-untyped]
 from market_ingestion.domain.value_objects import ObjectRef
 
 
 def _new_event_id() -> str:
-    return new_ulid()  # type: ignore[no-any-return]
+    return new_uuid7_str()  # type: ignore[no-any-return]
 
 
 def _now_iso() -> str:

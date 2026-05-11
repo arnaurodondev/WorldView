@@ -124,11 +124,11 @@ async def test_ws_stream_endpoint_connects(
     integration_client: Any,
 ) -> None:
     """WebSocket /api/v1/alerts/stream accepts a connection."""
-    user_id = str(uuid4())
-    # httpx does not support WS natively; verify the route is registered
-    resp = await integration_client.get(f"/api/v1/alerts/pending?user_id={user_id}")
-    # Should return 200 with empty list (no pending alerts)
+    # integration_client JWT uses INTEGRATION_USER_ID as sub; endpoint reads
+    # user_id from JWT via CurrentUserIdDep (not the query param) — BP-165.
+    resp = await integration_client.get("/api/v1/alerts/pending")
+    # Should return 200 with a valid response (endpoint may have alerts from other tests)
     assert resp.status_code == 200
     data = resp.json()
     assert "alerts" in data
-    assert data["alerts"] == []
+    assert isinstance(data["alerts"], list)

@@ -1,0 +1,78 @@
+---
+title: Slash Commands
+description: /ticker, /brief, and /compare slash commands for loading context into the chat assistant.
+section: Chat & AI
+order: 4
+updated: 2026-05-05
+---
+
+Slash commands let you inject structured context into the chat conversation without writing long preambles. Type `/` at the start of a message to see the autocomplete list.
+
+## /ticker — Load instrument context
+
+Load current price data, fundamentals, and recent news for an instrument into the context window:
+
+```
+/:AAPL
+```
+
+After loading, the conversation context includes:
+- Last price, day change, market cap
+- Key valuation metrics (P/E, P/S, EV/EBITDA)
+- Top 5 recent articles with relevance scores
+- Analyst consensus (where available)
+
+You can combine a slash command with a question in the same message:
+
+```
+/:NVDA What do analysts think about the data center growth outlook?
+```
+
+The instrument context is loaded first, then the question is answered against that context.
+
+<Callout type="tip" title="Multiple tickers">
+You can load multiple tickers in one message: `/:AAPL /:MSFT Compare their cloud revenue trajectories.` Both instruments' contexts are loaded before generation.
+</Callout>
+
+## /brief — Load morning brief context
+
+Load today's morning brief as context for follow-up questions:
+
+```
+/brief What does this mean for my tech holdings?
+```
+
+This is the same as clicking **Ask a follow-up** on the morning brief widget — it pre-loads the brief text so you can ask questions that reference its content.
+
+## /compare — Side-by-side comparison
+
+Compare two or more instruments across a set of dimensions:
+
+```
+/compare AAPL MSFT GOOGL on FCF yield and revenue growth
+```
+
+The `/compare` command generates a structured comparison table with:
+- The requested metrics for each instrument
+- Delta columns showing which instrument leads
+- A brief narrative synthesis of the key differences
+
+Supported comparison dimensions include any fundamental metric, as well as technical (RSI, trend) and news (sentiment, velocity) dimensions.
+
+## /portfolio — Load portfolio context
+
+Load your current holdings as context:
+
+```
+/portfolio Which of my positions has the most earnings risk this quarter?
+```
+
+This loads your current position list (tickers and weights) into the context window. The assistant then answers relative to your actual portfolio, not a hypothetical one.
+
+## Command autocomplete
+
+Type `/` at the start of a message to open the slash command picker. Use `↑` and `↓` to navigate, press `Enter` or `Tab` to select. The picker shows a brief description for each command and recent usage at the top.
+
+<Callout type="info" title="Context window limits">
+Loading many tickers at once may approach the context window limit (32K tokens). If you load more than 5 tickers simultaneously, the system automatically summarizes each instrument's context to fit. You will see a note indicating this.
+</Callout>

@@ -563,6 +563,53 @@ class TestPgFundamentalMetricsRepository:
         for i in range(len(points) - 1):
             assert points[i].as_of_date < points[i + 1].as_of_date
 
+    async def test_timeseries_order_desc_returns_most_recent_with_limit(self, uow) -> None:
+        """order='desc' + limit=N returns the N MOST-RECENT points, not the oldest.
+
+        Audit 2026-05-09 regression: prior to this fix the ``order`` argument
+        was silently dropped by the read repository, so a UI sparkline asking
+        for the 12 newest quarters received the 12 OLDEST instead — which for
+        AAPL meant 1985-1988 pre-IPO data instead of the recent year.
+        """
+        from datetime import UTC, date, datetime
+        from decimal import Decimal
+
+        from market_data.infrastructure.db.metric_extractor import MetricRow
+        from market_data.infrastructure.db.repositories.fundamental_metrics_query import query_timeseries
+
+        instr_id = await self._make_instrument(uow)
+        # 5 fiscal years: 2020 → 2024. With limit=2 + order=desc we expect
+        # only 2023 and 2024 (re-sorted ASC for rendering).
+        rows = [
+            MetricRow(
+                instrument_id=instr_id,
+                as_of_date=date(year, 12, 31),
+                metric="revenue",
+                value_numeric=Decimal(str(year)),
+                value_text=None,
+                period_type="ANNUAL",
+                section="income_statement",
+                ingested_at=datetime(2024, 10, 1, tzinfo=UTC),
+            )
+            for year in (2020, 2021, 2022, 2023, 2024)
+        ]
+        await uow.fundamental_metrics.upsert_metrics(rows)
+        await uow.commit()
+
+        session = uow.get_read_session()
+        # order=desc + limit=2 → 2023 + 2024
+        points = await query_timeseries(session, instr_id, "revenue", limit=2, order="desc")
+        assert len(points) == 2
+        # Always returned ASC by date so callers can render left→right
+        assert points[0].as_of_date == date(2023, 12, 31)
+        assert points[1].as_of_date == date(2024, 12, 31)
+
+        # order=asc + limit=2 → 2020 + 2021 (the original / now-explicit behaviour)
+        points = await query_timeseries(session, instr_id, "revenue", limit=2, order="asc")
+        assert len(points) == 2
+        assert points[0].as_of_date == date(2020, 12, 31)
+        assert points[1].as_of_date == date(2021, 12, 31)
+
     async def test_timeseries_respects_start_date(self, uow) -> None:
         """query_timeseries with start_date excludes earlier rows."""
         from datetime import UTC, date, datetime
@@ -679,7 +726,7 @@ class TestPgFundamentalMetricsRepository:
         await uow.commit()
 
         session = uow.get_read_session()
-        results = await query_screen(session, [ScreenFilter(metric="pe_ratio", max_value=20.0)])
+        results, _total = await query_screen(session, [ScreenFilter(metric="pe_ratio", max_value=20.0)])
         instrument_ids = [r.instrument_id for r in results]
         assert instr_id in instrument_ids
 
@@ -719,7 +766,7 @@ class TestPgFundamentalMetricsRepository:
 
         session = uow.get_read_session()
         # Both pe_ratio ≤ 20 AND roe_ttm ≥ 0.15 — instrument fails the second
-        results = await query_screen(
+        results, _total = await query_screen(
             session,
             [
                 ScreenFilter(metric="pe_ratio", max_value=20.0),

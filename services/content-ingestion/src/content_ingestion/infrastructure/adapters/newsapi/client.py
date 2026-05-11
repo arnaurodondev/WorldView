@@ -104,7 +104,9 @@ class NewsAPIClient:
         headers = {"X-Api-Key": self._api_key}
         params: dict[str, str | int] = {
             "q": query,
-            "sortBy": "publishedAt",
+            # "publishedAt" sort requires a paid plan (triggers HTTP 426 on free tier).
+            # "relevancy" is available on all tiers.
+            "sortBy": "relevancy",
             "language": language,
             "pageSize": self._page_size,
             "page": page,

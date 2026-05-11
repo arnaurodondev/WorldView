@@ -28,6 +28,8 @@ class NERClient(Protocol):
 
     async def extract_entities(self, inp: NERInput) -> NEROutput: ...
 
+    async def batch_extract_entities(self, inputs: list[NERInput]) -> list[NEROutput]: ...
+
 
 @runtime_checkable
 class ExtractionClient(Protocol):

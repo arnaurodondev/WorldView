@@ -15,6 +15,7 @@ from content_store.infrastructure.db.repositories.dedup import DedupHashReposito
 from content_store.infrastructure.db.repositories.document import DocumentRepository
 from content_store.infrastructure.db.repositories.minhash import MinHashRepository
 from content_store.infrastructure.db.repositories.outbox import OutboxRepository
+from content_store.infrastructure.storage.minio_silver import SilverStorageAdapter
 from sqlalchemy import select
 
 import common.ids  # type: ignore[import-untyped]
@@ -63,14 +64,13 @@ async def _process(
     )
 
     use_case = ProcessArticleUseCase(
-        session=session,
         document_repo=DocumentRepository(session),
         dedup_repo=DedupHashRepository(session),
         minhash_repo=MinHashRepository(session),
         outbox_repo=OutboxRepository(session),
         object_store=storage,
         bronze_bucket=bronze_bucket,
-        silver_bucket=silver_bucket,
+        silver_storage=SilverStorageAdapter(storage, silver_bucket),
         lsh_client=lsh_client,
         num_perm=128,
     )

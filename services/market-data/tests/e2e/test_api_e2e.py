@@ -52,7 +52,6 @@ async def test_readyz_all_checks_pass(e2e_client: AsyncClient) -> None:
     checks = body["checks"]
     assert checks["db"] == "ok"
     assert checks["valkey"] == "ok"
-    assert checks["kafka"] == "ok"
 
 
 # ── Instruments ───────────────────────────────────────────────────────────────

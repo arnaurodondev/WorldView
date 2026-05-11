@@ -1,31 +1,30 @@
 """Block 5 — Document Routing Score (PRD §6.7 Block 5).
 
-7-signal weighted formula. Weights sum to exactly 1.0 (module-level assertion).
+8-signal weighted formula. Weights sum to exactly 1.0 (module-level assertion).
 Watchlist signal sourced from Valkey SET maintained by the watchlist consumer.
+price_impact signal sourced from article_price_impacts table (PRD-0020 §6.5).
 """
 
 from __future__ import annotations
 
 import math
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from uuid import UUID
 
 from nlp_pipeline.domain.enums import MentionClass, RoutingTier
 from nlp_pipeline.domain.models import EntityMention, RoutingDecision
 
-if TYPE_CHECKING:
-    from uuid import UUID
-
-# ── Signal weights (PRD §6.7 Block 5) ────────────────────────────────────────
+# ── Signal weights (PRD §6.7 Block 5 / PRD-0020 §6.5 rebalance) ─────────────
 
 SIGNAL_WEIGHTS: dict[str, float] = {
-    "entity_density": 0.30,
+    "entity_density": 0.25,
     "source_reliability": 0.20,
     "novelty": 0.15,
     "recency": 0.10,
     "watchlist": 0.10,
-    "document_type": 0.10,
+    "document_type": 0.05,
     "extraction_yield": 0.05,
+    "price_impact": 0.10,
 }
 
 # Module-level assertion: weights must sum to exactly 1.0
@@ -45,17 +44,35 @@ DOCUMENT_TYPE_SIGNAL: dict[str, float] = {
     "sec_8k": 0.95,
     "sec_10k": 0.90,
     "sec_10q": 0.90,
+    "sec_edgar": 0.88,  # generic SEC filing — all form types (10-K/10-Q/8-K/DEF14A)
     "sec_def14a": 0.88,
     "earnings_call": 0.80,
     "analyst_report": 0.80,
     "press_release": 0.70,
-    "eodhd_news": 0.55,
-    "finnhub_news": 0.55,
-    "newsapi_news": 0.55,
+    "eodhd": 0.55,  # actual source_type emitted by content-ingestion EODHD adapter
+    "eodhd_news": 0.55,  # legacy alias (seed data)
+    "finnhub": 0.55,  # actual source_type emitted by content-ingestion Finnhub adapter
+    "finnhub_news": 0.55,  # legacy alias (seed data)
+    "newsapi": 0.55,  # actual source_type emitted by content-ingestion NewsAPI adapter
+    "newsapi_news": 0.55,  # legacy alias
     "manual": 0.50,
 }
 _DEFAULT_DOCUMENT_TYPE_SIGNAL: float = 0.50
 
+# Authoritative regulatory filings are guaranteed at least MEDIUM routing even when
+# entity density is low — structural SEC filings contain high-value factual disclosures
+# whose value is not captured by the entity_density signal (low ORGANIZATION/FI mention
+# counts in raw HTML do not indicate low informational value).
+_AUTHORITATIVE_FILING_SOURCES: frozenset[str] = frozenset(
+    {
+        "sec_edgar",
+        "sec_8k",
+        "sec_10k",
+        "sec_10q",
+        "sec_def14a",
+        "tenant_upload",
+    }
+)
 
 # ── Signal computation helpers ────────────────────────────────────────────────
 
@@ -97,13 +114,18 @@ def _extraction_yield_signal(mention_count: int, section_count: int) -> float:
     return 0.6 * min(1.0, mention_count / 20.0) + 0.4 * min(1.0, section_count / 8.0)
 
 
-def _assign_tier(score: float) -> RoutingTier:
+def _assign_tier(
+    score: float,
+    tier_deep: float = TIER_DEEP,
+    tier_medium: float = TIER_MEDIUM,
+    tier_light: float = TIER_LIGHT,
+) -> RoutingTier:
     """Assign routing tier from composite score (PRD §6.7 Block 5)."""
-    if score >= TIER_DEEP:
+    if score >= tier_deep:
         return RoutingTier.DEEP
-    if score >= TIER_MEDIUM:
+    if score >= tier_medium:
         return RoutingTier.MEDIUM
-    if score >= TIER_LIGHT:
+    if score >= tier_light:
         return RoutingTier.LIGHT
     return RoutingTier.SUPPRESS
 
@@ -123,8 +145,12 @@ def compute_routing_score(
     source_trust_weight: float,
     novelty_score: float,
     watched_entity_ids: frozenset[UUID],
+    price_impact_score: float = 0.0,
+    tier_deep: float = TIER_DEEP,
+    tier_medium: float = TIER_MEDIUM,
+    tier_light: float = TIER_LIGHT,
 ) -> RoutingDecision:
-    """Compute the 7-signal routing score and assign a RoutingTier.
+    """Compute the 8-signal routing score and assign a RoutingTier.
 
     Args:
         doc_id: Document being routed.
@@ -137,6 +163,9 @@ def compute_routing_score(
         source_trust_weight: From intelligence_db.source_trust_weights.
         novelty_score: Stage 1 novelty output [0, 1].
         watched_entity_ids: Resolved entity IDs currently on any watchlist.
+        price_impact_score: Normalised price-impact score [0, 1] from
+            article_price_impacts table. Defaults to 0.0 for articles not
+            yet labelled (< 25h old) or when lookup fails (best-effort).
 
     Returns:
         RoutingDecision with composite_score, feature_scores, and routing_tier.
@@ -149,13 +178,19 @@ def compute_routing_score(
         "watchlist": _watchlist_signal(mentions, watched_entity_ids),
         "document_type": DOCUMENT_TYPE_SIGNAL.get(source_type, _DEFAULT_DOCUMENT_TYPE_SIGNAL),
         "extraction_yield": _extraction_yield_signal(len(mentions), section_count),
+        "price_impact": max(0.0, min(1.0, price_impact_score)),
     }
 
     composite = sum(SIGNAL_WEIGHTS[signal] * value for signal, value in feature_scores.items())
     # Clamp to [0, 1] for safety
     composite = max(0.0, min(1.0, composite))
 
-    tier = _assign_tier(composite)
+    tier = _assign_tier(composite, tier_deep=tier_deep, tier_medium=tier_medium, tier_light=tier_light)
+
+    # Authoritative filings are upgraded from LIGHT to MEDIUM — their low entity_density
+    # scores do not reflect low informational value; it's a structural artifact of raw HTML.
+    if tier == RoutingTier.LIGHT and source_type in _AUTHORITATIVE_FILING_SOURCES:
+        tier = RoutingTier.MEDIUM
 
     return RoutingDecision(
         decision_id=decision_id,

@@ -90,7 +90,7 @@ class WatchlistCache:
     @staticmethod
     def _serialise(watchers: list[WatcherInfo]) -> str:
         return json.dumps(
-            [{"user_id": w.user_id, "watchlist_id": w.watchlist_id, "alert_types": w.alert_types} for w in watchers]
+            [{"user_id": w.user_id, "watchlist_id": w.watchlist_id, "alert_types": w.alert_types} for w in watchers],
         )
 
     @staticmethod

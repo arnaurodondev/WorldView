@@ -10,6 +10,6 @@ from .service_integration_contract_test import IntegrationContractTestBase
 
 __all__ = [
     "AvroContractTestBase",
-    "OpenAPIContractTestBase",
     "IntegrationContractTestBase",
+    "OpenAPIContractTestBase",
 ]

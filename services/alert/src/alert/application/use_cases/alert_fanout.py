@@ -13,6 +13,10 @@ Dedup key (PRD AD-9): sha256(entity_id:alert_type:window_bucket)
 where window_bucket = epoch_seconds // dedup_window_seconds.
 source_event_id is intentionally excluded so that multiple events about
 the same entity+type within one window are collapsed into one alert.
+
+Severity (PRD-0021 §6.5):
+- nlp.signal.detected.v1: severity = SeverityThresholds.classify(market_impact_score)
+- graph.state.changed.v1 / intelligence.contradiction.v1: severity = MEDIUM (F-13 override)
 """
 
 from __future__ import annotations
@@ -20,13 +24,16 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import fastavro  # type: ignore[import-untyped]
+import fastavro.schema  # type: ignore[import-untyped]
 
-from alert.domain.entities import Alert, OutboxEvent, PendingAlert
-from alert.domain.enums import AlertType
+from alert.application.ports.metrics import IAlertMetrics, NoOpAlertMetrics
+from alert.domain.entities import Alert, OutboxEvent, PendingAlert, SeverityThresholds
+from alert.domain.enums import AlertSeverity, AlertType
 from alert.domain.errors import DuplicateAlertError
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
@@ -35,20 +42,22 @@ from observability import get_logger  # type: ignore[import-untyped]
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from alert.application.ports.entity_resolver import EntityNameResolverPort
+    from alert.application.ports.notification import INotificationPublisher
     from alert.application.ports.repositories import (
         AlertSaveRepositoryPort,
         DedupRepositoryPort,
         OutboxRepositoryPort,
         PendingAlertRepositoryPort,
     )
-    from alert.infrastructure.cache.watchlist_cache import WatchlistCache
-    from alert.infrastructure.websocket.manager import ConnectionManager
+    from alert.application.ports.watchlist import IWatchlistCache
 
     class RepoFactory:
         """Protocol for constructing repos from a session."""
 
         def __call__(
-            self, session: AsyncSession
+            self,
+            session: AsyncSession,
         ) -> tuple[
             AlertSaveRepositoryPort,
             PendingAlertRepositoryPort,
@@ -69,24 +78,122 @@ TOPIC_ALERT_TYPE: dict[str, AlertType] = {
     "intelligence.contradiction.v1": AlertType.CONTRADICTION,
 }
 
-# Inline fallback Avro schema matching infra/kafka/schemas/alert.delivered.v1.avsc
-_ALERT_DELIVERED_SCHEMA: dict[str, Any] = {
-    "type": "record",
-    "name": "AlertDelivered",
-    "namespace": "com.worldview",
-    "fields": [
-        {"name": "event_id", "type": "string"},
-        {"name": "event_type", "type": "string", "default": "alert.delivered"},
-        {"name": "schema_version", "type": "int", "default": 1},
-        {"name": "occurred_at", "type": "string"},
-        {"name": "alert_id", "type": "string"},
-        {"name": "user_id", "type": "string"},
-        {"name": "entity_id", "type": "string"},
-        {"name": "alert_type", "type": "string"},
-        {"name": "channel", "type": "string"},
-        {"name": "correlation_id", "type": ["null", "string"], "default": None},
-    ],
+# Topics that always get MEDIUM severity regardless of market_impact_score (PRD-0021 F-13)
+_MEDIUM_OVERRIDE_TOPICS: frozenset[str] = frozenset({"graph.state.changed.v1", "intelligence.contradiction.v1"})
+
+# ── Signal-label derivation table (PLAN-0048 Wave B-1) ─────────────────────────
+# WHY a static dict (no LLM): the (claim_type, polarity) tuple → label is a
+# deterministic 8-row mapping. Calling an LLM here would add latency, cost,
+# and a new failure mode — all to produce strings the product team has fixed
+# in the spec. Rule-based + lowercase-normalised inputs is the right shape.
+#
+# Fallback when claim_type or polarity is missing or unknown: render
+# ``"<SEVERITY> signal"`` so the row still has actionable text instead of
+# the bare alert_type ``"SIGNAL"`` (the BP-263 root cause).
+_SIGNAL_LABEL_TABLE: dict[tuple[str, str], str] = {
+    ("forward_guidance", "positive"): "Bullish guidance",
+    ("forward_guidance", "negative"): "Bearish guidance",
+    ("factual", "positive"): "Positive factual",
+    ("factual", "negative"): "Negative factual",
+    ("projection", "positive"): "Bullish projection",
+    ("projection", "negative"): "Bearish projection",
+    ("opinion", "positive"): "Bullish opinion",
+    ("opinion", "negative"): "Bearish opinion",
 }
+
+
+def _derive_signal_label(event: dict[str, Any], severity: AlertSeverity) -> tuple[str, bool]:
+    """Compute a human-readable signal label from the event payload.
+
+    Returns ``(label, is_fallback)``. ``is_fallback`` is True when the
+    (claim_type, polarity) lookup missed and we degraded to ``"<SEVERITY> signal"``.
+
+    Callers use the flag to (a) compose a friendlier alert title from
+    entity_name / ticker rather than emitting ``"LOW signal"``-style labels
+    in the UI, and (b) emit a structured warning so we can quantify how
+    often upstream events lack the fields we need.
+    """
+    claim_type_raw = event.get("claim_type")
+    polarity_raw = event.get("polarity")
+    # Defensive str() — JSON deserialisation could in theory hand us None or int.
+    claim_type = str(claim_type_raw).lower() if claim_type_raw else ""
+    polarity = str(polarity_raw).lower() if polarity_raw else ""
+    label = _SIGNAL_LABEL_TABLE.get((claim_type, polarity))
+    if label:
+        return label, False
+    # Fallback: severity.upper() always yields LOW/MEDIUM/HIGH/CRITICAL.
+    return f"{str(severity).upper()} signal", True
+
+
+def _compose_alert_title(
+    *,
+    signal_label: str,
+    entity_name: str | None,
+    ticker: str | None,
+    alert_type: AlertType,
+    is_signal_label_fallback: bool,
+) -> str:
+    """Compose a user-friendly alert subject.
+
+    PLAN-0053 T-A-1-06 — per-type templates ensure no alert ever shows the bare
+    ``"<EnumName> alert"`` (e.g. "Graph Change alert"). Each AlertType has an
+    explicit template so users always see actionable text.
+
+    Priority by alert_type:
+      SIGNAL:
+        1. ``"<subject>: <signal_label>"`` when label is meaningful and subject exists
+        2. ``signal_label`` alone when no subject available
+        3. ``"<subject>: Signal"`` fallback when label is bare-severity but subject exists
+        4. ``"Signal detected"`` final fallback
+      GRAPH_CHANGE:
+        - ``"<subject>: Graph pattern change"`` or ``"Graph pattern change"``
+      CONTRADICTION:
+        - ``"<subject>: Conflicting signals"`` or ``"Conflicting signals"``
+
+    Earlier versions degraded to ``f"{alert_type.title()} alert"`` for non-SIGNAL
+    types, producing the user-reported "Graph Change alert" / "Contradiction alert"
+    titles. Those types lack ``claim_type``/``polarity`` payload (NLP-only fields)
+    so the signal_label lookup always missed; the new templates ignore signal_label
+    entirely for graph/contradiction events.
+    """
+    subject = ticker or entity_name
+
+    if alert_type == AlertType.SIGNAL:
+        if not is_signal_label_fallback:
+            if subject:
+                return f"{subject}: {signal_label}"
+            return signal_label
+        # Severity-only fallback — keep it short and contextual.
+        return f"{subject}: Signal" if subject else "Signal detected"
+
+    if alert_type == AlertType.GRAPH_CHANGE:
+        template = "Graph pattern change"
+        return f"{subject}: {template}" if subject else template
+
+    if alert_type == AlertType.CONTRADICTION:
+        template = "Conflicting signals"
+        return f"{subject}: {template}" if subject else template
+
+    # Defensive: enum extension safety net. Should be unreachable in current code.
+    return f"{subject}: Alert" if subject else "Alert"
+
+
+def _find_schema_path(schema_name: str) -> Path:
+    """Find Avro schema file by walking up from this file to the repo/container root.
+
+    Works in both development (deep path) and Docker (shallow /app path).
+    """
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        candidate = parent / "infra" / "kafka" / "schemas" / schema_name
+        if candidate.is_file():
+            return candidate
+    msg = f"Cannot locate {schema_name} in any parent of {current}"
+    raise FileNotFoundError(msg)
+
+
+# Schema file path — C-04 / BP-119: load from .avsc, never define inline
+_SCHEMA_PATH = _find_schema_path("alert.delivered.v1.avsc")
 
 _PARSED_SCHEMA: dict[str, Any] | None = None
 
@@ -94,7 +201,7 @@ _PARSED_SCHEMA: dict[str, Any] | None = None
 def _get_parsed_schema() -> dict[str, Any]:
     global _PARSED_SCHEMA
     if _PARSED_SCHEMA is None:
-        _PARSED_SCHEMA = fastavro.parse_schema(_ALERT_DELIVERED_SCHEMA)  # type: ignore[assignment]
+        _PARSED_SCHEMA = fastavro.schema.load_schema(_SCHEMA_PATH)  # type: ignore[assignment, arg-type]
     return _PARSED_SCHEMA  # type: ignore[return-value]
 
 
@@ -160,7 +267,7 @@ def _serialize_alert_delivered(
     record = {
         "event_id": str(new_uuid7()),
         "event_type": "alert.delivered",
-        "schema_version": 1,
+        "schema_version": 2,
         "occurred_at": alert.created_at.isoformat(),
         "alert_id": str(alert.alert_id),
         "user_id": str(user_id),
@@ -168,6 +275,7 @@ def _serialize_alert_delivered(
         "alert_type": str(alert.alert_type),
         "channel": "websocket",
         "correlation_id": correlation_id,
+        "severity": str(alert.severity),
     }
     buf = io.BytesIO()
     fastavro.schemaless_writer(buf, _get_parsed_schema(), record)
@@ -181,44 +289,64 @@ class AlertFanoutUseCase:
     """Fan-out one intelligence event to all watching users.
 
     Args:
+    ----
         session_factory: SQLAlchemy async session factory for alert_db.
         watchlist_cache: Cache-aside wrapper for S1 watchlist lookups.
-        connection_manager: Active WebSocket connection manager.
+        notification_publisher: Real-time notification publisher port (Valkey pub/sub or in-process).
+        repo_factory: Factory to build repos from a session.
         dedup_window_seconds: Deduplication window length (default 300 s).
         alert_delivered_topic: Kafka topic for outbox events.
+        severity_thresholds: Value object for score→severity classification.
+            Defaults to ``SeverityThresholds()`` (PRD-0021 §6.5 defaults).
+
     """
 
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
-        watchlist_cache: WatchlistCache,
-        connection_manager: ConnectionManager,
+        watchlist_cache: IWatchlistCache,
+        notification_publisher: INotificationPublisher,
         repo_factory: RepoFactory,
         dedup_window_seconds: int = 300,
         alert_delivered_topic: str = "alert.delivered.v1",
+        severity_thresholds: SeverityThresholds | None = None,
+        metrics: IAlertMetrics | None = None,
+        entity_resolver: EntityNameResolverPort | None = None,
     ) -> None:
         self._sf = session_factory
         self._cache = watchlist_cache
-        self._ws = connection_manager
+        self._notification_publisher = notification_publisher
         self._repo_factory = repo_factory
         self._dedup_window = dedup_window_seconds
         self._alert_delivered_topic = alert_delivered_topic
+        self._thresholds = severity_thresholds if severity_thresholds is not None else SeverityThresholds()
+        self._metrics: IAlertMetrics = metrics if metrics is not None else NoOpAlertMetrics()
+        # Optional: when None, payload enrichment is skipped (legacy callers + unit tests
+        # that don't care about (entity_name, ticker, signal_label) still work unchanged).
+        self._entity_resolver: EntityNameResolverPort | None = entity_resolver
 
     async def execute(
         self,
         event: dict[str, Any],
         topic: str,
         correlation_id: str | None = None,
+        market_impact_score: float = 0.0,
     ) -> FanoutResult:
         """Fan-out one event to all watchers.
 
         Args:
+        ----
             event: Deserialized Kafka message value.
             topic: Source Kafka topic name.
             correlation_id: Optional tracing correlation ID.
+            market_impact_score: Market impact score from the event (0.0-1.0).
+                Used to compute severity for signal events; ignored for
+                graph/contradiction events (F-13 MEDIUM override).
 
         Returns:
+        -------
             :class:`FanoutResult` describing what happened.
+
         """
         # ── 1. Backfill suppression ──────────────────────────────────────────
         if _should_suppress(event, topic):
@@ -251,7 +379,13 @@ class AlertFanoutUseCase:
         # ── 3. Resolve alert type ────────────────────────────────────────────
         alert_type = TOPIC_ALERT_TYPE.get(topic, AlertType.SIGNAL)
 
-        # ── 4. Resolve watchers ──────────────────────────────────────────────
+        # ── 4. Compute severity (PRD-0021 §6.5) ─────────────────────────────
+        # Clamp score to [0.0, 1.0] (belt-and-suspenders; consumer also clamps)
+        score = max(0.0, min(1.0, market_impact_score))
+        # F-13: graph/contradiction always MEDIUM; signal events use score
+        severity = AlertSeverity.MEDIUM if topic in _MEDIUM_OVERRIDE_TOPICS else self._thresholds.classify(score)
+
+        # ── 5. Resolve watchers ──────────────────────────────────────────────
         watchers = await self._cache.get_watchers(entity_id_str)
         if not watchers:
             logger.debug(  # type: ignore[no-any-return]
@@ -261,7 +395,7 @@ class AlertFanoutUseCase:
             )
             return FanoutResult(suppressed=False, watchers_count=0)
 
-        # ── 5. Dedup check ───────────────────────────────────────────────────
+        # ── 6. Dedup check ───────────────────────────────────────────────────
         now = utc_now()
         # Use event's occurred_at for the dedup window bucket (stable across re-deliveries).
         # If re-delivered in a different 300s window, the same event still hashes to the
@@ -290,28 +424,88 @@ class AlertFanoutUseCase:
                     watchers_count=len(watchers),
                 )
 
-            # ── 6. Build alert entity ────────────────────────────────────────
+            # ── 7. Build alert entity ────────────────────────────────────────
             source_event_id_raw = event.get("event_id", "")
             try:
                 source_event_id = UUID(str(source_event_id_raw))
             except (ValueError, AttributeError):
                 source_event_id = new_uuid7()
 
+            # Payload enrichment (PLAN-0048 Wave B-1):
+            # The persisted payload powers the frontend's RecentAlerts row text
+            # and AlertDetailSheet. Inject (entity_name, ticker, signal_label)
+            # BEFORE building the Alert so they end up in the DB row + websocket
+            # push + outbox event uniformly. Best-effort — resolver returns
+            # (None, None) on S7 errors and we still ship the alert.
+            enriched_payload: dict[str, Any] = dict(event)
+            entity_name: str | None = None
+            ticker: str | None = None
+            if self._entity_resolver is not None:
+                try:
+                    entity_name, ticker = await self._entity_resolver.resolve(entity_uuid)
+                except Exception:
+                    # Defensive: implementations promise not to raise, but a
+                    # programming error here MUST NOT block the alert path.
+                    logger.warning(  # type: ignore[no-any-return]
+                        "alert_fanout.entity_resolve_error",
+                        entity_id=str(entity_uuid),
+                        exc_info=True,
+                    )
+            if entity_name:
+                enriched_payload["entity_name"] = entity_name
+            if ticker:
+                enriched_payload["ticker"] = ticker
+            # Signal-label is only meaningful for SIGNAL alerts; emit it for
+            # all topics anyway because it's a cheap deterministic computation
+            # and the frontend always renders ``ticker: signal_label`` so a
+            # consistent shape simplifies the UI.
+            signal_label, is_fallback = _derive_signal_label(event, severity)
+            enriched_payload["signal_label"] = signal_label
+            if is_fallback:
+                # Surface upstream data-quality gaps. Frequency of this warning is the
+                # primary metric for tracking F-D-006 / F-X-201 remediation progress.
+                logger.warning(
+                    "alert_fanout.signal_label_fallback",
+                    claim_type=event.get("claim_type"),
+                    polarity=event.get("polarity"),
+                    severity=str(severity),
+                    topic=topic,
+                )
+            # Compose the persistent ``title`` so RecentAlerts / AlarmsPanel never
+            # need to fall back to bare severity in the UI (F-D-006 / F-X-201).
+            alert_title = _compose_alert_title(
+                signal_label=signal_label,
+                entity_name=entity_name,
+                ticker=ticker,
+                alert_type=alert_type,
+                is_signal_label_fallback=is_fallback,
+            )
+
             alert = Alert(
                 entity_id=entity_uuid,
                 alert_type=alert_type,
+                severity=severity,
                 source_event_id=source_event_id,
                 source_topic=topic,
-                payload=dict(event),
+                payload=enriched_payload,
                 dedup_key=dedup_key,
                 created_at=now,
+                title=alert_title,
+                ticker=ticker,
+                entity_name=entity_name,
+                signal_label=signal_label,
             )
 
-            # ── 7. Single transaction: alert + pending rows + outbox ─────────
+            # ── 8. Single transaction: alert + pending rows + outbox ─────────
             try:
                 await alert_repo.save(alert)
             except DuplicateAlertError:
                 # Race condition: another worker wrote same dedup_key first.
+                # Explicitly rollback before returning — the DB-level unique constraint
+                # violation leaves the asyncpg connection in an aborted state, which
+                # would corrupt subsequent queries if the session is returned to the pool
+                # without a ROLLBACK (BP-137).
+                await session.rollback()
                 logger.info("alert_fanout.dedup_race", dedup_key=dedup_key)  # type: ignore[no-any-return]
                 return FanoutResult(
                     suppressed=True,
@@ -334,28 +528,39 @@ class AlertFanoutUseCase:
                         topic=self._alert_delivered_topic,
                         partition_key=str(user_uuid),
                         payload_avro=payload_avro,
-                    )
+                    ),
                 )
                 watcher_user_ids.append(user_uuid)
 
             await session.commit()
 
-        # ── 8. Post-commit WebSocket push (never inside transaction) ─────────
+        # ── 9. Post-commit WebSocket push (never inside transaction) ─────────
         ws_payload = {
             "alert_id": str(alert.alert_id),
             "entity_id": entity_id_str,
             "alert_type": str(alert_type),
+            "severity": str(severity),
             "topic": topic,
             "occurred_at": now.isoformat(),
         }
         for user_uuid in watcher_user_ids:
-            await self._ws.send_to_user(user_uuid, ws_payload)
+            await self._notification_publisher.send_to_user(user_uuid, ws_payload)
+
+        # ── 10. Metrics ──────────────────────────────────────────────────────
+        # Metrics are fire-and-forget: must never affect the correctness path.
+        try:
+            self._metrics.record_alert_fanned_out(severity, alert_type, len(watcher_user_ids))
+            if severity == AlertSeverity.CRITICAL and watcher_user_ids:
+                self._metrics.record_flash_overlay()
+        except Exception:
+            logger.warning("alert_fanout.metrics_error", exc_info=True)  # type: ignore[no-any-return]
 
         logger.info(  # type: ignore[no-any-return]
             "alert_fanout.completed",
             alert_id=str(alert.alert_id),
             entity_id=entity_id_str,
             topic=topic,
+            severity=str(severity),
             watchers=len(watcher_user_ids),
         )
         return FanoutResult(

@@ -28,6 +28,7 @@ def build_fundamentals_narrative(
     """Build a deterministic embeddable financial narrative.
 
     Args:
+    ----
         canonical_name: Entity canonical name (e.g. "Apple Inc.").
         entity_type:    Entity type (e.g. "financial_instrument").
         revenue_usd_millions: Trailing twelve-month revenue in USD millions.
@@ -40,8 +41,10 @@ def build_fundamentals_narrative(
         description:      Optional company description (prepended if provided).
 
     Returns:
+    -------
         A single UTF-8 string suitable for embedding.  Same inputs always
         produce identical output.
+
     """
     parts: list[str] = []
 

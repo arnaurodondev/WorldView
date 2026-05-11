@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID
 
 from sqlalchemy import case, select, update
 
@@ -14,7 +15,6 @@ from market_ingestion.infrastructure.db.models.outbox_event import OutboxEventMo
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from uuid import UUID
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -148,6 +148,10 @@ class SqlaOutboxRepository(OutboxRepository):
             .values(
                 status="published",
                 published_at=published_at,
+                # F-003: keep ``dispatched_at`` in lock-step with
+                # ``published_at`` so cross-service SQL tooling that filters
+                # on the canonical column sees this service's rows.
+                dispatched_at=published_at,
                 locked_by=None,
                 locked_until=None,
             )
@@ -214,6 +218,9 @@ class SqlaOutboxRepository(OutboxRepository):
             .values(
                 status="published",
                 published_at=now,
+                # F-003: mirror into ``dispatched_at`` (canonical column) so
+                # the dispatcher path matches ``mark_published`` above.
+                dispatched_at=now,
                 locked_by=None,
                 locked_until=None,
             )

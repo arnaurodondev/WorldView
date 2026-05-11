@@ -1,0 +1,99 @@
+---
+title: Fundamentals API
+description: GET /v1/instruments/{id}/fundamentals — financial metrics endpoint reference.
+section: API Reference
+order: 4
+updated: 2026-05-05
+---
+
+The fundamentals endpoint returns structured financial data for an instrument, sourced from EODHD.
+
+## Endpoint
+
+```
+GET /v1/instruments/{entity_id}/fundamentals
+```
+
+**Path parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `entity_id` | UUID | Worldview entity ID (from search results) |
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `period` | string | `quarterly` or `annual` (default: `annual`) |
+| `limit` | integer | Number of historical periods to return (default: 5, max: 20) |
+
+## Response structure
+
+```json
+{
+  "entity_id": "01h8...",
+  "ticker": "AAPL",
+  "as_of": "2026-05-04",
+  "valuation": {
+    "pe_ttm": 31.2,
+    "ps_ttm": 8.4,
+    "pb": 45.3,
+    "ev_ebitda": 22.8,
+    "ev_revenue": 8.1,
+    "peg_ratio": 2.1,
+    "dividend_yield": 0.52
+  },
+  "income_statement": [
+    {
+      "period": "FY2025",
+      "end_date": "2025-09-30",
+      "revenue": 391035000000,
+      "gross_profit": 184066000000,
+      "operating_income": 123216000000,
+      "net_income": 93736000000,
+      "eps_diluted": 6.11
+    }
+  ],
+  "balance_sheet": [
+    {
+      "period": "Q4FY2025",
+      "end_date": "2025-09-30",
+      "total_assets": 364980000000,
+      "total_liabilities": 308030000000,
+      "total_equity": 56950000000,
+      "cash_and_equivalents": 29943000000,
+      "total_debt": 101304000000
+    }
+  ],
+  "cash_flow": [
+    {
+      "period": "FY2025",
+      "end_date": "2025-09-30",
+      "operating_cash_flow": 118254000000,
+      "capex": -9447000000,
+      "free_cash_flow": 108807000000
+    }
+  ]
+}
+```
+
+<Callout type="info" title="All monetary values in USD">
+All monetary amounts are returned in USD regardless of the company's reporting currency. EODHD normalizes international company financials to USD using the period-average exchange rate.
+</Callout>
+
+## Missing data
+
+If fundamentals data is unavailable for a field (e.g. a newly-listed company with no quarterly history), the value is `null` rather than `0`. Always check for `null` before rendering financial metrics.
+
+## Caching
+
+Fundamentals data is cached with a 24-hour TTL. The cache is invalidated and refreshed when EODHD pushes updated data (typically once per day after 18:00 ET).
+
+## ETFs and indices
+
+For ETFs, the fundamentals response includes:
+- `valuation.dividend_yield` — fund distribution yield
+- `valuation.pe_ttm` — weighted average P/E of holdings (if available)
+- `income_statement`, `balance_sheet`, `cash_flow` — empty arrays (not applicable)
+
+For indices, all fields except the instrument metadata are empty.

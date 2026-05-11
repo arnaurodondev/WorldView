@@ -2,7 +2,7 @@
 
 > **Owner**: Intelligence domain · **Port**: 8007
 > **Database**: `intelligence_db` (shared, `ALEMBIC_ENABLED=false`)
-> **Status**: Wave D-4 complete — REST API + health/metrics/DLQ + integration tests · Service feature-complete
+> **Status**: PLAN-0018 Wave E-2 complete — AGE Cypher path + neighborhood endpoints · All 10 waves done
 
 ---
 
@@ -29,12 +29,25 @@ and performs read/write operations only.
 | GET | `/healthz` | — | Liveness — always 200 |
 | GET | `/readyz` | — | Readiness — SELECT 1 on intelligence_db; 503 if degraded |
 | GET | `/metrics` | — | Prometheus text format |
-| GET | `/api/v1/entities/{entity_id}/graph` | — | Egocentric graph neighborhood; query params: `min_confidence` (0–1), `semantic_mode`, `limit` (1–200) |
+| GET | `/api/v1/entities/{entity_id}/graph` | — | Egocentric graph neighborhood; query params: `min_confidence` (0–1), `semantic_mode`, `limit` (1–200), `evidence_snippets_limit` (1–10, default 3), `depth` (1–3, default 1). `depth=1`: relational path — full `evidence_snippets` + `relation_summary`. `depth=2/3`: AGE Cypher multi-hop traversal (requires `CYPHER_ENABLED=true`); when `CYPHER_ENABLED=false`, `depth>1` falls back to depth=1 with a warning log. 504 on AGE 5 s timeout. |
+| GET | `/api/v1/entities/{entity_id}/contradictions` | — | Active contradiction links for entity; query params: `claim_type`, `top_k` (1–100, default 20). Returns empty list when none exist (NOT 404) |
 | GET | `/api/v1/relations` | — | Paginated filtered relation list; query params: `subject_entity_id`, `object_entity_id`, `canonical_type`, `semantic_mode`, `min_confidence`, `limit` (1–1000), `offset` |
 | GET | `/api/v1/graph/stats` | — | Aggregate counts: entity, relation, evidence, stale confidence, contradictions, breakdown by semantic_mode |
+| POST | `/api/v1/claims/search` | — | Search `claims` table; body: `{entity_ids[1..10], claim_types[], date_from, date_to, top_k(1–100), min_confidence(0–1)}`. Returns ordered by `extraction_confidence DESC` |
+| POST | `/api/v1/events/search` | — | Search `events` table (migration 0002); body: `{entity_ids[] (empty=no filter), event_types[], date_from, date_to, top_k(1–100)}`. Returns ordered by `event_date DESC`. Includes `event_subtype` and `structured_data` (JSONB) |
+| POST | `/api/v1/search/relations` | — | HNSW ANN semantic search over `relation_summaries`; body: `{query_embedding[1024], top_k(1–50), min_confidence, entity_ids[], relation_types[], semantic_mode}`. Returns ordered by cosine distance ASC. `summary_authority = confidence * log1p(evidence_count)` computed at query time |
+| POST | `/api/v1/entities/similar` | — | Similarity search: top-K financial instrument entities by `fundamentals_ohlcv` pgvector ANN + `competes_with` edge boost (+0.15, capped at 1.0); body: `{entity_id, top_k(1–50), min_score(0–1), include_competitors_only}`. Returns `SimilarEntitiesResponse`. 404 if entity not found; 422 if no fundamentals_ohlcv embedding; 503 if pgvector unavailable. Uses read-replica session (R27). |
+| POST | `/api/v1/graph/cypher/path` | — | AGE Cypher shortest-path between two entities. Body: `{source_entity_id, target_entity_id, max_hops(1–5, default 3), min_confidence(0–1, default 0.3), relation_types[], all_paths(bool)}`. Returns `{paths[], paths_found, query_time_ms}`. 503 if `KNOWLEDGE_GRAPH_CYPHER_ENABLED=false`, 504 on 5 s AGE timeout, 404 if entity missing. Uses **write session** (AGE requires LOAD 'age' — R27 exception). |
+| POST | `/api/v1/graph/cypher/neighborhood` | — | AGE Cypher egocentric neighborhood (multi-hop). Body: `{entity_id, max_hops(1–3, default 2), min_confidence(0–1, default 0.4), include_temporal_events(bool, default true), limit(1–200, default 50)}`. Returns `{center, relations[], entities{}, temporal_events[]}`. Same error codes as /path. |
 | GET | `/admin/dlq` | X-Admin-Token | List open DLQ entries (status=failed) |
 | GET | `/admin/dlq/{dlq_id}` | X-Admin-Token | Get single DLQ entry |
 | POST | `/admin/dlq/{dlq_id}/resolve` | X-Admin-Token | Mark DLQ entry resolved with optional note (max 2048 chars) |
+| GET | `/api/v1/entities/{entity_id}/paths` | — | **NEW (PLAN-0074 Wave E2)** Pre-computed multi-hop opportunity paths for an entity. Query params: `limit` (1–50, default 10), `min_score` (0–1, default 0.3), `min_hops` (2–5, default 2), `max_hops` (2–5, default 5). Returns `EntityPathsResponse{entity_id, paths[], total, freshness_ts}`. Paths ordered by `composite_score` DESC. 404 if entity not found. Empty list (total=0) when entity exists but has no pre-computed paths (NOT 404). **Lazy LLM explanation**: paths with `llm_explanation=null` fire a fire-and-forget `asyncio.create_task` to generate the explanation; `explanation_pending=true` is set for those paths — poll again after a short delay to retrieve the completed explanation. Uses read-replica session (R27). |
+| GET | `/api/v1/entities/{entity_id}/intelligence` | X-Internal-JWT | **NEW (PLAN-0074 Wave D)** Aggregated entity intelligence: current narrative (if generated), confidence breakdown (mean support/corroboration/contradiction, 90-day trend, source distribution top-10), entity-type-specific key_metrics, data_completeness. Uses read-replica session (R27). 200 on success; 404 if entity not found; 422 on invalid UUID. |
+| GET | `/internal/v1/entities/{entity_id}/intelligence` | X-Internal-JWT (system) | **NEW (PLAN-0074 Wave D)** Same as the public intelligence endpoint; internal-only route for S8 (rag-chat) to enrich chat responses with entity context. Wave G will add S9 gateway proxy for external exposure. |
+| GET | `/api/v1/entities/{entity_id}/narratives` | X-Internal-JWT | **NEW (PLAN-0074 Wave D)** Cursor-paginated narrative version history (newest first). Query params: `limit` (1–100, default 20), `cursor` (opaque base64 pagination token). Returns `NarrativeVersionListResponse{entity_id, versions[], next_cursor}`. Empty list (not 404) when no narratives exist. Uses read-replica session (R27). |
+| POST | `/api/v1/entities/{entity_id}/narratives/generate` | X-Internal-JWT | **NEW (PLAN-0074 Wave D)** Manual narrative generation trigger. Rate-limited to one request per entity+tenant+user per hour via Valkey `set_nx` (BP-200). Returns 202 + `{message, entity_id}` when queued; 429 + `Retry-After: 3600` when rate-limited; 422 on invalid UUID. Generation runs fire-and-forget via `asyncio.create_task`. |
+| GET | `/internal/v1/llm-costs` | X-Internal-JWT (system) | LLM cost aggregates for knowledge-graph (PLAN-0033); queries `intelligence_db.llm_usage_log` filtered to `service_name='knowledge-graph'`; params: `period` (YYYY-MM), `provider`, `breakdown` |
 
 ### `summary_authority` Field
 
@@ -83,14 +96,16 @@ Returns `0.0` when confidence is `null` (stale/unknown).
 |----|--------|----------|-------|-------|
 | 13A | `ConfidenceWorker` | 15 min | 8 partitions | Processes unprocessed `relation_evidence_raw` grouped by `partition_key`; 4-step confidence formula; marks processed |
 | 13B | `ContradictionBatchWorker` | 30 min | 100 claims | Subject-based scan via `DISTINCT ON`; inserts `contradictions` rows idempotently (ON CONFLICT DO NOTHING) |
-| 13C | `SummaryWorker` | 60 min | 20 relations | SHA-256 evidence_hash change detection (skip LLM if unchanged); LLM extraction via FallbackChainClient |
-| 13D-1 | `DefinitionRefreshWorker` | 90-day periodic + consumer-triggered | 50 | SHA-256(source_text) change detection; `entity_embedding_state view_type='definition'` |
-| 13D-2 | `NarrativeRefreshWorker` | 7-day periodic | 50 | Deterministic template (canonical_name + claims); truncates to 512 tokens; no LLM |
-| 13D-3 | `FundamentalsRefreshWorker` | 30-day periodic | 50 | Ticker entities only; fetches from market-data service REST API; S3 down = skip (no next_refresh_at update) |
-| 13E | `ProvisionalEnrichmentWorker` | 10 min | 20 | LLM extraction for provisional entities; creates canonical_entity + 3 embedding_state rows; emits entity.canonical.created.v1 |
-| 13F | `EmbeddingRefreshWorker` | 2h | 50 | Embeds relation summaries where `summary_embedding IS NULL` |
+| 13C | `SummaryWorker` | 60 min | 20 relations | SHA-256 evidence_hash change detection (skip LLM if unchanged); LLM extraction via FallbackChainClient. **PLAN-0072 changes**: (1) `canonicalized_evidence_text` accepted as fallback when `evidence_text` IS NULL (reads from `relation_evidence.canonicalized_evidence_text` via `get_all_for_relation`); (2) diagnostic `summary_worker_relation_evidence_audit` structlog entry emitted per relation showing evidence null breakdown; (3) `_SUMMARY_MODEL_ID` dead constant removed (`FallbackChainClient` handles model routing internally). **ARCH-003 3-phase session pattern (PLAN-0076 / DEF-018 / Wave B-1)**: LLM call always issued with NO open session — Phase 1 (fetch stale list) + Phase 2 (fetch evidence + existing summary) run on the **read replica** via `read_session_factory` (threaded from the scheduler by Wave B-5; falls back to write factory when `DATABASE_URL_READ` is unset); Phase 3 (LLM) holds no session; Phase 4 (write summary + clear stale flag) opens a **fresh write session per row**. Per-phase counters (`phase1_fetched_count`, `phase2_llm_calls`, `phase3_written_count`) are emitted in `summary_worker_complete`. **F-DS-208 retry-storm prevention**: when the LLM permanently fails (`extract()` returns None or empty string), the worker still calls `mark_summary_updated` to clear `summary_stale=true`, logging `summary_last_failed_at` — the flag is re-set when fresh evidence arrives. **F-DS-201**: `fetch_stale_summary` no longer uses `FOR UPDATE SKIP LOCKED` because APScheduler `max_instances=1 + coalesce=True` already prevents concurrent worker runs. `force_regen_batch_size` configurable via env var (see ENV vars table). |
+| 13D-1 | `DefinitionRefreshWorker` | 90-day periodic + consumer-triggered | 50 | SHA-256(source_text) change detection; `entity_embedding_state view_type='definition'`. For `financial_instrument`: uses EODHD source_text. For all other entity types: generates description via `EntityDescriptionClient` (gemini-3.1-flash-lite); falls back to deterministic template if API unavailable or cost cap exceeded (PRD-0017 §6.5) |
+| 13D-2 | `NarrativeRefreshWorker` | 7-day periodic | 50 | Deterministic template (canonical_name + claims); truncates to 512 tokens; no LLM. **Wave C additive path**: `NarrativeRefreshKafkaConsumer` subscribes to `entity.narrative.generated.v1` and upserts narrative-view embedding immediately on event receipt (BP-064: idempotency before write session; BP-121: 1500-char truncation). |
+| 13D-3 | `NarrativeGenerationWorker` (**NEW** PLAN-0074 Wave C) | Weekly Sunday 03:00 UTC | 500 | LLM-generated entity narratives; model: `meta-llama/Meta-Llama-3.1-8B-Instruct` via FallbackChainClient; template-v1 fallback when LLM unavailable; idempotency via SHA-256 of canonical `input_snapshot` JSON; health_score = `completeness×0.4 + freshness×0.3 + density×0.3`; publishes `entity.narrative.generated.v1` via outbox; `asyncio.Semaphore(5)` concurrency cap. |
+| 13D-4 | `FundamentalsRefreshWorker` | 30-day periodic | 50 | Ticker entities only; fetches from market-data service REST API; S3 down = skip (no next_refresh_at update) |
+| 13E | `ProvisionalEnrichmentWorker` | 5 min | 500 | **PLAN-0072**: Two-layer noise pre-filter before LLM extraction. Layer 1: `_NOISE_BLOCKLIST` frozenset (O(1)). Layer 2: `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` binary classifier via DeepInfra (confidence < 0.7 → noise, fail-open). **`meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` is confirmed available on the project DeepInfra account.** Noise rows → `status='noise'` (migration 0020). Remaining rows → DeepSeek V4 Flash full extraction; creates canonical_entity + 3 embedding_state rows; emits entity.canonical.created.v1 |
+| 13F | `EmbeddingRefreshWorker` | 2h | 50 | Embeds relation summaries where `summary_embedding IS NULL`. Records `summary_embedding_model_id` and `summary_last_embedded_at` to support model-aware ANN search and prevent mixed-model index drift (DEF-022). |
 | 13G | `MonthlyPartitionWorker` | 1st of month + startup | — | Idempotent CREATE IF NOT EXISTS + prune >24 months |
 | 13H | `YearlyPartitionWorker` | 1st of year + startup | — | Idempotent CREATE IF NOT EXISTS for yearly partitions |
+| **PathInsightWorker** | (**NEW** PLAN-0074 Wave E1) Standalone container | Continuous SKIP LOCKED claim loop | 10/cycle | Pre-computes scored multi-hop paths (2-5 hops) from hub entities via Apache AGE Cypher query. Scores each path with harmonic/diversity/surprise composite formula (PRD-0074 §9.3). Stores top-50 per anchor in `path_insights` table. `PathInsightSeeder` (nightly 02:30 UTC) enqueues hub entities (>10 outgoing relations) idempotently. BP-112/113: stuck-job reclaim loop every 5 min; all exceptions → mark_failed. `llm_explanation=NULL` (Wave E2 deferred). No LLM calls in Wave E1. Scales horizontally via unique `KNOWLEDGE_GRAPH_PATH_INSIGHT_WORKER_INSTANCE_ID` per container. |
 
 ### Multi-View Embedding Architecture (`entity_embedding_state`)
 
@@ -99,8 +114,8 @@ Each entity has exactly **3 rows** in `entity_embedding_state` (one per `view_ty
 | `view_type` | Source Text | Refresh Cadence | Worker |
 |-------------|-------------|-----------------|--------|
 | `definition` | Company description / canonical text | 90-day + event-triggered | 13D-1 + consumer 13D-4/5 |
-| `narrative` | Deterministic template (claims + contradictions) | 7-day | 13D-2 |
-| `fundamentals_ohlcv` | Financial metrics narrative via `build_fundamentals_narrative()` | 30-day | 13D-3 |
+| `narrative` | Deterministic template (claims + contradictions) OR LLM-generated text from `entity_narrative_versions` | 7-day (poll) + event-triggered (Kafka) | 13D-2 + 13D-3 consumer |
+| `fundamentals_ohlcv` | Financial metrics narrative via `build_fundamentals_narrative()` | 30-day | 13D-4 |
 
 Key invariants:
 - SHA-256 change detection on all views: unchanged text never triggers re-embed
@@ -111,8 +126,13 @@ Key invariants:
 
 | ID | Consumer | Group | Topic | Action |
 |----|----------|-------|-------|--------|
-| 13D-4 | `InstrumentEntityConsumer` | `kg-instrument-group` | `market.instrument.created` | Creates canonical_entity + mechanical aliases + LLM aliases (with collision check); triggers definition embed |
-| 13D-5 | `FundamentalsDescriptionConsumer` | `kg-fundamentals-group` | `market.dataset.fetched` (fundamentals only) | Downloads MinIO claim-check; SHA-256 description change detection; triggers definition re-embed if changed |
+| 13D-4 | `InstrumentEntityConsumer` | `kg-instrument-group` | `market.instrument.created` | Creates canonical_entity + mechanical aliases + LLM aliases (with collision check); triggers definition embed. **PLAN-0057 Wave C-3 / D-2 / D-3**: alias suite extended to NAME / CUSIP / FIGI / LEI / PRIMARY_TICKER (each with `source = eodhd_<type>`); synthesised-name guard (Wave D-3) skips publishing the placeholder `Instrument-{8hex}` or upper-case ticker as an EXACT alias; UPSERT-after-discover branch (Wave D-2) UPDATEs an existing placeholder canonical (created upstream by `InstrumentDiscoveredConsumer`) and clears `metadata.needs_fundamentals_enrichment` instead of inserting a duplicate. Stable-ID invariant (M-017): canonical's `entity_id == instrument_id` on both create and discover paths. |
+| 13D-4b | `InstrumentDiscoveredConsumer` | `kg-instrument-discovered-group` | `market.instrument.discovered.v1` | **PLAN-0057 Wave D-2**: lightweight canonical seeder. Inserts a placeholder `canonical_entities` row (`canonical_name = symbol`, `entity_id = instrument_id`, `metadata.needs_fundamentals_enrichment = true`) plus EXACT + TICKER aliases plus the 3 embedding-state placeholder rows. The richer `InstrumentEntityConsumer` later promotes the placeholder when fundamentals lands. Triggered when ohlcv/quotes see a previously-unknown symbol — without this seeding the placeholder, the news pipeline's Stage-2 ticker resolver returns 0 matches for fresh tickers seen for the first time via market data. |
+| 13D-5 | `FundamentalsDescriptionConsumer` | `kg-fundamentals-group` | `market.dataset.fetched` (fundamentals only) | Downloads MinIO claim-check; SHA-256 description change detection; triggers definition re-embed if changed. **Wave B-1**: also extracts `General.FullTimeEmployees`, `Highlights.RevenueTTM`, `SharesStats.PercentInsiders/PercentInstitutions` → `canonical_entities.metadata` JSONB patch (keys: `employee_count`, `revenue_ttm_usd`, `pct_insiders`, `pct_institutions`). Idempotent; no `entity.dirtied.v1` emitted. |
+| 13D-6 | `EconomicEventsDatasetConsumer` | `kg-economic-events-dataset-group` | `market.dataset.fetched` (economic_events only) | **D-W3/D-W5**: Replaces former `EconomicEventsWorker` (direct EODHD polling retired). Downloads MinIO claim-check (passthrough envelope); parses economic event list. Skips unreleased events (`actual=null`). Computes surprise magnitude (`actual - estimate`). Upserts into `temporal_events` (`event_type=macro, scope=NATIONAL, region=<iso2>`). Links to country canonical entity via `entity_event_exposures` (`exposure_type=directly_affected`). Natural-key deduplication. Countries from S2 policies (USA, EUR, GBR, JPN, CHN, EU — expanded by migration 0007). Metric: `s7_economic_events_ingested_total{country}`. |
+| 13D-7 | `MacroIndicatorDatasetConsumer` | `kg-macro-indicator-dataset-group` | `market.dataset.fetched` (macro_indicator only) | **D-W3/D-W5**: Replaces former `MacroIndicatorWorker` (direct EODHD polling retired). Downloads MinIO claim-check (passthrough envelope); one Kafka event per indicator per country. Merges into existing `macro_indicators` JSONB dict; SHA-256 hash comparison — only calls `EntityRepository.update_metadata()` on change. Indicators: `gdp_current_usd`, `gdp_growth_annual`, `inflation_consumer_prices_annual`, `real_interest_rate`, `unemployment_total_pct`, `current_account_balance_bop_usd`. Produces `entity.dirtied.v1` on change. Metric: `s7_macro_indicator_updates_total{country}`. |
+| 13D-8 | `InsiderTransactionsDatasetConsumer` | `kg-insider-transactions-dataset-group` | `market.dataset.fetched` (insider_transactions only) | **D-W3/D-W5**: Replaces former `InsiderTransactionsWorker` (direct EODHD polling retired). Downloads MinIO claim-check (passthrough envelope); resolves instrument entity by ticker. Merges transaction list into `insider_transactions` JSONB field. SHA-256 hash comparison — only updates when data changes. Metric: `s7_insider_transactions_relations_total{ticker}`. |
+| 13F | `AgeSyncWorker` | APScheduler every 15 min | `canonical_entities`, `relations`, `temporal_events`, `entity_event_exposures` | Watermark-based incremental sync from relational tables to Apache AGE shadow graph (`worldview_graph`). Guarded by `KNOWLEDGE_GRAPH_CYPHER_ENABLED` (dev/docker default `true` since PLAN-0057 E-2; code default `false`). Watermark stored in Valkey `s7:age:sync:watermark` (ISO-8601 UTC; epoch default → first run syncs everything). Paginates: 1000 entities/batch, 5000 relations/batch. Edge labels derived from `canonical_type` (uppercase, spaces→underscores) and validated against a 28-label whitelist before embedding in Cypher strings (injection prevention). All data values passed via AGE `$params` dict (parameterized). AGE session setup: `LOAD 'age'` + `SET search_path = ag_catalog, public` per run. Metrics: `s7_age_sync_entities_total`, `s7_age_sync_relations_total`, `s7_age_sync_duration_seconds`. |
 
 ### LLM Fallback Chain (`infrastructure/llm/fallback_chain.py`)
 
@@ -151,7 +171,8 @@ GET {MARKET_DATA_BASE_URL}/api/v1/fundamentals/{entity_id}
 | `relations` | Aggregate relation state (hash-partitioned ×8 on `subject_entity_id`) |
 | `relation_evidence_raw` | Append-only staging table (hot path; `partition_key` STORED column) |
 | `relation_evidence` | Processed evidence rows (after aggregation) |
-| `relation_summaries` | LLM-generated narrative summaries + 1024-dim embeddings |
+| `relation_summaries` | LLM-generated narrative summaries + 1024-dim embeddings (Wave A-2 / DEF-022 adds `summary_embedding_model_id TEXT` and `summary_last_embedded_at TIMESTAMPTZ` for mixed-model drift auditing) |
+| `provisional_entity_queue` | Unresolved-entity queue consumed by Worker 13E (`ProvisionalEnrichmentWorker`).  Wave A-4 / DEF-033 adds `next_retry_at TIMESTAMPTZ` (nullable) — populated on each retry transition with `now() + min(base * 2^retry_count, max)` minutes so LLM outages self-throttle; partial index `idx_provisional_queue_retry_at` (predicate `status='pending' AND next_retry_at IS NOT NULL`) keeps the deadline filter cheap. |
 | `article_claims` | Temporal claims / point-in-time assertions |
 | `contradictions` | Detected contradictions between claims |
 
@@ -175,15 +196,23 @@ GET {MARKET_DATA_BASE_URL}/api/v1/fundamentals/{entity_id}
 | `CONTRADICTION_WORKER_INTERVAL_SECONDS` | `30` | Contradiction detection cadence |
 | `CONTRADICTION_WORKER_BATCH_SIZE` | `100` | Claims per contradiction cycle |
 | `SUMMARY_REFRESH_INTERVAL_SECONDS` | `3600` | Relation summary refresh cadence |
+| `KNOWLEDGE_GRAPH_SUMMARY_WORKER_FORCE_REGEN_BATCH_SIZE` | `0` | If > 0, force-regenerate this many stale summaries per cycle regardless of evidence hash match. Useful after prompt template upgrades. |
 | `RELATION_CANONICALIZATION_THRESHOLD` | `0.35` | Max cosine distance for ANN soft-mapping |
 | `ALEMBIC_ENABLED` | `false` | Must remain false (intelligence_db DDL is external) |
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | For relation summary generation |
 | `MARKET_DATA_BASE_URL` | `http://market-data:8003` | REST endpoint for fundamentals + OHLCV data (13D-3 worker) |
 | `GEMINI_API_KEY` | — | Gemini Flash Lite fallback for embedding/extraction |
+| `KNOWLEDGE_GRAPH_DESCRIPTION_PROVIDER` | `gemini` (dev/docker since PLAN-0057 E-2; code default `none`) | `"gemini"` \| `"none"` — enables LLM descriptions for non-company entities (PRD-0017 §6.5). Falls back to template when API key empty. |
+| `KNOWLEDGE_GRAPH_GEMINI_API_KEY` | — | Google AI Studio API key for `GeminiDescriptionAdapter` (required when `DESCRIPTION_PROVIDER=gemini`) |
+| `KNOWLEDGE_GRAPH_DESCRIPTION_MAX_MONTHLY_USD` | `50.0` (dev/docker since PLAN-0057 E-2; code default `10.0`) | Monthly cost cap (USD) for description generation; enforced via Valkey counter `s7:desc:cost:{YYYY-MM}` |
+| `KNOWLEDGE_GRAPH_DESCRIPTION_GEMINI_CONCURRENCY` | `4` | Semaphore concurrency limit for Gemini description calls |
 | `KNOWLEDGE_GRAPH_LOG_LEVEL` | `INFO` | Log verbosity |
 | `KNOWLEDGE_GRAPH_LOG_JSON` | `true` | JSON structured log output |
 | `KNOWLEDGE_GRAPH_OTLP_ENDPOINT` | — | OTel OTLP gRPC endpoint (optional) |
 | `KNOWLEDGE_GRAPH_ADMIN_TOKEN` | — | X-Admin-Token for DLQ admin endpoints (empty = auth disabled) |
+| `KNOWLEDGE_GRAPH_SUMMARY_EMBEDDING_MODEL_ID` | `BAAI/bge-large-en-v1.5` | DEF-022 — value persisted to `relation_summaries.summary_embedding_model_id` on every embedding refresh; enables mixed-model drift auditing in the HNSW index. |
+| `KNOWLEDGE_GRAPH_PROVISIONAL_ENRICHMENT_BASE_RETRY_MINUTES` | `2` | DEF-033 — base of the exponential-backoff formula `next_retry_at = now() + min(base * 2^retry_count, max)` minutes used by Worker 13E. |
+| `KNOWLEDGE_GRAPH_PROVISIONAL_ENRICHMENT_MAX_RETRY_MINUTES` | `1440` | DEF-033 — cap (24h) on the backoff window so a permanently-failing row is eventually marked `'failed'` rather than retried forever. |
 | `DISPATCHER_POLL_INTERVAL_S` | `5.0` | Outbox dispatcher poll cadence |
 | `DISPATCHER_BATCH_SIZE` | `100` | Outbox events per poll cycle |
 
@@ -214,7 +243,7 @@ Per enriched message:
 2. INSERT `relation_evidence_raw` — **`partition_key` is STORED; never in INSERT**
 3. INSERT `events` + `event_entities` (ON CONFLICT DO NOTHING)
 4. INSERT `claims` (ON CONFLICT DO NOTHING)
-5. Produce `entity.dirtied.v1` **directly** (compacted topic, key=entity_id bytes)
+5. Return `entity_ids_to_dirty` — caller produces `entity.dirtied.v1` **AFTER session.commit()** (PLAN-0031 C-1)
 6. Emit `graph.state.changed.v1` via outbox
 
 Rows with `entity_provisional=true` are staged but skipped by aggregation worker until resolved.
@@ -325,3 +354,103 @@ make run       # port 8007
 make test
 make lint
 ```
+
+---
+
+## Embedding Model Tracking (DEF-022, Wave A-2) {#embedding-model-tracking-def-022}
+
+The HNSW ANN index over `relation_summaries.summary_embedding` is sensitive to
+mixed-model drift: vectors produced by different embedding models do not share
+a comparable cosine geometry, so a query embedded with model B against rows
+embedded with model A returns garbage neighbours.
+
+To make this auditable and recoverable, every successful embedding write now
+records the producing model and timestamp:
+
+| Column | Type | Source |
+|--------|------|--------|
+| `relation_summaries.summary_embedding_model_id` | `TEXT` (nullable) | `KNOWLEDGE_GRAPH_SUMMARY_EMBEDDING_MODEL_ID` |
+| `relation_summaries.summary_last_embedded_at` | `TIMESTAMPTZ` (nullable) | `common.time.utc_now()` at write time |
+
+A partial index `idx_relation_summaries_model_id` (predicate
+`summary_embedding IS NOT NULL`) enables fast `GROUP BY summary_embedding_model_id`
+audits and targeted re-embedding queries.
+
+Pre-existing rows have NULL model_ids until they are naturally refreshed by
+the next `EmbeddingRefreshWorker` cycle (no backfill — see migration `0027`
+docstring for rationale).
+
+**Operator note**: existing rows persisted before Wave A-2 carry
+`summary_embedding_model_id = NULL` indefinitely until their `summary_text`
+changes (the embedding refresh path is gated on `evidence_hash` change).
+Operators wanting a clean `GROUP BY` audit should trigger a one-shot
+full-refresh cycle (set `KNOWLEDGE_GRAPH_SUMMARY_WORKER_FORCE_REGEN_BATCH_SIZE`
+to a positive value for one scheduler tick) before relying on the audit
+counts. After the cascade rolls through, every active row carries a
+non-NULL model_id and `GROUP BY summary_embedding_model_id` reports the
+true model-distribution histogram.
+
+---
+
+## Exponential Retry Backoff (DEF-033, Wave A-4) {#exponential-retry-backoff-def-033}
+
+Worker 13E (`ProvisionalEnrichmentWorker`) and the hot-path
+`ProvisionalQueuedConsumer` both extract entity profiles via the LLM fallback
+chain.  When that chain experiences an outage (DeepInfra 5xx, network
+partition, model rate-limit), every failed attempt previously flipped the row
+back to `status='pending'` so the next 5-minute polling sweep re-claimed it
+and re-hit the upstream API immediately.  With a hot batch of up to 2,500
+permanently-failing rows this hammered the provider at full intensity until
+the retry counter eventually capped out — wasting spend and risking
+provider-side throttling.
+
+Wave A-4 introduces an **exponential backoff** persisted on the queue row:
+
+```text
+next_retry_at = now() + min(base * 2 ** retry_count, max) minutes
+```
+
+| `retry_count` (pre-increment) | Backoff (base=2, max=1440) |
+|------------------------------|----------------------------|
+| 0  | 2 min |
+| 1  | 4 min |
+| 2  | 8 min |
+| 3  | 16 min |
+| 4  | 32 min |
+| 5  | 64 min |
+| 6  | 128 min |
+| 7  | 256 min |
+| 8  | 512 min |
+| 9  | 1024 min |
+| 10+ | 1440 min (cap — 24 h) |
+
+The Phase-1 `claim_batch` SELECT excludes any row with
+`next_retry_at > now()`, so a transient outage now self-throttles.  Pre-Wave-A-4
+rows with `next_retry_at IS NULL` remain immediately eligible (backward
+compatible — no backfill required, see migration `0029`).
+
+Tunable via env vars:
+
+- `KNOWLEDGE_GRAPH_PROVISIONAL_ENRICHMENT_BASE_RETRY_MINUTES` (default `2`)
+- `KNOWLEDGE_GRAPH_PROVISIONAL_ENRICHMENT_MAX_RETRY_MINUTES` (default `1440`)
+
+**Implementation**: the SQL CASE in `core.apply_retry_transition` writes the
+deadline atomically alongside the `retry_count` increment in a single
+`UPDATE ... RETURNING` round-trip; terminal `'failed'` rows persist
+`next_retry_at = NULL` because they will never be re-claimed.
+
+**Both paths honour the env vars** (post-QA fix, BP-399): the polling worker
+(`ProvisionalEnrichmentWorker`) AND the hot-path consumer
+(`ProvisionalQueuedConsumer`) both forward
+`KNOWLEDGE_GRAPH_PROVISIONAL_ENRICHMENT_BASE_RETRY_MINUTES` and
+`KNOWLEDGE_GRAPH_PROVISIONAL_ENRICHMENT_MAX_RETRY_MINUTES` into
+`core.apply_retry_transition`. The original Wave A-4 commit only wired the
+polling worker; the QA fix added the consumer factory call site
+(`provisional_queued_consumer_main.py`) AND the recovery sweep in
+`_recover_stale_processing_rows` so all three retry pathways converge on the
+same operator-visible window.
+
+The Phase-1 SELECT in the hot-path consumer also filters
+`next_retry_at IS NULL OR next_retry_at <= now()`, so a Kafka redelivery
+immediately after a failed attempt cannot bypass the backoff window the
+prior attempt persisted (BP-399).

@@ -3,6 +3,7 @@ name: prd
 description: "Generate a Product Requirements Document through interactive human-agent discussion. Use when starting a new feature, project, or significant change that needs requirements analysis, technical design, and risk assessment before implementation."
 user-invocable: true
 argument-hint: "[feature title or brief description]"
+effort: heavy
 ---
 
 # PRD Generation — Interactive Requirements & Design Workshop
@@ -32,10 +33,84 @@ Before engaging the user, read these files silently to build your understanding:
 8. Check existing specs: `docs/specs/` — avoid duplicating or contradicting existing PRDs
 9. Check existing ADRs: `docs/architecture/decisions/` — respect existing architectural decisions
 
+## Phase 0.5 — Existing Implementation Deep Scan (Mandatory, Silent)
+
+**Before engaging the user, read the actual source code for every service likely to be affected.** This is not optional — PRDs that ignore what's already built produce requirements that are impossible to satisfy cleanly or that silently break existing behaviour.
+
+### 0.5a — Identify Affected Services
+From the feature description, list every service that will:
+- Gain new endpoints or workers
+- Have existing endpoints/entities/tables extended or changed
+- Produce or consume new Kafka events
+- Be affected indirectly (downstream consumers, shared schema)
+
+### 0.5b — Read Existing Source for Each Affected Service
+For each service, read:
+1. `services/<svc>/src/<svc>/domain/entities/` — every existing entity (fields, invariants, state)
+2. `services/<svc>/src/<svc>/domain/events/` — existing domain events
+3. `services/<svc>/src/<svc>/api/routers/` — existing endpoint signatures
+4. `services/<svc>/src/<svc>/application/` — existing use cases
+5. `services/<svc>/src/<svc>/infrastructure/db/` — existing DB models and Alembic migrations (to know real column types)
+6. `services/<svc>/tests/` — existing test coverage (to know what's currently tested and at risk)
+
+### 0.5c — Build the "Currently Implemented" Map
+Produce a silent internal map (do NOT show to user):
+
+| Item | Type | Service | Current State | Will PRD Change It? |
+|------|------|---------|--------------|---------------------|
+| `users` table | DB table | S1 | id, email, tenant_id, role | yes — add columns |
+| `GET /api/v1/users/{id}` | endpoint | S9 | returns UserPublic | yes — response shape |
+| `user.registered.v1` | Kafka event | S1 | fields: user_id, tenant_id | no |
+| ... | ... | ... | ... | ... |
+
+### 0.5d — Identify Break Surface
+For every item marked "Will PRD Change It?", identify:
+- **Existing tests that assert on the current state** → these will fail or need updating
+- **Downstream consumers** → other services that depend on the current shape
+- **API clients** → frontend code or external integrations that depend on current API shape
+- **Alembic migration state** → current head revision, what columns exist
+
+This break surface will be surfaced to the user in Phase 1 and factored into the technical design in Phase 2.
+
+---
+
+## Phase 0.6 — Cross-PRD Contradiction Check (Mandatory, Blocking)
+
+Before starting Phase 1, read `docs/plans/TRACKING.md` and identify all active/draft PRDs.
+For each active/draft PRD that touches overlapping domains, check:
+
+| Conflict Type | What to Check |
+|--------------|---------------|
+| **Kafka topic conflict** | Same topic claimed by two PRDs with different schemas or different producers/consumers |
+| **DB table conflict** | Same table modified by two concurrent PRDs without a dependency relationship |
+| **API path conflict** | Same endpoint path defined with different fields or semantics |
+| **Entity conflict** | Same domain entity extended differently by two PRDs |
+| **Architectural decision conflict** | This PRD contradicts a pattern already established in a recently-merged PRD |
+
+**If conflicts found**: Present them to the user before proceeding. Resolve each conflict explicitly — update scope, add dependency, or split into separate PRDs.
+**If no conflicts**: Proceed silently.
+
 
 ## Phase 1 — Requirements Discovery (Interactive)
 
 Start by presenting your initial understanding of the feature based on the argument and your context read. Then engage in discussion:
+
+### 1.0 Existing State Summary (Present to User First)
+Before asking any requirements questions, present a concise summary of what Phase 0.5 found:
+
+```
+## What's Already Implemented (relevant to this feature)
+
+**Affected services**: S1, S5, S9
+**Existing entities that will change**: Article (S5), User (S1)
+**Existing endpoints that will change**: GET /api/v1/news (S9)
+**Existing tests at risk**: 12 unit tests for Article construction, 3 API tests for /news
+**Migration requirements**: Alembic migration for articles table (current head: 005)
+
+These are constraints on the design. Let me know if any of this doesn't match your expectations.
+```
+
+This grounds the discussion in reality before requirements are collected.
 
 ### 1.1 Problem Statement Exploration
 - State your understanding of the problem being solved
@@ -57,6 +132,15 @@ For each requirement the user mentions:
 - Ask about backward compatibility constraints
 - Identify constraints from RULES.md that apply (outbox pattern, UUIDv7, UTC, etc.)
 - Ask: "What should this feature explicitly NOT do?"
+
+### 1.4 Open Question Severity Classification
+
+As open questions arise during discussion, classify each immediately:
+- **BLOCKING**: The design cannot be finalised or implemented without resolving this. (Example: "Does EODHD's API actually return field X?") — **must be resolved before PRD is written**
+- **DEFERRED**: Nice-to-have clarity; implementation can proceed safely with a documented assumption. (Example: "Should the email subject line be configurable?")
+
+**A PRD must not be written with any unresolved BLOCKING open question.**
+List all open questions in §14 with their classification.
 
 **Output after Phase 1**: Present a structured Requirements Summary and ask the user to confirm before proceeding.
 
@@ -103,7 +187,75 @@ Cross-reference with `BUG_PATTERNS.md`:
 - For each multi-step operation: what happens when step N fails after steps 1..N-1 succeeded?
 - Recovery strategy for each failure mode
 
+### 2.7 Existing Code Blast-Radius Analysis (Mandatory)
+
+Using the "Currently Implemented" map from Phase 0.5, for every proposed change produce an explicit table of what breaks:
+
+```markdown
+## Break-Surface Analysis
+
+| Change | What Currently Exists | What Will Break | Migration Strategy |
+|--------|----------------------|-----------------|-------------------|
+| Add column `score` to `articles` table | `articles` table with 8 columns | Alembic migration needed; queries with SELECT * still work; tests that assert column count will fail | New migration; server_default required for backfill |
+| Rename endpoint `/api/v1/news` → `/api/v1/news/top` | S9 router, frontend useNewsQuery hook | frontend API client, any existing tests for that route | Add route alias for one release cycle; update frontend in same PR |
+| Extend `Article` domain entity with `relevance_score` | Article frozen dataclass | All `Article(...)` construction calls need new field; unit tests constructing Article need updating | Add with default=None to keep existing tests green |
+| New Kafka consumer for `content.article.processed.v1` | S6 already consumes this topic | Check for consumer group conflicts; idempotency required | New consumer group; dedup by event_id |
+```
+
+**Rules**:
+- Every DB schema change must include: current Alembic head, new column with server_default, whether backfill is needed
+- Every entity extension must specify: default value for existing records, whether existing tests need updating
+- Every endpoint change must specify: whether old path is preserved (alias) or broken
+- Every new Kafka consumer must specify: consumer group name, idempotency strategy, what happens on replay
+
+Present this table to the user and align on migration strategy before proceeding.
+
+### 2.8 External API Reality Check (Mandatory when PRD references any external provider)
+
+For every external API field, endpoint, model ID, or capability this PRD references:
+
+| Assertion | Provider | Field/Endpoint | Verified? | Source |
+|-----------|----------|---------------|-----------|--------|
+| `EODHD /fundamentals` returns `General.Officers` | EODHD | General.Officers | ? | ? |
+| ... | ... | ... | ... | ... |
+
+**Rule**: Every row must be marked `YES` with a documentation reference or user confirmation before the PRD is written. If a field cannot be verified, mark it as `BLOCKING OQ` and do not design around it. (BP-100: PRDs that assume external API fields exist without verification produce dead implementation paths.)
+
+### 2.9 Architecture Compliance Gate (Mandatory, Blocking)
+
+Before writing the PRD, produce an explicit compliance table for every applicable RULES.md rule:
+
+| Rule | Applies? | Design Decision | Compliant? |
+|------|----------|----------------|------------|
+| R5 — Avro forward compat | yes/no | ... | PASS/FAIL |
+| R7 — No cross-service DB | yes/no | ... | PASS/FAIL |
+| R8 — No dual writes | yes/no | ... | PASS/FAIL |
+| R10 — UUIDv7 | yes/no | ... | PASS/FAIL |
+| R11 — UTC timestamps | yes/no | ... | PASS/FAIL |
+| R25 — API layer isolation | yes/no | ... | PASS/FAIL |
+| R27 — ReadOnlyUoW for reads | yes/no | ... | PASS/FAIL |
+
+**Block PRD writing** if any applicable rule is marked FAIL. Fix the design first.
+
 **Output after Phase 2**: Present the full Technical Design and discuss with the user. Iterate until both agree. **Do not proceed until the user confirms every entity, every schema, every endpoint.**
+
+## Phase 2.10 — Completeness Gate (Mandatory, Blocking)
+
+Before writing any PRD section, verify:
+
+| Check | Requirement | Status |
+|-------|-------------|--------|
+| No BLOCKING open questions | All OQs classified BLOCKING are resolved (§1.4) | PASS/FAIL |
+| No architecture compliance failures | §2.9 compliance table has no FAIL rows | PASS/FAIL |
+| No unverified external API fields | §2.8 table has no unverified rows | PASS/FAIL |
+| No cross-PRD conflicts | §0.6 found no unresolved conflicts | PASS/FAIL |
+| Break-surface analysis complete | §2.7 table covers every entity/table/endpoint/event being changed | PASS/FAIL |
+| Migration strategy defined | Every breaking change in §2.7 has a stated migration strategy | PASS/FAIL |
+| Every entity has ≥1 test | §11 has at least one test per entity in §6.5 | PASS/FAIL |
+| Every endpoint has ≥1 error response | §6.2 lists error responses for each endpoint | PASS/FAIL |
+| Every Kafka event has a named consumer | §6.3 lists at least one consumer per event | PASS/FAIL |
+
+**Do not proceed to Phase 3 if any row is FAIL.**
 
 ## Phase 3 — PRD Output
 

@@ -14,7 +14,7 @@ compute:
 Decay
 -----
 - RELATION_STATE evidence: decay_alpha from decay_class_config row
-- TEMPORAL_CLAIM evidence: fixed alpha = 0.02310 (30-day half-life)
+- TEMPORAL_CLAIM evidence: decay_alpha from decay_class_config row
 
 Domain layer — no DB imports.
 """
@@ -24,14 +24,16 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
-from knowledge_graph.domain.enums import SemanticMode
 from knowledge_graph.domain.models import ConfidenceComponents
+
+if TYPE_CHECKING:
+    from knowledge_graph.domain.enums import SemanticMode
 
 # Default formula constants (overridden by Settings in application layer)
 _CORROBORATION_CAP: float = 0.20
 _CONTRADICTION_CAP: float = 0.60
-_TEMPORAL_CLAIM_ALPHA: float = 0.02310  # 30-day half-life
 _CORROBORATION_GAIN_PER_SOURCE: float = 0.05
 _CORROBORATION_MIN_TEMPORAL_WEIGHT: float = 0.1
 _CONTRADICTION_TOP_K: int = 3
@@ -90,7 +92,7 @@ def compute_confidence(
     now: datetime | None = None,
     corroboration_cap: float = _CORROBORATION_CAP,
     contradiction_cap: float = _CONTRADICTION_CAP,
-    temporal_claim_alpha: float = _TEMPORAL_CLAIM_ALPHA,
+    temporal_claim_alpha: float | None = None,
     corroboration_gain_per_source: float = _CORROBORATION_GAIN_PER_SOURCE,
     corroboration_min_temporal_weight: float = _CORROBORATION_MIN_TEMPORAL_WEIGHT,
     contradiction_top_k: int = _CONTRADICTION_TOP_K,
@@ -105,8 +107,7 @@ def compute_confidence(
         All active contradiction links for the relation.
     decay_alpha:
         The per-class decay_alpha from ``decay_class_config``.
-        Used for RELATION_STATE; overridden by ``temporal_claim_alpha`` for
-        TEMPORAL_CLAIM.
+        Used for both RELATION_STATE and TEMPORAL_CLAIM.
     semantic_mode:
         Whether this is a RELATION_STATE or TEMPORAL_CLAIM relation.
     now:
@@ -116,7 +117,7 @@ def compute_confidence(
     contradiction_cap:
         Maximum contradiction penalty (default 0.60).
     temporal_claim_alpha:
-        Fixed alpha for TEMPORAL_CLAIM evidence (default 0.02310).
+        Backward-compatible parameter retained for callers. Ignored.
     corroboration_gain_per_source:
         Gain added per distinct qualifying corroboration source (default 0.05).
     corroboration_min_temporal_weight:
@@ -129,12 +130,14 @@ def compute_confidence(
     -------
     :class:`ConfidenceComponents`
         Intermediate + final values.  Call ``.validate()`` to assert bounds.
+
     """
     if now is None:
         now = datetime.now(tz=UTC)
 
-    # Pick the alpha used for evidence decay
-    eff_alpha = temporal_claim_alpha if semantic_mode == SemanticMode.TEMPORAL_CLAIM else decay_alpha
+    # Use registry-provided decay_alpha for all semantic modes.
+    eff_alpha = decay_alpha
+    _ = temporal_claim_alpha
 
     # ------------------------------------------------------------------
     # Step 1 — Support: temporal-weighted average of source_weights

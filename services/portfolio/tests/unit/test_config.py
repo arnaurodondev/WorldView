@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import ValidationError
 
 pytestmark = pytest.mark.unit
 
@@ -26,7 +27,12 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.host == "0.0.0.0"  # noqa: S104
     assert s.port == 8001
     assert s.debug is False
-    assert "portfolio_db" in s.database_url
+    assert "portfolio_db" in s.database_url.get_secret_value()
+    assert s.database_url_read.get_secret_value() == ""  # R23: empty → fallback to database_url
+    assert s.db_pool_size == 10
+    assert s.db_max_overflow == 20
+    assert s.db_pool_size_read == 20
+    assert s.db_max_overflow_read == 30
     assert s.kafka_bootstrap_servers == "localhost:9092"
     assert s.schema_registry_url == "http://localhost:8081"
     assert s.kafka_auto_register_schemas is True
@@ -43,6 +49,12 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.log_level == "INFO"
     assert s.log_format == "json"
     assert s.otlp_endpoint == ""
+    # SnapTrade defaults (PRD-0022 §12) — SecretStr; compare via get_secret_value()
+    assert s.snaptrade_client_id.get_secret_value() == ""
+    assert s.snaptrade_consumer_key.get_secret_value() == ""
+    assert s.snaptrade_redirect_uri == "http://localhost:3001/portfolio/brokerage/callback"
+    assert s.brokerage_sync_cycle_seconds == 14400
+    assert s.brokerage_sync_history_days == 730
 
 
 def test_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,3 +77,35 @@ def test_schema_registry_url_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PORTFOLIO_SCHEMA_REGISTRY_URL", "http://registry:8082")
     s = Settings()
     assert s.schema_registry_url == "http://registry:8082"
+
+
+def test_skip_verification_blocked_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F-007: internal_jwt_skip_verification=True MUST raise in production."""
+    for key in list(os.environ):
+        if key.startswith("PORTFOLIO_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("PORTFOLIO_STORAGE_ACCESS_KEY", "test-key")
+    monkeypatch.setenv("PORTFOLIO_STORAGE_SECRET_KEY", "test-secret")
+
+    with pytest.raises(ValidationError, match="MUST NOT be enabled in production"):
+        Settings(
+            internal_jwt_skip_verification=True,
+            _env_file=None,
+        )
+
+
+def test_skip_verification_allowed_in_dev(monkeypatch: pytest.MonkeyPatch) -> None:
+    """F-007: internal_jwt_skip_verification=True is allowed in non-production."""
+    for key in list(os.environ):
+        if key.startswith("PORTFOLIO_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("PORTFOLIO_STORAGE_ACCESS_KEY", "test-key")
+    monkeypatch.setenv("PORTFOLIO_STORAGE_SECRET_KEY", "test-secret")
+
+    s = Settings(
+        internal_jwt_skip_verification=True,
+        _env_file=None,
+    )
+    assert s.internal_jwt_skip_verification is True
