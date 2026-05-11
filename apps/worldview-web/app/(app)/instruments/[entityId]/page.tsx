@@ -92,6 +92,34 @@ export default function InstrumentDetailPage() {
   const [railOpen, setRailOpen] = useState(false);
   const handleRailClose = useCallback(() => setRailOpen(false), []);
 
+  // ISSUE-7 (2026-05-10): persist analyst panel width across page reloads.
+  // WHY localStorage (not autoSaveId): react-resizable-panels v4 (Group/Separator
+  // API) does not expose autoSaveId — that prop exists only in v3 (PanelGroup API).
+  // v4 Layout type is { [panelId: string]: number } (percentage per panel id).
+  // WHY lazy initializer: avoids a hydration mismatch — the server renders with
+  // undefined (no layout override) and the client picks up the stored value only
+  // after mount (in the initializer, which runs client-side only).
+  const PANEL_STORAGE_KEY = "instrument-panel-layout";
+  const [savedPanelLayout] = useState<{ [id: string]: number } | undefined>(() => {
+    if (typeof window === "undefined") return undefined;
+    try {
+      const raw = window.localStorage.getItem(PANEL_STORAGE_KEY);
+      return raw ? (JSON.parse(raw) as { [id: string]: number }) : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+  const handlePanelLayoutChanged = useCallback((layout: { [id: string]: number }) => {
+    try {
+      // WHY store the whole Layout object: v4's onLayoutChanged passes a map of
+      // panelId→percent. Storing the map preserves panel identity across reloads.
+      window.localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(layout));
+    } catch {
+      // WHY silent catch: localStorage may be unavailable (private browsing,
+      // storage quota). Persistence failing is a non-critical UX degradation.
+    }
+  }, []);
+
   // ── Fetch instrument page-bundle (PLAN-0059 I-5) ───────────────────────────
   // The page-bundle endpoint composes overview + fundamentals + technicals +
   // insider + top-news in one round-trip. We use it as the page-level query;
@@ -310,8 +338,15 @@ export default function InstrumentDetailPage() {
       {/* PLAN-0071 Phase 4: horizontal split — main tabs on the left, AnalystRail on the right.
           WHY PanelGroup here (below the header): the CompactInstrumentHeader and AISubheader
           span the full width; only the tab area splits into left+right panels.
-          WHY min-h-0 flex-1: the PanelGroup must fill remaining height after fixed headers. */}
-      <PanelGroup orientation="horizontal" className="min-h-0 flex-1">
+          WHY min-h-0 flex-1: the PanelGroup must fill remaining height after fixed headers.
+          ISSUE-7 (2026-05-10): defaultLayout restores persisted widths from localStorage;
+          onLayoutChanged saves them on every drag. autoSaveId is not in v4 API. */}
+      <PanelGroup
+        orientation="horizontal"
+        className="min-h-0 flex-1"
+        defaultLayout={savedPanelLayout}
+        onLayoutChanged={handlePanelLayoutChanged}
+      >
         {/* ── Main content panel ─────────────────────────────────────────── */}
         <Panel minSize={40} className="flex min-h-0 flex-col">
           {/* PLAN-0071 Phase 4 + P1-7: ONE Tabs root wraps both the tab strip row and content.
@@ -400,14 +435,19 @@ export default function InstrumentDetailPage() {
         {/* ── Analyst Rail (conditional) ─────────────────────────────────────── */}
         {/* PLAN-0071 Phase 4: rail panel. Only rendered when open to keep the SSE
             connection off the page while closed (same pattern as shell AskAiPanel).
-            defaultSize=22 (~320px at 1440px viewport), min=19 (~280px), max=34 (~480px). */}
+            ISSUE-7 (2026-05-10): defaultSize 22→28 (~400px at 1440px, was ~317px).
+            minSize 19→22 (~317px). Handle widened to w-1.5 with gripper dot visual. */}
         {railOpen && (
           <>
             <PanelResizeHandle
-              className="w-1 cursor-col-resize bg-border hover:bg-primary/40 active:bg-primary/60 transition-colors"
+              className="w-1.5 cursor-col-resize bg-border hover:bg-accent active:bg-primary/60 transition-colors flex items-center justify-center"
               aria-label="Resize analyst panel"
-            />
-            <Panel defaultSize={22} minSize={19} maxSize={34} className="min-h-0">
+            >
+              {/* WHY gripper dot: a 2px-wide vertical pill gives analysts a visual affordance
+                  for the drag target. Matches the pattern used in VS Code and Linear. */}
+              <div className="w-0.5 h-8 bg-muted-foreground/40 rounded-full" />
+            </PanelResizeHandle>
+            <Panel defaultSize={28} minSize={22} maxSize={34} className="min-h-0">
               <AnalystRail
                 onClose={handleRailClose}
                 ticker={instrument.ticker}

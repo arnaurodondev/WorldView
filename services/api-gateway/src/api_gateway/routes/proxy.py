@@ -1121,6 +1121,26 @@ async def trigger_brokerage_connection_sync(connection_id: str, request: Request
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+@router.get("/brokerage-connections/{connection_id}/balance")
+async def get_brokerage_connection_balance(connection_id: str, request: Request) -> Any:
+    """Proxy GET /api/v1/brokerage-connections/{id}/balance → S1 Portfolio service.
+
+    Returns cash/buying-power balance for the primary brokerage account linked
+    to this connection.  Returns ``{"available": false}`` (not 500) when SnapTrade
+    cannot provide balance data, so the frontend renders an em-dash truthfully.
+    Requires authentication.
+    """
+    if not getattr(request.state, "user", None):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        f"/api/v1/brokerage-connections/{connection_id}/balance",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 def _portfolio_headers(request: Request) -> dict[str, str]:
     """Auth headers for S1 Portfolio service.
 
@@ -2003,6 +2023,7 @@ async def get_entity_graph(
     entity_id: UUID,  # WHY UUID not str: enforces 422 on malformed values before any downstream call
     request: Request,
     limit: int = Query(default=40, ge=1, le=200),
+    depth: int = Query(default=1, ge=1, le=3),
     confidence_breakdown: bool = Query(default=False),
     focus_node: str | None = Query(default=None),
 ) -> Any:
@@ -2029,8 +2050,13 @@ async def get_entity_graph(
     extreme actually deliver more edges. Each unit increment in the FE slider now
     bumps `limit` linearly so the slider has visible effect at every step.
 
-    WHY strip depth from params: S7 has no depth param — it silently ignores it.
-    We explicitly forward only known, meaningful params to avoid confusion.
+    WHY forward depth (ISSUE-5 fix, 2026-05-10 — was silently stripped):
+    S7 supports depth=1/2/3 via AGE Cypher multi-hop graph traversal.
+    depth=1 uses the standard SQL neighbourhood query (default, fast).
+    depth=2/3 require KNOWLEDGE_GRAPH_CYPHER_ENABLED=true in the KG service
+    and use AGE Cypher to traverse 2- or 3-hop paths. The previous comment
+    claiming "S7 has no depth param" was incorrect — depth is a first-class
+    Query param at S7 GET /api/v1/entities/{id}/graph (ge=1, le=3).
 
     WHY transform instead of raw proxy: S7 returns GraphNeighborhoodResponse
     {center, relations, entities} but the frontend Cytoscape.js renderer
@@ -2046,15 +2072,19 @@ async def get_entity_graph(
     headers = _auth_headers(request)
     clients = _clients(request)
 
-    # Build params: forward known S7 params, strip unknown ones like `depth`
-    # (S7 silently ignores unknown params, but filtering avoids log noise and
-    # makes the intent of each forwarded param explicit).
+    # Build params: forward known S7 params explicitly so the intent of each
+    # forwarded param is clear and log noise from unknown params is avoided.
     raw_params = dict(request.query_params)
     s7_params: dict[str, str] = {"limit": str(limit)}
     if "min_confidence" in raw_params:
         s7_params["min_confidence"] = raw_params["min_confidence"]
     if "semantic_mode" in raw_params:
         s7_params["semantic_mode"] = raw_params["semantic_mode"]
+    # ISSUE-5 (2026-05-10): forward depth to S7 which supports AGE Cypher multi-hop
+    # traversal. depth=1 is S7's default (SQL query) so only send when >1 to avoid
+    # a redundant param on the common case. depth>1 requires KNOWLEDGE_GRAPH_CYPHER_ENABLED.
+    if depth > 1:
+        s7_params["depth"] = str(depth)
     # PLAN-0074 Wave G: forward confidence_breakdown and focus_node (Wave D additions).
     if confidence_breakdown:
         s7_params["confidence_breakdown"] = "true"
