@@ -1000,3 +1000,38 @@ docker compose up -d --no-deps <service-name>
 **Regression test**: observe `kafka_consumer_started` log + successful `enriched_article_processed` after rebuild
 
 ---
+
+## BP-456 — Parallel fix + QA agents: Docker rebuild races with uncommitted fix-agent edits
+
+**Date discovered**: 2026-05-11
+
+**Symptom**: Docker rebuild completes. Container is healthy. Bugs that fix agents were supposed to fix are still visible — the old compiled code is running. `git status` shows the fix files modified locally (fixes ARE on disk) but the container has old behaviour.
+
+**Root cause**: In a multi-agent parallel workflow, a QA/rebuild agent starts `docker compose build` at the same time as fix agents begin editing files. The `COPY` instruction in the Dockerfile captures the source tree at the moment it executes, not at build-end. If fix agents finish writing files AFTER the `COPY` layer has already run, the compiled bundle contains pre-fix source code.
+
+**Timeline example**:
+```
+T+00s  Fix Agent A starts editing OHLCVChart.tsx
+T+00s  QA Agent: docker compose build starts
+T+15s  Docker COPY apps/worldview-web executes (captures pre-fix source)
+T+30s  Next.js compilation starts from stale copy
+T+45s  Fix Agent A writes fix to disk (too late — already copied)
+T+2m   Build complete — healthy container with OLD code
+```
+
+**Detection**: Run `grep -n "fix_signature" local/source/file.tsx`. If present locally but the container behaviour is wrong, the build raced. For Next.js standalone containers (no source files inside), the compiled JS bundles cannot be grepped — rely on HTTP smoke tests against the running container.
+
+**Fix**:
+```bash
+docker compose build <service>        # rebuild AFTER all fixes confirmed on disk
+docker compose up -d worldview-web    # restart with new image
+```
+
+**Prevention**:
+- In multi-agent workflows, QA/rebuild agents must be launched SEQUENTIALLY after fix agents confirm their edits (not in parallel).
+- Never start a Docker build step as part of a parallel agent batch that also includes edit agents.
+- Validate the rebuild actually captured the fix: for frontend bundles, run a lightweight HTTP test that exercises the fixed component, not just a health check.
+
+**Reference**: 2026-05-11 portfolio/instrument frontend bug fix batch — QA agent built image 87s before fix agents finished writing OHLCVChart.tsx.
+
+---

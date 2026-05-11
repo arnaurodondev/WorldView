@@ -33,6 +33,7 @@ def _signal_row(
     claim_type: str = "BULLISH",
     confidence: float = 0.85,
     occurred_at: str | None = None,
+    polarity: str | None = None,
 ) -> dict:
     payload = {
         "event_id": str(event_id or uuid4()),
@@ -44,6 +45,8 @@ def _signal_row(
     }
     if occurred_at:
         payload["occurred_at"] = occurred_at
+    if polarity is not None:
+        payload["polarity"] = polarity
     return {
         "event_id": event_id or uuid4(),
         "partition_key": str(doc_id or _DOC_ID),
@@ -219,6 +222,39 @@ class TestListSignalsUseCase:
 
         assert items == []
         assert total == 0
+
+    async def test_polarity_populated_from_payload(self) -> None:
+        """polarity field is read directly from the Avro payload."""
+        from nlp_pipeline.application.use_cases.signals import ListSignalsUseCase
+
+        row = _signal_row(polarity="positive")
+        repo = _make_signals_repo(signal_rows=[row])
+
+        items, _ = await ListSignalsUseCase().execute(repo=repo, limit=10, offset=0, doc_id=None)
+
+        assert items[0].polarity == "positive"
+
+    async def test_polarity_defaults_to_neutral_when_absent(self) -> None:
+        """polarity defaults to 'neutral' for legacy rows that lack the field."""
+        from nlp_pipeline.application.use_cases.signals import ListSignalsUseCase
+
+        row = _signal_row()  # no polarity key in payload
+        repo = _make_signals_repo(signal_rows=[row])
+
+        items, _ = await ListSignalsUseCase().execute(repo=repo, limit=10, offset=0, doc_id=None)
+
+        assert items[0].polarity == "neutral"
+
+    async def test_polarity_negative(self) -> None:
+        """polarity='negative' is preserved correctly."""
+        from nlp_pipeline.application.use_cases.signals import ListSignalsUseCase
+
+        row = _signal_row(polarity="negative")
+        repo = _make_signals_repo(signal_rows=[row])
+
+        items, _ = await ListSignalsUseCase().execute(repo=repo, limit=10, offset=0, doc_id=None)
+
+        assert items[0].polarity == "negative"
 
 
 # ---------------------------------------------------------------------------

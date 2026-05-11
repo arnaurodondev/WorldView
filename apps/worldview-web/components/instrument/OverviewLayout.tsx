@@ -388,7 +388,7 @@ export function OverviewLayout({
             the bottom (the "black empty component" complaint). The
             EntityGraphPanel now renders responsively — see EntityGraphPanel.tsx
             for the responsive SVG fix. */}
-        <div className="min-w-0">
+        <div className="min-w-0 h-full">
           <EntityGraphPanel
             entityId={entityId}
             centerLabel={centerLabel}

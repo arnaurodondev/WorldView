@@ -28,7 +28,7 @@ def _make_app(repo_mock: AsyncMock) -> FastAPI:
     return app
 
 
-def _signal_row(impact_score: float = 0.0) -> dict:
+def _signal_row(impact_score: float = 0.0, polarity: str | None = None) -> dict:
     payload = {
         "event_id": str(_EVENT_ID),
         "doc_id": str(_DOC_ID),
@@ -38,6 +38,8 @@ def _signal_row(impact_score: float = 0.0) -> dict:
         "claim_id": "claim-abc",
         "occurred_at": _NOW.isoformat(),
     }
+    if polarity is not None:
+        payload["polarity"] = polarity
     return {
         "event_id": _EVENT_ID,
         "partition_key": str(_DOC_ID),
@@ -101,3 +103,28 @@ class TestListSignalsEndpoint:
             response = await client.get("/api/v1/signals", params={"order_by": "foo"})
 
         assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_polarity_field_present_in_response(self) -> None:
+        """polarity field from the Avro payload is serialised in the HTTP response."""
+        repo = _make_repo(rows=[_signal_row(polarity="positive")])
+        app = _make_app(repo)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/v1/signals")
+
+        assert response.status_code == 200
+        item = response.json()["items"][0]
+        assert "polarity" in item
+        assert item["polarity"] == "positive"
+
+    @pytest.mark.asyncio
+    async def test_polarity_defaults_to_neutral_when_absent(self) -> None:
+        """polarity defaults to 'neutral' for legacy rows that lack the field."""
+        repo = _make_repo(rows=[_signal_row()])  # no polarity in payload
+        app = _make_app(repo)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/v1/signals")
+
+        assert response.status_code == 200
+        item = response.json()["items"][0]
+        assert item["polarity"] == "neutral"

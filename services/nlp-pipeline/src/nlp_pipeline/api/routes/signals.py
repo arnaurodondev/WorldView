@@ -81,6 +81,7 @@ async def list_signals(
                 evidence_text=item.evidence_text,
                 detected_at=item.detected_at,
                 market_impact_score=item.market_impact_score,
+                polarity=item.polarity,
             )
             for item in items
         ],
@@ -205,7 +206,7 @@ async def get_entity_articles(
     # to /instruments/{id} freely). Re-enable selectively on /watchlist/*
     # surfaces in production multi-tenant deployment.
     _nil_uuid = "00000000-0000-0000-0000-000000000000"
-    tenant_id: str = ""  # noqa: F841 — kept for future re-enable; was getattr(request.state, "tenant_id", "")
+    tenant_id: str = ""
     if False:  # disabled in PLAN-0087; see note above
         watchlist_cache = getattr(request.app.state, "watchlist_cache", None)
         if watchlist_cache is not None and not await watchlist_cache.is_watched(entity_id):

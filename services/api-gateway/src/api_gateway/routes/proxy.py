@@ -3758,6 +3758,7 @@ async def top_movers(
 # Negative events: misses, downgrades, regulatory/legal risk, distress.
 _POSITIVE_SIGNAL_TYPES = frozenset(
     {
+        # Legacy broker-event labels (kept for backward compatibility)
         "M_AND_A",
         "EARNINGS_BEAT",
         "UPGRADE",
@@ -3771,10 +3772,14 @@ _POSITIVE_SIGNAL_TYPES = frozenset(
         "REVENUE_BEAT",
         "GUIDANCE_RAISE",
         "CONTRACT_WIN",
+        # NLP deep-extraction event_type enum (deep_extraction.py JSON schema)
+        "PRODUCT_LAUNCH",
+        "CAPITAL_RAISE",
     }
 )
 _NEGATIVE_SIGNAL_TYPES = frozenset(
     {
+        # Legacy broker-event labels (kept for backward compatibility)
         "EARNINGS_MISS",
         "DOWNGRADE",
         "REGULATORY_ACTION",
@@ -3787,6 +3792,11 @@ _NEGATIVE_SIGNAL_TYPES = frozenset(
         "FINE",
         "RECALL",
         "LAYOFF",
+        # NLP deep-extraction event_type enum (deep_extraction.py JSON schema)
+        "LEGAL",
+        "NATURAL_DISASTER",
+        "GEOPOLITICAL",
+        "SANCTIONS",
     }
 )
 
@@ -3870,6 +3880,11 @@ async def ai_signals(request: Request) -> Any:
                 "signal_id": str(item.get("signal_id", "")),
                 "entity_id": str(item.get("entity_id", "")),
                 "ticker": ticker_map.get(str(item.get("entity_id", ""))),
+                # Map signal_type (LLM event_type enum: PRODUCT_LAUNCH, LEGAL, etc.)
+                # to POSITIVE/NEGATIVE/NEUTRAL via _signal_type_to_label which covers
+                # both the legacy broker-event types and the NLP deep-extraction enum.
+                # This works for both existing and new outbox rows, unlike the polarity
+                # field which was hardcoded to "neutral" in earlier outbox writers.
                 "label": _signal_type_to_label(str(item.get("signal_type", ""))),
                 "score": float(item.get("confidence", 0.0)),
                 "article_title": article_map.get(str(item.get("doc_id", "")), {}).get("title"),

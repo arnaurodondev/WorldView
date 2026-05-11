@@ -20,9 +20,9 @@
  *   - ActionContextMenu replaced with a floating custom menu driven by
  *     useContextMenuActions. The floating menu is positioned at mouse coordinates
  *     from CellContextMenuEvent and closed on outside click.
- *   - Totals footer is unchanged — it lives below the grid and uses fixed pixel
- *     widths matching the initial HOLDINGS_AG_COL_WIDTHS. Width alignment drifts
- *     after the user resizes columns; this is acceptable for Phase 6.
+ *   - Totals footer uses AG Grid pinnedBottomRowData (BP-455 fix). The former
+ *     hardcoded-pixel-width sibling <div> footer was removed; the pinned row
+ *     stays in sync with column widths and TICKER pin automatically.
  *
  * WHO USES IT: app/(app)/portfolio/page.tsx — Holdings tab
  * DATA SOURCE: holdingsResp.holdings + batch quotes from S9
@@ -35,14 +35,12 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { formatPrice, formatPercent } from "@/lib/utils";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { AgGridBase } from "@/components/ui/ag-grid/AgGridBase";
 import { holdingsAgColumns } from "./ag-holdings-columns";
 import { useContextMenuActions } from "@/hooks/useContextMenuActions";
 import type { HoldingRowContext, ActionContext } from "@/lib/command-actions";
 import type { EnrichedHoldingRow } from "./holdings-columns";
-import { fmtPnl } from "./holdings-columns";
 import type { Holding } from "@/types/api";
 import type {
   GridApi,
@@ -294,9 +292,47 @@ export function SemanticHoldingsTable({
 
   const totalPnlPct = totalPnlCost > 0 ? (totalPnl / totalPnlCost) * 100 : 0;
 
+  // ── Pinned bottom row (AG Grid totals) ──────────────────────────────────────
+  // WHY pinnedBottomRowData instead of a sibling <div>: AG Grid renders pinned
+  // rows inside the grid DOM so they stay in sync with column widths, pinning,
+  // and horizontal scroll automatically. A sibling <div> with hardcoded pixel
+  // widths misaligns as soon as the user resizes a column or the TICKER pinned-
+  // left column separates from the scrollable viewport. See BP-455.
+  //
+  // WHY synthetic `h` object: EnrichedHoldingRow requires an `h: Holding` field
+  // (the cell renderers access it). The totals row doesn't correspond to a real
+  // Holding, so we supply a zero-value placeholder. The TickerCellRenderer
+  // checks `node.rowPinned === 'bottom'` and renders "TOTAL" instead of
+  // `h.ticker`, so the placeholder values are never surfaced to the user.
+  const pinnedBottomRow: EnrichedHoldingRow = {
+    h: {
+      holding_id: "__totals__",
+      portfolio_id: "",
+      instrument_id: "",
+      entity_id: "",
+      ticker: "",
+      name: "",
+      quantity: 0,
+      average_cost: 0,
+    },
+    livePrice: 0,
+    freshness: undefined,
+    value: totalValue,
+    pnl: totalPnl,
+    pnlPct: totalPnlPct,
+    weight: 0,
+    sector: null,
+    dayChange: null,
+    dayChangePct: null,
+    dayChangeValue: null,
+  };
+
   return (
     <div className="flex flex-col overflow-auto relative">
       {/* ── AG Grid table ─────────────────────────────────────────────────── */}
+      {/* WHY pinnedBottomRowData: renders totals as a proper AG Grid pinned row,
+          which tracks column widths/pinning/scroll automatically. Replaces the
+          former hardcoded-pixel-width <div> footer (BP-455). */}
       <AgGridBase<EnrichedHoldingRow>
         rowData={enrichedRows}
         columnDefs={holdingsAgColumns}
@@ -309,37 +345,9 @@ export function SemanticHoldingsTable({
         onColumnStateChanged={handleColumnStateChanged}
         onCellContextMenu={handleCellContextMenu}
         preventDefaultOnContextMenu={true}
+        pinnedBottomRowData={[pinnedBottomRow]}
         className="flex-1"
       />
-
-      {/* ── Totals footer ──────────────────────────────────────────────────── */}
-      {/* WHY fixed pixel widths: matches HOLDINGS_AG_COL_WIDTHS initial values.
-          Alignment drifts after column resize — acceptable until Phase 8. */}
-      <div className="flex h-[22px] shrink-0 items-center border-t-2 border-border">
-        {/* Left spacer: TICKER(80) + NAME(130) + QTY(80) + AVG COST(90) + CURRENT(90) + DAY$(90) + DAY%(80) = 640 */}
-        <div className="shrink-0 w-[640px] px-2 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-          TOTAL
-        </div>
-        <div
-          className={cn(
-            "shrink-0 w-[100px] px-2 font-mono text-[11px] tabular-nums text-right font-semibold",
-            totalPnl >= 0 ? "text-positive" : "text-negative",
-          )}
-        >
-          {fmtPnl(totalPnl)}
-        </div>
-        <div
-          className={cn(
-            "shrink-0 w-[80px] px-2 font-mono text-[11px] tabular-nums text-right font-semibold",
-            totalPnlPct >= 0 ? "text-positive" : "text-negative",
-          )}
-        >
-          {formatPercent(totalPnlPct / 100)}
-        </div>
-        <div className="shrink-0 w-[100px] px-2 font-mono text-[11px] tabular-nums text-foreground text-right font-semibold">
-          {formatPrice(totalValue)}
-        </div>
-      </div>
 
       {/* ── Floating context menu ─────────────────────────────────────────── */}
       {/* WHY floating (not ActionContextMenu wrapper): AG Grid renders its own

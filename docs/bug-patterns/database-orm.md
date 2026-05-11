@@ -1454,3 +1454,25 @@ return UUID(str(row[0])) if row else None
 **Regression test**: `services/knowledge-graph/tests/unit/infrastructure/repositories/test_entity_alias_upsert.py`
 
 ---
+
+## BP-459: Partial unique index exclusion allows phantom duplicate canonical entities
+
+**Category**: Database & ORM, Knowledge Graph
+**Services affected**: knowledge-graph (S7)
+
+**Symptom**: Two canonical entity rows co-exist for the same real-world entity (e.g., "Amazon Inc." as `financial_instrument` and "Amazon Business" as `company`). The second row appears as a separate node in the entity graph. Entity search may return both, and relations attach to the wrong node.
+
+**Root cause**: `canonical_entity.py:create_or_get()` uses `ON CONFLICT (lower(canonical_name)) WHERE entity_type != 'financial_instrument'`. This partial index **excludes all `financial_instrument` rows from deduplication**. If Amazon already exists as `financial_instrument` (ticker AMZN), a new provisional entity named "Amazon Business" with `entity_type="company"` has no conflict and is inserted as a fresh row. Two compounding factors:
+1. The LLM entity_profile prompt returns the raw surface form ("Amazon Business") without a lookup against existing canonicals.
+2. The `class_aware_canonical_match()` fuzzy matcher (added in PLAN-0087 for S8 RAG) is never called during S7 provisional enrichment — so the entity reaches `create_or_get()` without any pre-insert dedup check.
+
+**Fix**:
+1. Remove the `WHERE entity_type != 'financial_instrument'` predicate from the unique index — make it unconditional on `lower(canonical_name)`. Handle entity_type coalescing explicitly in the `ON CONFLICT DO UPDATE` clause.
+2. Before inserting a provisional entity, call `class_aware_canonical_match()` with the LLM-produced canonical name. If it returns a match above threshold, reuse the existing entity instead of inserting.
+3. One-off data cleanup: delete the "Amazon Business" row and re-point its relations to the canonical Amazon entity.
+
+**Detection**: `SELECT canonical_name, entity_type, count(*) FROM canonical_entities GROUP BY lower(canonical_name), entity_type HAVING count(*) > 1` catches future duplicates. Also: any entity node in the graph whose name is a substring or slight variation of an existing `financial_instrument` entity's name.
+
+**Regression test**: Add a unit test to `test_canonical_entity_repository.py` that inserts a `financial_instrument` entity then attempts to create an entity with the same lowercase canonical name but `entity_type='company'` — assert the second call returns the existing entity, not a new row.
+
+---

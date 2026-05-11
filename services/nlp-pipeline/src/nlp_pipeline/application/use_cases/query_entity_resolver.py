@@ -70,6 +70,149 @@ def _normalize(text: str) -> str:
     return " ".join(text.split())
 
 
+# Stop-words that are never entity mentions on their own.
+# WHY: when we tokenise a free-text query ("What is the relation between Apple
+# and Anthropic?") into candidate mentions, single stop-words like "what",
+# "the", "between" would be sent to every cascade stage and waste DB round-trips
+# while never matching.  Filtering them out before the batch call keeps the
+# query list lean.  The set is intentionally small — we only exclude the most
+# common English function words; domain nouns are kept even if short.
+_STOP_WORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "with",
+        "is",
+        "it",
+        "its",
+        "this",
+        "that",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "by",
+        "from",
+        "as",
+        "into",
+        "through",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "how",
+        "when",
+        "where",
+        "why",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "can",
+        "not",
+        "no",
+        "so",
+        "if",
+        "then",
+        "than",
+        "more",
+        "most",
+        "between",
+        "about",
+        "after",
+        "before",
+        "during",
+        "up",
+        "down",
+        "out",
+        "off",
+        "over",
+        "under",
+        "again",
+        "further",
+        "while",
+        "there",
+        "these",
+        "those",
+        "each",
+        "both",
+        "few",
+        "other",
+        "such",
+        "only",
+        "own",
+        "same",
+        "too",
+        "very",
+        "relation",
+        "relationship",
+        "connect",
+        "connection",
+        "link",
+    }
+)
+
+
+def _candidate_mentions(normalized: str) -> list[str]:
+    """Extract candidate entity mentions from a normalised query string.
+
+    Strategy (cheapest to most expensive):
+      1. The full normalised string — works for short queries like "Apple" or "AAPL".
+      2. Individual capitalisable tokens (≥ 2 chars) not in the stop-word list.
+      3. 2-gram and 3-gram windows of the non-stop tokens — catches "Apple Inc"
+         and "Alphabet Inc Class A" style compound names.
+
+    All candidates are de-duplicated (preserving order) before being returned.
+    The full string is always first so exact full-query matches win in Stage 1.
+
+    WHY deduplicate: the same token can appear in multiple windows; sending it
+    twice to batch_exact_match is harmless but wastes a DB parameter slot.
+    """
+    seen: dict[str, None] = {}  # ordered set via dict
+
+    def _add(s: str) -> None:
+        s = s.strip()
+        if s and s not in seen:
+            seen[s] = None
+
+    _add(normalized)
+
+    tokens = [t for t in normalized.split() if len(t) >= 2 and t not in _STOP_WORDS]
+
+    # 1-gram
+    for t in tokens:
+        _add(t)
+
+    # 2-gram windows
+    for i in range(len(tokens) - 1):
+        _add(f"{tokens[i]} {tokens[i + 1]}")
+
+    # 3-gram windows
+    for i in range(len(tokens) - 2):
+        _add(f"{tokens[i]} {tokens[i + 1]} {tokens[i + 2]}")
+
+    return list(seen)
+
+
 def _cache_key(normalized_text: str) -> str:
     digest = hashlib.sha256(normalized_text.encode()).hexdigest()[:16]
     return f"s6:v1:resolve:{digest}"
@@ -166,12 +309,23 @@ class QueryEntityResolverUseCase:
         top_k_per_mention: int,
         min_confidence: float,
     ) -> list[EntityResolutionResult]:
-        """Run the resolution cascade and return deduped, filtered results."""
+        """Run the resolution cascade and return deduped, filtered results.
+
+        Uses _candidate_mentions() to tokenise the query into 1/2/3-gram windows
+        before stages 1 and 3.  This lets "What is the relation between Apple and
+        Anthropic?" resolve both "apple" (→ Apple Inc.) and "anthropic" instead of
+        failing because the full sentence has no alias entry.
+        """
         # Accumulate: {entity_id: result_with_highest_confidence}
         best: dict[str, EntityResolutionResult] = {}
 
-        # Stage 1 — exact alias match
-        exact = await self._alias_repo.batch_exact_match([normalized])
+        # Build the candidate mention list: full query + 1/2/3-gram windows.
+        # Stage 2 (ticker) still uses the full string because _TICKER_RE scans
+        # all-caps tokens across the entire query rather than per-window.
+        candidates = _candidate_mentions(normalized)
+
+        # Stage 1 — exact alias match (batch: one query for all candidates)
+        exact = await self._alias_repo.batch_exact_match(candidates)
         for _text, entity_id in exact.items():
             entity_data = await self._canonical_repo.get(entity_id)
             if entity_data:
@@ -180,14 +334,14 @@ class QueryEntityResolverUseCase:
                     canonical_name=str(entity_data["canonical_name"]),
                     entity_type=str(entity_data["entity_type"]),
                     confidence=_CONF_EXACT,
-                    matched_text=normalized,
+                    matched_text=_text,
                     resolution_stage=1,
                     ticker=str(entity_data["ticker"]) if entity_data.get("ticker") else None,
                     isin=str(entity_data["isin"]) if entity_data.get("isin") else None,
                 )
                 _update_best(best, r)
 
-        # Stage 2 — ticker / ISIN match
+        # Stage 2 — ticker / ISIN match (scans the full normalised text)
         tickers = _TICKER_RE.findall(normalized.upper())
         isins = _ISIN_RE.findall(normalized.upper())
         if tickers or isins:
@@ -207,9 +361,12 @@ class QueryEntityResolverUseCase:
                     )
                     _update_best(best, r)
 
-        # Stage 3 — fuzzy trigram
+        # Stage 3 — fuzzy trigram (batch across all candidate windows)
+        # WHY pass all candidates: "apple inc" has higher trigram sim against the
+        # alias "apple inc." than the bare token "apple" does; running all windows
+        # at once via a single LATERAL query is as cheap as running one.
         fuzzy = await self._alias_repo.batch_fuzzy_trigram(
-            [normalized], threshold=_FUZZY_THRESHOLD, top_k_per_mention=top_k_per_mention
+            candidates, threshold=_FUZZY_THRESHOLD, top_k_per_mention=top_k_per_mention
         )
         for _text, matches in fuzzy.items():
             for entity_id, sim in matches:
@@ -221,7 +378,7 @@ class QueryEntityResolverUseCase:
                         canonical_name=str(entity_data["canonical_name"]),
                         entity_type=str(entity_data["entity_type"]),
                         confidence=confidence,
-                        matched_text=normalized,
+                        matched_text=_text,
                         resolution_stage=3,
                         ticker=str(entity_data["ticker"]) if entity_data.get("ticker") else None,
                         isin=str(entity_data["isin"]) if entity_data.get("isin") else None,
