@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select, update
 
 from alert.domain.entities import PendingAlert
-from alert.infrastructure.db.models import PendingAlertModel
+from alert.infrastructure.db.models import AlertModel, PendingAlertModel
 from common.time import utc_now  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -34,15 +33,32 @@ class PendingAlertRepository:
         self._session.add(row)
         await self._session.flush()
 
-    async def list_by_user(self, user_id: UUID, limit: int = 50, offset: int = 0) -> list[PendingAlert]:
-        """List undelivered pending alerts for a user, newest first."""
+    async def list_by_user(
+        self,
+        user_id: UUID,
+        limit: int = 50,
+        offset: int = 0,
+        min_severities: list[str] | None = None,
+    ) -> list[PendingAlert]:
+        """List undelivered pending alerts for a user, newest first.
+
+        When ``min_severities`` is provided, only pending alerts whose
+        associated alert has a severity in that list are returned.
+        The severity filter is pushed to SQL via a JOIN to avoid the
+        pagination-correctness bug where Python-side filtering after
+        OFFSET pagination skips valid rows (D-4).
+        """
         stmt = (
             select(PendingAlertModel)
-            .where(PendingAlertModel.user_id == user_id, PendingAlertModel.delivered_at.is_(None))
-            .order_by(PendingAlertModel.created_at.desc())
-            .limit(limit)
-            .offset(offset)
+            .join(AlertModel, PendingAlertModel.alert_id == AlertModel.alert_id)
+            .where(
+                PendingAlertModel.user_id == user_id,
+                PendingAlertModel.delivered_at.is_(None),
+            )
         )
+        if min_severities:
+            stmt = stmt.where(AlertModel.severity.in_(min_severities))
+        stmt = stmt.order_by(PendingAlertModel.created_at.desc()).limit(limit).offset(offset)
         rows = (await self._session.execute(stmt)).scalars().all()
         return [self._to_entity(r) for r in rows]
 

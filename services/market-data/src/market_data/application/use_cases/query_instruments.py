@@ -5,28 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from market_data.application.ports.uow import UnitOfWork
+    from market_data.application.ports.uow import ReadOnlyUnitOfWork
     from market_data.domain.entities import Instrument
-
-
-class GetInstrumentByIdUseCase:
-    """Return the instrument with the given UUID, or ``None``."""
-
-    def __init__(self, uow: UnitOfWork) -> None:
-        self._uow = uow
-
-    async def execute(self, instrument_id: str) -> Instrument | None:
-        return await self._uow.instruments_read.find_by_id(instrument_id)
-
-
-class GetInstrumentBySymbolUseCase:
-    """Return the instrument for the given symbol/exchange pair, or ``None``."""
-
-    def __init__(self, uow: UnitOfWork) -> None:
-        self._uow = uow
-
-    async def execute(self, symbol: str, exchange: str = "") -> Instrument | None:
-        return await self._uow.instruments_read.find_by_symbol_exchange(symbol, exchange)
 
 
 class SearchInstrumentsUseCase:
@@ -35,7 +15,7 @@ class SearchInstrumentsUseCase:
     Returns ``(total_count, items)`` so the caller can build paginated responses.
     """
 
-    def __init__(self, uow: UnitOfWork) -> None:
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
 
     async def execute(

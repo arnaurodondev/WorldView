@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -11,11 +12,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 import common.ids
 import common.time
 from content_ingestion.domain.entities import ContentIngestionTask
-from content_ingestion.infrastructure.db.models import ContentIngestionTaskModel
+from content_ingestion.infrastructure.db.models import ContentIngestionTaskModel, SourceModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
@@ -40,6 +39,7 @@ def _to_domain(row: ContentIngestionTaskModel) -> ContentIngestionTask:
         error_detail=row.error_detail,
         is_backfill=row.is_backfill,
         window_start=row.window_start,
+        next_attempt_at=row.next_attempt_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -72,6 +72,7 @@ class TaskRepository:
                 error_detail=task.error_detail,
                 is_backfill=task.is_backfill,
                 window_start=task.window_start,
+                next_attempt_at=task.next_attempt_at,
                 created_at=task.created_at,
                 updated_at=task.updated_at,
             ),
@@ -102,6 +103,7 @@ class TaskRepository:
                     error_detail=task.error_detail,
                     is_backfill=task.is_backfill,
                     window_start=task.window_start,
+                    next_attempt_at=task.next_attempt_at,
                     created_at=task.created_at,
                     updated_at=task.updated_at,
                 )
@@ -132,7 +134,14 @@ class TaskRepository:
 
         cte = (
             select(ContentIngestionTaskModel.id)
-            .where(ContentIngestionTaskModel.status.in_(claimable_statuses))
+            .where(
+                ContentIngestionTaskModel.status.in_(claimable_statuses),
+                # Exclude tasks that are still in an EODHD 429 backoff window.
+                # A NULL next_attempt_at means "no backoff" — eligible immediately.
+                # A non-NULL value only becomes claimable once it is <= NOW().
+                (ContentIngestionTaskModel.next_attempt_at.is_(None))
+                | (ContentIngestionTaskModel.next_attempt_at <= now),
+            )
             .order_by(ContentIngestionTaskModel.created_at)
             .limit(limit)
             .with_for_update(skip_locked=True)
@@ -151,7 +160,20 @@ class TaskRepository:
             .returning(ContentIngestionTaskModel)
         )
         rows = (await self._session.execute(stmt)).scalars().all()
-        return [_to_domain(row) for row in rows]
+        tasks = [_to_domain(row) for row in rows]
+
+        # Load source configs for all claimed tasks so adapters can read symbol,
+        # from_date, to_date, etc. without a second DB round-trip in the use case.
+        if tasks:
+            source_ids = [t.source_id for t in tasks]
+            cfg_result = await self._session.execute(
+                select(SourceModel.id, SourceModel.config).where(SourceModel.id.in_(source_ids))
+            )
+            source_configs = {row.id: (row.config or {}) for row in cfg_result}
+            for task in tasks:
+                task.source_config = source_configs.get(task.source_id, {})
+
+        return tasks
 
     async def update_status(
         self,
@@ -183,6 +205,48 @@ class TaskRepository:
         )
         result = await self._session.execute(stmt)
         return result.first() is not None
+
+    async def recover_expired_leases(self, now: dt.datetime, lease_timeout_seconds: int) -> int:
+        """Reset CLAIMED/RUNNING tasks with expired leases back to RETRY.
+
+        A worker that crashes while holding a lease will leave tasks stuck in
+        CLAIMED or RUNNING indefinitely.  This method is called at the start of
+        each scheduler tick to reclaim those tasks so they can be picked up by
+        another worker.
+
+        Args:
+        ----
+            now: Current UTC timestamp (avoids clock skew inside the transaction).
+            lease_timeout_seconds: Grace period in seconds beyond ``lease_expires``
+                before a task is considered abandoned.  Zero = recover immediately
+                when ``lease_expires < now``.
+
+        Returns:
+        -------
+            Number of tasks recovered.
+
+        """
+        cutoff = now - dt.timedelta(seconds=lease_timeout_seconds)
+        recoverable_statuses = ("claimed", "running")
+        stmt = (
+            update(ContentIngestionTaskModel)
+            .where(
+                ContentIngestionTaskModel.status.in_(recoverable_statuses),
+                ContentIngestionTaskModel.lease_expires.isnot(None),
+                ContentIngestionTaskModel.lease_expires < cutoff,
+            )
+            .values(
+                status="retry",
+                worker_id=None,
+                leased_at=None,
+                lease_expires=None,
+                updated_at=now,
+            )
+            .returning(ContentIngestionTaskModel.id)
+        )
+        result = await self._session.execute(stmt)
+        recovered = len(result.fetchall())
+        return recovered
 
     async def count_by_status(self) -> dict[str, int]:
         """Return task counts grouped by status (for metrics)."""

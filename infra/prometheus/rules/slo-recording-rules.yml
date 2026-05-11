@@ -1,0 +1,31 @@
+groups:
+  - name: slo_recording_rules
+    interval: 30s
+    rules:
+      - record: slo:api_gateway:error_rate_5m
+        expr: |
+          sum(rate(api_gateway_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(api_gateway_requests_total[5m]))
+
+      - record: slo:portfolio:error_rate_5m
+        expr: |
+          sum(rate(portfolio_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(portfolio_requests_total[5m]))
+
+      - record: slo:market_data:p95_latency_5m
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(market_data_request_duration_seconds_bucket[5m]))
+          )
+
+      - record: slo:rag_chat:p95_latency_5m
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(rag_chat_request_duration_seconds_bucket[5m]))
+          )
+
+      - record: slo:content_ingestion:throughput_1h
+        expr: |
+          sum(increase(content_ingestion_kafka_messages_consumed_total[1h]))

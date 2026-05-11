@@ -13,7 +13,10 @@ alerting:
 scrape_configs:
   - job_name: "portfolio"
     static_configs:
-      - targets: ["portfolio:8001"]
+      # Use container-internal port (right side of host:container mapping).
+      # docker-compose maps 8001:8000 on the host — within the Docker network
+      # the service listens on :8000, not :8001. (BP-175)
+      - targets: ["portfolio:8000"]
     metrics_path: /metrics
 
   - job_name: "market-ingestion"
@@ -28,7 +31,8 @@ scrape_configs:
 
   - job_name: "content-ingestion"
     static_configs:
-      - targets: ["content-ingestion:8004"]
+      # Container listens on :8000; host maps 8004:8000. Use :8000. (BP-175)
+      - targets: ["content-ingestion:8000"]
     metrics_path: /metrics
 
   - job_name: "content-store"
@@ -39,4 +43,65 @@ scrape_configs:
   - job_name: "api-gateway"
     static_configs:
       - targets: ["api-gateway:8000"]
+    metrics_path: /metrics
+
+  - job_name: "nlp-pipeline"
+    static_configs:
+      - targets: ["nlp-pipeline:8006"]
+    metrics_path: /metrics
+
+  - job_name: "knowledge-graph"
+    static_configs:
+      - targets: ["knowledge-graph:8007"]
+    metrics_path: /metrics
+
+  - job_name: "rag-chat"
+    static_configs:
+      - targets: ["rag-chat:8008"]
+    metrics_path: /metrics
+
+  - job_name: "alert"
+    static_configs:
+      - targets: ["alert:8010"]
+    metrics_path: /metrics
+
+  # ── Observability stack self-monitoring ────────────────────────────────
+  # Without these, Loki/Tempo/AlertManager outages are undetectable — no
+  # ServiceDown alert would fire. (F-014, audit finding)
+  - job_name: "loki"
+    static_configs:
+      - targets: ["loki:3100"]
+    metrics_path: /metrics
+
+  - job_name: "tempo"
+    static_configs:
+      - targets: ["tempo:3200"]
+    metrics_path: /metrics
+
+  - job_name: "alertmanager"
+    static_configs:
+      - targets: ["alertmanager:9093"]
+    metrics_path: /metrics
+
+  # ── Infrastructure exporters ────────────────────────────────────────────────
+  # WHY separate jobs: postgres_exporter and redis_exporter scrape infrastructure
+  # rather than application services; separate job names make it easy to write
+  # Prometheus rules that target only infra (e.g., ValkeyDown alert uses redis_up).
+  - job_name: "postgres"
+    static_configs:
+      - targets: ["postgres_exporter:9187"]
+    metrics_path: /metrics
+
+  - job_name: "valkey"
+    static_configs:
+      - targets: ["redis_exporter:9121"]
+    metrics_path: /metrics
+
+  # ── Pushgateway — synthetic monitor probe results ─────────────────────────
+  # honor_labels: true preserves the probe_name label set by synthetic_monitor.py
+  # so SyntheticProbeDown alert can reference {{ $labels.probe_name }} correctly.
+  - job_name: "pushgateway"
+    honor_labels: true
+    static_configs:
+      - targets: ["pushgateway:9091"]
     metrics_path: /metrics

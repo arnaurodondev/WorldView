@@ -14,6 +14,7 @@
 **File**: `services/api-gateway/src/api_gateway/config.py`
 **Issue**: `jwt_secret: str = "dev-secret-change-me"` — if the env var is not set, this default allows any attacker to forge valid JWT tokens.
 **Fix**: Remove the default value. Require `API_GATEWAY_JWT_SECRET` via env var with no fallback. The service should fail to start if unset.
+**Status**: ADDRESSED BY PRD-0025 — `jwt_secret` removed entirely; replaced by `OIDC_ISSUER_URL` (external Zitadel JWT validation via JWKS) + `INTERNAL_JWT_PRIVATE_KEY` (RS256 asymmetric, no shared secret).
 
 ### SEC-002: Hardcoded MinIO/S3 Credentials as Defaults
 
@@ -39,12 +40,14 @@
 **File**: `services/api-gateway/src/api_gateway/middleware.py`
 **Issue**: `allow_methods=["*"]` and `allow_headers=["*"]` combined with `allow_credentials=True` enables CSRF attacks and Authorization header spoofing from any origin.
 **Fix**: Whitelist specific methods (`GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`) and headers (`Authorization`, `Content-Type`, `X-Request-ID`). Restrict `allow_origins` to the frontend domain.
+**Status**: ADDRESSED BY PRD-0025 — CORS restricted to explicit method/header allowlist.
 
 ### SEC-004: Rate Limiting Middleware Not Wired (api-gateway)
 
 **File**: `services/api-gateway/src/api_gateway/app.py`
 **Issue**: `RateLimitMiddleware` class exists in `middleware.py` but is never added to the FastAPI application. No rate limiting protection is active.
 **Fix**: Add `app.add_middleware(RateLimitMiddleware, ...)` in `app.py` lifespan or startup.
+**Status**: ADDRESSED BY PRD-0025 — `RateLimitMiddleware` wired; rate limit key changed to user_id (authenticated) or IP hash (unauthenticated).
 
 ### SEC-005: Unauthenticated Tenant Creation (portfolio)
 
@@ -71,12 +74,14 @@
 - `Strict-Transport-Security` (HSTS)
 - `Content-Security-Policy` (XSS)
 **Fix**: Add a `SecurityHeadersMiddleware` that injects these headers on every response.
+**Status**: ADDRESSED BY PRD-0025 — `SecurityHeadersMiddleware` added with HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy.
 
 ### SEC-008: Rate Limiting by IP Only (api-gateway)
 
 **File**: `services/api-gateway/src/api_gateway/middleware.py`
 **Issue**: Rate limiting uses `client_ip` as key. Ineffective behind proxies or for per-user limits.
 **Fix**: After authentication, rate limit by user ID. Fall back to IP for unauthenticated endpoints. Respect `X-Forwarded-For` behind trusted proxies.
+**Status**: ADDRESSED BY PRD-0025 — Rate limit key = `user_id` (authenticated) or `sha256(IP)[:16]` (unauthenticated).
 
 ### SEC-009: Unescaped LIKE Patterns in Search (market-data)
 

@@ -8,7 +8,7 @@ and rich assertion wrappers used by all architecture test modules.
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -469,9 +469,30 @@ def discover_process_entry_points(svc: ServiceInfo) -> list[ProcessEntryPoint]:
 
 
 class _LifespanCreateTaskScanner(ast.NodeVisitor):
-    """AST visitor that finds asyncio.create_task() calls inside lifespan functions."""
+    """AST visitor that finds asyncio.create_task() calls inside lifespan functions.
+
+    Only flags tasks whose coroutine names contain a consumer or dispatcher
+    keyword.  Lightweight, read-only in-process tasks (e.g. cache-warmer
+    refresh loops) are deliberately excluded — R22 targets Kafka consumers
+    and outbox dispatchers, not cache utilities (see PRD-0017 §6.2 and the
+    service-level test guard in test_app_lifespan.py for full rationale).
+    """
 
     _LIFESPAN_NAMES = frozenset({"lifespan", "_lifespan", "startup"})
+
+    # Function-name substrings that indicate a consumer or dispatcher task.
+    # Cache-warmers, refresh loops, and other lightweight in-process helpers
+    # are intentionally NOT in this list.
+    _PROHIBITED_TASK_NAMES: frozenset[str] = frozenset(
+        {
+            "run",  # SchedulerProcess.run / ConsumerProcess.run
+            "consume",
+            "dispatch",
+            "outbox",
+            "kafka",
+            "consumer",
+        }
+    )
 
     def __init__(self) -> None:
         self.violations: list[tuple[int, str]] = []
@@ -514,9 +535,13 @@ class _LifespanCreateTaskScanner(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         if self._in_lifespan and self._is_create_task(node):
-            # Try to extract the task name from the first argument
             task_desc = self._describe_call_arg(node)
-            self.violations.append((node.lineno, task_desc))
+            # Only flag tasks whose coroutine name contains a prohibited keyword.
+            # This mirrors the service-level guard: cache-warmers are allowed;
+            # only consumers and dispatchers must be standalone processes (R22).
+            task_name = task_desc.lower()
+            if any(prohibited in task_name for prohibited in self._PROHIBITED_TASK_NAMES):
+                self.violations.append((node.lineno, task_desc))
         self.generic_visit(node)
 
     @staticmethod

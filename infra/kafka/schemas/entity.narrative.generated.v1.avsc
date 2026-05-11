@@ -1,0 +1,19 @@
+{
+  "type": "record",
+  "name": "EntityNarrativeGeneratedV1",
+  "namespace": "com.worldview.intelligence",
+  "doc": "Emitted by S7 NarrativeGenerationWorker (Block 13D-3) when a new entity narrative version is generated and promoted to is_current. Consumers (e.g. NarrativeRefreshKafkaConsumer) can use this to trigger embedding refresh for the new narrative text.",
+  "fields": [
+    {"name": "event_id",             "type": "string",             "doc": "UUIDv7 event identifier"},
+    {"name": "entity_id",            "type": "string",             "doc": "Canonical entity UUID"},
+    {"name": "version_id",           "type": "string",             "doc": "UUIDv7 of the new entity_narrative_versions row"},
+    {"name": "tenant_id",            "type": ["null", "string"],   "default": null, "doc": "Tenant UUID, null when not scoped"},
+    {"name": "generation_reason",    "type": "string",             "doc": "INITIAL | PERIODIC_REFRESH | DATA_UPDATE | EVIDENCE_SURGE | MANUAL_TRIGGER"},
+    {"name": "model_id",             "type": "string",             "doc": "LLM model that produced the narrative (e.g. meta-llama/Meta-Llama-3.1-8B-Instruct)"},
+    {"name": "narrative_text_length","type": "int",                "doc": "Length of the generated narrative_text in characters (NOT the full text)"},
+    {"name": "word_count",           "type": ["null", "int"],      "default": null, "doc": "Pre-computed word count; null when not computed"},
+    {"name": "quality_score",        "type": ["null", "double"],   "default": null, "doc": "LLM self-evaluation score [0.0, 1.0]; null when not computed"},
+    {"name": "occurred_at",          "type": "string",             "doc": "ISO-8601 UTC timestamp of generation"},
+    {"name": "schema_version",       "type": "string",             "default": "1.0.0", "doc": "Schema version for forward-compat tracking"}
+  ]
+}

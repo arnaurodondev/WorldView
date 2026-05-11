@@ -8,11 +8,8 @@ models, no Pydantic schemas.  ORM models are infrastructure concerns (wave 02).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from datetime import datetime
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now as _common_utc_now  # type: ignore[import-untyped]
@@ -54,6 +51,7 @@ class Security:
     industry: str | None = None
     country: str | None = None
     currency: str | None = None
+    description: str | None = None
     created_at: datetime = field(default_factory=_utc_now)
     updated_at: datetime = field(default_factory=_utc_now)
 
@@ -90,6 +88,11 @@ class OHLCVBar:
     column type and avoid float precision loss during DB round-trips.
     ``provider_priority`` is stored so the upsert logic can discard lower-
     priority data without re-querying.
+
+    ``is_derived`` marks bars that were computed locally (e.g. weekly/monthly
+    bars aggregated from daily bars) rather than ingested directly from an
+    external provider.  Derived bars are never overwritten by live ingestion
+    and do not consume EODHD API credits (PLAN-0036 W2-4/W2-5).
     """
 
     instrument_id: str = ""
@@ -99,11 +102,22 @@ class OHLCVBar:
     high: Decimal = Decimal("0")
     low: Decimal = Decimal("0")
     close: Decimal = Decimal("0")
-    volume: int = 0
+    volume: int | None = 0
     adjusted_close: Decimal | None = None
     source: str = ""
     provider_priority: ProviderPriority = field(default_factory=_default_provider_priority)
     ingested_at: datetime = field(default_factory=_utc_now)
+    # True for bars derived locally from finer-grained bars (e.g. 1w/1M from 1d).
+    # Forward-compatible addition: defaults to False so existing code is unaffected.
+    is_derived: bool = False
+    # True when this bar represents an incomplete period (e.g. the current week/month
+    # whose trading days have not all elapsed).  A partial bar is always derived — it
+    # makes no sense for a directly-ingested bar to be partial.
+    is_partial: bool = False
+
+    def __post_init__(self) -> None:
+        if self.is_partial and not self.is_derived:
+            raise ValueError("is_partial=True implies is_derived=True; a directly-ingested bar cannot be partial")
 
 
 @dataclass
@@ -127,6 +141,24 @@ class Quote:
     updated_at: datetime = field(default_factory=_utc_now)
 
 
+@dataclass(frozen=True, slots=True)
+class ScreenFieldMetadata:
+    """Metadata for a screenable fundamental metric field (PRD-0017 §6.4).
+
+    Static instances represent the 12 supported metric fields.
+    Persisted in ``screen_field_metadata`` table; also cached in Valkey.
+    """
+
+    name: str
+    label: str
+    field_type: str  # "numeric" | "text"
+    unit: str | None
+    description: str | None
+    observed_min: float | None
+    observed_max: float | None
+    null_fraction: float  # 0.0-1.0
+
+
 @dataclass
 class FundamentalsRecord:
     """One section of company fundamentals for a given reporting period.
@@ -148,3 +180,63 @@ class FundamentalsRecord:
     data: dict[str, object] = field(default_factory=dict)
     source: str = ""
     ingested_at: datetime = field(default_factory=_utc_now)
+
+
+@dataclass
+class PredictionMarket:
+    """A Polymarket prediction market record.
+
+    One row per market (keyed on ``market_id``).  Upserted on every poll
+    cycle so that question text, resolution status, and outcomes metadata
+    stay current without accumulating history.
+
+    ``outcomes`` holds only static outcome descriptors
+    (``[{"name": str, "token_id": str}]``).  Per-poll prices live in
+    ``PredictionMarketSnapshot.outcomes_prices``.
+    """
+
+    id: str = field(default_factory=_new_id)
+    market_id: str = ""
+    source: str = "polymarket"
+    question: str = ""
+    description: str | None = None
+    outcomes: list[dict] = field(default_factory=list)
+    close_time: datetime | None = None
+    resolution_status: str = "open"
+    resolved_answer: str | None = None
+    # WHY default None: added in migration 009; existing rows populated on next
+    # consumer poll. None = "slug not yet known" (distinct from "" which is invalid).
+    market_slug: str | None = None
+    # PLAN-0049 T-C-3-03 — high-level category tag (``macro`` | ``politics`` |
+    # ``sports`` | ``crypto`` | ``general``).  Forward-compatible: defaults to
+    # None so existing call-sites and tests are unaffected; the polymarket
+    # adapter populates the field once it starts emitting it on the wire.
+    category: str | None = None
+    created_at: datetime = field(default_factory=_utc_now)
+    updated_at: datetime = field(default_factory=_utc_now)
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionMarketSnapshot:
+    """Per-poll price snapshot for a single Polymarket market.
+
+    Stored in a TimescaleDB hypertable partitioned on ``snapshot_at``.
+    Each row is uniquely identified by ``(market_id, snapshot_at)``.
+
+    ``outcomes_prices`` maps outcome name to implied probability (0-1).
+    ``volume_24h`` and ``liquidity`` are optional; absent from some markets.
+    """
+
+    market_id: str
+    snapshot_at: datetime
+    outcomes_prices: dict[str, float]
+    source_event_id: str
+    volume_24h: Decimal | None = None
+    liquidity: Decimal | None = None
+    id: str = field(default_factory=_new_id)
+
+    def __post_init__(self) -> None:
+        if self.snapshot_at.tzinfo is None:
+            raise ValueError("snapshot_at must be UTC-aware (naive datetime not allowed)")
+        if len(self.outcomes_prices) < 2:
+            raise ValueError("outcomes_prices must contain at least 2 outcome entries")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pydantic import SecretStr  # — pydantic evaluates field types at runtime
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,9 +24,23 @@ class Settings(BaseSettings):
     # Valkey (caching + rate limiting)
     valkey_url: str = "redis://localhost:6379/0"
 
-    # Auth
-    jwt_secret: str = "dev-secret-change-me"
-    jwt_algorithm: str = "HS256"
+    # OIDC (Zitadel Cloud) — all required; service refuses to start without them (R13)
+    oidc_issuer_url: str  # e.g. https://<instance>.zitadel.cloud
+    oidc_client_id: str
+    oidc_client_secret: SecretStr
+    oidc_audience: str  # usually same as client_id
+    # Set to true in test/dev environments where Zitadel is not running.
+    # OIDC discovery failure becomes a warning instead of a fatal error;
+    # the gateway starts with internal-JWT-only auth (no external OIDC token validation).
+    oidc_discovery_optional: bool = False
+
+    # Internal JWT (RS256) — PEM-encoded RSA-2048 key pair
+    internal_jwt_private_key: SecretStr  # never logged — SecretStr
+    internal_jwt_public_key: str
+
+    # Frontend
+    frontend_url: str = "http://localhost:5173"
+    cookie_secure: bool = True  # False only in local dev (override via API_GATEWAY_COOKIE_SECURE=false)
 
     # Downstream service URLs
     portfolio_url: str = "http://localhost:8001"
@@ -36,13 +51,41 @@ class Settings(BaseSettings):
     nlp_pipeline_url: str = "http://localhost:8006"
     knowledge_graph_url: str = "http://localhost:8007"
     rag_chat_url: str = "http://localhost:8008"
+    alert_url: str = "http://localhost:8010"
 
     # Rate limiting
-    rate_limit_requests: int = 100
+    # WHY 300: authenticated users on the instrument detail page fire 4+ simultaneous
+    # OHLCV timeseries calls (one per workspace panel) plus screener + KG graph + news.
+    # 100 req/60s was too tight for multi-panel workspace usage → 429s on timeseries.
+    # Unauthenticated tier stays at 20 req/60s (enforced in RateLimitMiddleware).
+    rate_limit_requests: int = 300
     rate_limit_window_seconds: int = 60
 
     # CORS
-    cors_origins: str = "http://localhost:5173,http://localhost:3000"
+    # SEC-008: Port 3001 is the worldview-web frontend.  Port 3000 is unused and
+    # could be attacker-controlled; it must not appear in the default allowlist.
+    cors_origins: str = "http://localhost:5173,http://localhost:3001"
+
+    # Environment guard — SEC-003: dev-login is blocked when app_env="production"
+    # regardless of OIDC configuration, preventing accidental exposure in prod.
+    # Valid values: "development", "staging", "production"
+    app_env: str = "development"
+
+    # F-Q1-02: dev-only admin allow-list. When ``app_env != "production"``,
+    # any dev-login email matching one of these (comma-separated) values
+    # gets ``role=admin`` in the issued internal JWT so admin endpoints
+    # are reachable from the demo frontend without a real Zitadel role
+    # provider. In production, role MUST come from the OIDC payload.
+    dev_admin_emails: str = ""
+
+    # PLAN-0057 Wave A-1 / BP-303 — Service-account secret used by
+    # ``POST /internal/v1/service-token``. Background workers (e.g. the
+    # nlp-pipeline price-impact worker) authenticate with this shared secret
+    # to mint an RS256 internal JWT. Empty default keeps local dev workflows
+    # using ``POST /v1/auth/dev-login``; production deployments MUST set this
+    # via sealed secret. Compared with ``secrets.compare_digest`` to avoid
+    # leaking timing information.
+    service_account_token: SecretStr = SecretStr("")
 
     # Observability (STANDARDS.md §5 — mandatory in every service)
     service_name: str = "api-gateway"

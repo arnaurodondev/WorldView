@@ -19,9 +19,11 @@ no skip logic or wait loops are required in the tests themselves.
 from __future__ import annotations
 
 import os
+import socket
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 import pytest
 from httpx import AsyncClient
@@ -52,6 +54,30 @@ async def e2e_client() -> AsyncGenerator[AsyncClient, None]:
 # ── Function-scoped DB engine ──────────────────────────────────────────────────
 
 
+def _probe_db_available() -> bool:
+    """Best-effort TCP probe of the test DB host:port.
+
+    PLAN-0088 (2026-05-10): the e2e suite was written assuming the
+    docker-compose.test.yml stack is always up (per the docstring), but
+    when developers run ``pytest`` against a non-running stack the fixtures
+    raise ``OSError: Connect call failed`` instead of cleanly skipping —
+    polluting CI-style "all green" runs with hard errors. rag-chat and
+    alert already use this pattern; market-data didn't.
+    """
+    parsed = urlparse(_DB_URL.replace("+asyncpg", ""))
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 5432
+    sock = socket.socket()
+    sock.settimeout(0.5)
+    try:
+        sock.connect((host, port))
+    except OSError:
+        return False
+    finally:
+        sock.close()
+    return True
+
+
 @pytest.fixture
 async def e2e_db_session() -> AsyncGenerator[AsyncSession, None]:
     """Direct DB session for white-box assertions and test data seeding.
@@ -60,6 +86,9 @@ async def e2e_db_session() -> AsyncGenerator[AsyncSession, None]:
     at fixture setup to eliminate any leftover data from docker-compose tmpfs
     state or previous test runs.
     """
+    if not _probe_db_available():
+        pytest.skip(f"market-data e2e DB not available at {_DB_URL} — start docker-compose.test.yml stack")
+
     engine = create_async_engine(_DB_URL, echo=False)
     factory = async_sessionmaker(engine, expire_on_commit=False)
 

@@ -3,6 +3,7 @@ name: fix-bug
 description: "Diagnose and fix a bug following a structured workflow: reproduce, analyze, fix minimally, add regression test, update bug patterns. Use for known bugs with clear symptoms."
 user-invocable: true
 argument-hint: "[bug description, error message, or issue reference]"
+effort: light
 ---
 
 # Fix Bug — Structured Bug Resolution Pipeline

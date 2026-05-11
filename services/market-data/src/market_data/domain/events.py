@@ -53,10 +53,16 @@ class InstrumentCreated(DomainEvent):
 
     schema_version=2: adds optional name, isin, instrument_type fields populated
     from EODHD company_profile data when available.
+
+    schema_version=3 (PLAN-0057 Wave C-1, F-CRIT-04 / F-CRIT-11): adds four
+    additional EODHD identifier fields — ``cusip``, ``figi`` (from EODHD
+    ``OpenFigi``), ``lei`` and ``primary_ticker`` — so that S7 can insert a rich
+    alias suite on the canonical entity (CUSIP / FIGI / LEI / PRIMARY_TICKER).
+    All four are nullable with default ``None`` for backward compatibility.
     """
 
     event_type: ClassVar[str] = "market.instrument.created"
-    schema_version: ClassVar[int] = 2
+    schema_version: ClassVar[int] = 3
 
     instrument_id: str = ""
     security_id: str = ""
@@ -66,6 +72,52 @@ class InstrumentCreated(DomainEvent):
     isin: str | None = None
     instrument_type: str | None = None
     description: str | None = None  # From EODHD General.Description — used by S7 for definition embedding
+    # ── PLAN-0057 Wave C-1: EODHD identifier extras (schema_version=3) ────
+    # Source: EODHD General.{CUSIP, OpenFigi, LEI, PrimaryTicker}.  Each is
+    # nullable because the upstream EODHD response may omit any of them
+    # depending on the security and account tier; S7 only inserts the matching
+    # alias when the value is present and non-empty.
+    cusip: str | None = None
+    figi: str | None = None  # mapped from EODHD General.OpenFigi (NOT 'FIGI')
+    lei: str | None = None
+    primary_ticker: str | None = None
+
+
+@dataclass(frozen=True)
+class InstrumentDiscovered(DomainEvent):
+    """Emitted when an instrument is first observed during OHLCV/Quotes ingestion.
+
+    PLAN-0057 Wave D-2: This event replaces ``InstrumentCreated`` in the
+    OHLCV/Quotes path because at that stage we only know ``symbol`` and
+    ``exchange`` (no real ``name`` from EODHD fundamentals).  Producing
+    ``market.instrument.created`` with ``name=None`` previously caused
+    placeholder canonicals like ``Instrument-019dbbdb...`` (audit
+    finding F-CRIT-12).
+
+    Consumers:
+      * Portfolio (S2) — materialises ``InstrumentRef`` immediately so the
+        portfolio service can reference the instrument.
+      * Knowledge-graph (S7) — creates a *lightweight* canonical entity with
+        ``canonical_name = symbol`` and
+        ``metadata.needs_fundamentals_enrichment = true``.  The existing
+        ``InstrumentEntityConsumer`` upserts the real name and rich aliases
+        later when ``market.instrument.created`` arrives from the
+        fundamentals consumer.
+
+    ``market.instrument.created`` is now produced ONLY by
+    ``fundamentals_consumer`` and is gated on having a real ``Name`` from
+    EODHD.
+
+    Published to topic ``market.instrument.discovered.v1``.
+    """
+
+    event_type: ClassVar[str] = "market.instrument.discovered"
+    schema_version: ClassVar[int] = 1
+
+    instrument_id: str = ""
+    symbol: str = ""
+    # ``exchange`` is nullable in the Avro schema — provider may not always supply.
+    exchange: str | None = None
 
 
 @dataclass(frozen=True)

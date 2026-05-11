@@ -8,6 +8,8 @@ from uuid import uuid4
 import pytest
 from alert.infrastructure.websocket.manager import ConnectionManager
 
+pytestmark = pytest.mark.unit
+
 
 def _mock_ws() -> AsyncMock:
     ws = AsyncMock()

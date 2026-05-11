@@ -77,9 +77,11 @@ from messaging.kafka.schema_registry import (
 from messaging.kafka.serialization_utils import (
     decimal_to_str,
     deserialize_avro,
+    deserialize_confluent_avro,
     iso_datetime,
     load_schema,
     serialize_avro,
+    serialize_confluent_avro,
     serializer_for_schema,
 )
 from messaging.kafka.serializer import (
@@ -135,10 +137,12 @@ __all__ = [
     "create_valkey_client_from_url",
     "decimal_to_str",
     "deserialize_avro",
+    "deserialize_confluent_avro",
     "iso_datetime",
     "load_schema",
     "run_dispatcher",
     "serialize_avro",
+    "serialize_confluent_avro",
     "serializer_for_schema",
     "topic_event_type_subject_name_strategy",
 ]

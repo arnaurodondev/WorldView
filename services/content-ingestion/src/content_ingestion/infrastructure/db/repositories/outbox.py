@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import func, select, update
 
@@ -12,8 +13,6 @@ import common.time
 from content_ingestion.infrastructure.db.models import OutboxEventModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -94,7 +93,9 @@ class OutboxRepository:
                     dlq_id=common.ids.new_uuid7(),
                     original_event_id=record.id,
                     topic=record.topic,
-                    payload_avro=b"",  # Avro serialization may have failed
+                    # b"" sentinel: serialization failed; original message payload is lost.
+                    # See BP-040.  The canonical payload is preserved in payload_json.
+                    payload_avro=b"",
                     payload_json=record.payload,
                     error_detail=error_detail or None,
                 ),

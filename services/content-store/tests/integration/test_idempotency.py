@@ -14,6 +14,7 @@ from content_store.infrastructure.db.repositories.dedup import DedupHashReposito
 from content_store.infrastructure.db.repositories.document import DocumentRepository
 from content_store.infrastructure.db.repositories.minhash import MinHashRepository
 from content_store.infrastructure.db.repositories.outbox import OutboxRepository
+from content_store.infrastructure.storage.minio_silver import SilverStorageAdapter
 from sqlalchemy import func, select
 
 import common.ids  # type: ignore[import-untyped]
@@ -61,14 +62,13 @@ async def test_same_message_twice_produces_single_document(session_factory, mini
     # First processing — should succeed
     async with session_factory() as session:
         use_case = ProcessArticleUseCase(
-            session=session,
             document_repo=DocumentRepository(session),
             dedup_repo=DedupHashRepository(session),
             minhash_repo=MinHashRepository(session),
             outbox_repo=OutboxRepository(session),
             object_store=minio_storage,
             bronze_bucket=TEST_MINIO_BRONZE_BUCKET,
-            silver_bucket=TEST_MINIO_SILVER_BUCKET,
+            silver_storage=SilverStorageAdapter(minio_storage, TEST_MINIO_SILVER_BUCKET),
             lsh_client=lsh_client,
             num_perm=128,
         )
@@ -80,14 +80,13 @@ async def test_same_message_twice_produces_single_document(session_factory, mini
     # Second processing — same bytes → Stage A dedup catches it
     async with session_factory() as session:
         use_case = ProcessArticleUseCase(
-            session=session,
             document_repo=DocumentRepository(session),
             dedup_repo=DedupHashRepository(session),
             minhash_repo=MinHashRepository(session),
             outbox_repo=OutboxRepository(session),
             object_store=minio_storage,
             bronze_bucket=TEST_MINIO_BRONZE_BUCKET,
-            silver_bucket=TEST_MINIO_SILVER_BUCKET,
+            silver_storage=SilverStorageAdapter(minio_storage, TEST_MINIO_SILVER_BUCKET),
             lsh_client=lsh_client,
             num_perm=128,
         )
@@ -135,14 +134,13 @@ async def test_different_content_produces_separate_documents(session_factory, mi
 
         async with session_factory() as session:
             use_case = ProcessArticleUseCase(
-                session=session,
                 document_repo=DocumentRepository(session),
                 dedup_repo=DedupHashRepository(session),
                 minhash_repo=MinHashRepository(session),
                 outbox_repo=OutboxRepository(session),
                 object_store=minio_storage,
                 bronze_bucket=TEST_MINIO_BRONZE_BUCKET,
-                silver_bucket=TEST_MINIO_SILVER_BUCKET,
+                silver_storage=SilverStorageAdapter(minio_storage, TEST_MINIO_SILVER_BUCKET),
                 lsh_client=lsh_client,
                 num_perm=128,
             )

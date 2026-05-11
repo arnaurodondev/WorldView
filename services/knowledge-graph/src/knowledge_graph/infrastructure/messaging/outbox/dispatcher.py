@@ -1,10 +1,12 @@
 """Outbox dispatcher for intelligence_db (PRD §6.7 Block D).
 
 Polls ``intelligence_db.outbox_events`` and publishes to Kafka.
-Publishes 3 topics:
+Publishes 5 topics:
   - graph.state.changed.v1
   - intelligence.contradiction.v1
   - relation.type.proposed.v1
+  - entity.canonical.created.v1 (emitted by ProvisionalEnrichmentWorker)
+  - entity.narrative.generated.v1 (emitted by NarrativeGenerationWorker, Wave C)
 
 NOTE: entity.dirtied.v1 is produced DIRECTLY in Block 12a — it must NOT
 appear in outbox_events.  If found, a WARNING is logged and the row is
@@ -19,10 +21,12 @@ from typing import TYPE_CHECKING, Any, Protocol
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
     TOPIC_CONTRADICTION,
+    TOPIC_ENTITY_CANONICAL_CREATED,
     TOPIC_GRAPH_STATE_CHANGED,
     TOPIC_RELATION_PROPOSED,
     OutboxRepository,
 )
+from messaging.topics import ENTITY_DIRTIED as _ENTITY_DIRTIED_TOPIC  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -32,14 +36,24 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
 
+# BP-147: every topic written via OutboxRepository.append() MUST appear here.
+# Missing entries cause mark_failed() and a warning log — events are permanently
+# lost without being delivered to Kafka.
+#
+# entity.narrative.generated.v1 (PLAN-0074 Wave C) was omitted from the initial
+# commit even though the NarrativeGenerationWorker writes it.  Added here so
+# narrative events dispatched via outbox reach the NarrativeRefreshKafkaConsumer.
+_TOPIC_ENTITY_NARRATIVE_GENERATED = "entity.narrative.generated.v1"
+
 _ALLOWED_TOPICS = frozenset(
     {
         TOPIC_GRAPH_STATE_CHANGED,
         TOPIC_CONTRADICTION,
         TOPIC_RELATION_PROPOSED,
-    }
+        TOPIC_ENTITY_CANONICAL_CREATED,
+        _TOPIC_ENTITY_NARRATIVE_GENERATED,
+    },
 )
-_ENTITY_DIRTIED_TOPIC = "entity.dirtied.v1"
 
 
 class KafkaProducerProtocol(Protocol):
@@ -60,10 +74,12 @@ class OutboxDispatcher:
     """Polls outbox_events and publishes to Kafka (at-least-once).
 
     Args:
+    ----
         session_factory:    Read/write sessionmaker for intelligence_db.
         producer:           Kafka producer (confluent_kafka-compatible).
         poll_interval_s:    Seconds between polls when idle.
         batch_size:         Max events per poll cycle.
+
     """
 
     def __init__(

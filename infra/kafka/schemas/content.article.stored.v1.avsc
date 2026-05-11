@@ -18,6 +18,12 @@
     {"name": "word_count",      "type": ["null", "int"],           "default": null},
     {"name": "published_at",    "type": ["null", "string"],        "default": null, "doc": "Copied verbatim from raw event"},
     {"name": "is_backfill",     "type": "boolean",                 "default": false, "doc": "Copied verbatim from raw event"},
-    {"name": "correlation_id",  "type": ["null", "string"],        "default": null}
+    {"name": "correlation_id",  "type": ["null", "string"],        "default": null},
+    {
+      "name": "tenant_id",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Owning tenant UUID string. Propagated from content.article.raw.v1."
+    }
   ]
 }

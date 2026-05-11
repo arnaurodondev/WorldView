@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore[import-untyped]
@@ -22,6 +23,8 @@ from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
+
+    from ml_clients.usage_log import LlmUsageLogProtocol  # type: ignore[import-untyped]
 
     from knowledge_graph.config import Settings
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
@@ -35,8 +38,13 @@ class KnowledgeGraphScheduler:
     All work runs in the same asyncio event loop as FastAPI.
 
     Args:
+    ----
         settings: Service configuration (worker interval settings).
         workers:  Optional dict of worker instances; if None, stubs are used.
+
+    Workers registered:
+      - worker_13j_enrichment_sweep: daily at 02:00 UTC (CronTrigger)
+      - All others: interval-based (seconds)
     """
 
     def __init__(
@@ -58,7 +66,9 @@ class KnowledgeGraphScheduler:
         """Start the scheduler and the consumer coroutine.
 
         Args:
+        ----
             consumer_coro: Coroutine to run as the main Kafka consumer.
+
         """
         self._register_jobs()
         self._scheduler.start()
@@ -81,24 +91,60 @@ class KnowledgeGraphScheduler:
 
         logger.info("kg_consumer_task_stopped")
 
+        # F-X15 (PLAN-0073 fix): iterate ALL workers and close any that expose
+        # ``aclose()`` so httpx pools, MarketDataClient, and description LLM
+        # clients release sockets cleanly at service shutdown.  Previously only
+        # the provisional worker was closed, which leaked Worker 13J's
+        # MarketDataClient TCP pool on every restart.
+        for worker_name, worker in self._workers.items():
+            if worker is None:
+                continue
+            if hasattr(worker, "aclose"):
+                try:
+                    await worker.aclose()
+                except Exception:
+                    logger.warning(  # type: ignore[no-any-return]
+                        "scheduler_worker_aclose_failed",
+                        worker=worker_name,
+                        exc_info=True,
+                    )
+
+        # F-X15 (PLAN-0073 fix): explicitly close auxiliary clients owned by
+        # Worker 13J that are not exposed through the worker's ``aclose`` (the
+        # description LLM client + MarketDataClient).  Stored on
+        # ``self._aux_aclose`` by ``_add_structured_enrichment_worker``.
+        for label, closer in getattr(self, "_aux_aclose", []):
+            try:
+                await closer()
+            except Exception:
+                logger.warning(  # type: ignore[no-any-return]
+                    "scheduler_aux_aclose_failed",
+                    component=label,
+                    exc_info=True,
+                )
+
     # ------------------------------------------------------------------
     # Job registration
     # ------------------------------------------------------------------
 
     def _register_jobs(self) -> None:
-        """Register all 8 APScheduler jobs with configured intervals."""
+        """Register all APScheduler jobs with configured intervals."""
         s = self._settings
-        jobs: list[tuple[str, int, str]] = [
+        # Jobs that do NOT need an immediate first-tick — long-running background
+        # maintenance tasks where waiting one full interval is acceptable.
+        deferred_jobs: list[tuple[str, int, str]] = [
             ("confidence_recompute", s.worker_confidence_interval_s, "worker_13a_confidence"),
             ("contradiction_batch", s.worker_contradiction_interval_s, "worker_13b_contradiction"),
+            # Worker 13B: SA-2 — periodic relation_evidence promotion (300 s / 5 min).
+            # Promotes relation_evidence_raw rows to the immutable partitioned table so
+            # SummaryWorker can find high-quality evidence via get_all_for_relation().
+            ("evidence_promotion", s.worker_evidence_promote_interval_s, "worker_13b_evidence_promoter"),
             ("summary_generation", s.worker_summary_interval_s, "worker_13c_summary"),
-            ("definition_embedding", s.worker_definition_refresh_interval_s, "worker_13d1_definition"),
-            ("narrative_embedding", s.worker_narrative_refresh_interval_s, "worker_13d2_narrative"),
-            ("fundamentals_embedding", s.worker_fundamentals_refresh_interval_s, "worker_13d3_fundamentals"),
-            ("provisional_enrichment", s.worker_embedding_refresh_interval_s, "worker_13e_provisional"),
+            ("provisional_enrichment", s.worker_provisional_enrichment_interval_s, "worker_13e_provisional"),
+            ("embedding_refresh", s.worker_embedding_refresh_interval_s, "worker_13f_embedding"),
             ("partition_management", s.worker_partition_interval_s, "worker_13f_partition"),
         ]
-        for name, interval, job_id in jobs:
+        for name, interval, job_id in deferred_jobs:
             fn = self._resolve_job(name)
             self._scheduler.add_job(
                 fn,
@@ -108,6 +154,76 @@ class KnowledgeGraphScheduler:
                 max_instances=1,
                 coalesce=True,
             )
+
+        # Embedding and AGE sync jobs: fire 120 s after boot so HNSW indexes and
+        # the AGE property graph are populated before the first user request hits
+        # the demo. Previously these waited a full interval (60-120 min) after
+        # restart — matching the pattern used by narrative_generation (60 s) and
+        # path_insight_seeder (90 s).
+        _boot_delay = timedelta(seconds=120)
+        early_jobs: list[tuple[str, int, str]] = [
+            ("definition_embedding", s.worker_definition_refresh_interval_s, "worker_13d1_definition"),
+            ("narrative_embedding", s.worker_narrative_refresh_interval_s, "worker_13d2_narrative"),
+            ("fundamentals_embedding", s.worker_fundamentals_refresh_interval_s, "worker_13d3_fundamentals"),
+            ("age_sync", s.worker_age_sync_interval_s, "worker_13f_age_sync"),
+        ]
+        for name, interval, job_id in early_jobs:
+            fn = self._resolve_job(name)
+            self._scheduler.add_job(
+                fn,
+                "interval",
+                seconds=interval,
+                id=job_id,
+                max_instances=1,
+                coalesce=True,
+                next_run_time=datetime.now(tz=UTC) + _boot_delay,  # fire 120s after boot
+            )
+
+        # Workers 13D-6, 13D-7, 13D-8 have been migrated to Kafka consumers.
+        # They no longer run as cron-scheduled APScheduler jobs.
+
+        # Worker 13J: nightly structured enrichment sweep at 02:00 UTC (PRD-0073).
+        fn_13j = self._resolve_job("structured_enrichment")
+        self._scheduler.add_job(
+            fn_13j,
+            "cron",
+            hour=2,
+            minute=0,
+            id="worker_13j_enrichment_sweep",
+            max_instances=1,
+            coalesce=True,
+        )
+
+        # Worker 13D-3: narrative generation PERIODIC_REFRESH.
+        # D-R3-003 (PLAN-0087, 2026-05-09): originally weekly Sunday 03:00.
+        # For the demo window we run it every 6 hours AND immediately at
+        # startup — entities with description IS NULL stay un-narrated otherwise,
+        # which means A4 Intelligence tab + A7 chat surface render placeholders.
+        # Post-demo: revert to weekly cron.
+        fn_13d3 = self._resolve_job("narrative_generation")
+        self._scheduler.add_job(
+            fn_13d3,
+            "interval",
+            hours=6,
+            id="worker_13d3_narrative_generation",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=datetime.now(tz=UTC) + timedelta(seconds=60),  # fire 60s after boot
+        )
+
+        # PathInsightSeeder: D-R3-005 — was nightly 02:30 UTC. For the demo
+        # window we also fire on startup (60s delay) so /paths is populated
+        # before the demo without needing to wait until 02:30.
+        fn_seeder = self._resolve_job("path_insight_seeder")
+        self._scheduler.add_job(
+            fn_seeder,
+            "interval",
+            hours=6,
+            id="worker_path_insight_seeder",
+            max_instances=1,
+            coalesce=True,
+            next_run_time=datetime.now(tz=UTC) + timedelta(seconds=90),  # fire 90s after boot
+        )
 
     def _resolve_job(self, name: str) -> Any:
         """Return the real worker.run if available, otherwise a no-op stub."""
@@ -157,51 +273,541 @@ class KnowledgeGraphScheduler:
 
 def build_workers(
     settings: Settings,
-    session_factory: Any,
+    write_session_factory: Any,
+    read_session_factory: Any | None = None,
     llm_client: FallbackChainClient | None = None,
+    valkey_client: Any | None = None,
+    usage_logger: LlmUsageLogProtocol | None = None,
+    gemini_extraction_client: Any | None = None,
 ) -> dict[str, Any]:
-    """Instantiate all 8 workers from service dependencies.
+    """Instantiate all workers from service dependencies.
 
     Args:
-        settings:        Service settings.
-        session_factory: intelligence_db async_sessionmaker.
-        llm_client:      FallbackChainClient (None → workers use stubs).
+    ----
+        settings:             Service settings.
+        write_session_factory: intelligence_db write async_sessionmaker (primary pool).
+        read_session_factory:  intelligence_db read-replica async_sessionmaker
+                               (DEF-034 / Wave B-5). When ``None`` (default) all
+                               workers fall back to ``write_session_factory`` so
+                               existing tests + dev environments without a read
+                               replica continue to work unchanged.
+        llm_client:           FallbackChainClient (None → workers use stubs).
+        valkey_client:        ValkeyClient for watermark storage (None → age_sync stub).
+        usage_logger:         PLAN-0057 A-5 / F-CRIT-03 — fire-and-forget LLM cost
+                              logger threaded into ``DefinitionRefreshWorker`` and
+                              ``ProvisionalEnrichmentWorker``.  When None the
+                              workers stay backward-compatible (no logging).
+        gemini_extraction_client:
+                              SA-2: optional GeminiExtractionAdapter for SummaryWorker
+                              explicit Gemini 2.5 Flash Lite fallback.  When None
+                              the Gemini fallback path in SummaryWorker is disabled.
 
     Returns:
+    -------
         Dict mapping scheduler job names to worker instances.
+
     """
+    from knowledge_graph.application.use_cases.generate_narrative import GenerateNarrativeUseCase
     from knowledge_graph.infrastructure.workers.confidence import ConfidenceWorker
     from knowledge_graph.infrastructure.workers.contradiction_batch import ContradictionBatchWorker
     from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
     from knowledge_graph.infrastructure.workers.embedding_refresh import EmbeddingRefreshWorker
     from knowledge_graph.infrastructure.workers.fundamentals_refresh import FundamentalsRefreshWorker
+    from knowledge_graph.infrastructure.workers.narrative_generation_worker import NarrativeGenerationWorker
     from knowledge_graph.infrastructure.workers.narrative_refresh import NarrativeRefreshWorker
     from knowledge_graph.infrastructure.workers.partitions import MonthlyPartitionWorker
     from knowledge_graph.infrastructure.workers.provisional_enrichment import ProvisionalEnrichmentWorker
+    from knowledge_graph.infrastructure.workers.relation_evidence_promoter import RelationEvidencePromoterWorker
     from knowledge_graph.infrastructure.workers.summary import SummaryWorker
 
+    # DEF-034 (Wave B-5): when no read replica is wired, fall back to the write
+    # factory.  Workers that opt into the split use ``_read_factory`` for their
+    # read-only fetch phase; workers exempted from R23 (atomicity-bound or
+    # DDL-only) keep using ``write_session_factory`` for both reads and writes.
+    _read_factory = read_session_factory if read_session_factory is not None else write_session_factory
+
     workers: dict[str, Any] = {
-        "confidence_recompute": ConfidenceWorker(session_factory, settings),
-        "contradiction_batch": ContradictionBatchWorker(session_factory),
-        "partition_management": MonthlyPartitionWorker(session_factory),
+        # R23-EXEMPT: read+write atomicity required (evidence read + confidence
+        # write must occur in the same transaction or the recompute can read a
+        # stale snapshot).
+        "confidence_recompute": ConfidenceWorker(write_session_factory, settings),
+        # R23-EXEMPT: read+write atomicity required (contradiction detection
+        # reads evidence pairs and flags them in the same atomic batch).
+        "contradiction_batch": ContradictionBatchWorker(write_session_factory),
+        # R23-EXEMPT: DDL-only (CREATE TABLE IF NOT EXISTS for monthly
+        # partitions; partition existence check + creation must be atomic).
+        "partition_management": MonthlyPartitionWorker(write_session_factory),
+        # Worker 13B: SA-2 — periodic relation_evidence_raw → relation_evidence
+        # promotion.  Runs every worker_evidence_promote_interval_s (default 300 s).
+        # Does not need llm_client — pure SQL SELECT + INSERT batch.
+        "evidence_promotion": RelationEvidencePromoterWorker(write_session_factory),
     }
 
-    if llm_client is not None:
-        def_worker = DefinitionRefreshWorker(session_factory, llm_client)
-        workers.update(
-            {
-                "summary_generation": SummaryWorker(session_factory, llm_client),
-                "definition_embedding": def_worker,
-                "narrative_embedding": NarrativeRefreshWorker(session_factory, llm_client),
-                "fundamentals_embedding": FundamentalsRefreshWorker(
-                    session_factory,
-                    llm_client,
-                    market_data_base_url=getattr(settings, "market_data_base_url", "http://market-data:8003"),
-                ),
-                "provisional_enrichment": ProvisionalEnrichmentWorker(session_factory, llm_client),
-                "worker_13e_provisional": ProvisionalEnrichmentWorker(session_factory, llm_client),
-                "embedding_refresh": EmbeddingRefreshWorker(session_factory, llm_client),
-            }
+    if valkey_client is not None:
+        from knowledge_graph.infrastructure.workers.age_sync_worker import AgeSyncWorker
+
+        workers["age_sync"] = AgeSyncWorker(
+            write_session_factory,
+            valkey_client,
+            settings,
+            read_session_factory=_read_factory,
         )
 
+    # Worker 13J: structured enrichment (PRD-0073). Built unconditionally —
+    # uses NullDescriptionAdapter when no LLM is configured.
+    _add_structured_enrichment_worker(
+        workers,
+        settings,
+        write_session_factory,
+        valkey_client,
+        read_session_factory=_read_factory,
+    )
+
+    # Worker 13D-3: NarrativeGenerationWorker is registered unconditionally so the
+    # scheduler stub keeps working even when llm_client is None.  The use case
+    # falls back to the template-v1 generator when the LLM is unavailable.
+    # Inject concrete repo classes (R12 / LAYER-BOUNDARY — use case must not import
+    # from infrastructure/ at runtime; callers in infra/ do it here instead).
+    from knowledge_graph.infrastructure.intelligence_db.repositories.narrative_repository import (
+        NarrativeRepository as _NarrRepo,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import OutboxRepository as _ORepo
+
+    # PLAN-0088 P0-7 (2026-05-10): build a dedicated narrative chat client when a
+    # DeepInfra API key is available. The fallback-chain extraction client cannot
+    # serve narrative prompts because it hard-codes JSON-mode (causing hallucinated
+    # error envelopes that force the template-v1 fallback path for ~97% of entities).
+    _narrative_chat_client: Any | None = None
+    try:
+        _api_key = settings.deepinfra_api_key.get_secret_value()  # SecretStr
+    except Exception:
+        _api_key = ""
+    if _api_key:
+        from knowledge_graph.infrastructure.llm.narrative_chat import DeepInfraNarrativeChatClient
+
+        _narrative_chat_client = DeepInfraNarrativeChatClient(
+            api_key=_api_key,
+            model_id=getattr(settings, "narrative_llm_model_id", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
+            base_url=getattr(
+                settings,
+                "deepinfra_extraction_base_url",
+                "https://api.deepinfra.com/v1/openai",
+            ),
+        )
+
+    _narrative_use_case = GenerateNarrativeUseCase(
+        write_session_factory=write_session_factory,
+        read_session_factory=_read_factory,
+        narrative_llm_model_id=getattr(settings, "narrative_llm_model_id", "meta-llama/Meta-Llama-3.1-8B-Instruct"),
+        llm_client=llm_client,  # may be None — use case falls back to template-v1
+        narrative_repo_class=_NarrRepo,
+        outbox_repo_class=_ORepo,
+        narrative_chat_client=_narrative_chat_client,
+    )
+    workers["narrative_generation"] = NarrativeGenerationWorker(use_case=_narrative_use_case)
+
+    if llm_client is not None:
+        description_client = _build_description_client(settings, valkey_client)
+        embed_model = settings.embedding_model_id
+        embed_batch_limit = settings.worker_embedding_batch_limit
+        # PLAN-0057 A-5 / F-CRIT-03: thread the cost logger into workers that
+        # explicitly accept it.  ``DefinitionRefreshWorker`` already exposes
+        # ``usage_logger`` (used by GeminiDescriptionAdapter); the new
+        # ``ProvisionalEnrichmentWorker`` accepts the logger and forwards it
+        # into its FallbackChainClient calls (see provisional_enrichment.py).
+        def_worker = DefinitionRefreshWorker(
+            write_session_factory,
+            llm_client,
+            description_client,
+            usage_logger=usage_logger,
+            embedding_model_id=embed_model,
+            batch_limit=embed_batch_limit,
+            read_session_factory=_read_factory,
+        )
+        workers.update(
+            {
+                # DEF-018 / Wave B-1: SummaryWorker now uses the 3-phase
+                # session pattern — Phase 1 (fetch stale list) and Phase 2
+                # (fetch evidence + existing summary) run on the read replica
+                # via ``read_session_factory``; the LLM call holds no session;
+                # Phase 4 writes use the write factory.  See
+                # workers/summary.py for the phase split details.
+                # SA-2: wire Gemini 2.5 Flash Lite as the explicit last-resort
+                # fallback for SummaryWorker when the primary FallbackChainClient
+                # is exhausted (``summary_worker_fallback_invoked`` log event).
+                # ``gemini_extraction_client`` is None when the Gemini API key
+                # is absent → fallback disabled, same behaviour as before SA-2.
+                "summary_generation": SummaryWorker(
+                    session_factory=write_session_factory,
+                    llm_client=llm_client,
+                    force_regen_batch_size=settings.summary_worker_force_regen_batch_size,
+                    read_session_factory=_read_factory,
+                    gemini_extraction_client=gemini_extraction_client,
+                ),
+                "definition_embedding": def_worker,
+                "narrative_embedding": NarrativeRefreshWorker(
+                    write_session_factory,
+                    llm_client,
+                    embedding_model_id=embed_model,
+                    batch_limit=embed_batch_limit,
+                    read_session_factory=_read_factory,
+                ),
+                "fundamentals_embedding": FundamentalsRefreshWorker(
+                    write_session_factory,
+                    llm_client,
+                    market_data_base_url=getattr(settings, "market_data_base_url", "http://market-data:8003"),
+                    embedding_model_id=embed_model,
+                    concurrency=settings.worker_fundamentals_concurrency,
+                    # F-015: pass the RS256 private key when configured so the worker
+                    # issues a cryptographically verifiable JWT for market-data calls.
+                    # Falls back to HS256 dev token when the key is absent.
+                    internal_jwt_private_key_pem=getattr(
+                        settings, "internal_jwt_private_key", type("_", (), {"get_secret_value": lambda _: ""})()
+                    ).get_secret_value(),
+                    read_session_factory=_read_factory,
+                ),
+                "provisional_enrichment": ProvisionalEnrichmentWorker(
+                    write_session_factory,
+                    llm_client,
+                    embedding_model_id=embed_model,
+                    usage_logger=usage_logger,
+                    batch_limit=settings.worker_provisional_enrichment_batch_size,
+                    max_retries=settings.worker_provisional_enrichment_max_retries,
+                    concurrency=settings.worker_provisional_enrichment_concurrency,
+                    # PLAN-0072 T-72-1-01: Layer 2 noise classifier reuses the
+                    # existing DeepInfra API key; when empty Layer 2 is skipped
+                    # (fail-open) and rows go directly to Layer 3 extraction.
+                    noise_classifier_api_key=settings.deepinfra_api_key.get_secret_value(),  # DEF-005
+                    noise_classifier_api_base_url=settings.deepinfra_extraction_base_url,
+                    # Wave A-4 / DEF-033: exponential backoff so a transient LLM
+                    # outage does not cause every retry sweep to re-hit the API.
+                    base_retry_minutes=settings.provisional_enrichment_base_retry_minutes,
+                    max_retry_minutes=settings.provisional_enrichment_max_retry_minutes,
+                    read_session_factory=_read_factory,
+                ),
+                "embedding_refresh": EmbeddingRefreshWorker(
+                    write_session_factory,
+                    llm_client,
+                    embedding_model_id=embed_model,
+                    batch_limit=embed_batch_limit,
+                    # Wave A-2 / DEF-022: persist a stable, configurable model
+                    # id alongside each embedding so the HNSW index is auditable
+                    # for mixed-model drift even when ``embed_model`` differs
+                    # by environment (Ollama tag vs. DeepInfra slug).
+                    summary_embedding_model_id=settings.summary_embedding_model_id,
+                    read_session_factory=_read_factory,
+                ),
+            },
+        )
+
+    # PLAN-0074 Wave E1: PathInsightSeeder — registered unconditionally so the
+    # scheduler cron stub works even when AGE is not fully configured.
+    # The seeder only needs the DB session factory (no LLM dependency).
+    _add_path_insight_workers(workers, settings, write_session_factory)
+
     return workers
+
+
+def _add_path_insight_workers(
+    workers: dict[str, Any],
+    settings: Settings,
+    write_session_factory: Any,
+) -> None:
+    """Wire PathInsightSeeder into the workers dict (PLAN-0074 Wave E1).
+
+    PathInsightWorker runs as a standalone process (docker-compose
+    ``path-insight-worker`` service) — it is NOT registered here as a
+    scheduler cron job because it runs continuously rather than on a
+    fixed interval.  Only the seeder gets a scheduler entry.
+    """
+    from knowledge_graph.infrastructure.workers.path_insight_seeder import PathInsightSeeder
+
+    seeder = PathInsightSeeder(write_session_factory)
+    # The scheduler calls ``worker.run()`` via ``_resolve_job``, so we
+    # wrap the seeder with a run() alias pointing to seed_hub_entities.
+    seeder.run = seeder.seed_hub_entities  # type: ignore[attr-defined]
+    workers["path_insight_seeder"] = seeder
+
+
+def build_market_data_signer(settings: Settings) -> Any:
+    """Return a zero-arg callable that signs a fresh internal JWT per call.
+
+    F-A02 / F-X06 / F-S02 (PLAN-0073 fix): every call to
+    ``MarketDataClient.lookup`` / ``on_demand_profile`` needs an
+    ``X-Internal-JWT`` because S3 enforces ``require_internal_jwt`` on the
+    enrichment endpoints.  Mirrors :func:`fundamentals_refresh._system_jwt_headers`
+    but returns the raw token (the ``MarketDataClient`` builds the header).
+
+    Falls back to an HS256 dev token when ``internal_jwt_private_key`` is
+    empty — this is only accepted by S3 when
+    ``MARKET_DATA_INTERNAL_JWT_SKIP_VERIFICATION=true`` (dev/test only).
+    """
+    import time
+
+    import jwt
+
+    # Same dev-only HS256 secret as ``fundamentals_refresh`` so behaviour is
+    # consistent across all worker → market-data calls in dev.
+    _internal_jwt_dev_key = "dev-skip-verification-key-for-kg-structured-enrichment"
+
+    private_key_pem = settings.internal_jwt_private_key.get_secret_value()
+
+    # F-P2-06 (PLAN-0073): startup-time warning so the dev-key fallback shows
+    # up in the bootstrap log even if no requests are made.  The per-call
+    # warning below catches the prod case where the bootstrap log has rolled.
+    if not private_key_pem:
+        logger.warning(  # type: ignore[no-any-return]
+            "structured_enrichment_no_rs256_key",
+            message="KNOWLEDGE_GRAPH_INTERNAL_JWT_PRIVATE_KEY is empty; "
+            "MarketDataClient will sign HS256 dev tokens — production "
+            "S3 will return 401 unless MARKET_DATA_INTERNAL_JWT_SKIP_VERIFICATION=true",
+        )
+
+    # Closure-local counter so we can rate-limit the per-call warning to one
+    # log per N tokens — full burst-firing would drown out other logs.
+    _dev_key_warn_state = {"count": 0}
+    _dev_key_warn_every = 100
+
+    def _sign() -> str:
+        now = int(time.time())
+        payload = {
+            "iss": "worldview-gateway",
+            "sub": "system:kg-structured-enrichment",
+            "user_id": "00000000-0000-0000-0000-000000000000",
+            "tenant_id": "00000000-0000-0000-0000-000000000000",
+            "role": "system",
+            "iat": now,
+            # Short TTL keeps the blast radius small if a token is somehow
+            # leaked.  The signer issues a fresh token on every request so the
+            # 5-minute window is more than enough for one HTTP call.
+            "exp": now + 300,
+        }
+        if private_key_pem:
+            from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+            private_key = load_pem_private_key(private_key_pem.encode(), password=None)
+            return jwt.encode(payload, private_key, algorithm="RS256")  # type: ignore[no-any-return, arg-type]
+
+        # F-P2-06: warn periodically (not once) so a long-running consumer
+        # whose bootstrap log has rolled away still surfaces the dev-key
+        # state.  Every Nth token avoids drowning the rest of the logs.
+        _dev_key_warn_state["count"] += 1
+        if _dev_key_warn_state["count"] % _dev_key_warn_every == 1:
+            logger.warning(  # type: ignore[no-any-return]
+                "structured_enrichment_signing_with_dev_key",
+                message="MarketDataClient is signing with the HS256 dev key; "
+                "set KNOWLEDGE_GRAPH_INTERNAL_JWT_PRIVATE_KEY for production.",
+                tokens_signed_with_dev_key=_dev_key_warn_state["count"],
+            )
+        return jwt.encode(payload, _internal_jwt_dev_key, algorithm="HS256")  # type: ignore[no-any-return]
+
+    return _sign
+
+
+class _EntityDirtiedProducerAdapter:
+    """Adapter: bridges DirectProducerProtocol → ConfluentDirectProducer.
+
+    F-A01 / F-X02 (PLAN-0073 fix): the structured-enrichment use case calls
+    ``produce_entity_dirtied(entity_id, reason)`` on a high-level port.  The
+    only Kafka producer in this service is the lower-level
+    :class:`ConfluentDirectProducer` which exposes ``produce_bytes(topic, key,
+    value)``.  This adapter glues the two together by serialising the event
+    via the same helper used elsewhere in S7
+    (``provisional_enrichment_core._build_dirtied_event``) so the wire format
+    matches every other producer (Confluent Avro magic byte + framing).
+    """
+
+    def __init__(self, direct_producer: Any, topic: str) -> None:
+        self._dp = direct_producer
+        self._topic = topic
+
+    def produce_entity_dirtied(self, *, entity_id: Any, reason: str) -> None:
+        # Lazy import keeps ``messaging.*`` and the heavy serializer cost out
+        # of the application/domain import paths; this code path runs only at
+        # most once per entity so the import overhead is irrelevant.
+        from knowledge_graph.infrastructure.workers.provisional_enrichment_core import (
+            _build_dirtied_event,
+        )
+
+        value = _build_dirtied_event(entity_id, dirty_reason=reason)
+        self._dp.produce_bytes(
+            topic=self._topic,
+            key=str(entity_id).encode(),
+            value=value,
+        )
+
+
+def _build_entity_dirtied_producer(settings: Settings) -> tuple[Any | None, Any | None]:
+    """Construct a DirectProducerProtocol adapter for entity.dirtied.v1.
+
+    Returns ``(adapter, raw_producer)`` where ``raw_producer`` is the
+    confluent-kafka ``Producer`` instance — exposed so the caller can flush
+    it on shutdown.  ``(None, None)`` if confluent_kafka is not importable
+    (we still log a warning so operators see why entity.dirtied.v1 is silent).
+    """
+    try:
+        from confluent_kafka import Producer  # type: ignore[import-untyped]
+
+        from knowledge_graph.infrastructure.messaging.direct_producer import ConfluentDirectProducer
+    except Exception:
+        logger.warning(  # type: ignore[no-any-return]
+            "structured_enrichment_direct_producer_unavailable",
+            message="confluent_kafka not importable; entity.dirtied.v1 will be silently skipped",
+            exc_info=True,
+        )
+        return None, None
+
+    raw = Producer({"bootstrap.servers": settings.kafka_bootstrap_servers})
+    adapter = _EntityDirtiedProducerAdapter(
+        ConfluentDirectProducer(raw),
+        topic=settings.kafka_topic_entity_dirtied,
+    )
+    return adapter, raw
+
+
+def _add_structured_enrichment_worker(
+    workers: dict[str, Any],
+    settings: Settings,
+    session_factory: Any,
+    valkey_client: Any | None,
+    read_session_factory: Any | None = None,
+) -> None:
+    """Instantiate StructuredEnrichmentWorker (Worker 13J) and add to workers dict.
+
+    Wires the cascade dependencies: per-request JWT signer (F-A02), the
+    entity.dirtied.v1 producer adapter (F-A01), and the description LLM
+    client.  Each non-Worker resource that owns a network handle is also
+    registered on ``self._aux_aclose`` so :meth:`KnowledgeGraphScheduler.stop`
+    closes it cleanly (F-X15).
+
+    DEF-034 / Wave B-5: when ``read_session_factory`` is provided the
+    ``EntityEnrichmentAdapter`` routes its read-only ``list_unenriched`` query
+    to the read replica; mutations stay on the write factory.  Falls back to
+    ``session_factory`` for both when no read replica is configured.
+    """
+    from knowledge_graph.application.use_cases.structured_enrichment import (
+        StructuredEnrichmentUseCase,
+    )
+    from knowledge_graph.infrastructure.http.market_data_client import MarketDataClient
+    from knowledge_graph.infrastructure.intelligence_db.adapters.entity_enrichment_adapter import (
+        EntityEnrichmentAdapter,
+    )
+    from knowledge_graph.infrastructure.workers.structured_enrichment_worker import (
+        StructuredEnrichmentWorker,
+    )
+
+    enrichment_adapter = EntityEnrichmentAdapter(
+        session_factory,
+        read_session_factory=read_session_factory if read_session_factory is not None else session_factory,
+    )
+
+    # F-A02 / F-X06 / F-S02: per-request RS256 signer (HS256 fallback in dev).
+    signer = build_market_data_signer(settings)
+    market_data_client = MarketDataClient(
+        base_url=settings.market_data_internal_url,
+        internal_jwt=signer,
+    )
+    description_client = _build_description_client(settings, valkey_client)
+
+    # F-A01 / F-X02: wire the entity.dirtied.v1 producer adapter.
+    direct_producer, raw_producer = _build_entity_dirtied_producer(settings)
+    if direct_producer is None:
+        logger.warning(  # type: ignore[no-any-return]
+            "structured_enrichment_no_producer",
+            message="entity.dirtied.v1 producer unavailable; embedding refresh chain "
+            "for Worker 13J will rely solely on the watermark-based fallback (PRD §13.7)",
+        )
+
+    use_case = StructuredEnrichmentUseCase(
+        enrichment_adapter=enrichment_adapter,
+        market_data_client=market_data_client,
+        description_client=description_client,
+        session_factory=session_factory,
+        direct_producer=direct_producer,
+    )
+    workers["structured_enrichment"] = StructuredEnrichmentWorker(
+        enrichment_adapter=enrichment_adapter,
+        use_case=use_case,
+        session_factory=session_factory,
+    )
+
+    # F-X15 (PLAN-0073 fix): register cleanup hooks for the resources owned
+    # outside the worker proper (the worker itself has no aclose).  These run
+    # in :meth:`KnowledgeGraphScheduler.stop` after the consumer task is gone.
+    aux: list[tuple[str, Any]] = []
+    aux.append(("structured_enrichment_market_data_client", market_data_client.aclose))
+    if hasattr(description_client, "aclose"):
+        aux.append(("structured_enrichment_description_client", description_client.aclose))
+    if raw_producer is not None:
+
+        async def _flush_producer() -> None:
+            # ``flush`` is sync on confluent_kafka.Producer; run in a thread so
+            # it does not block the asyncio loop on shutdown.
+            await asyncio.get_event_loop().run_in_executor(None, raw_producer.flush, 5.0)
+
+        aux.append(("structured_enrichment_direct_producer", _flush_producer))
+    workers.setdefault("_aux_aclose", []).extend(aux)
+
+
+def _build_description_client(settings: Settings, valkey_client: Any | None = None) -> Any:
+    """Construct the EntityDescriptionClient based on ``KNOWLEDGE_GRAPH_DESCRIPTION_PROVIDER``.
+
+    - ``"deepinfra"`` → ``DeepInfraDescriptionAdapter`` (Qwen3-235B-A22B primary, Qwen3-32B fallback).
+    - ``"gemini"``    → ``GeminiDescriptionAdapter`` (gemini-3.1-flash-lite).
+    - anything else  → ``NullDescriptionAdapter`` (no external calls; fallback template always used).
+
+    Args:
+    ----
+        settings:      Service configuration.
+        valkey_client:  ValkeyClient for atomic cost tracking (G-005 fix).
+
+    """
+    import asyncio
+
+    from ml_clients.description_client import NullDescriptionAdapter  # type: ignore[import-untyped]
+
+    provider = settings.description_provider.lower()
+
+    if provider == "deepinfra":
+        api_key = settings.deepinfra_api_key.get_secret_value()  # DEF-005
+        if not api_key:
+            logger.warning(  # type: ignore[no-any-return]
+                "description_client_deepinfra_key_missing",
+                message="KNOWLEDGE_GRAPH_DEEPINFRA_API_KEY is empty; falling back to NullDescriptionAdapter",
+            )
+            return NullDescriptionAdapter()
+
+        from ml_clients.adapters.deepinfra_description import (
+            DeepInfraDescriptionAdapter,  # type: ignore[import-untyped]
+        )
+
+        semaphore = asyncio.Semaphore(settings.description_deepinfra_concurrency)
+        return DeepInfraDescriptionAdapter(
+            api_key=api_key,
+            primary_model_id=settings.description_deepinfra_model_id,
+            fallback_model_id=settings.description_deepinfra_fallback_model_id,
+            semaphore=semaphore,
+            cost_tracker=valkey_client,
+            max_monthly_usd=settings.description_max_monthly_usd,
+        )
+
+    if provider == "gemini":
+        api_key = settings.gemini_api_key.get_secret_value()
+        if not api_key:
+            logger.warning(  # type: ignore[no-any-return]
+                "description_client_gemini_key_missing",
+                message="KNOWLEDGE_GRAPH_GEMINI_API_KEY is empty; falling back to NullDescriptionAdapter",
+            )
+            return NullDescriptionAdapter()
+
+        from ml_clients.adapters.gemini_description import GeminiDescriptionAdapter  # type: ignore[import-untyped]
+
+        semaphore = asyncio.Semaphore(settings.description_gemini_concurrency)
+        return GeminiDescriptionAdapter(
+            api_key=api_key,
+            semaphore=semaphore,
+            cost_tracker=valkey_client,
+            max_monthly_usd=settings.description_max_monthly_usd,
+        )
+
+    return NullDescriptionAdapter()

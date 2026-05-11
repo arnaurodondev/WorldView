@@ -1,0 +1,59 @@
+---
+title: Instruments
+description: Every instrument page has five tabs — chart, fundamentals, news, intelligence graph, and filings.
+section: Instruments
+order: 1
+updated: 2026-05-05
+---
+
+An instrument page (`/instruments/:id`) is the deep-dive view for any equity, ETF, or index. It consolidates price data, fundamentals, news, entity relationships, and regulatory filings into a single five-tab layout.
+
+## Finding an instrument
+
+Search for any instrument using:
+
+- `⌘K` from anywhere in the app — type ticker or company name
+- The global search field in the TopBar
+- The Screener — click any row to navigate to that instrument's page
+
+## Instrument tabs
+
+### Overview (chart)
+
+The default tab shows a full OHLCV candlestick or line chart powered by the EODHD price series. Available controls:
+
+- **Timeframe** — 1D, 5D, 1M, 3M, 6M, 1Y, 5Y, MAX
+- **Chart type** — Candlestick, Line, Area, Bar
+- **Indicators** — 7 built-in: SMA(20), SMA(50), SMA(200), EMA(12), EMA(26), RSI(14), MACD(12,26,9)
+- **Drawing tools** — horizontal line, trend line, rectangle, Fibonacci retracement
+
+### Fundamentals
+
+Key financial metrics for equities and ETFs. See [Fundamentals](/docs/instruments/fundamentals) for the full field reference.
+
+### News
+
+Curated article feed for this instrument, ranked by AI relevance score. See [News](/docs/instruments/news) for routing tiers and sentiment icons.
+
+### Intelligence
+
+The knowledge graph showing relationships between this instrument's entity and other entities. See [Intelligence Graph](/docs/instruments/intelligence-graph).
+
+### Filings
+
+Recent SEC EDGAR filings: 8-K (material events), 10-K (annual report), 10-Q (quarterly report), Form 4 (insider transactions). Each filing shows a one-paragraph AI summary.
+
+## Instrument header
+
+Every instrument page shows a persistent header bar:
+
+- **Ticker** and **company name**
+- **Last price**, **$ change**, **% change** (updated every 60 seconds)
+- **Market status** — OPEN / CLOSED / PRE-MARKET / AFTER-HOURS
+- **Quick actions** — Add to watchlist, Set alert, Open in Workspace
+
+## Related pages
+
+- [Fundamentals](/docs/instruments/fundamentals) — valuation multiples, income statement, balance sheet
+- [News feed](/docs/instruments/news) — relevance scoring, sentiment, routing tiers
+- [Intelligence graph](/docs/instruments/intelligence-graph) — knowledge graph and entity relationships

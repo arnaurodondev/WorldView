@@ -14,11 +14,13 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import text
 
+from knowledge_graph.application.ports.repositories import RelationTypeRegistryRepositoryPort
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class RelationTypeRegistryRepository:
+class RelationTypeRegistryRepository(RelationTypeRegistryRepositoryPort):
     """Read repository for ``relation_type_registry``."""
 
     def __init__(self, session: AsyncSession) -> None:
@@ -28,7 +30,7 @@ class RelationTypeRegistryRepository:
         """Step 1: exact-match lookup against canonical_type."""
         result = await self._session.execute(
             text("""
-SELECT type_id, canonical_type, semantic_mode, decay_class, base_confidence, decay_alpha_from_config.decay_alpha
+SELECT rtr.type_id, rtr.canonical_type, rtr.semantic_mode, rtr.decay_class, rtr.base_confidence, dcc.decay_alpha
 FROM relation_type_registry rtr
 JOIN decay_class_config dcc ON dcc.decay_class = rtr.decay_class
 WHERE rtr.canonical_type = :canonical_type
@@ -83,23 +85,25 @@ WHERE canonical_type = :canonical_type AND is_active = true
         # Smaller value = more similar; threshold is MAX distance allowed.
         result = await self._session.execute(
             text("""
-SELECT type_id, canonical_type, semantic_mode, decay_class, base_confidence,
-       embedding <=> :query_embedding::vector AS cosine_distance
-FROM relation_type_registry
-WHERE is_active  = true
-  AND embedding IS NOT NULL
+SELECT rtr.type_id, rtr.canonical_type, rtr.semantic_mode, rtr.decay_class, rtr.base_confidence,
+             dcc.decay_alpha,
+       rtr.embedding <=> CAST(:query_embedding AS vector) AS cosine_distance
+FROM relation_type_registry rtr
+JOIN decay_class_config dcc ON dcc.decay_class = rtr.decay_class
+WHERE rtr.is_active  = true
+  AND rtr.embedding IS NOT NULL
 ORDER BY cosine_distance
 LIMIT :limit
 """),
             {
-                "query_embedding": query_embedding,
+                "query_embedding": str(query_embedding),
                 "limit": limit,
             },
         )
         row = result.fetchone()
         if not row:
             return None
-        cosine_distance = float(row[5])
+        cosine_distance = float(row[6])
         if cosine_distance > distance_threshold:
             return None
         return {
@@ -108,5 +112,6 @@ LIMIT :limit
             "semantic_mode": row[2],
             "decay_class": row[3],
             "base_confidence": float(row[4]),
+            "decay_alpha": float(row[5]),
             "cosine_distance": cosine_distance,
         }

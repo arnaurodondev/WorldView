@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+
+import structlog
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,8 +29,8 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # ── Database ───────────────────────────────────────────────────────────────
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/content_store_db"
-    database_url_read: str = ""
+    database_url: SecretStr = SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/content_store_db")
+    database_url_read: SecretStr = SecretStr("")
     db_pool_size: int = 10
     db_max_overflow: int = 20
     db_pool_size_read: int = 20
@@ -52,6 +56,12 @@ class Settings(BaseSettings):
 
     # ── Security ───────────────────────────────────────────────────────────────
     admin_token: str = ""
+    api_gateway_url: str = "http://api-gateway:8000"
+
+    # F-001: When True, InternalJWTMiddleware decodes JWTs WITHOUT signature
+    # verification if the JWKS public key is unavailable. NEVER enable in
+    # production — only for E2E tests that run without a full S9 stack.
+    internal_jwt_skip_verification: bool = False
 
     # ── Outbox dispatcher ──────────────────────────────────────────────────────
     outbox_batch_size: int = 100
@@ -77,3 +87,22 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""
+
+    @model_validator(mode="after")
+    def _warn_default_db_credentials(self) -> Settings:
+        """Warn at startup if database_url still contains default superuser credentials (D-7)."""
+        # F-007: Production guard — reject skip_verification in production.
+        if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").lower() == "production":
+            raise ValueError(
+                "internal_jwt_skip_verification MUST NOT be enabled in production. "
+                "Set APP_ENV != 'production' or remove the flag."
+            )
+        if "postgres:postgres" in self.database_url.get_secret_value():
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "default_db_credentials_detected",
+                message=(
+                    "CONTENT_STORE_DATABASE_URL still uses the default 'postgres:postgres' credentials. "
+                    "Set this env var to a secure database URL before deploying to production."
+                ),
+            )
+        return self

@@ -23,7 +23,7 @@ serve end-user queries, directly write to `market_data_db`.
 |--------|------|-------------|------|-------|
 | GET | `/healthz` | Liveness | — | — |
 | GET | `/readyz` | Readiness (DB + MinIO check) | — | — |
-| GET | `/metrics` | Prometheus metrics | — | — |
+| GET | `/metrics` | Prometheus metrics — requires `X-Internal-Token` header (M-004) | — | — |
 | POST | `/api/v1/ingest/trigger` | Manual trigger for a specific symbol/dataset | `X-Internal-Token` required | — |
 | POST | `/api/v1/ingest/backfill` | Backfill historical data for a symbol/date range | `X-Internal-Token` required | — |
 | GET | `/api/v1/ingest/status` | Current ingestion task status | — | — |
@@ -125,7 +125,7 @@ CREATE TABLE watermarks (
 ## Internal Modules
 
 ```
-services/market-ingestion/src/app/
+services/market-ingestion/src/market_ingestion/
 ├── api/
 │   ├── main.py              # FastAPI app, health/ready, ingest routes
 │   ├── lifespan.py          # Startup/shutdown (dispatcher init)
@@ -133,7 +133,7 @@ services/market-ingestion/src/app/
 │   ├── schemas.py
 │   └── routes/ingest.py
 ├── application/
-│   ├── ports/               # Abstract repos, adapters, UoW
+│   ├── ports/               # Abstract repos, adapters, UoW, zero_bar_tracker
 │   └── use_cases/
 │       ├── trigger_ingestion.py
 │       ├── backfill.py
@@ -145,12 +145,17 @@ services/market-ingestion/src/app/
 │   ├── enums.py             # Provider, DatasetType, IngestionTaskStatus (re-export from contracts), etc.
 │   ├── events.py            # MarketDatasetFetched (pointer event)
 │   ├── errors.py
+│   ├── freshness.py         # FRESHNESS_TTL_SECONDS, EODHD_CREDIT_COST
 │   └── value_objects.py     # Timeframe, ObjectRef (claim-check pointer), InstrumentKey, DateRange
 ├── infrastructure/
 │   ├── adapters/
-│   │   ├── providers/       # eodhd.py, alpha_vantage.py, polygon.py, yahoo.py
+│   │   ├── providers/       # base.py, eodhd.py, finnhub.py, yahoo.py, registry.py
 │   │   ├── canonical.py     # Raw → canonical transformation
-│   │   └── object_store.py  # MinIO adapter
+│   │   ├── object_store.py  # MinIO adapter
+│   │   └── zero_bar_tracker.py  # ValkeyZeroBarTracker (Valkey-backed streak counter)
+│   ├── metrics/
+│   │   ├── eodhd.py         # EODHD-specific Prometheus metrics (s2_eodhd_*)
+│   │   └── providers.py     # Generic provider metrics (s2_mi_provider_*)
 │   ├── config/settings.py
 │   ├── db/                  # models, repos, session, UoW
 │   └── messaging/           # dispatcher, kafka/ (mapper, serialization, schemas/)
@@ -182,12 +187,61 @@ and raise `ProviderError` or `ProviderAuthError` subclasses. The demo API key (a
 everyone) works for the original 3 endpoints + limited earnings calendar with symbol filter;
 the other 5 endpoints require a paid subscription.
 
+**Retry-After parsing (PLAN-0036 W0)**: `_parse_retry_after(header_value)` at module level
+handles RFC 7231 §7.1.3 format — integer/float seconds or HTTP-date. Returns `float | None`.
+`ProviderRateLimited` now carries a `retry_after: float | None` attribute set from this header.
+API keys are never exposed in error messages — `_endpoint_slug(url)` strips host + query params.
+
+**BaseProviderAdapter (PLAN-0038 W A-1)**: `EODHDProviderAdapter` now extends `BaseProviderAdapter`
+(`infrastructure/adapters/providers/base.py`) instead of `ProviderAdapter` directly. After each
+successful fetch, all 11 methods call `self._record_api_call()` which:
+- emits a `provider_api_call` structlog event with fields: `provider`, `dataset_type`, `symbol`,
+  `exchange`, `timeframe`, `bars_returned`, `latency_ms`, `credit_cost`, `status`
+- increments generic `s2_mi_provider_*` Prometheus metrics (see below)
+`ProviderFetchResult.bars_returned` (new field, default `0`) carries the count of records returned.
+
+**FinnhubProviderAdapter (PLAN-0038 W A-2)**: New `FinnhubProviderAdapter(BaseProviderAdapter)` at
+`infrastructure/adapters/providers/finnhub.py`. Implements 3 dataset types on Finnhub free tier
+(60 req/min, 1.1s rate-limit sleep after each call, `credit_cost=0`):
+- `fetch_news_sentiment(symbol, from_date, to_date)` — GET `/company-news`
+- `fetch_earnings_calendar(from_date, to_date)` — GET `/calendar/earnings` (no symbol on free tier)
+- `fetch_insider_transactions(ticker)` — GET `/stock/insider-transactions`
+
+OHLCV, quotes, fundamentals raise `ProviderUnavailable`. Registered in `build_provider_registry()`
+only when `finnhub_api_key` is non-empty (graceful degradation). Provider enum: `Provider.FINNHUB`.
+
 **Provider configuration (env vars):**
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
 | `MARKET_INGESTION_EODHD_API_KEY` | `demo` | EODHD API key (set to live key in production) |
 | `MARKET_INGESTION_EODHD_BASE_URL` | `https://eodhd.com/api` | EODHD base URL (override for staging/mock without image rebuild) |
+| `MARKET_INGESTION_FINNHUB_API_KEY` | `""` | Finnhub API key — adapter not registered when empty |
+
+---
+
+## Provider Coverage
+
+Routing is handled by `_preferred_provider()` in `execute_task.py`. The cheapest registered
+provider is selected at execution time — the stored `task.provider` is not changed.
+
+| Dataset Type | Primary Provider | Fallback | Credit Cost | Notes |
+|---|---|---|---|---|
+| OHLCV (1d/1w/1M) | Yahoo Finance | EODHD | 0 / 1 | Preferred when `yfinance` registered |
+| OHLCV (intraday) | EODHD | — | 5 | Yahoo only supports EOD |
+| QUOTES | EODHD | — | 1 | |
+| FUNDAMENTALS | EODHD | — | 10 | Most expensive; no free alternative yet |
+| NEWS_SENTIMENT | Finnhub | EODHD | 0 / 5 | Preferred when `finnhub_api_key` set |
+| EARNINGS_CALENDAR | Finnhub | EODHD | 0 / 5 | |
+| INSIDER_TRANSACTIONS | Finnhub | EODHD | 0 / 5 | |
+| ECONOMIC_EVENTS | EODHD | — | 5 | |
+| MACRO_INDICATOR | EODHD | — | 5 | |
+| YIELD_CURVE | EODHD | — | 5 | |
+| MARKET_CAP | EODHD | — | 1 | |
+
+**Zero-bar failover**: After 5 consecutive zero-bar responses from a free provider, the system
+falls back to EODHD. Streaks are tracked in Valkey (24h TTL auto-expiry). Controlled by
+`ValkeyZeroBarTracker` — disabled when Valkey is unavailable (graceful degradation).
 
 ---
 
@@ -231,9 +285,78 @@ sequenceDiagram
 
 ---
 
+## Ticker Coverage (64 symbols — migration 0002 + 0004)
+
+Polling policies are seeded for **64 symbols** across 6 categories. Each symbol gets 5 policies: `quotes` (5 min, adaptive, `market_hours_only=true`), `ohlcv 1d` (6 h), `ohlcv 1w` (7 days after migration 0005), `ohlcv 1mo` (30 days after 0005), and `fundamentals` (7 days after 0005, disabled for crypto/indices/commodity ETFs). The `market_hours_only` flag is enforced in `PollingPolicy.is_due()` via `_is_market_hours_now()` (Mon-Fri 13:30-20:00 UTC).
+
+**EODHD credit costs per endpoint** (budget tokens are scaled accordingly — BP-183):
+
+| Endpoint | EODHD Credits | Used for |
+|----------|--------------|---------|
+| `/api/fundamentals/:ticker` | 10 | fundamentals dataset |
+| `/api/intraday/:ticker` | 5 | ohlcv with timeframe 1m/5m/1h |
+| `/api/news` | 5 | news_sentiment dataset |
+| `/api/eod/:ticker` | 1 | ohlcv 1d/1w/1mo |
+| `/api/real-time/:ticker` | 1 | quotes dataset |
+
+**Steady-state API budget (after migration 0005)**: ~6,300 credits/day vs. ~23,000 before optimisation.
+
+**Monthly quota enforcement (PLAN-0036 W0)**: `EodhdQuotaService` (in `libs/messaging/eodhd_quota`)
+enforces a shared 100,000-credit/month hard cap via Valkey INCRBY (atomic, multi-replica safe).
+Soft limit fires at 80% (warning only). Hard limit blocks the provider call and retries the task.
+`ExecuteTaskUseCase` checks quota before every provider fetch — cost derived from `domain/freshness.py`
+`EODHD_CREDIT_COST` + `EODHD_INTRADAY_COST`. Valkey keys: `eodhd:v1:quota:{YYYY-MM}:credits_used`,
+with service and per-symbol attribution sub-keys. 32-day TTL auto-resets each month.
+
+**Pre-fetch freshness gate (PLAN-0036 W0)**: `watermarks.last_success_at` is now written on every
+successful fetch. `domain/freshness.py` declares `FRESHNESS_TTL_SECONDS` per dataset type.
+The scheduler gate (Wire 1) uses these TTLs to skip enqueuing tasks whose watermarks are still fresh.
+
+**Observability (PLAN-0036 W0)**: `infrastructure/metrics/eodhd.py` exposes 12 Prometheus counters/
+gauges/histograms under the `s2_eodhd_*` namespace: `requests_total`, `credits_used_total`,
+`rate_limited_total`, `errors_total`, `cache_hits_total`, `cache_misses_total`, `quota_blocked_total`,
+`request_duration_seconds`, `circuit_breaker_state`, `monthly_credits_used`, `monthly_credits_limit`.
+
+**Generic provider metrics (PLAN-0038 W A-1)**: `infrastructure/metrics/providers.py` exposes 5 metrics
+under the `s2_mi_provider_*` namespace that work across ALL providers (EODHD, Finnhub, Yahoo Finance):
+- `s2_mi_provider_requests_total` — labels: `provider`, `dataset_type`, `timeframe`, `status_code`
+- `s2_mi_provider_credits_total` — labels: `provider`, `dataset_type` (skipped for free providers)
+- `s2_mi_provider_latency_seconds` — histogram, labels: `provider`, `dataset_type`
+- `s2_mi_provider_rate_limited_total` — labels: `provider`
+- `s2_mi_provider_errors_total` — labels: `provider`, `reason`
+
+Grafana dashboard `infra/grafana/dashboards/api-usage-analytics.json` (uid: `api-usage-analytics-v1`)
+provides 8 panels combining these Prometheus metrics with Loki `provider_api_call` log queries.
+
+| Category | Symbols | Exchange |
+|----------|---------|----------|
+| US Equities (30) | AAPL, MSFT, GOOGL, AMZN, NVDA, TSLA, META, BRK-B, JNJ, V, WMT, JPM, PG, XOM, MA, UNH, HD, COST, MRK, BA, PFE, LLY, AXP, MS, DIS, IBM, EXC, CAT, KO, CVX | US |
+| Sector ETFs (9) | XLK, XLV, XLE, XLY, VTV, QQQ, IBIT, MSTR, PPA | US |
+| Broad Market ETFs (4) | SPY, IVV, VOO, VTI | US |
+| Fixed Income ETFs (4) | IEF, TLT, AGG, SHY | US |
+| Commodity ETFs (3) | GLD, SLV, USO | US (fundamentals disabled — no fin. statements) |
+| Major Indices (5) | GSPC, CCMP, INDU, RUT, VIX | INDX (fundamentals disabled) |
+| Crypto Top-10 (10) | BTC-USD, ETH-USD, BNB-USD, SOL-USD, XRP-USD, ADA-USD, DOGE-USD, AVAX-USD, MATIC-USD, LTC-USD | CC (fundamentals disabled) |
+| Forex (1) | EURUSD | FOREX |
+
+**Migration history**:
+- `0002_initial_seeds.py` — seeds all 64 symbols on fresh databases.
+- `0003_add_market_hours_only.py` — adds `market_hours_only` column; sets `true` for all quote policies.
+- `0004_expand_ticker_coverage.py` — for live systems with original 6-symbol `0002`, adds 58 new symbols via `INSERT … ON CONFLICT DO NOTHING`.
+- `0005_api_call_optimization.py` — fundamentals weekly (not daily), disabled for crypto/indices/commodity ETFs; 1w/1mo OHLCV extended intervals; 5m/1h intraday gated to market hours; budget recalibrated to match EODHD 100K credits/day limit.
+- `0006_weekly_insider_transactions.py` — OPT-10: insider_transactions interval changed from daily (86400 s) to weekly (604800 s); SEC Form 4 is already delayed 2 business days so daily polling adds no value.
+- `0007_expand_economic_event_countries.py` — D-W2: adds economic event polling policies for JPN, CHN, EU (joins existing USA, EUR, GBR from 0002). S7 consumers read from `market.dataset.fetched` so new country events are immediately processed.
+
+Note: PLAN-0036 Wave 0 does NOT add a new migration. The `watermarks.last_success_at` column already exists in the schema; it was simply never written by `save()` — fixed in this wave.
+
+**Canonical passthrough serialization (D-W1)**: 7 dataset types now use `serialize_passthrough()` in `DefaultCanonicalSerializer` instead of bespoke canonical models. Each MinIO object is a single NDJSON line: `{"dataset_type": "...", "symbol": "...", "source": "eodhd", "payload": <raw>, "fetched_at": "..."}`. Types: `economic_events`, `macro_indicator`, `insider_transactions`, `earnings_calendar`, `news_sentiment`, `yield_curve`, `market_cap`.
+
+---
+
 ## Error Handling
 
-- **Rate limit exceeded**: mark task as `rate_limited`, exponential backoff, decrement budget
+- **Rate limit exceeded (429)**: `ProviderRateLimited` raised with `retry_after` parsed from header. Task retried, budget decremented. `s2_eodhd_rate_limited_total` counter incremented.
+- **Quota exhausted (monthly hard limit)**: `ExecuteTaskUseCase` calls `EodhdQuotaService.try_consume()` before fetch. On `HARD_LIMIT_EXCEEDED`, task is retried (not failed) so it can run next month. Provider is never called.
 - **Provider 5xx**: retry up to max_attempts with backoff
 - **Malformed response**: mark task as `failed`, log error, no retry (FatalError)
 - **MinIO unavailable**: RetryableError, backoff

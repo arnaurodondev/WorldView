@@ -1,0 +1,115 @@
+---
+title: API Reference
+description: The S9 gateway exposes 55+ documented endpoints for market data, news, alerts, chat, and more.
+section: API Reference
+order: 1
+updated: 2026-05-05
+---
+
+Worldview's S9 API Gateway is the single entry point for programmatic access to all platform data. Every authenticated route requires a JWT issued by Zitadel.
+
+## Base URL
+
+```
+https://api.worldview.app/v1
+```
+
+For local development:
+
+```
+http://localhost:8000/v1
+```
+
+## Authentication
+
+All requests need an `Authorization: Bearer <jwt>` header. Issue a token via the OIDC PKCE flow or, for development, via `POST /v1/auth/dev-login`.
+
+<DocsTabs items={["curl", "Python", "TypeScript"]}>
+  <DocsTab>
+```bash
+curl -X POST https://api.worldview.app/v1/auth/dev-login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com"}'
+# Returns: { "access_token": "...", "token_type": "bearer", "expires_in": 3600 }
+```
+  </DocsTab>
+  <DocsTab>
+```python
+import httpx
+
+res = httpx.post(
+    "https://api.worldview.app/v1/auth/dev-login",
+    json={"email": "you@example.com"},
+)
+token = res.json()["access_token"]
+headers = {"Authorization": f"Bearer {token}"}
+```
+  </DocsTab>
+  <DocsTab>
+```ts
+const res = await fetch("https://api.worldview.app/v1/auth/dev-login", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ email: "you@example.com" }),
+});
+const { access_token } = await res.json();
+const headers = { Authorization: `Bearer ${access_token}` };
+```
+  </DocsTab>
+</DocsTabs>
+
+## Common response shapes
+
+**List endpoints** return a paginated envelope:
+
+```json
+{
+  "items": [...],
+  "total": 142,
+  "has_more": true,
+  "page": 1,
+  "page_size": 20
+}
+```
+
+**Single-resource endpoints** return the bare object.
+
+**Error responses** always include a `detail` field:
+
+```json
+{
+  "detail": "Instrument not found",
+  "code": "INSTRUMENT_NOT_FOUND",
+  "status": 404
+}
+```
+
+## Rate limits
+
+<Callout type="warn" title="Rate limits">
+Free tier: 60 requests/minute per token. Pro: 600/min. Enterprise: custom.
+Exceeded limits return `429 Too Many Requests` with a `Retry-After` header in seconds.
+</Callout>
+
+## Endpoint groups
+
+| Group | Prefix | Description |
+|-------|--------|-------------|
+| Auth | `/v1/auth` | Token issuance, OIDC, dev-login |
+| Instruments | `/v1/instruments` | Search, OHLCV, fundamentals, live quote |
+| News | `/v1/news` | Top articles, entity articles |
+| Portfolio | `/v1/portfolio` | Holdings, transactions, watchlists |
+| Screener | `/v1/screener` | Screen instruments with filters |
+| Alerts | `/v1/alerts` | CRUD alert rules, WebSocket |
+| Chat | `/v1/chat` | RAG threads and streaming |
+| Feedback | `/v1/feedback` | Submissions, NPS, feature requests |
+| Knowledge Graph | `/v1/graph` | Entity relationships |
+
+## Related pages
+
+- [Authentication](/docs/api-reference/authentication) — token types and refresh
+- [Quotes](/docs/api-reference/quotes) — price and OHLCV endpoints
+- [Fundamentals](/docs/api-reference/fundamentals) — financial metrics endpoints
+- [News](/docs/api-reference/news) — news feed endpoints
+- [Chat](/docs/api-reference/chat) — streaming chat endpoint
+- [Error codes](/docs/api-reference/error-codes) — all error shapes and codes

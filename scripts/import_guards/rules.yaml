@@ -167,3 +167,25 @@ rules:
       - "*.infrastructure.*"
     forbidden_from_imports: []
     layer_rule: api_no_infrastructure
+
+  # ─── Security: PRD-0025 auth patterns ────────────────────────────────────────
+
+  - id: IG-SEC-001
+    description: "Forbid direct X-Tenant-Id header reads in backend services (PRD-0025)"
+    message: >
+      After PRD-0025, backend services must never read request.headers.get("X-Tenant-Id")
+      directly. The X-Tenant-Id header is dead — InternalJWTMiddleware sets
+      request.state.tenant_id from the verified RS256 internal JWT.
+      Direct header reads bypass cryptographic verification and allow tenant impersonation.
+    remediation: >
+      Read from request.state.tenant_id (set by InternalJWTMiddleware) instead.
+      If request.state.tenant_id is empty, the request is unauthenticated — return 401.
+      See docs/specs/0025-auth-oidc-zitadel-internal-jwt.md §8 (threat model).
+    applies_to:
+      - "services/*/src/*/api/**/*.py"
+      - "services/*/src/*/application/**/*.py"
+    forbidden_imports: []
+    forbidden_from_imports: []
+    # This is a pattern rule — enforced by code review checklist; grep-based verification
+    # run in pre-PR hook: grep -r 'headers.get("X-Tenant-Id")' services/
+    pattern_note: "grep -r 'headers.get(\"X-Tenant-Id\")' services/ must return 0 results"

@@ -7,7 +7,7 @@ echo "=== Setting up MinIO test buckets ==="
 
 mc alias set local http://minio:9000 minioadmin minioadmin
 
-for BUCKET in market-ingestion market-bronze market-canonical market-data worldview-bronze worldview-silver; do
+for BUCKET in market-ingestion market-bronze market-canonical market-data worldview-bronze worldview-silver worldview; do
     echo "Creating bucket: $BUCKET"
     mc mb --ignore-existing "local/$BUCKET"
 done

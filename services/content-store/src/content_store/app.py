@@ -16,11 +16,14 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from content_store.api.dlq import router as dlq_router
+from content_store.api.documents import router as documents_router
 from content_store.api.health import router as health_router
 from content_store.config import Settings
 from content_store.infrastructure.db.session import _build_factories
+from content_store.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from observability import configure_logging, get_logger  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -76,13 +79,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             otlp_endpoint=settings.otlp_endpoint,
         )
 
-    # 3. Database — returns (engine, write_factory, read_factory) for R23 split
-    engine, write_factory, read_factory = _build_factories(settings)
+    # 2b. Sentry — fourth observability pillar (default-off: SENTRY_ENABLED=false)
+    init_sentry(service_name=settings.service_name, settings=SentrySettings())
+
+    # 3. Database — returns (engine, read_engine, write_factory, read_factory) for R23 split
+    engine, read_engine, write_factory, read_factory = _build_factories(settings)
 
     app.state.session_factory = write_factory
     app.state.write_factory = write_factory
     app.state.read_factory = read_factory
     app.state.engine = engine
+    app.state.read_engine = read_engine
 
     # 4. Object storage
     from storage.factory import build_object_storage  # type: ignore[import-untyped]
@@ -111,12 +118,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.valkey = valkey_client
     app.state.lsh_client = lsh_client
 
+    # 6. Internal JWT middleware startup — fetch JWKS from S9 (PRD-0025)
+    jwt_middleware: InternalJWTMiddleware | None = getattr(app.state, "_jwt_middleware", None)
+    if jwt_middleware is not None:
+        await jwt_middleware.startup()
+
     log.info("service_started", service=settings.service_name, port=settings.port)
 
     yield
 
-    # Graceful shutdown — dispose DB engine and Valkey
+    # Graceful shutdown — dispose DB engine(s) and Valkey
     await engine.dispose()
+    if read_engine is not engine:
+        await read_engine.dispose()
     log.info("service_stopped", service=settings.service_name)
 
 
@@ -131,6 +145,23 @@ def create_app() -> FastAPI:
     )
     app.state.settings = settings
 
+    # InternalJWTMiddleware (RS256 verifier — PRD-0025)
+    # Store instance on app.state so lifespan can call startup() on it.
+    jwks_url = f"{settings.api_gateway_url}/internal/jwks"
+    jwt_middleware = InternalJWTMiddleware(
+        app,
+        jwks_url=jwks_url,
+        skip_verification=settings.internal_jwt_skip_verification,
+        service_name=settings.service_name,
+    )
+    app.state._jwt_middleware = jwt_middleware
+    app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url=jwks_url,
+        skip_verification=settings.internal_jwt_skip_verification,
+        service_name=settings.service_name,
+    )
+
     # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)
     metrics = create_metrics(service_name=settings.service_name)
@@ -140,5 +171,6 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(dlq_router)
+    app.include_router(documents_router)
 
     return app

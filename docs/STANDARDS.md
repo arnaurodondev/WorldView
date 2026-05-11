@@ -31,6 +31,8 @@
 15. [Read/Write Database Session Pattern](#15-readwrite-database-session-pattern)
 16. [Session Optimization](#16-session-optimization)
 17. [Unit of Work — Explicit Commit Pattern](#17-unit-of-work--explicit-commit-pattern)
+18. [Docker Container Validation](#18-docker-container-validation-r31)
+19. [Parallel Execution & Subagent Patterns](#19-parallel-execution--subagent-patterns-r33-r34)
 
 ---
 
@@ -377,6 +379,30 @@ CREATE INDEX ix_outbox_claimable ON outbox_events (status, lease_expires)
 Services that need to identify the domain aggregate may add `aggregate_type TEXT` and
 `aggregate_id UUID` columns. The columns listed above are the minimum required set.
 
+#### 3.4.1 Cross-service consistency — known historical drift
+
+Historically, several services diverged from the canonical shape (audited
+2026-05-09 in `docs/audits/2026-05-09-qa-beta-data-platform.md` finding
+F-003). PLAN-0087 #9 reconciled the two outright bugs:
+
+| Service / DB | Drift | Remediation migration |
+|---|---|---|
+| `portfolio_db` | `topic` column missing — derived from `event_type` via Python `EVENT_TOPIC_MAP` at dispatch time | `services/portfolio/alembic/versions/0017_add_topic_to_outbox_events.py` (adds nullable `topic` + back-fills) |
+| `ingestion_db` | `dispatched_at` column missing — only `published_at` was present; SQL tooling that filtered on the canonical column missed this service | `services/market-ingestion/alembic/versions/0013_add_dispatched_at_to_outbox.py` (adds nullable `dispatched_at` + back-fills from `published_at`) |
+
+Other historical column-name variations remain (e.g., the
+"avro group" — `intelligence_db`, `nlp_db`, `alert_db` — still uses
+`event_id` PK, `payload_avro BYTEA`, `retry_count`). Renaming these is
+out-of-scope until a coordinated cut-over wave because it requires
+simultaneous code changes across producers, consumers, and replay
+tooling. New services MUST adopt the §3.4 canonical shape from day one;
+existing-service migrations are the safety net for cross-service tooling.
+
+When you write SQL that scans `outbox_events` across services (replay
+scripts, dashboards, retention queries), use the **canonical column names**
+(`id`, `topic`, `dispatched_at`, `attempt_count`) — every service's
+post-PLAN-0087 schema exposes them.
+
 ### 3.5 Outbox status values — canonical state machine
 
 ```
@@ -442,6 +468,91 @@ services/<service>/src/<package>/infrastructure/messaging/schemas/
 - Never remove or rename an existing field.
 - Never change a field's type incompatibly.
 - Bump `schema_version` integer when adding fields.
+
+### 3.7.1 Avro on the wire — Hard Rule R28 (PLAN-0062)
+
+Pure JSON on Kafka is **forbidden** (R28). Every topic in the platform follows
+the same producer/consumer contract:
+
+| Layer | Rule |
+|-------|------|
+| **Schema source of truth** | One `.avsc` file per topic in `infra/kafka/schemas/`, registered with the schema registry by `infra/kafka/init/register-schemas.py` at startup. |
+| **Canonical model** | One frozen dataclass in `libs/contracts/src/contracts/canonical/<event>.py` (entity-shaped payloads — articles, OHLCV, instruments) **OR** `libs/contracts/src/contracts/events/<domain>/<event>.py` (pure trigger events — provisional queued, contradictions, enrichment). The model mirrors the Avro fields field-for-field with `from_dict` / `to_dict`. |
+| **Producer** | `serialize_confluent_avro(schema_path, record)` (5-byte Confluent header + Avro body). Never `json.dumps(...).encode()` for outbox `payload_avro` writes. |
+| **Consumer** | `deserialize_confluent_avro(schema_path, raw)` keyed off `get_schema_path(topic)`. JSON fallback is permitted only as a transition aid and must log every fallback hit (warning level) so the migration window is measurable and the branch can be removed once traffic decays to zero. |
+| **Architecture test** | `tests/architecture/test_kafka_avro_enforcement.py` is unconditional — any new pure-JSON consumer fails the build. |
+
+The `canonical/` vs `events/<domain>/` split is intentional: `canonical/`
+historically carries the *one shape per domain* models that map onto
+persisted entities, while `events/<domain>/` carries pure-event payloads
+that exist only as Kafka triggers and never persist as their own row.
+When in doubt, ask whether the payload corresponds to a row in some
+service's database — if yes, it goes under `canonical/`; if it is
+purely an event-of-something-happened, it goes under `events/<domain>/`.
+
+#### Schema-id default (known limitation)
+
+`serialize_confluent_avro(schema_path, record, schema_id=0)` defaults the
+4-byte schema-id portion of the Confluent header to `0`. This is **invalid**
+in a real Confluent Schema Registry — registry IDs start at 1 and are
+assigned per registered subject. Internal consumers ignore the id (they load
+the schema from disk via `get_schema_path`), so this is fine for in-platform
+traffic, but external interoperability (ksqlDB, kafka-connect, third-party
+consumers) requires producers to pass the real registry-issued id.
+Reference: PLAN-0062 audit F-009.
+
+#### No CI Schema Registry compat-check (known limitation)
+
+CI runs `fastavro.parse_schema()` for **syntax** validation only — it does
+NOT execute a registry-vs-PR compatibility test. Non-additive schema
+changes (renamed fields, removed fields, narrowed types) therefore pass CI
+and only fail at deploy time when the registry rejects the new subject
+version. Consider adding `check-compatibility` against a local
+schema-registry container in CI.
+Reference: PLAN-0062 audit F-010.
+
+### 3.7.2 Transporting heterogeneous arrays through flat Avro records
+
+Some payloads are intrinsically heterogeneous — for example,
+`nlp.article.enriched.v1` carries arrays of `raw_relations`, `raw_events`,
+and `raw_claims` whose member shapes vary based on extractor mode. Two
+designs are available: nested Avro records (one record per shape) or a
+flat record with a JSON-string field per heterogeneous array. The flat
+JSON-string approach is the project's preferred workaround when:
+
+- The array's element schema is unstable (under active extraction-prompt
+  iteration), AND
+- The payload still passes through the same R28 Confluent-Avro envelope.
+
+**Pattern**:
+
+- The `.avsc` schema declares `<name>_json: ["null", "string"]` with
+  `default: null`. The legacy nested-record fields are kept alongside as
+  `["null", {"type": "array", ...}]` for backward compatibility.
+- Producer side: `encode_raw_array(items)` from
+  `contracts.events.nlp.article_enriched` — JSON-encodes the list and
+  returns `None` for empty input so empty arrays do not bloat the wire.
+- Consumer side: `decode_raw_array(blob)` — returns `[]` on every error
+  branch (missing, invalid JSON, non-list root, oversized) AND emits a
+  structured warning so silent drops are observable.
+- Defence-in-depth: a 16 MiB hard cap (`_MAX_RAW_ARRAY_BYTES`) bounds the
+  decoder against poison messages.
+
+**When to use**:
+
+- Mixed-shape arrays under prompt-engineering churn.
+- Payloads where the element shape is best documented in the canonical
+  model (not the wire schema).
+
+**When NOT to use**:
+
+- Arrays of stable, homogeneous records — those should be modelled as
+  proper Avro nested records so the registry enforces the contract.
+- Arrays > 16 MiB — split into a separate topic instead of bypassing the
+  cap.
+
+Both helpers are forgiving (`[]` on error) AND observable (warning per
+drop branch). Cross-link: `BUG_PATTERNS.md` BP-313.
 
 ### 3.8 Valkey — ALWAYS use `messaging.valkey.ValkeyClient`
 
@@ -511,6 +622,79 @@ New services implementing the outbox pattern MUST follow these rules:
 
 **R-OUTBOX-5: ID type** — Outbox event IDs MUST use UUIDv7 (`common.ids.new_uuid7()`).
 
+### 3.10 Outbox `partition_key` pattern (PLAN-0057-followup)
+
+**Why per-entity ordering matters.** Kafka guarantees ordering only within a single
+partition. Without a producer key, librdkafka's sticky/round-robin partitioner spreads
+messages across partitions arbitrarily — fine for events with no ordering invariant
+(e.g., independent dataset arrivals), but **broken** for events that mutate the same
+aggregate. Concrete example: two `market.instrument.created` events for the same
+`instrument_id` can land on different partitions and reach the S7 KG consumer
+out-of-order, overwriting the enriched canonical with an earlier placeholder. This was
+audit finding **F-DATA-06** (`docs/audits/2026-05-01-investigation-plan-0057-open-items.md`
+§2.2).
+
+**The fix.** `OutboxRecordProtocol` exposes `partition_key: str | None` and
+`BaseOutboxDispatcher` forwards it to `producer.produce(key=partition_key.encode("utf-8"))`.
+NULL/None means round-robin (unchanged legacy behaviour); a non-empty string pins all
+events with that key to the same Kafka partition.
+
+**Three-step migration pattern (per producing service).** Adopt incrementally — only
+services that emit ordered-by-aggregate events need it. Pilot example: market-data Wave B
+(this PRD).
+
+1. **Alembic — add the column** (forward-compatible per R11 / R5; nullable, no default):
+
+   ```python
+   def upgrade() -> None:
+       op.execute(
+           "ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS partition_key TEXT"
+       )
+   ```
+
+2. **Repo + ORM — accept and persist the kwarg:**
+
+   ```python
+   # ORM model
+   partition_key: Mapped[str | None] = mapped_column(String, nullable=True)
+
+   # Repository.create — keyword arg, defaults to None
+   async def create(
+       self, event_type: str, topic: str, payload: dict, partition_key: str | None = None
+   ) -> str:
+       ...
+       insert(OutboxEventModel).values(..., partition_key=partition_key)
+   ```
+
+3. **Producer call sites — pass the aggregate id when ordering matters:**
+
+   ```python
+   # Pin all events for the same instrument to the same partition.
+   await uow.outbox_events.create(
+       event_type=event.event_type,
+       topic=topic,
+       payload=event_to_outbox_payload(event),
+       partition_key=str(instrument.id),
+   )
+   ```
+
+**When NOT to set `partition_key`.** Events without ordering invariants (e.g.,
+`market.dataset.fetched`, content-ingestion `content.article.raw.v1`) should leave it
+NULL — Kafka's sticky/round-robin partitioner gives better load balancing than a
+single-key hot spot. Empty-string keys are coerced to None by the dispatcher to prevent
+accidental hot spots.
+
+**Backwards compatibility.** Records that pre-date the protocol change keep working —
+`BaseOutboxDispatcher` reads via `getattr(record, "partition_key", None)`, so legacy
+outbox row types that don't declare the column dispatch with `key=None`.
+
+**Reference implementation.** `services/market-data` (PLAN-0057-followup Wave B):
+- Migration `services/market-data/alembic/versions/014_add_partition_key_to_outbox.py`
+- ORM `services/market-data/src/market_data/infrastructure/db/models/infrastructure.py`
+- Repo `services/market-data/src/market_data/infrastructure/db/repositories/outbox_event_repo.py`
+- Producers: `ohlcv_consumer.py`, `quotes_consumer.py`, `fundamentals_consumer.py` —
+  each pins instrument-scoped events with `partition_key=str(instrument.id)`.
+
 ### 3.9 Kafka Consumer Standard (R20)
 
 Every Kafka consumer in a service **must** extend `BaseKafkaConsumer` from
@@ -519,7 +703,7 @@ in service code.
 
 ```python
 # ✅ CORRECT
-# services/my-service/src/my_service/infrastructure/consumer/my_consumer.py
+# services/my-service/src/my_service/infrastructure/messaging/consumers/my_consumer.py
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig
 from messaging.kafka.consumer.errors import FatalError, RetryableError
 
@@ -557,6 +741,67 @@ side effects (e.g., LSH indexing after DB commit), always:
 4. On exception, run compensating deletes (MinIO GC) before re-raising
 
 Enforced by `tests/architecture/test_consumer_enforcement.py`.
+
+### 3.11 Consumer Dedup — ALWAYS use `ValkeyDedupMixin`
+
+Every `BaseKafkaConsumer` subclass **must** declare `ValkeyDedupMixin` as a
+direct base class to satisfy the `is_duplicate` / `mark_processed` abstract
+interface.  Writing a hand-rolled implementation is **forbidden**.
+
+```python
+# ✅ CORRECT
+from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin
+from messaging.valkey.client import ValkeyClient
+
+class ArticleRawConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
+    def __init__(self, config: ConsumerConfig, valkey: ValkeyClient) -> None:
+        super().__init__(config)
+        self._dedup_client = valkey
+        self._dedup_prefix = "content_ingestion:dedup:article_raw"
+        # _dedup_ttl_seconds defaults to 86400 (24 h); override if needed
+
+# ❌ FORBIDDEN — hand-rolled dedup inside the consumer class
+class ArticleRawConsumer(BaseKafkaConsumer[None]):
+    async def is_duplicate(self, event_id: str) -> bool:
+        key = f"my_prefix:{event_id}"
+        return bool(await self._valkey.exists(key))  # reinvents the mixin
+```
+
+**Contract**:
+
+| Scenario | `is_duplicate` returns | `mark_processed` behaviour |
+|----------|----------------------|---------------------------|
+| Key exists in Valkey | `True` | — |
+| Key absent | `False` | — |
+| `_dedup_client is None` | `False` (at-least-once mode) | no-op |
+| Valkey unreachable | `False` (at-least-once mode, logs `dedup.valkey_check_failed`) | swallowed (logs `dedup.valkey_mark_failed`) |
+
+**At-least-once fallback safety**: when Valkey is unavailable the mixin
+falls back to `False` (prefer reprocessing over silent drop).  This is only
+safe when the consumer's downstream writes are idempotent — i.e. they use
+deterministic IDs (`uuid5_from_parts`) **or** `INSERT … ON CONFLICT DO NOTHING`.
+Every `BaseKafkaConsumer` subclass **must** document which strategy it relies on
+in a comment near the class definition.
+
+**Key naming**: follow the taxonomy in `docs/architecture/decisions/0004-valkey-key-taxonomy.md`.
+The `_dedup_prefix` should be unique per consumer class:
+
+```
+{service_prefix}:dedup:{consumer_name}
+# e.g. "content_ingestion:dedup:article_raw"
+```
+
+**TTL**: defaults to 86 400 seconds (24 hours).  Override `_dedup_ttl_seconds`
+in the subclass when the message replay window differs.
+
+**Cross-reference R9**: Valkey is the correct shared-state store for dedup keys.
+PostgreSQL dedup tables are **forbidden** — they create cross-service DB coupling
+and are single-point-of-failure under high throughput (R9).
+
+**Enforcement**: `tests/architecture/test_consumer_dedup_mixin_enforcement.py`
+(CONSUMER-DEDUP-001).  Allowlist for justified exceptions in
+`tests/architecture/_consumer_dedup_allowlist.yaml`.
 
 ---
 
@@ -1047,20 +1292,14 @@ async def lifespan(app: FastAPI):
     )
     app.state.storage = storage
 
-    # 7. Outbox dispatcher (background task)
-    dispatcher = MyServiceOutboxDispatcher(settings=settings, session_factory=session_factory)
-    import asyncio
-    dispatch_task = asyncio.create_task(dispatcher.run())
-    app.state.dispatcher = dispatcher
-
     logger.info("service_started")
     yield
 
     # Shutdown
-    dispatcher.stop()
-    await dispatch_task
     await valkey.close()
     logger.info("service_stopped")
+    # NOTE: Outbox dispatcher and consumers run as standalone processes (R22/§14).
+    # Do NOT start asyncio.create_task() for them here — see §14 for entry point conventions.
 
 
 def create_app() -> FastAPI:
@@ -1317,6 +1556,102 @@ The following patterns are **explicitly forbidden** and constitute review blocke
 | `else: await self.commit()` in `__aexit__` | Silent writes on every clean context exit; double-commit undetectable (R26) | Option B: `__aexit__` only rolls back on exception; every mutating use case calls `await uow.commit()` explicitly — see §17 |
 | `from __future__ import annotations` missing | Lazy evaluation needed for `TYPE_CHECKING` pattern | Add to every file using `if TYPE_CHECKING` |
 | `print()` statements | Not structured, not queryable | `logger.info(...)` with keyword args |
+| Per-request auth (`user_id`, `tenant_id`, `internal_jwt`, `entity_context`) in singleton `__init__` | Singleton holds `None` forever after first request → silent auth strip / cross-tenant leak risk (R30, BP-406) | Split into `<Class>Factory` (singleton) + `<Class>` (per-request); factory exposes `for_request(*, user_id, tenant_id, jwt, entity_context, ...) -> Class` |
+| Per-tool `trust_weight` field in `capability_manifest.yaml` (or any other duplicate ranking-weight table) | Two sources of truth drift over time → ranking quality differs between tool-use path and classical path; tied to BP-* drift class | Reference `source_type` only in manifests; let `TrustScorer` (libs/contracts `SOURCE_AUTHORITY` × recency_decay × corroboration × extraction_confidence) compute final weight at retrieval time |
+| Pydantic `BaseModel` for domain entities | Convention drift (worldview domain layer = frozen dataclasses); 5–10× slower construction; pydantic stays in API layer | `@dataclass(frozen=True, kw_only=True)` for domain; `BaseModel` only in `api/schemas.py` |
+| Hand-rolled `is_duplicate` / `mark_processed` per consumer (returns `False` / `pass` or ad-hoc Valkey logic) | Divergent dedup behaviour; missing at-least-once fallback; inconsistent TTL policies; dialect drift across services (R9, BP-415) | `ValkeyDedupMixin` from `libs/messaging.kafka.consumer.dedup`; enforced by `tests/architecture/test_consumer_dedup_mixin_enforcement.py` (CONSUMER-DEDUP-001) |
+
+---
+
+## 11.1 Ranking trust weights — single source of truth (PLAN-0079)
+
+**Standard**: ranking trust is computed per-item at retrieval time by `TrustScorer` from four named factors. There is one source of truth for source authority — the `SOURCE_AUTHORITY` table in `libs/contracts`.
+
+```
+trust(item) = w_source       · source_authority(item)            # SOURCE_AUTHORITY table
+            ·                  recency_decay(item, now)          # exp(-Δdays / τ_source)
+            · w_corroboration · corroboration_factor(item)       # 1 - exp(-evidence_count / 3)
+            · w_extraction   · extraction_confidence(item)       # GLiNER/relation/claim confidence
+```
+
+**Hard rules**:
+
+- The flat `DEFAULT_TRUST_WEIGHTS` map (legacy, in `services/rag-chat/src/rag_chat/application/pipeline/retrieval_orchestrator.py`) is renamed to `SOURCE_AUTHORITY` and lifted into `libs/contracts`. Once PLAN-0079 ships, no service may declare its own per-source-type weight table.
+- `capability_manifest.yaml` entries (PLAN-0067 R29) reference `source_type` for tools that produce `RetrievedItem`s. They MUST NOT carry a `trust_weight` field. `TrustScorer` looks up authority via the source_type.
+- Tool-handler authors who introduce a new `source_type` value extend `SOURCE_AUTHORITY` in the same PR, with a justifying review comment for the chosen authority value (cite a comparable existing entry: news, filing, transcript, social, …).
+- Eval gate: any change to `SOURCE_AUTHORITY` weights, the `TrustScorer` formula, or the four `w_*` / `τ_*` knobs MUST run the PLAN-0063 60-query golden eval and pass within 0.03 NDCG@10 of the prior baseline before merge.
+
+**Why this matters now**: without a single source of truth, a future PLAN that adds a new `source_type` (e.g., `polymarket_clob`) would set its own ad-hoc weight in either the manifest, the orchestrator, or a tool handler — and quietly diverge from the ranking semantics every other source uses. With `TrustScorer` + `SOURCE_AUTHORITY`, every ranking decision is visible and auditable from one place.
+
+---
+
+## 11.2 Per-request auth/scope context — factory pattern (R30)
+
+**Standard**: any class that needs request-scoped state (`user_id`, `tenant_id`, `internal_jwt`, `entity_context`, or any field that varies per HTTP request) is built by a singleton factory's `for_request(...)` method, not via constructor injection of the per-request fields into the class itself.
+
+**Pattern**:
+
+```python
+# libs/.../tool_executor.py
+
+class ToolExecutorFactory:                  # singleton — wired into DI container
+    """Holds shared collaborators (registry, S3 client, S6 client, ...).
+    Builds a fresh ToolExecutor for each HTTP request via for_request()."""
+
+    def __init__(self, registry: ToolRegistry, s3: S3Port, s6: S6Port,
+                 s7: S7Port, s1: S1Port) -> None:
+        self._registry, self._s3, self._s6 = registry, s3, s6
+        self._s7, self._s1 = s7, s1
+
+    def for_request(
+        self,
+        *,
+        user_id: UUID,
+        tenant_id: UUID,
+        internal_jwt: str,
+        entity_context: EntityContext | None = None,
+    ) -> ToolExecutor:
+        return ToolExecutor(
+            registry=self._registry,
+            s3=self._s3, s6=self._s6, s7=self._s7, s1=self._s1,
+            user_id=user_id, tenant_id=tenant_id,
+            internal_jwt=internal_jwt, entity_context=entity_context,
+        )
+
+class ToolExecutor:                          # per-request — short-lived
+    """One per HTTP request. Auth + scope bound at construction;
+    every execute() call inherits them automatically."""
+
+    def __init__(self, *, registry, s3, s6, s7, s1,
+                 user_id, tenant_id, internal_jwt, entity_context) -> None: ...
+
+    async def execute(self, tool_call: ToolUseBlock) -> RetrievedItem | None: ...
+```
+
+**Route handler usage**:
+
+```python
+# services/rag-chat/.../api/routes/chat.py
+
+@router.post("/chat")
+async def chat(req: ChatRequest, principal: Principal = Depends(...)):
+    executor = tool_executor_factory.for_request(
+        user_id=principal.user_id,
+        tenant_id=principal.tenant_id,
+        internal_jwt=principal.internal_jwt,
+        entity_context=req.entity_context,  # may be None
+    )
+    # executor lives only for this request; auth + scope already bound
+    ...
+```
+
+**Hard rules**:
+
+- A class taking `Optional[user_id|tenant_id|jwt]` in `__init__` is a review blocker (R30). Either it's stateless and shouldn't carry it, or it's request-scoped and needs a factory.
+- Tools that intend to act on the scoped entity (`search_documents`, `get_entity_graph`, `get_entity_narrative`, etc.) read `self._entity_context` and auto-inject `entity_ids = [entity_context.entity_id]` into the underlying port call. The LLM cannot override this when scope is set — that's the whole point of binding it at executor construction.
+- Tools that act cross-entity (`compare_entities`, `screen_universe`, `get_market_movers`) check `if self._entity_context is not None` and refuse / require explicit operands.
+
+**See also**: BP-406 (the silent failure mode this standard prevents), PLAN-0067 §0 (where this pattern was introduced after `/investigate` 2026-05-07), PLAN-0080/0081/0082 (downstream tool plans that depend on this contract).
 
 ---
 
@@ -1422,6 +1757,17 @@ Logs are stored and accessible broadly. Use the log sanitization pattern from `l
 **R15 — MUST validate and sanitize all external input**
 Use Pydantic models for request validation, domain allowlists for URLs, and input length limits for all user-facing text fields.
 
+**R27 — All internal service-to-service API endpoints MUST enforce `X-Internal-Token`**
+Any endpoint that is called only by other platform services (not by end users or the frontend) MUST
+require the `X-Internal-Token` header validated via `verify_internal_token` (or equivalent service-local
+implementation using `hmac.compare_digest`).  The token must be:
+- A strong random secret (≥32 bytes) stored in `INTERNAL_SERVICE_TOKEN` env var
+- **`SecretStr`** in pydantic-settings to prevent accidental logging
+- Validated with `hmac.compare_digest` to prevent timing attacks
+Enforcement pattern (established in S3 market-data D-02): add `_auth: InternalAuthDep = None` to each
+internal endpoint signature.  In unit tests, override `verify_internal_token` via
+`app.dependency_overrides`.
+
 ### Process
 
 **R16 — MUST NOT add a new microservice without an ADR**
@@ -1466,6 +1812,10 @@ Each microservice adds operational overhead. The decision must be deliberate and
 | R24 | Infrastructure | MUST NOT |
 | R25 | Architecture | MUST NOT |
 | R26 | Infrastructure | MUST NOT |
+| R27 | Security | MUST |
+| R28 | Contracts | MUST | (Avro on the wire — see §3.7.1) |
+| R29 | Architecture | MUST | (capability manifest sync) |
+| R30 | Architecture | MUST NOT | (per-request auth in singleton — see §11.2) |
 
 ---
 
@@ -2003,3 +2353,330 @@ Before merging any service with a `UnitOfWork` implementation:
 - [ ] Read-only use cases do NOT call `commit()` (no phantom commits)
 - [ ] Post-commit hooks run inside `commit()`, not `__aexit__()`
 - [ ] Hook failures are caught and logged — never propagated to the base consumer
+
+---
+
+## 18. Docker Container Validation (R31)
+
+After any source-code fix that affects runtime behaviour, the running Docker container must
+be rebuilt and verified before the fix is declared live. Editing a `.py` file does NOT
+affect the running container — the container image was built at `docker compose build` time.
+
+### 18.1 Standard Verification Pattern
+
+```bash
+# 1. Rebuild the image for the affected service
+docker compose build <svc>
+
+# 2. Replace the running container with the new image
+docker compose up -d <svc>
+
+# 3. Verify the new code is present (choose one)
+docker compose exec <svc> python -c "from <module> import <symbol>; print('OK')"
+docker compose logs <svc> --tail=20   # look for the new log line or version marker
+```
+
+### 18.2 Which Containers Need Rebuilding
+
+| Change type | Containers to rebuild |
+|------------|----------------------|
+| Python source file in service | That service's API, worker, scheduler, and dispatcher containers |
+| Shared lib (`libs/`) | Every service that installs the lib |
+| `config.py` / env var | That service's containers (API + workers) |
+| Alembic migration | The migration runner container only |
+| `docker-compose.yml` changes | `docker compose up -d` is sufficient (no build needed) |
+
+### 18.3 Anti-Pattern
+
+```
+# ❌ WRONG — source is edited but container is never rebuilt
+Edit services/rag_chat/src/rag_chat/pipeline.py
+git commit -m "fix: pipeline timeout"
+# Container still runs the pre-fix image. Fix is NOT live.
+
+# ✅ CORRECT
+Edit services/rag_chat/src/rag_chat/pipeline.py
+docker compose build rag-chat && docker compose up -d rag-chat
+docker compose exec rag-chat python -c "from rag_chat.pipeline import Pipeline; print(Pipeline.TIMEOUT)"
+git commit -m "fix: pipeline timeout — verified in running container"
+```
+
+### 18.4 Fast-Path (Development Only)
+
+In active development with bind mounts configured (where the container source is mounted
+from the host), container rebuilds are not needed for Python changes. Verify that bind
+mounts are active before skipping the rebuild step — production-mode compose files do NOT
+use bind mounts.
+
+---
+
+## 19. Parallel Execution & Subagent Patterns (R33, R34)
+
+This section covers standards for sessions that spawn parallel subagents (e.g., `/qa`
+with specialist agents, `/implement` with parallel wave agents, or orchestrated fix sprints).
+
+### 19.1 When to Use Parallel Subagents vs Sequential
+
+| Criterion | Use Parallel | Use Sequential |
+|-----------|-------------|----------------|
+| Tasks touch disjoint file sets | Yes | No |
+| Tasks share a fixture, model, or constant | No — sequential | Yes |
+| Combined output needs cross-validation | No — run sequentially then validate | Yes |
+| Each task takes >10 min independently | Yes — amortise wall-clock time | No |
+| Tasks have strict dependency order | No — sequential | Yes |
+
+**Default**: prefer sequential unless wall-clock time savings clearly justify the cross-agent
+regression risk. The marginal cost of a cross-agent regression (discover → diagnose → fix)
+often exceeds the time saved by parallelism.
+
+### 19.2 Commit Discipline — Subagents
+
+Every subagent MUST commit before returning, even if the commit is incremental. The checklist:
+
+```
+[ ] Subagent staged all changed files
+[ ] Subagent created a commit with a descriptive message
+[ ] Commit is on the main worktree (not a discarded worktree branch)
+[ ] Commit message references the plan/task IDs being completed
+```
+
+If a subagent returns without committing, the orchestrator must immediately reapply and
+commit the reported work before launching the next agent. Stale worktrees are ephemeral;
+commits are permanent.
+
+### 19.3 Budget Guardrails Before Launching N Agents
+
+Before spawning N parallel subagents, estimate:
+- **Token budget**: N × ~100k tokens/agent (approximate). If total exceeds project context
+  budget, reduce N or split into sequential batches.
+- **File conflict risk**: do a quick grep to confirm no two agents will touch the same file.
+  If conflict is likely, assign non-overlapping file sets explicitly in each agent's prompt.
+- **Test isolation**: confirm that each agent's test suite runs independently without
+  shared in-memory state (e.g. `pytest-asyncio` event loop isolation).
+
+### 19.4 Post-Return Full Suite Run
+
+After all parallel subagents return and their commits are merged/applied:
+
+```bash
+# Run the full suite for every service touched by any agent
+for svc in <svc1> <svc2> ...; do
+    echo "=== $svc ===" && python -m pytest services/$svc/tests/ -v --tb=short
+done
+```
+
+Classify failures using the R33 taxonomy: (a) pre-existing, (b) fix-induced regression,
+(c) stale test expectation. Resolve all (b) and (c) before the session is complete.
+
+### 19.5 Cross-Agent Regression Examples
+
+Known cross-agent regression patterns to watch for:
+
+| Pattern | Detection |
+|---------|-----------|
+| Agent A changes a shared fixture; Agent B's test expects the old fixture | `fixture` error in Agent B's tests after merge |
+| Agent A renames a constant; Agent B's new code references the old name | `NameError`/`ImportError` after merge |
+| Agent A changes a `side_effect` list; Agent B adds a call expecting the old list order | `StopIteration` or `AssertionError` after merge |
+| Agent A adds a migration; Agent B adds a conflicting migration with the same version number | Alembic `MultipleHeads` error |
+
+---
+
+## 20. Testing Layer Design Rules
+
+Derived from systemic failure patterns discovered in QA passes (PLAN-0084 Wave 6, 2026-05-07).
+Each rule below is numbered TI-20.N for traceability.
+
+### 20.1: Test Marker Consistency (TI-20.1)
+All `tests/unit/**/*.py` files MUST use module-level `pytestmark = pytest.mark.unit`.
+Per-function `@pytest.mark.unit` decorators are redundant and cause unreliable test selection
+with `pytest -m unit`.
+**Enforcement**: Architecture test `test_pytest_marker_enforcement.py` scans all unit test files
+via AST and rejects per-function markers.
+
+### 20.2: Parametrized Configuration Coverage (TI-20.2)
+When a function or class accepts a finite set of valid inputs (skip-paths, retry counts, TTL
+options, enum values), tests MUST exercise all variants — not just the most common one.
+Single-case tests hide typos and drift silently.
+**Example**: JWT middleware skip-paths defines 5 paths + 3 prefixes; ALL 8 must be tested.
+
+### 20.3: Pure Function Edge-Case Testing (TI-20.3)
+Every function with conditional logic that depends on time, boundaries, or state MUST have
+parametrized unit tests covering all branches, including boundary transitions.
+**Tool**: `@pytest.mark.parametrize` with explicit (input, expected) tuples.
+**Example**: `_next_sunday_03_utc()` needs 6 boundary cases: before Sunday, same-day before
+03:00, same-day at 03:00, same-day after 03:00, week boundary, month boundary.
+
+### 20.4: Mock Provider Partial Failure Injection (TI-20.4)
+Any code that uses a Valkey pipeline or Kafka batch operation MUST have a test that injects
+a failure mid-operation (e.g. pipeline `execute()` raises after DEL is processed). Verify
+graceful degradation — no crash, no corrupted state, appropriate warning log.
+
+### 20.5: Consumer Dedup Strategy Visibility (TI-20.5)
+Every `BaseKafkaConsumer` subclass MUST explicitly declare its dedup strategy as a class-level
+comment or docstring:
+- `ValkeyDedupMixin`: inherits is_duplicate/mark_processed automatically.
+- `DbAtomicDedup`: uses `INSERT … ON CONFLICT DO NOTHING`; `is_duplicate` and `mark_processed`
+  are explicit no-ops; allowlist entry required.
+- `None`: no dedup; consumer is idempotent by another means; allowlist entry required.
+**Rationale**: Hidden dedup assumptions cause data duplication bugs when consumers are copied as
+templates.
+
+### 20.6: Prometheus Registry Isolation (TI-20.6)
+All Prometheus metric tests MUST use an `isolated_registry` fixture that monkeypatches
+`prometheus_client.REGISTRY` with a fresh `CollectorRegistry` per test. Never read from the
+global `REGISTRY` in test assertions.
+**Pattern**:
+```python
+@pytest.fixture
+def isolated_registry(monkeypatch):
+    from prometheus_client import CollectorRegistry
+    import prometheus_client
+    registry = CollectorRegistry()
+    monkeypatch.setattr(prometheus_client, "REGISTRY", registry)
+    return registry
+```
+Place this fixture in `services/<service>/tests/unit/conftest.py` for each service with metric tests.
+
+### 20.7: SQLAlchemy ON CONFLICT Verification (TI-20.7)
+All `INSERT … ON CONFLICT DO NOTHING` repository methods MUST have an integration test that:
+1. First insert: `rowcount == 1`.
+2. Duplicate insert: `rowcount == 0`.
+3. Compiled SQL text contains both `"ON CONFLICT"` and `"DO NOTHING"` (not checked via
+   private `_post_values_clause` attribute).
+**Why**: `_post_values_clause is not None` also passes for `RETURNING` clauses. The compiled
+SQL string is the authoritative check.
+
+### 20.8: Exponential Backoff and Async Timing (TI-20.8)
+All retry loops MUST have a test that mocks `asyncio.sleep`, records the actual durations
+passed to it, and asserts the exponential progression (e.g. 60, 120, 240, max 300).
+Fixed-interval retries (`asyncio.sleep(CONSTANT)`) MUST be replaced with exponential backoff
+before merging. See BP-423 for the anti-pattern.
+
+### 20.9: Documentation Enforcement (TI-20.9)
+`.claude-context.md` files MUST stay in sync with code. Each new endpoint, Kafka topic, port
+interface, or config field added to a service MUST be reflected in the context file in the
+same commit.
+**Automation** (target PLAN-0085): CI gate extracts HTTP endpoint patterns from
+`.claude-context.md` and verifies their presence in service source files via grep.
+
+### 20.10: Parameter Ambiguity Prevention (TI-20.10)
+No function or method may accept two names for the same parameter concept (e.g. both `ttl`
+and `ex` for expiry duration). Use the upstream convention (Redis-native `ex`, not custom
+`ttl`). If a legacy alias exists, deprecate it with a `warnings.warn` and remove it in the
+next major version.
+
+---
+
+## 21. Multi-Tenancy Standards
+
+### 21.1: Tenant Attribution Model
+
+The platform uses **logical multi-tenancy**: shared database cluster, with `tenant_id` column
+filtering at query time. Two classes of data exist:
+
+| Class | Tenant-scoped? | Examples |
+|-------|----------------|---------|
+| **User data** | YES — must have `tenant_id` in every table | portfolios, holdings, watchlists, threads, messages, entity_mentions |
+| **Global reference data** | NO — shared across all tenants | canonical_entities, relations, market data (OHLCV, fundamentals), instruments |
+
+**Rule**: When in doubt, ask "Does this data differ between Tenant A and Tenant B?" If yes,
+it needs `tenant_id`. If it is a publicly-known fact (an entity, a price, a market event),
+it is global reference data.
+
+### 21.2: Avro Schema Tenant Field Rule
+
+All Avro event schemas for **user-attributable events** (content pipeline, NLP pipeline,
+intelligence pipeline, RAG, portfolio, alert) MUST include:
+
+```json
+{"name": "tenant_id", "type": ["null", "string"], "default": null}
+```
+
+Using `["null", "string"]` with `"default": null` satisfies R5 (forward compatibility — adding
+a nullable field with a default is always a non-breaking change).
+
+**Exceptions** (schemas that intentionally omit `tenant_id`):
+- `market.dataset.fetched.avsc` — global market data, not tenant-attributable
+- `market.instrument.*.avsc` — global instrument registry
+- `market.prediction.v1.avsc` — global prediction markets
+
+Verification:
+```bash
+for schema in infra/kafka/schemas/*.avsc; do
+  if ! grep -q '"tenant_id"' "$schema"; then echo "CHECK: $schema"; fi
+done
+```
+
+### 21.3: Vector/HNSW Search Tenant Filter
+
+Any query using `cosine_distance`, `l2_distance`, or `max_inner_product` against a table
+that has a `tenant_id` column MUST include:
+```sql
+AND (tenant_id = :tenant_id OR tenant_id IS NULL)
+```
+
+The `IS NULL` clause handles legacy rows ingested before the column was added. Without this
+filter, the similarity search returns top-K results globally — the highest-impact multi-tenant
+data breach vector (HR-053).
+
+### 21.4: Kafka Consumer Dedup Key Tenant Namespace
+
+When Avro events carry `tenant_id`, all `ValkeyDedupMixin` subclasses MUST incorporate
+`tenant_id` in the dedup key. Override `is_duplicate` / `mark_processed` to use:
+```python
+key = f"{self._dedup_prefix}:{tenant_id}:{event_id}"
+```
+Or extract `tenant_id` from the event in `extract_event_id()` and embed it in the returned
+string:
+```python
+def extract_event_id(self, payload: dict) -> str:
+    return f"{payload.get('tenant_id', 'system')}:{payload['event_id']}"
+```
+
+### 21.5: Rate Limiting Key Tenant Namespace
+
+Valkey rate limit keys for authenticated endpoints must be scoped per (tenant, user):
+```python
+key = f"rl:v1:user:{tenant_id}:{user_id}"
+```
+Not per user alone — a user could belong to multiple tenants and consume quota across tenant
+boundaries.
+
+### 21.6: MinIO Object Key Tenant Convention
+
+The `KeyBuilder` does not include a tenant segment. To ensure tenant isolation, the
+`resource_id` component MUST derive from a tenant-scoped entity ID (e.g., `doc_id` from the
+`documents` table after the `tenant_id` column is added). Do not use globally-scoped IDs
+(instrument tickers, schema version strings) as `resource_id` for tenant-attributable objects.
+
+---
+
+## 22. LLM Agent Loop Budget Standards
+
+Any agent loop implementation (S8 or future services) MUST enforce five independent budgets.
+These defaults are validated against worldview's query patterns and the Reference System
+investigation (2026-05-10-ai-architecture-enhancement-roi-analysis.md):
+
+```python
+@dataclass
+class AgentBudget:
+    max_tokens: int = 8_000          # soft — blocks further iterations; delivers current answer
+    max_tool_latency_s: float = 30.0 # soft — triggers surrender path; injects final-answer prompt
+    max_per_tool_s: float = 30.0     # hard — asyncio.wait_for per individual tool call
+    max_iterations: int = 6          # hard — unconditional cap independent of any framework
+    max_consecutive_errors: int = 2  # soft — consecutive tool failures → surrender
+```
+
+**Surrender path** (soft budget hit): inject system message
+`"You have reached the tool response budget for this turn. Provide your best answer with the information gathered so far."` — the LLM generates a final answer without further tool calls.
+
+**Token counting**: track cumulative prompt + completion tokens across all iterations of the
+loop. When `total_tokens >= max_tokens`, set a flag that breaks after the current LLM
+response completes (never mid-stream).
+
+**Consecutive error reset**: reset `consecutive_errors = 0` on any successful tool call.
+
+**Why these values**: `max_tool_latency_s=30.0` covers the known slow path (AGE Cypher
+queries on `traverse_graph` can reach 60s without a budget; 30s provides a meaningful partial
+answer). `max_iterations=6` matches the Reference System default and is sufficient for
+worldview's two-tool + summary pattern.

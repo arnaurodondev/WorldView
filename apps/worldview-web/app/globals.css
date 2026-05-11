@@ -1,0 +1,552 @@
+/**
+ * globals.css — Terminal Dark design system CSS variables + Tailwind base
+ *
+ * WHY THIS EXISTS: Defines the "Terminal Dark" color palette as CSS custom
+ * properties. All Tailwind utility classes (bg-background, text-primary, etc.)
+ * reference these variables, so changing them here updates the entire UI.
+ *
+ * PALETTE SOURCE: docs/ui/DESIGN_SYSTEM.md §2 "Color Palette — Terminal Dark"
+ * #09090B neutral near-black + trading yellow (#FFD60A) is the defining choice —
+ * matches Bloomberg Terminal / tastytrade institutional aesthetic. No blue tint:
+ * blue-tinted backgrounds read as "app" to finance professionals; neutral black
+ * reads as "terminal". The high-chroma yellow on near-black is the Bloomberg
+ * signature contrast ratio.
+ *
+ * PREVIOUS PALETTE: #0A0E14 (blue-tinted bg) + #E8A317 (amber-orange) — retired
+ * because the blue undertone read as "friendly fintech app" rather than terminal.
+ * The amber-orange was too warm/approachable; trading yellow is sharper/more urgent.
+ *
+ * PLAN-0059 W0 (2026-04-30):
+ *   - F-VISUAL-001 / 002 / NEW-M (CRITICAL silent drift): replace --positive
+ *     #26A69A (TradingView teal) with #00D26A (institutional green, AAA 9.18:1)
+ *     and --negative #EF5350 (Material Red 400) with #FF3B5C (urgent red, 6.83:1).
+ *     Split --destructive #EF4444 from --negative (different semantics: delete
+ *     vs price-down). Add --accent-ai #A855F7 (universal industry violet) so AI
+ *     features stop bypassing tokens via Tailwind's text-amber-* defaults.
+ *   - F-VISUAL-NEW-B: add @media blocks for prefers-reduced-motion, forced-colors,
+ *     prefers-contrast, and print — closes the audit's accessibility coverage gap.
+ *     For BlackRock enterprise accessibility committee compliance.
+ *   - F-VISUAL-NEW-M: SYNC `.dark` --muted-foreground to 55% (was 46%, drifted).
+ *     The PLAN-0053 WCAG fix shipped to :root but never propagated to .dark.
+ *     Active class is .dark — fix never reached production.
+ *   - F-VISUAL-NEW-E: ::selection now uses primary/30 instead of OS-default browser blue
+ *   - F-VISUAL-NEW-H: enable slashed-zero (financial convention to disambiguate 0 from O)
+ *
+ * DARK MODE: Permanent. No :root (light) variant needed.
+ * class="dark" is set permanently on <html> (ADR-F-04).
+ * Print mode (@media print) overrides to a light palette for paper output.
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* ── Terminal Dark — Dark Theme (permanent, ADR-F-04) ────────────── */
+  :root {
+    /* ── Backgrounds — elevation hierarchy from darkest (page) to lightest ──
+     * WHY neutral (not blue-tinted): #09090B has zero hue — it reads as a true
+     * terminal/hardware screen. Blue-tinted backgrounds (#0A0E14) subconsciously
+     * signal "web app". Removing the tint shifts the feel to Bloomberg/Reuters.
+     * Each step is ~3% lighter in L* (perceptual lightness) for a visible
+     * but non-garish elevation hierarchy. */
+    --background: 240 10% 4%;      /* #09090B — neutral near-black, no blue tint */
+    --card: 270 2% 7%;             /* #111113 — panel/card backgrounds, neutral */
+    --muted: 240 4% 11%;           /* #18181B — elevated surfaces, hover states */
+    --popover: 240 10% 4%;         /* #09090B — same as --background for dropdown menus */
+    --accent: 240 4% 11%;          /* #18181B — same as --muted for subtle hover highlights */
+    --surface-2: 240 4% 11%;       /* #18181B — alias for muted (explicit surface step) */
+    --surface-3: 240 4% 16%;       /* #27272A — third elevation level */
+
+    /* Text — warm off-white primary; neutral grey secondary for labels/timestamps.
+     * WHY keep warm foreground: pure #FFF is harsh on terminal black. #E4E4E7
+     * (zinc-200) is the standard institutional off-white — slightly warm without
+     * being parchment-tinted like the old #E0DDD4. */
+    --foreground: 240 5% 90%;       /* #E4E4E7 — zinc-200 off-white */
+    --card-foreground: 240 5% 90%;  /* #E4E4E7 */
+    --popover-foreground: 240 5% 90%; /* #E4E4E7 */
+    /* PLAN-0053 T-H-8-07 (WCAG): bumped from 46% → 55% lightness to clear AA
+       contrast (4.5:1) for normal text on the #09090B background. The old
+       #71717A measured ~4.27:1 — fails AA. New value (#83838A approx) lands
+       at ~5.4:1, comfortably passing AA without disrupting the visual hierarchy
+       (still distinctly secondary against the #E4E4E7 primary foreground).
+       PLAN-0059 W0: this was applied here but NOT mirrored to .dark — fixed below. */
+    --muted-foreground: 240 4% 55%; /* #83838A — zinc-500.5, AA-compliant secondary text */
+    --accent-foreground: 240 5% 90%; /* #E4E4E7 */
+    --secondary: 240 4% 11%;        /* #18181B */
+    --secondary-foreground: 240 5% 90%; /* #E4E4E7 */
+
+    /* Disabled state tokens — F-VISUAL-027 fix (PLAN-0059 W0):
+     * Replaces blanket disabled:opacity-50 (which yields ~3.5:1 on text-foreground
+     * and ~2.7:1 on text-muted-foreground — fails WCAG AA). These tokens make
+     * disabled UI desaturate but remain readable. Used by Button/Input/Select
+     * disabled: variants. */
+    --disabled-foreground: 0 0% 46%; /* #757575 — 5.5:1 vs --background, passes AA */
+    --disabled-bg: 240 4% 11%;       /* same as --muted, no opacity dim */
+    --disabled-border: 240 4% 20%;   /* #2D2D32, dimmer than --border */
+
+    /* Interactive — Bloomberg-signature bright trading yellow.
+     * WHY #FFD60A (not amber #E8A317): The old amber was warm/orange, reading as
+     * "notification" or "app accent". #FFD60A is the canonical Bloomberg Terminal
+     * yellow — high chroma, 100% saturation, pure hue 48° (almost pure yellow).
+     * On near-black it achieves ~14:1 contrast ratio (AAA). The sharp yellow also
+     * signals "price / alert" — the mental model finance users bring to this hue.
+     * --primary-foreground must be pure black (#000000): yellow text needs maximum
+     * contrast background; the old #0A0E14 was too dark-blue, not true black. */
+    --primary: 48 100% 52%;         /* #FFD60A — Bloomberg-signature trading yellow */
+    --primary-foreground: 0 0% 0%;  /* #000000 — pure black text on yellow CTA */
+
+    /* Structural — borders are MORE visible now (not hidden).
+     * WHY brighter border: #27272A (zinc-800) vs old #243040. Dense terminal layouts
+     * need clearly visible grid lines between panels. The old border was too subtle
+     * and blended into the background — panels looked undefined. #27272A gives a
+     * crisp 1px edge without glowing. */
+    --border: 240 4% 16%;           /* #27272A — zinc-800, visible panel edges */
+    --input: 240 4% 16%;            /* #27272A */
+    --ring: 48 100% 52%;            /* #FFD60A — focus rings match primary */
+
+    /* Destructive actions (delete, error states) — F-VISUAL-002 fix (PLAN-0059 W0):
+     * Split from --negative (different semantics). #EF4444 is the canonical
+     * "delete-action" red — distinct from price-down. */
+    --destructive: 0 84% 60%;       /* #EF4444 — destructive action red (delete) */
+    --destructive-foreground: 240 5% 90%; /* #E4E4E7 */
+
+    /* ── Financial domain tokens (no Tailwind equivalent) ──────────
+     * F-VISUAL-001/002 fix (PLAN-0059 W0):
+     *   - --positive #26A69A → #00D26A: TradingView teal had AA 4.51:1 on bg
+     *     (FAILS at 11px body text). Institutional green #00D26A is AAA 9.18:1.
+     *     Bloomberg uses #80FF80 phosphor; Refinitiv #00C853; Aladdin #00B050.
+     *     The deep luminance + saturation profile is the recognizable "price up"
+     *     signal — #26A69A reads as "data viz accent", not direction.
+     *   - --negative #EF5350 → #FF3B5C: Material Red 400 was consumer-app gentle.
+     *     #FF3B5C is institutional urgent — Bloomberg #FF6464 / Refinitiv #FF1744.
+     *     Color-blind delta-luminance vs proposed --positive: 96 (deuteranope).
+     *   - --warning kept (Bloomberg amber) but bumped to #FFB000 for distinctness
+     *     from --primary yellow (so alert severities don't collide visually). */
+    --positive: 150 100% 41%;       /* #00D26A — institutional green (was #26A69A teal) */
+    --positive-fill: 145 100% 32%;  /* #00A352 — fill backgrounds (badges) */
+    --negative: 350 100% 62%;       /* #FF3B5C — urgent institutional red (was #EF5350) */
+    --negative-fill: 350 80% 50%;   /* #E62945 — fill backgrounds (badges) */
+    --warning: 40 100% 50%;         /* #FFB000 — Bloomberg amber (distinct from primary yellow) */
+
+    /* AI accent — F-VISUAL-022 fix (PLAN-0059 W0):
+     * Replaces hardcoded text-amber-NNN and bg-amber-NNN in AI panels (AskAi,
+     * brief, copilot icons). Violet is the universal industry color for AI/ML
+     * (Anthropic, OpenAI Sora, GitHub Copilot, Notion AI). Using --primary
+     * yellow for AI muddied the brand (yellow already means price/alert).
+     * (Note: do NOT write `text-amber-` then `*` then `/` then `bg-` here —
+     * that substring closes the CSS comment early and breaks PostCSS.) */
+    --accent-ai: 268 90% 65%;       /* #A855F7 — AI assistant accent (violet) */
+    --accent-ai-fill: 268 75% 50%;  /* #9233D9 — fill (PLAN-0059 W0 fix F-019: hex annotation corrected) */
+
+    /* Border radius — near-zero for hard terminal edges.
+     * WHY 0.125rem (2px): Bloomberg Terminal uses zero-radius sharp rectangles.
+     * tastytrade uses 2px for a barely-there softening that prevents harsh pixel
+     * corners without looking "app-like". 0.375rem (6px) was too rounded — it
+     * made the dashboard look like a consumer app card grid, not a terminal.
+     * At 2px, panels feel like instrument/grid cells, not floating cards. */
+    --radius: 0.125rem;
+
+    /* ── Structural density tokens ─────────────────────────────────
+     * WHY fixed px values (not rem): Panel chrome heights must be pixel-precise
+     * for grid alignment. rem values shift if the user's browser zoom changes,
+     * breaking alignment. Bloomberg Terminal uses fixed 32px panel headers and
+     * 44px top chrome — these match that standard. */
+    --panel-header-height: 32px;    /* compact panel headers — leaves more room for data */
+    --topbar-height: 44px;          /* 4px tighter than old h-12 (48px); denser chrome */
+    --cell-px: 8px;                 /* standard horizontal cell padding in data tables (px-2) */
+  }
+
+  /* .dark class re-applies same values — ensures shadcn/ui dark-mode variants work.
+   * PLAN-0059 W0: synced to :root after silent F-VISUAL-NEW-M drift —
+   *   muted-foreground 46% → 55% (active class is .dark, so the WCAG fix
+   *   in :root never reached production until this commit).
+   * After Style Dictionary adoption (Wave 6), :root and .dark will both be
+   * generated from one source — making this dual-block edit impossible. */
+  .dark {
+    --background: 240 10% 4%;
+    --card: 270 2% 7%;
+    --muted: 240 4% 11%;
+    --popover: 240 10% 4%;
+    --accent: 240 4% 11%;
+    --surface-2: 240 4% 11%;
+    --surface-3: 240 4% 16%;
+    --foreground: 240 5% 90%;
+    --card-foreground: 240 5% 90%;
+    --popover-foreground: 240 5% 90%;
+    --muted-foreground: 240 4% 55%; /* PLAN-0059 W0: was 46% (silent WCAG drift); now matches :root */
+    --accent-foreground: 240 5% 90%;
+    --secondary: 240 4% 11%;
+    --secondary-foreground: 240 5% 90%;
+    --disabled-foreground: 0 0% 46%;
+    --disabled-bg: 240 4% 11%;
+    --disabled-border: 240 4% 20%;
+    --primary: 48 100% 52%;
+    --primary-foreground: 0 0% 0%;
+    --border: 240 4% 16%;
+    --input: 240 4% 16%;
+    --ring: 48 100% 52%;
+    --destructive: 0 84% 60%;       /* PLAN-0059 W0: split from --negative */
+    --destructive-foreground: 240 5% 90%;
+    --positive: 150 100% 41%;       /* PLAN-0059 W0: institutional green */
+    --positive-fill: 145 100% 32%;
+    --negative: 350 100% 62%;       /* PLAN-0059 W0: urgent institutional red */
+    --negative-fill: 350 80% 50%;
+    --warning: 40 100% 50%;         /* PLAN-0059 W0: Bloomberg amber */
+    --accent-ai: 268 90% 65%;       /* PLAN-0059 W0: AI accent (violet) */
+    --accent-ai-fill: 268 75% 50%;
+    --radius: 0.125rem;
+    --panel-header-height: 32px;
+    --topbar-height: 44px;
+    --cell-px: 8px;
+  }
+}
+
+@layer base {
+  /* Apply border color consistently — shadcn/ui components rely on this */
+  * {
+    @apply border-border;
+  }
+
+  /* Body: page background + text from Bloomberg Dark palette */
+  body {
+    @apply bg-background text-foreground;
+    /* PLAN-0059 W0 F-VISUAL-NEW-H: enable additional OpenType features.
+     * - tnum: tabular numerals (already had — keep)
+     * - zero: slashed zero — financial convention since IBM 3270 era,
+     *   disambiguates digit 0 from letter O. Every institutional terminal
+     *   has this enabled. Tickers like O (Realty Income), 0 (Berkshire
+     *   sub-share), and Q-class shares are scanned constantly.
+     * - ss01, salt, case, cv11: IBM Plex Sans/Mono stylistic sets that
+     *   improve numeric and uppercase legibility at 10-11px. */
+    font-feature-settings: "tnum" 1, "zero" 1, "ss01" 1, "salt" 1, "case" 1, "cv11" 1;
+    font-variant-numeric: tabular-nums slashed-zero;
+    /* Tight line height for information density — finance users scan fast */
+    line-height: 1.4;
+  }
+
+  /* Headings: medium weight, tight leading for compact dashboards */
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-medium leading-tight;
+    /* Re-assert tabular-nums on headings — some browsers reset OpenType
+     * features when font-weight is overridden. */
+    font-variant-numeric: tabular-nums slashed-zero;
+  }
+
+  /* PLAN-0059 W0 F-VISUAL-NEW-E: ::selection styled to brand yellow @ 30% alpha.
+   * Default OS browser blue (#338FFF on Chrome, #0066CC on Safari) reads as
+   * "leaked from another app" against the dark theme. Bloomberg uses primary-yellow
+   * at 25%; Refinitiv uses cyan at 30%. */
+  ::selection {
+    background: hsl(var(--primary) / 0.30);
+    color: hsl(var(--foreground));
+  }
+  ::-moz-selection {
+    background: hsl(var(--primary) / 0.30);
+    color: hsl(var(--foreground));
+  }
+
+  /* Scrollbars: 4px terminal-grade — matches Claude Code CLI aesthetic.
+   * WHY transparent track: shows the panel background through the scrollbar
+   * channel, making it invisible when not scrolling (cleaner than a visible trough).
+   * WHY border-radius: 0: terminal UIs use sharp thumb edges, not pill shapes.
+   * Bloomberg Terminal scrollbars have zero rounding. */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 0; /* sharp thumb — no pill shape in terminal UIs */
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+  /* Firefox minimal scrollbar */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+}
+
+/* ── Terminal shadow reset ─────────────────────────────────────────────── */
+/* WHY: Terminal UIs use 1px borders for structure — never decorative shadows.
+ * shadcn/ui Popover, DropdownMenu, and Select add box-shadow by default.
+ * This global reset ensures ALL shadcn popovers/dropdowns render borderless
+ * and shadowless, relying only on the border for definition. */
+@layer base {
+  /* Global shadow reset — borders replace shadows for all panel structure */
+  .shadow-sm, .shadow, .shadow-md, .shadow-lg, .shadow-xl, .shadow-2xl {
+    box-shadow: none !important;
+  }
+
+  /* shadcn Radix popper wrappers (Popover, Select, DropdownMenu, Tooltip)
+   * default to a large box-shadow. Override to border-only. */
+  [data-radix-popper-content-wrapper] > * {
+    box-shadow: none !important;
+    border: 1px solid hsl(var(--border)) !important;
+  }
+}
+
+/* ── Finance-specific utility classes ─────────────────────────── */
+@layer utilities {
+  /* .price-up / .price-down: semantic classes for P&L coloring */
+  .price-up {
+    color: hsl(var(--positive));
+  }
+  .price-down {
+    color: hsl(var(--negative));
+  }
+  .price-neutral {
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* .data-cell: compact table cell for high-density data grids */
+  .data-cell {
+    @apply px-2 py-1 text-xs font-mono tabular-nums;
+  }
+
+  /* .compact-row: Bloomberg-style tight table row */
+  .compact-row {
+    @apply h-8 border-b border-border hover:bg-muted/50 transition-colors;
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * PLAN-0059 W0 F-VISUAL-NEW-B — Accessibility-mode coverage.
+ *
+ * Closes the audit's accessibility-coverage gap. Required for BlackRock
+ * enterprise accessibility committee compliance. Four media queries:
+ *   1. prefers-reduced-motion: disable transitions for vestibular-disorder users
+ *   2. forced-colors: redefine tokens to system colors (Windows High Contrast,
+ *      ~6% of enterprise Windows users)
+ *   3. prefers-contrast: more — bump foreground to higher contrast
+ *   4. print: light theme on paper (PMs print holdings reports for client meetings)
+ * ────────────────────────────────────────────────────────────────────────
+ */
+
+/* ── 1. Reduced motion — WCAG 2.3.3, Apple HIG, Microsoft Fluent ───── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* Tick-flash (Wave D), alert flash overlay, accordion height — all clamp
+   * to instant. State changes still apply, just without the animation.
+   * PLAN-0052 Wave A QA: animate-ping added — used 4× on landing (Hero
+   * kicker, LIVE pill, LiveDataStrip, Footer status). Without an explicit
+   * override the universal 0.01ms duration produces a faint initial flash. */
+  .tick-flash, .animate-pulse, .animate-ping, .animate-spin, .animate-in, .animate-out {
+    animation: none !important;
+  }
+}
+
+/* ── PLAN-0052 Wave A: anchor scroll offset for sticky nav ───────────────
+ * The landing page LandingNav is `sticky top-0` and ~56px tall. Without
+ * scroll-padding-top, anchor jumps (#hero, #pricing, etc.) land with the
+ * heading hidden behind the nav. 5rem = 80px gives breathing room. */
+html {
+  scroll-padding-top: 5rem;
+}
+
+/* ── PLAN-0052 QA-R6: TopBarMarquee — scrolling ticker strip ─────────────
+ *
+ * WHY @keyframes here (not Tailwind plugin):
+ * The animation moves from 0 → -50% of the element's OWN width. Tailwind
+ * cannot express a percentage-of-self value inline; the value is computed
+ * at runtime from the total flex width of the doubled ticker list. A custom
+ * @keyframes with a fixed -50% target is the idiomatic CSS solution.
+ *
+ * WHY var(--marquee-duration):
+ * The duration is set inline on the animated element by TopBarMarquee.tsx
+ * (it scales with ticker count: 6s × N). Using a CSS variable lets the JS
+ * component control timing without a Tailwind plugin or style injection.
+ *
+ * WHY animation-play-state on hover/focus-within:
+ * Pausing on hover lets users read any chip without the strip scrolling past.
+ * focus-within covers keyboard navigation (Tab into the marquee region).
+ *
+ * REDUCED-MOTION HANDLING:
+ * The global prefers-reduced-motion block above already clamps all animation-
+ * duration values to 0.01ms and sets animation-iteration-count: 1. For the
+ * marquee we additionally show the static fallback row (.marquee-static-
+ * fallback) and hide the animated strip so motion-sensitive users get a normal
+ * static price bar rather than a single frozen frame. */
+@keyframes worldview-ticker-scroll {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-50%, 0, 0); }
+}
+
+.marquee-strip {
+  animation: worldview-ticker-scroll var(--marquee-duration, 60s) linear infinite;
+}
+
+/* Pause on hover or keyboard focus inside the marquee region. */
+.marquee-strip:hover,
+.marquee-strip:focus-within {
+  animation-play-state: paused;
+}
+
+/* Reduced-motion: hide the scrolling track, show static fallback. */
+@media (prefers-reduced-motion: reduce) {
+  .marquee-strip {
+    display: none;
+  }
+  .marquee-static-fallback {
+    display: flex !important;
+  }
+}
+
+/* ── 2. Forced colors (Windows High Contrast Mode) ──────────────────── */
+@media (forced-colors: active) {
+  :root, .dark {
+    --background: Canvas;
+    --foreground: CanvasText;
+    --card: Canvas;
+    --card-foreground: CanvasText;
+    --popover: Canvas;
+    --popover-foreground: CanvasText;
+    --muted: Canvas;
+    --muted-foreground: GrayText;
+    --border: CanvasText;
+    --input: CanvasText;
+    --primary: Highlight;
+    --primary-foreground: HighlightText;
+    --positive: LinkText;            /* system links default to a distinct color */
+    --negative: Mark;                /* system mark color (urgent) */
+    --destructive: Mark;
+    --warning: Mark;
+    --accent: Canvas;
+    --accent-ai: LinkText;
+    --ring: Highlight;
+  }
+  /* Disable opacity-based dimming under forced colors — system colors are
+   * already adjusted by the OS contrast theme. */
+  [class*="opacity-"], [class*="/10"], [class*="/20"], [class*="/30"], [class*="/40"], [class*="/50"] {
+    opacity: 1 !important;
+  }
+  /* Selection outline becomes 2px CanvasText — visible against any system bg */
+  *:focus-visible {
+    outline: 2px solid CanvasText !important;
+    outline-offset: 1px !important;
+  }
+}
+
+/* ── 3. Higher-contrast preference (separate from forced-colors) ────── */
+@media (prefers-contrast: more) {
+  :root, .dark {
+    --foreground: 0 0% 100%;         /* pure white text */
+    --muted-foreground: 0 0% 78%;    /* 6.8:1 from #09090B */
+    --border: 0 0% 45%;              /* visible 1px panel edges */
+    /* PLAN-0059 W0 fix F-018 (2026-04-30): boost price/AI/brand tokens
+     * proportionally so colour signals keep parity with the bumped
+     * foreground. Without these, the high-contrast page sharpens text
+     * but green/red/violet stay at default chroma — visually inconsistent. */
+    --positive: 150 100% 50%;        /* #00FF80, AAA on bumped fg */
+    --negative: 350 100% 70%;        /* #FF668A, brighter urgent red */
+    --destructive: 0 95% 65%;        /* #FA4C4C, sharper delete red */
+    --warning: 40 100% 60%;          /* #FFB833, brighter Bloomberg amber */
+    --primary: 48 100% 60%;          /* #FFE034, max-luminance trading yellow */
+    --accent-ai: 268 95% 75%;        /* brighter AI violet */
+  }
+}
+
+/* ── 3.b. Density data-attribute — PLAN-0059 I-4 ─────────────────────
+     PreferencesProvider sets `data-density` on <body> from the user's
+     preference. These rules let global surfaces respond — but components
+     that already opt in via cva density variants (Button, Input,
+     DataTable) remain consumer-controlled. */
+[data-density="comfortable"] body,
+body[data-density="comfortable"] {
+  /* Slight font-size bump for marketing surfaces / long-form pages */
+  font-size: 14px;
+}
+body[data-density="comfortable"] .text-\[11px\] {
+  font-size: 12px;
+}
+body[data-density="default"] {
+  /* No overrides — matches the legacy app shape. */
+}
+body[data-density="compact"] {
+  /* Compact is the institutional default and matches the existing
+     22px-row token system. No overrides needed today; reserved for
+     future component-class scoping. */
+}
+
+/* ── 4. Print stylesheet — light theme on paper ─────────────────────── */
+@media print {
+  :root, .dark {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 0%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 0%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 0%;
+    --muted: 0 0% 95%;
+    --muted-foreground: 0 0% 30%;
+    --border: 0 0% 60%;
+    --positive: 150 100% 25%;        /* darker on white for print contrast */
+    --negative: 0 80% 35%;
+    --destructive: 0 80% 40%;
+    --warning: 40 100% 30%;
+    --primary: 48 100% 35%;          /* darker yellow for print legibility */
+    --primary-foreground: 0 0% 0%;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  /* Hide chrome that's irrelevant on paper */
+  .topbar, .sidebar, .statusbar, [data-print-hide], header, nav, aside.no-print {
+    display: none !important;
+  }
+  /* Avoid breaking tables across pages mid-row */
+  tr, .data-row {
+    page-break-inside: avoid;
+  }
+  thead {
+    display: table-header-group;     /* repeat header on every page */
+  }
+  /* PLAN-0059 I-6: print-quality refinements.
+     - Show URL after every link in body content so the printed copy is useful
+       without the hyperlink. Skip for nav/menu links (those are display:none).
+     - Force charts (canvas-rendered) to fit within page width.
+     - Reset card shadows that don't print clean. */
+  main a[href]:not([data-print-hide])::after {
+    content: " (" attr(href) ")";
+    font-size: 9pt;
+    color: #666;
+    word-break: break-all;
+  }
+  canvas, svg {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+  .shadow-md, .shadow-lg, .shadow-xl, [class*="shadow-["] {
+    box-shadow: none !important;
+  }
+  /* Brand mark prefix on the first heading of every page —
+     gives the printed PDF a recognisable header. */
+  body::before {
+    content: "Worldview";
+    display: block;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 600;
+    font-size: 9pt;
+    color: #999;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 4pt;
+    margin-bottom: 12pt;
+  }
+
+  /* A4 portrait, 1.5cm margins by default */
+  @page {
+    margin: 1.5cm;
+    size: A4 portrait;
+  }
+}

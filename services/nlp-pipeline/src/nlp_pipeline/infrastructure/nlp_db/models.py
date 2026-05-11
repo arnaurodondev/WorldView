@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
+import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector  # type: ignore[import-not-found]
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, Text, func
+from sqlalchemy import VARCHAR, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -32,10 +34,31 @@ class SectionModel(Base):
     char_start: Mapped[int] = mapped_column(Integer, nullable=False)
     char_end: Mapped[int] = mapped_column(Integer, nullable=False)
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # PLAN-0086 Wave B-2: tenant isolation — nullable so legacy rows work with IS NULL fallback
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class ChunkModel(Base):
+    """ORM mapping for the ``chunks`` table.
+
+    PLAN-0063 W5-2 / migration 0017 added two GENERATED tsvector columns
+    (``tsv_english`` and ``tsv_simple``) to support hybrid lexical search.
+    BP-NEW1 — those columns are intentionally NOT declared on this model:
+    Postgres rejects any INSERT or UPDATE that targets a GENERATED column,
+    so adding them would break every chunk write the moment SQLAlchemy
+    tried to send a value (even ``None``) for them. They are computed by
+    the database from ``title_denorm`` / ``section_heading_denorm`` /
+    ``chunk_text`` (NOT ``chunk_text_key`` — that holds a MinIO key, not
+    body text — see BP-NEW-CHUNK-TEXT) and read directly via raw SQL by
+    ``ChunkANNRepository.lexical_search()``.
+
+    The two plain text columns ``title_denorm`` and ``section_heading_denorm``
+    are normal ORM-writeable columns; the chunk-writer populates them at
+    insert time so the GENERATED tsvector picks up the analyst-relevant
+    weighting (title=A, heading=B).
+    """
+
     __tablename__ = "chunks"
 
     chunk_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -53,6 +76,29 @@ class ChunkModel(Base):
     sentence_end_idx: Mapped[int | None] = mapped_column(Integer, nullable=True)
     speaker: Mapped[str | None] = mapped_column(Text, nullable=True)
     heading_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    chunk_text_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PLAN-0063 W5-2 (migration 0017): denormalised columns that feed the
+    # weighted tsv_english GENERATED column. NULL until the next ingestion
+    # populates them (BP-NEW1 — see class docstring).
+    title_denorm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    section_heading_denorm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PLAN-0063 W5-2 (BP-NEW-CHUNK-TEXT): denormalised chunk body for FTS.
+    # MinIO retains the canonical copy via chunk_text_key; this column exists
+    # so the GENERATED tsvector tokenizes actual content rather than the
+    # MinIO object path. The chunk-writer populates from `Chunk.text` at insert.
+    chunk_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PLAN-0078 Wave A: denormalised GLiNER mention metadata for GIN-indexed
+    # query-time entity filtering via @> containment queries.
+    # Shape: [{"entity_id": str|null, "entity_type": str, "char_start": int,
+    #          "char_end": int, "gliner_score": float, "raw_text": str}]
+    # Naming note: there is a table called ``entity_mentions`` — this is a
+    # column on ``chunks``, not that table.  Always empty ([]) until the
+    # article consumer or backfill script populates it.
+    entity_mentions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    # PLAN-0086 Wave B-2: tenant isolation — nullable so legacy rows work with IS NULL fallback
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    # PLAN-0086 Wave B-2: denormalised document title for RAG citations (avoids cross-service lookup)
+    document_title: Mapped[str | None] = mapped_column(sa.String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -103,8 +149,20 @@ class EntityMentionModel(Base):
     char_start: Mapped[int] = mapped_column(Integer, nullable=False)
     char_end: Mapped[int] = mapped_column(Integer, nullable=False)
     resolved_entity_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    # F-009: tenant isolation — nullable so legacy rows work with IS NULL fallback
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     resolution_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     resolution_stage: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ner_model_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Added by migration 0007 (PLAN-0033 T-B-1-01)
+    # nullable=False with server_default="unresolved" → always has a value → Mapped[str]
+    resolution_outcome: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default="unresolved",
+    )
+    resolution_noise_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    resolution_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -163,6 +221,9 @@ class RoutingDecisionModel(Base):
     doc_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     routing_tier: Mapped[str] = mapped_column(Text, nullable=False)
     final_routing_tier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PLAN-0057 A-1 (F-CRIT-06): persist Block 6 suppression-gate decision.
+    # CHECK constraint at DB layer restricts to {full_pipeline, section_embeddings_only, halt}.
+    processing_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     composite_score: Mapped[float] = mapped_column(Float, nullable=False)
     feature_scores_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -194,3 +255,156 @@ class DeadLetterQueueModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class DocumentSourceMetadataModel(Base):
+    """Cached citation metadata for stored articles (PRD §6 Wave B-1).
+
+    Populated by the S6 consumer; queried by S8 RAG for inline citations.
+    Access is always by PK or batch IN clause — no additional indexes needed.
+    """
+
+    __tablename__ = "document_source_metadata"
+
+    doc_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_name: Mapped[str | None] = mapped_column(VARCHAR(100), nullable=True)
+    source_type: Mapped[str | None] = mapped_column(VARCHAR(50), nullable=True)
+    word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # PRD-0026 §6.4: LLM relevance scoring columns (nullable; migration 0009)
+    llm_relevance_score: Mapped[Decimal | None] = mapped_column(sa.Numeric(6, 4), nullable=True)
+    llm_scored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # PLAN-0050 Wave E: sentiment + impact_score for News-tab pills (migration 0011).
+    # Both nullable — null until ArticleRelevanceScoringWorker/PriceImpactLabellingWorker run.
+    # sentiment values: "positive" | "negative" | "neutral" | "mixed"
+    sentiment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    impact_score: Mapped[Decimal | None] = mapped_column(sa.Numeric(6, 4), nullable=True)
+
+
+class EmbeddingPendingModel(Base):
+    """Retry queue for section/chunk embedding failures (migration 0004).
+
+    Populated by the S6 consumer when Block 7 embedding calls fail.
+    Consumed by EmbeddingRetryWorker which re-embeds with exponential backoff.
+    """
+
+    __tablename__ = "embedding_pending"
+
+    pending_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    doc_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    section_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    chunk_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    embedding_text: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    next_retry_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # PLAN-0057 Wave E-4 / migration 0016: stamped inside ``mark_failure`` so
+    # operators can distinguish "worker is healthily retrying" from "worker
+    # has been silently failing for hours".  NULL until the first retry runs.
+    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ArticleImpactWindowModel(Base):
+    """Multi-window price-impact measurements (PRD-0026 §6.4, migration 0009).
+
+    One row per (article_id, entity_id, window_type). Replaces article_price_impacts.
+    UNIQUE enforced by idx_article_impact_windows_unique index in migration 0009.
+    """
+
+    __tablename__ = "article_impact_windows"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("gen_random_uuid()"),
+    )
+    article_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    symbol: Mapped[str] = mapped_column(Text, nullable=False)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_type: Mapped[str] = mapped_column(VARCHAR(20), nullable=False)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    price_start: Mapped[Decimal] = mapped_column(sa.Numeric(18, 8), nullable=False)
+    price_end: Mapped[Decimal] = mapped_column(sa.Numeric(18, 8), nullable=False)
+    delta_pct: Mapped[Decimal] = mapped_column(sa.Numeric(10, 6), nullable=False)
+    high_pct: Mapped[Decimal | None] = mapped_column(sa.Numeric(10, 6), nullable=True)
+    low_pct: Mapped[Decimal | None] = mapped_column(sa.Numeric(10, 6), nullable=True)
+    volume: Mapped[Decimal | None] = mapped_column(sa.Numeric(18, 2), nullable=True)
+    impact_score: Mapped[Decimal] = mapped_column(sa.Numeric(6, 4), nullable=False)
+    normalisation_cap_pct: Mapped[Decimal] = mapped_column(sa.Numeric(6, 2), nullable=False)
+    data_quality: Mapped[str] = mapped_column(VARCHAR(20), nullable=False, server_default="daily_proxy")
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # PLAN-0055 C-1: provenance columns. Nullable because existing rows pre-date
+    # the migration; the worker rewrite (C-2) populates them on every new write.
+    model_id: Mapped[str | None] = mapped_column(VARCHAR(128), nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(VARCHAR(32), nullable=True)
+    input_hash: Mapped[str | None] = mapped_column(VARCHAR(64), nullable=True)
+
+
+class DocumentSourceLLMScoreModel(Base):
+    """Append-only LLM score ledger (PLAN-0055 Sub-Plan C).
+
+    One row per ``(doc_id, score_type, model_id, prompt_version)``. The latest
+    row by ``generated_at`` wins; the ``document_source_llm_latest`` materialized
+    view (Wave C-3) projects the current score for read paths.
+
+    Worker writes are INSERT ON CONFLICT DO NOTHING — duplicate scoring of the
+    same doc with the same model + prompt is a silent no-op.
+    """
+
+    __tablename__ = "document_source_llm_scores"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("gen_random_uuid()"),
+    )
+    doc_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    score_type: Mapped[str] = mapped_column(VARCHAR(32), nullable=False)
+    score_value: Mapped[Decimal | None] = mapped_column(sa.Numeric(6, 4), nullable=True)
+    score_label: Mapped[str | None] = mapped_column(VARCHAR(32), nullable=True)
+    model_id: Mapped[str] = mapped_column(VARCHAR(128), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(VARCHAR(32), nullable=False)
+    input_hash: Mapped[str] = mapped_column(VARCHAR(64), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+class LLMReplayJobModel(Base):
+    """Background job for the admin LLM replay endpoint (PLAN-0055 C-4).
+
+    The replay worker picks PENDING rows with FOR UPDATE SKIP LOCKED, sets
+    RUNNING, iterates articles, then sets COMPLETED (or FAILED with
+    ``error_detail`` on mid-stream errors).
+    """
+
+    __tablename__ = "llm_replay_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        server_default=sa.text("gen_random_uuid()"),
+    )
+    model_id: Mapped[str] = mapped_column(VARCHAR(128), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(VARCHAR(32), nullable=False)
+    score_types: Mapped[list[str]] = mapped_column(sa.ARRAY(Text), nullable=False)
+    since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(VARCHAR(16), nullable=False, server_default="PENDING")
+    total_articles: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    processed: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)

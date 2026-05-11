@@ -16,22 +16,23 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from datetime import date, datetime
-    from decimal import Decimal
-
     from market_data.domain.entities import (
         FundamentalsRecord,
         Instrument,
         OHLCVBar,
+        PredictionMarket,
+        PredictionMarketSnapshot,
         Quote,
+        ScreenFieldMetadata,
         Security,
     )
     from market_data.domain.enums import FundamentalsSection, Timeframe
     from market_data.domain.value_objects import InstrumentFlags
-
 
 # ── Read-side query result types ─────────────────────────────────────────────
 
@@ -63,6 +64,10 @@ class ScreenResult:
 
     instrument_id: str
     metrics: dict[str, Decimal | None]
+    ticker: str | None = None
+    name: str | None = None
+    exchange: str | None = None
+    sector: str | None = None
 
 
 class SecurityRepository(ABC):
@@ -87,6 +92,15 @@ class SecurityRepository(ABC):
     @abstractmethod
     async def upsert(self, security: Security) -> Security:
         """Insert or update the security; return the persisted record."""
+
+    @abstractmethod
+    async def update_from_enrichment(self, security_id: str, fields: dict[str, str | None]) -> None:
+        """COALESCE-update security fields from enrichment data.
+
+        Only updates columns whose current DB value IS NULL, preserving any
+        field already populated by a higher-priority source.  This prevents
+        EODHD from overwriting manually-curated or exchange-sourced values.
+        """
 
 
 class InstrumentRepository(ABC):
@@ -138,6 +152,14 @@ class InstrumentRepository(ABC):
     async def update_metadata(self, id: str, metadata: dict[str, str | None]) -> None:  # noqa: A002
         """Update instrument metadata fields (name, isin, sector, etc.), ignoring None-valued keys."""
 
+    @abstractmethod
+    async def find_by_isin(self, isin: str) -> Instrument | None:
+        """Return the first active instrument whose ISIN matches, or ``None``."""
+
+    @abstractmethod
+    async def find_by_symbol_icase(self, symbol: str) -> Instrument | None:
+        """Return the first active instrument whose symbol matches case-insensitively, or ``None``."""
+
 
 class OHLCVRepository(ABC):
     """Read/write access to the ``ohlcv_bars`` hypertable."""
@@ -169,6 +191,72 @@ class OHLCVRepository(ABC):
     @abstractmethod
     async def get_date_range(self, instrument_id: str, timeframe: Timeframe) -> tuple[date, date] | None:
         """Return ``(min_date, max_date)`` for the instrument/timeframe, or ``None``."""
+
+    @abstractmethod
+    async def bulk_upsert_derived(self, bars: list[OHLCVBar]) -> None:
+        """Upsert derived bars (is_derived=True) unconditionally.
+
+        Derived bars are computed locally from finer-grained bars (e.g. weekly
+        aggregated from daily).  They are always overwritten on recalculation
+        regardless of provider_priority — the local derivation IS the source of
+        truth for these timeframes (PLAN-0036 W2-4).
+        """
+
+    @abstractmethod
+    async def find_by_instrument_timeframe_datetime_range(
+        self,
+        instrument_id: str,
+        timeframe: Timeframe,
+        start_dt: datetime,
+        end_dt: datetime,
+    ) -> list[OHLCVBar]:
+        """Return bars for the given datetime range (inclusive on both ends).
+
+        Unlike ``find_by_instrument_timeframe_range`` which accepts ``date``
+        boundaries, this method accepts full ``datetime`` objects — required
+        for intraday period queries (e.g. 5m/1h resampling windows).
+        """
+
+    @abstractmethod
+    async def find_derived(
+        self,
+        instrument_id: str,
+        timeframe: Timeframe,
+        *,
+        limit: int = 200,
+    ) -> list[OHLCVBar]:
+        """Return derived bars for the given instrument/timeframe, sorted descending.
+
+        Used by ``GetOrDeriveOHLCVBarsUseCase`` to serve pre-computed weekly /
+        monthly bars without an EODHD call (PLAN-0036 W2-5).
+        """
+
+    @abstractmethod
+    async def get_sector_period_returns(self, lookback_days: int) -> list[dict]:
+        """Return average period return per sector using daily OHLCV bars.
+
+        Uses calendar-based lookback from the most recent daily bar per instrument
+        rather than derived weekly/monthly bars (which are rarely populated).
+
+        lookback_days: 7 for 1W, 30 for 1M
+        Returns a list of dicts: {name: str, change_pct: float | None, instrument_count: int}
+        """
+
+    @abstractmethod
+    async def get_period_movers(
+        self,
+        lookback_days: int,
+        mover_type: str,
+        limit: int,
+    ) -> list[dict]:
+        """Return top gainers or losers sorted by period return using daily OHLCV bars.
+
+        Uses calendar-based lookback from the most recent daily bar per instrument.
+
+        lookback_days: 7 for 1W, 30 for 1M
+        mover_type: "gainers" (DESC) or "losers" (ASC)
+        Returns list of dicts: {instrument_id, ticker, name, period_return_pct}
+        """
 
 
 class QuoteRepository(ABC):
@@ -332,8 +420,23 @@ class OutboxEventRepository(ABC):
     """Transactional outbox for domain event publishing."""
 
     @abstractmethod
-    async def create(self, event_type: str, topic: str, payload: dict) -> str:
-        """Insert a new pending outbox record; return the new record ID."""
+    async def create(
+        self,
+        event_type: str,
+        topic: str,
+        payload: dict,
+        partition_key: str | None = None,
+    ) -> str:
+        """Insert a new pending outbox record; return the new record ID.
+
+        ``partition_key`` (PLAN-0057-followup Wave B / F-DATA-06): optional
+        Kafka partition key. When set, the outbox dispatcher will pass
+        ``key=partition_key.encode("utf-8")`` to ``producer.produce(...)``
+        so that every event for the same key lands on the same Kafka
+        partition (preserving per-aggregate ordering for downstream
+        consumers). When ``None`` (default), Kafka's sticky/round-robin
+        partitioner is used — fine for events with no ordering invariants.
+        """
 
     @abstractmethod
     async def find_pending(self, limit: int = 100) -> list[dict]:
@@ -388,19 +491,125 @@ class FundamentalMetricsQueryRepository(ABC):
         end_date: date | None = None,
         period_type: str | None = None,
         limit: int = 1000,
+        order: str = "asc",
     ) -> list[MetricDataPoint]:
-        """Return timeseries data points for an instrument/metric combination."""
+        """Return timeseries data points for an instrument/metric combination.
+
+        ``order`` is ``"asc"`` (oldest first) or ``"desc"`` (newest first applied
+        at the SQL ``LIMIT`` boundary). The implementation must always return
+        rows in chronological order regardless of ``order``.
+        """
 
     @abstractmethod
     async def screen(
         self,
         filters: list[ScreenFilter],
         *,
-        limit: int = 100,
+        limit: int = 50,
         offset: int = 0,
-    ) -> list[ScreenResult]:
-        """Screen instruments by metric thresholds; return matching instruments."""
+        sort_by: str | None = None,
+        sort_order: str = "asc",
+    ) -> tuple[list[ScreenResult], int]:
+        """Screen instruments by metric thresholds; return (matching instruments, total count)."""
 
     @abstractmethod
     async def get_available_metrics(self, instrument_id: str) -> list[str]:
         """Return all distinct metric names available for an instrument."""
+
+    @abstractmethod
+    async def get_screen_field_metadata(self) -> list[ScreenFieldMetadata]:
+        """Return all rows from ``screen_field_metadata`` (DB fallback for cache miss)."""
+
+
+# ── Prediction Market repositories (PRD-0019) ─────────────────────────────────
+
+
+class PredictionMarketRepository(ABC):
+    """Port for prediction market read/write operations."""
+
+    @abstractmethod
+    async def upsert(self, market: PredictionMarket) -> PredictionMarket:
+        """Insert or update a prediction market record.
+
+        Conflict target: ``market_id``.
+        Updates: question, description, outcomes, close_time,
+        resolution_status, resolved_answer, updated_at.
+        """
+
+    @abstractmethod
+    async def find_by_market_id(self, market_id: str) -> PredictionMarket | None:
+        """Return the market with the given ``market_id``, or ``None``."""
+
+    @abstractmethod
+    async def list_markets(
+        self,
+        *,
+        status: str | None,
+        query: str | None,
+        limit: int,
+        offset: int,
+        category: str | None = None,
+    ) -> tuple[list[tuple[PredictionMarket, Decimal | None]], int]:
+        """Return a paginated list of ``(market, latest_volume_24h)`` pairs and total.
+
+        ``status``: filter by ``resolution_status`` (exact match); ``None`` = all.
+        ``query``: filter by ``question ILIKE '%query%'``; ``None`` = all.
+        ``category``: filter by ``LOWER(category) = LOWER(:category)`` exact
+            match (PLAN-0049 T-C-3-03); ``None`` = all.  Free-form string —
+            backend never validates the enum so new Polymarket tags roll out
+            without a code change.  NULL-category rows never match.
+
+        ``latest_volume_24h``: ``volume_24h`` from the most recent snapshot
+        (``LEFT JOIN LATERAL ... ORDER BY snapshot_at DESC LIMIT 1``); ``None``
+        when the market has no snapshots or the latest snapshot has no volume.
+        Forward-compatible: callers tolerating ``None`` continue to work.
+        """
+
+    @abstractmethod
+    async def count_open_by_category(self) -> list[tuple[str | None, int]]:
+        """Return ``[(category, count), ...]`` for all currently-open markets.
+
+        PLAN-0053 T-C-3-05. ``category`` may be NULL — frontends typically
+        bucket NULL into "uncategorized" or skip it. Counts are computed over
+        ``WHERE resolution_status = 'open'`` so unresolved or cancelled
+        markets are excluded.
+
+        Order: descending by count (highest first). Forward-compatible: a
+        new Polymarket category lights up automatically — no code changes
+        needed because we don't validate the enum.
+        """
+
+
+class PredictionMarketSnapshotRepository(ABC):
+    """Port for prediction market snapshot (hypertable) operations."""
+
+    @abstractmethod
+    async def insert_if_not_exists(self, snapshot: PredictionMarketSnapshot) -> bool:
+        """Atomically insert the snapshot; return ``True`` if new, ``False`` on conflict.
+
+        Conflict target: ``(market_id, snapshot_at)``.
+        """
+
+    @abstractmethod
+    async def list_snapshots(
+        self,
+        market_id: str,
+        *,
+        from_dt: datetime | None,
+        to_dt: datetime | None,
+        limit: int,
+    ) -> list[PredictionMarketSnapshot]:
+        """Return snapshots for ``market_id``, ordered by ``snapshot_at DESC``."""
+
+    @abstractmethod
+    async def get_latest_prices_batch(
+        self,
+        market_ids: list[str],
+    ) -> dict[str, dict[str, float]]:
+        """Return the latest ``outcomes_prices`` for each market in ``market_ids``.
+
+        Uses ``DISTINCT ON (market_id)`` ordered by ``snapshot_at DESC`` — a single
+        query regardless of how many markets are requested (avoids N+1).
+
+        Returns a dict keyed by ``market_id``; missing markets are not included.
+        """

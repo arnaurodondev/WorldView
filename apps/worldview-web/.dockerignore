@@ -1,0 +1,15 @@
+node_modules
+.next
+.env.local
+.env.*.local
+*.log
+.git
+.gitignore
+Dockerfile
+.dockerignore
+e2e
+__tests__
+vitest.config.ts
+playwright.config.ts
+tsconfig.tsbuildinfo
+coverage

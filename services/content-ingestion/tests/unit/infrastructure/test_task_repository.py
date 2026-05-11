@@ -212,6 +212,54 @@ class TestUpdateStatus:
         session.execute.assert_called_once()
 
 
+class TestRecoverExpiredLeases:
+    async def test_recover_expired_leases_returns_count(self) -> None:
+        """Returns the number of tasks recovered."""
+        session = _mock_session()
+        mock_result = MagicMock()
+        # fetchall() returns one row per recovered task
+        mock_result.fetchall.return_value = [
+            (common.ids.new_uuid7(),),
+            (common.ids.new_uuid7(),),
+        ]
+        session.execute.return_value = mock_result
+        repo = TaskRepository(session)  # type: ignore[arg-type]
+
+        now = common.time.utc_now()
+        recovered = await repo.recover_expired_leases(now, lease_timeout_seconds=0)
+
+        assert recovered == 2
+        session.execute.assert_called_once()
+
+    async def test_recover_expired_leases_none_expired(self) -> None:
+        """Returns 0 when no leases are expired."""
+        session = _mock_session()
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = []
+        session.execute.return_value = mock_result
+        repo = TaskRepository(session)  # type: ignore[arg-type]
+
+        now = common.time.utc_now()
+        recovered = await repo.recover_expired_leases(now, lease_timeout_seconds=300)
+
+        assert recovered == 0
+
+    async def test_recover_expired_leases_grace_period(self) -> None:
+        """Grace period delays recovery — cutoff = now - lease_timeout."""
+        session = _mock_session()
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = []
+        session.execute.return_value = mock_result
+        repo = TaskRepository(session)  # type: ignore[arg-type]
+
+        now = common.time.utc_now()
+        # 3600s grace period — should produce a WHERE clause with cutoff 1 hour ago
+        await repo.recover_expired_leases(now, lease_timeout_seconds=3600)
+
+        # Confirm the UPDATE statement was issued (cutoff logic is in SQL)
+        session.execute.assert_called_once()
+
+
 class TestCountByStatus:
     async def test_count_by_status(self) -> None:
         """Returns correct counts per status."""

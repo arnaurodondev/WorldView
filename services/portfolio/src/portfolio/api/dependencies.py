@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import hmac
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, Request
 
 from portfolio.application.ports.cache import WatchlistCachePort
-from portfolio.application.ports.unit_of_work import UnitOfWork
+from portfolio.application.ports.unit_of_work import ReadOnlyUnitOfWork, UnitOfWork
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -20,7 +19,24 @@ async def get_uow(request: Request) -> AsyncGenerator[UnitOfWork, None]:
     from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 
     session_factory = request.app.state.session_factory
-    async with SqlAlchemyUnitOfWork(session_factory) as uow:
+    cipher = getattr(request.app.state, "snaptrade_cipher", None)
+    async with SqlAlchemyUnitOfWork(session_factory, snaptrade_cipher=cipher) as uow:
+        yield uow
+
+
+async def get_read_uow(request: Request) -> AsyncGenerator[ReadOnlyUnitOfWork, None]:
+    """Yield a read-only SqlAlchemyReadOnlyUnitOfWork bound to the read replica factory (R27).
+
+    Uses SqlAlchemyReadOnlyUnitOfWork which has no commit/rollback/flush — enforcing
+    read-only semantics at the type level.
+    """
+    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyReadOnlyUnitOfWork
+
+    read_factory = request.app.state.read_factory
+    # ST-003 fix: pass cipher so encrypted snaptrade_user_secret fields can be
+    # decrypted when reading brokerage connections via the read replica.
+    cipher = getattr(request.app.state, "snaptrade_cipher", None)
+    async with SqlAlchemyReadOnlyUnitOfWork(read_factory, snaptrade_cipher=cipher) as uow:
         yield uow
 
 
@@ -34,16 +50,6 @@ async def get_watchlist_cache(request: Request) -> WatchlistCachePort:
     )
 
 
-async def verify_internal_token(
-    request: Request,
-    x_internal_token: str | None = Header(None),
-) -> None:
-    """Validate X-Internal-Token against the configured service token."""
-    expected = request.app.state.settings.internal_service_token
-    if not expected or not x_internal_token or not hmac.compare_digest(x_internal_token, expected):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal token")
-
-
 UoWDep = Annotated[UnitOfWork, Depends(get_uow)]
+ReadUoWDep = Annotated[ReadOnlyUnitOfWork, Depends(get_read_uow)]
 WatchlistCacheDep = Annotated[WatchlistCachePort, Depends(get_watchlist_cache)]
-InternalAuthDep = Annotated[None, Depends(verify_internal_token)]

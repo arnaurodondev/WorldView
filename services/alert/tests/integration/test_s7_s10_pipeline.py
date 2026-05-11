@@ -136,8 +136,11 @@ async def test_pipeline_api_returns_alert_after_fanout(
     httpserver: Any,
 ) -> None:
     """M7: after fan-out, GET /api/v1/alerts/pending returns the alert for the user."""
+    from tests.integration.conftest import INTEGRATION_USER_ID
+
     entity_id = str(uuid4())
-    user_id = str(uuid4())
+    # Use the JWT's sub UUID as user_id so CurrentUserIdDep can find alerts (BP-165)
+    user_id = INTEGRATION_USER_ID
     watchlist_id = str(uuid4())
 
     httpserver.expect_request(

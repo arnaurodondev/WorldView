@@ -1,6 +1,9 @@
 """CanonicalEntity repository — get/create in intelligence_db.
 
 Uses raw SQL (text()) — S6 does not own intelligence_db DDL.
+
+PLAN-0084 D-2: declares ``CanonicalEntityPort`` as parent so that use cases
+can depend on the port ABC rather than this concrete class directly.
 """
 
 from __future__ import annotations
@@ -12,12 +15,13 @@ from uuid import UUID
 from sqlalchemy import text
 
 import common.ids  # type: ignore[import-untyped]
+from nlp_pipeline.application.ports.canonical_entity import CanonicalEntityPort
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class CanonicalEntityRepository:
+class CanonicalEntityRepository(CanonicalEntityPort):
     """Read/create canonical entities in intelligence_db (PRD §6.7 Block 9)."""
 
     def __init__(self, session: AsyncSession) -> None:
@@ -44,6 +48,34 @@ class CanonicalEntityRepository:
             "exchange": row[5],
         }
 
+    async def batch_get(self, entity_ids: list[UUID]) -> dict[UUID, dict[str, object]]:
+        """Fetch multiple canonical entities by ID in a single query.
+
+        Returns a dict keyed by entity_id; missing IDs are omitted.
+        """
+        if not entity_ids:
+            return {}
+
+        result = await self._session.execute(
+            text(
+                "SELECT entity_id, canonical_name, entity_type, isin, ticker, exchange "
+                "FROM canonical_entities WHERE entity_id = ANY(:ids)",
+            ),
+            {"ids": [str(eid) for eid in entity_ids]},
+        )
+        rows = result.fetchall()
+        return {
+            UUID(str(row[0])): {
+                "entity_id": UUID(str(row[0])),
+                "canonical_name": row[1],
+                "entity_type": row[2],
+                "isin": row[3],
+                "ticker": row[4],
+                "exchange": row[5],
+            }
+            for row in rows
+        }
+
     async def create(
         self,
         canonical_name: str,
@@ -63,7 +95,7 @@ class CanonicalEntityRepository:
                 "(entity_id, canonical_name, entity_type, isin, ticker, exchange, metadata, "
                 "created_at, updated_at) "
                 "VALUES (:entity_id, :canonical_name, :entity_type, :isin, :ticker, :exchange, "
-                ":metadata::jsonb, :created_at, :updated_at)",
+                "cast(:metadata AS jsonb), :created_at, :updated_at)",
             ),
             {
                 "entity_id": str(entity_id),

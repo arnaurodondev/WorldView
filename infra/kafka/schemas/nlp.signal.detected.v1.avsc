@@ -16,6 +16,7 @@
     {"name": "polarity",             "type": "string",             "doc": "positive | negative | neutral"},
     {"name": "extraction_confidence","type": "float"},
     {"name": "is_backfill",          "type": "boolean",            "default": false},
-    {"name": "correlation_id",       "type": ["null", "string"],   "default": null}
+    {"name": "correlation_id",       "type": ["null", "string"],   "default": null},
+    {"name": "market_impact_score",  "type": "double",             "default": 0.0, "doc": "Normalised market impact score 0.0–1.0. 0.0 = no OHLCV data or article < 25h old."}
   ]
 }

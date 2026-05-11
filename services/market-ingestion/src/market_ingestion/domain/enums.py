@@ -15,6 +15,8 @@ class Provider(StrEnum):
     ALPHA_VANTAGE = "alpha_vantage"
     POLYGON = "polygon"
     YAHOO_FINANCE = "yahoo_finance"
+    FINNHUB = "finnhub"
+    ALPACA = "alpaca"
 
 
 class DatasetType(StrEnum):

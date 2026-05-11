@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import time
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from ml_clients.dataclasses import EntityMention, NERInput, NEROutput
 from ml_clients.errors import FatalError, RetryableError
+
+if TYPE_CHECKING:
+    from observability.metrics import MLMetrics
 
 logger = structlog.get_logger()
 
@@ -47,11 +51,18 @@ class GLiNERLocalAdapter:
     blocking the event loop.
     """
 
-    def __init__(self, model_path: str, semaphore: asyncio.Semaphore) -> None:
+    def __init__(
+        self,
+        model_path: str,
+        semaphore: asyncio.Semaphore,
+        *,
+        metrics: MLMetrics | None = None,
+    ) -> None:
         self._model_path = model_path
         self._semaphore = semaphore
         self._model: Any = None
         self._model_lock = asyncio.Lock()
+        self._metrics = metrics
 
     async def _get_model(self) -> Any:
         if self._model is None:
@@ -65,38 +76,80 @@ class GLiNERLocalAdapter:
         return self._model
 
     async def extract_entities(self, inp: NERInput) -> NEROutput:
+        start = time.perf_counter()
+        status = "success"
+        try:
+            results = await self.batch_extract_entities([inp])
+            return results[0]
+        except (RetryableError, FatalError):
+            status = "error"
+            raise
+        finally:
+            if self._metrics:
+                latency = time.perf_counter() - start
+                self._metrics.ml_api_requests_total.labels(
+                    model_id=self._model_path, operation="ner", status=status
+                ).inc()
+                self._metrics.ml_api_latency_seconds.labels(model_id=self._model_path, operation="ner").observe(latency)
+                # Word-count approximation for token counts (GLiNER local — zero cost)
+                token_count = len(inp.text.split())
+                self._metrics.ml_api_tokens_in_total.labels(model_id=self._model_path).inc(token_count)
+                # GLiNER is local — no cost per token
+                self._metrics.ml_api_estimated_cost_usd_total.labels(model_id=self._model_path).inc(0.0)
+
+    async def batch_extract_entities(self, inputs: list[NERInput]) -> list[NEROutput]:
+        """Run GLiNER on a batch of texts in a single model forward pass.
+
+        GLiNER accepts a list of texts natively — one GPU/CPU forward pass for
+        all sections rather than N separate calls.  All inputs must use the same
+        entity_classes and threshold; if they differ, the first input's values are
+        used (documents are always processed with a single ontology in this system).
+
+        NMS is applied per-section so overlapping spans within a single section are
+        suppressed without affecting other sections in the batch.
+        """
+        if not inputs:
+            return []
         async with self._semaphore:
             try:
                 model = await self._get_model()
                 loop = asyncio.get_event_loop()
 
-                text = inp.text
-                entity_classes = inp.entity_classes
-                threshold = inp.threshold
+                texts = [inp.text for inp in inputs]
+                entity_classes = inputs[0].entity_classes
+                threshold = inputs[0].threshold
 
-                def sync_call() -> list[dict[str, Any]]:
-                    return model.predict_entities(  # type: ignore[no-any-return]
-                        text, entity_classes, threshold=threshold
-                    )
+                def sync_batch_call() -> list[list[dict[str, Any]]]:
+                    # GLiNER predict_entities(list, labels) silently returns [] — the
+                    # batch API is broken (BP-123). Must iterate individually like server.py.
+                    return [  # type: ignore[no-any-return]
+                        model.predict_entities(t, entity_classes, threshold=threshold) for t in texts
+                    ]
 
-                raw_entities: list[dict[str, Any]] = await loop.run_in_executor(None, sync_call)
-                filtered = _apply_nms(raw_entities)
-                mentions = [
-                    EntityMention(
-                        text=str(e["text"]),
-                        label=str(e["label"]),
-                        start=int(e["start"]),
-                        end=int(e["end"]),
-                        score=float(e["score"]),
-                    )
-                    for e in filtered
-                ]
+                raw_batched: list[list[dict[str, Any]]] = await loop.run_in_executor(None, sync_batch_call)
+
+                outputs: list[NEROutput] = []
+                for raw_entities in raw_batched:
+                    filtered = _apply_nms(raw_entities)
+                    mentions = [
+                        EntityMention(
+                            text=str(e["text"]),
+                            label=str(e["label"]),
+                            start=int(e["start"]),
+                            end=int(e["end"]),
+                            score=float(e["score"]),
+                        )
+                        for e in filtered
+                    ]
+                    outputs.append(NEROutput(mentions=mentions))
+
                 logger.info(
-                    "ner_completed",
+                    "ner_batch_completed",
                     model_path=self._model_path,
-                    entity_count=len(mentions),
+                    batch_size=len(inputs),
+                    total_entities=sum(len(o.mentions) for o in outputs),
                 )
-                return NEROutput(mentions=mentions)
+                return outputs
             except (MemoryError, RuntimeError) as exc:
                 raise RetryableError(f"GLiNER transient error: {exc}") from exc
             except ValueError as exc:

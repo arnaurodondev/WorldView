@@ -1,4 +1,4 @@
-"""Unit tests for Worker 13A — ConfidenceWorker (T-D-3-01)."""
+"""Unit tests for Worker 13A — ConfidenceWorker (T-D-3-01, T-B-01)."""
 
 from __future__ import annotations
 
@@ -32,6 +32,61 @@ def _make_session_factory(
     return sf
 
 
+# ---------------------------------------------------------------------------
+# T-B-01: _derive_period_type helper
+# ---------------------------------------------------------------------------
+
+
+class TestDerivePeriodType:
+    """Unit tests for _derive_period_type helper (T-B-01)."""
+
+    def test_valid_from_populated_from_earliest_evidence(self) -> None:
+        """valid_from is derived from the MIN evidence_date in relation_evidence_raw."""
+        from knowledge_graph.infrastructure.workers.confidence import _derive_period_type
+
+        earliest = datetime(2024, 1, 1, tzinfo=UTC)
+        # When valid_to is None → ONGOING; the key thing is that valid_from is
+        # derived from earliest_evidence_date (tested in integration; here we
+        # test the helper's output for the ONGOING path).
+        result = _derive_period_type(earliest, None)
+        assert result == "ONGOING"
+
+    def test_relation_period_type_point_in_time(self) -> None:
+        """valid_to - valid_from < 7 days → POINT_IN_TIME."""
+        from knowledge_graph.infrastructure.workers.confidence import _derive_period_type
+
+        valid_from = datetime(2026, 1, 1, tzinfo=UTC)
+        valid_to = datetime(2026, 1, 5, tzinfo=UTC)  # 4 days gap
+        result = _derive_period_type(valid_from, valid_to)
+        assert result == "POINT_IN_TIME"
+
+    def test_relation_period_type_historical(self) -> None:
+        """valid_to IS NOT NULL and gap >= 7 days → HISTORICAL."""
+        from knowledge_graph.infrastructure.workers.confidence import _derive_period_type
+
+        valid_from = datetime(2025, 1, 1, tzinfo=UTC)
+        valid_to = datetime(2025, 3, 1, tzinfo=UTC)  # > 7 days gap
+        result = _derive_period_type(valid_from, valid_to)
+        assert result == "HISTORICAL"
+
+    def test_relation_period_type_ongoing(self) -> None:
+        """valid_to IS NULL → ONGOING regardless of valid_from."""
+        from knowledge_graph.infrastructure.workers.confidence import _derive_period_type
+
+        valid_from = datetime(2024, 6, 1, tzinfo=UTC)
+        result = _derive_period_type(valid_from, None)
+        assert result == "ONGOING"
+
+    def test_point_in_time_boundary_exactly_7_days(self) -> None:
+        """Gap of exactly 7 days → HISTORICAL (not < 7 days)."""
+        from knowledge_graph.infrastructure.workers.confidence import _derive_period_type
+
+        valid_from = datetime(2026, 1, 1, tzinfo=UTC)
+        valid_to = datetime(2026, 1, 8, tzinfo=UTC)  # exactly 7 days
+        result = _derive_period_type(valid_from, valid_to)
+        assert result == "HISTORICAL"
+
+
 class TestConfidenceWorkerRun:
     def test_no_unprocessed_rows_no_update(self) -> None:
         """If no unprocessed evidence, confidence update is skipped."""
@@ -55,7 +110,7 @@ class TestConfidenceWorkerRun:
             MockEvRepo.return_value = mock_ev
 
             worker = ConfidenceWorker(sf, settings)
-            asyncio.get_event_loop().run_until_complete(worker.run())
+            asyncio.run(worker.run())
 
             # mark_confidence_updated should never be called
             for _call in MockRelRepo.return_value.mock_calls:

@@ -35,12 +35,27 @@ loki.source.docker "containers" {
 }
 
 // ── Add service name label from container name ──
+// Strips the "worldview-" compose prefix and "-N" instance suffix so that
+// the Loki `service` label matches the Prometheus `job` label exactly.
+// e.g. "/worldview-portfolio-1" → "portfolio"  (F-030)
 loki.relabel "docker" {
   forward_to = []
+
+  // Keep only worldview application containers — drop infra noise (Kafka,
+  // Zookeeper, Postgres, MinIO, etc.) to reduce Loki volume. (F-031)
+  // worldview-web added 2026-05-03: frontend logs were silently dropped.
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(portfolio|market-ingestion|market-data|content-ingestion|content-store|api-gateway|nlp-pipeline|knowledge-graph|rag-chat|alert|worldview-web).*"
+    action        = "keep"
+  }
+
+  // Extract clean service name from compose-generated container name.
   rule {
     source_labels = ["__meta_docker_container_name"]
     target_label  = "service"
-    regex         = "/(.*)"
+    regex         = "/worldview-(.*)-\\d+"
+    replacement   = "$1"
   }
 }
 

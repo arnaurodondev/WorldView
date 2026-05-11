@@ -8,14 +8,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from content_store.domain.entities import CanonicalDocument, MinHashSignature
-
 
 # ── DLQ data transfer object ──────────────────────────────────────────────────
 
@@ -37,21 +35,50 @@ class DLQEntryData:
     resolution_note: str | None
 
 
+# ── Document metadata DTO ────────────────────────────────────────────────────
+
+
+@dataclass
+class DocumentMetadataDTO:
+    """Lightweight document metadata returned by the batch lookup endpoint.
+
+    ``source_name`` is always ``None`` — the ``documents`` table has no such
+    column.  S8 derives it from ``document_source_metadata`` in S6.
+    """
+
+    doc_id: UUID
+    title: str | None
+    url: str | None
+    published_at: datetime | None
+    source_name: str | None
+    source_type: str | None
+    word_count: int | None
+
+
 class DocumentRepositoryPort(ABC):
     """Port for canonical document storage."""
 
     @abstractmethod
     async def create(self, doc: CanonicalDocument) -> None: ...
 
+    @abstractmethod
+    async def batch_get_metadata(self, doc_ids: list[UUID]) -> list[DocumentMetadataDTO]: ...
+
 
 class DedupHashRepositoryPort(ABC):
     """Port for deduplication hash lookups and insertions (Stage A + B)."""
 
     @abstractmethod
-    async def check_exists(self, hash_type: str, hash_value: str) -> UUID | None: ...
+    async def check_exists(self, hash_type: str, hash_value: str, tenant_id: UUID | None = None) -> UUID | None: ...
 
     @abstractmethod
-    async def insert_pair(self, doc_id: UUID, raw_hash: str, normalized_hash: str) -> None: ...
+    async def insert_pair(
+        self,
+        doc_id: UUID,
+        raw_hash: str,
+        normalized_hash: str,
+        tenant_id: UUID | None = None,
+    ) -> None: ...
 
 
 class MinHashRepositoryPort(ABC):

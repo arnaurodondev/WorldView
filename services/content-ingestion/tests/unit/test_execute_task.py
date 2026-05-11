@@ -313,3 +313,330 @@ class TestAdapterBuilderInjection:
             mock_dedup_repo.exists_by_url_hash,
         )
         assert output.results == []
+
+
+# ---------------------------------------------------------------------------
+# D-9 — Split-brain prevention: task.succeed() is atomic with data write
+# ---------------------------------------------------------------------------
+
+
+class TestSplitBrainPrevention:
+    """Verify that task SUCCEEDED status is committed inside the advisory-lock
+    transaction (D-9).  If the inner commit fails, the task must NOT appear
+    SUCCEEDED in the caller's view.
+    """
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
+    async def test_task_succeeded_committed_inside_advisory_lock(
+        self,
+        mock_faw_cls: MagicMock,
+        mock_lock: MagicMock,
+        mock_fetch: AsyncMock,
+    ) -> None:
+        """When task_factory is provided, update_status is called inside the
+        advisory-lock session — not via the outer task_repo argument (D-9)."""
+        task = _make_claimed_task()
+        result_item = MagicMock()
+        mock_fetch.return_value = _make_fetch_output(task, results=[result_item])
+
+        mock_lock_cm = AsyncMock()
+        mock_lock_cm.__aenter__ = AsyncMock(return_value=True)
+        mock_lock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_lock.return_value = mock_lock_cm
+
+        mock_faw = AsyncMock()
+        mock_faw.execute.return_value = FetchSummary(source_name="test-source", fetched=1)
+        mock_faw_cls.return_value = mock_faw
+
+        adapter_state_factory, _mock_asr = _make_adapter_state_factory()
+        write_factory, _session = _make_write_factory()
+
+        # inner_task_repo returned by task_factory (bound to the advisory lock session)
+        inner_task_repo = AsyncMock()
+        task_factory = MagicMock(return_value=inner_task_repo)
+
+        uc = ExecuteContentTaskUseCase(
+            write_factory=write_factory,
+            settings=_make_settings(),
+            bronze=MagicMock(),
+            adapter_state_factory=adapter_state_factory,
+            fetch_log_factory=MagicMock(return_value=AsyncMock()),
+            outbox_factory=MagicMock(return_value=AsyncMock()),
+            adapter_builder=MagicMock(),
+            task_factory=task_factory,
+        )
+        outer_task_repo = _mock_task_repo()
+
+        await uc.execute(task, outer_task_repo)
+
+        # Succeeded update must go through inner_task_repo (inside the lock), not outer
+        inner_task_repo.update_status.assert_awaited()
+        # Outer task_repo should only be called for RUNNING status (step 1)
+        for call in outer_task_repo.update_status.await_args_list:
+            from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+            # positional arg[1] is the new status
+            if len(call.args) >= 2:
+                assert (
+                    call.args[1] != IngestionTaskStatus.SUCCEEDED
+                ), "outer task_repo.update_status was called with SUCCEEDED — D-9 violation"
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    async def test_advisory_lock_not_acquired_marks_retry(
+        self,
+        mock_lock: MagicMock,
+        mock_fetch: AsyncMock,
+    ) -> None:
+        """When the advisory lock is held by another worker, the task must be
+        marked RETRY (D-003) — NOT SUCCEEDED."""
+        task = _make_claimed_task()
+        result_item = MagicMock()
+        mock_fetch.return_value = _make_fetch_output(task, results=[result_item])
+
+        # Advisory lock NOT acquired
+        mock_lock_cm = AsyncMock()
+        mock_lock_cm.__aenter__ = AsyncMock(return_value=False)
+        mock_lock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_lock.return_value = mock_lock_cm
+
+        adapter_state_factory, _mock_asr = _make_adapter_state_factory()
+        write_factory, _session = _make_write_factory()
+
+        inner_task_repo = AsyncMock()
+        task_factory = MagicMock(return_value=inner_task_repo)
+
+        uc = ExecuteContentTaskUseCase(
+            write_factory=write_factory,
+            settings=_make_settings(),
+            bronze=MagicMock(),
+            adapter_state_factory=adapter_state_factory,
+            fetch_log_factory=MagicMock(return_value=AsyncMock()),
+            outbox_factory=MagicMock(return_value=AsyncMock()),
+            adapter_builder=MagicMock(),
+            task_factory=task_factory,
+        )
+        outer_task_repo = _mock_task_repo()
+
+        result = await uc.execute(task, outer_task_repo)
+
+        # Must be RETRY, not SUCCEEDED
+        assert task.status == IngestionTaskStatus.RETRY
+        assert result is None
+        # inner_task_repo must have been called with RETRY status
+        inner_task_repo.update_status.assert_awaited_once()
+        call_args = inner_task_repo.update_status.await_args
+        assert call_args.args[1] == IngestionTaskStatus.RETRY
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    async def test_advisory_lock_not_acquired_fallback_marks_retry(
+        self,
+        mock_lock: MagicMock,
+        mock_fetch: AsyncMock,
+    ) -> None:
+        """When task_factory is None and lock not acquired, outer task_repo
+        is used — and status must still be RETRY (D-003)."""
+        task = _make_claimed_task()
+        result_item = MagicMock()
+        mock_fetch.return_value = _make_fetch_output(task, results=[result_item])
+
+        # Advisory lock NOT acquired
+        mock_lock_cm = AsyncMock()
+        mock_lock_cm.__aenter__ = AsyncMock(return_value=False)
+        mock_lock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_lock.return_value = mock_lock_cm
+
+        adapter_state_factory, _mock_asr = _make_adapter_state_factory()
+        write_factory, _session = _make_write_factory()
+
+        # No task_factory — uses fallback path
+        uc = _make_use_case(
+            write_factory=write_factory,
+            adapter_state_factory=adapter_state_factory,
+        )
+        outer_task_repo = _mock_task_repo()
+
+        result = await uc.execute(task, outer_task_repo)
+
+        assert task.status == IngestionTaskStatus.RETRY
+        assert result is None
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
+    async def test_commit_failure_prevents_succeeded_status(
+        self,
+        mock_faw_cls: MagicMock,
+        mock_lock: MagicMock,
+        mock_fetch: AsyncMock,
+    ) -> None:
+        """If the inner commit (data + status) fails, the exception propagates
+        and the caller must NOT see SUCCEEDED status — preventing split-brain (D-9)."""
+        task = _make_claimed_task()
+        result_item = MagicMock()
+        mock_fetch.return_value = _make_fetch_output(task, results=[result_item])
+
+        mock_lock_cm = AsyncMock()
+        mock_lock_cm.__aenter__ = AsyncMock(return_value=True)
+        mock_lock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_lock.return_value = mock_lock_cm
+
+        mock_faw = AsyncMock()
+        mock_faw.execute.return_value = FetchSummary(source_name="test-source", fetched=1)
+        mock_faw_cls.return_value = mock_faw
+
+        adapter_state_factory, _mock_asr = _make_adapter_state_factory()
+
+        # Write factory whose session.commit raises on the first call (inside the lock)
+        mock_session = AsyncMock()
+        mock_session.commit.side_effect = RuntimeError("DB commit failed")
+        mock_session_cm = AsyncMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        write_factory = MagicMock(return_value=mock_session_cm)
+
+        inner_task_repo = AsyncMock()
+        task_factory = MagicMock(return_value=inner_task_repo)
+
+        uc = ExecuteContentTaskUseCase(
+            write_factory=write_factory,
+            settings=_make_settings(),
+            bronze=MagicMock(),
+            adapter_state_factory=adapter_state_factory,
+            fetch_log_factory=MagicMock(return_value=AsyncMock()),
+            outbox_factory=MagicMock(return_value=AsyncMock()),
+            adapter_builder=MagicMock(),
+            task_factory=task_factory,
+        )
+        outer_task_repo = _mock_task_repo()
+
+        # The DB error propagates — execute() catches it and marks RETRY/FAILED
+        await uc.execute(task, outer_task_repo)
+
+        # Task must NOT be in SUCCEEDED state (data was never committed)
+        from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+        assert (
+            task.status != IngestionTaskStatus.SUCCEEDED
+        ), "Task was marked SUCCEEDED despite the commit failing — D-9 split-brain detected"
+
+
+# ---------------------------------------------------------------------------
+# F-CRIT-005 — Exception chaining when DB status update also fails
+# ---------------------------------------------------------------------------
+
+
+class TestExceptionChainingOnDbFailure:
+    """When a pipeline error occurs AND the subsequent task_repo.update_status
+    also fails, the DB error must be raised with the original error in its
+    __cause__ chain (F-CRIT-005)."""
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._do_fetch_and_write")
+    async def test_fatal_error_db_update_failure_chains_exceptions(self, mock_dofw: AsyncMock) -> None:
+        """ConfigurationError (fatal) + DB update failure → DB error raised with
+        original as __cause__."""
+        original_error = ConfigurationError("bad config")
+        mock_dofw.side_effect = original_error
+
+        uc = _make_use_case()
+        task = _make_claimed_task()
+        task_repo = _mock_task_repo()
+        db_error = RuntimeError("DB connection lost")
+        # First call (mark RUNNING) succeeds; second call (in except handler) fails.
+        task_repo.update_status.side_effect = [None, db_error]
+
+        with pytest.raises(RuntimeError, match="DB connection lost") as exc_info:
+            await uc.execute(task, task_repo)
+
+        # Verify exception chaining: __cause__ should be the original error
+        assert exc_info.value.__cause__ is original_error
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._do_fetch_and_write")
+    async def test_retryable_error_db_update_failure_chains_exceptions(self, mock_dofw: AsyncMock) -> None:
+        """ConnectionError (retryable) + DB update failure → DB error raised with
+        original as __cause__."""
+        original_error = ConnectionError("network down")
+        mock_dofw.side_effect = original_error
+
+        uc = _make_use_case()
+        task = _make_claimed_task()
+        task_repo = _mock_task_repo()
+        db_error = RuntimeError("DB timeout")
+        # First call (mark RUNNING) succeeds; second call (in except handler) fails.
+        task_repo.update_status.side_effect = [None, db_error]
+
+        with pytest.raises(RuntimeError, match="DB timeout") as exc_info:
+            await uc.execute(task, task_repo)
+
+        assert exc_info.value.__cause__ is original_error
+
+
+# ---------------------------------------------------------------------------
+# F-CRIT-004 — task_factory invariant: never use outer task_repo inside
+# write_factory sessions when task_factory is available
+# ---------------------------------------------------------------------------
+
+
+class TestTaskFactoryInvariant:
+    """When task_factory is provided, all status updates inside the advisory-lock
+    session MUST go through task_factory(session), never the outer task_repo."""
+
+    @patch("content_ingestion.application.use_cases.execute_task.ExecuteContentTaskUseCase._fetch_from_source")
+    @patch("content_ingestion.application.use_cases.execute_task.pg_advisory_lock")
+    @patch("content_ingestion.application.use_cases.execute_task.FetchAndWriteUseCase")
+    async def test_outer_task_repo_never_receives_succeeded_when_factory_exists(
+        self,
+        mock_faw_cls: MagicMock,
+        mock_lock: MagicMock,
+        mock_fetch: AsyncMock,
+    ) -> None:
+        task = _make_claimed_task()
+        result_item = MagicMock()
+        mock_fetch.return_value = _make_fetch_output(task, results=[result_item])
+
+        mock_lock_cm = AsyncMock()
+        mock_lock_cm.__aenter__ = AsyncMock(return_value=True)
+        mock_lock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_lock.return_value = mock_lock_cm
+
+        mock_faw = AsyncMock()
+        mock_faw.execute.return_value = FetchSummary(source_name="test-source", fetched=1)
+        mock_faw_cls.return_value = mock_faw
+
+        adapter_state_factory, _mock_asr = _make_adapter_state_factory()
+        write_factory, _session = _make_write_factory()
+
+        inner_task_repo = AsyncMock()
+        task_factory = MagicMock(return_value=inner_task_repo)
+
+        uc = ExecuteContentTaskUseCase(
+            write_factory=write_factory,
+            settings=_make_settings(),
+            bronze=MagicMock(),
+            adapter_state_factory=adapter_state_factory,
+            fetch_log_factory=MagicMock(return_value=AsyncMock()),
+            outbox_factory=MagicMock(return_value=AsyncMock()),
+            adapter_builder=MagicMock(),
+            task_factory=task_factory,
+        )
+        outer_task_repo = _mock_task_repo()
+
+        await uc.execute(task, outer_task_repo)
+
+        # inner_task_repo must have received the SUCCEEDED update
+        inner_task_repo.update_status.assert_awaited()
+        found_succeeded = False
+        for call in inner_task_repo.update_status.await_args_list:
+            if len(call.args) >= 2 and call.args[1] == IngestionTaskStatus.SUCCEEDED:
+                found_succeeded = True
+        assert found_succeeded, "inner_task_repo never received SUCCEEDED — F-CRIT-004 violation"
+
+        # outer_task_repo must NOT have SUCCEEDED (only RUNNING is allowed)
+        for call in outer_task_repo.update_status.await_args_list:
+            if len(call.args) >= 2:
+                assert (
+                    call.args[1] != IngestionTaskStatus.SUCCEEDED
+                ), "outer task_repo received SUCCEEDED inside write session — F-CRIT-004 violation"

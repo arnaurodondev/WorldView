@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
+from uuid import UUID
 
 from sqlalchemy import func, select, update
 
@@ -11,8 +12,6 @@ import common.time
 from content_ingestion.infrastructure.db.models import DeadLetterQueueModel, OutboxEventModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

@@ -25,12 +25,22 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
+from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
+from messaging.topics import ENTITY_CANONICAL_CREATED as _ENTITY_CANONICAL_CREATED_TOPIC  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+_ENTITY_CANONICAL_CREATED_SCHEMA_PATH = get_schema_path("entity.canonical.created.v1.avsc")
+
+# PLAN-0062 F-018: defence-in-depth bound on the unbounded ``json.loads`` read.
+# 16 MiB cap on the JSON-fallback path to prevent OOM from a poison legacy
+# message.
+_MAX_JSON_FALLBACK_BYTES = 16 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +52,7 @@ class _NoOpUoW:
     async def __aenter__(self) -> _NoOpUoW:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     async def commit(self) -> None:
@@ -57,13 +67,18 @@ class _NoOpUoW:
 # ---------------------------------------------------------------------------
 
 
-class EntityCreatedConsumer(BaseKafkaConsumer[None]):
+class EntityCreatedConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
+    # DP-005 fix: class-level constant so key prefix is stable across config changes.
+    _dedup_prefix: str = "kg:dedup:entity_created_consumer"
+
     """Consumes ``entity.canonical.created.v1`` and unblocks held evidence rows.
 
     Args:
+    ----
         config: Consumer configuration.
         session_factory: async_sessionmaker for intelligence_db.
         dedup_client: Optional dedup client (Valkey); if None, dedup is skipped.
+
     """
 
     def __init__(
@@ -76,7 +91,6 @@ class EntityCreatedConsumer(BaseKafkaConsumer[None]):
         super().__init__(config)
         self._sf = session_factory
         self._dedup_client = dedup_client
-        self._dedup_prefix = f"kg:dedup:{config.group_id}"
 
     # ------------------------------------------------------------------
     # Core processing
@@ -115,22 +129,6 @@ class EntityCreatedConsumer(BaseKafkaConsumer[None]):
         )
 
     # ------------------------------------------------------------------
-    # Idempotency
-    # ------------------------------------------------------------------
-
-    async def is_duplicate(self, event_id: str) -> bool:
-        if self._dedup_client is None:
-            return False
-        key = f"{self._dedup_prefix}:{event_id}"
-        return bool(await self._dedup_client.exists(key))
-
-    async def mark_processed(self, event_id: str) -> None:
-        if self._dedup_client is None:
-            return
-        key = f"{self._dedup_prefix}:{event_id}"
-        await self._dedup_client.set(key, "1", ex=86400)
-
-    # ------------------------------------------------------------------
     # Failure tracking
     # ------------------------------------------------------------------
 
@@ -140,7 +138,6 @@ class EntityCreatedConsumer(BaseKafkaConsumer[None]):
             event_id=failure.event_id,
             error=str(failure.last_error),
         )
-        return None
 
     async def update_failure(self, failure: FailureInfo[None]) -> None:
         logger.warning(  # type: ignore[no-any-return]
@@ -149,7 +146,7 @@ class EntityCreatedConsumer(BaseKafkaConsumer[None]):
             attempt=failure.attempt,
         )
 
-    async def dead_letter(self, failure: FailureInfo[None]) -> None:
+    async def _dead_letter_impl(self, failure: FailureInfo[None]) -> None:
         logger.error(  # type: ignore[no-any-return]
             "entity_consumer_dead_lettered",
             event_id=failure.event_id,
@@ -168,9 +165,36 @@ class EntityCreatedConsumer(BaseKafkaConsumer[None]):
     # ------------------------------------------------------------------
 
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
+        """Decode entity.canonical.created.v1 events.
+
+        PLAN-0062 Wave A: Confluent-Avro on the wire (5-byte header + Avro
+        body), with a JSON fallback to keep the consumer compatible with any
+        legacy messages from before the producer cutover.  The fallback path
+        emits a warning so we can quantify residual JSON traffic.
+        """
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
+
+        path = schema_path or _ENTITY_CANONICAL_CREATED_SCHEMA_PATH
+        if raw and raw[:1] == b"\x00":
+            return deserialize_confluent_avro(path, raw)  # type: ignore[no-any-return]
+        logger.warning(  # type: ignore[no-any-return]
+            "entity_consumer_legacy_json_payload",
+            message="entity.canonical.created.v1 message lacks Confluent magic byte; using JSON fallback",
+        )
+        # PLAN-0062 F-018: cap JSON-fallback to 16 MiB before ``json.loads``.
+        from messaging.kafka.consumer.errors import (  # type: ignore[import-untyped]
+            MalformedDataError,
+        )
+
+        if len(raw) > _MAX_JSON_FALLBACK_BYTES:
+            raise MalformedDataError(
+                f"JSON fallback payload exceeds cap ({len(raw)} > {_MAX_JSON_FALLBACK_BYTES})",
+            )
         return json.loads(raw)  # type: ignore[no-any-return]
 
     def get_schema_path(self, topic: str) -> str | None:
+        if topic == _ENTITY_CANONICAL_CREATED_TOPIC:
+            return _ENTITY_CANONICAL_CREATED_SCHEMA_PATH
         return None
 
     def extract_event_id(self, value: dict[str, Any]) -> str:
@@ -193,8 +217,10 @@ async def _unblock_provisional_evidence(
     either ``subject_entity_id`` or ``object_entity_id`` matching the
     resolved entity.
 
-    Returns:
+    Returns
+    -------
         Number of rows updated.
+
     """
     if provisional_queue_id is not None:
         result = await session.execute(

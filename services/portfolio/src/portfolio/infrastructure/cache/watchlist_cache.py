@@ -5,10 +5,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
+import structlog
+
 from portfolio.application.ports.cache import WatchlistCachePort
+from portfolio.infrastructure.metrics.prometheus import s1_watchlist_cache_invalidation_failures_total
 
 if TYPE_CHECKING:
     from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
+
+_log = structlog.get_logger(__name__)
 
 
 def _key(entity_id: UUID) -> str:
@@ -35,8 +40,16 @@ class ValkeyWatchlistCache(WatchlistCachePort):
         return [UUID(m) for m in members]
 
     async def invalidate_entity(self, entity_id: UUID) -> None:
-        """Delete the reverse-index key for *entity_id* (cache invalidation)."""
-        await self._client._redis.delete(_key(entity_id))
+        """Delete the reverse-index key for *entity_id* (cache invalidation).
+
+        Fail-open: Valkey errors are logged and counted but never propagated.
+        Staleness is bounded by the configured TTL (default 300 s).
+        """
+        try:
+            await self._client._redis.delete(_key(entity_id))
+        except Exception as exc:
+            s1_watchlist_cache_invalidation_failures_total.inc()
+            _log.warning("watchlist_cache_invalidation_failed", entity_id=str(entity_id), error=str(exc))
 
     async def set_user_ids(self, entity_id: UUID, user_ids: list[UUID], ttl: int | None = None) -> None:
         """Atomically replace the user set for *entity_id* and set TTL."""

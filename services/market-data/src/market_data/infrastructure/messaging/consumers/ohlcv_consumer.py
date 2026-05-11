@@ -5,17 +5,18 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from contracts.canonical.ohlcv import CanonicalOHLCVBar  # type: ignore[import-untyped]
 from market_data.domain.entities import Instrument, OHLCVBar, Security
 from market_data.domain.enums import Provider, Timeframe
-from market_data.domain.events import InstrumentCreated, InstrumentUpdated
+from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags, ProviderPriority
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
+from messaging.kafka.consumer.dedup import ValkeyDedupMixin  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
+from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
@@ -23,12 +24,13 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from market_data.application.ports.uow import UnitOfWork
+    from messaging.valkey.client import ValkeyClient  # type: ignore[import-untyped]
     from storage.interface import ObjectStorage  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)
 
-# Schema directory relative to repo root
-_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "infra/kafka/schemas"
+
+_SCHEMA_DIR = find_schema_dir()
 _TOPIC = "market.dataset.fetched"
 _DATASET_TYPE = "ohlcv"  # market-ingestion publishes lowercase DatasetType StrEnum values
 _GROUP_ID = "market-data-ohlcv"
@@ -40,8 +42,13 @@ def _parse_ohlcv_bytes(raw: bytes) -> list[CanonicalOHLCVBar]:
     return [CanonicalOHLCVBar.from_dict(json.loads(line)) for line in lines if line.strip()]
 
 
-class OHLCVConsumer(BaseKafkaConsumer[dict]):
-    """Materializes OHLCV datasets from object storage into the database."""
+class OHLCVConsumer(ValkeyDedupMixin, BaseKafkaConsumer[dict]):
+    """Materializes OHLCV datasets from object storage into the database.
+
+    Dedup mixin is belt-and-braces over the consumer's natural-key
+    ``create_if_not_exists()`` idempotency.  The mixin protects against expensive
+    ML/HTTP work on Kafka rebalance re-delivery; the natural key protects rows.
+    """
 
     def __init__(
         self,
@@ -49,6 +56,7 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
         object_storage: ObjectStorage | None,
         config: ConsumerConfig | None = None,
         metrics: Any = None,
+        dedup_client: ValkeyClient | None = None,
     ) -> None:
         if config is None:
             config = ConsumerConfig(group_id=_GROUP_ID, topics=[_TOPIC])
@@ -56,6 +64,8 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
         self._uow_factory = uow_factory
         self._object_storage = object_storage
         self._current_uow: UnitOfWork | None = None
+        self._dedup_client = dedup_client
+        self._dedup_prefix = f"market_data:dedup:{_GROUP_ID}"
 
     # ── abstract implementations ──────────────────────────────────────────────
 
@@ -79,17 +89,6 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
     def extract_event_id(self, value: dict[str, Any]) -> str:
         return str(value["event_id"])
 
-    async def is_duplicate(self, event_id: str) -> bool:
-        # Dedup is handled atomically via create_if_not_exists at the start of
-        # process_message (BP-035). Always return False here so the base class
-        # proceeds to process_message regardless.
-        return False
-
-    async def mark_processed(self, event_id: str) -> None:
-        # No-op: the event_id was already recorded by create_if_not_exists inside
-        # process_message before any data was written.
-        pass
-
     async def store_failure(self, failure: FailureInfo[dict]) -> dict:
         if self._current_uow is None:
             raise RuntimeError("store_failure called outside of processing context — this is a programming error")
@@ -104,7 +103,7 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
     async def update_failure(self, failure: FailureInfo[dict]) -> None:
         pass  # retry tracking is handled by store_failure
 
-    async def dead_letter(self, failure: FailureInfo[dict]) -> None:
+    async def _dead_letter_impl(self, failure: FailureInfo[dict]) -> None:
         if self._current_uow is not None:
             payload = {
                 "event_id": failure.event_id,
@@ -199,16 +198,28 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
                 flags=InstrumentFlags(has_ohlcv=True),
             )
             instrument = await uow.instruments.upsert(instrument)
-            created_event = InstrumentCreated(
+            # PLAN-0057 Wave D-2: emit ``market.instrument.discovered.v1`` instead
+            # of ``market.instrument.created`` here.  At this stage we only know
+            # symbol/exchange — the EODHD ``Name`` is not available, and emitting
+            # ``InstrumentCreated(name=None)`` previously produced placeholder
+            # canonicals like ``Instrument-019dbbdb`` in the knowledge graph
+            # (audit finding F-CRIT-12).  ``fundamentals_consumer`` is now the
+            # SOLE emitter of ``market.instrument.created`` (gated on a real Name).
+            discovered_event = InstrumentDiscovered(
                 instrument_id=instrument.id,
-                security_id=instrument.security_id,
                 symbol=symbol,
-                exchange=exchange,
+                exchange=exchange or None,
             )
             await uow.outbox_events.create(
-                event_type=created_event.event_type,
-                topic=EVENT_TOPIC_MAP[created_event.event_type],
-                payload=event_to_outbox_payload(created_event),
+                event_type=discovered_event.event_type,
+                topic=EVENT_TOPIC_MAP[discovered_event.event_type],
+                payload=event_to_outbox_payload(discovered_event),
+                # PLAN-0057-followup Wave B (F-DATA-06): pin every
+                # ``market.instrument.discovered.v1`` event for a given
+                # instrument to the same Kafka partition so the downstream
+                # S7 ``InstrumentDiscoveredConsumer`` observes them in causal
+                # order (discovered → created enrichment).
+                partition_key=str(instrument.id),
             )
         elif not instrument.flags.has_ohlcv:
             updated_flags = InstrumentFlags(
@@ -230,6 +241,9 @@ class OHLCVConsumer(BaseKafkaConsumer[dict]):
                 event_type=updated_event.event_type,
                 topic=EVENT_TOPIC_MAP[updated_event.event_type],
                 payload=event_to_outbox_payload(updated_event),
+                # F-DATA-06: keep all updates for this instrument on the same
+                # partition so KG/S6 observe them in order.
+                partition_key=str(instrument.id),
             )
 
         # Resolve timeframe

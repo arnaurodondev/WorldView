@@ -1,0 +1,18 @@
+{
+  "type": "record",
+  "name": "InstrumentDiscoveredV1",
+  "namespace": "com.worldview.market",
+  "doc": "Lightweight 'discovered' notification — emitted by S3 OHLCV/Quotes consumers when a new instrument is first seen during dataset materialisation, BEFORE fundamentals (and therefore the real Name) are available. Replaces the old behaviour where ohlcv_consumer/quotes_consumer emitted market.instrument.created with name=null. Portfolio (S2) uses this to materialise an InstrumentRef immediately. Knowledge-graph (S7) uses this to create a lightweight canonical entity (canonical_name=symbol, metadata.needs_fundamentals_enrichment=true) that gets enriched later when fundamentals_consumer emits market.instrument.created with the real Name. See PLAN-0057 Wave D-2.",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string", "default": "market.instrument.discovered"},
+    {"name": "schema_version", "type": "int", "default": 1},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "instrument_id", "type": "string", "doc": "Internal instrument UUID — used as canonical_entity.entity_id in KG and InstrumentRef.id in portfolio (M-017 stable cross-service ID)."},
+    {"name": "symbol", "type": "string", "doc": "Provider symbol (e.g. AAPL). Used as the placeholder canonical_name until fundamentals enrich it."},
+    {"name": "exchange", "type": ["null", "string"], "default": null, "doc": "Exchange code (e.g. NASDAQ, US). Optional — provider may not always supply."},
+    {"name": "entity_id", "type": ["null", "string"], "default": null, "doc": "Stable cross-service instrument identifier (= instrument_id in market-data). Set by event_to_outbox_payload (M-017) — portfolio (S2) uses this as its InstrumentRef.id so replays produce the same row."},
+    {"name": "correlation_id", "type": ["null", "string"], "default": null},
+    {"name": "causation_id", "type": ["null", "string"], "default": null}
+  ]
+}

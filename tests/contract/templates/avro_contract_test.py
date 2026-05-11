@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import fastavro
 
@@ -20,8 +20,8 @@ class AvroContractTestBase:
     """
 
     schema_file: str = ""
-    valid_samples: list[dict[str, Any]] = []
-    invalid_samples: list[dict[str, Any]] = []
+    valid_samples: ClassVar[list[dict[str, Any]]] = []
+    invalid_samples: ClassVar[list[dict[str, Any]]] = []
 
     @classmethod
     def load_schema(cls) -> dict[str, Any]:

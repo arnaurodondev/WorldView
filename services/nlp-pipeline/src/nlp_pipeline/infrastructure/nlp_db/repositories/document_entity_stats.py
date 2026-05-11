@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -11,8 +12,6 @@ from sqlalchemy.dialects.postgresql import insert
 from nlp_pipeline.infrastructure.nlp_db.models import DocumentEntityStatsModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from nlp_pipeline.domain.models import DocumentEntityStats

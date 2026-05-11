@@ -20,6 +20,8 @@ from nlp_pipeline.application.blocks.ner import (
 from nlp_pipeline.domain.enums import MentionClass
 from nlp_pipeline.domain.models import EntityMention, Section
 
+pytestmark = pytest.mark.unit
+
 
 def _make_section(text: str, char_start: int = 0) -> Section:
     return Section(
@@ -54,7 +56,11 @@ def _make_mention(
 
 
 def _make_ner_client(mentions: list[dict[str, Any]]) -> Any:
-    """Build a mock NERClient that returns given mentions."""
+    """Build a mock NERClient that returns the given mentions for every section.
+
+    run_ner_block now calls batch_extract_entities (one call per batch of sections).
+    The mock returns the same mention list for every section in the batch.
+    """
     from ml_clients.dataclasses import EntityMention as MLMention  # type: ignore[import-not-found]
     from ml_clients.dataclasses import NEROutput
 
@@ -68,9 +74,15 @@ def _make_ner_client(mentions: list[dict[str, Any]]) -> Any:
         )
         for m in mentions
     ]
-    output = NEROutput(mentions=ml_mentions)
+    per_section_output = NEROutput(mentions=ml_mentions)
+
+    async def _batch(inputs: list[Any]) -> list[NEROutput]:
+        return [per_section_output] * len(inputs)
+
     client = MagicMock()
-    client.extract_entities = AsyncMock(return_value=output)
+    client.batch_extract_entities = AsyncMock(side_effect=_batch)
+    # extract_entities kept for completeness (not called by run_ner_block anymore)
+    client.extract_entities = AsyncMock(return_value=per_section_output)
     return client
 
 
@@ -216,6 +228,40 @@ class TestRunNERBlock:
         # NMS should keep only the higher-confidence span
         assert len(mentions) == 1
         assert mentions[0].mention_text == "Apple Inc."
+
+    @pytest.mark.asyncio
+    async def test_ner_block_sets_model_id(self) -> None:
+        """When ner_model_id is passed, all EntityMention objects carry that value (PLAN-0031 B-1)."""
+        client = _make_ner_client(
+            [
+                {"text": "Apple", "label": "organization", "score": 0.92, "start": 0, "end": 5},
+                {"text": "AAPL", "label": "financial_instrument", "score": 0.88, "start": 10, "end": 14},
+            ]
+        )
+        doc_id = uuid.uuid4()
+        section = _make_section("Apple AAPL earnings today")
+
+        mentions, _ = await run_ner_block(doc_id, [section], client, ner_model_id="test-ner-v1")
+
+        assert len(mentions) == 2
+        for m in mentions:
+            assert m.ner_model_id == "test-ner-v1"
+
+    @pytest.mark.asyncio
+    async def test_ner_block_none_model_id_fallback(self) -> None:
+        """When ner_model_id is not passed (defaults to None), mentions have ner_model_id=None."""
+        client = _make_ner_client(
+            [
+                {"text": "Tesla", "label": "organization", "score": 0.90, "start": 0, "end": 5},
+            ]
+        )
+        doc_id = uuid.uuid4()
+        section = _make_section("Tesla reported quarterly earnings")
+
+        mentions, _ = await run_ner_block(doc_id, [section], client)
+
+        assert len(mentions) == 1
+        assert mentions[0].ner_model_id is None
 
 
 @pytest.mark.unit

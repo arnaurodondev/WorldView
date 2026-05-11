@@ -22,3 +22,19 @@ VALUES
      true)
 
 ON CONFLICT (name, version) DO NOTHING;
+
+-- SummaryWorker (Worker 13C) hardcodes this UUID as _PROMPT_TEMPLATE_ID.
+-- Without this row, every summary INSERT fails with a FK violation and
+-- relation_summaries stays permanently empty.
+-- BP-NEW: "SummaryWorker prompt_template_id FK seed missing" (2026-05-10)
+INSERT INTO prompt_templates (template_id, name, version, capability, template_text, output_schema, is_active)
+VALUES (
+    '00000000-0000-0000-0000-000000000001',
+    'relation_summary_v2',
+    2,
+    'SUMMARIZATION',
+    E'Summarize the following evidence statements about a relationship between two entities into a concise 2-3 sentence summary. Focus on key facts and avoid repetition.\n\nSTRICT RULES:\n- Do not invent or add any claims not present in the evidence statements below.\n- If the evidence statements are contradictory, write: ''Evidence is conflicting on [topic].''\n- Do not use qualitative adjectives (''strong'', ''strategic'', ''important'') unless they appear verbatim in the evidence.\n\n{evidence_statements}',
+    '{"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"]}'::jsonb,
+    true
+)
+ON CONFLICT (template_id) DO NOTHING;

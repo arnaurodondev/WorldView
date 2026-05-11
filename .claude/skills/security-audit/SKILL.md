@@ -3,6 +3,11 @@ name: security-audit
 description: "Perform a focused security audit on changes or a specific service. Covers OWASP Top 10, multi-tenant isolation, input validation, secrets management, and project-specific security patterns. Use before PRs with security-sensitive changes or periodically for full audits."
 user-invocable: true
 argument-hint: "[service name, file paths, or 'full' for complete audit]"
+effort: heavy
+paths:
+  - "**/api/**/*.py"
+  - "**/api/routes/**/*.py"
+  - "**/infrastructure/**/*.py"
 ---
 
 # Security Audit — Focused Security Analysis

@@ -1,6 +1,7 @@
 groups:
   - name: worldview_alerts
     rules:
+      # ── Service availability ───────────────────────────────────────────────
       - alert: ServiceDown
         expr: up == 0
         for: 1m
@@ -8,53 +9,100 @@ groups:
           severity: critical
         annotations:
           summary: "{{ $labels.job }} is down"
-          description: "Prometheus target {{ $labels.instance }} (job: {{ $labels.job }}) has been unreachable for >1 minute."
+          description: >
+            Prometheus target {{ $labels.instance }} (job: {{ $labels.job }})
+            has been unreachable for >1 minute.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/ServiceDown.md"
 
+      # ── HTTP error rates ───────────────────────────────────────────────────
+      # Threshold lowered from 5% → 1%. A financial platform should not
+      # tolerate more than 1% 5xx before alerting. (audit finding)
       - alert: HighErrorRate
-        expr: job:http_error_ratio:rate5m > 0.05
+        expr: job:http_error_ratio:rate5m > 0.01
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.job }} error rate >5%"
-          description: "{{ $labels.job }} has a 5xx error ratio of {{ $value | humanizePercentage }} (threshold: 5%) for >5 minutes."
+          summary: "{{ $labels.job }} error rate >1%"
+          description: >
+            {{ $labels.job }} has a 5xx error ratio of
+            {{ $value | humanizePercentage }} (threshold: 1%) for >5 minutes.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/HighErrorRate.md"
 
+      # Threshold lowered from 20% → 10%. Service is effectively broken at 10%.
+      # HighErrorRate (warning) is suppressed when this fires — see alertmanager inhibit_rules.
       - alert: CriticalErrorRate
-        expr: job:http_error_ratio:rate5m > 0.20
+        expr: job:http_error_ratio:rate5m > 0.10
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.job }} error rate >20%"
-          description: "{{ $labels.job }} has a 5xx error ratio of {{ $value | humanizePercentage }} (threshold: 20%) for >2 minutes."
+          summary: "{{ $labels.job }} error rate >10%"
+          description: >
+            {{ $labels.job }} has a 5xx error ratio of
+            {{ $value | humanizePercentage }} (threshold: 10%) for >2 minutes.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/CriticalErrorRate.md"
 
+      # ── Latency ───────────────────────────────────────────────────────────
+      # Threshold lowered from 2s → 500ms. Financial data APIs must respond
+      # in sub-second time; 2s is grotesquely permissive. (audit finding)
+      # rag-chat excluded: DeepSeek R1 32B LLM calls legitimately take 5-30s.
       - alert: HighP95Latency
-        expr: job:http_duration_p95:rate5m > 2.0
+        expr: job:http_duration_p95:rate5m{job!="rag-chat"} > 0.5
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.job }} p95 latency >2s"
-          description: "{{ $labels.job }} p95 request latency is {{ $value | humanizeDuration }} (threshold: 2s) for >5 minutes."
+          summary: "{{ $labels.job }} p95 latency >500ms"
+          description: >
+            {{ $labels.job }} p95 request latency is
+            {{ $value | humanizeDuration }} (threshold: 500ms) for >5 minutes.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/HighLatency.md"
 
+      # rag-chat has a separate threshold: LLM calls are expected to take up to 30s.
+      # Alert only if p95 exceeds 30s (indicating LLM timeout / provider down).
+      - alert: RagChatHighP95Latency
+        expr: job:http_duration_p95:rate5m{job="rag-chat"} > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAG-chat p95 latency >30s — LLM call may be timing out"
+          description: >
+            rag-chat p95 latency is {{ $value | humanizeDuration }} (threshold: 30s).
+            Likely cause: DeepSeek/DeepInfra provider unavailable or overloaded.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/RagChatHighLatency.md"
+
+      # ── Outbox backlog ─────────────────────────────────────────────────────
+      # Expanded scope from s[45] to all services (s[0-9]+).
+      # s[1-9] pattern was a bug — it excluded S10. (F-017, audit finding)
       - alert: OutboxBacklog
-        expr: '{__name__=~"s[45]_outbox_pending_total"} > 100'
+        expr: '{__name__=~"s[0-9]+_outbox_pending_total"} > 100'
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "Outbox backlog >100 events"
-          description: "{{ $labels.job }} has {{ $value }} pending outbox events (threshold: 100) for >5 minutes."
+          summary: "Outbox backlog >100 events in {{ $labels.job }}"
+          description: >
+            {{ $labels.job }} has {{ $value }} pending outbox events
+            (threshold: 100) for >5 minutes. Check dispatcher process.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/OutboxBacklog.md"
 
+      # ── Dead letter queue ──────────────────────────────────────────────────
+      # Expanded scope to s[0-9]+ — s[1-9] excluded S10. (F-017, audit finding)
       - alert: DeadLetterQueueNonEmpty
-        expr: '{__name__=~"s[45]_dlq_total"} > 0'
+        expr: '{__name__=~"s[0-9]+_dlq_total"} > 0'
         for: 2m
         labels:
           severity: critical
         annotations:
           summary: "DLQ has entries in {{ $labels.job }}"
-          description: "{{ $labels.job }} dead-letter queue has {{ $value }} entries for >2 minutes. Investigate failed event processing."
+          description: >
+            {{ $labels.job }} dead-letter queue has {{ $value }} entries
+            for >2 minutes. Investigate failed event processing.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/DLQNonEmpty.md"
 
+      # ── Outbox dispatch errors ─────────────────────────────────────────────
       - alert: OutboxDispatchErrors
         expr: job:outbox_errors:rate5m > 0.1
         for: 5m
@@ -62,31 +110,130 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.job }} outbox dispatch errors"
-          description: "{{ $labels.job }} outbox dispatch error rate is {{ $value }}/sec (threshold: 0.1/sec) for >5 minutes."
+          description: >
+            {{ $labels.job }} outbox dispatch error rate is {{ $value }}/sec
+            (threshold: 0.1/sec) for >5 minutes.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/OutboxDispatchErrors.md"
 
+      # ── S5 Content Store — dedup latency ──────────────────────────────────
+      # Correct histogram_quantile: sum by (tier, le) before quantile.
       - alert: HighDedupLatency
-        expr: histogram_quantile(0.95, sum(rate(s5_dedup_duration_seconds_bucket[5m])) by (tier, le)) > 2.0
+        expr: >
+          histogram_quantile(0.95,
+            sum by (tier, le) (rate(s5_dedup_duration_seconds_bucket[5m]))
+          ) > 2.0
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "S5 dedup p95 latency >2s (tier: {{ $labels.tier }})"
-          description: "Content Store dedup p95 latency for tier {{ $labels.tier }} is {{ $value | humanizeDuration }} (threshold: 2s) for >5 minutes."
+          description: >
+            Content Store dedup p95 latency for tier {{ $labels.tier }} is
+            {{ $value | humanizeDuration }} (threshold: 2s) for >5 minutes.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/HighDedupLatency.md"
 
+      # ── S5 Content Store — LSH index failures ─────────────────────────────
+      # Lower `for` from 5m to 1m: LSH failures happen in bursts and resolve
+      # quickly; 5m `for` masks the burst entirely. (audit finding)
       - alert: LSHIndexFailures
         expr: rate(s5_lsh_index_failures_total[5m]) > 0
-        for: 5m
+        for: 1m
         labels:
           severity: warning
         annotations:
           summary: "S5 LSH index failures occurring"
-          description: "Content Store LSH Valkey index is experiencing failures at {{ $value }}/sec for >5 minutes."
+          description: >
+            Content Store LSH Valkey index is experiencing failures at
+            {{ $value }}/sec for >1 minute.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/LSHFailures.md"
 
+      # ── S4 Content Ingestion — fetch errors ───────────────────────────────
+      # Reduced `for` from 10m to 5m. Ten-minute delay is too long for a
+      # financial content pipeline. (audit finding)
       - alert: ContentFetchErrors
         expr: sum(rate(s4_fetches_total{status="failed"}[5m])) > 0.5
-        for: 10m
+        for: 5m
         labels:
           severity: warning
         annotations:
           summary: "S4 content fetch failures sustained"
-          description: "Content Ingestion fetch failure rate is {{ $value }}/sec (threshold: 0.5/sec) sustained for >10 minutes."
+          description: >
+            Content Ingestion fetch failure rate is {{ $value }}/sec
+            (threshold: 0.5/sec) sustained for >5 minutes.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/ContentFetchErrors.md"
+
+      # ── S7 Knowledge Graph — worker crashes ──────────────────────────────
+      # s7_worker_crash_total metric existed but had no alert wired. (F-021)
+      - alert: KGWorkerCrash
+        expr: rate(s7_worker_crash_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Knowledge graph worker {{ $labels.worker }} is crashing"
+          description: >
+            Worker {{ $labels.worker }} has had {{ $value | humanize }} crashes/sec
+            for >1 minute. Knowledge graph enrichment is degraded.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/KGWorkerCrash.md"
+
+      # ── S10 Alert service — fan-out stopped ──────────────────────────────
+      - alert: AlertFanoutStopped
+        expr: >
+          s10_alerts_pending_total > 0
+          AND rate(s10_websocket_pushes_total[5m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "S10 alert fan-out stopped despite pending alerts"
+          description: >
+            There are {{ $value }} pending alerts but WebSocket push rate is zero
+            for >5 minutes. Users are not receiving real-time alerts.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/AlertFanoutStopped.md"
+
+      # ── Kafka consumer silence (no lag exporter) ──────────────────────────
+      # Fires when a consumer topic's rate drops to zero while the service is up.
+      # Indicates a stalled consumer that has not crashed (no process exit).
+      - alert: KafkaConsumerSilent
+        expr: >
+          job_topic:kafka_consumed:rate5m == 0
+          and on(job) up == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} consumer {{ $labels.topic }} has consumed 0 messages for 10m"
+          description: >
+            Consumer in {{ $labels.job }} for topic {{ $labels.topic }} has
+            consumed zero messages for >10 minutes but the service is up.
+            The consumer may be stalled or the topic may have no producers.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/KafkaConsumerSilent.md"
+
+      # ── Auth failure rate ─────────────────────────────────────────────────
+      - alert: HighAuthFailureRate
+        expr: >
+          sum(rate(api_gateway_requests_total{status=~"401|403"}[5m]))
+          / sum(rate(api_gateway_requests_total[5m])) > 0.05
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API Gateway auth failure rate >5%"
+          description: >
+            {{ $value | humanizePercentage }} of API Gateway requests are
+            returning 401/403 for >3 minutes. May indicate broken client
+            configuration or active credential attack.
+          runbook_url: "https://github.com/worldview/runbooks/blob/main/HighAuthFailureRate.md"
+
+      # ── Synthetic probes — end-to-end user journey health ────────────────
+      # Fires when a synthetic probe pushed by synthetic_monitor.py records
+      # success=0 for >5 minutes. probe_name label maps to the Python function
+      # name (e.g. probe_api_gateway_health, probe_market_data_quote).
+      - alert: SyntheticProbeDown
+        expr: synthetic_probe_success == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Synthetic probe {{ $labels.probe_name }} failing for 5m"
+          runbook: "Check synthetic monitor logs: docker compose logs synthetic-monitor"

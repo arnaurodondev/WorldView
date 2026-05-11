@@ -10,6 +10,8 @@ from alert.infrastructure.messaging.consumers.watchlist_consumer import Watchlis
 
 from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
 
+pytestmark = pytest.mark.unit
+
 
 def _make_consumer(
     dedup_client: MagicMock | None = None,

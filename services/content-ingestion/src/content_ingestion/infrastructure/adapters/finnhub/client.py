@@ -30,6 +30,26 @@ class RateLimitError(AdapterError):
         super().__init__(f"Finnhub rate limited, retry after {sleep_secs:.1f}s")
 
 
+class PremiumEndpointError(AdapterError):
+    """Raised when Finnhub returns HTTP 403 — the API key tier lacks access.
+
+    F-104 fix (2026-04-30): the transcripts endpoint is paid; on the free
+    tier every call returns 403. The previous code raised a generic
+    ``AdapterError`` and the retry loop happily burned 3 attempts x backoff
+    on every symbol every cycle (~56 s wasted per cycle). 403 is a
+    permanent contract failure, not a transient one — we surface it with
+    its own type so the caller can distinguish "not licensed" from
+    "transient" and skip silently instead of retrying.
+    """
+
+    def __init__(self, endpoint: str) -> None:
+        self.endpoint = endpoint
+        super().__init__(
+            f"Finnhub endpoint '{endpoint}' returned 403 — premium endpoint "
+            f"requires a paid Finnhub plan; skipping (no retry).",
+        )
+
+
 class FinnhubClient:
     """Low-level HTTP client for Finnhub endpoints.
 
@@ -127,6 +147,7 @@ class FinnhubClient:
 
         Raises:
             RateLimitError: On 429 with wait time to next minute boundary.
+            PremiumEndpointError: On 403 — endpoint requires a paid plan.
             AdapterError: On other error status codes.
         """
         if response.status_code == 429:
@@ -135,6 +156,15 @@ class FinnhubClient:
             now = datetime.now(tz=UTC)
             sleep_secs = max(1.0, 60.0 - now.second)
             raise RateLimitError(sleep_secs=sleep_secs)
+        # F-104 fix: 403 is a permanent licensing failure, not transient —
+        # raise a distinct exception so the retry loop can short-circuit
+        # rather than burning 3 attempts x backoff on every symbol.
+        if response.status_code == 403:
+            # The URL path is the most useful identifier for which endpoint
+            # was rejected. Keep it short — full URL leaks the api_key query
+            # param into logs.
+            endpoint = response.request.url.path if response.request else "<unknown>"
+            raise PremiumEndpointError(endpoint=endpoint)
         if response.status_code >= 400:
             msg = f"Finnhub API error: HTTP {response.status_code}"
             raise AdapterError(msg)

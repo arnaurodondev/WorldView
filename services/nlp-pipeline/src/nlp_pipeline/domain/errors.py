@@ -111,3 +111,9 @@ class InvalidRoutingScoreError(NLPDomainError):
     """Routing score computation produced an invalid result."""
 
     error_code = "INVALID_ROUTING_SCORE"
+
+
+class PriceImpactError(DomainError):
+    """Raised when ArticlePriceImpact validation or computation fails (R21)."""
+
+    error_code = "PRICE_IMPACT_ERROR"

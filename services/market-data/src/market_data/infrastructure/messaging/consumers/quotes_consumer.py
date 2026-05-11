@@ -5,16 +5,16 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from contracts.canonical.quotes import CanonicalQuote  # type: ignore[import-untyped]
 from market_data.domain.entities import Instrument, Quote, Security
-from market_data.domain.events import InstrumentCreated, InstrumentUpdated
+from market_data.domain.events import InstrumentDiscovered, InstrumentUpdated
 from market_data.domain.value_objects import InstrumentFlags
 from market_data.infrastructure.messaging.outbox.dispatcher import EVENT_TOPIC_MAP, event_to_outbox_payload
 from messaging.kafka.consumer.base import BaseKafkaConsumer, ConsumerConfig, FailureInfo  # type: ignore[import-untyped]
 from messaging.kafka.consumer.errors import MalformedDataError, StorageUnavailableError  # type: ignore[import-untyped]
+from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 from observability.logging import get_logger  # type: ignore[import-untyped]
 
@@ -22,12 +22,14 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from market_data.application.ports.uow import UnitOfWork
+    from market_data.infrastructure.cache.price_snapshot_cache import PriceSnapshotCache
     from market_data.infrastructure.cache.quote_cache import QuoteCache
     from storage.interface import ObjectStorage  # type: ignore[import-untyped]
 
 logger = get_logger(__name__)
 
-_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "infra/kafka/schemas"
+
+_SCHEMA_DIR = find_schema_dir()
 _TOPIC = "market.dataset.fetched"
 _DATASET_TYPE = "quotes"  # market-ingestion: DatasetType.QUOTES = "quotes" (lowercase, plural)
 _GROUP_ID = "market-data-quotes"
@@ -39,7 +41,27 @@ def _parse_quote_bytes(raw: bytes) -> CanonicalQuote:
 
 
 class QuotesConsumer(BaseKafkaConsumer[dict]):
-    """Materializes quote datasets from object storage into the database."""
+    """Materializes quote datasets from object storage into the database.
+
+    Idempotency strategy: ``create_if_not_exists`` (BP-035 pattern).
+    The ``ingestion_events`` repository uses ``INSERT … ON CONFLICT DO NOTHING … RETURNING``
+    to atomically record the event_id before any data write.  This is strictly stronger
+    than Valkey TTL-based dedup because the record survives Valkey restarts and persists
+    in the same DB transaction as the actual write.
+
+    ``ValkeyDedupMixin`` is intentionally NOT in the MRO — it would be misleading
+    (the mixin's ``is_duplicate`` / ``mark_processed`` are shadowed by no-ops anyway).
+    This consumer is allowlisted in tests/architecture/_consumer_dedup_allowlist.yaml.
+
+    ``_dedup_prefix`` is kept as a class attribute so the architecture test
+    ``test_consumer_dedup_mixin_enforcement.py`` can confirm a dedup strategy is
+    at least named, even when the mixin is not used.
+    """
+
+    # Dedup strategy: DB-atomic (INSERT ... ON CONFLICT DO NOTHING per BP-035).
+    # ValkeyDedupMixin intentionally NOT used — see is_duplicate / mark_processed overrides.
+    _dedup_prefix = "market-data:dedup:quotes_consumer"
+    _dedup_ttl_seconds = 86400
 
     def __init__(
         self,
@@ -48,6 +70,7 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
         valkey_client: Any = None,
         config: ConsumerConfig | None = None,
         metrics: Any = None,
+        price_snapshot_cache: Any = None,  # PriceSnapshotCache | None
     ) -> None:
         if config is None:
             config = ConsumerConfig(group_id=_GROUP_ID, topics=[_TOPIC])
@@ -55,7 +78,9 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
         self._uow_factory = uow_factory
         self._object_storage = object_storage
         self._valkey_client = valkey_client
+        self._dedup_client = valkey_client  # ValkeyDedupMixin reads this attribute
         self._quote_cache: QuoteCache | None = None
+        self._price_snapshot_cache: PriceSnapshotCache | None = price_snapshot_cache
         self._current_uow: UnitOfWork | None = None
 
         # Build QuoteCache lazily if we have a valkey client
@@ -111,7 +136,7 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
     async def update_failure(self, failure: FailureInfo[dict]) -> None:
         pass
 
-    async def dead_letter(self, failure: FailureInfo[dict]) -> None:
+    async def _dead_letter_impl(self, failure: FailureInfo[dict]) -> None:
         if self._current_uow is not None:
             payload = {
                 "event_id": failure.event_id,
@@ -192,16 +217,24 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
                 flags=InstrumentFlags(has_quotes=True),
             )
             instrument = await uow.instruments.upsert(instrument)
-            created_event = InstrumentCreated(
+            # PLAN-0057 Wave D-2: emit ``market.instrument.discovered.v1`` instead
+            # of ``market.instrument.created`` here.  See the matching block in
+            # ``ohlcv_consumer.py`` for the rationale (F-CRIT-12: prevent
+            # placeholder canonicals like ``Instrument-019dbbdb...``).
+            discovered_event = InstrumentDiscovered(
                 instrument_id=instrument.id,
-                security_id=instrument.security_id,
                 symbol=symbol,
-                exchange=exchange,
+                exchange=exchange or None,
             )
             await uow.outbox_events.create(
-                event_type=created_event.event_type,
-                topic=EVENT_TOPIC_MAP[created_event.event_type],
-                payload=event_to_outbox_payload(created_event),
+                event_type=discovered_event.event_type,
+                topic=EVENT_TOPIC_MAP[discovered_event.event_type],
+                payload=event_to_outbox_payload(discovered_event),
+                # PLAN-0057-followup Wave B (F-DATA-06): pin every
+                # ``market.instrument.discovered.v1`` event for a given
+                # instrument to the same Kafka partition so KG observes
+                # discovered → created enrichment in causal order.
+                partition_key=str(instrument.id),
             )
         elif not instrument.flags.has_quotes:
             updated_flags = InstrumentFlags(
@@ -223,6 +256,9 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
                 event_type=updated_event.event_type,
                 topic=EVENT_TOPIC_MAP[updated_event.event_type],
                 payload=event_to_outbox_payload(updated_event),
+                # F-DATA-06: keep all updates for this instrument on the same
+                # partition so KG/S6 observe them in order.
+                partition_key=str(instrument.id),
             )
 
         # Map canonical → domain entity; preserve NULL values (D-004)
@@ -248,6 +284,27 @@ class QuotesConsumer(BaseKafkaConsumer[dict]):
         # caching stale data into Valkey until TTL expiry.
         if self._quote_cache is not None:
             uow.schedule_post_commit(self._quote_cache.invalidate(instrument.id))
+
+        # After DB commit: resolve a PriceSnapshot from the fresh quote and write
+        # it to Valkey.  This hot-caches the snapshot so the first API read is
+        # served from cache (O(1)) rather than triggering a full DB resolution.
+        # We pass ohlcv_bars=[] here because OHLCV bars arrive via a separate
+        # consumer topic — the quote is the only source available at this stage.
+        # The full fallback chain (including OHLCV) is exercised in the API router.
+        if self._price_snapshot_cache is not None:
+            from market_data.domain.price_snapshot import PriceSnapshotResolver
+
+            resolved_at = datetime.now(tz=UTC)
+            resolver = PriceSnapshotResolver()
+            snapshot = resolver.resolve(
+                instrument_id=instrument.id,
+                symbol=symbol,
+                exchange=exchange,
+                quote=quote,
+                ohlcv_bars=[],  # OHLCV not available at consumer stage (see above)
+                resolved_at=resolved_at,
+            )
+            uow.schedule_post_commit(self._price_snapshot_cache.set(instrument.id, snapshot))
 
         logger.info(
             "quotes_consumer.materialized",

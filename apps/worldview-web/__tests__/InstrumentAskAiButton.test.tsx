@@ -1,0 +1,99 @@
+/**
+ * __tests__/InstrumentAskAiButton.test.tsx — page-context Ask AI floater.
+ *
+ * Pins the contract that:
+ *   - the floating trigger is visible while closed
+ *   - clicking it mounts the AskAiPanel
+ *   - the contextHint forwarded to the panel actually surfaces in DOM
+ *
+ * AskAiPanel is mocked so we can assert on the props it receives without
+ * pulling in the full SSE-streaming machinery (covered by AskAiPanel.test).
+ */
+
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+
+// Mock the panel before importing the button so the import boundary picks up the stub.
+// WHY render ticker/price/fundamentals: PLAN-0071 P2A-4 migrated InstrumentAskAiButton
+// to pass structured props instead of building a contextHint string. The mock surfaces
+// them as text so assertions can verify the correct values are forwarded.
+vi.mock("@/components/shell/AskAiPanel", () => ({
+  AskAiPanel: ({
+    ticker,
+    price,
+    fundamentals,
+    contextHint,
+    onClose,
+  }: {
+    ticker?: string;
+    price?: number;
+    fundamentals?: { pe?: number | null; marketCap?: number | null };
+    contextHint?: string;
+    onClose: () => void;
+  }) => {
+    const parts: string[] = [];
+    if (ticker) parts.push(`Ticker: ${ticker}`);
+    if (price !== undefined) parts.push(`price $${price.toFixed(2)}`);
+    if (fundamentals?.pe != null) parts.push(`P/E ${fundamentals.pe}`);
+    if (fundamentals?.marketCap != null) {
+      const billions = fundamentals.marketCap / 1_000_000_000;
+      parts.push(`mcap $${billions.toFixed(1)}B`);
+    }
+    if (contextHint) parts.push(contextHint);
+    return (
+      <div data-testid="mock-ask-ai-panel">
+        <span data-testid="ctx">{parts.join(" ")}</span>
+        <button onClick={onClose}>close</button>
+      </div>
+    );
+  },
+}));
+
+import { InstrumentAskAiButton } from "@/components/instrument/InstrumentAskAiButton";
+
+describe("InstrumentAskAiButton", () => {
+  it("renders the floating trigger labelled with the ticker", () => {
+    render(<InstrumentAskAiButton ticker="AAPL" />);
+    const btn = screen.getByRole("button", { name: /ask ai about aapl/i });
+    expect(btn).toBeInTheDocument();
+  });
+
+  it("opens the AskAiPanel and forwards ticker, price, and fundamentals as structured props", () => {
+    // WHY structured props: PLAN-0071 P2A-4 replaced contextHint string-building
+    // with dedicated ticker/price/fundamentals props so AskAiPanel can include
+    // system_context in the POST body for model-side context injection.
+    // recentBars is accepted by the interface for API stability but no longer
+    // forwarded — the component ignores it.
+    render(
+      <InstrumentAskAiButton
+        ticker="AAPL"
+        currentPrice={193.5}
+        recentBars={[
+          { timestamp: "2026-04-01T00:00:00Z", open: 180, high: 181, low: 179, close: 180, volume: 1 },
+          { timestamp: "2026-04-29T00:00:00Z", open: 195, high: 196, low: 192, close: 193.5, volume: 1 },
+        ]}
+        fundamentals={{ pe_ratio: 28.6, market_cap: 3_000_000_000 } as never}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /ask ai about aapl/i }));
+
+    const panel = screen.getByTestId("mock-ask-ai-panel");
+    const ctx = screen.getByTestId("ctx").textContent ?? "";
+    expect(panel).toBeInTheDocument();
+    expect(ctx).toMatch(/Ticker: AAPL/);
+    expect(ctx).toMatch(/price \$193\.50/);
+    expect(ctx).toMatch(/P\/E 28\.6/);
+    expect(ctx).toMatch(/mcap \$3\.0B/);
+  });
+
+  it("hides the trigger while the panel is open and shows it again on close", () => {
+    render(<InstrumentAskAiButton ticker="MSFT" />);
+    const btn = screen.getByRole("button", { name: /ask ai about msft/i });
+    fireEvent.click(btn);
+    // Trigger gone, panel mounted
+    expect(screen.queryByRole("button", { name: /ask ai about msft/i })).toBeNull();
+    // Close via the mock panel's button
+    fireEvent.click(screen.getByText("close"));
+    expect(screen.getByRole("button", { name: /ask ai about msft/i })).toBeInTheDocument();
+  });
+});

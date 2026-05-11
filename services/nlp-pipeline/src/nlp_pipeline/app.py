@@ -15,21 +15,28 @@ from __future__ import annotations
 
 import re
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog.contextvars
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from nlp_pipeline.api.routes import dlq, health, signals
+from nlp_pipeline.api.routes import admin, dlq, embed, entities, health, internal_costs, news, search, signals
+from nlp_pipeline.api.routes.search_documents import router as search_documents_router
 from nlp_pipeline.config import Settings
 from nlp_pipeline.infrastructure.intelligence_db.session import (
     _build_intelligence_factories,
 )
+from nlp_pipeline.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
 from nlp_pipeline.infrastructure.nlp_db.session import _build_nlp_factories
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
-from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
+from observability.metrics import (  # type: ignore[import-untyped]
+    add_prometheus_middleware,
+    create_metrics,
+    create_ml_metrics,
+)
+from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -59,6 +66,52 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
+async def _expire_stale_embeddings(
+    session_factory: Any,
+    config: Settings,
+) -> None:
+    """On startup, if current embedding model differs from stored, bulk-expire stale rows (PLAN-0031 B-2).
+
+    Sets ``expires_at = now()`` on any ``chunk_embeddings`` / ``section_embeddings``
+    rows whose ``model_id`` does not match ``config.embedding_model_id``.
+    The EmbeddingRetryWorker will re-generate them on its next cycle.
+    """
+    import structlog
+    from sqlalchemy import text
+
+    _log = structlog.get_logger(__name__)  # type: ignore[no-any-return]
+
+    async with session_factory() as session:
+        r1 = await session.execute(
+            text("UPDATE chunk_embeddings SET expires_at = now() WHERE model_id != :current AND expires_at IS NULL"),
+            {"current": config.embedding_model_id},
+        )
+        r2 = await session.execute(
+            text("UPDATE section_embeddings SET expires_at = now() WHERE model_id != :current AND expires_at IS NULL"),
+            {"current": config.embedding_model_id},
+        )
+        if r1.rowcount > 0 or r2.rowcount > 0:
+            _log.warning(
+                "embedding_model_changed",
+                stale_chunk_count=r1.rowcount,
+                stale_section_count=r2.rowcount,
+                current_model=config.embedding_model_id,
+            )
+        await session.commit()
+
+
+def _build_embedding_client(settings: Settings) -> object:
+    """Instantiate the embedding adapter for the API process.
+
+    Thin shim over :func:`nlp_pipeline.bootstrap.embedding.build_embedding_client`
+    — the implementation moved there so the API process and the standalone
+    embedding-retry worker share one source of truth (PLAN-0057 QA A-004).
+    """
+    from nlp_pipeline.bootstrap.embedding import build_embedding_client
+
+    return build_embedding_client(settings)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan — sets up database and Valkey for API endpoints.
@@ -83,11 +136,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             otlp_endpoint=settings.otlp_endpoint,
         )
 
-    # 3. Database engines — R23 dual factory (write + read) for both DBs
-    nlp_engine, nlp_sf, nlp_read_sf = _build_nlp_factories(settings)
-    intel_engine, intel_sf, intel_read_sf = _build_intelligence_factories(settings)
+    # 2b. Sentry — fourth observability pillar (default-off: SENTRY_ENABLED=false)
+    init_sentry(service_name=settings.service_name, settings=SentrySettings())
+
+    # 3. Start InternalJWTMiddleware — fetch JWKS from S9 at startup
+    jwt_middleware: InternalJWTMiddleware | None = getattr(app.state, "_jwt_middleware", None)
+    if jwt_middleware is not None:
+        await jwt_middleware.startup()
+
+    # 4. Database engines — R23 dual factory (write + read) for both DBs
+    nlp_engine, nlp_read_engine, nlp_sf, nlp_read_sf = _build_nlp_factories(settings)
+    intel_engine, intel_read_engine, intel_sf, intel_read_sf = _build_intelligence_factories(settings)
     app.state.nlp_engine = nlp_engine
+    app.state.nlp_read_engine = nlp_read_engine
     app.state.intel_engine = intel_engine
+    app.state.intel_read_engine = intel_read_engine
     app.state.nlp_session_factory = nlp_sf
     app.state.nlp_write_factory = nlp_sf
     app.state.nlp_read_factory = nlp_read_sf
@@ -95,7 +158,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.intel_write_factory = intel_sf
     app.state.intel_read_factory = intel_read_sf
 
-    # 4. Valkey + WatchlistCache
+    # 4b. Expire stale embeddings if embedding model changed (PLAN-0031 B-2)
+    try:
+        await _expire_stale_embeddings(nlp_sf, settings)
+    except Exception:
+        log.warning("expire_stale_embeddings_failed", exc_info=True)
+
+    # 5. Valkey + WatchlistCache
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
     from nlp_pipeline.infrastructure.valkey.watchlist_cache import WatchlistCache
 
@@ -104,13 +173,46 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.valkey = valkey
     app.state.watchlist_cache = watchlist_cache
 
+    # 5b. Embedding client for POST /api/v1/embed — provider-selectable.
+    # The API process runs separately from article_consumer_main; it needs its own
+    # embedding client instance so the embed endpoint is not tied to Ollama.
+    app.state.embedding_client = _build_embedding_client(settings)
+    log.info(
+        "api_embedding_client_ready",
+        provider=settings.embedding_provider,
+    )
+
+    # 5. Optional: MinIO chunk text store (for search use case text hydration)
+    app.state.chunk_text_store = None
+    if settings.storage_access_key:
+        try:
+            from nlp_pipeline.infrastructure.storage.chunk_text_store import MinIOChunkTextStore
+            from storage.factory import build_object_storage  # type: ignore[import-untyped]
+            from storage.settings import StorageSettings  # type: ignore[import-untyped]
+
+            _obj_storage = build_object_storage(
+                settings=StorageSettings(
+                    endpoint=settings.storage_endpoint,
+                    access_key=settings.storage_access_key,
+                    secret_key=settings.storage_secret_key,
+                ),
+            )
+            app.state.chunk_text_store = MinIOChunkTextStore(_obj_storage, settings.chunk_bucket)
+            log.info("chunk_text_store_configured", bucket=settings.chunk_bucket)
+        except Exception:
+            log.warning("chunk_text_store_init_failed", exc_info=True)
+
     log.info("service_started", service=settings.service_name)
     yield
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
     await valkey.close()
     await nlp_engine.dispose()
+    if nlp_read_engine is not nlp_engine:
+        await nlp_read_engine.dispose()
     await intel_engine.dispose()
+    if intel_read_engine is not intel_engine:
+        await intel_read_engine.dispose()
     log.info("service_stopped", service=settings.service_name)
 
 
@@ -135,20 +237,57 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="2025.6.0",
         lifespan=lifespan,
     )
-    settings = settings or Settings()
+    settings = settings or Settings()  # type: ignore[call-arg]
     app.state.settings = settings
+
+    # Exception handlers — must be registered before middleware so that handler
+    # responses are still processed by middleware layers (e.g. Prometheus timing).
+    register_error_handlers(app)
+
+    # InternalJWTMiddleware (RS256 verifier — PRD-0025 Wave D)
+    # We store the instance on app.state so lifespan can call startup() on it.
+    jwks_url = f"{settings.api_gateway_url}/internal/jwks"
+    jwt_middleware = InternalJWTMiddleware(
+        app,
+        jwks_url=jwks_url,
+        skip_verification=settings.internal_jwt_skip_verification,
+        service_name=settings.service_name,
+        # S6 is internal-only: S8 forwards the same JWT multiple times per request.
+        # JTI replay check is done at the S8 user-facing boundary; disabling here
+        # prevents false 401s on the second S6 call (embed then chunk search).
+        jti_replay_check_enabled=settings.jti_replay_check_enabled,
+    )
+    app.state._jwt_middleware = jwt_middleware
+    app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url=jwks_url,
+        skip_verification=settings.internal_jwt_skip_verification,
+        service_name=settings.service_name,
+        jti_replay_check_enabled=settings.jti_replay_check_enabled,
+    )
 
     # Middleware (must be registered before lifespan starts)
     app.add_middleware(RequestIdMiddleware)
     metrics = create_metrics(service_name=settings.service_name)
+    ml_metrics = create_ml_metrics(settings.service_name)
     add_prometheus_middleware(app, metrics)
     add_otel_middleware(app)
     app.state.metrics = metrics
+    app.state.ml_metrics = ml_metrics
 
     _register_exception_handlers(app)
 
     app.include_router(health.router, tags=["health"])
+    app.include_router(embed.router)
     app.include_router(signals.router)
+    app.include_router(entities.router)
+    app.include_router(search.router)
+    app.include_router(news.router)
     app.include_router(dlq.router)
+    app.include_router(internal_costs.router)
+    # PLAN-0055 C-4: admin LLM replay endpoint.
+    app.include_router(admin.router)
+    # PLAN-0064 W6: full-text document search (stub in Wave 1, wired in Wave 3).
+    app.include_router(search_documents_router)
 
     return app

@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from datetime import datetime
 
 from common.ids import new_ulid  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from market_ingestion.domain.enums import Provider
 from market_ingestion.domain.errors import ProviderRateLimited
-
-if TYPE_CHECKING:
-    from datetime import datetime
 
 
 @dataclass

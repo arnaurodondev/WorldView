@@ -1,0 +1,77 @@
+---
+title: News Alerts
+description: Keyword and entity-based news alerts that fire when specific topics appear in the news pipeline.
+section: Alerts
+order: 4
+updated: 2026-05-05
+---
+
+News alerts fire when articles mentioning a specific entity, keyword phrase, or sentiment pattern flow through the Worldview news pipeline. They are evaluated after NLP processing — typically 3–5 minutes after article publication.
+
+## Keyword alerts
+
+A keyword alert fires when any article contains a specified phrase:
+
+```
+ANY news containing "interest rate cut" WITH sentiment ANY
+```
+
+Keywords are matched against the full article body (not just the headline) using case-insensitive substring matching. Multiple keywords can be added to a single rule using AND or OR logic.
+
+**OR logic** — any keyword triggers the alert:
+```
+Keywords: ["rate cut", "Fed pivot", "FOMC dovish"]  → matches any one
+```
+
+**AND logic** — all keywords must be present in the same article:
+```
+Keywords: ["AAPL", "acquisition"] with AND → only fires if both appear together
+```
+
+## Entity-based alerts
+
+Entity-based alerts fire when articles mention a specific named entity extracted by the NLP pipeline:
+
+```
+Articles mentioning [AAPL entity] WITH sentiment NEGATIVE
+```
+
+This is more precise than keyword matching — it uses the resolved entity identity rather than the raw ticker string. For example, "Apple" and "Apple Inc." and "$AAPL" all resolve to the same entity.
+
+<Callout type="info" title="Entity resolution">
+Entity resolution is performed by the NLP pipeline's canonicalization step. Aliases and alternative names are mapped to the canonical entity. This means entity-based news alerts are more robust to different writing styles than raw keyword matches.
+</Callout>
+
+## Sentiment-scoped alerts
+
+Both keyword and entity alerts support sentiment scoping:
+
+| Sentiment scope | Behavior |
+|----------------|---------|
+| ANY | Fires on all articles |
+| POSITIVE | Only fires on articles with positive sentiment toward the entity |
+| NEGATIVE | Only fires on articles with negative sentiment toward the entity |
+
+Sentiment is assigned by the NLP pipeline at the entity level (not the article level), so "Apple announces layoffs but beats earnings" can be POSITIVE for earnings mentions and NEGATIVE for the layoffs mention.
+
+## Routing tier filtering
+
+You can restrict news alerts to high-quality sources:
+
+- **TIER_1 only** — SEC filings, official press releases, Fed statements
+- **TIER_1 + TIER_2** — adds major wire services (Reuters, Bloomberg, AP)
+- **All tiers** — includes financial media and aggregated sources
+
+<Callout type="warn" title="Tier 4 noise">
+TIER_4 (social/aggregated) sources can be high-volume and noisy. Avoid setting aggressive news alerts targeting all tiers, as you may receive many low-quality matches during trending news events.
+</Callout>
+
+## Watchlist news alerts
+
+Create a single rule that monitors your entire watchlist:
+
+```
+Any instrument in [Watchlist name] has news WITH sentiment NEGATIVE routing [TIER_1+2]
+```
+
+This rule fires whenever any instrument in your watchlist receives negative-sentiment Tier 1 or 2 news coverage — useful for portfolio-wide monitoring without one rule per ticker.

@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query
 
-from portfolio.api.dependencies import UoWDep
+from portfolio.api.dependencies import ReadUoWDep
 from portfolio.api.schemas import InstrumentResponse, PaginatedResponse
 from portfolio.application.use_cases.instrument import GetInstrumentByIdUseCase, ListInstrumentsUseCase
 
@@ -15,7 +15,7 @@ router = APIRouter(tags=["instruments"])
 
 @router.get("/instruments", response_model=PaginatedResponse[InstrumentResponse])
 async def list_instruments(
-    uow: UoWDep,
+    uow: ReadUoWDep,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> PaginatedResponse[InstrumentResponse]:
@@ -41,7 +41,7 @@ async def list_instruments(
 
 
 @router.get("/instruments/{instrument_id}", response_model=InstrumentResponse)
-async def get_instrument(instrument_id: UUID, uow: UoWDep) -> InstrumentResponse:
+async def get_instrument(instrument_id: UUID, uow: ReadUoWDep) -> InstrumentResponse:
     uc = GetInstrumentByIdUseCase()
     instrument = await uc.execute(instrument_id, uow)
     return InstrumentResponse(

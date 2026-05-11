@@ -127,6 +127,7 @@ def _make_serializer() -> MagicMock:
     s.serialize_ohlcv = MagicMock(return_value=b'{"bar": 1}\n')
     s.serialize_quotes = MagicMock(return_value=b'{"bid": 1.0}\n')
     s.serialize_fundamentals = MagicMock(return_value=b'{"revenue": 1000}\n')
+    s.serialize_passthrough = MagicMock(return_value=b'{"dataset_type": "economic_events", "payload": []}\n')
     return s
 
 
@@ -141,6 +142,15 @@ def _make_registry(*, raw_data: bytes | None = None, fetch_side_effect=None) -> 
         adapter.fetch_ohlcv = AsyncMock(return_value=fr)
         adapter.fetch_quotes = AsyncMock(return_value=fr)
         adapter.fetch_fundamentals = AsyncMock(return_value=fr)
+    # Extended fetch methods used by passthrough dataset types — must be AsyncMock
+    # so that `await adapter.fetch_*()` works in _fetch().
+    adapter.fetch_economic_events = AsyncMock(return_value=fr)
+    adapter.fetch_macro_indicator = AsyncMock(return_value=fr)
+    adapter.fetch_insider_transactions = AsyncMock(return_value=fr)
+    adapter.fetch_earnings_calendar = AsyncMock(return_value=fr)
+    adapter.fetch_news_sentiment = AsyncMock(return_value=fr)
+    adapter.fetch_yield_curve = AsyncMock(return_value=fr)
+    adapter.fetch_historical_market_cap = AsyncMock(return_value=fr)
     registry = MagicMock()
     registry.get = MagicMock(return_value=adapter)
     return registry
@@ -326,8 +336,13 @@ async def test_watermark_advanced_with_range_end() -> None:
 
 
 @pytest.mark.unit
-async def test_watermark_violation_fails_task_and_propagates() -> None:
-    """WatermarkViolation from advance_bar_ts propagates without persisting fail/retry state."""
+async def test_watermark_violation_retries_task_and_propagates() -> None:
+    """WatermarkViolation from advance_bar_ts → task.retry() called (concurrent worker race).
+
+    WatermarkViolation is a transient race condition, not a fatal error.
+    The losing worker should re-queue via retry() so the task is attempted again.
+    task.fail() must NOT be called.
+    """
     task = _make_task()
     wm = _make_watermark()
     wm.advance_bar_ts.side_effect = WatermarkViolation("non-monotonic advance")
@@ -337,8 +352,8 @@ async def test_watermark_violation_fails_task_and_propagates() -> None:
     with pytest.raises(WatermarkViolation):
         await uc.execute(task)
 
+    task.retry.assert_called_once()
     task.fail.assert_not_called()
-    task.retry.assert_not_called()
 
 
 @pytest.mark.unit
@@ -665,8 +680,8 @@ async def test_minio_write_skipped_on_retry_if_object_exists() -> None:
     """
     task = _make_task(dataset_type=DatasetType.OHLCV)
     store = _make_store()
-    # bronze exists (skip put), canonical does not yet (allow put)
-    store.exists = AsyncMock(side_effect=[True, False])
+    # bronze exists (skip put); canonical is always PUT without an exists() check
+    store.exists = AsyncMock(side_effect=[True])
     uc, _, _, store, _ = _make_use_case(store=store)
 
     await uc.execute(task)
@@ -675,8 +690,8 @@ async def test_minio_write_skipped_on_retry_if_object_exists() -> None:
     assert store.put.await_count == 1
     # Pipeline still completes
     task.succeed.assert_called_once()
-    # exists() was queried for both bronze and canonical keys
-    assert store.exists.await_count == 2
+    # exists() is only queried for the bronze key (canonical always overwrites)
+    assert store.exists.await_count == 1
 
 
 @pytest.mark.unit
@@ -754,3 +769,331 @@ async def test_invalid_state_transition_reraises() -> None:
         await uc.execute(task)
 
     assert exc_info.value is original_exc, "must re-raise the original exception"
+
+
+@pytest.mark.unit
+async def test_type_error_in_canonicalize_fails_task_bp113() -> None:
+    """BP-113 regression: TypeError from None-valued OHLCV price field must call _persist_fail.
+
+    FIX-O3 (BP-182) handles volume=null gracefully (coerced to 0), so that specific
+    input no longer raises.  This test uses open=None instead, which goes through
+    float(None) — still a TypeError — to verify the BP-113 catch-and-fail path
+    is intact for genuinely corrupt price fields.
+    """
+    import json
+
+    # Raw data with None for a price field — float(None) raises TypeError in from_dict
+    raw_with_none_open = json.dumps(
+        [{"open": None, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 100, "date": "2025-01-01"}]
+    ).encode()
+
+    task = _make_task(dataset_type=DatasetType.OHLCV, timeframe="1d")
+    uow = _make_uow()
+
+    # Use real serializer to trigger the actual TypeError path
+    from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
+
+    real_serializer = DefaultCanonicalSerializer()
+    registry = _make_registry(raw_data=raw_with_none_open)
+    store = _make_store()
+
+    uc = ExecuteTaskUseCase(
+        uow=uow,
+        provider_registry=registry,
+        object_store=store,
+        serializer=real_serializer,
+        bronze_bucket="market-bronze",
+        canonical_bucket="market-canonical",
+    )
+
+    with pytest.raises(ProviderDataError):
+        await uc.execute(task)
+
+    # task.fail must have been called (BP-113 fix)
+    task.fail.assert_called_once()
+
+
+@pytest.mark.unit
+async def test_null_volume_ohlcv_succeeds_bp182() -> None:
+    """FIX-O3 / BP-182 regression: EODHD volume=null must NOT crash — coerced to 0.
+
+    Previously int(None) raised TypeError, leaving the task stuck in RUNNING
+    (BP-113). After FIX-O3, volume=null is gracefully coerced to 0 so the bar
+    is canonicalized and the task succeeds.
+    """
+    import json
+
+    raw_with_none_volume = json.dumps(
+        [{"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": None, "date": "2025-01-01"}]
+    ).encode()
+
+    task = _make_task(dataset_type=DatasetType.OHLCV, timeframe="1d")
+    uow = _make_uow()
+
+    from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
+
+    real_serializer = DefaultCanonicalSerializer()
+    registry = _make_registry(raw_data=raw_with_none_volume)
+    store = _make_store()
+
+    uc = ExecuteTaskUseCase(
+        uow=uow,
+        provider_registry=registry,
+        object_store=store,
+        serializer=real_serializer,
+        bronze_bucket="market-bronze",
+        canonical_bucket="market-canonical",
+    )
+
+    # Must NOT raise — null volume is valid and coerced to 0
+    await uc.execute(task)
+
+    task.succeed.assert_called_once()
+    task.fail.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# M-007: Watermark race condition tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_watermark_violation_triggers_retry() -> None:
+    """WatermarkViolation from advance_bar_ts → task.retry() called, status is RETRY not FAILED.
+
+    When two workers race on the same watermark, the loser receives a
+    WatermarkViolation.  The correct response is task.retry() so the task is
+    re-queued; task.fail() must NOT be called (the task is not broken, just lost
+    a race).
+    """
+    task = _make_task()
+    # Simulate task in RUNNING state (after claim)
+    task.status = "running"
+
+    wm = _make_watermark()
+    wm.advance_bar_ts.side_effect = WatermarkViolation("non-monotonic: new_ts <= current_ts")
+    uow = _make_uow(watermark=wm)
+    uc, _, _, _, _ = _make_use_case(uow=uow)
+
+    # WatermarkViolation should propagate after triggering retry
+    with pytest.raises(WatermarkViolation):
+        await uc.execute(task)
+
+    # retry() called — task goes back to RETRY queue
+    task.retry.assert_called_once()
+    # fail() must NOT be called — this is a transient race, not a fatal error
+    task.fail.assert_not_called()
+
+
+@pytest.mark.unit
+async def test_watermark_concurrent_advance_only_one_succeeds() -> None:
+    """Concurrent advance with same bar_ts: one succeeds, other gets WatermarkViolation and retries.
+
+    Simulates two tasks racing to advance the same watermark.  The second call
+    raises WatermarkViolation, which must result in retry(), not fail().
+    """
+
+    bar_ts = datetime(2024, 6, 30, tzinfo=UTC)
+
+    # Task 1: succeeds (watermark advances normally)
+    task1 = _make_task(range_end=bar_ts)
+    wm1 = _make_watermark(changed=True)
+    uow1 = _make_uow(watermark=wm1)
+    uc1, _, _, _, _ = _make_use_case(uow=uow1)
+
+    # Task 2: races, loses — watermark raises WatermarkViolation
+    task2 = _make_task(range_end=bar_ts)
+    wm2 = _make_watermark(changed=True)
+    wm2.advance_bar_ts.side_effect = WatermarkViolation("concurrent advance detected")
+    uow2 = _make_uow(watermark=wm2)
+    uc2, _, _, _, _ = _make_use_case(uow=uow2)
+
+    # Task 1 executes successfully
+    await uc1.execute(task1)
+    task1.succeed.assert_called_once()
+    task1.retry.assert_not_called()
+
+    # Task 2 races and loses → retry, not fail
+    with pytest.raises(WatermarkViolation):
+        await uc2.execute(task2)
+
+    task2.retry.assert_called_once()
+    task2.fail.assert_not_called()
+
+    # Only one watermark was actually advanced (task1's)
+    wm1.advance_bar_ts.assert_called_once_with(bar_ts)
+    wm2.advance_bar_ts.assert_called_once_with(bar_ts)  # called but raised
+
+
+@pytest.mark.unit
+async def test_canonicalize_type_error_marks_failed() -> None:
+    """BP-113 regression: None price field in record → TypeError → task.fail() called (not stuck RUNNING).
+
+    FIX-O3 (BP-182) handles volume=null gracefully, so this test uses open=None
+    (a price field where float(None) still raises TypeError) to keep the BP-113
+    catch-and-fail path exercised for genuinely unrecoverable data errors.
+    """
+    import json as _json
+
+    raw_with_none_open = _json.dumps(
+        [{"open": None, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 100, "date": "2025-01-01"}]
+    ).encode()
+
+    task = _make_task(dataset_type=DatasetType.OHLCV, timeframe="1d")
+    uow = _make_uow()
+
+    from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
+
+    real_serializer = DefaultCanonicalSerializer()
+    registry = _make_registry(raw_data=raw_with_none_open)
+    store = _make_store()
+
+    uc = ExecuteTaskUseCase(
+        uow=uow,
+        provider_registry=registry,
+        object_store=store,
+        serializer=real_serializer,
+        bronze_bucket="market-bronze",
+        canonical_bucket="market-canonical",
+    )
+
+    with pytest.raises(ProviderDataError):
+        await uc.execute(task)
+
+    # task.fail() must be called — task transitions to FAILED, not stuck in RUNNING
+    task.fail.assert_called_once()
+    task.retry.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# D-W1: Passthrough dataset type routing tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "dataset_type",
+    [
+        DatasetType.ECONOMIC_EVENTS,
+        DatasetType.MACRO_INDICATOR,
+        DatasetType.INSIDER_TRANSACTIONS,
+        DatasetType.EARNINGS_CALENDAR,
+        DatasetType.NEWS_SENTIMENT,
+        DatasetType.YIELD_CURVE,
+        DatasetType.MARKET_CAP,
+    ],
+)
+async def test_passthrough_types_use_serialize_passthrough(dataset_type: DatasetType) -> None:
+    """D-W1: Passthrough dataset types call serialize_passthrough(), NOT serialize_fundamentals().
+
+    Before D-W1 these types fell through to the FUNDAMENTALS branch, producing
+    garbage output (CanonicalFundamentals.from_dict() applied to non-fundamentals
+    data).  After D-W1 they are routed to the correct passthrough serializer.
+    """
+    raw_payload = json.dumps({"data": "test"}).encode()
+    task = _make_task(dataset_type=dataset_type, symbol="EVENTS.USA")
+    registry = _make_registry(raw_data=raw_payload)
+    serializer = _make_serializer()
+    uc, _, _, _, serializer = _make_use_case(registry=registry, serializer=serializer)
+
+    await uc.execute(task)
+
+    # Must call passthrough, not fundamentals
+    serializer.serialize_passthrough.assert_called_once()
+    serializer.serialize_fundamentals.assert_not_called()
+    serializer.serialize_ohlcv.assert_not_called()
+    serializer.serialize_quotes.assert_not_called()
+
+
+@pytest.mark.unit
+async def test_passthrough_returns_row_count_one() -> None:
+    """D-W1: Passthrough canonicalization always returns row_count=1.
+
+    Each task produces exactly one envelope record regardless of how many
+    entries the raw payload contains.
+    """
+    # Large payload — but row_count must still be 1
+    raw_payload = json.dumps([{"event": i} for i in range(50)]).encode()
+    task = _make_task(dataset_type=DatasetType.ECONOMIC_EVENTS, symbol="EVENTS.USA")
+    registry = _make_registry(raw_data=raw_payload)
+    serializer = _make_serializer()
+    serializer.serialize_passthrough = MagicMock(return_value=b'{"dataset_type": "economic_events"}\n')
+    uc, uow, _, _, serializer = _make_use_case(registry=registry, serializer=serializer)
+
+    await uc.execute(task)
+
+    # The MarketDatasetFetched event should record row_count=1
+    uow.outbox.add.assert_awaited_once()
+    call_kwargs = uow.outbox.add.call_args.kwargs
+    event = call_kwargs["events"][0]
+    assert event.row_count == 1
+
+
+@pytest.mark.unit
+async def test_passthrough_serialize_called_with_correct_args() -> None:
+    """D-W1: serialize_passthrough() receives raw_data, dataset_type, symbol, source."""
+    raw_payload = json.dumps({"gdp": 25000.0}).encode()
+    task = _make_task(
+        dataset_type=DatasetType.MACRO_INDICATOR,
+        symbol="USA.gdp_current_usd",
+        provider=Provider.EODHD,
+    )
+    registry = _make_registry(raw_data=raw_payload)
+    serializer = _make_serializer()
+    uc, _, _, _, serializer = _make_use_case(registry=registry, serializer=serializer)
+
+    await uc.execute(task)
+
+    call_kwargs = serializer.serialize_passthrough.call_args.kwargs
+    assert call_kwargs["dataset_type"] == str(DatasetType.MACRO_INDICATOR)
+    assert call_kwargs["symbol"] == "USA.gdp_current_usd"
+    assert call_kwargs["source"] == str(Provider.EODHD)
+    # raw_data is the parsed JSON (dict), not raw bytes
+    assert call_kwargs["raw_data"] == {"gdp": 25000.0}
+
+
+@pytest.mark.unit
+async def test_fundamentals_not_affected_by_passthrough_change() -> None:
+    """D-W1: FUNDAMENTALS dataset type still routes to serialize_fundamentals() (no regression)."""
+    task = _make_task(dataset_type=DatasetType.FUNDAMENTALS, variant="annual")
+    registry = _make_registry(raw_data=_fundamentals_json())
+    serializer = _make_serializer()
+    uc, _, _, _, serializer = _make_use_case(registry=registry, serializer=serializer)
+
+    await uc.execute(task)
+
+    serializer.serialize_fundamentals.assert_called_once()
+    serializer.serialize_passthrough.assert_not_called()
+
+
+@pytest.mark.unit
+async def test_passthrough_real_serializer_economic_events() -> None:
+    """D-W1 integration: DefaultCanonicalSerializer.serialize_passthrough() produces valid envelope.
+
+    Uses the real serializer (not a mock) to verify the end-to-end passthrough
+    path for economic events produces correctly-structured NDJSON.
+    """
+    from market_ingestion.infrastructure.adapters.canonical import DefaultCanonicalSerializer
+
+    events_payload = [{"date": "2026-04-24", "event": "CPI", "actual": 3.2, "country": "USA"}]
+    raw_data = json.dumps(events_payload).encode()
+
+    task = _make_task(dataset_type=DatasetType.ECONOMIC_EVENTS, symbol="EVENTS.USA")
+    registry = _make_registry(raw_data=raw_data)
+    real_serializer = DefaultCanonicalSerializer()
+    store = _make_store()
+    uow = _make_uow()
+
+    uc = ExecuteTaskUseCase(
+        uow=uow,
+        provider_registry=registry,
+        object_store=store,
+        serializer=real_serializer,
+        bronze_bucket="market-bronze",
+        canonical_bucket="market-canonical",
+    )
+
+    # Must not raise — passthrough path handles list payload cleanly
+    await uc.execute(task)
+    task.succeed.assert_called_once()
+    task.fail.assert_not_called()

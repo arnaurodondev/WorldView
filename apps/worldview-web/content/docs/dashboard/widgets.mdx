@@ -1,0 +1,75 @@
+---
+title: Dashboard Widgets
+description: Detailed reference for each of the five dashboard widgets.
+section: Dashboard
+order: 2
+updated: 2026-05-05
+---
+
+Each widget on the dashboard is an independent component that fetches its own data and renders asynchronously. A widget's loading skeleton appears while data is fetching; a retry button appears if the fetch fails.
+
+## Morning Brief
+
+The morning brief is a 400–600 word AI-generated digest produced at 06:00 ET each trading day.
+
+**What it covers:**
+- Overall market tone (risk-on / risk-off) with macro context
+- Top three news themes from the last 18 hours
+- Watchlist-specific commentary: which of your holdings are in the news
+- Key economic events happening today
+- One actionable research question based on the day's themes
+
+**Interaction:**
+- Company names in the brief are linked to their instrument pages
+- Click **Ask a follow-up** to open the Chat panel pre-loaded with the brief as context
+- Rate the brief with thumbs up/down; your feedback trains the next generation
+
+<Callout type="info" title="Watchlist scoping">
+The brief is scoped to your active watchlist. Instruments not in your watchlist may still appear if they are broadly market-moving, but instrument-specific commentary focuses on your holdings.
+</Callout>
+
+## Sector Heatmap
+
+The sector heatmap visualizes the 11 SPDR ETF sectors by percentage daily change, using a 7-step color scale:
+
+| Color | Threshold |
+|-------|-----------|
+| Deep red | ≤ −2% |
+| Red | −2% to −1% |
+| Light red | −1% to −0.25% |
+| Neutral gray | −0.25% to +0.25% |
+| Light green | +0.25% to +1% |
+| Green | +1% to +2% |
+| Deep green | ≥ +2% |
+
+Cell size is proportional to the sector's approximate market-cap weight in the S&P 500. Click any cell to open the Screener filtered to that sector.
+
+## Watchlist Movers
+
+Displays all instruments in your active watchlist sorted by absolute percentage daily change — both gainers and losers appear, enabling at-a-glance scanning of what moved most today.
+
+Each row shows: **ticker**, **company name**, **last price**, **$ change**, **% change**, and a directional sparkline for the last 5 trading days.
+
+## Economic Calendar
+
+Shows the next 5 upcoming macro events with:
+
+- **Event name** (e.g. "US CPI MoM", "FOMC Rate Decision")
+- **Release time** in your local timezone
+- **Consensus** estimate vs. **prior** reading
+- **Actual** value (populated after release, highlighted green/red vs consensus)
+
+Click any event to see a 12-month history of actuals vs. consensus for that indicator.
+
+## Prediction Markets
+
+Shows the top 5 Polymarket prediction markets by 24-hour trading volume:
+
+- **Market title** (e.g. "Fed cuts rates in June 2026?")
+- **YES probability** as a large percentage figure
+- **24h volume** in USD
+- **Direction arrow** showing probability change since yesterday
+
+<Callout type="tip" title="Category filter">
+Use the dropdown above the prediction markets widget to filter by category: Economics, Politics, Crypto, Sports, or All.
+</Callout>

@@ -55,10 +55,10 @@ def test_routes_registered() -> None:
     assert "/healthz" in routes
     assert "/readyz" in routes
 
-    # Instruments
+    # Instruments (PLAN-0073 Wave B-1: old /symbol/{symbol} and /{id} replaced by /lookup)
     assert "/api/v1/instruments" in routes
-    assert "/api/v1/instruments/{instrument_id}" in routes
-    assert "/api/v1/instruments/symbol/{symbol}" in routes
+    assert "/api/v1/instruments/lookup" in routes
+    assert "/api/v1/instruments/on-demand-profile" in routes
 
     # OHLCV
     assert "/api/v1/ohlcv/{instrument_id}" in routes
@@ -72,26 +72,28 @@ def test_routes_registered() -> None:
 
 
 def test_readyz_returns_503_when_db_down() -> None:
-    """GET /readyz returns 503 when the DB is unreachable."""
-    from market_data.app import create_app
+    """GET /readyz returns 503 when the DB is unreachable.
 
-    app = create_app()
+    Uses the null lifespan to avoid real JWKS fetch (F-003: startup now raises
+    RuntimeError on failure).  Injects error-raising DB mock after startup.
+    """
+    app = _make_test_app()
 
-    # Set up minimal state so readyz can attempt its checks
     mock_sf = MagicMock()
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=None)
     mock_session.execute = AsyncMock(side_effect=Exception("Connection refused"))
     mock_sf.return_value = mock_session
-    app.state.session_factory = mock_sf
 
     mock_valkey = AsyncMock()
     mock_valkey.ping = AsyncMock(return_value=True)
-    app.state.valkey_client = mock_valkey
-    app.state.object_storage = None
 
     with TestClient(app, raise_server_exceptions=False) as client:
+        # Override state after lifespan startup so the mock is used by readyz
+        app.state.session_factory = mock_sf
+        app.state.valkey_client = mock_valkey
+        app.state.object_storage = None
         resp = client.get("/readyz")
 
     assert resp.status_code == 503

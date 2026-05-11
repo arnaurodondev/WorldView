@@ -9,9 +9,9 @@ import pytest
 from market_ingestion.domain.enums import DatasetType, Provider
 from market_ingestion.domain.errors import (
     ProviderAuthError,
-    ProviderDataError,
     ProviderRateLimited,
     ProviderUnavailable,
+    ProviderUnsupportedSymbol,
 )
 from market_ingestion.infrastructure.adapters.providers.eodhd import (
     EODHDProviderAdapter,
@@ -170,10 +170,16 @@ async def test_fetch_ohlcv_503_raises_unavailable():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_fetch_ohlcv_404_raises_data_error():
+async def test_fetch_ohlcv_404_raises_unsupported_symbol():
+    """PLAN-0052 platform-QA round 4: 404 from EODHD now raises
+    ``ProviderUnsupportedSymbol`` (not ``ProviderDataError``) so the
+    caller can dead-letter without polluting the fatal-error metric.
+    A symbol the provider doesn't support is structurally different
+    from a malformed-data response — both are non-retryable, but the
+    metric impact differs."""
     adapter, _ = _make_adapter(status_code=404)
 
-    with pytest.raises(ProviderDataError):
+    with pytest.raises(ProviderUnsupportedSymbol):
         await adapter.fetch_ohlcv("AAPL", "1d", _START, _END)
 
 

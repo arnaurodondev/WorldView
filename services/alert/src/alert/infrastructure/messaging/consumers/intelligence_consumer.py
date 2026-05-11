@@ -21,6 +21,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -33,8 +34,20 @@ _KNOWN_TOPICS: frozenset[str] = frozenset(
         "nlp.signal.detected.v1",
         "graph.state.changed.v1",
         "intelligence.contradiction.v1",
-    }
+    },
 )
+
+
+_TOPIC_SCHEMA_PATHS: dict[str, str] = {
+    "nlp.signal.detected.v1": get_schema_path("nlp.signal.detected.v1.avsc"),
+    "graph.state.changed.v1": get_schema_path("graph.state.changed.v1.avsc"),
+    "intelligence.contradiction.v1": get_schema_path("intelligence.contradiction.v1.avsc"),
+}
+
+# PLAN-0062 F-018: defence-in-depth bound on the unbounded ``json.loads`` read.
+# 16 MiB cap on the JSON-fallback path to prevent OOM from a poison legacy
+# message.
+_MAX_JSON_FALLBACK_BYTES = 16 * 1024 * 1024
 
 
 # ── Minimal no-op UoW ─────────────────────────────────────────────────────────
@@ -44,7 +57,7 @@ class _NoOpUoW:
     async def __aenter__(self) -> _NoOpUoW:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass
 
     async def commit(self) -> None:
@@ -61,12 +74,14 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
     """Consumes intelligence topics and routes each event to fan-out.
 
     Args:
+    ----
         config: Consumer configuration.  ``topics`` should contain all
             three intelligence topic names; ``group_id`` should be
             ``alert-service-group``.
         fanout_use_case: :class:`AlertFanoutUseCase` instance to call for
             each received event.
         dedup_client: Optional Valkey client for event deduplication.
+
     """
 
     def __init__(
@@ -102,7 +117,20 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
         topic = self._resolve_topic(value, headers)
         correlation_id: str | None = value.get("correlation_id")  # type: ignore[assignment]
 
-        result = await self._fanout.execute(event=value, topic=topic, correlation_id=correlation_id)
+        # Extract market_impact_score; default 0.0 for events that don't carry it.
+        # Guard float() against None or non-numeric values (e.g. schema mismatch).
+        raw_score = value.get("market_impact_score", 0.0)
+        try:
+            market_impact_score: float = max(0.0, min(1.0, float(raw_score or 0.0)))
+        except (ValueError, TypeError):
+            market_impact_score = 0.0
+
+        result = await self._fanout.execute(
+            event=value,
+            topic=topic,
+            correlation_id=correlation_id,
+            market_impact_score=market_impact_score,
+        )
 
         logger.debug(  # type: ignore[no-any-return]
             "intelligence_consumer.processed",
@@ -124,7 +152,9 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
                     "intelligence_consumer.unknown_topic_from_header",
                     topic=topic_header,
                 )
-            return topic_header
+                # Fall through to event_type resolution; don't store arbitrary header values.
+            else:
+                return topic_header
 
         # Fall back to event_type field in the payload
         event_type: str = str(value.get("event_type", ""))
@@ -189,7 +219,6 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
             error=str(failure.last_error),
             attempt=failure.attempt,
         )
-        return None
 
     async def update_failure(self, failure: FailureInfo[None]) -> None:
         logger.warning(  # type: ignore[no-any-return]
@@ -198,7 +227,7 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
             attempt=failure.attempt,
         )
 
-    async def dead_letter(self, failure: FailureInfo[None]) -> None:
+    async def _dead_letter_impl(self, failure: FailureInfo[None]) -> None:
         logger.error(  # type: ignore[no-any-return]
             "intelligence_consumer.dead_lettered",
             event_id=failure.event_id,
@@ -217,10 +246,46 @@ class IntelligenceConsumer(BaseKafkaConsumer[None]):
     # ── Serialization ─────────────────────────────────────────────────────────
 
     def deserialize_value(self, raw: bytes, schema_path: str | None = None) -> dict[str, Any]:
+        """Decode events from any of the three intelligence topics.
+
+        PLAN-0062 Wave C: AVRO_FIRST decode driven by the Confluent magic
+        byte (0x00).  When ``schema_path`` is provided (set by the base
+        consumer's ``_handle_message`` via ``get_schema_path``) the Avro path
+        decodes against that schema.  Falls back to JSON for legacy
+        producers — this is logged so we can quantify residual JSON traffic.
+
+        QA-iter1 (PLAN-0062): if the Confluent magic byte is present but no
+        schema path is known (unknown topic), refuse to call ``json.loads``
+        on Avro bytes — that would raise ``JSONDecodeError`` and dead-letter
+        the message via the noisier path.  Raise ``MalformedDataError``
+        directly so the dead-letter is clean and the warning is accurate.
+        """
+        from messaging.kafka.consumer.errors import MalformedDataError  # type: ignore[import-untyped]
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
+
+        if raw and raw[:1] == b"\x00":
+            if schema_path:
+                return deserialize_confluent_avro(schema_path, raw)  # type: ignore[no-any-return]
+            logger.warning(  # type: ignore[no-any-return]
+                "intelligence_consumer.avro_payload_without_schema",
+                message="Confluent magic byte present but no schema_path resolved; dead-lettering as malformed",
+            )
+            raise MalformedDataError(
+                "Avro magic byte present but no schema path registered for this topic",
+            )
+        logger.warning(  # type: ignore[no-any-return]
+            "intelligence_consumer.legacy_json_payload",
+            message="message lacks Confluent magic byte; using JSON fallback",
+        )
+        # PLAN-0062 F-018: cap JSON-fallback to 16 MiB before ``json.loads``.
+        if len(raw) > _MAX_JSON_FALLBACK_BYTES:
+            raise MalformedDataError(
+                f"JSON fallback payload exceeds cap ({len(raw)} > {_MAX_JSON_FALLBACK_BYTES})",
+            )
         return json.loads(raw)  # type: ignore[no-any-return]
 
     def get_schema_path(self, topic: str) -> str | None:
-        return None
+        return _TOPIC_SCHEMA_PATHS.get(topic)
 
     def extract_event_id(self, value: dict[str, Any]) -> str:
         return str(value.get("event_id", ""))

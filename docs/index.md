@@ -58,7 +58,7 @@ Read in this order:
 
 | App | Port | Doc |
 |-----|------|-----|
-| Frontend (React + Vite) | 5173 | [frontend.md](apps/frontend.md) |
+| Worldview Web (Next.js 15) | 3001 | [worldview-web.md](apps/worldview-web.md) |
 
 ---
 

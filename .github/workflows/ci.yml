@@ -19,8 +19,10 @@ env:
 # │       ┌──────────┬────────────┼──────────────┐                             │
 # │       │          │            │              │                              │
 # │  test-services  test-contract  test-integration  test-e2e                  │
-# │  (unit, 9 svcs) (portfolio)  (portfolio +        (3 svcs, compose)         │
-# │                               market-data,                                 │
+# │  (unit,10 svcs) (3 svcs)     (portfolio +        (8 svcs, compose)         │
+# │                               market-data, alert,                          │
+# │                               api-gateway,                                 │
+# │                               rag-chat,                                    │
 # │                               testcontainers)                              │
 # │                                                                             │
 # │  validate-service-structure, import-guards, and architecture-tests gate    │
@@ -36,17 +38,17 @@ jobs:
     name: Lint & Type-check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
       # Pin versions so a new ruff/mypy release can't silently break CI.
       - name: Install tools
-        run: python -m pip install "ruff==0.4.0" "mypy==1.10.0"
+        run: python -m pip install "ruff>=0.4,<1" "mypy>=1.10,<2"
 
       - name: Ruff check
         run: ruff check libs/ services/
@@ -83,10 +85,10 @@ jobs:
     name: Validate Avro Schemas
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -123,10 +125,10 @@ jobs:
     name: Validate Service Structure
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -143,7 +145,7 @@ jobs:
 
       - name: Upload structure report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: structure-violation-report
           path: /tmp/structure-report.json
@@ -156,10 +158,10 @@ jobs:
     name: Import Guards
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -176,7 +178,7 @@ jobs:
 
       - name: Upload import guard report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: import-guard-violation-report
           path: /tmp/import-guards-report.json
@@ -189,16 +191,16 @@ jobs:
     name: Architecture Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
-      - name: Install pytest
-        run: python -m pip install "pytest>=8" "pytest-asyncio>=0.23" --quiet
+      - name: Install pytest and yaml
+        run: python -m pip install "pytest>=8" "pytest-asyncio>=0.23" "pyyaml>=6" --quiet
 
       - name: Run architecture tests
         run: pytest tests/architecture -v --tb=short
@@ -209,12 +211,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lib: [common, contracts, messaging, storage, observability]
+        lib: [common, contracts, messaging, storage, observability, ml-clients]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -251,11 +253,12 @@ jobs:
           - knowledge-graph
           - rag-chat
           - api-gateway
+          - alert
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -279,29 +282,30 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: apps/frontend
+        working-directory: apps/worldview-web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: "20"
 
       - name: Install pnpm
-        run: corepack enable && corepack prepare pnpm@9 --activate
+        # WHY pnpm@10.33.0: Must match exact version in package.json "packageManager" field.
+        # Using a major-only pin (pnpm@10) allows silent drift that can change lockfile
+        # format and resolution behaviour between CI runs.
+        run: corepack enable && corepack prepare pnpm@10.33.0 --activate
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: ~/.local/share/pnpm/store
-          key: pnpm-${{ runner.os }}-${{ hashFiles('apps/frontend/package.json') }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('apps/worldview-web/pnpm-lock.yaml') }}
           restore-keys: pnpm-${{ runner.os }}-
 
-      # No pnpm-lock.yaml is committed; use a plain install.
-      # TODO: commit pnpm-lock.yaml and switch to --frozen-lockfile.
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck
         run: pnpm typecheck
@@ -321,14 +325,22 @@ jobs:
   # ═══════════════════════════════════════════════════════════════════════════
 
   test-contract:
-    name: Contract Tests — portfolio
+    name: Contract Tests — ${{ matrix.service }}
     runs-on: ubuntu-latest
     needs: [test-libs, validate-service-structure, import-guards, architecture-tests]
+    strategy:
+      fail-fast: false
+      matrix:
+        # Only services with actual contract test files (not empty placeholder dirs).
+        # portfolio: 10 test files (Avro shape + OpenAPI contract)
+        # alert: test_s1_contract.py (pytest-httpserver mock of S1 Portfolio API)
+        # market-ingestion: test_market_dataset_fetched_contract.py (Avro field coverage)
+        service: [portfolio, alert, market-ingestion]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -338,10 +350,10 @@ jobs:
           python -m pip install \
             $(for dir in libs/*/; do printf " -e %s" "$dir"; done) \
             --quiet
-          python -m pip install -e "services/portfolio[dev]" --quiet
+          python -m pip install -e "services/${{ matrix.service }}[dev]" --quiet
 
       - name: Run contract tests
-        run: pytest services/portfolio/tests -m contract -v --tb=short
+        run: pytest services/${{ matrix.service }}/tests -m contract -v --tb=short
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Integration tests — testcontainers (Docker-in-CI, no compose stack needed)
@@ -372,11 +384,23 @@ jobs:
             # market-data conftest uses the Python alembic API directly —
             # no venv path assumption, works out of the box.
             fix_alembic_venv: false
+          - service: alert
+            # alert uses testcontainers Postgres + the Python alembic API
+            # (similar to market-data).  No venv path fix required.
+            fix_alembic_venv: false
+          - service: api-gateway
+            # api-gateway integration tests use ASGI in-process transport with
+            # mocked downstream clients (MagicMock) — no testcontainers needed.
+            fix_alembic_venv: false
+          - service: rag-chat
+            # rag-chat integration tests use ASGI in-process transport — fully
+            # mocked, no testcontainers or external infra required.
+            fix_alembic_venv: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -440,11 +464,42 @@ jobs:
           - service: market-data
             profile: market-data-test
 
+          # Port mappings:
+          #   55433 ← postgres, 7480 ← minio, 6379 ← valkey, 9092 ← kafka
+          #   8081 ← schema-registry, 8004 ← content-ingestion API
+          - service: content-ingestion
+            profile: content-ingestion-test
+
+          # Port mappings:
+          #   55433 ← postgres, 7480 ← minio, 6379 ← valkey, 9092 ← kafka
+          #   8081 ← schema-registry, 8005 ← content-store API
+          - service: content-store
+            profile: content-store-test
+
+          # Port mappings:
+          #   55433 ← postgres(pgvector), 7480 ← minio, 6379 ← valkey
+          #   9092 ← kafka, 8081 ← schema-registry
+          #   8006 ← nlp-pipeline API, 8007 ← knowledge-graph API
+          # The intelligence-test profile brings up both S6 (nlp-pipeline) and
+          # S7 (knowledge-graph) against the shared intelligence_db.
+          # Two separate matrix entries run their E2E tests on isolated runners.
+          - service: nlp-pipeline
+            profile: intelligence-test
+
+          - service: knowledge-graph
+            profile: intelligence-test
+
+          # Port mappings:
+          #   55433 ← postgres(pgvector), 6379 ← valkey
+          #   9092 ← kafka, 8081 ← schema-registry, 8010 ← alert API
+          - service: alert
+            profile: alert-test
+
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -460,7 +515,7 @@ jobs:
       # from the committed .example files which have correct Docker-network values.
       - name: Create docker.env from example
         run: |
-          for svc in portfolio market-ingestion market-data; do
+          for svc in portfolio market-ingestion market-data content-ingestion content-store nlp-pipeline knowledge-graph alert; do
             example="services/$svc/configs/docker.env.example"
             target="services/$svc/configs/docker.env"
             if [ -f "$example" ] && [ ! -f "$target" ]; then
@@ -502,16 +557,45 @@ jobs:
           } >> "$GITHUB_ENV"
 
       # Run integration tests against the live compose infra.
-      # Only for market-ingestion — portfolio and market-data use testcontainers
-      # and their integration tests already ran in the test-integration job.
+      # market-ingestion, content-ingestion, and content-store have no
+      # testcontainers; their integration tests require the live compose stack.
       - name: Run integration tests (market-ingestion only)
         if: matrix.service == 'market-ingestion'
         run: >
           pytest services/market-ingestion/tests/integration
           -m integration -v --tb=short
 
-      # All three services expose their API on localhost (8001/8002/8003).
-      # The e2e conftest files default to these ports, so no env vars are needed.
+      # content-ingestion integration tests default to localhost:5432 but
+      # docker-compose.test.yml maps Postgres to localhost:55433.
+      - name: Set env vars for content-ingestion infra
+        if: matrix.service == 'content-ingestion'
+        run: |
+          echo "S4_TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:55433/content_ingestion_test_db" >> "$GITHUB_ENV"
+
+      - name: Run integration tests (content-ingestion only)
+        if: matrix.service == 'content-ingestion'
+        run: >
+          pytest services/content-ingestion/tests/integration
+          -m integration -v --tb=short
+
+      # content-store integration tests default to localhost:5432 but
+      # docker-compose.test.yml maps Postgres to localhost:55433.
+      - name: Set env vars for content-store infra
+        if: matrix.service == 'content-store'
+        run: |
+          echo "S5_TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:55433/content_store_test_db" >> "$GITHUB_ENV"
+
+      - name: Run integration tests (content-store only)
+        if: matrix.service == 'content-store'
+        run: >
+          pytest services/content-store/tests/integration
+          -m integration -v --tb=short
+
+      # All services expose their APIs on localhost (ports mapped in compose).
+      # E2E tests use ASGI in-process transport; they connect directly to the
+      # databases started by the compose stack.  Conftest defaults match the
+      # host-mapped ports (55433 for Postgres, 6379 for Valkey, etc.), so no
+      # extra env vars are needed for E2E.
       - name: Run E2E tests
         run: >
           pytest services/${{ matrix.service }}/tests/e2e

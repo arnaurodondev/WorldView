@@ -1,0 +1,26 @@
+# infra/tofu/terraform.tfvars.example
+#
+# Copy to terraform.tfvars and fill in real values.
+# terraform.tfvars is gitignored — NEVER commit it.
+#
+# Usage:
+#   cp terraform.tfvars.example terraform.tfvars
+#   # Edit terraform.tfvars with your values
+#   tofu init -backend-config=~/.config/tofu/hetzner-s3.tfbackend
+#   tofu plan
+#   tofu apply
+
+hcloud_token   = "REPLACE_ME_hetzner_cloud_api_token"
+k3s_token      = "REPLACE_ME_run: openssl rand -hex 32"
+developer_ip   = "REPLACE_ME_your_public_ip/32"  # find with: curl -s https://api.ipify.org
+
+# Contents of your SSH public key (not the path, the actual key string)
+ssh_public_key = "ssh-ed25519 AAAAC3... your_email@example.com"
+
+# Optional: uncomment and fill when domain is purchased
+# domain = "worldview.yourdomain.com"
+
+# Node types (defaults are optimal; change only if you need to scale down cost)
+# cp_type      = "cx32"   # 4 vCPU, 8 GB — ~€6/mo
+# worker1_type = "cx52"   # 16 vCPU, 32 GB — ~€24/mo (stateful)
+# worker2_type = "cx42"   # 8 vCPU, 16 GB — ~€12/mo (stateless)

@@ -111,6 +111,7 @@ async def main() -> None:
     await asyncio.sleep(1)  # brief pause for lifespan to complete
 
     from alert.application.use_cases.alert_fanout import AlertFanoutUseCase
+    from alert.infrastructure.clients.s7_entity_resolver import S7EntityResolver
     from alert.infrastructure.db.repositories.alert import AlertRepository
     from alert.infrastructure.db.repositories.dedup import DedupRepository
     from alert.infrastructure.db.repositories.outbox import OutboxRepository
@@ -127,14 +128,21 @@ async def main() -> None:
     session_factory = app.state.session_factory
     watchlist_cache = app.state.watchlist_cache
     ws_manager = app.state.ws_manager
+    # WHY pull valkey from app.state: lifespan creates it once and reuses for
+    # both watchlist cache + (now) entity resolver. Avoids opening a second
+    # connection pool for the same Valkey URL.
+    valkey = app.state.valkey
+    entity_resolver = S7EntityResolver(settings, valkey)
+    app.state.entity_resolver = entity_resolver
 
     fanout = AlertFanoutUseCase(
         session_factory=session_factory,
         watchlist_cache=watchlist_cache,
-        connection_manager=ws_manager,
+        notification_publisher=ws_manager,
         repo_factory=_repo_factory,  # type: ignore[arg-type]
         dedup_window_seconds=settings.alert_dedup_window_seconds,
         alert_delivered_topic=settings.kafka_topic_alert_delivered,
+        entity_resolver=entity_resolver,
     )
     app.state.fanout_use_case = fanout
 

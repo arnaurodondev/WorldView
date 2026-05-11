@@ -71,11 +71,13 @@ async def test_request_id_rejects_invalid_header(client) -> None:
     assert response.headers["x-request-id"] != "<script>alert(1)</script>"
 
 
-async def test_metrics_endpoint_returns_prometheus(client) -> None:
-    """GET /metrics should return prometheus text format."""
-    response = await client.get("/metrics")
+async def test_metrics_endpoint_returns_prometheus() -> None:
+    """GET /metrics returns prometheus text format (PRD-0025: /metrics is in _SKIP_PREFIXES)."""
+    test_app = create_app()
+
+    transport = ASGITransport(app=test_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.get("/metrics")
+
     assert response.status_code == 200
-    # Prometheus content type
-    assert "text/plain" in response.headers.get("content-type", "") or "text/plain" in str(
-        response.headers.get("content-type", "")
-    )
+    assert "text/plain" in response.headers.get("content-type", "")

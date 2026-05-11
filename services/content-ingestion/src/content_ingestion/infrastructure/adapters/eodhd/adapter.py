@@ -109,6 +109,7 @@ class EODHDAdapter(SourceAdapter):
 
             raw_bytes = json.dumps(article).encode("utf-8")
             published_at = _parse_published_at(article)
+            title = article.get("title") or None  # EODHD news articles have a "title" field
 
             results.append(
                 FetchResult(
@@ -121,6 +122,7 @@ class EODHDAdapter(SourceAdapter):
                     content_type="application/json",
                     published_at=published_at,
                     is_backfill=is_backfill,
+                    title=title,
                 ),
             )
 

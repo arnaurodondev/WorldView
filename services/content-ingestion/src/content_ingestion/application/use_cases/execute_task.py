@@ -65,6 +65,9 @@ class ExecuteContentTaskUseCase:
     - **Repository factories** (``adapter_state_factory``, ``fetch_log_factory``,
       ``outbox_factory``): callables that accept a DB session and return
       the corresponding port implementation.
+    - **task_factory**: callable that accepts a DB session and returns a
+      ``TaskPort``.  Used to update task status *inside* the advisory-lock
+      transaction so the status write is atomic with the data write (D-9).
     - **bronze**: pre-built ``BronzeStoragePort`` for MinIO writes.
     - **adapter_builder**: callable that constructs a ``SourceAdapterPort``
       for a given source type + dedup function, encapsulating all client
@@ -81,6 +84,7 @@ class ExecuteContentTaskUseCase:
         fetch_log_factory: Callable[[Any], FetchLogPort],
         outbox_factory: Callable[[Any], OutboxPort],
         adapter_builder: Callable[[SourceType, Callable[[str], Awaitable[bool]]], SourceAdapterPort],
+        task_factory: Callable[[Any], TaskPort] | None = None,
     ) -> None:
         self._write_factory = write_factory
         self._settings = settings
@@ -89,6 +93,7 @@ class ExecuteContentTaskUseCase:
         self._fetch_log_factory = fetch_log_factory
         self._outbox_factory = outbox_factory
         self._adapter_builder = adapter_builder
+        self._task_factory = task_factory
 
     async def execute(
         self,
@@ -114,13 +119,31 @@ class ExecuteContentTaskUseCase:
             # Fatal: exhaust attempts immediately
             task.attempt_count = task.max_attempts
             task.fail(str(exc))
-            await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+            try:
+                await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+            except Exception as db_err:
+                logger.error(
+                    "task_status_update_failed",
+                    task_id=str(task.id),
+                    original_error=str(exc),
+                    db_error=str(db_err),
+                )
+                raise db_err from exc
             logger.error("task_fatal_error", task_id=str(task.id), error=str(exc))
             return None
         except Exception as exc:
             # Retryable
             task.fail(str(exc))
-            await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+            try:
+                await task_repo.update_status(task.id, task.status, error_detail=task.error_detail)
+            except Exception as db_err:
+                logger.error(
+                    "task_status_update_failed",
+                    task_id=str(task.id),
+                    original_error=str(exc),
+                    db_error=str(db_err),
+                )
+                raise db_err from exc
             logger.warning("task_retryable_error", task_id=str(task.id), error=str(exc))
             return None
 
@@ -154,8 +177,20 @@ class ExecuteContentTaskUseCase:
             pg_advisory_lock(session, f"s4:fetch:{task.source_name}") as acquired,
         ):
             if not acquired:
-                task.succeed()
-                await task_repo.update_status(task.id, task.status)
+                # Another worker holds the lock — mark RETRY so the task is
+                # re-attempted later (D-003).  We must NOT mark SUCCEEDED because
+                # the data write did not happen in *this* worker.
+                from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+                if self._task_factory is not None:
+                    # F-CRIT-004: always use task_factory(session) inside the
+                    # write_factory session — never the outer task_repo.
+                    inner_task_repo = self._task_factory(session)
+                    await inner_task_repo.update_status(task.id, IngestionTaskStatus.RETRY)
+                    await session.commit()
+                else:
+                    await task_repo.update_status(task.id, IngestionTaskStatus.RETRY)
+                task.retry("advisory_lock_held_by_another_worker")
                 return None
 
             fetch_log_repo = self._fetch_log_factory(session)
@@ -176,20 +211,38 @@ class ExecuteContentTaskUseCase:
                 prefetched_results=fetch_output.results,
             )
 
-            # Update watermark after successful writes
+            # Update watermark after successful writes.
+            # PLAN-0055 B-1: also snapshot the live ``sources.config_hash`` so the
+            # startup drift detector can flag operator config edits since this run.
             if summary.fetched > 0:
                 adapter_state_repo = self._adapter_state_factory(session)
                 now = ct_mod.utc_now()
+                config_hash = getattr(fetch_output.source, "config_hash", None)
                 await adapter_state_repo.upsert(
                     task.source_id,
                     last_watermark=now,
                     last_run_at=now,
+                    last_run_config_hash=config_hash,
                 )
-                await session.commit()
 
-        # 5. Mark task SUCCEEDED
-        task.succeed()
-        await task_repo.update_status(task.id, task.status)
+            # 5. Mark task SUCCEEDED *inside* the advisory-lock transaction (D-9).
+            #
+            # Write the status to the DB BEFORE mutating the domain object.
+            # This way, if session.commit() fails, task.status is still RUNNING
+            # and the outer execute() error handler can safely call task.fail().
+            # The domain object is only updated AFTER the commit succeeds.
+            #
+            # Pattern: write-then-commit-then-mutate (not mutate-then-commit).
+            from contracts.enums import IngestionTaskStatus  # type: ignore[import-untyped]
+
+            if self._task_factory is not None:
+                inner_task_repo = self._task_factory(session)
+                await inner_task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+            else:
+                await task_repo.update_status(task.id, IngestionTaskStatus.SUCCEEDED)
+            await session.commit()
+            # Commit succeeded — safe to mutate domain object in memory
+            task.succeed()
 
         return summary
 
@@ -212,7 +265,9 @@ class ExecuteContentTaskUseCase:
             name=task.source_name,
             source_type=task.source_type,
             enabled=True,
-            config={},
+            # Use the source config loaded by claim_batch (symbol, from_date, etc.)
+            # so adapters like Finnhub can read their required parameters.
+            config=task.source_config,
         )
 
         # Build adapter with dedup check via a short-lived session

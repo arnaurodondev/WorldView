@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from uuid import UUID
+from typing import Any
+from uuid import UUID
 
 
 class DomainError(Exception):
@@ -138,6 +136,31 @@ class PortfolioArchivedError(BusinessRuleViolationError):
     error_code = "PORTFOLIO_ARCHIVED"
 
 
+class RootPortfolioNotArchivableError(BusinessRuleViolationError):
+    """Raised when a user (or API call) attempts to archive/delete the
+    auto-provisioned ROOT portfolio.
+
+    PLAN-0046 Wave 3 / T-46-3-01. The root portfolio aggregates positions
+    across all other portfolios; deleting it would orphan the user's "All
+    Accounts" view. The API maps this to HTTP 400 explicitly (see
+    error_mapping.py) so the frontend can show a precise tooltip.
+    """
+
+    error_code = "ROOT_PORTFOLIO_NOT_ARCHIVABLE"
+
+
+class CannotRecordTransactionOnRootPortfolioError(BusinessRuleViolationError):
+    """Raised when ``RecordTransactionUseCase`` is called against a ROOT
+    portfolio.
+
+    PLAN-0046 Wave 3 / T-46-3-03. Root portfolios are pure read-time
+    aggregations of their owner's other portfolios — they have no
+    independent transaction stream. The API maps this to HTTP 400.
+    """
+
+    error_code = "CANNOT_RECORD_TRANSACTION_ON_ROOT"
+
+
 class InsufficientHoldingsError(BusinessRuleViolationError):
     error_code = "INSUFFICIENT_HOLDINGS"
 
@@ -193,3 +216,86 @@ class WatchlistMemberAlreadyExistsError(EntityAlreadyExistsError):
 
 class AlertPreferenceNotFoundError(EntityNotFoundError):
     error_code = "ALERT_PREFERENCE_NOT_FOUND"
+
+
+# ── Brokerage ──────────────────────────────────────────────────────────────────
+
+
+class BrokerageConnectionNotFoundError(EntityNotFoundError):
+    error_code = "BROKERAGE_CONNECTION_NOT_FOUND"
+
+
+class BrokerageConnectionForbiddenError(AuthorizationError):
+    error_code = "BROKERAGE_CONNECTION_FORBIDDEN"
+
+
+class TosNotAcceptedError(ValidationError):
+    error_code = "TOS_NOT_ACCEPTED"
+
+
+class BrokerageConnectionStateError(BusinessRuleViolationError):
+    error_code = "BROKERAGE_CONNECTION_STATE_ERROR"
+
+
+class BrokerageConnectionAlreadyDisconnectedError(BrokerageConnectionStateError):
+    error_code = "BROKERAGE_CONNECTION_ALREADY_DISCONNECTED"
+
+
+class BrokerageApiError(DomainError):
+    error_code = "BROKERAGE_API_ERROR"
+
+
+class InstrumentResolutionTransientError(DomainError):
+    """Raised when the market-data service (S3) is unreachable or returns a
+    non-404 error during instrument resolution.
+
+    This is a *transient* infrastructure failure — the symbol may still be valid;
+    the lookup failed due to a downstream outage.  Callers should record the
+    failure as ``SyncErrorType.API_ERROR`` rather than ``UNKNOWN_INSTRUMENT`` so
+    that genuine "instrument not found" errors (404) remain distinguishable from
+    transient network/5xx failures.
+    """
+
+    error_code = "INSTRUMENT_RESOLUTION_TRANSIENT"
+
+
+# ── Feedback (PLAN-0052 Wave D) ────────────────────────────────────────────────
+
+
+class NPSRateLimitError(BusinessRuleViolationError):
+    """Raised when a user tries to submit a second NPS score within 30 days.
+
+    The DB enforces this via the partial unique index
+    ``uq_nps_scores_tenant_user_30d`` (migration 0015). Maps to HTTP 409
+    via ``BusinessRuleViolationError`` in ``error_mapping.py``.
+    """
+
+    error_code = "NPS_RATE_LIMITED"
+
+
+class FeedbackSubmissionNotFoundError(EntityNotFoundError):
+    error_code = "FEEDBACK_SUBMISSION_NOT_FOUND"
+
+
+class FeatureRequestNotFoundError(EntityNotFoundError):
+    error_code = "FEATURE_REQUEST_NOT_FOUND"
+
+
+# ── Auth / Provisioning ────────────────────────────────────────────────────────
+
+
+class ProvisionConflictError(DomainError):
+    """Raised when provisioning detects an email already linked to a different Zitadel sub.
+
+    Maps to HTTP 409 in the provision route handler.
+    """
+
+    error_code = "PROVISION_CONFLICT"
+
+    def __init__(self, email: str, conflict_sub: str | None) -> None:
+        super().__init__(
+            f"Email '{email}' is already linked to a different identity provider subject.",
+            details={"email": email, "conflict_sub": conflict_sub or ""},
+        )
+        self.email = email
+        self.conflict_sub = conflict_sub

@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from datetime import date
-
-    from market_data.application.ports.uow import UnitOfWork
+    from market_data.application.ports.uow import ReadOnlyUnitOfWork
     from market_data.domain.entities import OHLCVBar
     from market_data.domain.enums import Timeframe
 
@@ -15,7 +14,7 @@ if TYPE_CHECKING:
 class GetOHLCVBarsUseCase:
     """Return OHLCV bars for an instrument within an optional date range."""
 
-    def __init__(self, uow: UnitOfWork) -> None:
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
 
     async def execute(
@@ -24,14 +23,25 @@ class GetOHLCVBarsUseCase:
         timeframe: Timeframe,
         start: date,
         end: date,
+        *,
+        limit: int = 200,
     ) -> list[OHLCVBar]:
-        return await self._uow.ohlcv_read.find_by_instrument_timeframe_range(instrument_id, timeframe, start, end)
+        """Fetch bars in [start, end] then return the last ``limit`` bars.
+
+        The repository query fetches all matching bars ordered ASC by bar_date.
+        ``limit`` is applied as a tail-slice so callers always get the most
+        recent N bars rather than the oldest N — matching financial chart
+        conventions (e.g. "show the last 30 trading days").
+        """
+        bars = await self._uow.ohlcv_read.find_by_instrument_timeframe_range(instrument_id, timeframe, start, end)
+        # Slice from the tail: bars are ASC-ordered so [-limit:] gives the newest ones.
+        return bars[-limit:] if len(bars) > limit else bars
 
 
 class GetOHLCVBulkUseCase:
     """Bulk-fetch OHLCV bars for multiple instruments at once."""
 
-    def __init__(self, uow: UnitOfWork) -> None:
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
 
     async def execute(
@@ -53,7 +63,7 @@ class GetOHLCVBulkUseCase:
 class GetAvailableTimeframesUseCase:
     """Return all timeframes with stored bars for the given instrument."""
 
-    def __init__(self, uow: UnitOfWork) -> None:
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
 
     async def execute(self, instrument_id: str) -> list[Timeframe]:
@@ -63,7 +73,7 @@ class GetAvailableTimeframesUseCase:
 class GetOHLCVRangeUseCase:
     """Return date range metadata for an instrument/timeframe combination."""
 
-    def __init__(self, uow: UnitOfWork) -> None:
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
 
     async def execute(

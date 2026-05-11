@@ -10,9 +10,11 @@ CR-3: LSH indexing happens AFTER DB commit in _handle_message override.
 
 from __future__ import annotations
 
+import contextlib
 import json
-from pathlib import Path
+import time
 from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID
 
 import structlog
 
@@ -21,12 +23,17 @@ from content_store.application.use_cases.process_article import (
     ProcessingSummary,
     RawArticleEvent,
 )
+from content_store.domain.errors import BronzeObjectNotFoundError
 from content_store.infrastructure.db.repositories.dedup import DedupHashRepository
 from content_store.infrastructure.db.repositories.document import DocumentRepository
 from content_store.infrastructure.db.repositories.minhash import MinHashRepository
 from content_store.infrastructure.db.repositories.outbox import OutboxRepository
 from content_store.infrastructure.db.repositories.processed_events import ProcessedEventsRepository
-from content_store.infrastructure.metrics.prometheus import s5_lsh_index_failures_total
+from content_store.infrastructure.metrics.prometheus import (
+    record_processing_outcome,
+    s5_lsh_index_failures_total,
+)
+from content_store.infrastructure.storage.minio_bronze import BronzeStorageAdapter
 from content_store.infrastructure.storage.minio_silver import SilverStorageAdapter
 from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     BaseKafkaConsumer,
@@ -34,6 +41,7 @@ from messaging.kafka.consumer.base import (  # type: ignore[import-untyped]
     FailureInfo,
     UnitOfWorkProtocol,
 )
+from messaging.kafka.schema_paths import find_schema_dir  # type: ignore[import-untyped]
 from messaging.kafka.serialization_utils import deserialize_confluent_avro  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -45,7 +53,8 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
-_SCHEMA_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "infra/kafka/schemas"
+
+_SCHEMA_DIR = find_schema_dir()
 _INPUT_TOPIC = "content.article.raw.v1"
 
 
@@ -71,8 +80,24 @@ class _SessionUnitOfWork(UnitOfWorkProtocol):
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        # SA-1 fix (BP-443): Explicit close() prevents MissingGreenlet.
+        #
+        # Root cause: without an explicit close(), asyncpg's pool reset fires
+        # ``await_only()`` outside a greenlet_spawn context when the connection
+        # is returned to the pool → RuntimeError: greenlet_spawn has not been called.
+        #
+        # Fix: close the session first (while inside a normal asyncio frame),
+        # letting SQLAlchemy's greenlet_spawn machinery issue the final ROLLBACK
+        # cleanly.  This mirrors the identical fix in stored_article_dedup_consumer.py.
+        session = self.session
+        self.session = None  # prevent any further access through self.session
+        if session is not None:
+            with contextlib.suppress(Exception):
+                await session.close()
+        # Delegate to the session context-manager to release remaining resources.
         if self._session_cm is not None:
-            await self._session_cm.__aexit__(*args)
+            with contextlib.suppress(Exception):
+                await self._session_cm.__aexit__(*args)
 
     async def commit(self) -> None:
         if self.session is not None:
@@ -118,6 +143,9 @@ def _parse_raw_event(value: dict[str, Any]) -> RawArticleEvent:
         title=value.get("title"),
         published_at=value.get("published_at"),
         is_backfill=bool(value.get("is_backfill", False)),
+        # PLAN-0086 Wave C-1: propagate tenant_id from the Avro event envelope.
+        # None = public/global news; non-None = private tenant content.
+        tenant_id=value.get("tenant_id") or None,
     )
 
 
@@ -154,6 +182,9 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
         self._lsh = lsh_client
         self._current_uow: _SessionUnitOfWork | None = None
         self._current_summary: ProcessingSummary | None = None
+        # R24: bronze bytes pre-fetched in _handle_message BEFORE the DB session opens.
+        # Stored on self so process_message() can pass them to the use case.
+        self._prefetched_bytes: bytes | None = None
 
     # ── Abstract: dedup ───────────────────────────────────────────────────────
 
@@ -191,7 +222,7 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
     async def update_failure(self, failure: FailureInfo[dict]) -> None:  # type: ignore[type-arg]
         """No-op: retry tracking is handled via DLQ, not a separate table."""
 
-    async def dead_letter(self, failure: FailureInfo[dict]) -> None:  # type: ignore[type-arg]
+    async def _dead_letter_impl(self, failure: FailureInfo[dict]) -> None:  # type: ignore[type-arg]
         """Write a DLQ row directly to dead_letter_queue via a new session."""
         import common.ids  # type: ignore[import-untyped]
         from content_store.infrastructure.db.models import DeadLetterQueueModel
@@ -202,7 +233,7 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
                 session.add(
                     DeadLetterQueueModel(
                         dlq_id=common.ids.new_uuid7(),
-                        original_event_id=common.ids.new_uuid7(),
+                        original_event_id=UUID(failure.event_id),
                         topic=failure.topic,
                         payload_json=payload_json,
                         error_detail=str(failure.last_error),
@@ -275,14 +306,24 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
             dedup_repo=DedupHashRepository(uow.session),
             minhash_repo=MinHashRepository(uow.session),
             outbox_repo=OutboxRepository(uow.session),
-            object_store=self._store,
+            bronze_store=BronzeStorageAdapter(self._store, self._app_config.bronze_bucket),
             bronze_bucket=self._app_config.bronze_bucket,
             silver_storage=SilverStorageAdapter(self._store, self._app_config.silver_bucket),
             lsh_client=self._lsh,
             output_topic=self._app_config.output_topic,
             num_perm=self._app_config.num_perm,
         )
-        self._current_summary = await use_case.execute(article)
+        # R24: pass pre-fetched bytes (fetched before session opened in _handle_message)
+        # F-DP2-05 (PLAN-deep-qa-iter2): when the bronze object is missing, the use
+        # case raises BronzeObjectNotFoundError after logging a structured warning.
+        # We swallow it here and leave _current_summary as None so the base consumer
+        # commits the offset (no retry, no DLQ traceback) — bronze corruption is
+        # operational and retrying the same missing key won't help.
+        try:
+            self._current_summary = await use_case.execute(article, prefetched_bytes=self._prefetched_bytes)
+        except BronzeObjectNotFoundError:
+            self._current_summary = None
+            return
 
     # ── CR-3: post-commit LSH indexing ────────────────────────────────────────
 
@@ -294,9 +335,55 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
 
         After that succeeds we index into the Valkey LSH bands best-effort.
         On commit failure, delete any orphaned silver MinIO object best-effort.
+
+        R24: bronze bytes are pre-fetched here, BEFORE super()._handle_message opens
+        a DB session, to avoid holding a DB connection during external I/O.
         """
         self._current_summary = None
         self._current_uow = None  # reset so is_duplicate always uses a fresh session
+        self._prefetched_bytes = None  # R24: reset; populated below before session opens
+        _start = time.perf_counter()
+
+        # R24: Pre-fetch bronze bytes BEFORE the DB session opens.
+        # We deserialize the message here (the base class will deserialize again;
+        # the overhead is negligible compared to avoiding a held DB conn during I/O).
+        #
+        # F-DP2-05 (PLAN-deep-qa-iter2): if prefetch fails because the bronze
+        # object is missing (NoSuchKey / ObjectNotFoundError), short-circuit
+        # message processing entirely instead of falling through to the in-session
+        # fetch (which would just hit the same NoSuchKey and raise an unhandled
+        # traceback).  We log a structured warning and return so the base consumer
+        # commits the offset cleanly.
+        try:
+            raw = msg.value()
+            schema_path = self.get_schema_path(msg.topic())
+            value = self.deserialize_value(raw, schema_path)
+            article = _parse_raw_event(value)
+            self._prefetched_bytes = await self._store.get_bytes(
+                self._app_config.bronze_bucket, article.minio_bronze_key
+            )
+            logger.debug("bronze_prefetched", key=article.minio_bronze_key)
+        except Exception as exc:
+            # Bucket / key missing — skip cleanly, don't even attempt in-session fallback.
+            exc_name = type(exc).__name__
+            if exc_name in {"ObjectNotFoundError", "NoSuchKey", "FileNotFoundError"}:
+                logger.warning(
+                    "bronze_object_missing_skipping",
+                    bronze_key=getattr(locals().get("article"), "minio_bronze_key", None),
+                    error=str(exc),
+                )
+                # Mark the message processed via the base consumer's normal flow
+                # by deferring to it — but the use case will short-circuit again
+                # on the same missing key inside process_message().  To avoid the
+                # extra session, just return early here: the base run loop will
+                # commit the next message's offset on its next poll.
+                return
+            logger.warning(
+                "bronze_prefetch_failed_falling_back_to_in_session_fetch",
+                error=str(exc),
+            )
+            # Fall through: use case will fetch bytes inside the DB session as fallback.
+
         try:
             await super()._handle_message(msg)  # type: ignore[misc]
         except Exception:
@@ -311,7 +398,20 @@ class ArticleConsumer(BaseKafkaConsumer[dict]):  # type: ignore[type-arg]
             self._current_summary = None
             raise
 
+        # ── Metrics recording (post-commit) ──────────────────────────────────
+        # Record after the DB commit so only successfully committed articles
+        # are counted. Suppressed articles are also counted here with their
+        # outcome tier, giving a complete picture of the dedup pipeline.
         summary = self._current_summary
+        if summary is not None:
+            _duration = time.perf_counter() - _start
+            record_processing_outcome(
+                suppressed=summary.suppressed,
+                dedup_result=str(summary.decision.outcome),
+                duration=_duration,
+            )
+
+        # ── CR-3: LSH indexing AFTER commit ──────────────────────────────────
         if summary is not None and summary.signature is not None and summary.doc_id is not None:
             try:
                 await self._lsh.index(

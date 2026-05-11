@@ -42,9 +42,12 @@ class TestDocumentModel:
         pk_cols = [c.name for c in mapper.primary_key]
         assert pk_cols == ["doc_id"]
 
-    def test_content_hash_unique(self) -> None:
+    def test_content_hash_not_globally_unique(self) -> None:
+        # uniqueness is now enforced via partial indexes in migration 0005
+        # (uq_documents_content_hash_global + uq_documents_content_hash_tenant)
+        # so content_hash no longer carries a column-level UNIQUE flag
         col = DocumentModel.__table__.c.content_hash
-        assert col.unique is True
+        assert col.nullable is False  # still required
 
     def test_nullable_fields(self) -> None:
         table = DocumentModel.__table__
@@ -66,9 +69,13 @@ class TestDocumentModel:
 
 
 class TestDedupHashModel:
-    def test_unique_constraint(self) -> None:
-        constraints = [c.name for c in DedupHashModel.__table__.constraints if hasattr(c, "name")]
-        assert "uq_dedup_hashes_type_value" in constraints
+    def test_lookup_index_present(self) -> None:
+        # uq_dedup_hashes_type_value UniqueConstraint was removed in migration 0005
+        # and replaced by partial indexes (uq_dedup_hashes_global + uq_dedup_hashes_tenant)
+        # so global and per-tenant hash spaces coexist without collision.
+        # The lookup index idx_dedup_hashes_lookup remains for read performance.
+        index_names = {i.name for i in DedupHashModel.__table__.indexes}
+        assert "idx_dedup_hashes_lookup" in index_names
 
     def test_cascade_delete(self) -> None:
         fk = next(iter(DedupHashModel.__table__.c.doc_id.foreign_keys))

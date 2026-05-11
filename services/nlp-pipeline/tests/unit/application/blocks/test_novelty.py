@@ -16,6 +16,8 @@ from nlp_pipeline.application.blocks.novelty import (
 from nlp_pipeline.domain.enums import RoutingTier
 from nlp_pipeline.domain.models import RoutingDecision
 
+pytestmark = pytest.mark.unit
+
 
 def _make_routing_decision(tier: RoutingTier = RoutingTier.DEEP) -> RoutingDecision:
     return RoutingDecision(

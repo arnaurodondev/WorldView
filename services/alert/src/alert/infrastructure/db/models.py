@@ -9,7 +9,19 @@ import uuid
 from datetime import datetime
 from typing import ClassVar
 
-from sqlalchemy import DateTime, ForeignKey, Index, LargeBinary, String, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    LargeBinary,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -59,9 +71,34 @@ class AlertModel(Base):
     source_topic: Mapped[str] = mapped_column(String(200), nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)  # type: ignore[type-arg]
     dedup_key: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    severity: Mapped[str] = mapped_column(String(10), nullable=False, server_default="low")
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # Enrichment columns added in migration 0006_add_alert_enrichment_columns.
+    # All nullable, forward-compatible — old rows simply read NULL.
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ticker: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    entity_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    signal_label: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Ack + snooze columns added in migration 0007_add_alert_ack_and_snooze.
+    # All nullable, forward-compatible — old rows simply read NULL.
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    acknowledged_by_user_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    snooze_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    __table_args__ = (Index("idx_alerts_entity", "entity_id", created_at.desc()),)
+    __table_args__ = (
+        Index("idx_alerts_entity", "entity_id", created_at.desc()),
+        Index("idx_alerts_severity", "severity", created_at.desc()),
+        Index("idx_alerts_tenant", "tenant_id", postgresql_where="tenant_id IS NOT NULL"),
+        Index("idx_alerts_ticker", "ticker", postgresql_where="ticker IS NOT NULL"),
+        # Partial index for the "active alerts" query — see migration 0007.
+        Index(
+            "idx_alerts_unack_unsnoozed",
+            "severity",
+            created_at.desc(),
+            postgresql_where="acknowledged_at IS NULL",
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -144,3 +181,55 @@ class DeadLetterQueueModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolution_note: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# email_preferences
+# ---------------------------------------------------------------------------
+
+
+class EmailPreferenceModel(Base):
+    __tablename__ = "email_preferences"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    weekly_digest_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    send_day_of_week: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="6")
+    send_hour_utc: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="8")
+    email_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_digest_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("send_day_of_week BETWEEN 0 AND 6", name="ck_email_prefs_day"),
+        CheckConstraint("send_hour_utc BETWEEN 0 AND 23", name="ck_email_prefs_hour"),
+        Index("idx_email_prefs_scheduler", "tenant_id", "weekly_digest_enabled", "send_day_of_week"),
+        UniqueConstraint("tenant_id", "user_id", name="uq_email_prefs_tenant_user"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# email_log
+# ---------------------------------------------------------------------------
+
+
+class EmailLogModel(Base):
+    __tablename__ = "email_log"
+
+    log_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    email_type: Mapped[str] = mapped_column(Text, nullable=False)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("idx_email_log_user_sent_at", "user_id", "sent_at"),
+        Index("idx_email_log_status_sent_at", "status", "sent_at"),
+    )

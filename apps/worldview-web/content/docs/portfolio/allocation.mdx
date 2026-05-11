@@ -1,0 +1,62 @@
+---
+title: Allocation
+description: Sector allocation treemap, exposure breakdown, and concentration analysis.
+section: Portfolio
+order: 5
+updated: 2026-05-05
+---
+
+The Allocation tab provides a visual breakdown of how your portfolio's market value is distributed across sectors and asset classes. It helps you identify concentration risk and sector imbalances at a glance.
+
+## Sector treemap
+
+The treemap displays each position as a rectangle. Rectangle area is proportional to the position's weight in the total portfolio. Rectangles are grouped and colored by GICS sector.
+
+Sector colors follow the design system's sector palette:
+- Technology — blue
+- Healthcare — green
+- Financials — teal
+- Consumer Discretionary — orange
+- Energy — yellow
+- Industrials — gray
+- Real Estate — purple
+- Utilities — pink
+- Materials — brown
+- Communication Services — indigo
+- Consumer Staples — lime
+
+<Callout type="tip" title="Hover for details">
+Hover over any rectangle in the treemap to see the instrument's ticker, sector, market value, weight %, and day P&L.
+</Callout>
+
+## Sector bar chart
+
+Below the treemap, a horizontal bar chart shows each sector's total weight as a percentage of portfolio value. A vertical dashed line marks the S&P 500's sector weight for the same sector — useful for seeing your relative over/underweight vs. the benchmark.
+
+## Exposure breakdown
+
+The exposure table shows:
+
+| Exposure | Value | % of Portfolio |
+|----------|-------|----------------|
+| US Equities | $X | X% |
+| International Equities | $X | X% |
+| ETFs | $X | X% |
+| Options (delta-adjusted) | $X | X% |
+| Cash (uninvested) | $X | X% |
+
+## Concentration metrics
+
+Three concentration metrics are shown in the header:
+
+- **Top 5 concentration** — combined weight of your 5 largest positions
+- **Top 10 concentration** — combined weight of your 10 largest positions
+- **Herfindahl-Hirschman Index (HHI)** — sum of squared weights; values above 2,500 indicate high concentration
+
+<Callout type="info" title="Watchlist-based allocation">
+If you have not connected a brokerage, the Allocation tab uses your active watchlist as an equal-weight proxy portfolio. This lets you analyze sector exposure for stocks you are tracking even without real positions.
+</Callout>
+
+## Benchmark comparison
+
+Use the **Benchmark** dropdown to compare your allocation to the S&P 500, Nasdaq 100, or Russell 2000. The sector bar chart shows your weight alongside the benchmark weight in a side-by-side format.

@@ -54,14 +54,7 @@ from tests.architecture._utils import (
 #   TOPO-DIR-OUTBOX        — infrastructure/outbox/ outside messaging/outbox/
 #   TOPO-STALE-OUTBOX      — infrastructure/outbox/ co-exists with messaging/outbox/ (stale)
 
-TOPOLOGY_BASELINE: dict[tuple[str, str], str] = {
-    # --- S3: market-data — consumers extracted (Wave B-2); lifespan cleanup deferred ---
-    # TOPO-LIFESPAN: consumers still embedded pending compose containers for standalone processes.
-    (
-        "market-data",
-        "TOPO-LIFESPAN",
-    ): "Remove create_task calls once consumer containers are added to compose (PLAN-0011 post-B-2)",
-}
+TOPOLOGY_BASELINE: dict[tuple[str, str], str] = {}
 
 # All rule IDs this module uses — used for baseline integrity checks.
 _KNOWN_RULE_IDS: frozenset[str] = frozenset(
@@ -367,7 +360,12 @@ class TestNoLifespanEmbedding:
     """app.py must not start background processing loops inside lifespan (R22)."""
 
     def test_app_lifespan_has_no_background_tasks(self) -> None:
-        """No asyncio.create_task() calls must appear inside app.py lifespan."""
+        """Consumer/dispatcher asyncio.create_task() calls must not appear inside app.py lifespan.
+
+        Lightweight, read-only in-process tasks (e.g. cache-warmer refresh loops)
+        are intentionally exempt — R22 targets Kafka consumers and outbox dispatchers
+        only (see PRD-0017 §6.2 and services/market-data/tests/unit/test_app_lifespan.py).
+        """
         violations: list[ArchViolation] = []
         for svc in discover_services():
             app_py = svc.pkg_dir / "app.py"

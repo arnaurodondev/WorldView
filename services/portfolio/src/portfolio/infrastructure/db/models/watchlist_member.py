@@ -24,4 +24,10 @@ class WatchlistMemberModel(Base):
     watchlist_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("watchlists.id"), nullable=False)
     entity_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False, server_default="company")
+    # PLAN-0046 / T-46-2-01: denormalised ticker/name/instrument_id resolved at
+    # add-time. Nullable so historical rows (pre-Alembic 0010) keep working;
+    # the read path interprets NULL as "not yet resolved". See migration docstring.
+    ticker: Mapped[str | None] = mapped_column(String(20), nullable=True, default=None)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
+    instrument_id: Mapped[uuid.UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True, default=None)
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

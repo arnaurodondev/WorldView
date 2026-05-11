@@ -23,6 +23,8 @@ class ContentSourceType(StrEnum):
     FINNHUB = "finnhub"
     NEWSAPI = "newsapi"
     MANUAL = "manual"
+    POLYMARKET = "polymarket"
+    TENANT_UPLOAD = "tenant_upload"
 
 
 class IngestionTaskStatus(StrEnum):

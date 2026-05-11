@@ -1,0 +1,30 @@
+{
+  "_comment": "PLAN-0059 W0 fix F-005 (2026-04-30): bundlewatch budgets per route, derived from master report §3.3 / plan §T-A-2-02. Each budget is an upper bound on the gzipped first-load JS for the named page. Failures should be investigated, not raised — increases require justification. Tracks the standalone Next.js build output.",
+  "files": [
+    {
+      "path": ".next/static/chunks/pages/dashboard*.js",
+      "maxSize": "220kB"
+    },
+    {
+      "path": ".next/static/chunks/pages/portfolio*.js",
+      "maxSize": "380kB"
+    },
+    {
+      "path": ".next/static/chunks/pages/screener*.js",
+      "maxSize": "280kB"
+    },
+    {
+      "path": ".next/static/chunks/pages/instruments*.js",
+      "maxSize": "320kB"
+    },
+    {
+      "path": ".next/static/chunks/main-*.js",
+      "maxSize": "120kB"
+    }
+  ],
+  "ci": {
+    "trackBranches": ["main", "master"],
+    "repoOwner": "worldview",
+    "repoName": "worldview"
+  }
+}

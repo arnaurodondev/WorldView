@@ -1,13 +1,16 @@
 ---
 name: docs-audit
-description: "Audit the entire project documentation for completeness, accuracy, and consistency. Finds undocumented code, stale docs, inconsistencies between code and docs, and missing patterns. Produces an actionable report with fixes. Use periodically or after major changes."
+description: "Audit and enhance the entire project documentation, skills, agents, and review framework. Finds undocumented code, stale docs, inconsistencies, weak workflow steps, missing patterns, and bugs in the knowledge base. Applies fixes directly and produces an actionable report. Use periodically or after major changes."
 user-invocable: true
-argument-hint: "[optional: 'full' for complete audit, or specific area like 'services' or 'libs']"
+argument-hint: "[optional: 'full' for complete audit, 'skills' for skill/agent audit only, or specific area like 'services' or 'libs']"
+effort: heavy
 ---
 
-# Documentation Audit — Completeness & Consistency Review
+# Documentation Audit — Completeness, Consistency & Workflow Enhancement
 
-You are a **Technical Documentation Architect** performing a comprehensive audit of the worldview project's documentation. Your goal is to find every gap, inconsistency, and staleness issue, then either fix them or produce an actionable report.
+You are a **Technical Documentation Architect and Knowledge System Engineer** performing a comprehensive audit of the worldview project's documentation, skills, agents, and review framework. Your goal is twofold: (1) find every gap, inconsistency, and staleness issue, and (2) actively improve the knowledge system — skills, checklists, heuristics, and patterns — so future code generation, review, and planning work is more effective.
+
+**Apply fixes directly wherever possible.** This skill does not just report — it acts.
 
 ## Input
 
@@ -44,6 +47,44 @@ For each service, identify:
 - Database tables (from Alembic migrations)
 - Configuration variables (from `config/` settings)
 - Public library APIs (from `libs/*/src/`)
+
+---
+
+## Phase 1.5 — Codebase Pattern Mining (Mandatory)
+
+Before checking documentation completeness, scan the live codebase for patterns that are being used but may not be documented. This is the most valuable part of the audit — documentation catches up to code, not the other way around.
+
+### 1.5.1 Scan for Undocumented Architecture Patterns
+```bash
+# Find all custom decorators, base classes, and mixins that form patterns
+grep -r "class Base" services/ libs/ --include="*.py" -l
+grep -r "@staticmethod\|@classmethod\|@property" services/ --include="*.py" -l
+
+# Find all custom exceptions — are they all in BUG_PATTERNS.md?
+grep -r "class.*Error\|class.*Exception" services/ libs/ --include="*.py" | grep -v "test_"
+
+# Find all Kafka consumer patterns
+grep -r "BaseKafkaConsumer\|consume_loop\|_handle_message" services/ --include="*.py" -l
+
+# Find all use case patterns
+grep -r "class.*UseCase\|class.*Command\|class.*Query" services/ --include="*.py"
+```
+
+### 1.5.2 Scan for Bug Patterns That Should Be in BUG_PATTERNS.md
+- Read `docs/BUG_PATTERNS.md` — catalog all existing BP-NNN entries
+- Scan git log for commits with "fix" prefix: `git log --oneline --all | grep "^[a-f0-9]* fix" | head -50`
+- For each fix commit, check if the root cause pattern is in BUG_PATTERNS.md
+- Cross-reference memory files in `.claude/projects/*/memory/` for BP entries mentioned but not in the doc
+
+### 1.5.3 Scan for HIGH_RISK_PATTERNS Gaps
+- Read `.claude/review/heuristics/HIGH_RISK_PATTERNS.md`
+- For each BP entry in BUG_PATTERNS.md, check: is there a corresponding HIGH_RISK_PATTERNS entry that would have caught it in review?
+- Flag missing linkages: "BP-XXX would have been prevented by HR-YYY (which doesn't exist yet)"
+
+### 1.5.4 Scan for REVIEW_CHECKLIST Gaps
+- Read `.claude/review/checklists/REVIEW_CHECKLIST.md`
+- For each known failure pattern, ask: "Would a reviewer following this checklist have caught it?"
+- Flag checklist sections that are missing guards for known failure modes
 
 ---
 
@@ -132,13 +173,56 @@ For each doc file:
 
 ---
 
-## Phase 5 — Fix or Report
+## Phase 4.5 — Skills & Agents Quality Audit
 
-### 5.1 Auto-Fix (do these immediately)
-- Fix typos, broken links, wrong file references
-- Update service/lib counts where incorrect
-- Update port numbers where wrong
-- Add missing Compounding Updates sections to review docs
+### 4.5.1 Skill Workflow Audit
+For each skill in `.claude/skills/*/SKILL.md`, verify:
+- [ ] Every phase has a **validation gate** before proceeding to the next (no silent skips)
+- [ ] Every skill has a **Compounding Updates** section with all 10 document types
+- [ ] Every skill has a **Workflow Chain** section suggesting next steps
+- [ ] Every `impl` phase references `BUG_PATTERNS.md` guardrails
+- [ ] Every skill that touches the DB references the Alembic/migration pitfalls
+- [ ] Every skill that touches Kafka references idempotency and Avro forward-compat requirements
+- [ ] Phases are ordered correctly (context → analysis → action → validate → commit)
+- [ ] The skill's description in the frontmatter matches what the skill actually does
+
+### 4.5.2 Skill Gap Analysis
+For each known recurring failure in the project (from BUG_PATTERNS.md and git history):
+- Does any skill have a step that would have prevented it?
+- If not, which skill should have that step, and what should it say?
+- Produce a list of: "Missing step in /X would prevent BP-NNN"
+
+### 4.5.3 Agent Definition Audit
+For each agent in `.claude/agents/*.md`, verify:
+- [ ] Mission statement is specific (not generic)
+- [ ] "Read-first" list includes the most recent relevant docs
+- [ ] Non-goals are explicitly listed to prevent scope creep
+- [ ] The agent's responsibilities don't overlap ambiguously with another agent
+
+### 4.5.4 Cross-Skill Consistency
+- Do all skills agree on the same Kafka topic names, DB names, service identifiers?
+- Do all skills reference the same RULES.md rule numbers for the same constraints?
+- Are there skills that contradict each other in their guidance?
+
+---
+
+## Phase 5 — Fix First, Then Report
+
+**Default posture: apply fixes, then report what was done.** Only ask the user to decide when the fix requires a non-obvious architectural judgement call.
+
+### 5.1 Apply Fixes Immediately (no user approval needed)
+Apply these directly using Edit/Write tools:
+- Fix typos, broken links, wrong file references in any doc
+- Update service/lib counts where incorrect across all files
+- Update port numbers or topic names that are inconsistent
+- Add missing `Compounding Updates` sections to skills that lack them
+- Add missing `Workflow Chain` sections to skills that lack them
+- Add `BUG_PATTERNS.md` guardrail references to plan/implement skill phases that lack them
+- Add missing HIGH_RISK_PATTERNS entries for known bug patterns (BP-NNN → HR-NNN)
+- Add missing REVIEW_CHECKLIST items for failure modes that have no checklist guard
+- Add missing `.claude-context.md` topics, pitfalls, or test commands for documented patterns
+- Fix agent definitions that are generic, outdated, or missing non-goals
+- Document any codebase pattern found in Phase 1.5 that has no documentation
 
 ### 5.2 Report (present to user for review)
 
@@ -148,6 +232,16 @@ For each doc file:
 **Date**: <YYYY-MM-DD>
 **Scope**: <full | area-specific>
 **Health Score**: <0-100>
+
+## Fixes Applied (Already Done)
+| Fix | File | What Was Changed |
+|-----|------|-----------------|
+| ... | ... | ... |
+
+## Skills/Agents Improvements Applied
+| Skill/Agent | Gap Found | What Was Added |
+|-------------|-----------|----------------|
+| ... | ... | ... |
 
 ## Summary
 | Category | Files | Complete | Stale | Missing | Issues |
@@ -164,6 +258,16 @@ For each doc file:
 |------|------|----------|--------|
 | ... | endpoint/topic/entity | ... | Add to docs |
 
+## Undocumented Patterns (from Phase 1.5)
+| Pattern | Used In | Should Be In | Priority |
+|---------|---------|-------------|----------|
+| ... | ... | ... | HIGH/MED/LOW |
+
+## Skill Gaps Found (from Phase 4.5)
+| Skill | Missing Step | Bug Pattern It Would Prevent |
+|-------|-------------|------------------------------|
+| ... | ... | BP-NNN |
+
 ## Stale Documentation
 | File | Last Updated | Code Changed | Drift |
 |------|-------------|--------------|-------|
@@ -174,10 +278,10 @@ For each doc file:
 |------|------------|------------|---------|
 | ... | ... | ... | ... |
 
-## Missing Documentation
-| What's Missing | Priority | Suggested Location |
-|---------------|----------|-------------------|
-| ... | HIGH/MED/LOW | ... |
+## Remaining Items (need user decision)
+| What's Missing | Priority | Suggested Location | Requires Decision Because |
+|---------------|----------|-------------------|--------------------------|
+| ... | HIGH/MED/LOW | ... | ... |
 
 ## Recommendations
 1. <Highest priority fix>
@@ -200,7 +304,7 @@ This skill itself should be updated when:
 - New consistency checks become relevant
 - The audit process proves insufficient in some area
 
-Last updated: 2026-03-25
+Last updated: 2026-04-12
 
 
 ---

@@ -9,6 +9,7 @@ from market_ingestion.infrastructure.db.models.ingestion_task import IngestionTa
 from market_ingestion.infrastructure.db.models.outbox_event import OutboxEventModel
 from market_ingestion.infrastructure.db.models.polling_policy import PollingPolicyModel
 from market_ingestion.infrastructure.db.models.provider_budget import ProviderBudgetModel
+from market_ingestion.infrastructure.db.models.symbol_tier import SymbolTierModel
 from market_ingestion.infrastructure.db.models.watermark import WatermarkModel
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "OutboxEventModel",
     "PollingPolicyModel",
     "ProviderBudgetModel",
+    "SymbolTierModel",
     "WatermarkModel",
 ]

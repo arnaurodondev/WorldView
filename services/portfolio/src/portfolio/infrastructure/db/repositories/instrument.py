@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -12,8 +13,6 @@ from portfolio.domain.entities.instrument import InstrumentRef
 from portfolio.infrastructure.db.models.instrument import InstrumentModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -39,12 +38,37 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
 
+    async def list_by_ids(self, instrument_ids: list[UUID]) -> list[InstrumentRef]:
+        """Batch fetch -- single SELECT instead of N+1 round trips.
+
+        QA-iter1 MIN-4: GetRealizedPnLUseCase previously did
+        ``await uow.instruments.get(iid)`` in a loop -- for a 5-year portfolio
+        touching 200 instruments that's 200 sequential queries on the read
+        replica. ``WHERE id = ANY(:ids)`` collapses that to one query.
+        """
+        if not instrument_ids:
+            return []
+        # WHY ``in_(instrument_ids)``: SQLAlchemy translates this to
+        # ``id = ANY(ARRAY[…])`` on PostgreSQL — index-friendly and cheaper
+        # than chained ORs.
+        result = await self._session.execute(
+            select(InstrumentModel).where(InstrumentModel.id.in_(instrument_ids)),
+        )
+        return [self._to_entity(r) for r in result.scalars()]
+
     async def get_by_symbol_exchange(self, symbol: str, exchange: str) -> InstrumentRef | None:
         result = await self._session.execute(
             select(InstrumentModel).where(
                 InstrumentModel.symbol == symbol,
                 InstrumentModel.exchange == exchange,
-            )
+            ),
+        )
+        row = result.scalar_one_or_none()
+        return self._to_entity(row) if row else None
+
+    async def get_by_symbol(self, symbol: str) -> InstrumentRef | None:
+        result = await self._session.execute(
+            select(InstrumentModel).where(func.upper(InstrumentModel.symbol) == symbol.upper()).limit(1),
         )
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
@@ -56,6 +80,13 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
         return [self._to_entity(r) for r in result.scalars()], total
 
     async def upsert(self, instrument: InstrumentRef) -> InstrumentRef:
+        # PLAN-0053 T-D-4-02: normalise None → 'unknown' so the NOT NULL
+        # constraint added in migration 0016 is satisfied even when the
+        # adapter / consumer didn't surface the field. Existing call-sites
+        # (brokerage_sync_worker, instrument_consumer) pass ``data.get``
+        # results which can be None — this keeps them working without a
+        # cross-cutting adapter rewrite.
+        normalised_asset_class = instrument.asset_class or "unknown"
         stmt = (
             pg_insert(InstrumentModel)
             .values(
@@ -64,7 +95,7 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
                 exchange=instrument.exchange,
                 name=instrument.name,
                 currency=instrument.currency,
-                asset_class=instrument.asset_class,
+                asset_class=normalised_asset_class,
                 entity_id=instrument.entity_id,
                 source_event_id=instrument.source_event_id,
                 synced_at=instrument.synced_at,
@@ -77,7 +108,7 @@ class SqlAlchemyInstrumentRepository(InstrumentRepository):
                     # Without COALESCE, an InstrumentUpdated event would overwrite these with NULL.
                     "name": func.coalesce(instrument.name, InstrumentModel.name),
                     "currency": func.coalesce(instrument.currency, InstrumentModel.currency),
-                    "asset_class": func.coalesce(instrument.asset_class, InstrumentModel.asset_class),
+                    "asset_class": func.coalesce(normalised_asset_class, InstrumentModel.asset_class),
                     "entity_id": instrument.entity_id,
                     "source_event_id": instrument.source_event_id,
                     "synced_at": instrument.synced_at,

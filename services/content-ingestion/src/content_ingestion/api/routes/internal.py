@@ -7,7 +7,7 @@ import hashlib
 from fastapi import APIRouter, HTTPException, status
 
 import common.ids  # type: ignore[import-untyped]
-from content_ingestion.api.dependencies import BronzeStorageDep, InternalAuthDep, UoWDep
+from content_ingestion.api.dependencies import BronzeStorageDep, UoWDep
 from content_ingestion.api.schemas import IngestSubmitRequest, IngestSubmitResponse, check_url_ssrf_async
 from content_ingestion.application.use_cases.submit_content import SubmitContentUseCase
 from content_ingestion.domain.entities import SourceType
@@ -24,7 +24,6 @@ async def internal_health() -> dict[str, str]:
 @router.post("/ingest/submit", response_model=IngestSubmitResponse, status_code=status.HTTP_202_ACCEPTED)
 async def ingest_submit(
     body: IngestSubmitRequest,
-    _auth: InternalAuthDep,
     uow: UoWDep,
     bronze: BronzeStorageDep,
 ) -> IngestSubmitResponse:

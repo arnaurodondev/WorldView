@@ -70,6 +70,8 @@ class SqlaReadOnlyUnitOfWork(ReadOnlyUnitOfWork):
         return self._dlq
 
     async def __aenter__(self) -> SqlaReadOnlyUnitOfWork:
+        # Eager session init: simplifies async context management; lazy init
+        # adds complexity for marginal gain.
         self._session = self._read_factory()
         await self._session.__aenter__()
         self._tasks = TaskRepository(self._session)

@@ -11,6 +11,11 @@ BUCKETS=(
     content-data
     intelligence-data
     rag-data
+    market-bronze
+    market-canonical
+    worldview-bronze
+    worldview-silver
+    worldview
 )
 
 for BUCKET in "${BUCKETS[@]}"; do

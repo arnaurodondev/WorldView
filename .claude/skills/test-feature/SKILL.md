@@ -3,6 +3,11 @@ name: test-feature
 description: "Design and implement comprehensive tests for a feature or module. Analyzes code to identify test scenarios (happy path, edge cases, error paths, integration), writes tests, and validates coverage. Use to ensure thorough test coverage for new or existing features."
 user-invocable: true
 argument-hint: "[feature name, service, module path, or specific function to test]"
+effort: medium
+paths:
+  - "**/domain/**/*.py"
+  - "**/application/**/*.py"
+  - "**/application/use_cases/**/*.py"
 ---
 
 # Test Feature — Comprehensive Test Design & Implementation
@@ -202,33 +207,139 @@ ruff check <test_files>
 
 ---
 
-## Phase 5 — Coverage Report
+## Phase 5 — Coverage Report & File Output
 
-### 5.1 Summary
-Present a coverage summary:
+### 5.1 Determine Report File Path
+
+**MANDATORY**: Every `/test-feature` invocation MUST write its report to a file. Never rely on terminal output as the only record.
+
+```
+docs/audits/YYYY-MM-DD-test-<slug>-report.md
+```
+
+Where `<slug>` is a kebab-case abbreviation of the test target (e.g., `nlp-pipeline-price-impact`, `scripts-local-k8s`, `content-ingestion-unit`).
+
+Create the directory if needed: `docs/audits/`
+
+### 5.2 Per-Issue Deep Investigation
+
+For every gap, failure, or problem discovered during testing, write a full investigation block in the report file. Do NOT summarise — investigate fully.
+
+Each issue block must contain:
 
 ```markdown
-## Test Coverage Report: <target>
+## Issue I-NNN: <title>
 
-### New Tests Added
-| Test File | Test Count | Type | All Pass? |
-|-----------|-----------|------|-----------|
-| ... | ... | unit/integration | YES/NO |
+### Summary
+<2-3 sentence description of what is wrong and where>
 
-### Coverage by Function
-| Function | Happy | Edge | Error | Integration | Status |
-|----------|-------|------|-------|-------------|--------|
-| func_a() | 2/2 | 3/3 | 2/2 | 1/1 | COVERED |
-| func_b() | 1/1 | 1/2 | 0/1 | N/A | GAP |
+### Severity
+<BLOCKING | CRITICAL | MAJOR | MINOR | NIT>
+**Rationale**: <why this severity was assigned>
 
-### Gaps & Recommendations
-- <Function X> error path for <scenario> not tested because <reason>
-- Integration test for <scenario> deferred — requires <infrastructure>
+### Root Cause Analysis
+<Deep investigation — answer ALL of the following:>
+- **What**: The exact code/config/data that is wrong (with file:line references)
+- **Why**: The chain of events that causes this — what decisions or omissions led here
+- **When**: Under what conditions the issue manifests (always? intermittently? under load?)
+- **Where**: Exact location in the architecture (domain? application? infrastructure? config?)
+- **History**: Was this recently introduced? Is it a known class of bug (BP-XXX)?
 
-### Bug Pattern Guards
-- BP-001: Guarded by test_serialization_roundtrip
-- BP-003: Guarded by test_fixture_scope_isolation
+### Evidence
 ```
+<paste actual failing test output, error messages, or code excerpt>
+```
+- **File**: `path/to/file.py:line_number`
+- **Related BP**: BP-XXX (if applicable)
+
+### Impact
+- **Immediate**: <what breaks or is incorrect right now>
+- **Blast radius**: <other services, tests, or systems that could be affected>
+- **Data risk**: <any data corruption, data loss, or incorrect data risk>
+- **User impact**: <visible to end user? how?>
+
+### Solution Options
+
+#### Option A: <short descriptive title>
+**Description**: <clear explanation of what this solution does and how it addresses the root cause>
+**Changes required**:
+- [ ] `path/to/file.py` — <what changes and why>
+- [ ] `path/to/test.py` — <what test changes are needed>
+- [ ] `docs/...` — <what documentation must be updated>
+- [ ] `infra/...` — <any infrastructure changes>
+**Benefits (long-term)**:
+- <architectural benefit>
+- <maintainability benefit>
+- <correctness/safety benefit>
+**Drawbacks (long-term)**:
+- <technical debt or complexity introduced>
+- <performance or scalability concern>
+- <migration cost or breaking change risk>
+**Effort**: Low | Medium | High
+**Risk**: Low | Medium | High
+**Complexity**: <lines changed, services touched, test changes required>
+
+#### Option B: <short descriptive title>
+*(Use same structure as Option A)*
+
+#### Option C: <short descriptive title (if applicable)>
+*(Use same structure as Option A)*
+
+### Recommended Option
+**Option X** — <1 sentence rationale comparing it to alternatives, citing the most important trade-off>
+
+### Verification Steps
+After applying the fix:
+- [ ] <specific test or command to run to confirm the issue is resolved>
+- [ ] <regression check — ensure nothing else broke>
+
+---
+```
+
+### 5.3 Write Report File
+
+Write the complete report to the file path determined in §5.1. The report structure:
+
+```markdown
+# Test Feature Report: <target>
+
+**Date**: YYYY-MM-DD HH:MM UTC
+**Skill**: test-feature
+**Target**: <exact target description from input>
+**Branch**: <git branch>
+**Test Run**: `<exact pytest command that was run>`
+**Verdict**: PASS | PASS_WITH_GAPS | FAIL
+
+---
+
+## Executive Summary
+<3-5 sentences: what was tested, what was found, most important issues, overall assessment>
+
+## Test Execution Results
+| Test File | Tests Run | Passed | Failed | Skipped | Status |
+|-----------|-----------|--------|--------|---------|--------|
+| ... | N | N | N | N | PASS/FAIL |
+
+## Coverage Matrix
+| Function/Method | Happy | Edge | Error | Integration | Status |
+|----------------|-------|------|-------|-------------|--------|
+| func_a() | 2/2 | 3/3 | 2/2 | 1/1 | COVERED |
+| func_b() | 1/1 | 1/2 | 0/1 | N/A | GAPS |
+
+## Issues Found
+
+*(One full investigation block per issue — see §5.2 format)*
+
+## Bug Pattern Guards Added
+| Pattern | Test | Coverage |
+|---------|------|---------|
+| BP-XXX | test_name | guards against X |
+
+## Recommendations
+- <priority-ordered list of next steps>
+```
+
+After writing the file, output its path to the terminal: `Report written to: docs/audits/YYYY-MM-DD-test-<slug>-report.md`
 
 ---
 

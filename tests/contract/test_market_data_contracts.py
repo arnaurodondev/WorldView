@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 
 from tests.contract.templates.avro_contract_test import AvroContractTestBase
@@ -8,7 +10,7 @@ from tests.contract.templates.avro_contract_test import AvroContractTestBase
 @pytest.mark.contract
 class TestMarketDatasetFetchedContract(AvroContractTestBase):
     schema_file = "infra/kafka/schemas/market.dataset.fetched.avsc"
-    valid_samples = [
+    valid_samples: ClassVar[list[dict]] = [
         {
             "event_id": "018f3a85-b39f-7a78-bf2a-1f03523ad9cf",
             "event_type": "market.dataset.fetched",
@@ -45,5 +47,5 @@ class TestMarketDatasetFetchedContract(AvroContractTestBase):
             **self.valid_samples[0],
             "schema_version": "1",
         }
-        with pytest.raises(Exception):
+        with pytest.raises((ValueError, TypeError)):  # fastavro may raise ValueError or TypeError for type mismatches
             self.assert_invalid_sample_rejected(invalid_sample)

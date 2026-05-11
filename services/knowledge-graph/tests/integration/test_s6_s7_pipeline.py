@@ -3,7 +3,7 @@
 Verifies that the graph materialization block (Block 12a) correctly:
   - Writes a relation row to intelligence_db.
   - Appends a graph.state.changed.v1 outbox entry.
-  - Calls direct_producer.produce_bytes for entity.dirtied.v1.
+  - Returns entity_ids_to_dirty for caller-managed post-commit produce.
 
 The test does NOT require a live Kafka broker; it uses mock producers and
 a real intelligence_db.
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
 
 import pytest
 from knowledge_graph.application.blocks.graph_write import (
@@ -56,29 +55,29 @@ async def test_s6_s7_pipeline_relation_written(session_factory) -> None:
         is_backfill=False,
     )
 
-    # Mock direct producer (entity.dirtied.v1 — direct Kafka produce)
-    mock_producer = MagicMock()
-    mock_producer.produce_bytes = MagicMock()
-
     async with session_factory() as session:
         relation_repo = RelationRepository(session)
         evidence_repo = RelationEvidenceRepository(session)
         outbox_repo = OutboxRepository(session)
 
+        # PLAN-0031 C-1: materialize_graph no longer takes direct_producer;
+        # it returns entity_ids_to_dirty for the caller to produce post-commit.
         summary = await materialize_graph(
             doc_id=doc_id,
             source_type="eodhd_news",
             is_backfill=False,
             relations=[raw_relation],
             canonical_types=["listed_on"],
+            canonical_semantic_modes=[None],
+            canonical_decay_classes=[None],
+            canonical_decay_alphas=[None],
+            canonical_base_confidences=[None],
             events=[],
             claims=[],
             session=session,
             relation_repo=relation_repo,
             evidence_repo=evidence_repo,
             outbox_repo=outbox_repo,
-            direct_producer=mock_producer,  # type: ignore[arg-type]
-            entity_dirtied_topic="entity.dirtied.v1",
         )
         await session.commit()
 
@@ -98,8 +97,9 @@ WHERE subject_entity_id = :sub AND object_entity_id = :obj
     assert summary.relations_upserted >= 1
     assert summary.evidence_rows_inserted >= 1
 
-    # Verify entity.dirtied.v1 was produced directly
-    mock_producer.produce_bytes.assert_called()
+    # PLAN-0031 C-1: entity_ids_to_dirty returned instead of producing directly
+    assert subject_id in summary.entity_ids_to_dirty
+    assert obj_id in summary.entity_ids_to_dirty
 
     # Verify outbox entry for graph.state.changed.v1
     async with session_factory() as session:
@@ -130,9 +130,6 @@ async def test_s6_s7_pipeline_unknown_type_stages_evidence(session_factory) -> N
         evidence_date=datetime.now(tz=UTC),
     )
 
-    mock_producer = MagicMock()
-    mock_producer.produce_bytes = MagicMock()
-
     async with session_factory() as session:
         relation_repo = RelationRepository(session)
         evidence_repo = RelationEvidenceRepository(session)
@@ -144,14 +141,16 @@ async def test_s6_s7_pipeline_unknown_type_stages_evidence(session_factory) -> N
             is_backfill=False,
             relations=[raw_relation],
             canonical_types=[None],  # unknown type → no upsert, but evidence staged
+            canonical_semantic_modes=[None],
+            canonical_decay_classes=[None],
+            canonical_decay_alphas=[None],
+            canonical_base_confidences=[None],
             events=[],
             claims=[],
             session=session,
             relation_repo=relation_repo,
             evidence_repo=evidence_repo,
             outbox_repo=outbox_repo,
-            direct_producer=mock_producer,  # type: ignore[arg-type]
-            entity_dirtied_topic="entity.dirtied.v1",
         )
         await session.commit()
 

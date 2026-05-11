@@ -1,0 +1,73 @@
+---
+title: Screener Filters
+description: Reference for all filter criteria — market cap, P/E, revenue, news velocity, and routing tier.
+section: Screener
+order: 2
+updated: 2026-05-05
+---
+
+The filter bar is divided into six collapsible sections. Click a section header to expand or collapse it. Active filters are shown as chips below the filter bar.
+
+## Market & Size filters
+
+| Filter | Type | Notes |
+|--------|------|-------|
+| Market Cap | Range (min/max) | Values in USD billions |
+| Exchange | Multi-select | NYSE, NASDAQ, AMEX, OTC |
+| Sector | Multi-select | 11 GICS sectors |
+| Industry | Multi-select | Available after selecting a sector |
+| Country | Multi-select | Instrument's country of incorporation |
+
+## Valuation filters
+
+| Filter | Type | Notes |
+|--------|------|-------|
+| P/E Ratio | Range | Trailing TTM; negative values excluded by default |
+| P/S Ratio | Range | TTM revenue basis |
+| P/B Ratio | Range | Most recent quarter book value |
+| EV/EBITDA | Range | LTM basis |
+| Dividend Yield | Range | Annualized forward dividend; 0 = no dividend |
+
+<Callout type="info" title="Negative P/E handling">
+By default, the P/E filter excludes companies with negative earnings (loss-making). To include them, toggle the **Include negative P/E** checkbox. Loss-making companies show P/E as "—" in the grid.
+</Callout>
+
+## Growth filters
+
+| Filter | Type | Notes |
+|--------|------|-------|
+| Revenue Growth YoY | Range (%) | Most recent quarter vs. same quarter prior year |
+| EPS Growth YoY | Range (%) | Diluted TTM EPS vs. prior TTM |
+| FCF Growth YoY | Range (%) | TTM FCF vs. prior TTM |
+
+## Technical filters
+
+| Filter | Type | Notes |
+|--------|------|-------|
+| RSI (14-day) | Range (0–100) | As of last market close |
+| Price vs SMA(50) | Above / Below / Either | Crossing or separation |
+| Price vs SMA(200) | Above / Below / Either | |
+| 52-week Range % | Range | 0% = 52-week low; 100% = 52-week high |
+| Relative Volume | Range (multiplier) | Today's volume / avg 30-day volume |
+
+## News filters
+
+| Filter | Type | Notes |
+|--------|------|-------|
+| News Velocity (7d) | Range (article count) | Total articles in last 7 days |
+| Max Routing Tier | Select | Filter to TIER_1 only, TIER_1+2, etc. |
+| Min Relevance Score | Slider (0–100) | Average relevance of last 7-day articles |
+| Sentiment | All / Positive / Negative | Majority sentiment in last 7-day articles |
+
+## Preset filter combinations
+
+Click **Load preset** in the filter bar to apply a built-in combination:
+
+- **Momentum** — RSI 55–75, Above SMA(50), Above SMA(200), Rel. Vol > 1.2
+- **Deep value** — P/E 5–12, P/B < 1.5, Market Cap > $500M
+- **News catalyst** — News Velocity > 8, Tier 1+2 only, Relevance > 70
+- **Dividend income** — Dividend Yield > 3%, Payout Ratio < 75%, Market Cap > $2B
+
+<Callout type="tip" title="Filter logic">
+All filters are combined with AND logic. If you set Market Cap > $1B AND P/E < 15, only companies meeting both criteria are shown. There is no OR filter mode in the current UI.
+</Callout>

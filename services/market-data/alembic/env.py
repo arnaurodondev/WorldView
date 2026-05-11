@@ -16,7 +16,9 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 config = context.config
 
 # DB URL resolution: ALEMBIC_URL → MARKET_DATA_DATABASE_URL → alembic.ini fallback
-_db_url = os.environ.get("ALEMBIC_URL") or _Settings().database_url
+# SecretStr guard: pydantic SecretStr must be unwrapped before passing to alembic
+_db_url_raw = os.environ.get("ALEMBIC_URL") or _Settings().database_url
+_db_url = _db_url_raw.get_secret_value() if hasattr(_db_url_raw, "get_secret_value") else str(_db_url_raw)
 if _db_url:
     config.set_main_option("sqlalchemy.url", _db_url)
 

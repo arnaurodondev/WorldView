@@ -59,7 +59,6 @@ async def test_rollback_does_not_call_on_commit(mock_session_factory: MagicMock)
     # manually, the session was already rolled back; the __aexit__ calls commit again
     # which is fine because session is idempotent in tests
     # Key: we verify that calling rollback() explicitly does NOT trigger on_commit
-    pass
 
 
 @pytest.mark.asyncio
@@ -82,7 +81,8 @@ async def test_exception_triggers_rollback_not_commit(mock_session_factory: Magi
 
 @pytest.mark.asyncio
 async def test_aexit_does_not_auto_commit_on_clean_exit(
-    mock_session_factory: MagicMock, mock_session: AsyncMock
+    mock_session_factory: MagicMock,
+    mock_session: AsyncMock,
 ) -> None:
     """QA-006 regression guard: __aexit__ must NOT auto-commit when no exception is raised.
 
@@ -116,7 +116,8 @@ async def test_repos_accessible_inside_context(mock_session_factory: MagicMock) 
 
 @pytest.mark.asyncio
 async def test_uow_session_closed_even_if_rollback_fails(
-    mock_session_factory: MagicMock, mock_session: AsyncMock
+    mock_session_factory: MagicMock,
+    mock_session: AsyncMock,
 ) -> None:
     """Session close runs in finally even if rollback throws (M-007)."""
     from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
@@ -132,7 +133,8 @@ async def test_uow_session_closed_even_if_rollback_fails(
 
 @pytest.mark.asyncio
 async def test_uow_original_exception_preserved_on_rollback_failure(
-    mock_session_factory: MagicMock, mock_session: AsyncMock
+    mock_session_factory: MagicMock,
+    mock_session: AsyncMock,
 ) -> None:
     """Original exception is preserved when rollback also fails (M-007)."""
     from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork

@@ -27,17 +27,23 @@ select = [
 ignore = [
     "S101",  # assert is fine in tests
     "B008",  # Depends() in FastAPI signatures
+    # TCH003: Pydantic models, SQLAlchemy ORM models, and Python dataclasses
+    # all call get_type_hints() at runtime. Moving stdlib types (UUID, datetime, Decimal,
+    # etc.) into TYPE_CHECKING blocks causes PydanticUndefinedAnnotation at startup.
+    # Rule name in ruff ≤0.5 (pinned pre-commit v0.4.0): TCH003 (renamed TC003 in ruff ≥0.6).
+    "TCH003",
 ]
 unfixable = ["F841"]  # don't auto-remove unused variables
 
 [lint.per-file-ignores]
 "**/tests/**/*.py" = ["S101", "S106", "S603", "S607", "T20", "N802", "N815", "N806", "B023", "SIM", "F821", "TCH003", "E402"]
-"services/*/src/*/config.py" = ["S104", "S105"]
+"services/*/src/*/config.py" = ["S104", "S105", "TCH002"]
 "libs/*/src/*/settings.py" = ["S105"]
 "**/alembic/**/*.py" = ["E501", "TCH003"]
-"scripts/**/*.py" = ["T20", "N802", "N815", "N806", "B023", "SIM", "DTZ"]
+"scripts/**/*.py" = ["T20", "N802", "N815", "N806", "B023", "SIM", "DTZ", "S603", "S607", "E501"]
 # FastAPI, Pydantic, and SQLAlchemy call get_type_hints() at runtime, so
 # runtime-annotated imports cannot be moved into TYPE_CHECKING blocks.
+"services/*/src/*/app.py" = ["TCH001", "TCH002", "TCH003"]
 "services/*/src/*/api/*.py" = ["TCH001", "TCH002", "TCH003"]
 "services/*/src/*/api/**/*.py" = ["TCH001", "TCH002", "TCH003"]
 "services/*/src/*/infrastructure/db/models/*.py" = ["TCH003"]

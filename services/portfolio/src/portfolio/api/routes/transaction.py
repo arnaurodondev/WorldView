@@ -1,12 +1,16 @@
-"""Transaction API routes."""
+"""Transaction API routes.
+
+Auth: InternalJWTMiddleware sets request.state.tenant_id / user_id from the
+verified RS256 JWT (PRD-0025, F-CRIT-001 remediation).
+"""
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Header, Query, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
-from portfolio.api.dependencies import UoWDep
+from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
     PaginatedResponse,
     RecordTransactionRequest,
@@ -19,6 +23,22 @@ from portfolio.application.use_cases.record_transaction import RecordTransaction
 router = APIRouter(tags=["transactions"])
 
 
+def _extract_tenant_id(request: Request) -> UUID:
+    """Read tenant_id from request.state set by InternalJWTMiddleware."""
+    raw = getattr(request.state, "tenant_id", None)
+    if not raw:
+        raise HTTPException(status_code=401, detail="Missing tenant_id in JWT")
+    return UUID(str(raw))
+
+
+def _extract_owner_id(request: Request) -> UUID:
+    """Read user_id (owner) from request.state set by InternalJWTMiddleware."""
+    raw = getattr(request.state, "user_id", None)
+    if not raw:
+        raise HTTPException(status_code=401, detail="Missing user_id in JWT")
+    return UUID(str(raw))
+
+
 @router.post(
     "/transactions",
     response_model=RecordTransactionResponse,
@@ -27,10 +47,11 @@ router = APIRouter(tags=["transactions"])
 async def record_transaction(
     body: RecordTransactionRequest,
     uow: UoWDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-    x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
+    request: Request,
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ) -> RecordTransactionResponse:
+    x_tenant_id = _extract_tenant_id(request)
+    x_owner_id = _extract_owner_id(request)
     from portfolio.domain.enums import TransactionDirection, TransactionType
 
     uc = RecordTransactionUseCase()
@@ -68,36 +89,89 @@ async def record_transaction(
     )
 
 
-@router.get("/transactions", response_model=PaginatedResponse[TransactionListItem])
-async def list_transactions(
-    uow: UoWDep,
-    portfolio_id: UUID = Header(..., alias="X-Portfolio-ID"),
-    x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-    limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+def _build_transaction_response(
+    enriched: list,  # type: ignore[type-arg]  # list[EnrichedTransaction]
+    total: int,
+    limit: int,
+    offset: int,
 ) -> PaginatedResponse[TransactionListItem]:
-    uc = ListTransactionsUseCase()
-    transactions, total = await uc.execute(portfolio_id, x_owner_id, x_tenant_id, uow, limit=limit, offset=offset)
+    """Shared serialisation for the flat and nested transaction endpoints.
+
+    F-012: extracted so both ``GET /transactions`` (flat) and
+    ``GET /portfolios/{id}/transactions`` (nested) emit identical bodies.
+    F-205 (QA iter-2): now consumes ``EnrichedTransaction`` so the response
+    carries ``ticker``/``name`` resolved from the local instruments cache.
+    """
     return PaginatedResponse(
         items=[
             TransactionListItem(
-                id=t.id,
-                portfolio_id=t.portfolio_id,
-                instrument_id=t.instrument_id,
-                transaction_type=str(t.transaction_type),
-                direction=str(t.direction),
-                quantity=t.quantity,
-                price=t.price,
-                fees=t.fees,
-                currency=t.currency,
-                executed_at=t.executed_at,
-                external_ref=t.external_ref,
-                created_at=t.created_at,
+                id=e.transaction.id,
+                portfolio_id=e.transaction.portfolio_id,
+                instrument_id=e.transaction.instrument_id,
+                transaction_type=str(e.transaction.transaction_type),
+                direction=str(e.transaction.direction),
+                quantity=e.transaction.quantity,
+                price=e.transaction.price,
+                fees=e.transaction.fees,
+                amount=e.transaction.amount,  # PLAN-0046 / BP-263 — surface SnapTrade cash amount
+                currency=e.transaction.currency,
+                # F-205: enrichment fields (None when instrument not in local cache).
+                ticker=e.ticker,
+                name=e.name,
+                # PLAN-0053 T-D-4-02: asset_class for frontend badge.
+                asset_class=e.asset_class,
+                executed_at=e.transaction.executed_at,
+                external_ref=e.transaction.external_ref,
+                created_at=e.transaction.created_at,
             )
-            for t in transactions
+            for e in enriched
         ],
         total=total,
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/transactions", response_model=PaginatedResponse[TransactionListItem])
+async def list_transactions(
+    uow: ReadUoWDep,
+    request: Request,
+    portfolio_id: UUID = Header(..., alias="X-Portfolio-ID"),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> PaginatedResponse[TransactionListItem]:
+    x_owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
+    uc = ListTransactionsUseCase()
+    transactions, total = await uc.execute(portfolio_id, x_owner_id, x_tenant_id, uow, limit=limit, offset=offset)
+    return _build_transaction_response(transactions, total, limit, offset)
+
+
+# F-012 (QA 2026-04-28): canonical REST-nested form. The flat
+# ``/v1/transactions?portfolio_id=...`` path stays for backward compat
+# (the dashboard / older clients still hit it), but the nested form
+# matches the rest of the analytics surface (``/portfolios/{id}/exposure``,
+# ``/value-history``, ``/risk-metrics``) so a strict OpenAPI consumer
+# isn't forced to special-case transactions.
+@router.get(
+    "/portfolios/{portfolio_id}/transactions",
+    response_model=PaginatedResponse[TransactionListItem],
+)
+async def list_transactions_nested(
+    portfolio_id: UUID,
+    uow: ReadUoWDep,
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> PaginatedResponse[TransactionListItem]:
+    """Nested alias for ``GET /transactions?portfolio_id=...``.
+
+    Keeps the API surface uniform across the portfolio analytics endpoints
+    that already use the nested form. The flat endpoint remains as the
+    canonical path during the transition.
+    """
+    x_owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
+    uc = ListTransactionsUseCase()
+    transactions, total = await uc.execute(portfolio_id, x_owner_id, x_tenant_id, uow, limit=limit, offset=offset)
+    return _build_transaction_response(transactions, total, limit, offset)

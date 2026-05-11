@@ -61,7 +61,7 @@
       "gridPos": { "h": 4, "w": 8, "x": 0, "y": 1 },
       "targets": [
         {
-          "expr": "sum(job:kafka_produced:rate5m)",
+          "expr": "sum(job:kafka_produced:rate5m{topic=~\"$topic\"})",
           "refId": "A"
         }
       ],
@@ -76,7 +76,7 @@
       "gridPos": { "h": 4, "w": 8, "x": 8, "y": 1 },
       "targets": [
         {
-          "expr": "sum(job_topic:kafka_consumed:rate5m)",
+          "expr": "sum(job_topic:kafka_consumed:rate5m{topic=~\"$topic\", consumer_group=~\"$consumer_group\"})",
           "refId": "A"
         }
       ],
@@ -91,7 +91,7 @@
       "gridPos": { "h": 4, "w": 8, "x": 16, "y": 1 },
       "targets": [
         {
-          "expr": "sum(job:kafka_produced:rate5m) - sum(job_topic:kafka_consumed:rate5m)",
+          "expr": "sum(job:kafka_produced:rate5m{topic=~\"$topic\"}) - sum(job_topic:kafka_consumed:rate5m{topic=~\"$topic\", consumer_group=~\"$consumer_group\"})",
           "refId": "A"
         }
       ],
@@ -217,7 +217,7 @@
       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 21 },
       "targets": [
         {
-          "expr": "sum(rate({__name__=~\".+_kafka_messages_consumed_total\"}[5m])) by (consumer_group)",
+          "expr": "sum(rate({__name__=~\".+_kafka_messages_consumed_total\", consumer_group=~\"$consumer_group\", topic=~\"$topic\"}[5m])) by (consumer_group)",
           "legendFormat": "{{consumer_group}}",
           "refId": "A"
         }
@@ -247,7 +247,7 @@
       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 31 },
       "targets": [
         {
-          "expr": "sum(rate({__name__=~\".+_kafka_messages_produced_total\"}[5m])) by (job, topic)",
+          "expr": "sum(rate({__name__=~\".+_kafka_messages_produced_total\", topic=~\"$topic\"}[5m])) by (job, topic)",
           "legendFormat": "{{job}} \u2014 {{topic}}",
           "refId": "A"
         }

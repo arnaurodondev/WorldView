@@ -6,21 +6,24 @@ Always writes an audit log entry to routing_decisions.
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from nlp_pipeline.domain.enums import RoutingTier
+# PLAN-0057 A-1: ProcessingPath now lives in the domain layer so it can be
+# a typed field on the RoutingDecision dataclass. We re-export it from this
+# module so existing call sites (`from ...suppression import ProcessingPath`)
+# don't break.
+from nlp_pipeline.domain.enums import ProcessingPath, RoutingTier
 
 if TYPE_CHECKING:
     from nlp_pipeline.domain.models import RoutingDecision
 
-
-class ProcessingPath(StrEnum):
-    """Processing path assigned by the suppression gate."""
-
-    HALT = "halt"  # SUPPRESS tier — stop all downstream
-    SECTION_EMBEDDINGS_ONLY = "section_embeddings_only"  # LIGHT tier — no NER reprocessing
-    FULL_PIPELINE = "full_pipeline"  # MEDIUM or DEEP — continue full processing
+__all__ = [
+    "ProcessingPath",
+    "apply_suppression_gate",
+    "should_generate_chunk_embeddings",
+    "should_run_deep_extraction",
+    "should_run_entity_resolution",
+]
 
 
 def apply_suppression_gate(routing_decision: RoutingDecision) -> ProcessingPath:

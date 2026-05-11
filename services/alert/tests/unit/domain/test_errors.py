@@ -13,6 +13,8 @@ from alert.domain.errors import (
     UserNotConnectedError,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class TestErrorHierarchy:
     @pytest.mark.unit

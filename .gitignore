@@ -61,3 +61,33 @@ pgdata/
 *.pem
 *.key
 secrets/
+terraform.tfvars
+*.tfbackend
+*.tfstate*
+
+# Eval run results (timestamped outputs — not source-of-truth artifacts)
+results/eval_*.json
+results/eval_*.csv
+results/boost_sweep_*.json
+
+# Claude Code local state
+.claude/projects/
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+.claire/
+.mcp.json
+
+# Node
+node_modules
+node_modules/
+
+# Design tool artifacts (too large for git)
+*.pen
+
+# Test output
+test-results/
+out.txt
+
+# Non-project directories
+SF_trip/
+meshx-ai-engineers/

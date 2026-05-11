@@ -16,11 +16,17 @@ from market_data.domain.enums import FundamentalsSection, PeriodType
 
 pytestmark = pytest.mark.unit
 
+# PLAN-0059 W0 fix F-010 added a UUID pattern constraint to the instrument_id
+# path parameter so non-UUID paths return 422 (preventing asyncpg DataError on
+# the screener route collision). Tests must use valid UUID strings as IDs.
+INSTR_UUID = "00000000-0000-0000-0000-000000000001"
+UNKNOWN_UUID = "00000000-0000-0000-0000-000000000099"
+
 
 def _make_record(section: FundamentalsSection = FundamentalsSection.INCOME_STATEMENT) -> FundamentalsRecord:
     return FundamentalsRecord(
         id="rec-001",
-        security_id="instr-001",
+        security_id=INSTR_UUID,
         section=section,
         period_end=datetime(2023, 12, 31, tzinfo=UTC),
         period_type=PeriodType.ANNUAL,
@@ -67,10 +73,10 @@ def test_get_fundamentals_all_sections_found() -> None:
     mock_uc = _make_section_uc(all_records=records)
     _, client = _make_app(mock_uc)
 
-    resp = client.get("/api/v1/fundamentals/instr-001")
+    resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["security_id"] == "instr-001"
+    assert data["security_id"] == INSTR_UUID
     assert len(data["records"]) == 1
 
 
@@ -79,7 +85,7 @@ def test_get_fundamentals_not_found() -> None:
     mock_uc = _make_section_uc(all_records=[])
     _, client = _make_app(mock_uc)
 
-    resp = client.get("/api/v1/fundamentals/unknown-id")
+    resp = client.get(f"/api/v1/fundamentals/{UNKNOWN_UUID}")
     assert resp.status_code == 404
 
 
@@ -89,7 +95,7 @@ def test_get_income_statement() -> None:
     mock_uc = _make_section_uc(records_by_section={FundamentalsSection.INCOME_STATEMENT: records})
     _, client = _make_app(mock_uc)
 
-    resp = client.get("/api/v1/fundamentals/instr-001/income-statement")
+    resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/income-statement")
     assert resp.status_code == 200
     assert resp.json()["records"][0]["section"] == "income_statement"
 
@@ -100,7 +106,7 @@ def test_get_balance_sheet() -> None:
     mock_uc = _make_section_uc(records_by_section={FundamentalsSection.BALANCE_SHEET: records})
     _, client = _make_app(mock_uc)
 
-    resp = client.get("/api/v1/fundamentals/instr-001/balance-sheet")
+    resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/balance-sheet")
     assert resp.status_code == 200
     assert resp.json()["records"][0]["section"] == "balance_sheet"
 
@@ -111,7 +117,7 @@ def test_get_earnings() -> None:
     mock_uc = _make_section_uc(records_by_section={FundamentalsSection.EARNINGS_HISTORY: records})
     _, client = _make_app(mock_uc)
 
-    resp = client.get("/api/v1/fundamentals/instr-001/earnings")
+    resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/earnings")
     assert resp.status_code == 200
     assert resp.json()["records"][0]["section"] == "earnings_history"
 
@@ -122,9 +128,86 @@ def test_fundamentals_record_data_is_dict() -> None:
     mock_uc = _make_section_uc(records_by_section={FundamentalsSection.INCOME_STATEMENT: records})
     _, client = _make_app(mock_uc)
 
-    resp = client.get("/api/v1/fundamentals/instr-001/income-statement")
+    resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/income-statement")
     assert resp.status_code == 200
     assert isinstance(resp.json()["records"][0]["data"], dict)
+
+
+# ── PLAN-0041 Wave A-1: new section endpoints ─────────────────────────────────
+
+
+def test_get_technicals_snapshot() -> None:
+    """GET /api/v1/fundamentals/{id}/technicals-snapshot returns technicals."""
+    records = [_make_record(FundamentalsSection.TECHNICALS_SNAPSHOT)]
+    mock_uc = _make_section_uc(records_by_section={FundamentalsSection.TECHNICALS_SNAPSHOT: records})
+    _, client = _make_app(mock_uc)
+
+    resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/technicals-snapshot")
+    assert resp.status_code == 200
+    assert resp.json()["records"][0]["section"] == "technicals_snapshot"
+
+
+def test_get_share_statistics() -> None:
+    """GET /api/v1/fundamentals/{id}/share-statistics returns share statistics."""
+    records = [_make_record(FundamentalsSection.SHARE_STATISTICS)]
+    mock_uc = _make_section_uc(records_by_section={FundamentalsSection.SHARE_STATISTICS: records})
+    _, client = _make_app(mock_uc)
+
+    resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/share-statistics")
+    assert resp.status_code == 200
+    assert resp.json()["records"][0]["section"] == "share_statistics"
+
+
+def test_get_splits_dividends() -> None:
+    """GET /api/v1/fundamentals/{id}/splits-dividends returns splits/dividend history."""
+    records = [_make_record(FundamentalsSection.SPLITS_DIVIDENDS)]
+    mock_uc = _make_section_uc(records_by_section={FundamentalsSection.SPLITS_DIVIDENDS: records})
+    _, client = _make_app(mock_uc)
+
+    resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/splits-dividends")
+    assert resp.status_code == 200
+    assert resp.json()["records"][0]["section"] == "splits_dividends"
+
+
+def test_get_earnings_trend() -> None:
+    """GET /api/v1/fundamentals/{id}/earnings-trend returns forward earnings estimates."""
+    records = [_make_record(FundamentalsSection.EARNINGS_TREND)]
+    mock_uc = _make_section_uc(records_by_section={FundamentalsSection.EARNINGS_TREND: records})
+    _, client = _make_app(mock_uc)
+
+    resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/earnings-trend")
+    assert resp.status_code == 200
+    assert resp.json()["records"][0]["section"] == "earnings_trend"
+
+
+def test_get_earnings_annual_trend() -> None:
+    """GET /api/v1/fundamentals/{id}/earnings-annual-trend returns annual earnings projections."""
+    records = [_make_record(FundamentalsSection.EARNINGS_ANNUAL_TREND)]
+    mock_uc = _make_section_uc(records_by_section={FundamentalsSection.EARNINGS_ANNUAL_TREND: records})
+    _, client = _make_app(mock_uc)
+
+    resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/earnings-annual-trend")
+    assert resp.status_code == 200
+    assert resp.json()["records"][0]["section"] == "earnings_annual_trend"
+
+
+def test_section_endpoint_returns_empty_list_when_no_data() -> None:
+    """Section endpoints return 200 with empty records list when no data exists."""
+    # WHY: Unlike the all-sections endpoint (which returns 404 on empty), individual
+    # section endpoints return empty lists — the instrument may simply lack that data.
+    mock_uc = _make_section_uc(records_by_section={})
+    _, client = _make_app(mock_uc)
+
+    for path in [
+        "technicals-snapshot",
+        "share-statistics",
+        "splits-dividends",
+        "earnings-trend",
+        "earnings-annual-trend",
+    ]:
+        resp = client.get(f"/api/v1/fundamentals/{INSTR_UUID}/{path}")
+        assert resp.status_code == 200, f"Expected 200 for /{path}, got {resp.status_code}"
+        assert resp.json()["records"] == [], f"Expected empty records for /{path}"
 
 
 def test_no_infra_import_in_fundamentals_router() -> None:

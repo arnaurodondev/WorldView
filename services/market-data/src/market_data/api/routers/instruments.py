@@ -3,29 +3,31 @@
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from market_data.api.dependencies import (
-    get_instrument_by_id_uc,
-    get_instrument_by_symbol_uc,
+    get_lookup_instrument_uc,
+    get_on_demand_profile_uc,
     get_search_instruments_uc,
+    require_internal_jwt,
 )
 from market_data.api.schemas.instruments import (
     InstrumentFlagsResponse,
     InstrumentListResponse,
+    InstrumentLookupDetailResponse,
+    InstrumentLookupResponse,
     InstrumentResponse,
+    OnDemandProfileResponse,
 )
-from market_data.application.use_cases.query_instruments import (
-    GetInstrumentByIdUseCase,
-    GetInstrumentBySymbolUseCase,
-    SearchInstrumentsUseCase,
-)
+from market_data.application.use_cases.lookup_instrument import InstrumentLookupUseCase
+from market_data.application.use_cases.on_demand_profile import OnDemandProfileUseCase
+from market_data.application.use_cases.query_instruments import SearchInstrumentsUseCase
 from market_data.domain.entities import Instrument
+from market_data.domain.errors import EodhRateLimitError, InstrumentNotFoundError
 
 router = APIRouter(tags=["instruments"])
-
-_INSTRUMENT_ID_PARAM = Path(description="Instrument UUID (primary key of the ``instruments`` table).")
 
 
 def _to_response(instrument: Instrument) -> InstrumentResponse:
@@ -44,30 +46,116 @@ def _to_response(instrument: Instrument) -> InstrumentResponse:
     )
 
 
-# IMPORTANT: literal-path route must be declared BEFORE the path-param route
-@router.get("/instruments/symbol/{symbol}", response_model=InstrumentResponse)
-async def get_instrument_by_symbol(
-    symbol: str,
-    exchange: str = "",
-    uc: Annotated[GetInstrumentBySymbolUseCase, Depends(get_instrument_by_symbol_uc)] = ...,  # type: ignore[assignment]
-) -> InstrumentResponse:
-    """Return the instrument matching the given symbol (and optional exchange)."""
-    instrument = await uc.execute(symbol, exchange)
-    if instrument is None:
-        raise HTTPException(status_code=404, detail=f"Instrument not found: {symbol}/{exchange}")
-    return _to_response(instrument)
+# IMPORTANT: /lookup and /on-demand-profile MUST be defined BEFORE any
+# path-param route (e.g., /{instrument_id}) to prevent FastAPI from matching
+# the literal string "lookup" as a UUID path parameter.
 
 
-@router.get("/instruments/{instrument_id}", response_model=InstrumentResponse)
-async def get_instrument(
-    instrument_id: Annotated[str, _INSTRUMENT_ID_PARAM],
-    uc: Annotated[GetInstrumentByIdUseCase, Depends(get_instrument_by_id_uc)] = ...,  # type: ignore[assignment]
-) -> InstrumentResponse:
-    """Return the instrument with the given UUID."""
-    instrument = await uc.execute(instrument_id)
-    if instrument is None:
-        raise HTTPException(status_code=404, detail=f"Instrument not found: {instrument_id}")
-    return _to_response(instrument)
+@router.get(
+    "/instruments/lookup",
+    response_model=InstrumentLookupDetailResponse | InstrumentLookupResponse,
+)
+async def lookup_instrument(
+    symbol: Annotated[
+        str | None,
+        Query(min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$"),
+    ] = None,
+    isin: Annotated[
+        str | None,
+        Query(min_length=12, max_length=12, pattern=r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$"),
+    ] = None,
+    id: Annotated[UUID | None, Query()] = None,  # noqa: A002
+    extra_info: bool = Query(False),
+    uc: Annotated[InstrumentLookupUseCase, Depends(get_lookup_instrument_uc)] = ...,  # type: ignore[assignment]
+) -> InstrumentLookupDetailResponse | InstrumentLookupResponse:
+    """Unified instrument lookup by id, isin, or symbol.
+
+    At least one parameter is required. Priority: id > isin > symbol.
+    Set ``extra_info=true`` to include enrichment fields (name, sector,
+    industry, country, currency_code, description).
+    """
+    try:
+        result = await uc.execute(
+            id=str(id) if id else None,
+            isin=isin,
+            symbol=symbol,
+            extra_info=extra_info,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="At least one of id, isin, or symbol is required") from exc
+    except InstrumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Instrument not found") from exc
+
+    inst = result.instrument
+    if extra_info:
+        sec = result.security
+        return InstrumentLookupDetailResponse(
+            id=inst.id,
+            symbol=inst.symbol,
+            exchange=inst.exchange,
+            is_active=inst.is_active,
+            name=inst.name,
+            isin=inst.isin or (sec.isin if sec else None),
+            sector=inst.sector or (sec.sector if sec else None),
+            industry=inst.industry or (sec.industry if sec else None),
+            country=inst.country or (sec.country if sec else None),
+            currency_code=inst.currency_code or (sec.currency if sec else None),
+            description=sec.description if sec else None,
+        )
+
+    return InstrumentLookupResponse(
+        id=inst.id,
+        symbol=inst.symbol,
+        exchange=inst.exchange,
+        is_active=inst.is_active,
+    )
+
+
+@router.get("/instruments/on-demand-profile", response_model=OnDemandProfileResponse)
+async def on_demand_profile(
+    # F-S03: route-level SSRF pattern guards.  Belt-and-suspenders alongside
+    # the use-case validation: FastAPI rejects malformed input with 422 before
+    # the use case ever sees it, but the use case still validates as a defence
+    # in depth (e.g. when the use case is called from another worker, not HTTP).
+    ticker: Annotated[
+        str | None,
+        Query(min_length=1, max_length=20, pattern=r"^[A-Za-z0-9.\-]+$"),
+    ] = None,
+    isin: Annotated[
+        str | None,
+        Query(min_length=12, max_length=12, pattern=r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$"),
+    ] = None,
+    _: Annotated[None, Depends(require_internal_jwt)] = None,
+    uc: Annotated[OnDemandProfileUseCase, Depends(get_on_demand_profile_uc)] = ...,  # type: ignore[assignment]
+) -> OnDemandProfileResponse:
+    """Fetch (and persist) a structured enrichment profile for an instrument.
+
+    DB-first: returns cached data when ``securities.description`` is already
+    populated.  Falls back to EODHD and persists the result.
+    Requires ``X-Internal-JWT`` — internal endpoint, not exposed to clients.
+    """
+    try:
+        data = await uc.execute(ticker=ticker, isin=isin)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except InstrumentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Instrument not found") from exc
+    except EodhRateLimitError as exc:
+        raise HTTPException(status_code=429, detail="EODHD rate limit exceeded -- retry later") from exc
+
+    return OnDemandProfileResponse(
+        instrument_id=data.instrument_id,
+        security_id=data.security_id,
+        ticker=data.ticker,
+        exchange=data.exchange,
+        isin=data.isin,
+        currency_code=data.currency_code,
+        description=data.description,
+        sector=data.sector,
+        industry=data.industry,
+        country=data.country,
+        source=data.source,
+    )
 
 
 @router.get("/instruments", response_model=InstrumentListResponse)

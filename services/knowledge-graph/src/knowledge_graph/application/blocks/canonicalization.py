@@ -12,25 +12,32 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 from typing import TYPE_CHECKING, Literal
+from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.application.ports.repositories import (
     TOPIC_RELATION_PROPOSED,
 )
+from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
+from messaging.kafka.serialization_utils import (  # type: ignore[import-untyped]
+    serialize_confluent_avro,
+)
+
+# PLAN-0062 F-006: producer-side R28 enforcement — emit Confluent-Avro framed
+# bytes (5-byte magic+schema-id header + Avro body) for ``relation.type.proposed.v1``
+# instead of raw ``json.dumps(...).encode()``.  Resolved at import time so
+# production code and tests share the same path.
+_RELATION_TYPE_PROPOSED_SCHEMA_PATH = get_schema_path("relation.type.proposed.v1.avsc")
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from knowledge_graph.application.ports.repositories import (
         OutboxRepositoryPort as OutboxRepository,
     )
     from knowledge_graph.application.ports.repositories import (
         RelationTypeRegistryRepositoryPort as RelationTypeRegistryRepository,
     )
-
 
 # ---------------------------------------------------------------------------
 # Protocol for the embedding client (duck-typed — no ml-clients runtime dep)
@@ -90,6 +97,7 @@ async def canonicalize_relation_type(
     ``canonical_type=None`` — it does **not** raise.
 
     Args:
+    ----
         raw_type: Raw relation type string from the LLM extraction.
         semantic_mode_hint: Hint from the enriched message (RELATION_STATE or
             TEMPORAL_CLAIM).  Used as fallback when registry lookup fails.
@@ -103,12 +111,18 @@ async def canonicalize_relation_type(
         correlation_id: Propagated correlation ID.
 
     Returns:
+    -------
         :class:`CanonicalizationResult` with ``canonical_type=None`` if proposed.
+
     """
     # ------------------------------------------------------------------
-    # Step 1 — Exact match
+    # Step 1 — Exact match (PLAN-0072 T-72-1-02: normalize before lookup)
     # ------------------------------------------------------------------
-    exact = await registry_repo.find_exact(raw_type)
+    # LLM outputs lowercase ("competes_with") while registry seeds are
+    # lowercase too, but some historical payloads had UPPER or mixed case.
+    # Normalize here so the exact-match is always case-insensitive.
+    normalized_raw_type = raw_type.lower().strip().replace(" ", "_")
+    exact = await registry_repo.find_exact(normalized_raw_type)
     if exact:
         return CanonicalizationResult(
             canonical_type=str(exact["canonical_type"]),
@@ -154,10 +168,18 @@ async def canonicalize_relation_type(
         "source_doc_id": str(source_doc_id) if source_doc_id else None,
         "correlation_id": correlation_id,
     }
+    # PLAN-0062 F-006 / DS F-001: build Avro bytes BEFORE the outbox append so
+    # a serialization failure aborts the transaction instead of poisoning the
+    # outbox with a half-written row.  Confluent wire format with magic byte
+    # ``0x00`` + 4-byte schema-id placeholder.
+    payload_avro_bytes = serialize_confluent_avro(
+        _RELATION_TYPE_PROPOSED_SCHEMA_PATH,
+        proposal_payload,
+    )
     await outbox_repo.append(
         topic=TOPIC_RELATION_PROPOSED,
         partition_key=str(subject_entity_id),
-        payload_avro=json.dumps(proposal_payload).encode(),
+        payload_avro=payload_avro_bytes,
     )
 
     return CanonicalizationResult(

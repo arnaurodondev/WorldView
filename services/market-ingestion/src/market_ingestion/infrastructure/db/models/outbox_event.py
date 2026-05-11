@@ -49,6 +49,15 @@ class OutboxEventModel(Base):
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # ``dispatched_at`` was added by migration 0013 to align this table with
+    # the canonical outbox shape in docs/STANDARDS.md §3.4 (PLAN-0087 #9 /
+    # F-003). It mirrors ``published_at`` (the column the dispatcher already
+    # writes via ``mark_published``); both are populated together so
+    # cross-service SQL tooling that filters on ``dispatched_at IS NULL``
+    # works correctly here. The duplication is intentional and temporary —
+    # a future migration will rename ``published_at`` once all consumers are
+    # updated. Until then, keep both in lock-step.
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         # Dispatcher claim: eligible rows by status + lease expiry

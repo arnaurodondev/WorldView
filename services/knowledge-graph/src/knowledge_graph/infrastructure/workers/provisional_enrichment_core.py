@@ -1,0 +1,536 @@
+"""Shared enrichment logic for ProvisionalEnrichmentWorker and ProvisionalQueuedConsumer.
+
+Both the polling sweep worker (provisional_enrichment.py) and the hot-path Kafka
+consumer (provisional_queued_consumer.py) need to run the same LLM extraction,
+embedding, and DB persistence steps.  This module provides module-level async
+functions so both call sites can share logic without circular imports.
+
+ARCH-003 contract: no DB session is held during extract_entity_profile or
+compute_embedding — callers acquire a session, release it, do the I/O, then
+acquire a new session for persist_enrichment.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+from uuid import UUID
+
+from common.ids import new_uuid7  # type: ignore[import-untyped]
+from common.time import utc_now  # type: ignore[import-untyped]
+from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
+    EntityEmbeddingStateRepository,
+)
+from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
+from observability import get_logger  # type: ignore[import-untyped]
+
+# Topic name constant — avoid importing from messaging.topics to sidestep
+# version-skew attr-defined errors when the installed package predates the
+# ENTITY_CANONICAL_CREATED constant (added in later revision).
+_ENTITY_CANONICAL_CREATED_TOPIC = "entity.canonical.created.v1"
+
+_ENTITY_CANONICAL_CREATED_SCHEMA_PATH = get_schema_path("entity.canonical.created.v1.avsc")
+_ENTITY_DIRTIED_SCHEMA_PATH = get_schema_path("entity.dirtied.v1.avsc")
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
+
+logger = get_logger(__name__)  # type: ignore[no-any-return]
+
+_EXTRACT_MODEL_ID = "kg-entity-profile-v1"
+
+# Canonical entity types seeded in migration 0001. The code-level validation
+# here mirrors the DB CHECK constraint added by migration 0021 (T-72-3-02).
+_VALID_ENTITY_TYPES: frozenset[str] = frozenset(
+    {
+        "company",
+        "financial_instrument",
+        "person",
+        "organization",
+        "country",
+        "currency",
+        "commodity",
+        "index",
+        "sector",
+        "concept",
+        "event",
+        "other",
+    }
+)
+
+# Map legacy or LLM-invented aliases to the canonical type.
+# Includes types emitted by entity_profile.py v1.0 prompt (pre-T-72-3-02).
+_ENTITY_TYPE_ALIASES: dict[str, str] = {
+    "corp": "company",
+    "corporation": "company",
+    "enterprise": "company",
+    "firm": "company",
+    "business": "company",
+    "organisation": "organization",
+    "inst": "organization",
+    "institution": "organization",
+    # Legacy v1.0 prompt types not in the canonical list:
+    "regulator": "organization",
+    "fund": "financial_instrument",
+    "macro_indicator": "concept",
+}
+
+
+def _build_dirtied_event(entity_id: UUID, dirty_reason: str = "profile_updated") -> bytes:
+    """Build a fully-populated entity.dirtied.v1 Confluent-Avro payload.
+
+    B-3 fix: previously callers emitted ``{"entity_id": "<uuid>"}`` which is
+    missing ``event_id``, ``event_type``, ``schema_version``, ``occurred_at``,
+    and ``dirty_reason`` — all required by the Avro schema at
+    ``infra/kafka/schemas/entity.dirtied.v1.avsc``.
+
+    PLAN-0062 R28 fix: migrated from json.dumps to serialize_confluent_avro so
+    that entity.dirtied.v1 uses the Confluent 5-byte wire-format header,
+    consistent with all other producer paths.
+    """
+    from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
+
+    return serialize_confluent_avro(
+        _ENTITY_DIRTIED_SCHEMA_PATH,
+        {
+            "event_id": str(new_uuid7()),
+            "event_type": "entity.dirtied",
+            "schema_version": 1,
+            "occurred_at": utc_now().isoformat(),
+            "entity_id": str(entity_id),
+            "dirty_reason": dirty_reason,
+            "source_doc_id": None,
+            "correlation_id": None,
+        },
+    )
+
+
+async def extract_entity_profile(
+    llm_client: FallbackChainClient,
+    mention_text: str,
+    mention_class: str,
+    context_snippet: str,
+) -> dict[str, Any] | None:
+    """Call the extraction LLM to produce a structured entity profile.
+
+    No DB session needed — pure HTTP call via FallbackChainClient.
+
+    Returns a dict with keys: canonical_name, entity_type, ticker, isin, aliases.
+    Returns None if the LLM chain fails or returns an empty result.
+
+    DEF-003/020 (BP-398): context_snippet originates from external article content
+    and must be truncated and XML-delimited before reaching the LLM prompt
+    constructor.  Without this guard an adversarial headline can inject LLM
+    instructions and corrupt entity profiles (indirect prompt injection).
+    """
+    from ml_clients.dataclasses import ExtractionInput  # type: ignore[import-untyped]
+    from prompts.knowledge.entity_profile import ENTITY_PROFILE  # type: ignore[import-untyped]
+
+    # Truncate to 500 chars then wrap in an XML delimiter so the LLM treats
+    # this block as data, not as instructions.  The XML tag creates a structural
+    # boundary that prevents the external content from "bleeding" into the
+    # surrounding prompt text even if it contains injection payloads.
+    _safe_context = f"<article_context>{context_snippet[:500]}</article_context>"
+
+    inp = ExtractionInput(
+        prompt=ENTITY_PROFILE.render(name=mention_text, entity_class=mention_class),
+        context=_safe_context,
+        output_schema={
+            "canonical_name": "string",
+            "entity_type": "string",
+            "ticker": "string|null",
+            "isin": "string|null",
+            "aliases": "list[string]",
+        },
+        model_id=_EXTRACT_MODEL_ID,
+    )
+    result = await llm_client.extract(inp, entity_id=None)
+    if result is None:
+        return None
+    return result.result  # type: ignore[return-value]
+
+
+async def compute_embedding(
+    llm_client: FallbackChainClient,
+    entity_id: UUID | None,
+    source_text: str,
+    embed_model_id: str,
+) -> list[float] | None:
+    """Compute a definition embedding via the LLM chain.
+
+    No DB session needed — pure HTTP call (ARCH-003).
+    """
+    from ml_clients.dataclasses import EmbeddingInput  # type: ignore[import-untyped]
+
+    inp = EmbeddingInput(text=source_text, model_id=embed_model_id)
+    outputs = await llm_client.embed([inp], entity_id=entity_id)
+    return outputs[0].embedding if outputs else None
+
+
+async def persist_enrichment(
+    session: AsyncSession,
+    queue_id: UUID,
+    mention_text: str,
+    profile: dict[str, Any],
+    embedding: list[float] | None = None,
+    embed_model_id: str = "bge-large:latest",
+) -> UUID | None:
+    """Persist an LLM-extracted entity profile to intelligence_db.
+
+    Performs all DB writes for a single provisional entity:
+      - canonical_entities INSERT
+      - entity_aliases INSERTs (mechanical + LLM with collision check)
+      - entity_embedding_state rows
+      - embedding upsert (if provided)
+      - relation_evidence_raw provisional flag clear
+      - entity.canonical.created.v1 outbox entry
+
+    Session-only — no external HTTP/LLM calls (ARCH-003).
+    """
+    from sqlalchemy import text
+
+    from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
+        CanonicalEntityRepository,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias import (
+        EntityAliasRepository,
+    )
+    from knowledge_graph.infrastructure.intelligence_db.repositories.outbox import (
+        OutboxRepository,
+    )
+    from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
+
+    canonical_name: str = profile.get("canonical_name") or mention_text
+    _raw_type: str = profile.get("entity_type") or str(profile.get("mention_class", "unknown"))
+    _norm_type = _raw_type.lower().strip().replace(" ", "_")
+    entity_type = _ENTITY_TYPE_ALIASES.get(_norm_type, _norm_type)
+    if entity_type not in _VALID_ENTITY_TYPES:
+        logger.warning(  # type: ignore[no-any-return]
+            "provisional_enrichment_invalid_entity_type",
+            raw_type=_raw_type,
+            mention_text=mention_text,
+            defaulting_to="other",
+        )
+        entity_type = "other"
+    # Clamp ticker/isin to DB column widths (varchar(20)); discard if malformed.
+    # Qwen3.5-0.8B occasionally returns oversized values despite prompt instructions.
+    _ticker_raw: str | None = profile.get("ticker")
+    ticker: str | None = _ticker_raw[:20] if _ticker_raw else None
+    _isin_raw: str | None = profile.get("isin")
+    # Standard ISIN = exactly 12 alphanumeric chars; anything else is a hallucination.
+    import re as _re
+
+    isin: str | None = _isin_raw if (_isin_raw and _re.fullmatch(r"[A-Z0-9]{12}", _isin_raw)) else None
+    if _isin_raw and isin is None:
+        logger.warning(  # type: ignore[no-any-return]
+            "provisional_enrichment_isin_discarded",
+            isin_raw=_isin_raw,
+            entity=canonical_name,
+        )
+
+    # QA-iter1 (PLAN-0062 SA-005 fix): pre-validate the Avro payload BEFORE any
+    # DB writes.  The polling worker (provisional_enrichment.py) commits the
+    # batch session in a finally-style block — if serialize_confluent_avro
+    # raised AFTER the canonical-entity INSERT it would orphan the entity row
+    # without an outbox event (DB committed, no Kafka event ever produced).
+    # By serializing first we either fail-fast (no DB writes) or have valid
+    # bytes ready when the outbox INSERT runs at the end of this function.
+    entity_id_str = str(new_uuid7())
+    avro_record: dict[str, Any] = {
+        "event_id": str(new_uuid7()),
+        "event_type": "entity.canonical.created",
+        "schema_version": 1,
+        "occurred_at": utc_now().isoformat(),
+        "entity_id": entity_id_str,
+        "canonical_name": canonical_name,
+        "entity_type": entity_type,
+        "provisional_queue_id": str(queue_id),
+        "alias_texts": [canonical_name, *([ticker.upper()] if ticker else []), *([isin.upper()] if isin else [])],
+        "correlation_id": None,
+    }
+    avro_payload_bytes = serialize_confluent_avro(_ENTITY_CANONICAL_CREATED_SCHEMA_PATH, avro_record)
+
+    # ── Fuzzy pre-lookup — BP-459 provisional entity deduplication ───────────
+    # ``create_or_get`` handles exact-name conflicts atomically via ON CONFLICT,
+    # but the unique index only triggers when ``lower(canonical_name)`` matches
+    # exactly.  When the LLM returns a slight variation of an already-canonical
+    # name (e.g. "Amazon Business" for an entity we already have as "Amazon Inc.")
+    # no conflict fires, and a new duplicate row is inserted.
+    #
+    # The fuzzy pre-lookup uses pg_trgm trigram similarity against the
+    # entity_aliases table.  A sim ≥ 0.75 threshold safely separates
+    # abbreviation/punctuation differences (e.g. "apple inc." vs "apple inc"
+    # scores ~0.95 → reuse) from genuinely different entities (e.g. "amazon
+    # business" vs "amazon inc." scores ~0.55 → create new).
+    #
+    # WHY this position: we run after entity_type normalization so the
+    # canonical_name we look up is the name we'd actually write to the DB.
+    # WHY not inside create_or_get: fuzzy search crosses table boundaries
+    # (entity_aliases) whereas create_or_get is scoped to canonical_entities.
+    alias_repo_prelookup = EntityAliasRepository(session)
+    lookup_name = canonical_name.lower().strip()
+    fuzzy_matches = await alias_repo_prelookup.fuzzy_search(lookup_name, limit=3)
+
+    existing_entity_id: UUID | None = None
+    for match in fuzzy_matches:
+        sim = float(match["similarity"])  # type: ignore[arg-type]
+        if sim >= 0.75:
+            existing_entity_id = UUID(str(match["entity_id"]))
+            logger.info(  # type: ignore[no-any-return]
+                "provisional_entity_deduplicated",
+                mention_text=mention_text,
+                canonical_name=canonical_name,
+                matched_entity_id=str(existing_entity_id),
+                similarity=sim,
+            )
+            break
+
+    if existing_entity_id is not None:
+        # Reuse the existing entity — skip all DB writes and return early.
+        # The caller (ProvisionalEnrichmentWorker / ProvisionalQueuedConsumer)
+        # will update provisional_entity_queue with this entity_id.
+        return existing_entity_id
+
+    # ── Atomic dedup INSERT (DEF-014 / BP-384 — replaces find_exact race) ──
+    # Migration 0026 added a UNIQUE INDEX on lower(canonical_name).  ``create_or_get``
+    # issues an atomic INSERT ... ON CONFLICT DO NOTHING and re-SELECTs on conflict.
+    # When ``was_created=False`` we skip alias inserts, embedding, and outbox.
+    entity_repo = CanonicalEntityRepository(session)
+    entity_id, was_created = await entity_repo.create_or_get(  # type: ignore[attr-defined]
+        canonical_name=canonical_name,
+        entity_type=entity_type,
+        ticker=ticker,
+        isin=isin,
+    )
+    if not was_created:
+        logger.info(  # type: ignore[no-any-return]
+            "provisional_enrichment_entity_deduped",
+            canonical_name=canonical_name,
+            existing_entity_id=str(entity_id),
+            entity_deduped=True,
+        )
+        # Return the existing entity_id; the caller (ProvisionalEnrichmentWorker
+        # / ProvisionalQueuedConsumer) will update provisional_entity_queue.
+        # No new outbox event needed — entity already exists and is reachable.
+        return entity_id
+    # The repo generates its own UUIDv7 — re-serialize with the actual entity_id
+    # to keep the outbox bytes consistent with the DB row.  This second
+    # serialize_confluent_avro call uses an identical record shape, so it is
+    # equally safe to fail before any further DB work.
+    avro_record["entity_id"] = str(entity_id)
+    avro_payload_bytes = serialize_confluent_avro(_ENTITY_CANONICAL_CREATED_SCHEMA_PATH, avro_record)
+
+    alias_repo = EntityAliasRepository(session)
+    normalized_name = canonical_name.lower().strip()
+    await alias_repo.insert(entity_id, canonical_name, normalized_name, "EXACT", "provisional_enrichment")
+
+    if ticker:
+        await alias_repo.insert(entity_id, ticker, ticker.upper(), "TICKER", "provisional_enrichment")
+    if isin:
+        await alias_repo.insert(entity_id, isin, isin.upper(), "ISIN", "provisional_enrichment")
+
+    llm_aliases: list[str] = profile.get("aliases") or []
+    for alias in llm_aliases[:5]:
+        normalized = alias.lower().strip()
+        existing = await alias_repo.find_exact(normalized)
+        if existing and existing["entity_id"] != entity_id:
+            logger.warning(  # type: ignore[no-any-return]
+                "provisional_enrichment_alias_collision",
+                alias=alias,
+                existing_entity_id=str(existing["entity_id"]),
+                new_entity_id=str(entity_id),
+            )
+            continue
+        await alias_repo.insert(entity_id, alias, normalized, "LLM", "provisional_enrichment")
+
+    emb_repo = EntityEmbeddingStateRepository(session)
+    await emb_repo.ensure_rows_exist(entity_id, entity_type)
+
+    if canonical_name and embedding is not None:
+        await _write_embedding(entity_id, canonical_name, embedding, emb_repo, embed_model_id)
+
+    # PLAN-0088 Wave I fix: the original DEF-021 patch referenced
+    # subject_provisional_id / object_provisional_id columns that do not exist
+    # on relation_evidence_raw — only a single provisional_queue_id column was
+    # ever shipped (see migration 0038 schema). The dual-column "DEF-021"
+    # claim was aspirational; entity_consumer._unblock_provisional_evidence()
+    # actually uses the single-column pattern. This worker now mirrors that
+    # pattern so promotion no longer crashes with UndefinedColumn at runtime.
+    #
+    # Trade-off: when both endpoints of an evidence row are provisional, both
+    # subject_entity_id and object_entity_id are overwritten with the same
+    # canonical id. This is the same behaviour entity_consumer already
+    # produces; correcting it requires a schema extension tracked separately.
+    await session.execute(
+        text("""
+UPDATE relation_evidence_raw
+SET entity_provisional = false,
+    subject_entity_id  = CASE
+        WHEN provisional_queue_id = :queue_id THEN :entity_id
+        ELSE subject_entity_id
+    END,
+    object_entity_id   = CASE
+        WHEN provisional_queue_id = :queue_id THEN :entity_id
+        ELSE object_entity_id
+    END
+WHERE provisional_queue_id = :queue_id
+  AND entity_provisional   = true
+"""),
+        {"entity_id": str(entity_id), "queue_id": str(queue_id)},
+    )
+
+    outbox_repo = OutboxRepository(session)
+    # QA-iter1 (PLAN-0062): payload bytes were pre-serialized at the top of
+    # this function — the call there fails-fast if the record dict is invalid,
+    # preventing partial DB state without an outbox row (BP-313 / SA-005).
+    await outbox_repo.append(
+        topic=_ENTITY_CANONICAL_CREATED_TOPIC,
+        partition_key=str(entity_id),
+        payload_avro=avro_payload_bytes,
+    )
+
+    return entity_id  # type: ignore[no-any-return]
+
+
+async def _write_embedding(
+    entity_id: UUID,
+    source_text: str,
+    embedding: list[float] | None,
+    emb_repo: EntityEmbeddingStateRepository,
+    embed_model_id: str,
+) -> None:
+    """Write a pre-computed embedding vector to entity_embedding_state (session-only)."""
+    from datetime import timedelta
+
+    from knowledge_graph.infrastructure.intelligence_db.repositories.entity_embedding_state import (
+        VIEW_DEFINITION,
+        sha256_hex,
+    )
+
+    await emb_repo.upsert(
+        entity_id,
+        VIEW_DEFINITION,
+        embedding=embedding,
+        model_id=embed_model_id if embedding else None,
+        source_text=source_text,
+        source_hash=sha256_hex(source_text),
+        next_refresh_at=utc_now() + timedelta(days=90),  # type: ignore[no-any-return, operator]
+    )
+
+
+async def apply_retry_transition(
+    session: AsyncSession,
+    queue_id: UUID,
+    max_retries: int,
+    base_retry_minutes: int = 2,
+    max_retry_minutes: int = 1440,
+) -> bool:
+    """Atomically increment retry_count and decide terminal state in one SQL round-trip.
+
+    The DB authoritatively reads the current ``retry_count`` and computes the
+    new status with a SQL ``CASE`` expression, so we never depend on a stale
+    caller-supplied count.  ``RETURNING (status = 'failed')`` exposes the outcome
+    to Python so the caller can increment the appropriate Prometheus counter.
+
+    Returns True if the row was transitioned to 'failed' (terminal), False if it
+    was reset to 'pending' for another attempt.
+
+    This function does NOT increment ``s7_provisional_enrichment_failed_total`` —
+    callers that need the counter (the worker's ``_apply_retry``) must check
+    the return value and call ``inc()`` themselves so existing test patch paths
+    are preserved.
+
+    DEF-033 — exponential backoff:
+      Computes ``next_retry_at = utc_now() +
+      min(base_retry_minutes * 2 ** retry_count, max_retry_minutes)`` minutes
+      and persists it alongside the retry_count increment.  The Phase-1 SELECT
+      filters rows on ``next_retry_at IS NULL OR next_retry_at <= now()`` so
+      this row is excluded from ``claim_batch`` until the deadline elapses.
+
+      ``retry_count`` here is the *current* DB value (before the increment) —
+      using the post-increment value would make the very first failure wait
+      ``2 * 2^1 = 4`` minutes instead of the intended 2 minutes.  We read it
+      back from the row inside the CTE so the formula is consistent across
+      concurrent workers regardless of which one wins the UPDATE race.
+
+      ``base_retry_minutes`` and ``max_retry_minutes`` default to the worldview
+      production values so existing test fixtures (which only pass
+      ``max_retries``) keep working without modification.
+    """
+
+    from sqlalchemy import text
+
+    # Compute next_retry_at in Python (not SQL) so tests can drive the
+    # backoff window deterministically by patching ``common.time.utc_now``
+    # and so the value is testable against a known baseline.  We use the
+    # SQL CASE on retry_count to derive the backoff multiplier for the
+    # *current* row state: this avoids a separate SELECT round-trip while
+    # still letting Python clamp the result to ``max_retry_minutes``.
+    #
+    # Single round-trip pattern: we read retry_count via a CTE, compute the
+    # backoff in SQL, and apply both updates atomically.  The Python-side
+    # parameters bound below are the base / cap.
+    result = await session.execute(
+        text("""
+WITH current AS (
+    SELECT retry_count AS rc
+    FROM provisional_entity_queue
+    WHERE queue_id = :queue_id
+      AND status = 'processing'
+)
+UPDATE provisional_entity_queue AS q
+SET retry_count = LEAST(q.retry_count + 1, :max_retries),
+    status = CASE
+        WHEN q.retry_count + 1 >= :max_retries THEN 'failed'
+        ELSE 'pending'
+    END,
+    next_retry_at = CASE
+        -- Failed terminal rows do not need a retry deadline (they will
+        -- never be re-claimed) — leave it NULL for clarity.
+        WHEN q.retry_count + 1 >= :max_retries THEN NULL
+        -- BP-449 fix: explicit CAST(:base_now AS timestamptz) prevents asyncpg
+        -- DatatypeMismatchError — the CASE NULL branch makes asyncpg infer
+        -- :base_now as interval type from the +interval context without the cast.
+        ELSE CAST(:base_now AS timestamptz)
+             + (LEAST(
+                    :base_minutes * (2 ^ COALESCE((SELECT rc FROM current), 0))::int,
+                    :max_minutes
+                ) || ' minutes')::interval
+    END
+WHERE q.queue_id = :queue_id
+  AND q.status = 'processing'
+RETURNING (q.status = 'failed') AS is_terminal,
+          q.retry_count AS new_retry_count,
+          q.next_retry_at AS next_retry_at
+"""),
+        {
+            "queue_id": str(queue_id),
+            "max_retries": max_retries,
+            "base_minutes": base_retry_minutes,
+            "max_minutes": max_retry_minutes,
+            "base_now": utc_now(),
+        },
+    )
+    row = result.fetchone()
+    if row is None:
+        # Row no longer exists or was already resolved/noise — nothing to do.
+        return False
+
+    # Surface the backoff decision in structured logs so ops can chart
+    # retry-storm shape and confirm the cap is firing during outages.
+    is_terminal = bool(row[0])
+    next_retry_at = row[2] if len(row) >= 3 else None
+    backoff_minutes = None
+    if next_retry_at is not None:
+        # Compute the effective backoff window from the persisted value so
+        # the log matches the DB exactly (including Postgres rounding).
+        backoff_minutes = max(0, int((next_retry_at - utc_now()).total_seconds() // 60))
+    logger.info(  # type: ignore[no-any-return]
+        "provisional_enrichment_retry_transition",
+        queue_id=str(queue_id),
+        is_terminal=is_terminal,
+        backoff_minutes=backoff_minutes,
+        next_retry_at=next_retry_at.isoformat() if next_retry_at is not None else None,
+    )
+    return is_terminal

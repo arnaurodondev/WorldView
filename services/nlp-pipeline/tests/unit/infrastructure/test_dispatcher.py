@@ -21,6 +21,8 @@ from nlp_pipeline.infrastructure.messaging.outbox.dispatcher import (
     NLPPipelineOutboxDispatcher,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _make_settings() -> MagicMock:
     s = MagicMock()

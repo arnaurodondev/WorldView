@@ -1,35 +1,95 @@
-"""Holdings API routes."""
+"""Holdings API routes.
+
+Auth: InternalJWTMiddleware sets request.state.tenant_id / user_id from the
+verified RS256 JWT (PRD-0025, F-CRIT-001 remediation).
+"""
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, HTTPException, Query, Request
 
-from portfolio.api.dependencies import UoWDep
-from portfolio.api.schemas import HoldingResponse
+from portfolio.api.dependencies import ReadUoWDep
+from portfolio.api.schemas import HoldingResponse, PaginatedResponse
 from portfolio.application.use_cases.read_models import GetHoldingsUseCase
 
 router = APIRouter(tags=["holdings"])
 
 
-@router.get("/holdings/{portfolio_id}", response_model=list[HoldingResponse])
+def _extract_tenant_id(request: Request) -> UUID:
+    """Read tenant_id from request.state set by InternalJWTMiddleware."""
+    raw = getattr(request.state, "tenant_id", None)
+    if not raw:
+        raise HTTPException(status_code=401, detail="Missing tenant_id in JWT")
+    return UUID(str(raw))
+
+
+def _extract_owner_id(request: Request) -> UUID:
+    """Read user_id (owner) from request.state set by InternalJWTMiddleware."""
+    raw = getattr(request.state, "user_id", None)
+    if not raw:
+        raise HTTPException(status_code=401, detail="Missing user_id in JWT")
+    return UUID(str(raw))
+
+
+@router.get(
+    "/holdings/{portfolio_id}",
+    response_model=PaginatedResponse[HoldingResponse],
+)
 async def get_holdings(
     portfolio_id: UUID,
-    uow: UoWDep,
-    owner_id: UUID = Header(..., alias="X-Owner-ID"),
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-) -> list[HoldingResponse]:
+    uow: ReadUoWDep,
+    request: Request,
+    include_closed: bool = Query(
+        default=False,
+        description=(
+            "Include zero-quantity (closed) positions. Default false — only"
+            " active positions are returned, matching the typical UI view."
+            " Set true for tax/audit reporting that needs historic legs."
+        ),
+    ),
+) -> PaginatedResponse[HoldingResponse]:
+    """List holdings for a portfolio.
+
+    F-011 (QA 2026-04-28): the response now uses the same paginated
+    envelope as the rest of the portfolio domain (``items`` / ``total``
+    / ``limit`` / ``offset``). Previously this endpoint returned a bare
+    array, forcing the gateway to special-case it. The gateway now
+    tolerates both shapes during the transition window.
+
+    F-303 (QA iter-3 2026-04-28): zero-quantity rows are hidden by
+    default — they're either closed positions (sold flat) or orphans
+    from a sparse broker resync after the F-201 repair script. Pro users
+    pass ``?include_closed=true`` to see them.
+
+    There's no built-in pagination on holdings (a portfolio rarely has
+    more than ~50 positions), so the envelope reports ``total ==
+    len(items)`` and a fixed ``limit`` of 1000 — meaning the response is
+    always complete even when the envelope is in use.
+    """
+    owner_id = _extract_owner_id(request)
+    x_tenant_id = _extract_tenant_id(request)
     uc = GetHoldingsUseCase()
-    holdings = await uc.execute(portfolio_id, owner_id, x_tenant_id, uow)
-    return [
+    enriched_holdings = await uc.execute(
+        portfolio_id,
+        owner_id,
+        x_tenant_id,
+        uow,
+        include_closed=include_closed,
+    )
+    items = [
         HoldingResponse(
-            id=h.id,
-            portfolio_id=h.portfolio_id,
-            instrument_id=h.instrument_id,
-            quantity=h.quantity,
-            average_cost=h.average_cost,
-            currency=h.currency,
+            id=eh.holding.id,
+            portfolio_id=eh.holding.portfolio_id,
+            instrument_id=eh.holding.instrument_id,
+            quantity=eh.holding.quantity,
+            average_cost=eh.holding.average_cost,
+            currency=eh.holding.currency,
+            ticker=eh.ticker,
+            name=eh.name,
+            entity_id=eh.entity_id,
         )
-        for h in holdings
+        for eh in enriched_holdings
     ]
+    return PaginatedResponse(items=items, total=len(items), limit=1000, offset=0)

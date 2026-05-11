@@ -57,15 +57,68 @@ class SchedulerProcess:
             tick_interval_seconds=self._tick_interval,
             max_tasks_per_tick=self._max_tasks_per_tick,
         )
+
+        # PLAN-0055 A-2: spawn the auto-backfill orchestrator as a fire-and-forget
+        # task so the first tick fires immediately. Gated by env so operators retain
+        # a kill-switch. Errors inside the task are swallowed in _run_startup_backfill.
+        if getattr(self._settings, "auto_backfill_on_startup", False):
+            self._spawn_startup_backfill()
+
         while not self._stop_event.is_set():
-            await self._tick()
-            with suppress(TimeoutError):
-                await asyncio.wait_for(
-                    asyncio.shield(self._stop_event.wait()),
-                    timeout=self._tick_interval,
-                )
+            # WHY try/except here: _tick() catches DB errors internally, but an
+            # unhandled exception from asyncio.wait_for or asyncio.shield (e.g. an
+            # unexpected RuntimeError) would silently kill the scheduler loop.
+            # Catching at the loop level ensures the scheduler always retries after
+            # a short pause rather than dying silently.  CancelledError re-raises
+            # so SIGTERM / stop() propagates correctly.
+            try:
+                await self._tick()
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(
+                        asyncio.shield(self._stop_event.wait()),
+                        timeout=self._tick_interval,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("scheduler_loop_error")
+                await asyncio.sleep(5)
 
         logger.info("scheduler_stopped")
+
+    def _spawn_startup_backfill(self) -> None:
+        """Build the use case and detach it on a background task (PLAN-0055 A-2)."""
+        from market_ingestion.application.services.provider_routing_cache import ProviderRoutingCache
+        from market_ingestion.application.use_cases.run_startup_backfill import RunStartupBackfillUseCase
+
+        try:
+            routing = ProviderRoutingCache()
+            routing.load_from_config(self._settings)
+            use_case = RunStartupBackfillUseCase(
+                uow_factory=lambda: SqlaUnitOfWork(self._write_factory, self._read_factory),
+                settings=self._settings,
+                routing=routing,
+            )
+            # Stash so the task isn't GC'd before completion (RUF006).
+            self._startup_backfill_task = asyncio.create_task(
+                self._run_startup_backfill(use_case),
+                name="startup_backfill",
+            )
+        except Exception as exc:  # — scheduler must boot regardless
+            logger.exception("startup_backfill_spawn_failed", error=str(exc))
+
+    @staticmethod
+    async def _run_startup_backfill(use_case) -> None:  # type: ignore[no-untyped-def]
+        try:
+            summary = await use_case.execute()
+            logger.info(
+                "startup_backfill_task_completed",
+                enqueued=summary.enqueued,
+                skipped=summary.skipped,
+                failed=summary.failed,
+            )
+        except Exception as exc:  # — fire-and-forget; never crash the loop
+            logger.exception("startup_backfill_task_failed", error=str(exc))
 
     async def _tick(self) -> None:
         """Execute one scheduler tick."""

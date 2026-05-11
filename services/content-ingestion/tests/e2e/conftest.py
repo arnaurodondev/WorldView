@@ -10,7 +10,6 @@ For full e2e with live infrastructure, start with:
 Environment:
     CONTENT_INGESTION_E2E_DATABASE_URL — Postgres URL (default: localhost:55433/content_ingestion_db)
     CONTENT_INGESTION_ADMIN_TOKEN     — admin token expected by the service (default: e2e-admin-token)
-    INTERNAL_SERVICE_TOKEN            — internal service token (default: e2e-internal-token)
 """
 
 from __future__ import annotations
@@ -39,7 +38,22 @@ E2E_DB_URL = os.getenv(
     "postgresql+asyncpg://postgres:postgres@localhost:55433/content_ingestion_db",
 )
 E2E_ADMIN_TOKEN = os.getenv("CONTENT_INGESTION_ADMIN_TOKEN", "e2e-admin-token")
-E2E_INTERNAL_TOKEN = os.getenv("INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
+
+# Minimal HS256 JWT accepted by InternalJWTMiddleware when no RS256 public key is loaded.
+# Used for e2e tests where the api-gateway JWKS endpoint is not available.
+import jwt as _jwt
+
+_E2E_INTERNAL_JWT: str = _jwt.encode(
+    {
+        "sub": "e2e-user",
+        "tenant_id": "e2e-tenant",
+        "role": "owner",
+        "iss": "worldview-gateway",
+        "exp": 9999999999,
+    },
+    "e2e-secret",
+    algorithm="HS256",
+)
 
 # ── DB availability probe ─────────────────────────────────────────────────────
 
@@ -169,12 +183,11 @@ def e2e_app(e2e_session_factory):
 
     settings = MagicMock()
     settings.admin_token = E2E_ADMIN_TOKEN
-    settings.internal_service_token = E2E_INTERNAL_TOKEN
+    settings.api_gateway_url = "http://api-gateway:8000"
 
     from content_ingestion.infrastructure.db.unit_of_work import SqlaReadOnlyUnitOfWork, SqlaUnitOfWork
 
     app.state.settings = settings
-    app.state.session_factory = e2e_session_factory
     app.state.write_factory = e2e_session_factory
     app.state.read_factory = e2e_session_factory
     app.state.uow_factory = lambda: SqlaUnitOfWork(e2e_session_factory)
@@ -194,6 +207,17 @@ def e2e_app(e2e_session_factory):
     app.include_router(admin.router)
     app.include_router(dlq.router)
     app.include_router(internal.router)
+
+    # Add InternalJWTMiddleware so internal endpoint auth works correctly (PRD-0025).
+    # In e2e tests the JWKS endpoint is not available, so the middleware operates in
+    # graceful-degradation mode (no signature verification — claims decoded as-is).
+    from content_ingestion.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
+
+    app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url="http://api-gateway:8000/internal/jwks",
+        skip_verification=True,
+    )
 
     return app
 
@@ -217,5 +241,5 @@ def admin_headers() -> dict[str, str]:
 
 @pytest.fixture
 def internal_headers() -> dict[str, str]:
-    """HTTP headers that satisfy the internal auth dependency."""
-    return {"X-Internal-Token": E2E_INTERNAL_TOKEN}
+    """HTTP headers that satisfy the InternalJWTMiddleware (PRD-0025)."""
+    return {"X-Internal-JWT": _E2E_INTERNAL_JWT}

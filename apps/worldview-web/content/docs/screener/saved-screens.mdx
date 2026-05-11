@@ -1,0 +1,62 @@
+---
+title: Saved Screens
+description: Save your screener filter combinations as named presets and reload them in one click.
+section: Screener
+order: 3
+updated: 2026-05-05
+---
+
+A saved screen is a named snapshot of your current filter settings. Once saved, you can reload it with a single click instead of re-entering all criteria. Saved screens are stored per-user and persist across sessions.
+
+## Saving a screen
+
+<Steps>
+  <Step title="Configure your filters">
+    Use the filter bar to set all the criteria you want. The grid updates in real time as you adjust filters.
+  </Step>
+  <Step title="Click Save screen">
+    Click the **Save screen** button (floppy disk icon) in the Screener toolbar.
+  </Step>
+  <Step title="Name the screen">
+    Enter a descriptive name (e.g. "High FCF + low P/B"). Click **Save**.
+  </Step>
+</Steps>
+
+The saved screen appears in the **Saved screens** dropdown at the top of the filter bar.
+
+## Loading a saved screen
+
+Click the **Saved screens** dropdown and select any saved screen. All filters are restored instantly and the grid updates to show matching instruments.
+
+<Callout type="tip" title="Keyboard shortcut">
+Press `⌘S` (macOS) or `Ctrl+S` (Windows/Linux) while the Screener is active to quickly save the current filter state. If an existing screen with the same name exists, you are prompted to overwrite or save as a new copy.
+</Callout>
+
+## Managing saved screens
+
+Click the **Manage screens** link in the dropdown to open the saved screens manager:
+
+- **Rename** — click the name to edit inline
+- **Duplicate** — create a copy of a saved screen to use as a starting point
+- **Delete** — remove a saved screen permanently
+- **Set as default** — the default screen loads automatically when you open the Screener
+
+## Sharing screens
+
+You can share a screen via URL: click the **Share** button (link icon) in the toolbar. This copies a URL that encodes all filter parameters as query string values. Anyone with the link can open the Screener with those filters pre-applied — even without a Worldview account (the Screener itself requires sign-in, but the URL can be bookmarked or shared internally).
+
+<CodeBlock filename="example-screen-url.txt">
+```
+https://worldview.app/screener?marketCap[min]=1000&pe[max]=15&rsi[min]=55&rsi[max]=70&sort=newVelocity7d:desc
+```
+</CodeBlock>
+
+## Export
+
+While viewing a saved screen's results, click **Export** to download:
+
+- **CSV** — all visible columns for all matching rows
+- **Excel (.xlsx)** — formatted with freeze panes and header styling
+- **PDF** — paginated table suitable for printing or archiving
+
+Export is limited to 5,000 rows per download. For larger exports, contact support for an API key.

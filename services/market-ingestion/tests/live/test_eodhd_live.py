@@ -51,6 +51,7 @@ def _is_network_available() -> bool:
 
 
 pytestmark = [
+    pytest.mark.live,
     pytest.mark.skipif(not _is_network_available(), reason="No network connectivity to eodhd.com"),
 ]
 

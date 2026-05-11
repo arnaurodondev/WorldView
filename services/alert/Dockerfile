@@ -6,17 +6,25 @@ WORKDIR /build
 
 RUN pip install --no-cache-dir uv==0.4.29
 
-COPY libs/common /build/libs/common
-COPY libs/messaging /build/libs/messaging
-COPY libs/observability /build/libs/observability
-COPY services/alert /build/services/alert
+# Copy only pyproject.toml + src from each lib (no tests, caches, venvs)
+COPY libs/common/pyproject.toml /build/libs/common/pyproject.toml
+COPY libs/common/src /build/libs/common/src
+COPY libs/messaging/pyproject.toml /build/libs/messaging/pyproject.toml
+COPY libs/messaging/src /build/libs/messaging/src
+COPY libs/observability/pyproject.toml /build/libs/observability/pyproject.toml
+COPY libs/observability/src /build/libs/observability/src
 
-RUN uv venv /app/.venv && \
-    uv pip install --no-cache --python /app/.venv \
-        -e /build/libs/common \
-        -e /build/libs/messaging \
-        -e /build/libs/observability \
-        -e /build/services/alert
+COPY services/alert/pyproject.toml /build/services/alert/pyproject.toml
+COPY services/alert/src /build/services/alert/src
+
+# Non-editable install with uv cache mount for faster rebuilds
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv /app/.venv && \
+    uv pip install --python /app/.venv \
+        /build/libs/common \
+        /build/libs/messaging \
+        /build/libs/observability \
+        /build/services/alert
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
@@ -26,13 +34,13 @@ WORKDIR /app
 RUN useradd --create-home --shell /bin/bash --uid 1001 appuser
 
 COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder /build/libs /app/libs
 COPY --from=builder /build/services/alert/src /app/src
-COPY --from=builder /build/services/alert/alembic /app/alembic
-COPY --from=builder /build/services/alert/alembic.ini /app/alembic.ini
+COPY services/alert/alembic /app/alembic
+COPY services/alert/alembic.ini /app/alembic.ini
+COPY infra/kafka/schemas /app/infra/kafka/schemas
 
 ENV PATH="/app/.venv/bin:$PATH"
-ENV PYTHONPATH="/app/src:/app/libs/common/src:/app/libs/messaging/src:/app/libs/observability/src"
+ENV PYTHONPATH="/app/src"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
