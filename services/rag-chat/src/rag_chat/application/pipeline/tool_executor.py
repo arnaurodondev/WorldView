@@ -2472,11 +2472,12 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="get_entity_graph",
             description=(
-                "Retrieves the egocentric knowledge graph for a named entity — its immediate "
-                "neighbours, relationships, and confidence scores. PREFER THIS TOOL for questions "
-                "like 'what is the relation between X and Y', 'how is X connected to Y', "
-                "'who are X's partners/competitors/subsidiaries'. Returns nodes and edges. "
-                "Use the entity map above to identify the primary entity for this call. "
+                "Retrieves the egocentric knowledge graph for a SINGLE named entity — its immediate "
+                "neighbours, relationships, and confidence scores. Use for questions about ONE entity "
+                "like 'who are X's partners', 'what are X's subsidiaries', 'who does X compete with'. "
+                "For questions about the relationship BETWEEN two entities (e.g. 'how is X connected to Y', "
+                "'what is the relation between X and Y'), use traverse_graph instead — it is designed "
+                "for cross-entity path finding and is more reliable for two-entity queries. "
                 "If this tool returns empty or sparse results for a well-known entity, you may supplement "
                 "with training knowledge but MUST label it 'Based on public knowledge: …' — never invent "
                 "confidence scores or graph metadata."
@@ -2516,11 +2517,12 @@ def build_default_registry() -> ToolRegistry:
         ToolSpec(
             name="traverse_graph",
             description=(
-                "Executes a Cypher-based multi-hop graph traversal for complex path-finding "
-                "queries (3+ hops, shared investors, board-member chains). "
-                "IMPORTANT: prefer get_entity_graph for simple 'what is the relation between X and Y' "
-                "questions — traverse_graph is for advanced indirect path tracing only. "
-                "Requires a known starting entity resolved from the entity map above."
+                "Finds paths between two entities in the knowledge graph via multi-hop traversal. "
+                "USE THIS TOOL when asked 'what is the relation between X and Y', 'how is X connected "
+                "to Y', 'is X related to Y', or any question involving TWO named entities. "
+                "Provide start_entity AND target_entity (e.g. start_entity='Apple', target_entity='Anthropic'). "
+                "Also useful for indirect chains (shared investors, board-member chains, 3+ hops). "
+                "Returns direct and indirect paths with relation types and confidence scores."
             ),
             parameters=[
                 ParameterSpec(name="start_entity", type="string", description="Starting entity name", required=True),

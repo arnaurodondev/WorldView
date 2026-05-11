@@ -124,6 +124,13 @@ if TYPE_CHECKING:
 # bytes for ``nlp.signal.detected.v1`` instead of raw ``json.dumps(...).encode()``.
 _NLP_SIGNAL_DETECTED_SCHEMA_PATH = get_schema_path("nlp.signal.detected.v1.avsc")
 
+# Polarity mapping for the LLM event_type enum defined in deep_extraction.py.
+# WHY here: the outbox writer must set polarity for the nlp.signal.detected.v1
+# Avro schema; computing it from signal_type keeps the field semantically correct
+# for future consumers that read polarity directly (e.g. S9 proxy, S10 alerts).
+_POSITIVE_EVENT_TYPES = frozenset({"M_AND_A", "PRODUCT_LAUNCH", "CAPITAL_RAISE", "GUIDANCE_RAISE"})
+_NEGATIVE_EVENT_TYPES = frozenset({"REGULATORY_ACTION", "LEGAL", "NATURAL_DISASTER", "GEOPOLITICAL", "SANCTIONS"})
+
 # Block 13E: schema path for the temporal-event outbox topic (intelligence.temporal_event.v1).
 # The schema lives alongside all other Avro schemas in the infra/kafka/schemas/ dir.
 _TEMPORAL_EVENT_SCHEMA_PATH = get_schema_path("intelligence.temporal_event.v1.avsc")
@@ -1700,7 +1707,13 @@ async def _enqueue_signal_events(
             "claimer_entity_id": None,
             "subject_entity_id": str(signal.entity_id),
             "claim_type": signal.signal_type,
-            "polarity": "neutral",
+            "polarity": (
+                "positive"
+                if signal.signal_type.upper() in _POSITIVE_EVENT_TYPES
+                else "negative"
+                if signal.signal_type.upper() in _NEGATIVE_EVENT_TYPES
+                else "neutral"
+            ),
             "extraction_confidence": float(signal.confidence),
             "is_backfill": is_backfill,
             "correlation_id": correlation_id,

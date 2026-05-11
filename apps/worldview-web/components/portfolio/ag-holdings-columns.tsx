@@ -25,6 +25,16 @@ import { cn } from "@/lib/utils";
 import { formatPrice, formatPercent, formatPercentUnsigned } from "@/lib/utils";
 import { formatStalenessAwarePrice, fmtPnl } from "./holdings-columns";
 
+// ── Pinned-row detection helper ───────────────────────────────────────────────
+// WHY: AG Grid passes `node.rowPinned === 'bottom'` for pinnedBottomRowData rows.
+// Renderers use this to switch between normal cell content and totals content.
+// WHY optional chain: in Vitest/jsdom the AG Grid node object may be undefined
+// because the test environment does not fully initialise the AG Grid internals.
+// The optional chain makes the helper test-safe while preserving runtime behavior.
+function isPinnedBottom(params: ICellRendererParams<EnrichedHoldingRow>): boolean {
+  return params.node?.rowPinned === "bottom";
+}
+
 // ── Column pixel widths ───────────────────────────────────────────────────────
 
 export const HOLDINGS_AG_COL_WIDTHS: Record<string, number> = {
@@ -44,40 +54,59 @@ export const HOLDINGS_AG_COL_WIDTHS: Record<string, number> = {
 
 // ── Cell renderers ────────────────────────────────────────────────────────────
 
-function TickerCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
+function TickerCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
+  // WHY pinned-row branch: the totals footer is a pinnedBottomRowData row.
+  // The TICKER cell is the natural place to show the "TOTAL" label since it is
+  // pinned left and always visible regardless of horizontal scroll.
+  if (isPinnedBottom(params)) {
+    return (
+      <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-semibold">
+        TOTAL
+      </span>
+    );
+  }
   return (
     <span className="font-mono text-[11px] tabular-nums text-primary font-medium">
-      {data?.h.ticker}
+      {params.data?.h.ticker}
     </span>
   );
 }
 
-function NameCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
+function NameCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
+  if (isPinnedBottom(params)) {
+    return <span className="text-[11px] text-muted-foreground">—</span>;
+  }
   return (
     <span className="text-[11px] text-foreground truncate block max-w-[120px]">
-      {data?.h.name}
+      {params.data?.h.name}
     </span>
   );
 }
 
-function QtyCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
+function QtyCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
+  if (isPinnedBottom(params)) {
+    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">—</span>;
+  }
   return (
     <span className="font-mono text-[11px] tabular-nums text-foreground text-right w-full block">
-      {data?.h.quantity.toLocaleString("en-US") ?? "—"}
+      {params.data?.h.quantity.toLocaleString("en-US") ?? "—"}
     </span>
   );
 }
 
-function AvgCostCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
+function AvgCostCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
+  if (isPinnedBottom(params)) {
+    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">—</span>;
+  }
   return (
     <span className="font-mono text-[11px] tabular-nums text-foreground text-right w-full block">
-      {data ? formatPrice(data.h.average_cost) : "—"}
+      {params.data ? formatPrice(params.data.h.average_cost) : "—"}
     </span>
   );
 }
 
-function CurrentCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
-  if (!data) {
+function CurrentCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
+  if (isPinnedBottom(params) || !params.data) {
     return (
       <span className="font-mono text-[11px] tabular-nums text-muted-foreground">—</span>
     );
@@ -86,18 +115,21 @@ function CurrentCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) 
     <span
       className="font-mono text-[11px] tabular-nums text-foreground text-right w-full block"
       title={
-        data.freshness && data.freshness !== "live"
+        params.data.freshness && params.data.freshness !== "live"
           ? "Delayed or end-of-day price — live feed unavailable"
           : undefined
       }
     >
-      {formatStalenessAwarePrice(data.livePrice, data.freshness)}
+      {formatStalenessAwarePrice(params.data.livePrice, params.data.freshness)}
     </span>
   );
 }
 
-function DayChangeCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
-  const v = data?.dayChangeValue;
+function DayChangeCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
+  if (isPinnedBottom(params)) {
+    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">—</span>;
+  }
+  const v = params.data?.dayChangeValue;
   return (
     <span
       className={cn(
@@ -110,8 +142,11 @@ function DayChangeCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>
   );
 }
 
-function DayChangePctCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
-  const v = data?.dayChangePct;
+function DayChangePctCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
+  if (isPinnedBottom(params)) {
+    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">—</span>;
+  }
+  const v = params.data?.dayChangePct;
   return (
     <span
       className={cn(
@@ -124,13 +159,16 @@ function DayChangePctCellRenderer({ data }: ICellRendererParams<EnrichedHoldingR
   );
 }
 
-function PnlCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
-  const v = data?.pnl ?? 0;
+function PnlCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
+  const v = params.data?.pnl ?? 0;
+  // WHY font-semibold on pinned row: the totals row is the financial summary of
+  // all positions — visually heavier weight distinguishes it from individual rows.
   return (
     <span
       className={cn(
         "font-mono text-[11px] tabular-nums text-right w-full block",
         v >= 0 ? "text-positive" : "text-negative",
+        isPinnedBottom(params) && "font-semibold",
       )}
     >
       {fmtPnl(v)}
@@ -138,13 +176,14 @@ function PnlCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
   );
 }
 
-function PnlPctCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
-  const v = data?.pnlPct ?? 0;
+function PnlPctCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
+  const v = params.data?.pnlPct ?? 0;
   return (
     <span
       className={cn(
         "font-mono text-[11px] tabular-nums text-right w-full block",
         v >= 0 ? "text-positive" : "text-negative",
+        isPinnedBottom(params) && "font-semibold",
       )}
     >
       {formatPercent(v / 100)}
@@ -152,16 +191,24 @@ function PnlPctCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
   );
 }
 
-function ValueCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
+function ValueCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
   return (
-    <span className="font-mono text-[11px] tabular-nums text-foreground text-right w-full block">
-      {data ? formatPrice(data.value) : "—"}
+    <span
+      className={cn(
+        "font-mono text-[11px] tabular-nums text-foreground text-right w-full block",
+        isPinnedBottom(params) && "font-semibold",
+      )}
+    >
+      {params.data ? formatPrice(params.data.value) : "—"}
     </span>
   );
 }
 
-function WeightCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
-  const weight = data?.weight ?? 0;
+function WeightCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
+  if (isPinnedBottom(params)) {
+    return <span className="font-mono text-[11px] tabular-nums text-muted-foreground text-right w-full block">—</span>;
+  }
+  const weight = params.data?.weight ?? 0;
   return (
     <div className="flex items-center gap-1.5 justify-end">
       {/* WHY w-[48px] bar: fixed width keeps all bars on the same scale. */}
@@ -178,10 +225,13 @@ function WeightCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
   );
 }
 
-function SectorCellRenderer({ data }: ICellRendererParams<EnrichedHoldingRow>) {
+function SectorCellRenderer(params: ICellRendererParams<EnrichedHoldingRow>) {
+  if (isPinnedBottom(params)) {
+    return <span className="text-[11px] text-muted-foreground">—</span>;
+  }
   return (
     <span className="text-[11px] text-muted-foreground truncate block max-w-[100px]">
-      {data?.sector ?? "—"}
+      {params.data?.sector ?? "—"}
     </span>
   );
 }

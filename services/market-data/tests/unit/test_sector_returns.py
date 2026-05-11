@@ -33,12 +33,20 @@ def test_sector_returns_maps_1m_to_lookback_30():
     uow.ohlcv_read.get_sector_period_returns.assert_awaited_once_with(30)
 
 
+def test_sector_returns_maps_1d_to_lookback_1():
+    """'1D' period must translate to 1-day calendar lookback (previous bar)."""
+    uow = _make_uow([])
+    uc = GetSectorReturnsUseCase(uow)
+    asyncio.run(uc.execute("1D"))
+    uow.ohlcv_read.get_sector_period_returns.assert_awaited_once_with(1)
+
+
 def test_sector_returns_invalid_period():
-    """'1D' is not supported — S9 handles 1D via the screener path."""
+    """Truly unsupported periods (e.g. '5Y') must raise ValueError."""
     uow = _make_uow([])
     uc = GetSectorReturnsUseCase(uow)
     with pytest.raises(ValueError, match="Unsupported period"):
-        asyncio.run(uc.execute("1D"))
+        asyncio.run(uc.execute("5Y"))
 
 
 def test_sector_returns_passes_through_rows():

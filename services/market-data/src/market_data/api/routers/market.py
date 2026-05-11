@@ -23,16 +23,15 @@ router = APIRouter(tags=["market"])
 
 @router.get("/market/sector-returns")
 async def sector_returns(
-    period: Annotated[str, Query(description="Period: 1W or 1M")] = "1W",
+    period: Annotated[str, Query(description="Period: 1D, 1W, or 1M")] = "1W",
     uc: GetSectorReturnsUseCase = Depends(get_sector_returns_uc),
 ) -> dict:
-    """Sector heatmap data aggregated from OHLCV bars for weekly/monthly periods.
+    """Sector heatmap data aggregated from OHLCV bars for daily/weekly/monthly periods.
 
     Returns average period return per GICS sector.
-    Use S9 /v1/market/heatmap?period=1D for daily (screener-based).
     """
-    if period not in ("1W", "1M"):
-        raise HTTPException(status_code=400, detail="period must be '1W' or '1M'")
+    if period not in ("1D", "1W", "1M"):
+        raise HTTPException(status_code=400, detail="period must be '1D', '1W', or '1M'")
     try:
         sectors = await uc.execute(period)
     except ValueError as e:

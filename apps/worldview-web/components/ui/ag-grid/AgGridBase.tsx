@@ -32,6 +32,14 @@ export interface AgGridBaseProps<TData extends object> {
   onColumnStateChanged?: () => void;
   /** When true, suppresses the browser's native right-click context menu. */
   preventDefaultOnContextMenu?: boolean;
+  /**
+   * WHY pinnedBottomRowData: AG Grid renders pinned rows inside the grid DOM,
+   * keeping them in sync with column widths, pinning, and horizontal scroll
+   * automatically. Use this instead of a sibling <div> footer for totals rows.
+   * See BP-455 — sibling <div> footers misalign when columns are resized or
+   * the TICKER column is pinned left.
+   */
+  pinnedBottomRowData?: TData[];
 }
 
 /**
@@ -64,6 +72,7 @@ export function AgGridBase<TData extends object>({
   onSortChanged,
   onColumnStateChanged,
   preventDefaultOnContextMenu,
+  pinnedBottomRowData,
 }: AgGridBaseProps<TData>) {
   const colStateHandler = onColumnStateChanged;
 
@@ -79,6 +88,7 @@ export function AgGridBase<TData extends object>({
         theme="legacy"
         rowData={rowData}
         columnDefs={columnDefs}
+        pinnedBottomRowData={pinnedBottomRowData}
         rowHeight={28}
         headerHeight={28}
         groupHeaderHeight={22}

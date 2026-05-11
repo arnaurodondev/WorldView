@@ -44,8 +44,37 @@ import { NarrativeCard } from "@/components/intelligence/NarrativeCard";
 import { KeyMetricsGrid } from "@/components/intelligence/KeyMetricsGrid";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, BarChart2 } from "lucide-react";
+import { ArrowLeft, BarChart2, ExternalLink } from "lucide-react";
 import type { EntityGraph } from "@/types/api";
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+
+/**
+ * Convert an ISO date string to a compact relative label ("5m ago", "3h ago", "2d ago").
+ * WHY: news timestamps are ISO-8601 UTC — converting to relative time
+ * is more scannable than absolute dates in a narrow sidebar column.
+ */
+function relativeTime(isoDate: string | null): string {
+  if (!isoDate) return "";
+  const diffMs = Date.now() - new Date(isoDate).getTime();
+  const m = Math.floor(diffMs / 60_000);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+/**
+ * Return a Tailwind CSS class pair for a sentiment label.
+ * WHY: consistent sentiment colouring across sidebar + news tab (positive →
+ * green, negative → red, mixed → amber, null/neutral → muted).
+ */
+function sentimentClasses(s: string | null | undefined): string {
+  if (s === "positive") return "bg-positive/15 text-positive";
+  if (s === "negative") return "bg-negative/15 text-negative";
+  if (s === "mixed") return "bg-warning/15 text-warning";
+  return "bg-muted text-muted-foreground";
+}
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -133,6 +162,26 @@ export function EntitySidebar({ entityId }: EntitySidebarProps) {
     enabled: !!displayEntityId,
   });
 
+  // ── Related news (top-3 articles by relevance score) ─────────────────────
+  //
+  // WHY separate query (not reusing the news tab data):
+  // The sidebar shows a compact 3-article preview. The news tab fetches 20+
+  // articles with pagination. Separate TanStack Query keys let each component
+  // manage its own cache without stomping on the other's stale time.
+  //
+  // WHY staleTime 120_000 (2min): news refreshes more frequently than
+  // entity descriptions but less often than real-time price data.
+  const { data: entityNews } = useQuery({
+    queryKey: ["entity-news-sidebar", displayEntityId],
+    queryFn: () =>
+      gw.getEntityNews(displayEntityId, {
+        limit: 3,
+        order_by: "display_relevance_score",
+      }),
+    staleTime: 120_000,
+    enabled: !!displayEntityId,
+  });
+
   // Top-3 relations sorted by confidence (weight), filtered to edges that include
   // the display entity, with summaries if available.
   const topRelations = useMemo(() => {
@@ -205,6 +254,74 @@ export function EntitySidebar({ entityId }: EntitySidebarProps) {
               <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
                 {entityDetail.description}
               </p>
+            )}
+
+            {/* ── Entity metadata rows ───────────────────────────────────── */}
+            {/* WHY show inside the header (not a separate scrollable section):
+                These are top-of-card facts (sector, role, etc.) that orient the
+                analyst immediately — they should not require scrolling to find.
+                WHY conditional rows (not a fixed-height block): metadata varies by
+                entity_type. Financial instruments have sector/industry/employees;
+                persons have role/organization; locations have category. Showing
+                only the populated fields avoids empty grey rows. */}
+            {entityDetail?.metadata && (
+              <div className="mt-2 space-y-0.5">
+                {/* Person-type fields */}
+                {entityDetail.metadata.role && (
+                  <div className="flex gap-1.5 text-[10px] font-mono">
+                    <span className="text-muted-foreground shrink-0 w-[52px]">Role</span>
+                    <span className="text-foreground/80 truncate">{entityDetail.metadata.role}</span>
+                  </div>
+                )}
+                {entityDetail.metadata.organization && (
+                  <div className="flex gap-1.5 text-[10px] font-mono">
+                    <span className="text-muted-foreground shrink-0 w-[52px]">Org</span>
+                    <span className="text-foreground/80 truncate">{entityDetail.metadata.organization}</span>
+                  </div>
+                )}
+                {/* Company/FI fields */}
+                {entityDetail.metadata.sector && (
+                  <div className="flex gap-1.5 text-[10px] font-mono">
+                    <span className="text-muted-foreground shrink-0 w-[52px]">Sector</span>
+                    <span className="text-foreground/80 truncate">{entityDetail.metadata.sector}</span>
+                  </div>
+                )}
+                {entityDetail.metadata.industry && (
+                  <div className="flex gap-1.5 text-[10px] font-mono">
+                    <span className="text-muted-foreground shrink-0 w-[52px]">Industry</span>
+                    <span className="text-foreground/80 truncate">{entityDetail.metadata.industry}</span>
+                  </div>
+                )}
+                {entityDetail.metadata.founded_year != null && (
+                  <div className="flex gap-1.5 text-[10px] font-mono">
+                    <span className="text-muted-foreground shrink-0 w-[52px]">Founded</span>
+                    <span className="text-foreground/80 tabular-nums">{entityDetail.metadata.founded_year}</span>
+                  </div>
+                )}
+                {entityDetail.metadata.employee_count != null && (
+                  <div className="flex gap-1.5 text-[10px] font-mono">
+                    <span className="text-muted-foreground shrink-0 w-[52px]">Employees</span>
+                    <span className="text-foreground/80 tabular-nums">
+                      {entityDetail.metadata.employee_count.toLocaleString()}
+                    </span>
+                  </div>
+                )}
+                {/* Shared fields */}
+                {(entityDetail.metadata.headquarters_country ?? entityDetail.metadata.country) && (
+                  <div className="flex gap-1.5 text-[10px] font-mono">
+                    <span className="text-muted-foreground shrink-0 w-[52px]">Country</span>
+                    <span className="text-foreground/80 truncate">
+                      {entityDetail.metadata.headquarters_country ?? entityDetail.metadata.country}
+                    </span>
+                  </div>
+                )}
+                {entityDetail.metadata.category && (
+                  <div className="flex gap-1.5 text-[10px] font-mono">
+                    <span className="text-muted-foreground shrink-0 w-[52px]">Category</span>
+                    <span className="text-foreground/80 truncate">{entityDetail.metadata.category}</span>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -389,6 +506,97 @@ export function EntitySidebar({ entityId }: EntitySidebarProps) {
                           ))}
                         </div>
                       )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ── Related news (top-3 by relevance) ───────────────────────── */}
+          {/* WHY here (after relations, before metrics): news is primary-source
+              evidence that supports the KG relations above — the analyst can
+              read a relation summary and immediately scan the articles that
+              generated it. Metrics are secondary signals, so they come last. */}
+          {entityNews && entityNews.articles.length > 0 && (
+            <div>
+              <SectionHeader title="Related News" />
+              <div className="space-y-1.5">
+                {entityNews.articles.map((article) => {
+                  // Determine relevance badge colour tier
+                  const score = article.display_relevance_score;
+                  const scoreBadgeClass =
+                    score >= 0.7
+                      ? "bg-positive/15 text-positive"
+                      : score >= 0.4
+                        ? "bg-warning/15 text-warning"
+                        : "bg-muted text-muted-foreground";
+
+                  return (
+                    <div
+                      key={article.article_id}
+                      className="rounded-[2px] border border-border/30 bg-muted/20 px-2 py-1.5"
+                    >
+                      {/* Article title — external link opens in new tab */}
+                      {/* WHY target="_blank" + noopener noreferrer:
+                          News URLs open external sites. noopener prevents the
+                          new tab from accessing window.opener (security), noreferrer
+                          avoids leaking the app URL to the destination site. */}
+                      {article.url ? (
+                        <a
+                          href={article.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="group flex items-start gap-1"
+                          aria-label={article.title ?? "News article"}
+                        >
+                          <span className="text-[10px] text-foreground/90 line-clamp-2 flex-1 group-hover:text-primary transition-colors">
+                            {article.title ?? "Untitled"}
+                          </span>
+                          <ExternalLink
+                            className="h-2.5 w-2.5 shrink-0 mt-0.5 text-muted-foreground group-hover:text-primary transition-colors"
+                            strokeWidth={1.5}
+                            aria-hidden
+                          />
+                        </a>
+                      ) : (
+                        <p className="text-[10px] text-foreground/90 line-clamp-2">
+                          {article.title ?? "Untitled"}
+                        </p>
+                      )}
+
+                      {/* Source + timestamp + badges row */}
+                      <div className="mt-1 flex items-center gap-1 flex-wrap">
+                        {/* Source name */}
+                        {article.source_name && (
+                          <span className="text-[9px] font-mono text-muted-foreground">
+                            {article.source_name}
+                          </span>
+                        )}
+                        {/* Relative timestamp */}
+                        {article.published_at && (
+                          <span className="text-[9px] font-mono text-muted-foreground/70">
+                            · {relativeTime(article.published_at)}
+                          </span>
+                        )}
+                        {/* Relevance score badge */}
+                        <span
+                          className={`ml-auto shrink-0 font-mono text-[9px] tabular-nums rounded-[2px] px-1 py-0.5 ${scoreBadgeClass}`}
+                          title={`Relevance: ${(score * 100).toFixed(0)}%`}
+                        >
+                          {(score * 100).toFixed(0)}%
+                        </span>
+                        {/* Sentiment tag — shown only when not null/neutral
+                            WHY omit neutral: neutral is the default state and
+                            adds visual noise without communicating signal. */}
+                        {article.sentiment && article.sentiment !== "neutral" && (
+                          <span
+                            className={`shrink-0 font-mono text-[9px] rounded-[2px] px-1 py-0.5 ${sentimentClasses(article.sentiment)}`}
+                          >
+                            {article.sentiment}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   );
                 })}

@@ -429,6 +429,9 @@ def _make_persist_session() -> tuple[AsyncMock, MagicMock]:
     repos.canonical_create = AsyncMock(return_value=_ENTITY_ID)
     repos.alias_insert = AsyncMock()
     repos.alias_find_exact = AsyncMock(return_value=None)  # default: no collision
+    # BP-459: fuzzy_search pre-lookup; default returns empty list (no fuzzy match)
+    # so all existing tests fall through to create_or_get as before.
+    repos.alias_fuzzy_search = AsyncMock(return_value=[])
     repos.embedding_ensure = AsyncMock()
     repos.outbox_append = AsyncMock()
 
@@ -453,6 +456,8 @@ class _PersistRepoPatches:
         alias_repo = MagicMock()
         alias_repo.insert = repos.alias_insert
         alias_repo.find_exact = repos.alias_find_exact
+        # BP-459: fuzzy pre-lookup; default returns [] so existing tests don't short-circuit.
+        alias_repo.fuzzy_search = repos.alias_fuzzy_search
 
         embedding_repo = MagicMock()
         embedding_repo.ensure_rows_exist = repos.embedding_ensure
@@ -987,11 +992,14 @@ class TestPersistEnrichmentUnblocksSubjectAndObject:
         assert "object_entity_id" in sql_str, "SQL must reference object_entity_id"
         assert "CASE" in sql_str.upper(), "SQL must use CASE expressions to conditionally update subject/object columns"
 
-        # The WHERE clause must cover both provisional slot columns so rows
-        # where the provisional entity is the OBJECT are also matched.
+        # The WHERE clause must use provisional_queue_id to identify the blocked
+        # evidence rows. PLAN-0088 Wave I clarified that subject_provisional_id /
+        # object_provisional_id columns were never shipped — the schema uses a single
+        # provisional_queue_id column (see migration 0038). Both subject_entity_id and
+        # object_entity_id are updated via CASE expressions keyed on provisional_queue_id.
         assert (
-            "subject_provisional_id" in sql_str or "object_provisional_id" in sql_str
-        ), "SQL WHERE clause must reference provisional slot columns (subject_provisional_id / object_provisional_id)"
+            "provisional_queue_id" in sql_str
+        ), "SQL WHERE clause must filter on provisional_queue_id to match blocked evidence rows"
 
     async def test_evidence_update_params_include_queue_id_and_entity_id(self) -> None:
         """The UPDATE params must pass both :queue_id and :entity_id."""
@@ -1023,3 +1031,249 @@ class TestPersistEnrichmentUnblocksSubjectAndObject:
         assert "queue_id" in params, f"Params must include queue_id; got {params.keys()}"
         assert "entity_id" in params, f"Params must include entity_id; got {params.keys()}"
         assert params["queue_id"] == str(_QUEUE_ID)
+
+
+# ---------------------------------------------------------------------------
+# BP-459: fuzzy pre-lookup deduplication
+# ---------------------------------------------------------------------------
+
+_FUZZY_MATCHED_ID = UUID("01234567-89ab-7def-8012-aaaaaaaaaaaa")
+
+
+class TestPersistEnrichmentFuzzyDedup:
+    """BP-459: persist_enrichment deduplicates via fuzzy_search before create_or_get.
+
+    When EntityAliasRepository.fuzzy_search() returns a match with sim ≥ 0.75,
+    persist_enrichment must:
+      - Return the matched entity_id immediately (no create_or_get call).
+      - Skip all side effects (alias inserts, outbox event, embedding write).
+      - Emit a 'provisional_entity_deduplicated' structured log event.
+
+    The 0.75 threshold ensures "apple inc." vs "apple inc" (sim ~0.95) → reuse,
+    while "amazon business" vs "amazon inc." (sim ~0.55) → new entity.
+    """
+
+    async def test_persist_enrichment_deduplicates_via_fuzzy_match(self) -> None:
+        """High-similarity fuzzy match short-circuits create_or_get and all side effects."""
+        import structlog.testing
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+
+        # Simulate fuzzy_search returning a high-similarity alias hit (sim=0.92).
+        # This mimics "apple inc" matching an existing "apple inc." entity.
+        fuzzy_match = {
+            "alias_id": UUID("01234567-89ab-7def-8012-000000000001"),
+            "entity_id": _FUZZY_MATCHED_ID,
+            "alias_text": "Apple Inc.",
+            "normalized_alias_text": "apple inc.",
+            "alias_type": "EXACT",
+            "similarity": 0.92,
+        }
+
+        # We need to patch EntityAliasRepository so fuzzy_search returns our
+        # mock data.  persist_enrichment lazily imports EntityAliasRepository
+        # inside the function body, so we patch at its source location.
+        alias_repo_mock = MagicMock()
+        alias_repo_mock.fuzzy_search = AsyncMock(return_value=[fuzzy_match])
+        alias_repo_mock.insert = AsyncMock()
+        alias_repo_mock.find_exact = AsyncMock(return_value=None)
+
+        canonical_repo_mock = MagicMock()
+        canonical_repo_mock.create_or_get = AsyncMock(return_value=(_ENTITY_ID, True))
+
+        outbox_repo_mock = MagicMock()
+        outbox_repo_mock.append = AsyncMock()
+
+        embedding_repo_mock = MagicMock()
+        embedding_repo_mock.ensure_rows_exist = AsyncMock()
+
+        profile = {
+            "canonical_name": "Apple Inc",  # slight variation — no trailing dot
+            "entity_type": "company",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with (
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias.EntityAliasRepository",
+                return_value=alias_repo_mock,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity.CanonicalEntityRepository",
+                return_value=canonical_repo_mock,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.outbox.OutboxRepository",
+                return_value=outbox_repo_mock,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.workers.provisional_enrichment_core.EntityEmbeddingStateRepository",
+                return_value=embedding_repo_mock,
+            ),
+            structlog.testing.capture_logs() as captured,
+        ):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Apple Inc",
+                profile=profile,
+                embedding=None,
+            )
+
+        # Must return the fuzzy-matched existing entity_id (not a new one).
+        assert result == _FUZZY_MATCHED_ID, (
+            f"Expected fuzzy-matched entity_id {_FUZZY_MATCHED_ID}, got {result}. "
+            "Fuzzy pre-lookup short-circuit did not fire."
+        )
+
+        # create_or_get must NOT have been called — we returned before it.
+        canonical_repo_mock.create_or_get.assert_not_awaited()
+
+        # No alias inserts, no outbox event — the existing entity already has them.
+        alias_repo_mock.insert.assert_not_awaited()
+        outbox_repo_mock.append.assert_not_awaited()
+
+        # Structured log must record the deduplication event.
+        dedup_events = [e for e in captured if e.get("event") == "provisional_entity_deduplicated"]
+        assert dedup_events, f"Expected 'provisional_entity_deduplicated' log event; captured: {captured}"
+        assert dedup_events[0]["matched_entity_id"] == str(_FUZZY_MATCHED_ID)
+        assert float(dedup_events[0]["similarity"]) >= 0.75
+
+    async def test_persist_enrichment_low_similarity_does_not_short_circuit(self) -> None:
+        """Low-similarity fuzzy match (sim < 0.75) falls through to create_or_get.
+
+        "Amazon Business" vs "Amazon Inc." scores ~0.55 — different entities,
+        so create_or_get must be called to insert the new canonical row.
+        """
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+
+        # Fuzzy search returns a low-similarity match — should NOT short-circuit.
+        low_sim_match = {
+            "alias_id": UUID("01234567-89ab-7def-8012-000000000002"),
+            "entity_id": _FUZZY_MATCHED_ID,
+            "alias_text": "Amazon Inc.",
+            "normalized_alias_text": "amazon inc.",
+            "alias_type": "EXACT",
+            "similarity": 0.55,  # below 0.75 threshold
+        }
+
+        alias_repo_mock = MagicMock()
+        alias_repo_mock.fuzzy_search = AsyncMock(return_value=[low_sim_match])
+        alias_repo_mock.insert = AsyncMock()
+        alias_repo_mock.find_exact = AsyncMock(return_value=None)
+
+        canonical_repo_mock = MagicMock()
+        # Simulate a fresh INSERT (was_created=True) for "Amazon Business"
+        canonical_repo_mock.create_or_get = AsyncMock(return_value=(_ENTITY_ID, True))
+
+        outbox_repo_mock = MagicMock()
+        outbox_repo_mock.append = AsyncMock()
+
+        embedding_repo_mock = MagicMock()
+        embedding_repo_mock.ensure_rows_exist = AsyncMock()
+        embedding_repo_mock.upsert = AsyncMock()
+
+        profile = {
+            "canonical_name": "Amazon Business",
+            "entity_type": "company",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with (
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias.EntityAliasRepository",
+                return_value=alias_repo_mock,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity.CanonicalEntityRepository",
+                return_value=canonical_repo_mock,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.outbox.OutboxRepository",
+                return_value=outbox_repo_mock,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.workers.provisional_enrichment_core.EntityEmbeddingStateRepository",
+                return_value=embedding_repo_mock,
+            ),
+        ):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Amazon Business",
+                profile=profile,
+                embedding=None,
+            )
+
+        # Low similarity → fallthrough → create_or_get must have been called.
+        canonical_repo_mock.create_or_get.assert_awaited_once()
+
+        # Result is the newly created entity_id (not the fuzzy-matched one).
+        assert result == _ENTITY_ID
+
+    async def test_persist_enrichment_no_fuzzy_matches_falls_through(self) -> None:
+        """Empty fuzzy_search result → create_or_get called as normal (no short-circuit)."""
+        from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
+
+        session, repos = _make_persist_session()
+
+        alias_repo_mock = MagicMock()
+        # fuzzy_search returns empty list — no candidates at all
+        alias_repo_mock.fuzzy_search = AsyncMock(return_value=[])
+        alias_repo_mock.insert = AsyncMock()
+        alias_repo_mock.find_exact = AsyncMock(return_value=None)
+
+        canonical_repo_mock = MagicMock()
+        canonical_repo_mock.create_or_get = AsyncMock(return_value=(_ENTITY_ID, True))
+
+        outbox_repo_mock = MagicMock()
+        outbox_repo_mock.append = AsyncMock()
+
+        embedding_repo_mock = MagicMock()
+        embedding_repo_mock.ensure_rows_exist = AsyncMock()
+        embedding_repo_mock.upsert = AsyncMock()
+
+        profile = {
+            "canonical_name": "Brand New Corp",
+            "entity_type": "company",
+            "ticker": None,
+            "isin": None,
+            "aliases": [],
+        }
+
+        with (
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.entity_alias.EntityAliasRepository",
+                return_value=alias_repo_mock,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity.CanonicalEntityRepository",
+                return_value=canonical_repo_mock,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.intelligence_db.repositories.outbox.OutboxRepository",
+                return_value=outbox_repo_mock,
+            ),
+            patch(
+                "knowledge_graph.infrastructure.workers.provisional_enrichment_core.EntityEmbeddingStateRepository",
+                return_value=embedding_repo_mock,
+            ),
+        ):
+            result = await core.persist_enrichment(
+                session=session,
+                queue_id=_QUEUE_ID,
+                mention_text="Brand New Corp",
+                profile=profile,
+                embedding=None,
+            )
+
+        # No fuzzy match → create_or_get must have been called for the new entity.
+        canonical_repo_mock.create_or_get.assert_awaited_once()
+        assert result == _ENTITY_ID

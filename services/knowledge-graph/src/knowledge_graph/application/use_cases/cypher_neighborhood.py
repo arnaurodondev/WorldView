@@ -8,13 +8,28 @@ Uses a hybrid approach:
 This preserves the architectural invariant that the relational tables are the
 source of truth. AGE is used for graph traversal only.
 
-Security: entity_id passed as parameterized ``$center_id`` — never f-strung into Cypher.
+Security: entity_id is validated as a strict UUID (hex+hyphen only) via _UUID_RE before
+being embedded as a string literal in the Cypher pattern (same approach as PathDiscovery).
 ``max_hops`` is a Pydantic-validated int [1, 3] embedded as a numeric literal.
 ``limit`` is a Pydantic-validated int [1, 200] embedded as a numeric literal.
+
+BP-450 (2026-05-11): AGE 1.5 does not support ``ALL(rel IN relationships(path) WHERE ...)``
+on variable-length relationship lists — the predicate raises:
+  "syntax error at or near '('"
+in asyncpg's PREPARE phase.  Additionally, asyncpg's extended-query (prepared-statement)
+protocol fails for AGE Cypher queries that pass a ``$1`` params argument when the Cypher
+body also contains Cypher-level ``$var`` references (asyncpg confuses them for additional
+PostgreSQL positional parameters).
+
+Fix: embed entity_id as a UUID string literal (UUID-validated — only [0-9a-fA-F-] chars),
+remove the $1 params argument, and drop the ``ALL(...)`` Cypher predicate.  Confidence
+filtering is performed post-query by ``relation_repo.list_for_entity(min_confidence=...)``
+in Step 2 (the relational table is the authoritative source of truth for edge weights).
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -28,6 +43,11 @@ from knowledge_graph.application.use_cases.cypher_path import (
     _setup_age_session,
 )
 
+# UUID validation pattern — guards entity_id before it is embedded in Cypher.
+# UUIDs contain only [0-9a-fA-F-] so no SQL/Cypher injection is possible.
+# Mirrors the same pattern in PathDiscovery (BP-SA5-003).
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,8 +59,10 @@ if TYPE_CHECKING:
         TemporalEventRepository,
     )
 
-# Statement timeout — same 5 s limit as the path endpoint (PRD §6.3)
-_STATEMENT_TIMEOUT_MS = "5000"
+# Statement timeout — 20 s to allow depth=3 AGE traversal on moderately-dense
+# graphs (raised from 5 s; depth=3 traversal can visit hundreds of nodes and
+# needs more wall time than a simple 2-hop neighbourhood query).
+_STATEMENT_TIMEOUT_MS = "20000"
 
 # ── Result dataclass (internal) ───────────────────────────────────────────────
 
@@ -58,26 +80,35 @@ class CypherNeighborhoodResult:
 # ── AGE SQL ───────────────────────────────────────────────────────────────────
 
 
-def _build_neighborhood_sql(max_hops: int, limit: int) -> str:
-    """Build parameterized AGE Cypher SQL for neighborhood discovery.
+def _build_neighborhood_sql(entity_id_str: str, max_hops: int, limit: int) -> str:
+    """Build AGE Cypher SQL for neighborhood discovery with embedded UUID literal.
 
+    ``entity_id_str`` is a UUID string pre-validated by ``_UUID_RE`` (only
+    [0-9a-fA-F-] characters) — safe to embed directly as a Cypher string literal.
     ``max_hops`` is a Pydantic-validated int [1, 3] — embedded as a numeric literal.
     ``limit`` is a Pydantic-validated int [1, 200] — embedded as a numeric literal.
-    The center entity_id is passed as ``$center_id`` (parameterized).
+
+    WHY no $params argument: asyncpg's extended-query (prepared-statement) protocol
+    fails for AGE Cypher queries that mix a PostgreSQL ``$1`` positional parameter
+    with Cypher-level ``$var`` references — Postgres confuses them during PREPARE.
+    Embedding the UUID as a string literal (after UUID validation) avoids this
+    entirely.  Confidence filtering is done by SQL in Step 2 (relation_repo).
+    See BP-450 (2026-05-11).
+
+    WHY no ALL(rel IN relationships(path) WHERE ...) predicate: AGE 1.5 does not
+    support this construct on variable-length relationship lists and raises
+    "syntax error at or near '('" at PREPARE time.  Confidence is authoritative
+    in the relational ``relations`` table — filtering is applied there in Step 2.
     """
     # BP-SA5-001 (2026-05-10): use lowercase ``entity`` label to match the
     # canonical label written by AgeSyncWorker and queried by PathDiscovery.
-    # BP-450 (2026-05-11): AGE 1.5 does not support ALL(rel IN r WHERE ...) on
-    # variable-length relationship lists — use ``relationships(path)`` on a named
-    # path instead, mirroring the working syntax in cypher_path.py.
     return (
-        "SELECT neighbor_id::text"  # noqa: S608 — max_hops/limit validated ints; center_id via $center_id param
+        "SELECT neighbor_id::text"  # noqa: S608 — entity_id UUID-validated; max_hops/limit validated ints
         " FROM ag_catalog.cypher('worldview_graph', $$"
-        f" MATCH path = (center:entity {{entity_id: $center_id}})-[r*1..{max_hops}]-(neighbor:entity)"
-        " WHERE ALL(rel IN relationships(path) WHERE rel.confidence >= $min_conf)"
+        f" MATCH (center:entity {{entity_id: '{entity_id_str}'}})-[r*1..{max_hops}]-(neighbor:entity)"
         " RETURN DISTINCT neighbor.entity_id AS neighbor_id"
         f" LIMIT {limit}"
-        " $$, :params) AS (neighbor_id agtype)"
+        " $$) AS (neighbor_id agtype)"
     )
 
 
@@ -97,7 +128,7 @@ class CypherNeighborhoodUseCase:
     ------
         CypherDisabledError:       KNOWLEDGE_GRAPH_CYPHER_ENABLED=false.
         CypherEntityNotFoundError: entity not in canonical_entities.
-        CypherTimeoutError:        AGE query exceeded 5 s statement_timeout.
+        CypherTimeoutError:        AGE query exceeded 20 s statement_timeout.
 
     """
 
@@ -123,28 +154,29 @@ class CypherNeighborhoodUseCase:
         if center_row is None:
             raise CypherEntityNotFoundError(entity_id)
 
+        # Validate entity_id as UUID before embedding in Cypher string literal.
+        # WHY: UUID contains only [0-9a-fA-F-] — no SQL/Cypher metacharacters.
+        # Mirrors the approach used in PathDiscovery (BP-SA5-003, BP-450).
+        eid_str = str(entity_id)
+        if not _UUID_RE.match(eid_str):
+            raise ValueError(f"entity_id is not a valid UUID: {eid_str!r}")
+
         # AGE session setup
         await _setup_age_session(session)
         await session.execute(text(f"SET LOCAL statement_timeout = '{_STATEMENT_TIMEOUT_MS}'"))
 
         # ── Step 1: AGE Cypher — discover neighbor entity_ids ─────────────────
-        import json
-
-        sql = _build_neighborhood_sql(max_hops, limit)
-        params_json = json.dumps(
-            {
-                "center_id": str(entity_id),
-                "min_conf": min_confidence,
-            },
-        )
+        # BP-450 (2026-05-11): embed entity_id as literal; no $params argument.
+        # Confidence filtering is deferred to SQL in Step 2 (source of truth).
+        sql = _build_neighborhood_sql(eid_str, max_hops, limit)
 
         try:
-            result = await session.execute(text(sql), {"params": params_json})
+            result = await session.execute(text(sql))
             rows = result.fetchall()
         except Exception as exc:
             exc_str = str(exc).lower()
             if "timeout" in exc_str or "canceling" in exc_str or "statement_timeout" in exc_str:
-                raise CypherTimeoutError("AGE Cypher query exceeded 5 s statement_timeout") from exc
+                raise CypherTimeoutError("AGE Cypher query exceeded 20 s statement_timeout") from exc
             raise
 
         # Parse neighbor entity_ids from agtype text

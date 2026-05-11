@@ -104,32 +104,31 @@ class TestCypherPathUseCase:
             )
 
     async def test_entity_id_embedded_as_uuid_literal_not_params(self) -> None:
-        """Entity IDs are UUID-validated string literals in Cypher SQL — NOT $params.
+        """Entity IDs are UUID-validated string literals in SQL — NOT $params.
 
-        BP-459-C / BP-450: asyncpg's extended-query protocol confuses PostgreSQL $1
-        positional params with Cypher-level $var references.  The fix is to embed
-        entity_ids as UUID string literals (UUID-validated, only [0-9a-fA-F-] chars)
-        and omit the $params argument entirely.
+        BP-461 (2026-05-11): The SQL path query bypasses AGE entirely and queries
+        the relations table directly. Entity IDs must still be embedded as UUID
+        string literals (UUID-validated, only [0-9a-fA-F-] chars) — no $params.
 
         Security invariant: only UUID-validated values are embedded — no arbitrary
         user strings can be injected because _UUID_RE rejects non-UUID inputs.
         """
         from knowledge_graph.application.use_cases.cypher_path import (
             CypherPathUseCase,
-            _build_path_sql,
+            _build_direct_sql,
         )
 
         src_str = str(_SRC)
         tgt_str = str(_TGT)
 
-        # The SQL must embed entity_ids as UUID string literals (BP-459-C)
-        sql = _build_path_sql(src_str, tgt_str, max_hops=3, all_paths=False)
-        assert src_str in sql, "source entity_id must be embedded as a UUID literal in Cypher SQL"
-        assert tgt_str in sql, "target entity_id must be embedded as a UUID literal in Cypher SQL"
+        # The SQL must embed entity_ids as UUID string literals (BP-461 / BP-459-C)
+        sql = _build_direct_sql(src_str, tgt_str, limit=1)
+        assert src_str in sql, "source entity_id must be embedded as a UUID literal in SQL"
+        assert tgt_str in sql, "target entity_id must be embedded as a UUID literal in SQL"
 
-        # The SQL must NOT use Cypher $source/$target parameters (asyncpg conflict)
-        assert "$source" not in sql, "entity_ids must be literal strings, not Cypher $params (BP-450)"
-        assert "$target" not in sql, "entity_ids must be literal strings, not Cypher $params (BP-450)"
+        # The SQL must NOT use PostgreSQL $params (asyncpg extended-query conflict)
+        assert "$source" not in sql, "entity_ids must be literal strings, not $params (BP-450)"
+        assert "$target" not in sql, "entity_ids must be literal strings, not $params (BP-450)"
 
         # Verify that when execute() is called, NO positional $params dict is passed
         session = _make_session()
@@ -146,18 +145,22 @@ class TestCypherPathUseCase:
             min_confidence=0.3,
         )
 
-        # The AGE Cypher execute call must NOT pass a {"params": ...} dict
+        # Every execute() call must NOT pass a {"params": ...} dict
         for c in session.execute.call_args_list:
             args, _kwargs = c
-            # Any execute call with a second positional arg that has "params" key is wrong
             if len(args) >= 2 and isinstance(args[1], dict) and "params" in args[1]:
                 pytest.fail(
-                    "execute() must NOT pass a {'params': ...} dict for AGE Cypher — "
-                    "entity_ids are embedded as UUID literals (BP-459-C / BP-450)"
+                    "execute() must NOT pass a {'params': ...} dict — "
+                    "entity_ids are embedded as UUID literals (BP-461 / BP-450)"
                 )
 
     async def test_raises_timeout_error_on_db_exception(self) -> None:
-        """DB exception containing 'timeout' → CypherTimeoutError."""
+        """DB exception containing 'timeout' → CypherTimeoutError.
+
+        BP-461: the new SQL-only implementation has no AGE session setup; the
+        first execute() call IS the 1-hop SQL query.  A timeout on that call
+        must still be surfaced as CypherTimeoutError.
+        """
         from knowledge_graph.application.use_cases.cypher_path import (
             CypherPathUseCase,
             CypherTimeoutError,
@@ -167,20 +170,8 @@ class TestCypherPathUseCase:
         entity_repo = _make_entity_repo(exists=True)
 
         session = AsyncMock()
-        # First 3 executes are LOAD + SET search_path + SET statement_timeout — succeed
-        # The 4th execute (the Cypher query) raises timeout
-        call_count = 0
-
-        async def _execute_side_effect(sql, *args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count <= 3:
-                mock_result = MagicMock()
-                mock_result.fetchall.return_value = []
-                return mock_result
-            raise Exception("canceling statement due to statement timeout")
-
-        session.execute = AsyncMock(side_effect=_execute_side_effect)
+        # The first (and only) execute is the 1-hop SQL query — it raises timeout.
+        session.execute = AsyncMock(side_effect=Exception("canceling statement due to statement timeout"))
 
         with pytest.raises(CypherTimeoutError):
             await uc.execute(
@@ -212,43 +203,77 @@ class TestCypherPathUseCase:
         assert result.source_entity_id == _SRC
         assert result.target_entity_id == _TGT
 
-    async def test_max_hops_embedded_in_cypher_not_params(self) -> None:
-        """max_hops is embedded as a numeric literal in Cypher — not a Cypher $param."""
-        from knowledge_graph.application.use_cases.cypher_path import _build_path_sql
+    async def test_max_hops_controls_two_hop_phase(self) -> None:
+        """max_hops=1 skips 2-hop query; max_hops>=2 attempts it when 1-hop returns nothing.
+
+        BP-461: the new SQL-only implementation uses two separate queries
+        (_build_direct_sql for 1-hop, _build_twohop_sql for 2-hop).  max_hops
+        determines whether the 2-hop phase is attempted, not a Cypher *1..N literal.
+        """
+        from knowledge_graph.application.use_cases.cypher_path import (
+            CypherPathUseCase,
+            _build_direct_sql,
+            _build_twohop_sql,
+        )
 
         src_str = str(_SRC)
         tgt_str = str(_TGT)
-        for hops in [1, 3, 5]:
-            sql = _build_path_sql(src_str, tgt_str, hops, all_paths=False)
-            # The numeric literal must appear in the Cypher string
-            assert f"*1..{hops}" in sql, f"max_hops={hops} must appear as *1..{hops} in Cypher"
-            # It must NOT be a Cypher parameter
+
+        # Entity IDs must appear in both SQL helpers (UUID literal embedding).
+        sql1 = _build_direct_sql(src_str, tgt_str, limit=1)
+        sql2 = _build_twohop_sql(src_str, tgt_str, limit=1)
+        for sql in (sql1, sql2):
+            assert src_str in sql
+            assert tgt_str in sql
             assert "$max_hops" not in sql
 
-    async def test_all_paths_uses_limit_not_allshortestpaths(self) -> None:
-        """all_paths=True → LIMIT 5; all_paths=False → LIMIT 1.
+        # max_hops=1 → only one execute() call (1-hop SQL only, 2-hop skipped).
+        session_1hop = _make_session(execute_returns=[])
+        entity_repo = _make_entity_repo(exists=True)
+        uc = CypherPathUseCase()
+        await uc.execute(
+            session_1hop,
+            entity_repo,
+            cypher_enabled=True,
+            source_entity_id=_SRC,
+            target_entity_id=_TGT,
+            max_hops=1,
+        )
+        assert session_1hop.execute.call_count == 1, "max_hops=1 must run only the 1-hop query"
 
-        BP-459-C: AGE 1.5.0 does NOT support allShortestPaths() or shortestPath().
-        The fix uses variable-length -[r*1..N]- with LIMIT to control path count.
+        # max_hops=2 → two execute() calls (1-hop returns nothing, then 2-hop tried).
+        session_2hop = _make_session(execute_returns=[])
+        await uc.execute(
+            session_2hop,
+            entity_repo,
+            cypher_enabled=True,
+            source_entity_id=_SRC,
+            target_entity_id=_TGT,
+            max_hops=2,
+        )
+        assert session_2hop.execute.call_count == 2, "max_hops=2 must attempt the 2-hop query too"
+
+    async def test_all_paths_uses_limit_in_sql(self) -> None:
+        """all_paths=True → limit=5 rows; all_paths=False → limit=1 row.
+
+        BP-461: the new SQL-only implementation passes a ``limit`` argument to
+        _build_direct_sql / _build_twohop_sql.  Neither shortestPath() nor
+        allShortestPaths() are used — they are not supported by AGE 1.5.0.
         """
-        from knowledge_graph.application.use_cases.cypher_path import _build_path_sql
+        from knowledge_graph.application.use_cases.cypher_path import _build_direct_sql
 
         src_str = str(_SRC)
         tgt_str = str(_TGT)
-        sql_single = _build_path_sql(src_str, tgt_str, 3, all_paths=False)
-        sql_all = _build_path_sql(src_str, tgt_str, 3, all_paths=True)
+        sql_single = _build_direct_sql(src_str, tgt_str, limit=1)
+        sql_all = _build_direct_sql(src_str, tgt_str, limit=5)
 
-        # AGE 1.5.0-incompatible shortestPath/allShortestPaths must NOT appear
-        assert "shortestPath" not in sql_single, "shortestPath() is not supported by AGE 1.5.0 (BP-459-C)"
-        assert "allShortestPaths" not in sql_all, "allShortestPaths() is not supported by AGE 1.5.0 (BP-459-C)"
+        # AGE 1.5.0-incompatible functions must never appear
+        assert "shortestPath" not in sql_single
+        assert "allShortestPaths" not in sql_all
 
-        # all_paths=True → LIMIT 5 (up to 5 paths); all_paths=False → LIMIT 1 (shortest only)
+        # LIMIT is embedded as a numeric literal in the SQL
         assert "LIMIT 5" in sql_all
         assert "LIMIT 1" in sql_single
-
-        # Variable-length pattern must be used instead
-        assert "*1..3" in sql_single
-        assert "*1..3" in sql_all
 
     async def test_relation_types_filter_applied_post_hoc(self) -> None:
         """relation_types filter excludes paths whose edges don't match."""

@@ -2,7 +2,7 @@
 
 > **Category**: frontend
 > **Description**: React hooks, Next.js, WebSocket/SSE, TypeScript, CSS, component lifecycle, API contract mismatches in UI code
-> **Count**: 35 patterns
+> **Count**: 39 patterns
 > **Back to index**: [BUG_PATTERNS.md](../BUG_PATTERNS.md)
 
 ---
@@ -1153,4 +1153,114 @@ instances project-wide.
 - Verify CSP compliance with browser devtools Network → Response Headers → Content-Security-Policy BEFORE shipping a new component to staging.
 - For AG Grid specifically: `ModuleRegistry.registerModules(...)` must be called exactly once before any grid renders — put it in the providers/entry file, not inside the component.
 
+---
+
+## BP-453 — `scrollToRealTime()` on empty chart marks scroll guard `true` prematurely — chart scrolls to 1985
+
+**Context**: `OHLCVChart.tsx` uses two refs to coordinate scrolling: `pendingScrollToRealTime` (data arrived before chart was ready) and `hasScrolledToRealTime` (one-shot guard so scroll fires only once).
+
+**Symptom**: Every instrument page load starts pinned at the oldest available bar (~1985 for US equities). The chart never auto-advances to the most recent bar on initial load.
+
+**Root cause**: In `initChart()`, when `pendingScrollToRealTime.current` was true, the code called `chart.timeScale().scrollToRealTime()` AND set `hasScrolledToRealTime.current = true`. But `initChart()` runs before the data-update effect populates bar data — calling `scrollToRealTime()` on an empty chart is a silent no-op. Setting `hasScrolledToRealTime.current = true` at this point permanently blocked the real `scrollToRealTime()` call when actual bars arrived in the data-update effect below.
+
+**Fix**: In `initChart()`'s pending-scroll path, only clear `pendingScrollToRealTime.current = false`. Remove both the no-op `scrollToRealTime()` call and the premature `hasScrolledToRealTime.current = true` assignment. The data-update effect already handles calling `scrollToRealTime()` once it has real bar data.
+
+**Prevention**:
+- Any "done" guard (`hasX.current = true`) must only be set AFTER the operation succeeds on real data — never in a deferred-init path that runs before data is available.
+- When a lightweight-charts `timeScale()` call is preceded by a data-load step, treat any pre-data call as a potential no-op and ensure the guard is not set until the call produces observable effect.
+
+**Reference**: `apps/worldview-web/components/instrument/OHLCVChart.tsx` — `initChart()`, around line 529.
+
+---
+
+## BP-454 — `h-full` inside CSS Grid cell resolves to content height — black void below EntityGraph panel
+
+**Context**: `OverviewLayout.tsx` lower section uses `<div className="grid grid-cols-3 min-h-[400px]">`. Zone 8 (Entity Graph) wraps `<EntityGraphPanel>` in `<div className="min-w-0">`. `EntityGraphPanel` uses `h-full` internally to fill its parent.
+
+**Symptom**: Overview tab shows a black rectangle (~120px tall) below the entity graph in the bottom-right grid cell. The panel renders at its `min-h-[280px]` minimum and does not expand to fill the grid row.
+
+**Root cause**: CSS Grid `min-h-[400px]` on the grid container sets the MINIMUM row height but does NOT give the individual cells an explicit height. `h-full` on a child resolves against its direct parent — in this case `<div class="min-w-0">` — which has no explicit height set. So `h-full` collapses to the component's own `min-h` (280px), leaving 120px of bare dark background visible below it (the "black void").
+
+**Fix**: Add `h-full` to the intermediate wrapper div: `<div className="min-w-0 h-full">`. Every div between the CSS Grid item boundary and the component root that uses `h-full` must also carry `h-full`.
+
+**Prevention**:
+- When placing any component that uses `h-full` inside a CSS Grid cell, ALL intermediate wrapper divs between the grid item and the component must also have `h-full`.
+- `min-h-[N]` on a grid container does NOT propagate explicit height to children — it only floors the row height. Components relying on `h-full` need an explicit height on every ancestor up to the grid item.
+- Code-review signal: `h-full` on a component inside `<div className="min-w-0">` (or any single-utility wrapper) is a candidate for missing `h-full` propagation.
+
+**Reference**: `apps/worldview-web/components/instrument/OverviewLayout.tsx` — Zone 8 wrapper, around line 391.
+
 **Regression test**: `apps/worldview-web/__tests__/csp-headers.test.ts` (to be added)
+
+---
+
+## BP-455 — Hardcoded pixel-width `<div>` footer below AG Grid misaligns on column resize / pinned column
+
+**Context**: Portfolio totals rendered as a sibling `<div>` below `<AgGridReact>`, with hardcoded `w-[640px]` spacer to align under the scrollable columns. TICKER column pinned left.
+
+**Symptom**: Totals footer drifts left or right when the user resizes any column or when the grid's horizontal scroll position changes.
+
+**Root cause**: AG Grid splits its viewport into two DOM containers — one for pinned columns (left) and one for the scrollable columns. A sibling `<div>` lives outside both containers and can only be aligned via hardcoded pixel values. Any column resize or horizontal scroll breaks the alignment.
+
+**Fix**: Use `pinnedBottomRowData` prop on `<AgGridReact>`. AG Grid renders pinned rows inside the grid DOM, placing them in both the pinned and scrollable containers automatically.
+
+```tsx
+// Bad
+<AgGridReact rowData={rows} />
+<div style={{ paddingLeft: 640 }}>TOTAL …</div>
+
+// Good
+<AgGridReact rowData={rows} pinnedBottomRowData={[totalsRow]} />
+```
+
+Cell renderers check `params.node?.rowPinned === 'bottom'` and render totals values instead of normal cell content. Use optional chaining (`?.`) — `node` can be undefined in Vitest/jsdom environments.
+
+**Prevention**: Never use a sibling `<div>` to represent a footer for an AG Grid table. Any footer/totals row must live inside the grid via `pinnedBottomRowData`.
+
+**Reference**: `apps/worldview-web/components/portfolio/SemanticHoldingsTable.tsx` and `ag-holdings-columns.tsx`.
+
+---
+
+## BP-457 — JSX block comment `{/* */}` at top level of `return()` outside any element
+
+**Context**: `HoldingLotsPanel.tsx` had `{/* WHY … */}` placed at the top level of a `return()` directly before the root `<div>`. This is invalid JSX — a JSX comment expression outside any wrapping element is a compile-time error.
+
+**Symptom**: TypeScript/ESLint parser error; component fails to build.
+
+**Root cause**: JSX comments (`{/* */}`) are valid only inside a JSX element, not at the top level of a `return()` statement alongside a root element. The parser sees two top-level expressions.
+
+**Fix**: Convert to a JS line comment (`// …`) which is valid at the top level of `return()`, or move the comment inside the root element.
+
+```tsx
+// Bad
+return (
+  {/* WHY border-y: … */}
+  <div className="border-y">…</div>
+);
+
+// Good
+return (
+  // WHY border-y: …
+  <div className="border-y">…</div>
+);
+```
+
+**Prevention**: Never start a JSX `{/* */}` comment outside a JSX element. Top-level comments in `return()` must use `//` line syntax.
+
+**Reference**: `apps/worldview-web/components/portfolio/HoldingLotsPanel.tsx` line 93.
+
+---
+
+## BP-458 — Signal label lookup set mismatched with LLM event_type enum
+
+**Context**: S9 proxy `_signal_type_to_label()` was designed for broker-event labels (EARNINGS_BEAT, DOWNGRADE, etc.) but S6 NLP pipeline uses a different event_type enum (PRODUCT_LAUNCH, LEGAL, GEOPOLITICAL, etc.) from `deep_extraction.py`.
+
+**Symptom**: All AI signals on the dashboard show "NEUTRAL" regardless of content.
+
+**Root cause**: `_POSITIVE_SIGNAL_TYPES`/`_NEGATIVE_SIGNAL_TYPES` in proxy.py only contained broker-event labels. The LLM extracts `event_type` values from a separate enum (EARNINGS_RELEASE, PRODUCT_LAUNCH, CAPITAL_RAISE, LEGAL, NATURAL_DISASTER, GEOPOLITICAL, SANCTIONS, etc.) — none of which were in the lookup sets, so all fell through to the NEUTRAL default.
+
+**Fix**: Add the NLP deep-extraction `event_type` values to the lookup sets in proxy.py. Also fix `_enqueue_signal_events` in `article_consumer.py` which hardcoded `"polarity": "neutral"` in the Avro payload — compute polarity from signal_type using the same lookup.
+
+**Prevention**: When two systems exchange signal/event type enums, keep both lookup sets and the enum definition in sync. Add a comment citing the source of truth. When adding a new LLM extraction schema, immediately add its output labels to the downstream label mapping.
+
+**Reference**: `services/api-gateway/src/api_gateway/routes/proxy.py` (_POSITIVE/_NEGATIVE sets), `services/nlp-pipeline/src/nlp_pipeline/infrastructure/messaging/consumers/article_consumer.py` (_enqueue_signal_events), `services/nlp-pipeline/src/nlp_pipeline/application/blocks/deep_extraction.py` (event_type enum).

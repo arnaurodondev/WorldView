@@ -885,3 +885,35 @@ rg "organization_id.*str" services/rag-chat/src/ --include="*.py" | grep "def.*t
 Any tool handler that accepts `organization_id` as a non-injected positional parameter is vulnerable.
 
 **Compounding**: BP-428 documents the same pattern with bug-history references.
+
+---
+
+### HR-056: Relation Evidence Promotion Without Quality Gate
+```python
+# BAD — promotes all non-duplicate evidence regardless of confidence
+INSERT INTO relation_evidence
+SELECT * FROM relation_evidence_raw
+WHERE entity_provisional = false
+  AND NOT EXISTS (dedup check)
+```
+**Risk**: Single-document LLM hallucinations enter the knowledge graph as confirmed relations. Phantom triples inflate path confidence products in BFS traversal, pollute S8 graph neighborhood queries, and are nearly impossible to retract once promoted (FK references accumulate across `relation_evidence`, `relation_summaries`, chat answers).
+
+**Fix**: Gate promotion on at least one of:
+- `extraction_confidence >= 0.70` (strong LLM signal from a single document), OR
+- `evidence_density >= 0.05` (triple appears in ≥5% of documents mentioning both entities)
+
+```python
+# CORRECT — quality gate before promotion
+WHERE entity_provisional = false
+  AND NOT EXISTS (dedup check)
+  AND (extraction_confidence >= 0.70
+       OR evidence_count::float / NULLIF(total_docs_mentioning_both, 0) >= 0.05)
+```
+
+**Detection**:
+```bash
+grep -n "INSERT INTO relation_evidence" services/knowledge-graph/src/ -r
+```
+Any promotion INSERT without a confidence/density WHERE clause is vulnerable.
+
+**Reference**: E-3 (2026-05-10-ai-architecture-enhancement-roi-analysis.md).

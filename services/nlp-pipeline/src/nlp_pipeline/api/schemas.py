@@ -20,6 +20,10 @@ class SignalResponse(BaseModel):
     evidence_text: str
     detected_at: datetime
     market_impact_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Avro polarity field ("positive" | "negative" | "neutral") from
+    # nlp.signal.detected.v1 — used by the S9 proxy to populate the
+    # dashboard label correctly (avoids the claim_type→label mismatch).
+    polarity: str = "neutral"
 
 
 class SignalListResponse(BaseModel):
