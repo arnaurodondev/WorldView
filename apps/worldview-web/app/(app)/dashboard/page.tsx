@@ -55,9 +55,17 @@ import { SectorHeatmapWidget } from "@/components/dashboard/SectorHeatmapWidget"
 // MoversWidgetTabs wrapper which hosts Holdings + Watchlist movers behind a
 // tab toggle. The tab defaults to Holdings so users with a brokerage see
 // their owned names first, but Watchlist remains one click away.
+// ISSUE-3: MoversWidgetTabs moved to Row 3 (wider, more prominent placement)
+// so all three tab views (MARKET / HOLDINGS / WATCHLIST) have enough vertical
+// space to show meaningful list depth without crowding the Row 2 strip.
 import { MoversWidgetTabs } from "@/components/dashboard/MoversWidgetTabs";
 import { PortfolioSummary } from "@/components/dashboard/PortfolioSummary";
-import { PreMarketMoversWidget } from "@/components/dashboard/PreMarketMoversWidget";
+// ISSUE-3: AiSignalsWidget now occupies the Row 2 col-5 slot previously held
+// by MoversWidgetTabs. The ML price-impact signals are compact (ticker + bar +
+// score) and fit well in the 130px Row 2 height budget. PreMarketMoversWidget
+// is removed — MoversWidgetTabs in Row 3 covers the universe-wide movers view
+// (via its MARKET tab) without duplicating a standalone movers component.
+import { AiSignalsWidget } from "@/components/dashboard/AiSignalsWidget";
 import { PredictionMarketsWidget } from "@/components/dashboard/PredictionMarketsWidget";
 import { EconomicCalendar } from "@/components/dashboard/EconomicCalendar";
 import { EarningsCalendarWidget } from "@/components/dashboard/EarningsCalendarWidget";
@@ -145,13 +153,15 @@ export default function DashboardPage() {
         <MorningBriefCard />
       </div>
 
-      {/* ── Row 2: Market Snapshot (3) · Sector Heatmap (4) · Watchlist Movers (5) ── */}
-      {/* WHY 3 + 4 + 5 (Wave E-1):
+      {/* ── Row 2: Market Snapshot (3) · Sector Heatmap (4) · AI Signals (5) ── */}
+      {/* WHY 3 + 4 + 5 (ISSUE-3 reshuffle):
             - MarketSnapshot at col-3 (~230px) fits 6 ticker rows comfortably.
             - SectorHeatmap is now a TREEMAP (Wave F-1); col-4 (~310px) gives
               the wrapped tile grid enough horizontal room for 11 tiles.
-            - WatchlistMovers at col-5 (~390px) is wide enough for a full
-              ticker · name · price · % row in two parallel columns.
+            - AiSignalsWidget at col-5 (~390px): ML price-impact signals are
+              compact (ticker chip + 4px score bar + percentage) and render
+              well in the fixed 130px Row 2 height. MoversWidgetTabs moved to
+              Row 3 where it gets full minmax height for list depth.
           WHY min-w-0 on every cell: each widget contains a flex layout with
           truncate-able children. Without min-w-0, flex children default to
           their min-content width and break the truncate.
@@ -164,27 +174,27 @@ export default function DashboardPage() {
       <div className="col-span-1 md:col-span-3 lg:col-span-4 h-full min-w-0 border border-border/40">
         <SectorHeatmapWidget />
       </div>
-      {/* PLAN-0053 T-B-2-03 + T-H-8-01: hosts MoversWidgetTabs (Holdings |
-          Watchlist), default Holdings. Responsive col-span ladder added by
-          Wave H makes the cell collapse cleanly on narrow viewports.
-          WHY overflow-hidden: inner widgets contain scroll containers
-          (independent-scroll rule) — the cell must clip so the inner
-          overflow-auto has a definite height. */}
+      {/* ISSUE-3: AiSignalsWidget replaces MoversWidgetTabs here. The ML
+          price-impact signals feed fits Row 2's 130px height budget — each
+          row is just a ticker chip + score bar + percentage (no pagination
+          needed for ≤6 signals). overflow-hidden prevents the score bars
+          from bleeding outside the cell boundary. */}
       <div className="col-span-1 md:col-span-6 lg:col-span-5 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
-        <MoversWidgetTabs />
+        <AiSignalsWidget />
       </div>
 
-      {/* ── Row 3: Portfolio (4) · Prediction Markets (4) · Top Movers (4) ── */}
-      {/* WHY 4 + 4 + 4 (Wave E-1):
+      {/* ── Row 3: Portfolio (4) · Prediction Markets (4) · MoversWidgetTabs (4) ── */}
+      {/* WHY 4 + 4 + 4 (ISSUE-3 reshuffle from Wave E-1):
             - Equal-weight cells: each represents a different signal stream
-              (your money · prediction-market consensus · universe-wide
-              outliers). Symmetric layout signals "no panel is more
-              important than the others — choose your view".
-            - PredictionMarkets moved here from Row 2 to free col-5 for
-              WatchlistMovers (per Wave E-1).
-            - PreMarketMoversWidget (universe-wide TopMovers, sector-filterable
-              via Wave F-2) is the remaining col-4 cell — duplicates the
-              gainers/losers idiom of WatchlistMovers but for the full market.
+              (your money · prediction-market consensus · universe-wide/
+              watchlist/holdings movers). Symmetric layout signals "no panel
+              is more important than the others — choose your view".
+            - PredictionMarkets stays at col-4 (unchanged).
+            - MoversWidgetTabs replaces the standalone PreMarketMoversWidget
+              here. The tab widget already contains a MARKET tab with universe-
+              wide top movers, plus HOLDINGS and WATCHLIST tabs — three views
+              in one cell at no extra cost. The minmax(220px, 1fr) row height
+              gives the list depth needed to show ≥8 rows without truncation.
           WHY overflow-hidden on each cell: rows 3 + 4 are minmax(Npx, 1fr)
           (bounded height). overflow-hidden on the cell + overflow-y-auto
           inside the widget content area enables independent scrolling per
@@ -195,8 +205,14 @@ export default function DashboardPage() {
       <div className="col-span-1 md:col-span-3 lg:col-span-4 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
         <PredictionMarketsWidget />
       </div>
+      {/* ISSUE-3: MoversWidgetTabs moves here from Row 2 to get the full
+          minmax(220px, 1fr) height budget (vs the fixed 130px in Row 2).
+          This gives all three tab panes (MARKET / HOLDINGS / WATCHLIST)
+          enough vertical space to show ≥8 movers without crowding.
+          The standalone PreMarketMoversWidget is removed — MARKET tab covers
+          the same universe-wide view. */}
       <div className="col-span-1 md:col-span-6 lg:col-span-4 h-full min-h-0 min-w-0 overflow-hidden border border-border/40">
-        <PreMarketMoversWidget />
+        <MoversWidgetTabs />
       </div>
 
       {/* ── Row 4: Econ Calendar (3) · Earnings (3) · Portfolio News (3) · Recent Alerts (3) ── */}
