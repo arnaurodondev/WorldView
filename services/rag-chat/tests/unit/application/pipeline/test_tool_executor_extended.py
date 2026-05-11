@@ -432,8 +432,24 @@ class TestTraverseGraph:
         assert "HACK_DB" not in sanitized
 
     async def test_executor_traverse_graph_returns_items_on_valid_paths(self) -> None:
-        """When S7.cypher_traverse returns paths, result must be a non-empty list."""
+        """When S7.cypher_traverse returns paths, result must be a non-empty list.
+
+        BP-459-A: start_entity='Sam Altman' does not match entity_context.name='Apple Inc.',
+        so the executor calls resolve_entity_by_name() for both start and target entities.
+        The mock must return valid candidates so UUID resolution succeeds.
+        """
+        _ALTMAN_ID = UUID("018f0000-0000-7000-8000-000000000010")
+        _MSFT_ID = UUID("018f0000-0000-7000-8000-000000000011")
+
         s7 = _make_s7_port(paths=[{"path": "A→B"}, {"path": "A→C"}])
+        # Wire resolve_entity_by_name to return a valid candidate for both lookups.
+        # The first call is for start_entity ("Sam Altman"), the second for target ("Microsoft").
+        s7.resolve_entity_by_name = AsyncMock(
+            side_effect=[
+                [{"entity_id": str(_ALTMAN_ID), "alias_text": "Sam Altman", "similarity": 0.95}],
+                [{"entity_id": str(_MSFT_ID), "alias_text": "Microsoft", "similarity": 0.92}],
+            ]
+        )
         entity_ctx = _make_entity_context()
         executor = _make_executor(s7=s7, entity_context=entity_ctx)
 
@@ -447,6 +463,54 @@ class TestTraverseGraph:
 
         assert isinstance(result, list)
         assert len(result) == 1  # one RetrievedItem summarising all paths
+        # Verify resolve_entity_by_name was called for both entities (not entity_context lock-in)
+        assert s7.resolve_entity_by_name.call_count == 2
+
+    async def test_traverse_graph_uses_context_when_start_matches(self) -> None:
+        """BP-459-A: start_entity matching context.name skips resolve — uses context entity_id."""
+        _TARGET_ID = UUID("018f0000-0000-7000-8000-000000000020")
+        entity_ctx = _make_entity_context(name="Apple Inc.")
+        s7 = _make_s7_port(paths=[{"hops": 1}])
+        # Only one resolve call expected for the target; start uses context (no lookup)
+        s7.resolve_entity_by_name = AsyncMock(
+            return_value=[{"entity_id": str(_TARGET_ID), "alias_text": "Anthropic", "similarity": 0.91}]
+        )
+        executor = _make_executor(s7=s7, entity_context=entity_ctx)
+        tc = _make_tool_call("traverse_graph", start_entity="Apple", target_entity="Anthropic", depth=2)
+        result = await executor.execute(tc)
+        assert len(result) == 1
+        assert s7.resolve_entity_by_name.call_count == 1  # only target lookup, not start
+
+    async def test_traverse_graph_returns_empty_when_start_unresolved(self) -> None:
+        """BP-459-A: unresolvable start_entity that doesn't match context degrades to []."""
+        entity_ctx = _make_entity_context(name="Apple Inc.")
+        s7 = _make_s7_port()
+        s7.resolve_entity_by_name = AsyncMock(return_value=[])
+        executor = _make_executor(s7=s7, entity_context=entity_ctx)
+        tc = _make_tool_call("traverse_graph", start_entity="Unknown Corp", target_entity="Anthropic", depth=2)
+        result = await executor.execute(tc)
+        assert result == []  # R9 graceful degradation — no crash
+
+    async def test_traverse_graph_params_include_source_and_target_ids(self) -> None:
+        """BP-459-B: cypher_traverse params must have source_id AND target_id for path queries.
+
+        The old code passed {'id': entity_context_id} which only supported egocentric
+        (neighborhood) traversal.  Two-entity path queries need both source_id + target_id.
+        """
+        _SRC = UUID("018f0000-0000-7000-8000-000000000030")
+        _TGT = UUID("018f0000-0000-7000-8000-000000000031")
+        entity_ctx = _make_entity_context(name="Apple Inc.", entity_id=_SRC)
+        s7 = _make_s7_port(paths=[{"hops": 1}])
+        s7.resolve_entity_by_name = AsyncMock(
+            return_value=[{"entity_id": str(_TGT), "alias_text": "Anthropic", "similarity": 0.90}]
+        )
+        executor = _make_executor(s7=s7, entity_context=entity_ctx)
+        tc = _make_tool_call("traverse_graph", start_entity="Apple Inc.", target_entity="Anthropic", depth=3)
+        await executor.execute(tc)
+        s7.cypher_traverse.assert_called_once()
+        params = s7.cypher_traverse.call_args.kwargs.get("params") or {}
+        assert params.get("source_id") == str(_SRC), "source_id must be in params (BP-459-B)"
+        assert params.get("target_id") == str(_TGT), "target_id must be in params (BP-459-B)"
 
 
 # ── search_entity_relations tests ─────────────────────────────────────────────

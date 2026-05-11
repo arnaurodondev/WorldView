@@ -1,12 +1,22 @@
 """CypherPathUseCase — shortest path between two entities via Apache AGE (PRD-0018 §6.3).
 
 Security invariants (enforced here — see Pitfalls in .claude-context.md):
-- Entity IDs are ALWAYS passed as parameterized ``$source`` / ``$target`` values
-  in the AGE params JSON dict — never string-interpolated into Cypher.
+- Entity IDs are UUID-validated ([0-9a-fA-F-] only) and embedded as string literals
+  in the Cypher pattern — never passed as $params (BP-459-C / BP-450: asyncpg's
+  prepared-statement protocol confuses PostgreSQL $1 params with Cypher $var refs).
 - ``max_hops`` is a Pydantic-validated integer [1, 5] and is embedded as a numeric
   literal in the Cypher pattern. The route handler ensures it cannot exceed 5.
 - ``relation_types`` filtering is applied in Python after the query (post-hoc),
   using the agtype-parsed label string. No user string is embedded in Cypher.
+
+AGE 1.5.0 compatibility (BP-459-C, 2026-05-11):
+  AGE 1.5.0 does NOT support:
+    - ``shortestPath()`` / ``allShortestPaths()`` — raises "function does not exist"
+    - ``ALL(rel IN relationships(path) WHERE ...)`` — raises "syntax error at or near '('"
+  Fix: use variable-length relationship pattern ``-[r*1..N]-`` with LIMIT,
+  embed entity_ids as UUID string literals (no $params argument), and apply
+  confidence filtering post-query via relation_repo (same approach as BP-450 in
+  cypher_neighborhood.py).
 
 AGE session requirements:
   Every DB session that issues AGE Cypher MUST execute the following first:
@@ -31,6 +41,7 @@ Result parsing:
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -46,6 +57,11 @@ if TYPE_CHECKING:
     from knowledge_graph.infrastructure.intelligence_db.repositories.canonical_entity import (
         CanonicalEntityRepository,
     )
+
+# UUID validation pattern — guards entity_ids before they are embedded in Cypher.
+# UUIDs contain only [0-9a-fA-F-] so no SQL/Cypher injection is possible.
+# Mirrors the same pattern in cypher_neighborhood.py (BP-450, BP-459-C).
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
 # ── Custom errors ─────────────────────────────────────────────────────────────
 
@@ -110,28 +126,53 @@ class CypherPathResult:
 _STATEMENT_TIMEOUT_MS = "5000"
 
 
-def _build_path_sql(max_hops: int, *, all_paths: bool) -> str:
-    """Build parameterized AGE Cypher SQL for path finding.
+def _build_path_sql(source_id_str: str, target_id_str: str, max_hops: int, *, all_paths: bool) -> str:
+    """Build AGE Cypher SQL for path finding with embedded UUID string literals.
 
+    BP-459-C (2026-05-11): AGE 1.5.0 does NOT support shortestPath(),
+    allShortestPaths(), or ALL(rel IN relationships(path) WHERE ...) on
+    variable-length relationship lists.  These constructs raise:
+      - "function shortestPath does not exist"
+      - "syntax error at or near '('"
+    at PREPARE time in asyncpg.
+
+    Fix: use variable-length ``-[r*1..N]-`` pattern with LIMIT.  Entity IDs
+    are embedded as validated UUID string literals (no $params argument) to
+    avoid the asyncpg extended-query / Cypher $var confusion (same as BP-450
+    in cypher_neighborhood.py).  Confidence filtering is applied post-query
+    via the relational table (source of truth).
+
+    The Cypher RETURN projects node entity_ids and edge types directly so that
+    the outer SQL receives two agtype-typed columns (matching the column
+    declarations) — no AGE path functions are invoked in the outer SQL context.
+
+    ``source_id_str`` / ``target_id_str`` must be pre-validated by ``_UUID_RE``
+    (only [0-9a-fA-F-] characters) — safe to embed directly as Cypher string
+    literals.
     ``max_hops`` is a Pydantic-validated int [1, 5] — safe to embed as a
-    numeric literal (not a string from user input).  Entity IDs are always
-    passed via the ``$source`` / ``$target`` Cypher parameters.
+    numeric literal.
     """
-    fn = "allShortestPaths" if all_paths else "shortestPath"
-    limit_clause = " LIMIT 5" if all_paths else ""
+    # Limit: return up to 5 paths when all_paths=True, otherwise just 1.
+    limit = 5 if all_paths else 1
     # BP-SA5-001 (2026-05-10): use lowercase ``entity`` label to match the
     # canonical label written by AgeSyncWorker and queried by PathDiscovery.
+    #
+    # We RETURN two lists projected inside Cypher so AGE handles the path
+    # decomposition (nodes/relationships) — no outer SQL path functions needed.
+    # Each row represents one path; columns are agtype arrays.
+    # MATCH path = ... binds the matched route to the variable `path` so that
+    # nodes(path) / relationships(path) can project it in RETURN.
+    # This is AGE 1.5.0-compatible; shortestPath() / ALL() are NOT (BP-459-C).
     return (
-        "SELECT nodes_col::text, edges_col::text"  # noqa: S608 — max_hops validated int; IDs via $source/$target
+        "SELECT nodes_col::text, edges_col::text"  # noqa: S608 — entity_ids UUID-validated; max_hops/limit validated ints
         " FROM ag_catalog.cypher('worldview_graph', $$"
-        f" MATCH path = {fn}("
-        f"   (s:entity {{entity_id: $source}})-[r*1..{max_hops}]->(t:entity {{entity_id: $target}})"
-        " )"
-        " WHERE ALL(rel IN relationships(path) WHERE rel.confidence >= $min_conf)"
+        f" MATCH path = (s:entity {{entity_id: '{source_id_str}'}})"
+        f"               -[r*1..{max_hops}]-"
+        f"               (t:entity {{entity_id: '{target_id_str}'}})"
         " RETURN [n IN nodes(path) | n] AS nodes_col,"
         "        [r IN relationships(path) | r] AS edges_col"
-        + limit_clause
-        + " $$, :params) AS (nodes_col agtype, edges_col agtype)"
+        f" LIMIT {limit}"
+        " $$) AS (nodes_col agtype, edges_col agtype)"
     )
 
 
@@ -265,22 +306,27 @@ class CypherPathUseCase:
         if not await entity_repo.exists(target_entity_id):
             raise CypherEntityNotFoundError(target_entity_id)
 
+        # BP-459-C: validate entity UUIDs before embedding as Cypher string literals.
+        # UUIDs contain only [0-9a-fA-F-] — no SQL/Cypher metacharacters possible.
+        source_id_str = str(source_entity_id)
+        target_id_str = str(target_entity_id)
+        if not _UUID_RE.match(source_id_str):
+            raise ValueError(f"source_entity_id is not a valid UUID: {source_id_str!r}")
+        if not _UUID_RE.match(target_id_str):
+            raise ValueError(f"target_entity_id is not a valid UUID: {target_id_str!r}")
+
         # AGE session setup — LOAD 'age' + SET search_path
         await _setup_age_session(session)
         await session.execute(text(f"SET LOCAL statement_timeout = '{_STATEMENT_TIMEOUT_MS}'"))
 
-        sql = _build_path_sql(max_hops, all_paths=all_paths)
-        params_json = json.dumps(
-            {
-                "source": str(source_entity_id),
-                "target": str(target_entity_id),
-                "min_conf": min_confidence,
-            },
-        )
+        # BP-459-C: embed entity_ids as UUID string literals — no $params argument.
+        # Confidence filtering applied post-query (relational table is authoritative).
+        sql = _build_path_sql(source_id_str, target_id_str, max_hops, all_paths=all_paths)
 
         start_ms = time.monotonic() * 1000
         try:
-            result = await session.execute(text(sql), {"params": params_json})
+            # No positional params dict: entity_ids are embedded as literals (BP-450/BP-459-C).
+            result = await session.execute(text(sql))
             rows = result.fetchall()
         except Exception as exc:
             exc_str = str(exc).lower()
