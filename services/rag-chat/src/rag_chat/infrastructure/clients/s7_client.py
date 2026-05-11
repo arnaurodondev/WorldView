@@ -300,27 +300,65 @@ class S7Client(BaseUpstreamClient):
         params: dict,
         max_results: int = 50,
     ) -> list[dict]:
-        """POST /api/v1/graph/cypher/neighborhood → egocentric multi-hop results.
+        """Two-entity path query or egocentric traversal via KG Cypher endpoints.
 
-        The ``params`` dict is expected to contain an ``"id"`` key with the
-        entity UUID string (set by the caller in ``_fetch_cypher``).
+        BP-459-B FIX: The old implementation always called the single-entity
+        ``/api/v1/graph/cypher/neighborhood`` endpoint, which returned egocentric
+        relations rather than inter-entity paths.  This made two-entity queries
+        (e.g. "Apple → Anthropic") always return [] because the neighborhood of
+        Apple never explicitly surfaces the path to Anthropic.
+
+        Resolution:
+        - When ``params`` contains both ``"source_id"`` and ``"target_id"``, call
+          the two-entity path endpoint POST /api/v1/graph/cypher/path.  The response
+          shape is ``{source_entity_id, target_entity_id, paths, paths_found, ...}``.
+          We flatten each path's nodes + edges into a list of dicts for the caller.
+        - When only ``"source_id"`` is present (no target), fall back to the
+          egocentric POST /api/v1/graph/cypher/neighborhood endpoint (unchanged).
 
         Returns empty list when feature is disabled (503) or on any error.
         This method NEVER raises; callers treat an empty list as unavailable.
+
+        ``cypher`` is accepted for forward-compatibility logging but not forwarded
+        to either endpoint — both endpoints construct Cypher server-side from the
+        validated UUID parameters (BP-459-C / BP-450 security patterns).
         """
-        entity_id = params.get("id", "")
-        limit = min(max_results, 200)  # CypherNeighborhoodRequest.limit max=200
-        raw = await self._post(
-            "/api/v1/graph/cypher/neighborhood",
-            {
-                "entity_id": entity_id,
-                "max_hops": 2,
-                "min_confidence": 0.4,
-                "include_temporal_events": False,
-                "limit": limit,
-            },
-        )
-        # Response shape: {center, relations, entities, temporal_events}
-        # Flatten relations into a list of dicts for the caller
-        results: list[dict] = raw.get("relations", [])  # type: ignore[assignment]
-        return results
+        source_id = params.get("source_id", params.get("id", ""))
+        target_id = params.get("target_id")
+        max_hops = int(params.get("max_hops", 2))
+
+        if target_id:
+            # ── Two-entity path query → /api/v1/graph/cypher/path ─────────────
+            raw = await self._post(
+                "/api/v1/graph/cypher/path",
+                {
+                    "source_entity_id": source_id,
+                    "target_entity_id": target_id,
+                    "max_hops": min(max_hops, 5),  # CypherPathRequest.max_hops le=5
+                    "min_confidence": 0.3,
+                    "all_paths": True,  # return up to 5 shortest paths
+                },
+            )
+            # Response shape: {source_entity_id, target_entity_id, paths, paths_found, ...}
+            # Each path: {hops, nodes: [{entity_id, canonical_name, entity_type}],
+            #             edges: [{from_entity_id, to_entity_id, canonical_type, confidence}]}
+            # Flatten into a list of path dicts so the caller can iterate them.
+            results: list[dict] = raw.get("paths", [])  # type: ignore[assignment]
+            return results
+        else:
+            # ── Single-entity egocentric traversal → /api/v1/graph/cypher/neighborhood ─
+            limit = min(max_results, 200)  # CypherNeighborhoodRequest.limit max=200
+            raw = await self._post(
+                "/api/v1/graph/cypher/neighborhood",
+                {
+                    "entity_id": source_id,
+                    "max_hops": min(max_hops, 3),  # CypherNeighborhoodRequest.max_hops le=3
+                    "min_confidence": 0.4,
+                    "include_temporal_events": False,
+                    "limit": limit,
+                },
+            )
+            # Response shape: {center, relations, entities, temporal_events}
+            # Flatten relations into a list of dicts for the caller.
+            results = raw.get("relations", [])  # type: ignore[assignment]
+            return results

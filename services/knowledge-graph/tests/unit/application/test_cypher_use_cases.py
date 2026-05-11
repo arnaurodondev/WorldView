@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -104,29 +103,35 @@ class TestCypherPathUseCase:
                 target_entity_id=_TGT,
             )
 
-    async def test_entity_id_passed_as_param_not_f_string(self) -> None:
-        """Entity IDs are in the AGE params dict, not interpolated into Cypher SQL.
+    async def test_entity_id_embedded_as_uuid_literal_not_params(self) -> None:
+        """Entity IDs are UUID-validated string literals in Cypher SQL — NOT $params.
 
-        This is the HIGH-priority security test: test_cypher_path_entity_id_parameterized
-        from PRD §11.
+        BP-459-C / BP-450: asyncpg's extended-query protocol confuses PostgreSQL $1
+        positional params with Cypher-level $var references.  The fix is to embed
+        entity_ids as UUID string literals (UUID-validated, only [0-9a-fA-F-] chars)
+        and omit the $params argument entirely.
+
+        Security invariant: only UUID-validated values are embedded — no arbitrary
+        user strings can be injected because _UUID_RE rejects non-UUID inputs.
         """
         from knowledge_graph.application.use_cases.cypher_path import (
             CypherPathUseCase,
             _build_path_sql,
         )
 
-        # The SQL template must NOT contain entity_id string literals
-        sql = _build_path_sql(max_hops=3, all_paths=False)
-        assert "$source" in sql, "entity_id must be a $source Cypher parameter, not an f-string literal"
-        assert "$target" in sql, "entity_id must be a $target Cypher parameter, not an f-string literal"
-
-        # The entity UUID must NOT appear in the SQL — it goes in the params JSON dict
         src_str = str(_SRC)
         tgt_str = str(_TGT)
-        assert src_str not in sql
-        assert tgt_str not in sql
 
-        # Verify that when execute() is called, the params JSON contains the entity IDs
+        # The SQL must embed entity_ids as UUID string literals (BP-459-C)
+        sql = _build_path_sql(src_str, tgt_str, max_hops=3, all_paths=False)
+        assert src_str in sql, "source entity_id must be embedded as a UUID literal in Cypher SQL"
+        assert tgt_str in sql, "target entity_id must be embedded as a UUID literal in Cypher SQL"
+
+        # The SQL must NOT use Cypher $source/$target parameters (asyncpg conflict)
+        assert "$source" not in sql, "entity_ids must be literal strings, not Cypher $params (BP-450)"
+        assert "$target" not in sql, "entity_ids must be literal strings, not Cypher $params (BP-450)"
+
+        # Verify that when execute() is called, NO positional $params dict is passed
         session = _make_session()
         entity_repo = _make_entity_repo(exists=True)
         uc = CypherPathUseCase()
@@ -141,23 +146,15 @@ class TestCypherPathUseCase:
             min_confidence=0.3,
         )
 
-        # Find the AGE Cypher execute call (has {"params": json_string})
-        age_call = None
+        # The AGE Cypher execute call must NOT pass a {"params": ...} dict
         for c in session.execute.call_args_list:
             args, _kwargs = c
-            # The cypher execute call passes {"params": "..."} as the second argument
+            # Any execute call with a second positional arg that has "params" key is wrong
             if len(args) >= 2 and isinstance(args[1], dict) and "params" in args[1]:
-                age_call = c
-                break
-
-        assert age_call is not None, "Expected an AGE Cypher execute call with 'params' dict"
-        _, params_dict = age_call[0]
-        params_json = params_dict["params"]
-        params = json.loads(params_json)
-
-        # Entity IDs must be in the params dict — not in the SQL string
-        assert params["source"] == str(_SRC)
-        assert params["target"] == str(_TGT)
+                pytest.fail(
+                    "execute() must NOT pass a {'params': ...} dict for AGE Cypher — "
+                    "entity_ids are embedded as UUID literals (BP-459-C / BP-450)"
+                )
 
     async def test_raises_timeout_error_on_db_exception(self) -> None:
         """DB exception containing 'timeout' → CypherTimeoutError."""
@@ -219,25 +216,39 @@ class TestCypherPathUseCase:
         """max_hops is embedded as a numeric literal in Cypher — not a Cypher $param."""
         from knowledge_graph.application.use_cases.cypher_path import _build_path_sql
 
+        src_str = str(_SRC)
+        tgt_str = str(_TGT)
         for hops in [1, 3, 5]:
-            sql = _build_path_sql(hops, all_paths=False)
+            sql = _build_path_sql(src_str, tgt_str, hops, all_paths=False)
             # The numeric literal must appear in the Cypher string
             assert f"*1..{hops}" in sql, f"max_hops={hops} must appear as *1..{hops} in Cypher"
             # It must NOT be a Cypher parameter
             assert "$max_hops" not in sql
 
-    async def test_all_paths_uses_allshortestpaths(self) -> None:
-        """all_paths=True → allShortestPaths() in Cypher; all_paths=False → shortestPath()."""
+    async def test_all_paths_uses_limit_not_allshortestpaths(self) -> None:
+        """all_paths=True → LIMIT 5; all_paths=False → LIMIT 1.
+
+        BP-459-C: AGE 1.5.0 does NOT support allShortestPaths() or shortestPath().
+        The fix uses variable-length -[r*1..N]- with LIMIT to control path count.
+        """
         from knowledge_graph.application.use_cases.cypher_path import _build_path_sql
 
-        sql_single = _build_path_sql(3, all_paths=False)
-        sql_all = _build_path_sql(3, all_paths=True)
+        src_str = str(_SRC)
+        tgt_str = str(_TGT)
+        sql_single = _build_path_sql(src_str, tgt_str, 3, all_paths=False)
+        sql_all = _build_path_sql(src_str, tgt_str, 3, all_paths=True)
 
-        assert "shortestPath" in sql_single
-        assert "allShortestPaths" not in sql_single
-        assert "allShortestPaths" in sql_all
+        # AGE 1.5.0-incompatible shortestPath/allShortestPaths must NOT appear
+        assert "shortestPath" not in sql_single, "shortestPath() is not supported by AGE 1.5.0 (BP-459-C)"
+        assert "allShortestPaths" not in sql_all, "allShortestPaths() is not supported by AGE 1.5.0 (BP-459-C)"
+
+        # all_paths=True → LIMIT 5 (up to 5 paths); all_paths=False → LIMIT 1 (shortest only)
         assert "LIMIT 5" in sql_all
-        assert "LIMIT 5" not in sql_single
+        assert "LIMIT 1" in sql_single
+
+        # Variable-length pattern must be used instead
+        assert "*1..3" in sql_single
+        assert "*1..3" in sql_all
 
     async def test_relation_types_filter_applied_post_hoc(self) -> None:
         """relation_types filter excludes paths whose edges don't match."""
@@ -334,21 +345,32 @@ class TestCypherNeighborhoodUseCase:
                 entity_id=_ENT,
             )
 
-    async def test_entity_id_passed_as_param_not_f_string_in_neighborhood(self) -> None:
-        """center_id is in AGE params dict, not interpolated into neighborhood Cypher SQL."""
+    async def test_entity_id_embedded_as_uuid_literal_in_neighborhood(self) -> None:
+        """BP-450: center_id is embedded as a UUID string literal in neighborhood Cypher SQL.
+
+        Rationale: asyncpg's PREPARE phase fails when AGE Cypher SQL mixes a PostgreSQL
+        $1 positional param with Cypher-level $var references. The fix embeds the UUID
+        directly after strict _UUID_RE validation (only [0-9a-fA-F-] characters).
+        """
         from knowledge_graph.application.use_cases.cypher_neighborhood import _build_neighborhood_sql
 
-        sql = _build_neighborhood_sql(max_hops=2, limit=50)
-        assert "$center_id" in sql, "center_id must be a Cypher $parameter, never an f-string literal"
-        # Entity UUID must not appear in the template (it's only in the params dict at runtime)
-        assert str(_ENT) not in sql
+        eid_str = str(_ENT)
+        sql = _build_neighborhood_sql(entity_id_str=eid_str, max_hops=2, limit=50)
+        # Entity UUID must appear directly in the Cypher literal
+        assert eid_str in sql, "center_id must be embedded as a UUID string literal in the Cypher body"
+        # No $1 params argument should be present — that was the source of the asyncpg error
+        assert ":params" not in sql, "BP-450: $1/:params argument must be removed from neighborhood SQL"
+        assert "$center_id" not in sql, "BP-450: $center_id Cypher param must be replaced with literal UUID"
+        # ALL(rel IN relationships...) predicate must be absent — AGE 1.5 doesn't support it
+        assert "ALL(" not in sql, "BP-450: ALL() on variable-length rels must be removed from neighborhood SQL"
 
     async def test_max_hops_embedded_as_numeric_literal_in_neighborhood(self) -> None:
         """max_hops [1,3] is an int literal in the Cypher pattern, not a param."""
         from knowledge_graph.application.use_cases.cypher_neighborhood import _build_neighborhood_sql
 
+        eid_str = str(_ENT)
         for hops in [1, 2, 3]:
-            sql = _build_neighborhood_sql(hops, limit=50)
+            sql = _build_neighborhood_sql(eid_str, hops, limit=50)
             assert f"r*1..{hops}" in sql, f"max_hops={hops} must be literal *1..{hops} in Cypher"
             assert "$max_hops" not in sql
 
