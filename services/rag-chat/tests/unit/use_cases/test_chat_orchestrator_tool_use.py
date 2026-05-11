@@ -161,12 +161,25 @@ class TestOrchestratorToolUsePath:
         """When LLM response has tool_calls → 'tool_call' SSE events yielded.
 
         Verifies: one 'tool_call' event per tool_use block, emitted BEFORE execute_all.
+
+        E-6: We use a two-call mock: first returns tool_calls, second returns a
+        direct answer so the loop terminates after one tool round.
         """
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
         block = _make_tool_use_block("get_price_history")
-        first_resp = _make_llm_tool_response(tool_calls=[block])
-        pipeline = _make_pipeline(first_response=first_resp)
+        pipeline = _make_pipeline()
+
+        # First LLM call: tool_calls; second call: direct answer (breaks loop).
+        call_n = [0]
+
+        async def _two_call(messages, tools=None, **kwargs):
+            call_n[0] += 1
+            if call_n[0] == 1:
+                return _make_llm_tool_response(tool_calls=[block])
+            return _make_llm_tool_response(text="AAPL is $150.", tool_calls=[])
+
+        pipeline.llm_chain.chat_with_tools = _two_call
 
         item = _make_retrieved_item()
         executor = _make_executor([item])
@@ -181,23 +194,29 @@ class TestOrchestratorToolUsePath:
         assert data["tool"] == "get_price_history"
 
     def test_orchestrator_tool_results_injected_into_messages(self) -> None:
-        """After execute_all → tool_result turns injected into messages for 2nd turn.
+        """After execute_all → tool_result turns injected into messages for next iteration.
 
-        Verifies: stream_chat is called with messages that include tool context.
+        E-6: In the multi-turn loop, after tool execution the results are injected
+        into messages. On the next iteration the LLM sees the context and can answer.
+        Verifies: the second LLM call receives messages with system, user, assistant roles.
         """
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
         block = _make_tool_use_block("get_price_history")
-        first_resp = _make_llm_tool_response(tool_calls=[block])
-        pipeline = _make_pipeline(first_response=first_resp)
+        pipeline = _make_pipeline()
 
         captured_messages: list = []
+        call_n = [0]
 
-        async def _capture_stream(messages: list, **kwargs: Any):
+        async def _capture_and_answer(messages, tools=None, **kwargs):
+            call_n[0] += 1
+            captured_messages.clear()
             captured_messages.extend(messages)
-            yield "Answer based on data."
+            if call_n[0] == 1:
+                return _make_llm_tool_response(tool_calls=[block])
+            return _make_llm_tool_response(text="Answer based on data.", tool_calls=[])
 
-        pipeline.llm_chain.stream_chat = _capture_stream
+        pipeline.llm_chain.chat_with_tools = _capture_and_answer
 
         item = _make_retrieved_item()
         executor = _make_executor([item])
@@ -206,8 +225,7 @@ class TestOrchestratorToolUsePath:
         orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
         asyncio.run(_collect(orch, _make_request(), MagicMock()))
 
-        # Messages must include system, user, assistant (tool_calls), and user (results)
-        assert len(captured_messages) >= 3
+        # After the first tool round, messages include system, user, assistant, and user (results).
         roles = [m.get("role") for m in captured_messages]
         assert "system" in roles
         assert "user" in roles
@@ -250,27 +268,36 @@ class TestOrchestratorToolUsePath:
     def test_orchestrator_tool_result_content_capped_at_4000_chars(self) -> None:
         """Large context block (> 4000 chars) from tool results must be capped.
 
-        Verifies: _TOOL_RESULT_MAX_CHARS = 4000 cap is applied before injection.
+        Verifies: _TOOL_RESULT_MAX_CHARS = 4000 cap is applied before injection
+        into messages for the next LLM iteration.
+
+        E-6: In the multi-turn loop, context is injected between iterations. The
+        long context block must be capped at 4000 chars when injected as a user message.
         """
         from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
 
         block = _make_tool_use_block("get_price_history")
-        first_resp = _make_llm_tool_response(tool_calls=[block])
-        pipeline = _make_pipeline(first_response=first_resp)
+        pipeline = _make_pipeline()
 
         captured_user_content: list[str] = []
+        call_n = [0]
 
-        async def _capture_stream(messages: list, **kwargs: Any):
-            for msg in messages:
-                if msg.get("role") == "user" and "Here is the data" in str(msg.get("content", "")):
-                    captured_user_content.append(msg["content"])
-            yield "Answer."
-
-        pipeline.llm_chain.stream_chat = _capture_stream
-
-        # Return a very long context block
+        # Return a very long context block from build_prompt.
         long_context = "A" * 10000
         pipeline.build_prompt = MagicMock(return_value=("prompt", [], long_context))
+
+        async def _two_call_capture(messages: list, tools=None, **kwargs: Any):
+            call_n[0] += 1
+            # Capture user messages with tool results in the second call
+            if call_n[0] == 2:
+                for msg in messages:
+                    if msg.get("role") == "user" and "Here is the data" in str(msg.get("content", "")):
+                        captured_user_content.append(msg["content"])
+            if call_n[0] == 1:
+                return _make_llm_tool_response(tool_calls=[block])
+            return _make_llm_tool_response(text="Answer.", tool_calls=[])
+
+        pipeline.llm_chain.chat_with_tools = _two_call_capture
 
         item = _make_retrieved_item()
         executor = _make_executor([item])
@@ -279,7 +306,7 @@ class TestOrchestratorToolUsePath:
         orch = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=factory)
         asyncio.run(_collect(orch, _make_request(), MagicMock()))
 
-        # If we captured the user message, verify the context was capped at 4000
+        # If we captured the user message with tool results, verify the context was capped.
         if captured_user_content:
             content = captured_user_content[0]
             # "A" * 10000 must not appear; capped at 4000

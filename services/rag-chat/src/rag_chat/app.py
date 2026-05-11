@@ -173,6 +173,7 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     from rag_chat.application.pipeline.retrieval_orchestrator import ParallelRetrievalOrchestrator
     from rag_chat.application.pipeline.retrieval_plan_builder import RetrievalPlanBuilder
     from rag_chat.application.security.input_validator import InputValidator
+    from rag_chat.application.security.llm_injection_classifier import LLMInjectionClassifier
     from rag_chat.application.use_cases.chat_orchestrator import ChatOrchestratorUseCase
     from rag_chat.application.use_cases.get_thread import GetThreadUseCase
     from rag_chat.application.use_cases.persist_chat import ChatPersistenceUseCase
@@ -354,6 +355,14 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     # graph the chat orchestrator uses. This guarantees the eval harness measures
     # exactly the same retrieval path that production chat uses.
     _validator = InputValidator()
+
+    # E-8: Layer 2 LLM semantic injection classifier.
+    # Uses the same DeepInfra API key as the completion model. The model is
+    # configurable via INJECTION_CLASSIFIER_MODEL env var (default: Qwen/Qwen3.5-0.8B).
+    # When deepinfra_api_key is absent the classifier disables itself (fail-open for
+    # the Layer 2 check — Layer 1 regex is always active).
+    _llm_classifier = LLMInjectionClassifier(api_key=_deepinfra_api_key)
+
     _plan_builder = RetrievalPlanBuilder(cypher_enabled=settings.cypher_enabled)
     _hyde = HydeExpander(
         llm_provider=providers[0],
@@ -422,6 +431,9 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
         reranker=reranker,
         llm_chain=llm_chain,
         persistence=ChatPersistenceUseCase(),
+        # E-8: Wire Layer 2 semantic injection classifier. When deepinfra_api_key
+        # is absent, the classifier internally disables itself (returns SAFE).
+        llm_classifier=_llm_classifier,
     )
 
     # BUG-1 FIX: Wire ToolExecutorFactory with all upstream ports so the 8 new
@@ -482,7 +494,12 @@ def _wire_orchestrator(app: FastAPI, settings: RagChatSettings, valkey_client: V
     )
     app.state.tool_executor_factory = tool_executor_factory  # expose for tests / health checks
 
-    orchestrator = ChatOrchestratorUseCase(pipeline=pipeline, tool_executor_factory=tool_executor_factory)
+    orchestrator = ChatOrchestratorUseCase(
+        pipeline=pipeline,
+        tool_executor_factory=tool_executor_factory,
+        # E-12: pass write_factory so ChatAuditLogger can flush to chat_audit_log.
+        write_factory=app.state.write_factory,
+    )
     app.state.chat_orchestrator = orchestrator
     app.state.chat_pipeline = pipeline  # expose for PLAN-0074 Wave F + PLAN-0067 W11-3
     app.state.llm_chain = llm_chain
