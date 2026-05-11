@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
 
+from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
     ActivateBrokerageConnectionResponse,
@@ -18,6 +19,7 @@ from portfolio.api.schemas import (
     ListBrokerageConnectionsResponse,
     SyncErrorResponse,
 )
+from portfolio.application.ports.brokerage_client import SnapTradeUser
 from portfolio.application.use_cases.brokerage_connection import (
     ActivateBrokerageConnectionCommand,
     ActivateBrokerageConnectionUseCase,
@@ -30,6 +32,8 @@ from portfolio.application.use_cases.brokerage_connection import (
     ListBrokerageConnectionsQuery,
     ListBrokerageConnectionsUseCase,
 )
+
+logger = get_logger(__name__)  # type: ignore[no-any-return]
 
 router = APIRouter(tags=["brokerage-connections"])
 
@@ -250,6 +254,82 @@ async def get_sync_errors(
             for e in result.items
         ],
     )
+
+
+# ── Account balance (P1-C) ────────────────────────────────────────────────────
+
+
+@router.get(
+    "/brokerage-connections/{connection_id}/balance",
+    status_code=status.HTTP_200_OK,
+)
+async def get_brokerage_balance(
+    connection_id: UUID,
+    uow: ReadUoWDep,
+    request: Request,
+) -> dict[str, Any]:
+    """Return cash/buying-power balance for a brokerage connection (read-only, R27).
+
+    Calls SnapTrade's per-account balance endpoint. Returns
+    ``{"available": true, "cash": ..., "buying_power": ..., "currency": ...}``
+    when the broker exposes balance data, or ``{"available": false, "reason": ...}``
+    when balance is unavailable — the frontend renders an em-dash for the latter.
+
+    This is a best-effort endpoint: any SDK/network failure returns
+    ``available: false`` rather than 500, so the UI never crashes on balance.
+    """
+    user_id, tenant_id = _require_user_headers(request)
+
+    # Ownership check — read replica (R27); verifies connection belongs to user.
+    connection = await uow.brokerage_connections.get_by_user(connection_id, user_id, tenant_id)
+    if connection is None:
+        raise HTTPException(status_code=404, detail="Brokerage connection not found")
+
+    # Only ACTIVE connections have valid SnapTrade credentials that can query balance.
+    from portfolio.domain.enums import ConnectionStatus
+
+    if connection.status != ConnectionStatus.ACTIVE:
+        return {"available": False, "reason": "connection_not_active"}
+
+    # Build the SnapTrade user credentials from the stored (decrypted) connection.
+    # WHY: SnapTradeClient methods always require user_id + user_secret for HMAC signing.
+    snap_user = SnapTradeUser(
+        snaptrade_user_id=connection.snaptrade_user_id,
+        snaptrade_user_secret=connection.snaptrade_user_secret,  # NEVER logged
+    )
+
+    brokerage_client = request.app.state.brokerage_client
+
+    # Step 1: get the list of SnapTrade account IDs linked to this connection.
+    # WHY: the balance endpoint is per-account; we aggregate (first account = primary).
+    try:
+        account_ids = await brokerage_client.list_account_ids(snap_user)
+    except Exception:
+        logger.warning(
+            "brokerage_balance_list_accounts_failed",
+            connection_id=str(connection_id),
+        )
+        return {"available": False, "reason": "account_list_unavailable"}
+
+    if not account_ids:
+        return {"available": False, "reason": "no_accounts_linked"}
+
+    # Step 2: fetch balance for the primary (first) account.
+    # WHY first only: most users have one account per connection; aggregating
+    # multi-currency/multi-account balances without knowing the user's intent
+    # would be misleading.  The frontend can call per-account if needed.
+    primary_account_id = account_ids[0]
+    balance = await brokerage_client.get_account_balance(snap_user, primary_account_id)
+
+    if balance is None:
+        return {"available": False, "reason": "balance_unavailable"}
+
+    return {
+        "available": True,
+        "cash": str(balance["cash"]) if balance.get("cash") is not None else None,
+        "buying_power": str(balance["buying_power"]) if balance.get("buying_power") is not None else None,
+        "currency": balance.get("currency", "USD"),
+    }
 
 
 # ── Background task helper ────────────────────────────────────────────────────

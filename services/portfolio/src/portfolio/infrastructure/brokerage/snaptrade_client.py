@@ -74,6 +74,21 @@ def _parse_trade_date(trade_date: str | None) -> datetime:
         return datetime.now(tz=UTC)
 
 
+def _parse_date(value: str | None) -> date | None:
+    """Parse a bare ISO date string (YYYY-MM-DD) from SnapTrade into a ``date``.
+
+    P2-E: used for settlement_date which is a date-only field (no time component).
+    Returns ``None`` when the value is absent or unparseable — settlement_date is
+    always optional and should never block activity ingestion.
+    """
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value[:10])  # truncate at 10 chars; ignore any time component
+    except (ValueError, TypeError):
+        return None
+
+
 class SnapTradeClient:
     """Infrastructure adapter wrapping the snaptrade-python-sdk v11.
 
@@ -375,6 +390,13 @@ class SnapTradeClient:
             # entity (``amount`` column added in Alembic 0009).
             item_amount = item.get("amount") if hasattr(item, "get") else getattr(item, "amount", None)
             item_fee = item.get("fee") if hasattr(item, "get") else getattr(item, "fee", None)
+            # P2-E: capture description and settlement_date from the activity.
+            # ``description`` is a human-readable label (e.g. "Dividend Payment - AAPL").
+            # ``settlement_date`` is the T+N settlement date, distinct from trade_date.
+            item_description = item.get("description") if hasattr(item, "get") else getattr(item, "description", None)
+            item_settlement_date = (
+                item.get("settlement_date") if hasattr(item, "get") else getattr(item, "settlement_date", None)
+            )
 
             # ── PLAN-0051 / T-A-1-06 — F-P-010 ──────────────────────────────
             # When the broker tags a row as DIVIDEND but ships an empty /
@@ -410,6 +432,10 @@ class SnapTradeClient:
                     brokerage_name=str(item_institution) if item_institution else None,
                     amount=parsed_amount,
                     fee=_parse_optional_decimal(item_fee),
+                    # P2-E: pass through broker description (empty string → None for cleanliness)
+                    description=str(item_description).strip() or None if item_description else None,
+                    # P2-E: settlement_date as a bare date (no time component)
+                    settlement_date=_parse_date(str(item_settlement_date) if item_settlement_date else None),
                 ),
             )
 
@@ -539,3 +565,91 @@ class SnapTradeClient:
             )
 
         return positions
+
+    # ── Account balance (P1-C) ────────────────────────────────────────────────
+
+    async def get_account_balance(
+        self,
+        user: SnapTradeUser,
+        account_id: str,
+    ) -> dict[str, Any] | None:
+        """Return cash / buying-power balance for one SnapTrade account.
+
+        Calls ``accounts_account_id_balances_get`` which returns a list of
+        ``Balance`` objects (one per currency).  We aggregate USD (or the first
+        available currency) and return a flat dict.
+
+        Returns ``None`` on any SDK exception rather than raising — the caller
+        (portfolio route + S9 proxy) returns ``{"available": false}`` so the
+        frontend renders an em-dash instead of crashing.  This is intentional:
+        balance data is informational and should never block the UI.
+
+        Raw API responses are NOT logged (security invariant F-20).
+        """
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self._account_info.accounts_account_id_balances_get(
+                    user_id=user.snaptrade_user_id,
+                    user_secret=user.snaptrade_user_secret,  # NEVER logged
+                    account_id=account_id,
+                ),
+            )
+        except Exception:
+            # Defensive: balance is informational — don't surface SDK errors to the caller.
+            # The route handler converts None → {"available": false}.
+            logger.warning(
+                "snaptrade_get_account_balance_failed",
+                snaptrade_user_id=user.snaptrade_user_id,
+                account_id=account_id,
+                # Do NOT log exc_info: response may contain account details (F-20).
+            )
+            return None
+
+        if not result:
+            return None
+
+        # ``result`` is a list of Balance objects; each has ``cash``, ``buying_power``,
+        # and ``currency`` attributes.  SnapTrade may return multiple currencies — we
+        # prefer USD if present, else use the first entry.
+        balances = list(result) if hasattr(result, "__iter__") else []
+        if not balances:
+            return None
+
+        # Sort: USD first, then alphabetically for determinism.
+        def _currency_key(b: Any) -> str:
+            raw = b.get("currency") if hasattr(b, "get") else getattr(b, "currency", "")
+            if hasattr(raw, "get"):
+                raw = raw.get("code") or ""
+            elif hasattr(raw, "code"):
+                raw = raw.code or ""
+            return "" if str(raw).upper() == "USD" else str(raw)
+
+        balances.sort(key=_currency_key)
+        bal = balances[0]
+
+        def _field(obj: Any, *keys: str) -> Any:
+            """Extract a field from a DictSchema-style SnapTrade object."""
+            for k in keys:
+                v = obj.get(k) if hasattr(obj, "get") else getattr(obj, k, None)
+                if v is not None:
+                    return v
+            return None
+
+        # Currency code may be a nested dict/object or a plain string.
+        raw_currency = _field(bal, "currency")
+        if hasattr(raw_currency, "get"):
+            currency_code = str(raw_currency.get("code") or "USD")
+        elif hasattr(raw_currency, "code"):
+            currency_code = str(raw_currency.code or "USD")
+        else:
+            currency_code = str(raw_currency or "USD")
+
+        cash_raw = _field(bal, "cash")
+        buying_power_raw = _field(bal, "buying_power")
+
+        return {
+            "cash": _parse_optional_decimal(cash_raw),
+            "buying_power": _parse_optional_decimal(buying_power_raw),
+            "currency": currency_code,
+        }

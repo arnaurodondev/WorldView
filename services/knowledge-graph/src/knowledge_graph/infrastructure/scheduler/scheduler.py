@@ -130,7 +130,9 @@ class KnowledgeGraphScheduler:
     def _register_jobs(self) -> None:
         """Register all APScheduler jobs with configured intervals."""
         s = self._settings
-        jobs: list[tuple[str, int, str]] = [
+        # Jobs that do NOT need an immediate first-tick — long-running background
+        # maintenance tasks where waiting one full interval is acceptable.
+        deferred_jobs: list[tuple[str, int, str]] = [
             ("confidence_recompute", s.worker_confidence_interval_s, "worker_13a_confidence"),
             ("contradiction_batch", s.worker_contradiction_interval_s, "worker_13b_contradiction"),
             # Worker 13B: SA-2 — periodic relation_evidence promotion (300 s / 5 min).
@@ -138,15 +140,11 @@ class KnowledgeGraphScheduler:
             # SummaryWorker can find high-quality evidence via get_all_for_relation().
             ("evidence_promotion", s.worker_evidence_promote_interval_s, "worker_13b_evidence_promoter"),
             ("summary_generation", s.worker_summary_interval_s, "worker_13c_summary"),
-            ("definition_embedding", s.worker_definition_refresh_interval_s, "worker_13d1_definition"),
-            ("narrative_embedding", s.worker_narrative_refresh_interval_s, "worker_13d2_narrative"),
-            ("fundamentals_embedding", s.worker_fundamentals_refresh_interval_s, "worker_13d3_fundamentals"),
             ("provisional_enrichment", s.worker_provisional_enrichment_interval_s, "worker_13e_provisional"),
             ("embedding_refresh", s.worker_embedding_refresh_interval_s, "worker_13f_embedding"),
             ("partition_management", s.worker_partition_interval_s, "worker_13f_partition"),
-            ("age_sync", s.worker_age_sync_interval_s, "worker_13f_age_sync"),
         ]
-        for name, interval, job_id in jobs:
+        for name, interval, job_id in deferred_jobs:
             fn = self._resolve_job(name)
             self._scheduler.add_job(
                 fn,
@@ -155,6 +153,30 @@ class KnowledgeGraphScheduler:
                 id=job_id,
                 max_instances=1,
                 coalesce=True,
+            )
+
+        # Embedding and AGE sync jobs: fire 120 s after boot so HNSW indexes and
+        # the AGE property graph are populated before the first user request hits
+        # the demo. Previously these waited a full interval (60-120 min) after
+        # restart — matching the pattern used by narrative_generation (60 s) and
+        # path_insight_seeder (90 s).
+        _boot_delay = timedelta(seconds=120)
+        early_jobs: list[tuple[str, int, str]] = [
+            ("definition_embedding", s.worker_definition_refresh_interval_s, "worker_13d1_definition"),
+            ("narrative_embedding", s.worker_narrative_refresh_interval_s, "worker_13d2_narrative"),
+            ("fundamentals_embedding", s.worker_fundamentals_refresh_interval_s, "worker_13d3_fundamentals"),
+            ("age_sync", s.worker_age_sync_interval_s, "worker_13f_age_sync"),
+        ]
+        for name, interval, job_id in early_jobs:
+            fn = self._resolve_job(name)
+            self._scheduler.add_job(
+                fn,
+                "interval",
+                seconds=interval,
+                id=job_id,
+                max_instances=1,
+                coalesce=True,
+                next_run_time=datetime.now(tz=UTC) + _boot_delay,  # fire 120s after boot
             )
 
         # Workers 13D-6, 13D-7, 13D-8 have been migrated to Kafka consumers.
