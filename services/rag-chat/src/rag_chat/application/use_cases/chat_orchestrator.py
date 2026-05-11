@@ -157,11 +157,33 @@ class ChatOrchestratorUseCase:
 
         # ── Step 5-8: Tool-use path ───────────────────────────────────────────────
         # Build per-request ToolExecutor from factory (or a minimal default).
+        #
+        # ISSUE-1 FIX: EntityContext from the primary resolved entity is now passed
+        # to for_request() so every entity-scoped tool handler (get_entity_graph,
+        # traverse_graph, search_claims, search_events, etc.) receives a non-None
+        # entity_context.  Before this fix entity_context was always None → every
+        # handler hit the `if self._entity_context is not None:` guard and returned
+        # [] → all_tools_failed → "Unable to retrieve relevant data" for ALL entity
+        # queries.
+        from rag_chat.application.pipeline.tool_executor import EntityContext
+
+        _primary = entities[0] if entities else None
+        entity_context = (
+            EntityContext(
+                entity_id=_primary.entity_id,
+                ticker=_primary.ticker or "",
+                name=_primary.canonical_name,
+            )
+            if _primary is not None
+            else None
+        )
+
         if self._tool_factory is not None:
             tool_executor = self._tool_factory.for_request(
                 user_id=request.user_id,
                 tenant_id=request.tenant_id,
                 internal_jwt=None,  # JWT forwarding handled inside S1Port adapter
+                entity_context=entity_context,
             )
         else:
             # Minimal default for tests/legacy DI that haven't been updated yet.
@@ -198,6 +220,21 @@ class ChatOrchestratorUseCase:
         from common.time import utc_now  # type: ignore[import-untyped]
 
         _today = utc_now().date().isoformat()
+
+        # Build entity resolution map for multi-entity queries so the LLM can
+        # supply second-entity UUIDs to cross-entity tools like traverse_graph.
+        # Without this the LLM only knows entity names from the user's message
+        # and cannot construct valid UUID arguments for graph traversal calls.
+        _entity_map_section = ""
+        if entities:
+            _emap_lines = []
+            for _ent in entities:
+                _ticker_str = f", ticker: {_ent.ticker}" if _ent.ticker else ""
+                _emap_lines.append(
+                    f'- "{_ent.canonical_name}": entity_id={_ent.entity_id}' f" (type: {_ent.entity_type}{_ticker_str})"
+                )
+            _entity_map_section = "\n\nEntities resolved from this query:\n" + "\n".join(_emap_lines)
+
         system_prompt = (
             tool_executor._registry.to_system_prompt_section()
             + f"\n\nYou are a market intelligence assistant with access to the tools listed above. "
@@ -210,7 +247,7 @@ class ChatOrchestratorUseCase:
             f"with identifiers, cite them inline using [N1], [N2], … markers — one marker "
             f"per claim that is supported by a retrieved item, in the order the items "
             f"appear in the tool output. Do NOT invent citation numbers. If no documents "
-            f"were retrieved, do not emit any citation markers."
+            f"were retrieved, do not emit any citation markers." + _entity_map_section
         )
 
         # Assemble OpenAI-format messages for the structured call.

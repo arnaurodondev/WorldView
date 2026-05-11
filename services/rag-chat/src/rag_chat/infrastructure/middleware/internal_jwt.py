@@ -64,7 +64,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         self._skip_verification = skip_verification
 
         if self._skip_verification:
-            logger.critical(  # type: ignore[no-any-return]
+            logger.warning(  # type: ignore[no-any-return]
                 "internal_jwt_skip_verification_enabled",
                 detail=(
                     "InternalJWTMiddleware signature verification is DISABLED. "
@@ -179,7 +179,7 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         # eval_retrieval.py can call /v1/internal/retrieve without a signed JWT.
         # MUST NOT be used in production (validated at startup via config.py).
         if self._skip_verification:
-            logger.critical(  # type: ignore[no-any-return]
+            logger.debug(  # type: ignore[no-any-return]
                 "internal_jwt_unverified_decode",
                 detail="Decoding JWT WITHOUT signature verification (skip_verification=True).",
             )
