@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from uuid import UUID
+    from datetime import datetime
 
-    from alert.domain.entities import Alert, DeadLetterEntry, OutboxEvent, PendingAlert
+    from alert.domain.entities import Alert, DeadLetterEntry, EmailPreference, OutboxEvent, PendingAlert
+    from alert.domain.enums import AlertSeverity
 
 
 class DLQRepositoryPort(ABC):
@@ -35,17 +37,69 @@ class DLQRepositoryPort(ABC):
 
 
 class AlertRepositoryPort(ABC):
-    """Port for alert reads."""
+    """Port for alert reads + ack/snooze writes (PLAN-0051 T-D-4-02)."""
 
     @abstractmethod
     async def get_by_id(self, alert_id: UUID) -> Alert | None: ...
+
+    @abstractmethod
+    async def acknowledge(
+        self,
+        alert_id: UUID,
+        user_id: UUID,
+        ack_time: datetime | None = None,
+    ) -> bool:
+        """Mark an alert acknowledged. Idempotent — returns False if already acked."""
+
+    @abstractmethod
+    async def snooze(self, alert_id: UUID, snooze_until: datetime) -> bool:
+        """Set ``snooze_until``. Returns True iff a row was updated."""
+
+    @abstractmethod
+    async def list_history(
+        self,
+        tenant_id: UUID,
+        *,
+        status: str = "all",
+        severity: AlertSeverity | None = None,
+        entity_id: UUID | None = None,
+        from_dt: datetime | None = None,
+        to_dt: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Alert]:
+        """Return alerts in tenant history matching filters, newest first."""
+
+    @abstractmethod
+    async def count_history(
+        self,
+        tenant_id: UUID,
+        *,
+        status: str = "all",
+        severity: AlertSeverity | None = None,
+        entity_id: UUID | None = None,
+        from_dt: datetime | None = None,
+        to_dt: datetime | None = None,
+    ) -> int:
+        """Return the count of alerts in tenant history matching the filters.
+
+        Used to back canonical pagination — the API needs the universe size to
+        decide whether more pages exist (QA-iter1 C-3). Mirrors the same
+        WHERE-clause semantics as ``list_history`` (sans LIMIT/OFFSET).
+        """
 
 
 class PendingAlertRepositoryPort(ABC):
     """Port for pending alert operations."""
 
     @abstractmethod
-    async def list_by_user(self, user_id: UUID, limit: int = 50, offset: int = 0) -> list[PendingAlert]: ...
+    async def list_by_user(
+        self,
+        user_id: UUID,
+        limit: int = 50,
+        offset: int = 0,
+        min_severities: list[str] | None = None,
+    ) -> list[PendingAlert]: ...
 
     @abstractmethod
     async def acknowledge(self, user_id: UUID, alert_id: UUID) -> bool: ...
@@ -73,3 +127,19 @@ class AlertSaveRepositoryPort(ABC):
 
     @abstractmethod
     async def save(self, alert: Alert) -> None: ...
+
+
+class EmailPreferenceRepositoryPort(ABC):
+    """Port for email preference read/write operations."""
+
+    @abstractmethod
+    async def get_by_user(self, user_id: UUID, tenant_id: UUID) -> EmailPreference | None: ...
+
+    @abstractmethod
+    async def upsert(self, pref: EmailPreference) -> None: ...
+
+    @abstractmethod
+    async def commit(self) -> None: ...
+
+    @abstractmethod
+    async def list_scheduled_users(self, day: int, hour: int) -> list[EmailPreference]: ...

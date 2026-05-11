@@ -3,6 +3,7 @@ name: refactor
 description: "Safely restructure code without changing behavior. Ensures existing tests pass before and after, preserves architecture boundaries, runs broader regression tests, and updates documentation. Use for code reorganization, naming improvements, pattern migrations, and dependency cleanup."
 user-invocable: true
 argument-hint: "[description of refactoring, e.g. 'extract shared validation logic in portfolio service']"
+effort: medium
 ---
 
 # Refactor — Safe Behavioral-Preserving Restructuring

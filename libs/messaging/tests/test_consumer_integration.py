@@ -94,7 +94,7 @@ class _TestConsumer(BaseKafkaConsumer[str]):
                 stored.attempt = failure.attempt
                 stored.last_error = failure.last_error
 
-    async def dead_letter(self, failure: FailureInfo[str]) -> None:
+    async def _dead_letter_impl(self, failure: FailureInfo[str]) -> None:
         self.dead_letters.append(failure)
 
     async def get_pending_retries(self) -> list[FailureInfo[str]]:

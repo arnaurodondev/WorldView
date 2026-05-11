@@ -1,0 +1,12 @@
+NEW ENV VARS — PLAN-0052 Wave D
+- PORTFOLIO_FEEDBACK_S3_BUCKET (default: worldview-feedback-screenshots) — service: portfolio
+- PORTFOLIO_FEEDBACK_SCREENSHOT_TTL_DAYS (default: 90) — service: portfolio
+- PORTFOLIO_FEEDBACK_CONSOLE_LOGS_TTL_DAYS (default: 7) — service: portfolio
+
+Action items for worldview-gitops:
+- Add the 3 vars above to bootstrap/setup-secrets.sh value sources (no real secret — defaults are fine for dev/staging).
+- Add to portfolio service Helm values.yaml under env.
+- Configure S3 bucket worldview-feedback-screenshots with 90d lifecycle policy on objects (TTL match).
+- Optional: provision a separate S3 bucket per environment (worldview-feedback-screenshots-dev / -staging / -prod).
+
+No new secrets to fetch — these are pure config defaults. The S3 access keys are already covered by PORTFOLIO_STORAGE_ACCESS_KEY / PORTFOLIO_STORAGE_SECRET_KEY (existing).

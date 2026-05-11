@@ -1,0 +1,70 @@
+---
+title: Panel Types
+description: Detailed reference for all 11 workspace panel types.
+section: Workspace
+order: 2
+updated: 2026-05-05
+---
+
+Each panel type has its own configuration options accessible from the panel header's settings gear icon.
+
+## Chart panel
+
+Renders an OHLCV chart using the same engine as the Instruments → Overview tab.
+
+**Panel-specific settings:**
+- Symbol — the instrument ticker
+- Timeframe — 1D through MAX
+- Chart type — Candlestick / Line / Area
+- Active indicators — select from 7 built-in indicators
+- Theme override — Light / Dark (default: inherits app theme)
+
+## News Feed panel
+
+Shows an article feed, either for a specific instrument or a keyword topic.
+
+**Panel-specific settings:**
+- Mode — Instrument (by ticker) or Keyword (free-text search)
+- Sort — By relevance score or by publication date
+- Minimum tier — filter to Tier 1/2/all
+- Sentiment filter — All / Positive / Negative
+
+## Fundamentals panel
+
+Displays the valuation metrics panel for an instrument. Compact layout optimized for the panel grid — shows valuation multiples, key income statement metrics, and the 52-week range bar.
+
+## Intelligence Graph panel
+
+Renders the entity knowledge graph for an instrument. Same capabilities as the Instruments → Intelligence tab, optimized for the panel viewport size.
+
+## Portfolio panel
+
+A compact summary of your Portfolio: total value, daily P&L, and a scrollable holdings list sorted by day change. Each holding links to its instrument page.
+
+## Screener panel
+
+An embedded mini-screener. Supports the same filters as the full Screener page, but results appear within the panel. Click a result row to update any Chart panels linked to the same broadcast channel.
+
+<Callout type="tip" title="Linking Screener to Chart">
+Assign the Screener panel and a Chart panel to the same broadcast channel. When you click a screener result, the Chart panel immediately shows that instrument's chart — enabling rapid scanning of screener hits.
+</Callout>
+
+## Watchlist panel
+
+Shows your active watchlist with real-time quotes. Same columns as Portfolio → Watchlists. Click any row to update linked panels on the same broadcast channel.
+
+## Economic Calendar panel
+
+Shows the next 5–10 upcoming macro events. Compact format: event name, release time, consensus, and prior. Click an event to expand its historical chart.
+
+## Prediction Markets panel
+
+Top 5 Polymarket events by volume with YES probability and 24h change. Compact format for the panel grid. Click an event to open the Polymarket source page.
+
+## Chat panel
+
+Embeds the full AI chat assistant in the panel. The conversation is independent of `/chat` — it is a panel-specific thread. Symbol linking applies: if the panel is on a broadcast channel and the symbol changes, the panel automatically appends a context message loading that instrument.
+
+## Alerts panel
+
+Shows the alert history for the current session: ticker, severity, trigger condition, trigger time, and current price. Useful for monitoring an active trading session alongside charts.

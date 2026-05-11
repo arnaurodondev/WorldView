@@ -186,3 +186,76 @@ class TestPing:
     async def test_ping_returns_true(self, client: ValkeyClient) -> None:
         result = await client.ping()
         assert result is True
+
+
+# ── Pub/sub operations ────────────────────────────────────────────────────────
+
+
+class TestPubSub:
+    """Tests for ValkeyClient.publish() and ValkeyClient.subscribe()."""
+
+    async def test_publish_returns_subscriber_count(self, client: ValkeyClient) -> None:
+        """publish() returns the number of subscribers (0 when no subscribers)."""
+        count = await client.publish("test:channel", "hello")
+        assert isinstance(count, int)
+
+    async def test_subscribe_and_publish_round_trip(self) -> None:
+        """Messages published on one client are received by a subscriber on the same server.
+
+        Note: ``get_message(ignore_subscribe_messages=True)`` reads ONE response per call
+        and returns None when it encounters a subscribe confirmation.  Use ``async for``
+        over the PubSub object instead — it internally skips subscribe confirmations.
+        """
+        import fakeredis
+        import fakeredis.aioredis
+
+        server = fakeredis.FakeServer()
+        sub_redis = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
+        pub_redis = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
+
+        sub_client = ValkeyClient(config=ValkeyConfig())
+        sub_client._redis = sub_redis  # type: ignore[assignment]
+        pub_client = ValkeyClient(config=ValkeyConfig())
+        pub_client._redis = pub_redis  # type: ignore[assignment]
+
+        channel = "alert:user-abc"
+        message = '{"alert_id": "123"}'
+
+        received: list[str] = []
+        async with sub_client.subscribe(channel) as pubsub:
+            # Publish BEFORE the loop so the message is already in the buffer
+            await pub_client.publish(channel, message)
+
+            # async for: first yields subscribe confirmation (skipped), then the message
+            async for msg in pubsub.listen():
+                if msg["type"] == "message":
+                    received.append(msg["data"])
+                    break
+
+        assert len(received) == 1
+        assert received[0] == message
+
+    async def test_subscribe_unsubscribes_on_exit(self) -> None:
+        """The async context manager cleans up the subscription on exit."""
+        import fakeredis
+        import fakeredis.aioredis
+
+        server = fakeredis.FakeServer()
+        fake_redis = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
+        client = ValkeyClient(config=ValkeyConfig())
+        client._redis = fake_redis  # type: ignore[assignment]
+
+        channel = "alert:cleanup-test"
+        received: list[str] = []
+        async with client.subscribe(channel) as pubsub:
+            # Publish before the loop so the message is in the buffer
+            await client.publish(channel, "msg")
+            async for msg in pubsub.listen():
+                if msg["type"] == "message":
+                    received.append(msg["data"])
+                    break
+
+        assert received == ["msg"]
+        # After context exit, no subscription active — verify by checking subscriber count
+        count = await client.publish(channel, "after-unsubscribe")
+        assert count == 0  # no active subscribers

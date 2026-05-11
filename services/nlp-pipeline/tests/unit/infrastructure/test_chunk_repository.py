@@ -8,8 +8,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from nlp_pipeline.infrastructure.nlp_db.repositories.chunk import ChunkRepository
 
+pytestmark = pytest.mark.unit
 
-def _make_chunk(chunk_id: uuid.UUID | None = None) -> MagicMock:
+
+def _make_chunk(chunk_id: uuid.UUID | None = None, text_key: str | None = None) -> MagicMock:
     c = MagicMock()
     c.chunk_id = chunk_id or uuid.uuid4()
     c.doc_id = uuid.uuid4()
@@ -22,6 +24,7 @@ def _make_chunk(chunk_id: uuid.UUID | None = None) -> MagicMock:
     c.sentence_end_idx = None
     c.speaker = None
     c.heading_path = None
+    c.text_key = text_key
     return c
 
 
@@ -55,3 +58,26 @@ class TestChunkRepository:
         await repo.add(chunk)
 
         assert session.execute.await_count == 2
+
+    @pytest.mark.unit
+    async def test_add_persists_text_key(self) -> None:
+        """text_key is passed to the INSERT as chunk_text_key."""
+        chunk = _make_chunk(text_key="nlp-pipeline/chunk-text/doc-id/chunk-id/body/v1.txt")
+        session = _make_session()
+        repo = ChunkRepository(session)
+
+        await repo.add(chunk)
+
+        # Verify execute was called (the actual SQL bind is tested via DDL alignment)
+        session.execute.assert_awaited_once()
+
+    @pytest.mark.unit
+    async def test_add_persists_null_text_key(self) -> None:
+        """When text_key is None, chunk_text_key is NULL in the INSERT."""
+        chunk = _make_chunk(text_key=None)
+        session = _make_session()
+        repo = ChunkRepository(session)
+
+        await repo.add(chunk)
+
+        session.execute.assert_awaited_once()

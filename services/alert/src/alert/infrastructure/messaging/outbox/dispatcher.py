@@ -31,8 +31,10 @@ class AlertOutboxDispatcher:
     """Polls ``outbox_events`` and produces each pending event to Kafka.
 
     Args:
+    ----
         settings: Service settings (bootstrap_servers, topic names, etc.).
         session_factory: SQLAlchemy async session factory for alert_db.
+
     """
 
     def __init__(

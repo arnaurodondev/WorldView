@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -10,8 +11,6 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from nlp_pipeline.infrastructure.nlp_db.models import ChunkModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from nlp_pipeline.domain.models import Chunk
@@ -22,6 +21,12 @@ class ChunkRepository:
         self._session = session
 
     async def add(self, chunk: Chunk) -> None:
+        # PLAN-0063 W5-2: ``title_denorm`` and ``section_heading_denorm`` feed
+        # the GENERATED ``tsv_english`` tsvector column (weights A and B).
+        # ``chunk_text`` feeds weight D (and the entire ``tsv_simple``); it must
+        # be the actual chunk body (NOT ``chunk_text_key`` which is a MinIO
+        # object path — see BP-NEW-CHUNK-TEXT). Skipping any of these would
+        # leave new chunks invisible to lexical search.
         stmt = (
             pg_insert(ChunkModel)
             .values(
@@ -36,6 +41,17 @@ class ChunkRepository:
                 sentence_end_idx=chunk.sentence_end_idx,
                 speaker=chunk.speaker,
                 heading_path=chunk.heading_path,
+                chunk_text_key=chunk.text_key,
+                title_denorm=chunk.title_denorm,
+                section_heading_denorm=chunk.section_heading_denorm,
+                chunk_text=chunk.text,
+                # PLAN-0078 Wave B: persist GLiNER mention metadata for GIN filtering.
+                entity_mentions=chunk.entity_mentions,
+                # PLAN-0086 Wave C-1: tenant isolation — NULL = public/global content.
+                tenant_id=chunk.tenant_id,
+                # PLAN-0086 Wave C-1: denormalised document title for RAG citations;
+                # truncated to 512 chars to match the DB column length constraint.
+                document_title=chunk.title_denorm[:512] if chunk.title_denorm else None,
             )
             .on_conflict_do_nothing(index_elements=["chunk_id"])
         )

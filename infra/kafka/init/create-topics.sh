@@ -37,6 +37,7 @@ TOPICS=(
     "market.dataset.fetched:6:1"
     "market.instrument.created:3:1"
     "market.instrument.updated:3:1"
+    "market.instrument.discovered.v1:3:1"
     "content.article.raw.v1:12:1"
     "content.article.stored.v1:12:1"
     "nlp.article.enriched.v1:12:1"
@@ -46,11 +47,12 @@ TOPICS=(
     "relation.type.proposed.v1:4:1"
     "entity.canonical.created.v1:12:1"
     "alert.delivered.v1:12:1"
-    "claim.extracted.v1:12:1"
+    "market.prediction.v1:8:1"
     "kg.dead-letter.v1:12:1"
     "alert.dead-letter.v1:12:1"
     "nlp.dead-letter.v1:12:1"
     "content.dead-letter.v1:12:1"
+    "market.dead-letter.v1:8:1"
 )
 
 for TOPIC_SPEC in "${TOPICS[@]}"; do
@@ -107,6 +109,39 @@ echo "Setting 30-day retention on relation.type.proposed.v1"
 "$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
     --entity-type topics \
     --entity-name relation.type.proposed.v1 \
+    --add-config retention.ms=2592000000
+
+echo "Setting 30-day retention on market.prediction.v1"
+"$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
+    --entity-type topics \
+    --entity-name market.prediction.v1 \
+    --add-config retention.ms=2592000000
+
+# 30-day retention: primary pipeline topics — services may be down for extended
+# maintenance windows; 7-day Kafka default is insufficient to avoid silent
+# message loss beyond the retention window.
+echo "Setting 30-day retention on market.dataset.fetched"
+"$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
+    --entity-type topics \
+    --entity-name market.dataset.fetched \
+    --add-config retention.ms=2592000000
+
+echo "Setting 30-day retention on content.article.stored.v1"
+"$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
+    --entity-type topics \
+    --entity-name content.article.stored.v1 \
+    --add-config retention.ms=2592000000
+
+echo "Setting 30-day retention on nlp.article.enriched.v1"
+"$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
+    --entity-type topics \
+    --entity-name nlp.article.enriched.v1 \
+    --add-config retention.ms=2592000000
+
+echo "Setting 30-day retention on content.article.raw.v1"
+"$KAFKA_CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --alter \
+    --entity-type topics \
+    --entity-name content.article.raw.v1 \
     --add-config retention.ms=2592000000
 
 # ── Verification ──────────────────────────────────────────────────────────────

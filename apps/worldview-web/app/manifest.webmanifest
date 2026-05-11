@@ -1,0 +1,37 @@
+{
+  "name": "Worldview — Institutional Market Intelligence",
+  "short_name": "Worldview",
+  "description": "Bloomberg-grade research without the Bloomberg bill. Real-time market intelligence, entity graphs, AI-native research, and prediction markets.",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#09090B",
+  "theme_color": "#FFD60A",
+  "orientation": "any",
+  "categories": ["finance", "productivity", "business"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

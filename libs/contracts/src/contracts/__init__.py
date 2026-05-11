@@ -10,6 +10,7 @@ from contracts.canonical.ingestion import (
     CanonicalStoredArticleEvent,
     CanonicalWatchlistEvent,
 )
+from contracts.canonical.instrument_discovered import CanonicalInstrumentDiscovered
 from contracts.canonical.ohlcv import CanonicalOHLCVBar
 from contracts.canonical.quotes import CanonicalQuote
 from contracts.canonical.sentiment import CanonicalSentiment
@@ -21,6 +22,7 @@ from contracts.parsing import (
     to_jsonl,
     to_parquet,
 )
+from contracts.trust import SOURCE_AUTHORITY
 from contracts.versions import (
     ARTICLE_SCHEMA_VERSION,
     ENRICHED_ARTICLE_SCHEMA_VERSION,
@@ -47,12 +49,14 @@ __all__ = [
     "RAW_ARTICLE_SCHEMA_VERSION",
     "SENTIMENT_SCHEMA_VERSION",
     "SIGNAL_SCHEMA_VERSION",
+    "SOURCE_AUTHORITY",
     "STORED_ARTICLE_SCHEMA_VERSION",
     "WATCHLIST_EVENT_SCHEMA_VERSION",
     "CanonicalArticle",
     "CanonicalEnrichedArticleEvent",
     "CanonicalEntity",
     "CanonicalFundamentals",
+    "CanonicalInstrumentDiscovered",
     "CanonicalOHLCVBar",
     "CanonicalQuote",
     "CanonicalRawArticleEvent",

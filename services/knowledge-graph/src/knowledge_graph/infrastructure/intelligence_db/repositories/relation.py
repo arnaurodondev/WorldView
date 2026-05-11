@@ -11,18 +11,19 @@ Critical constraints:
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import text
 
-if TYPE_CHECKING:
-    from datetime import datetime
+from knowledge_graph.application.ports.repositories import RelationRepositoryPort
 
+if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-class RelationRepository:
+class RelationRepository(RelationRepositoryPort):
     """Read/write repository for ``relations`` (HASH-partitioned x 8)."""
 
     def __init__(self, session: AsyncSession) -> None:
@@ -72,6 +73,10 @@ INSERT INTO relations (
     now(), now(), 1
 )
 ON CONFLICT (subject_entity_id, canonical_type, object_entity_id) DO UPDATE SET
+    semantic_mode     = EXCLUDED.semantic_mode,
+    decay_class       = EXCLUDED.decay_class,
+    decay_alpha       = EXCLUDED.decay_alpha,
+    base_confidence   = EXCLUDED.base_confidence,
     latest_evidence_at = now(),
     evidence_count     = relations.evidence_count + 1,
     confidence_stale   = true,
@@ -90,6 +95,56 @@ RETURNING relation_id
         )
         row = result.fetchone()
         return UUID(str(row[0]))  # type: ignore[index]
+
+    async def upsert_relation(
+        self,
+        subject_entity_id: UUID,
+        object_entity_id: UUID,
+        canonical_type: str,
+        evidence_text: str | None = None,
+        source_weight: float = 0.90,
+        is_backfill: bool = False,
+    ) -> UUID:
+        """Convenience wrapper for worker-sourced relation upserts.
+
+        Uses ``RELATION_STATE`` semantic mode and ``DURABLE`` decay class,
+        appropriate for long-lived company → person executive relationships.
+        The *evidence_text* is logged for audit trail; *is_backfill* is
+        accepted for interface symmetry but does not affect DB writes.
+
+        Args:
+        ----
+            subject_entity_id: Source entity (e.g. company).
+            object_entity_id:  Target entity (e.g. person).
+            canonical_type:    Relation type key (e.g. ``"has_executive"``).
+            evidence_text:     Human-readable provenance (logged only).
+            source_weight:     Base confidence assigned to the relation.
+            is_backfill:       Accepted for interface symmetry; unused.
+
+        Returns:
+        -------
+            The ``relation_id`` of the upserted relation row.
+
+        """
+        from observability import get_logger  # type: ignore[import-untyped]
+
+        _log = get_logger(__name__)  # type: ignore[no-any-return]
+        if evidence_text:
+            _log.debug(  # type: ignore[no-any-return]
+                "relation_upsert_evidence",
+                canonical_type=canonical_type,
+                evidence=evidence_text,
+            )
+
+        return await self.upsert(
+            subject_entity_id=subject_entity_id,
+            object_entity_id=object_entity_id,
+            canonical_type=canonical_type,
+            semantic_mode="RELATION_STATE",
+            decay_class="DURABLE",
+            decay_alpha=0.000950,  # DURABLE: ~730-day half-life
+            base_confidence=source_weight,
+        )
 
     async def get(
         self,
@@ -167,7 +222,10 @@ FOR UPDATE SKIP LOCKED
         ]
 
     async def fetch_stale_summary(self, limit: int = 50) -> list[dict[str, object]]:
-        """Fetch relations needing a fresh LLM summary (Worker 13C)."""
+        """Fetch relations needing a fresh LLM summary (Worker 13C).
+
+        # max_instances=1 APScheduler coalescing prevents concurrent calls — no row-level lock needed
+        """
         result = await self._session.execute(
             text("""
 SELECT relation_id, semantic_mode, decay_class, decay_alpha, confidence
@@ -176,7 +234,6 @@ WHERE summary_stale = true
   AND confidence IS NOT NULL
 ORDER BY confidence DESC, latest_evidence_at DESC
 LIMIT :limit
-FOR UPDATE SKIP LOCKED
 """),
             {"limit": limit},
         )
@@ -191,6 +248,60 @@ FOR UPDATE SKIP LOCKED
             }
             for r in rows
         ]
+
+    async def update_contra_columns(
+        self,
+        relation_id: UUID,
+        strongest_contra_score: float,
+        contra_count_by_type: dict[str, object],
+        latest_contra_at: object,
+    ) -> None:
+        """Persist aggregated contradiction stats on the relation (T-B-02)."""
+        import json
+
+        await self._session.execute(
+            text("""
+UPDATE relations SET
+    strongest_contra_score = :strongest,
+    contra_count_by_type   = :count_by_type::jsonb,
+    latest_contra_at       = :latest_at
+WHERE relation_id = :relation_id
+"""),
+            {
+                "relation_id": str(relation_id),
+                "strongest": strongest_contra_score,
+                "count_by_type": json.dumps(contra_count_by_type),
+                "latest_at": latest_contra_at,
+            },
+        )
+
+    async def invalidate_relation(
+        self,
+        relation_id: UUID,
+        valid_to: object,
+        valid_to_confidence: float,
+        valid_to_source: str,
+    ) -> None:
+        """Soft-close a relation when contradiction drives confidence below threshold (T-B-02).
+
+        Sets ``valid_to``, ``valid_to_confidence``, and ``valid_to_source`` in a
+        single UPDATE.  No Kafka event emitted — deferred to follow-up plan.
+        """
+        await self._session.execute(
+            text("""
+UPDATE relations SET
+    valid_to            = :valid_to,
+    valid_to_confidence = :valid_to_confidence,
+    valid_to_source     = :valid_to_source
+WHERE relation_id = :relation_id
+"""),
+            {
+                "relation_id": str(relation_id),
+                "valid_to": valid_to,
+                "valid_to_confidence": valid_to_confidence,
+                "valid_to_source": valid_to_source,
+            },
+        )
 
     async def mark_summary_updated(self, relation_id: UUID) -> None:
         """Clear ``summary_stale`` after a new summary has been generated."""
@@ -223,6 +334,38 @@ LIMIT :limit
             }
             for r in rows
         ]
+
+    async def get_valid_to(self, relation_id: UUID) -> object | None:
+        """Fetch the ``valid_to`` column for a relation (T-B-01 period-type derivation)."""
+        result = await self._session.execute(
+            text("SELECT valid_to FROM relations WHERE relation_id = :relation_id"),
+            {"relation_id": str(relation_id)},
+        )
+        row = result.fetchone()
+        if row is None:
+            return None
+        return row[0]  # type: ignore[no-any-return]
+
+    async def update_valid_from_and_period_type(
+        self,
+        relation_id: UUID,
+        valid_from: datetime,
+        relation_period_type: str,
+    ) -> None:
+        """Persist ``valid_from`` and ``relation_period_type`` derived from evidence (T-B-01)."""
+        await self._session.execute(
+            text("""
+UPDATE relations
+SET valid_from = :valid_from,
+    relation_period_type = :relation_period_type
+WHERE relation_id = :relation_id
+"""),
+            {
+                "relation_id": str(relation_id),
+                "valid_from": valid_from,
+                "relation_period_type": relation_period_type,
+            },
+        )
 
     async def mark_confidence_updated(
         self,
@@ -381,6 +524,52 @@ LIMIT :limit OFFSET :offset
             ],
             total,
         )
+
+    async def find_competes_with_batch(
+        self,
+        entity_id: UUID,
+        candidate_ids: list[UUID],
+        min_confidence: float = 0.3,
+    ) -> dict[UUID, tuple[bool, float | None]]:
+        """Return a mapping of candidate_id → (has_competes_with, confidence).
+
+        Checks both directions: entity_id → candidate AND candidate → entity_id.
+        Uses ``ANY(:candidate_ids)`` to avoid N+1 queries.
+        Returns an empty dict when ``candidate_ids`` is empty.
+        """
+        if not candidate_ids:
+            return {}
+
+        result = await self._session.execute(
+            text("""
+SELECT
+    CASE
+        WHEN subject_entity_id = :entity_id THEN object_entity_id
+        ELSE subject_entity_id
+    END AS candidate_id,
+    confidence
+FROM relations
+WHERE canonical_type = 'competes_with'
+  AND confidence >= :min_confidence
+  AND (
+    (subject_entity_id = :entity_id AND object_entity_id = ANY(:candidate_ids))
+    OR
+    (object_entity_id = :entity_id AND subject_entity_id = ANY(:candidate_ids))
+  )
+"""),
+            {
+                "entity_id": str(entity_id),
+                "min_confidence": min_confidence,
+                "candidate_ids": [str(cid) for cid in candidate_ids],
+            },
+        )
+        rows = result.fetchall()
+        out: dict[UUID, tuple[bool, float | None]] = {}
+        for row in rows:
+            cid = UUID(str(row[0]))
+            confidence: float | None = float(row[1]) if row[1] is not None else None
+            out[cid] = (True, confidence)
+        return out
 
     async def get_stats(self) -> dict[str, object]:
         """Return aggregate graph statistics (API: GET /graph/stats)."""

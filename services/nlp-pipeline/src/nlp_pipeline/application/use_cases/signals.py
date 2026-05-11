@@ -17,7 +17,11 @@ from common.time import utc_now  # type: ignore[import-untyped]
 from observability import get_logger  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
-    from nlp_pipeline.application.ports.repositories import SignalsQueryPort
+    from nlp_pipeline.application.ports.repositories import (
+        NewsQueryPort,
+        RankedArticleData,
+        SignalsQueryPort,
+    )
 
 _log = get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -34,6 +38,11 @@ class SignalData:
     confidence: float
     evidence_text: str
     detected_at: datetime
+    market_impact_score: float = 0.0
+    # Avro polarity field from nlp.signal.detected.v1
+    # ("positive" | "negative" | "neutral").  Defaults to "neutral" so
+    # legacy JSON rows (pre-Avro migration) degrade gracefully.
+    polarity: str = "neutral"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -52,13 +61,6 @@ class EntityDetailData:
     mention_count: int
     resolved_count: int
     provisional_count: int
-
-
-@dataclasses.dataclass(frozen=True)
-class EntityArticleData:
-    doc_id: UUID
-    routing_tier: str
-    mention_count: int
 
 
 @dataclasses.dataclass(frozen=True)
@@ -81,13 +83,42 @@ class ListSignalsUseCase:
         limit: int,
         offset: int,
         doc_id: UUID | None,
+        min_impact_score: float = 0.0,
+        order_by: str = "created_at",
     ) -> tuple[list[SignalData], int]:
-        rows, total = await repo.list_signal_events(limit=limit, offset=offset, doc_id=doc_id)
+        rows, total = await repo.list_signal_events(
+            limit=limit,
+            offset=offset,
+            doc_id=doc_id,
+            min_impact_score=min_impact_score,
+            order_by=order_by,
+        )
 
         items: list[SignalData] = []
         for row in rows:
             try:
-                payload = json.loads(row["payload_avro"])
+                # PLAN-0062 F-006 read-side compatibility: outbox rows written
+                # *after* the producer migration carry Confluent-Avro framed
+                # bytes (5-byte ``\x00<schema-id>`` header + Avro body).
+                # Pre-migration rows are still raw JSON bytes — sniff the magic
+                # byte and dispatch.  The Avro branch is preferred; the JSON
+                # fallback exists only until legacy rows drain.
+                # TODO PLAN-0062-followup: drop JSON branch once legacy outbox rows drain.
+                raw = row["payload_avro"]
+                if isinstance(raw, bytes | bytearray) and raw[:1] == b"\x00":
+                    from messaging.kafka.schema_paths import (  # type: ignore[import-untyped]
+                        get_schema_path,
+                    )
+                    from messaging.kafka.serialization_utils import (  # type: ignore[import-untyped]
+                        deserialize_confluent_avro,
+                    )
+
+                    payload = deserialize_confluent_avro(
+                        get_schema_path("nlp.signal.detected.v1.avsc"),
+                        bytes(raw),
+                    )
+                else:
+                    payload = json.loads(raw)
                 items.append(
                     SignalData(
                         signal_id=UUID(payload.get("event_id", str(row["event_id"]))),
@@ -107,10 +138,21 @@ class ListSignalsUseCase:
                         detected_at=datetime.fromisoformat(payload["occurred_at"])
                         if "occurred_at" in payload
                         else row["created_at"],
+                        market_impact_score=float(row.get("impact_score") or 0.0),
+                        # Read the polarity directly from the Avro payload
+                        # ("positive"|"negative"|"neutral").  Falls back to
+                        # "neutral" for legacy JSON rows that predate the field.
+                        polarity=str(payload.get("polarity", "neutral")),
                     ),
                 )
             except Exception:
-                _log.debug("signals.list_skip_malformed_payload", exc_info=True)
+                # PLAN-0062 F-006: silent drops are unacceptable for produced
+                # signals — promote to ``warning`` with a stable event name so
+                # the metric is observable in production logs.
+                _log.warning(
+                    "signals_list_skip_malformed_payload",
+                    exc_info=True,
+                )
                 continue
 
         return items, int(total)
@@ -163,34 +205,74 @@ class GetEntityDetailUseCase:
 
 
 class GetEntityArticlesUseCase:
-    """List articles that mention a given entity."""
+    """List articles mentioning a given entity, with full scoring fields (PRD-0026 §6.7 Flow D)."""
 
     async def execute(
         self,
-        repo: SignalsQueryPort,
+        repo: NewsQueryPort,
         entity_id: UUID,
+        start_date: datetime,
+        end_date: datetime,
+        order_by: str,
         limit: int,
-    ) -> tuple[list[EntityArticleData], int]:
-        rows, total = await repo.get_entity_articles(entity_id=entity_id, limit=limit)
-        return [
-            EntityArticleData(
-                doc_id=UUID(str(row["doc_id"])),
-                routing_tier=str(row["routing_tier"]),
-                mention_count=int(row["mention_count"]),
-            )
-            for row in rows
-        ], int(total)
+        offset: int,
+        tenant_id: str | None = None,
+    ) -> tuple[list[RankedArticleData], int]:
+        """Return ranked articles for an entity within the given date range.
+
+        Delegates entirely to the port — the SQL CTE computes display_relevance_score
+        and all window scores at query time.  Returns an empty list (not 404) when the
+        entity has no articles in the date range.
+
+        F-009 Option B: tenant_id is passed through to the port for tenant-scoped
+        entity_mentions filtering.
+        """
+        return await repo.get_entity_articles(
+            entity_id=entity_id,
+            start_date=start_date,
+            end_date=end_date,
+            order_by=order_by,
+            limit=limit,
+            offset=offset,
+            tenant_id=tenant_id,
+        )
+
+
+class GetTopNewsUseCase:
+    """Return globally top-ranked articles within a rolling time window (PRD-0026 §6.7 Flow C)."""
+
+    async def execute(
+        self,
+        repo: NewsQueryPort,
+        hours: int,
+        limit: int,
+        offset: int,
+        min_display_score: float | None,
+        routing_tier: str | None,
+    ) -> tuple[list[RankedArticleData], int]:
+        """Return articles ranked by display_relevance_score.
+
+        Delegates entirely to the port — the 3-CTE SQL computes all scores at query time.
+        """
+        return await repo.get_top_news(
+            hours=hours,
+            limit=limit,
+            offset=offset,
+            min_display_score=min_display_score,
+            routing_tier=routing_tier,
+        )
 
 
 class VectorSearchUseCase:
-    """Semantic section search (keyword fallback until ML client injected)."""
+    """Semantic section search (keyword ILIKE fallback until ML client injected)."""
 
     async def execute(
         self,
         repo: SignalsQueryPort,
+        query: str,
         limit: int,
     ) -> list[VectorSearchHitData]:
-        rows = await repo.vector_search_sections(limit=limit)
+        rows = await repo.vector_search_sections(query=query, limit=limit)
         return [
             VectorSearchHitData(
                 doc_id=row["doc_id"],

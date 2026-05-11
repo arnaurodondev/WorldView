@@ -9,11 +9,14 @@ import pytest
 from alert.config import Settings
 from alert.infrastructure.clients.s1_client import S1Client, WatcherInfo
 
+pytestmark = pytest.mark.unit
+
 
 def _settings(**overrides: object) -> Settings:
     defaults = {
         "s1_portfolio_base_url": "http://s1:8001",
-        "internal_service_token": "test-token",
+        "s8_internal_jwt": "test-s8-token",
+        "s1_internal_jwt": "test-s1-jwt",
     }
     defaults.update(overrides)
     return Settings(**defaults)  # type: ignore[arg-type]
@@ -79,7 +82,7 @@ class TestS1Client:
             "results": {
                 "e1": [{"user_id": "u1", "watchlist_id": "w1", "alert_types": []}],
                 "e2": [{"user_id": "u2", "watchlist_id": "w2", "alert_types": ["GRAPH_CHANGE"]}],
-            }
+            },
         }
         mock_resp.raise_for_status = MagicMock()
         mock_client.post = AsyncMock(return_value=mock_resp)
@@ -121,20 +124,71 @@ class TestS1Client:
         assert await client.health_check() is False
 
     @pytest.mark.unit
-    async def test_internal_token_sent_in_header(self) -> None:
+    async def test_internal_jwt_sent_in_header(self) -> None:
+        """PRD-0025: S1Client must send X-Internal-JWT (RS256), not X-Internal-Token."""
         mock_client = AsyncMock(spec=httpx.AsyncClient)
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"watchers": []}
         mock_resp.raise_for_status = MagicMock()
         mock_client.get = AsyncMock(return_value=mock_resp)
 
-        client = S1Client(_settings(internal_service_token="secret-tok"), client=mock_client)
+        client = S1Client(_settings(s1_internal_jwt="rs256.test.jwt"), client=mock_client)
         await client.get_watchers_by_entity("eid-1")
 
         call_args = mock_client.get.call_args
-        # headers may be in kwargs or positional — check both
         headers = call_args.kwargs.get("headers") or (call_args.args[1] if len(call_args.args) > 1 else {})
-        assert headers.get("X-Internal-Token") == "secret-tok"
+        assert headers.get("X-Internal-JWT") == "rs256.test.jwt"
+        assert "X-Internal-Token" not in headers
+
+
+class TestGetUserEmail:
+    @pytest.mark.unit
+    async def test_returns_email_on_success(self) -> None:
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"user_id": "u1", "email_address": "user@example.com"}
+        mock_resp.raise_for_status = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        client = S1Client(_settings(), client=mock_client)
+        result = await client.get_user_email("u1")
+
+        assert result == "user@example.com"
+
+    @pytest.mark.unit
+    async def test_returns_none_when_email_absent(self) -> None:
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"user_id": "u1", "email_address": ""}
+        mock_resp.raise_for_status = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        client = S1Client(_settings(), client=mock_client)
+        result = await client.get_user_email("u1")
+
+        assert result is None
+
+    @pytest.mark.unit
+    async def test_returns_none_on_s1_error(self) -> None:
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))
+
+        client = S1Client(_settings(), client=mock_client)
+        result = await client.get_user_email("u1")
+
+        assert result is None
+
+    @pytest.mark.unit
+    async def test_returns_none_on_404(self) -> None:
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError("404", request=MagicMock(), response=MagicMock())
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        client = S1Client(_settings(), client=mock_client)
+        result = await client.get_user_email("u1")
+
+        assert result is None
 
 
 class TestWatcherInfo:

@@ -27,12 +27,26 @@ async def test_readyz_ok(app, client) -> None:
     mock_engine = MagicMock()
     mock_engine.connect = MagicMock(return_value=mock_conn)
 
-    # Directly set the engine on app.state
+    # Satisfy both the JWKS and DB checks added by PRD-0025
+    app.state._internal_jwt_public_key = "fake-pub-key"
     app.state.engine = mock_engine
 
     response = await client.get("/readyz")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_readyz_jwks_not_loaded(app, client) -> None:
+    """readyz returns 503 when JWKS public key is not yet loaded."""
+    # Ensure JWKS key is absent
+    if hasattr(app.state, "_internal_jwt_public_key"):
+        del app.state._internal_jwt_public_key
+
+    response = await client.get("/readyz")
+    assert response.status_code == 503
+    assert response.json()["status"] == "unavailable"
+    assert response.json()["reason"] == "jwks_not_loaded"
 
 
 @pytest.mark.asyncio
@@ -46,6 +60,8 @@ async def test_readyz_db_down(app, client) -> None:
     mock_engine = MagicMock()
     mock_engine.connect = MagicMock(return_value=mock_conn)
 
+    # JWKS key must be present so we actually reach the DB check
+    app.state._internal_jwt_public_key = "fake-pub-key"
     app.state.engine = mock_engine
 
     response = await client.get("/readyz")

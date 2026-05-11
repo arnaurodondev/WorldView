@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import fastavro
 import pytest
@@ -115,6 +115,162 @@ class TestDecimalToStr:
 
     def test_negative(self) -> None:
         assert decimal_to_str(Decimal("-99.99")) == "-99.99"
+
+
+class TestConfluentAvroDeserialization:
+    """Tests for deserialize_confluent_avro (Confluent wire-format: 0x00 + 4-byte schema_id)."""
+
+    _SCHEMA: ClassVar[dict] = {
+        "type": "record",
+        "name": "TestEvent",
+        "fields": [
+            {"name": "event_id", "type": "string"},
+            {"name": "value", "type": "int"},
+        ],
+    }
+
+    def _build_confluent_bytes(self, schema_path: str, record: dict, schema_id: int = 1) -> bytes:
+        """Build a Confluent-encoded Avro message: header + schemaless payload."""
+        import io
+
+        import fastavro
+
+        parsed = fastavro.parse_schema(self._SCHEMA)
+        buf = io.BytesIO()
+        fastavro.schemaless_writer(buf, parsed, record)
+        payload = buf.getvalue()
+        header = b"\x00" + schema_id.to_bytes(4, "big")
+        return header + payload
+
+    def test_confluent_roundtrip(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        """Confluent wire format: header stripped, payload decoded correctly."""
+        import json
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        schema_file = tmp_path / "test_event.avsc"
+        schema_file.write_text(json.dumps(self._SCHEMA))
+
+        record = {"event_id": "abc-123", "value": 42}
+        confluent_bytes = self._build_confluent_bytes(str(schema_file), record, schema_id=7)
+
+        result = deserialize_confluent_avro(str(schema_file), confluent_bytes)
+        assert result["event_id"] == "abc-123"
+        assert result["value"] == 42
+
+    def test_missing_magic_byte_raises_value_error(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        """Data not starting with 0x00 raises ValueError with a clear message."""
+        import json
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        schema_file = tmp_path / "test_event.avsc"
+        schema_file.write_text(json.dumps(self._SCHEMA))
+
+        # JSON bytes — first byte is b"{" (0x7B), not 0x00
+        raw_json = b'{"event_id": "x", "value": 1}'
+        with pytest.raises(ValueError, match="magic byte"):
+            deserialize_confluent_avro(str(schema_file), raw_json)
+
+    def test_empty_payload_raises_value_error(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        """Empty bytes raises ValueError."""
+        import json
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        schema_file = tmp_path / "test_event.avsc"
+        schema_file.write_text(json.dumps(self._SCHEMA))
+
+        with pytest.raises(ValueError):
+            deserialize_confluent_avro(str(schema_file), b"")
+
+    def test_schema_id_in_header_is_ignored(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        """The 4-byte schema_id in the header is stripped but not validated.
+
+        We load the schema from disk, not the registry — any schema_id is fine.
+        """
+        import json
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        schema_file = tmp_path / "test_event.avsc"
+        schema_file.write_text(json.dumps(self._SCHEMA))
+
+        # schema_id=999 — not a real registry ID, but header structure is valid
+        confluent_bytes = self._build_confluent_bytes(str(schema_file), {"event_id": "y", "value": 7}, schema_id=999)
+        result = deserialize_confluent_avro(str(schema_file), confluent_bytes)
+        assert result["event_id"] == "y"
+
+    # ── PLAN-0062 F-020: expected_schema_ids parameter ────────────────────
+
+    def test_no_expected_schema_ids_skips_validation(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        """Default behaviour (``expected_schema_ids=None``) skips the check."""
+        import json
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        schema_file = tmp_path / "test_event.avsc"
+        schema_file.write_text(json.dumps(self._SCHEMA))
+
+        confluent_bytes = self._build_confluent_bytes(str(schema_file), {"event_id": "z", "value": 1}, schema_id=12345)
+        # No allow-list passed → no error even though schema_id is bogus.
+        result = deserialize_confluent_avro(str(schema_file), confluent_bytes)
+        assert result["event_id"] == "z"
+
+    def test_matching_expected_schema_id_succeeds(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        """When the header's schema_id is in the allow-list, decode succeeds."""
+        import json
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        schema_file = tmp_path / "test_event.avsc"
+        schema_file.write_text(json.dumps(self._SCHEMA))
+
+        confluent_bytes = self._build_confluent_bytes(str(schema_file), {"event_id": "ok", "value": 2}, schema_id=42)
+        result = deserialize_confluent_avro(
+            str(schema_file),
+            confluent_bytes,
+            expected_schema_ids={42, 43},
+        )
+        assert result["event_id"] == "ok"
+
+    def test_mismatched_expected_schema_id_raises(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        """When the header's schema_id is NOT in the allow-list, raise ValueError."""
+        import json
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        schema_file = tmp_path / "test_event.avsc"
+        schema_file.write_text(json.dumps(self._SCHEMA))
+
+        confluent_bytes = self._build_confluent_bytes(str(schema_file), {"event_id": "x", "value": 3}, schema_id=99)
+        with pytest.raises(ValueError, match="Unexpected schema-id 99"):
+            deserialize_confluent_avro(
+                str(schema_file),
+                confluent_bytes,
+                expected_schema_ids={1, 2, 3},
+            )
+
+    def test_short_payload_with_expected_schema_ids_raises_magic_byte_error_first(
+        self,
+        tmp_path,  # type: ignore[no-untyped-def]
+    ) -> None:
+        """A < 5-byte payload fails the magic-byte check BEFORE the schema-id check."""
+        import json
+
+        from messaging.kafka.serialization_utils import deserialize_confluent_avro
+
+        schema_file = tmp_path / "test_event.avsc"
+        schema_file.write_text(json.dumps(self._SCHEMA))
+
+        # Valid magic byte but truncated header (< 5 bytes total).
+        truncated = b"\x00\x00\x00"
+        with pytest.raises(ValueError, match="magic byte"):
+            deserialize_confluent_avro(
+                str(schema_file),
+                truncated,
+                expected_schema_ids={1},
+            )
 
 
 class TestSchemasModuleReexports:

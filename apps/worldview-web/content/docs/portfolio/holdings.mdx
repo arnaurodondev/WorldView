@@ -1,0 +1,61 @@
+---
+title: Holdings
+description: Live brokerage positions with day change, unrealized P&L, and weight bars.
+section: Portfolio
+order: 2
+updated: 2026-05-05
+---
+
+The Holdings tab shows your current open positions imported from your connected brokerage. It updates every 5 minutes during market hours.
+
+## Holdings table columns
+
+| Column | Description |
+|--------|-------------|
+| Ticker | Instrument symbol |
+| Name | Company or ETF full name |
+| Quantity | Number of shares / contracts held |
+| Avg Cost | Average cost basis per share (FIFO weighted) |
+| Last Price | Most recent EODHD intraday price |
+| Day Change | $ and % change from prior close |
+| Market Value | Quantity × Last Price |
+| Unrealized P&L | (Last Price − Avg Cost) × Quantity |
+| Unrealized P&L % | Unrealized P&L as a percentage of cost basis |
+| Weight | Position market value as % of total portfolio |
+
+## Weight bars
+
+The **Weight** column includes a mini bar chart that fills proportionally to the position's share of total portfolio value. This gives a quick visual read on concentration — positions wider than ~20% of the bar stand out immediately as large exposures.
+
+## Sorting and filtering
+
+Click any column header to sort ascending or descending. The table remembers your sort preference within the session.
+
+Filter options:
+- **Search** — filter by ticker or company name
+- **Asset class** — Equity / ETF / Options (options show the underlying)
+- **Sector** — filter to a single GICS sector
+
+## Day change coloring
+
+Each row uses the 7-step HeatCell color scale on the Day Change and Unrealized P&L % cells:
+
+- Deep red: ≤ −2%
+- Red: −2% to −1%
+- Light red: −1% to −0.25%
+- Neutral: flat
+- Light green: +0.25% to +1%
+- Green: +1% to +2%
+- Deep green: ≥ +2%
+
+<Callout type="info" title="Options positions">
+Options are displayed as the underlying equity ticker with a badge showing the contract type (CALL/PUT), strike, and expiry. Market value and P&L are calculated using the option's last quoted price.
+</Callout>
+
+## Navigating to an instrument
+
+Click any row in the Holdings table to navigate to that instrument's full page (chart, fundamentals, news, intelligence graph). The instrument page opens with the Holdings tab context preserved — use the browser Back button to return.
+
+## Sync status
+
+The Holdings tab shows a "Last synced" timestamp in the header. If sync is delayed (e.g. brokerage API outage), a warning banner appears. Click **Sync now** to trigger a manual refresh.

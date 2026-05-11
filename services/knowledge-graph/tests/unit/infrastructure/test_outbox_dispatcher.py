@@ -54,7 +54,7 @@ class TestOutboxDispatcherAllowedTopics:
             return_value=outbox_repo,
         ):
             dispatcher = OutboxDispatcher(sf, producer, poll_interval_s=0.0)
-            dispatched = asyncio.get_event_loop().run_until_complete(dispatcher._dispatch_batch())
+            dispatched = asyncio.run(dispatcher._dispatch_batch())
 
         assert dispatched == 1
         producer.produce.assert_called_once()
@@ -76,7 +76,7 @@ class TestOutboxDispatcherAllowedTopics:
             return_value=outbox_repo,
         ):
             dispatcher = OutboxDispatcher(sf, producer)
-            dispatched = asyncio.get_event_loop().run_until_complete(dispatcher._dispatch_batch())
+            dispatched = asyncio.run(dispatcher._dispatch_batch())
 
         assert dispatched == 1
         producer.produce.assert_called_once()
@@ -96,9 +96,32 @@ class TestOutboxDispatcherAllowedTopics:
             return_value=outbox_repo,
         ):
             dispatcher = OutboxDispatcher(sf, producer)
-            dispatched = asyncio.get_event_loop().run_until_complete(dispatcher._dispatch_batch())
+            dispatched = asyncio.run(dispatcher._dispatch_batch())
 
         assert dispatched == 1
+
+    def test_entity_canonical_created_topic_dispatched(self) -> None:
+        """entity.canonical.created.v1 is an allowed topic (ProvisionalEnrichmentWorker)."""
+        from knowledge_graph.infrastructure.messaging.outbox.dispatcher import OutboxDispatcher
+
+        event = _make_event("entity.canonical.created.v1")
+        sf, _session, outbox_repo = _make_session_factory([event])
+
+        producer = MagicMock()
+        producer.produce = MagicMock()
+        producer.flush = MagicMock(return_value=0)
+
+        with patch(
+            "knowledge_graph.infrastructure.messaging.outbox.dispatcher.OutboxRepository",
+            return_value=outbox_repo,
+        ):
+            dispatcher = OutboxDispatcher(sf, producer)
+            dispatched = asyncio.run(dispatcher._dispatch_batch())
+
+        assert dispatched == 1
+        producer.produce.assert_called_once()
+        outbox_repo.mark_dispatched.assert_awaited_once()
+        outbox_repo.mark_failed.assert_not_awaited()
 
 
 class TestOutboxDispatcherEntityDirtied:
@@ -117,7 +140,7 @@ class TestOutboxDispatcherEntityDirtied:
             return_value=outbox_repo,
         ):
             dispatcher = OutboxDispatcher(sf, producer)
-            dispatched = asyncio.get_event_loop().run_until_complete(dispatcher._dispatch_batch())
+            dispatched = asyncio.run(dispatcher._dispatch_batch())
 
         # Not counted as successfully dispatched
         assert dispatched == 0
@@ -144,7 +167,7 @@ class TestOutboxDispatcherUnknownTopic:
             return_value=outbox_repo,
         ):
             dispatcher = OutboxDispatcher(sf, producer)
-            dispatched = asyncio.get_event_loop().run_until_complete(dispatcher._dispatch_batch())
+            dispatched = asyncio.run(dispatcher._dispatch_batch())
 
         assert dispatched == 0
         producer.produce.assert_not_called()
@@ -165,7 +188,7 @@ class TestOutboxDispatcherUnknownTopic:
             return_value=outbox_repo,
         ):
             dispatcher = OutboxDispatcher(sf, producer)
-            dispatched = asyncio.get_event_loop().run_until_complete(dispatcher._dispatch_batch())
+            dispatched = asyncio.run(dispatcher._dispatch_batch())
 
         assert dispatched == 0
         outbox_repo.mark_failed.assert_awaited_once()
@@ -183,7 +206,7 @@ class TestOutboxDispatcherUnknownTopic:
             return_value=outbox_repo,
         ):
             dispatcher = OutboxDispatcher(sf, producer)
-            dispatched = asyncio.get_event_loop().run_until_complete(dispatcher._dispatch_batch())
+            dispatched = asyncio.run(dispatcher._dispatch_batch())
 
         assert dispatched == 0
         producer.produce.assert_not_called()

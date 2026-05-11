@@ -6,13 +6,16 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
+    Computed,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     LargeBinary,
     SmallInteger,
+    String,
     Text,
     UniqueConstraint,
     func,
@@ -28,7 +31,13 @@ class Base(DeclarativeBase):
 
 
 class SourceModel(Base):
-    """Configured polling source."""
+    """Configured polling source.
+
+    PLAN-0055 B-1: ``config_hash`` is a Postgres GENERATED column (SHA-256 of the
+    canonical config JSON). The ORM declares it but never writes — Postgres maintains
+    it on every INSERT/UPDATE. The ``uq_sources_dedup`` UNIQUE on
+    (source_type, config_hash) makes ``CreateSourceUseCase`` idempotent.
+    """
 
     __tablename__ = "sources"
 
@@ -37,7 +46,17 @@ class SourceModel(Base):
     source_type: Mapped[str] = mapped_column(Text, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # GENERATED column — Postgres maintains it; ORM is read-only here.
+    # SQLAlchemy's ``Computed`` directive matches the migration's DDL so this
+    # field is excluded from INSERT/UPDATE statements automatically.
+    config_hash: Mapped[str] = mapped_column(
+        String(64),
+        Computed("encode(digest(config::text, 'sha256'), 'hex')", persisted=True),
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("source_type", "config_hash", name="uq_sources_dedup"),)
 
 
 class SourceAdapterStateModel(Base):
@@ -52,6 +71,9 @@ class SourceAdapterStateModel(Base):
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PLAN-0055 B-1: snapshot of sources.config_hash at last successful fetch.
+    # Compared at startup to current sources.config_hash to surface drift WARNs.
+    last_run_config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
@@ -129,6 +151,7 @@ class ContentIngestionTaskModel(Base):
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_backfill: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -142,6 +165,40 @@ class ContentIngestionTaskModel(Base):
             postgresql_where=text("window_start IS NOT NULL"),
         ),
         Index("ix_cit_worker_lease", "worker_id", "lease_expires"),
+    )
+
+
+class PredictionMarketFetchLogModel(Base):
+    """Deduplication log for Polymarket poll cycles.
+
+    Each row records a market snapshot captured during a single poll.
+    The unique index on ``(market_id, snapshot_at)`` prevents double-publishing
+    the same market state within a single poll window.
+
+    Notes:
+        - ``id`` is always app-generated via ``new_uuid7()`` (BP: no gen_random_uuid() on PKs)
+        - ``resolution_status`` carries a server_default of ``'open'`` (BP-126)
+        - ``source_id`` is nullable to allow manual/webhook snapshot submissions
+    """
+
+    __tablename__ = "prediction_market_fetch_log"
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    source_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("sources.id"), nullable=True)
+    market_id: Mapped[str] = mapped_column(Text, nullable=False)
+    snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolution_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="open",
+        server_default=text("'open'"),
+    )
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("market_id", "snapshot_at", name="uq_pmfl_market_snapshot"),
+        Index("ix_pmfl_source_fetched", "source_id", "fetched_at"),
     )
 
 
@@ -160,3 +217,38 @@ class DeadLetterQueueModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class TenantDocumentUploadModel(Base):
+    """ORM model for tenant-owned document uploads.
+
+    PLAN-0086 Wave D-2: Maps the ``tenant_document_uploads`` table introduced in
+    migration 0007.  Every query against this model MUST include a ``tenant_id``
+    predicate — the repository enforces this; the ORM model itself does not.
+
+    The ``status`` column is constrained at the DB level by ``chk_tdu_status``.
+    The ORM default ``"processing"`` mirrors the server_default so in-memory
+    objects reflect the correct value immediately after ``session.add()``.
+    """
+
+    __tablename__ = "tenant_document_uploads"
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    uploaded_by_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    chunk_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # ``default`` mirrors the DB server_default so the ORM row value is correct
+    # immediately after add() without needing a round-trip to Postgres.
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="processing")
+    minio_bronze_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    minio_silver_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

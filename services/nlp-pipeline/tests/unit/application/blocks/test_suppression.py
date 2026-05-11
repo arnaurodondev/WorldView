@@ -15,6 +15,8 @@ from nlp_pipeline.application.blocks.suppression import (
 from nlp_pipeline.domain.enums import RoutingTier
 from nlp_pipeline.domain.models import RoutingDecision
 
+pytestmark = pytest.mark.unit
+
 
 def _decision(tier: RoutingTier, final_tier: RoutingTier | None = None) -> RoutingDecision:
     return RoutingDecision(

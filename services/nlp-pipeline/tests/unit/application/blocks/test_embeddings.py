@@ -12,7 +12,10 @@ from nlp_pipeline.application.blocks.embeddings import (
     chunk_section,
     run_embeddings_block,
 )
+from nlp_pipeline.application.ports.repositories import ChunkTextStorePort
 from nlp_pipeline.domain.models import Section
+
+pytestmark = pytest.mark.unit
 
 
 def _make_section(text: str, section_index: int = 0, speaker: str | None = None) -> Section:
@@ -32,9 +35,14 @@ def _make_section(text: str, section_index: int = 0, speaker: str | None = None)
 def _make_embedding_client(dimension: int = 1024) -> MagicMock:
     from ml_clients.dataclasses import EmbeddingOutput  # type: ignore[import-not-found]
 
-    output = EmbeddingOutput(embedding=[0.1] * dimension, model_id="bge", dimension=dimension)
+    # Return one output per input so batch calls work correctly.
+    # The old `return_value=[output]` only returned 1 item regardless of how many
+    # inputs were passed; `side_effect` lets us scale to the actual batch size.
+    async def _embed(inputs: list) -> list:
+        return [EmbeddingOutput(embedding=[0.1] * dimension, model_id="bge", dimension=dimension) for _ in inputs]
+
     client = MagicMock()
-    client.embed = AsyncMock(return_value=[output])
+    client.embed = _embed
     return client
 
 
@@ -118,6 +126,37 @@ class TestChunkSection:
             words0 = set(chunks[0].text.split())
             words1 = set(chunks[1].text.split())
             assert words0 & words1, "Overlap expected between consecutive chunks"
+
+    def test_oversize_sentence_with_overlap_does_not_hang(self) -> None:
+        """BP-302 regression: a single sentence longer than max_tokens
+        following a non-empty overlap window must NOT hang the loop.
+
+        Before the fix, the inner break exited without incrementing `i`,
+        the outer loop rebuilt the same overlap, and `i` never advanced.
+        Empirically this hung worldview-nlp-pipeline-article-consumer-1
+        on real news articles containing un-punctuated pull-quotes >512
+        words. Test with `max_tokens=10` and a 50-word un-punctuated
+        sentence sandwiched between short ones to trigger the exact
+        race: the first short sentence carries over as overlap, the
+        oversize sentence on its own exceeds max_tokens, the inner
+        break fires, and the liveness guard must drop the overlap and
+        force `i` to advance on the next outer iteration.
+
+        The assertion is implicit: this test must RETURN within a
+        reasonable wall-clock window. pytest's collection timeout will
+        kill it if the loop hangs.
+        """
+        oversize = " ".join(["x"] * 50)  # 50 "words", no `.!?`
+        text = f"Short start here. {oversize} Short end here."
+        section = _make_section(text)
+        chunks = chunk_section(section, max_tokens=10, overlap_tokens=3)
+        # Must produce >= 2 chunks (start + oversize + tail) without hanging
+        assert len(chunks) >= 2
+        # Every input word should appear in at least one chunk (no data loss).
+        all_chunk_text = " ".join(c.text for c in chunks)
+        assert "Short start here" in all_chunk_text
+        assert "Short end here" in all_chunk_text
+        assert "x x x" in all_chunk_text  # the oversize sentence content
 
     def test_empty_section_returns_empty(self) -> None:
         section = _make_section("")
@@ -214,3 +253,270 @@ class TestRunEmbeddingsBlock:
         )
 
         assert len(chunks) >= 1
+
+
+@pytest.mark.unit
+class TestRunEmbeddingsBlockOptionC:
+    """Option C: section embedding uses first chunk as representative (not full section text)."""
+
+    @pytest.mark.asyncio
+    async def test_section_embedding_uses_first_chunk_text(self) -> None:
+        """Section embedding must be called with the first chunk's text, not the full section text."""
+        # Build a section with multiple sentences that will produce at least one chunk
+        text = "Apple reported record earnings. Revenue grew strongly. Investors cheered."
+        section = _make_section(text)
+        captured_texts: list[str] = []
+
+        async def _fake_embed(inputs: list) -> list:
+            from ml_clients.dataclasses import EmbeddingOutput  # type: ignore[import-not-found]
+
+            for inp in inputs:
+                captured_texts.append(inp.text)
+            # Return one output per input so batch callers get the right count.
+            return [EmbeddingOutput(embedding=[0.1] * 1024, model_id="bge", dimension=1024)] * len(inputs)
+
+        client = MagicMock()
+        client.embed = _fake_embed
+
+        _, _, section_embeddings, _ = await run_embeddings_block(
+            [section],
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=False,
+        )
+
+        assert len(section_embeddings) == 1
+        # The text sent to the embedding client must be the first chunk's text
+        # (which for a single-sentence/short section equals the section text).
+        # With batch embed, all section texts are sent in one call; for a single
+        # section with no chunk embeddings that means exactly 1 text.
+        assert len(captured_texts) == 1
+        assert captured_texts[0] in text  # first chunk text is a substring/equal of section
+
+    @pytest.mark.asyncio
+    async def test_pending_entry_carries_embedding_text(self) -> None:
+        """On failure, EmbeddingPendingEntry.embedding_text is populated (not empty)."""
+        client = MagicMock()
+        client.embed = AsyncMock(side_effect=Exception("Ollama OOM"))
+
+        sections = [_make_section("Apple reported record revenue this quarter.")]
+
+        _, _, _, failures = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=False,
+        )
+
+        assert len(failures) >= 1
+        assert failures[0].embedding_text != "", "embedding_text must be populated for retry"
+
+    @pytest.mark.asyncio
+    async def test_chunk_pending_entry_carries_chunk_text(self) -> None:
+        """Failed chunk embeddings also store the chunk text for retry."""
+        client = MagicMock()
+        client.embed = AsyncMock(side_effect=Exception("timeout"))
+
+        sections = [_make_section("Apple. Tesla. Google. Amazon. Microsoft. IBM reported results.")]
+
+        _, _, _, failures = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=True,
+        )
+
+        chunk_failures = [f for f in failures if f.chunk_id is not None]
+        assert chunk_failures, "Expected at least one chunk embedding failure"
+        for failure in chunk_failures:
+            assert failure.embedding_text != "", f"chunk failure must have text: {failure}"
+
+
+@pytest.mark.unit
+class TestRunEmbeddingsBlockChunkTextStore:
+    """Tests for the chunk_text_store integration in Block 7."""
+
+    def _make_text_store(self, fail: bool = False) -> ChunkTextStorePort:
+        store = MagicMock(spec=ChunkTextStorePort)
+        if fail:
+            store.put = AsyncMock(side_effect=Exception("MinIO unavailable"))
+        else:
+
+            async def _put(chunk_id: object, doc_id: object, text: object) -> str:
+                return f"nlp-pipeline/chunk-text/{doc_id}/{chunk_id}/body/v1.txt"
+
+            store.put = AsyncMock(side_effect=_put)
+        return store
+
+    @pytest.mark.asyncio
+    async def test_chunk_text_keys_set_when_store_provided(self) -> None:
+        """When chunk_text_store is provided, all chunks get text_key set."""
+        client = _make_embedding_client()
+        sections = [_make_section("Apple beats earnings. Revenue grew. Stock rallied.")]
+        store = self._make_text_store()
+
+        chunks, _, _, _ = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=True,
+            chunk_text_store=store,
+        )
+
+        assert len(chunks) >= 1
+        for chunk in chunks:
+            assert chunk.text_key is not None
+            assert "nlp-pipeline/chunk-text" in chunk.text_key
+
+    @pytest.mark.asyncio
+    async def test_chunk_text_keys_none_without_store(self) -> None:
+        """When chunk_text_store is None, text_key is never set on chunks."""
+        client = _make_embedding_client()
+        sections = [_make_section("Apple beats earnings. Revenue grew.")]
+
+        chunks, _, _, _ = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=True,
+            chunk_text_store=None,
+        )
+
+        for chunk in chunks:
+            assert chunk.text_key is None
+
+    @pytest.mark.asyncio
+    async def test_upload_failure_does_not_raise(self) -> None:
+        """MinIO upload failure must not propagate — chunk is returned with text_key=None."""
+        client = _make_embedding_client()
+        sections = [_make_section("Revenue grew. Apple stock rose.")]
+        store = self._make_text_store(fail=True)
+
+        chunks, _, _, _ = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=True,
+            chunk_text_store=store,
+        )
+
+        assert len(chunks) >= 1
+        for chunk in chunks:
+            assert chunk.text_key is None  # upload failed, key not set
+
+    @pytest.mark.asyncio
+    async def test_store_called_for_all_tiers(self) -> None:
+        """Text is uploaded even when generate_chunk_embeddings=False (LIGHT tier)."""
+        client = _make_embedding_client()
+        sections = [_make_section("Short article text. Only one sentence.")]
+        store = self._make_text_store()
+
+        chunks, _, _, _ = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=False,  # LIGHT tier
+            chunk_text_store=store,
+        )
+
+        assert store.put.await_count == len(chunks)
+        for chunk in chunks:
+            assert chunk.text_key is not None
+
+
+@pytest.mark.unit
+class TestBatchEmbedSingleCall:
+    """Verify the batch-embed refactor sends all texts in ONE embed() call."""
+
+    @pytest.mark.asyncio
+    async def test_batch_embed_single_call_for_multiple_sections(self) -> None:
+        """3 sections, generate_chunk_embeddings=False → embed() called ONCE with 3 inputs."""
+        sections = [
+            _make_section("Apple reported record earnings this quarter.", section_index=0),
+            _make_section("Tesla delivered more vehicles than expected.", section_index=1),
+            _make_section("Amazon Web Services revenue beat estimates.", section_index=2),
+        ]
+
+        embed_call_count = 0
+        all_captured_inputs: list[list] = []
+
+        async def _counting_embed(inputs: list) -> list:
+            nonlocal embed_call_count
+            embed_call_count += 1
+            all_captured_inputs.append(list(inputs))
+            from ml_clients.dataclasses import EmbeddingOutput  # type: ignore[import-not-found]
+
+            return [EmbeddingOutput(embedding=[0.1] * 1024, model_id="bge", dimension=1024) for _ in inputs]
+
+        client = MagicMock()
+        client.embed = _counting_embed
+
+        _, _, section_embeddings, failures = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=False,
+        )
+
+        # Exactly 1 embed() call for all 3 sections (not 3 separate calls).
+        assert embed_call_count == 1, f"Expected 1 embed call, got {embed_call_count}"
+
+        # The single call should have received 3 inputs (one per section).
+        assert (
+            len(all_captured_inputs[0]) == 3
+        ), f"Expected 3 inputs in single embed call, got {len(all_captured_inputs[0])}"
+
+        # All 3 section embeddings produced.
+        assert len(section_embeddings) == 3
+        assert not failures
+
+    @pytest.mark.asyncio
+    async def test_batch_embed_sections_and_chunks(self) -> None:
+        """2 sections with chunk embeddings → embed() called once with (2 sections + N chunks) inputs."""
+        # Use short texts that each produce exactly 1 chunk.
+        sections = [
+            _make_section("Apple quarterly results beat estimates. Revenue grew.", section_index=0),
+            _make_section("Microsoft cloud division reported strong growth. Azure up.", section_index=1),
+        ]
+
+        embed_call_count = 0
+        total_inputs_seen = 0
+
+        async def _counting_embed(inputs: list) -> list:
+            nonlocal embed_call_count, total_inputs_seen
+            embed_call_count += 1
+            total_inputs_seen += len(inputs)
+            from ml_clients.dataclasses import EmbeddingOutput  # type: ignore[import-not-found]
+
+            return [EmbeddingOutput(embedding=[0.1] * 1024, model_id="bge", dimension=1024) for _ in inputs]
+
+        client = MagicMock()
+        client.embed = _counting_embed
+
+        chunks, chunk_embeddings, section_embeddings, failures = await run_embeddings_block(
+            sections,
+            embedding_client=client,
+            model_id="bge",
+            instruction_prefix="",
+            generate_chunk_embeddings=True,
+        )
+
+        # embed() must be called exactly once regardless of the number of texts.
+        assert embed_call_count == 1, f"Expected 1 embed call, got {embed_call_count}"
+
+        # Total inputs = 2 section texts + however many chunks were produced.
+        expected_total = len(sections) + len(chunks)
+        assert total_inputs_seen == expected_total, f"Expected {expected_total} total inputs, got {total_inputs_seen}"
+
+        # All embeddings produced successfully.
+        assert len(section_embeddings) == 2
+        assert len(chunk_embeddings) == len(chunks)
+        assert not failures

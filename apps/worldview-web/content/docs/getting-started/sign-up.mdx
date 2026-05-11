@@ -1,0 +1,72 @@
+---
+title: Sign Up & Authentication
+description: How to create an account, verify your email, and log in with Zitadel OIDC.
+section: Getting Started
+order: 2
+updated: 2026-05-05
+---
+
+Worldview uses **Zitadel** as its identity provider. Zitadel is an open-source OIDC/OAuth 2.0 platform — your credentials are never stored directly in Worldview's database.
+
+## Create an account
+
+<Steps>
+  <Step title="Go to the registration page">
+    Navigate to [/register](/register). Enter your email address and choose a strong password (minimum 10 characters).
+  </Step>
+  <Step title="Submit the form">
+    Click **Create account**. Worldview sends a verification email via Zitadel's email service within a few seconds.
+  </Step>
+  <Step title="Verify your email">
+    Open your inbox and click the **Verify email** link. The link is valid for 24 hours. If it expires, use the **Resend verification** link on the login page.
+  </Step>
+  <Step title="Sign in">
+    Return to [/login](/login), enter your credentials, and click **Sign in**. You are redirected to `/dashboard`.
+  </Step>
+</Steps>
+
+<Callout type="info" title="PKCE flow">
+The browser uses the OAuth 2.0 PKCE (Proof Key for Code Exchange) flow. Your access token lives in React state only — it is never written to `localStorage` or cookies, which prevents token theft via XSS.
+</Callout>
+
+## Development login
+
+For local development, when Zitadel is not configured, Worldview ships a convenience endpoint:
+
+<CodeBlock filename="dev-login.sh">
+```bash
+curl -X POST http://localhost:8000/v1/auth/dev-login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "dev@example.com"}'
+# Returns: { "access_token": "...", "token_type": "bearer" }
+```
+</CodeBlock>
+
+The `/login` page shows a **Dev Login** button automatically when `NEXT_PUBLIC_DEV_LOGIN_ENABLED=true`.
+
+## Token lifecycle
+
+| Token | Lifetime | Storage |
+|-------|----------|---------|
+| Access token | 1 hour | React state (memory only) |
+| Refresh token | 30 days | Zitadel session cookie (HttpOnly, Secure) |
+| Internal JWT (X-Internal-JWT) | 5 minutes | Passed as request header to backends |
+
+Worldview silently refreshes the access token in the background when it has less than 5 minutes remaining. You should never see an unexpected logout during an active session.
+
+## Password reset
+
+1. Click **Forgot password** on the login page
+2. Enter your email address
+3. Click the reset link in your inbox (valid 1 hour)
+4. Set a new password and sign in
+
+<Callout type="warn" title="Email delivery">
+Verification and reset emails may land in your spam folder. Add `noreply@worldview.app` to your contacts to prevent this.
+</Callout>
+
+## Security tips
+
+- Use a unique password not shared with any other service
+- The access token is scoped read/write for your own tenant — it cannot access other users' data
+- If you suspect your account is compromised, change your Zitadel password immediately and all active sessions will be revoked

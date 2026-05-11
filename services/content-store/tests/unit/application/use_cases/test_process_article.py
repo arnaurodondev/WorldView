@@ -14,6 +14,7 @@ from content_store.application.use_cases.process_article import (
 )
 from content_store.domain.entities import CanonicalDocument, DeduplicationDecision
 from content_store.domain.enums import DedupOutcome, DocumentStatus
+from content_store.domain.errors import BronzeObjectNotFoundError
 
 pytestmark = pytest.mark.unit
 
@@ -47,7 +48,7 @@ def _make_use_case(
     dedup_repo: AsyncMock | None = None,
     minhash_repo: AsyncMock | None = None,
     outbox_repo: AsyncMock | None = None,
-    object_store: AsyncMock | None = None,
+    bronze_store: AsyncMock | None = None,
     silver_storage: AsyncMock | None = None,
     lsh_client: AsyncMock | None = None,
 ) -> ProcessArticleUseCase:
@@ -56,7 +57,7 @@ def _make_use_case(
         dedup_repo=dedup_repo or AsyncMock(),
         minhash_repo=minhash_repo or AsyncMock(),
         outbox_repo=outbox_repo or AsyncMock(),
-        object_store=object_store or AsyncMock(),
+        bronze_store=bronze_store or AsyncMock(),
         bronze_bucket="worldview-bronze",
         silver_storage=silver_storage or _make_silver_storage(),
         lsh_client=lsh_client or AsyncMock(),
@@ -73,7 +74,7 @@ class TestProcessArticleUseCase:
         store = AsyncMock()
         store.get_bytes.return_value = b"<html><body>Hello</body></html>"
 
-        uc = _make_use_case(dedup_repo=dedup_repo, object_store=store)
+        uc = _make_use_case(dedup_repo=dedup_repo, bronze_store=store)
         article = _make_article()
         summary = await uc.execute(article)
 
@@ -91,7 +92,7 @@ class TestProcessArticleUseCase:
         store = AsyncMock()
         store.get_bytes.return_value = b"<html><body>Hello World</body></html>"
 
-        uc = _make_use_case(dedup_repo=dedup_repo, object_store=store)
+        uc = _make_use_case(dedup_repo=dedup_repo, bronze_store=store)
         summary = await uc.execute(_make_article())
 
         assert summary.suppressed is True
@@ -127,7 +128,7 @@ class TestProcessArticleUseCase:
             document_repo=document_repo,
             minhash_repo=minhash_repo,
             outbox_repo=outbox_repo,
-            object_store=store,
+            bronze_store=store,
             silver_storage=silver_storage,
             lsh_client=lsh_client,
         )
@@ -175,7 +176,7 @@ class TestProcessArticleUseCase:
         uc = _make_use_case(
             dedup_repo=dedup_repo,
             document_repo=document_repo,
-            object_store=store,
+            bronze_store=store,
             lsh_client=lsh_client,
         )
         summary = await uc.execute(_make_article())
@@ -206,7 +207,7 @@ class TestProcessArticleUseCase:
             stage="stage_c",
         )
 
-        uc = _make_use_case(dedup_repo=dedup_repo, object_store=store, lsh_client=lsh_client)
+        uc = _make_use_case(dedup_repo=dedup_repo, bronze_store=store, lsh_client=lsh_client)
         summary = await uc.execute(_make_article())
 
         assert summary.suppressed is True
@@ -235,7 +236,7 @@ class TestProcessArticleUseCase:
             stage="stage_c",
         )
 
-        uc = _make_use_case(dedup_repo=dedup_repo, object_store=store, lsh_client=lsh_client)
+        uc = _make_use_case(dedup_repo=dedup_repo, bronze_store=store, lsh_client=lsh_client)
         summary = await uc.execute(_make_article())
 
         assert summary.suppressed is False
@@ -266,7 +267,7 @@ class TestProcessArticleUseCase:
         outbox_repo = AsyncMock()
         uc = _make_use_case(
             dedup_repo=dedup_repo,
-            object_store=store,
+            bronze_store=store,
             lsh_client=lsh_client,
             outbox_repo=outbox_repo,
         )
@@ -279,6 +280,43 @@ class TestProcessArticleUseCase:
         assert "doc_id" in payload
         assert "content_hash" in payload
         assert "minio_silver_key" in payload
+
+    async def test_bronze_object_missing_raises_domain_error(self) -> None:
+        """F-DP2-05 (PLAN-deep-qa-iter2): missing bronze key → BronzeObjectNotFoundError.
+
+        When the storage adapter raises ObjectNotFoundError (or NoSuchKey /
+        FileNotFoundError), the use case must translate to the domain-level
+        BronzeObjectNotFoundError so the consumer can skip the message
+        gracefully instead of producing an unhandled traceback.
+        """
+
+        # Stub bronze store that raises a class named ObjectNotFoundError
+        # (we simulate without importing libs/storage to keep the domain test isolated).
+        class FakeObjectNotFoundError(Exception):
+            """Mimics storage.exceptions.ObjectNotFoundError by name match."""
+
+        # Rename the class to match what the use case pattern-matches on.
+        FakeObjectNotFoundError.__name__ = "ObjectNotFoundError"
+
+        store = AsyncMock()
+        store.get_bytes.side_effect = FakeObjectNotFoundError("key gone")
+
+        uc = _make_use_case(bronze_store=store)
+
+        with pytest.raises(BronzeObjectNotFoundError):
+            await uc.execute(_make_article(), prefetched_bytes=None)
+
+    async def test_bronze_other_error_propagates(self) -> None:
+        """Non-NotFound storage errors must still propagate (e.g. permission, server)."""
+        store = AsyncMock()
+        store.get_bytes.side_effect = RuntimeError("connection refused")
+
+        uc = _make_use_case(bronze_store=store)
+
+        # RuntimeError is not in the {ObjectNotFoundError, NoSuchKey, FileNotFoundError}
+        # whitelist → re-raised as-is, not converted to BronzeObjectNotFoundError.
+        with pytest.raises(RuntimeError, match="connection refused"):
+            await uc.execute(_make_article(), prefetched_bytes=None)
 
 
 class TestGuessContentType:
@@ -323,7 +361,7 @@ class TestPublishedAtParsing:
         uc = _make_use_case(
             dedup_repo=dedup_repo,
             document_repo=document_repo,
-            object_store=store,
+            bronze_store=store,
             lsh_client=lsh_client,
         )
         summary = await uc.execute(_make_article(published_at="invalid-date"))
@@ -356,7 +394,7 @@ class TestPublishedAtParsing:
         uc = _make_use_case(
             dedup_repo=dedup_repo,
             document_repo=document_repo,
-            object_store=store,
+            bronze_store=store,
             lsh_client=lsh_client,
         )
         summary = await uc.execute(_make_article(published_at="2026-03-27T10:00:00Z"))
@@ -389,7 +427,7 @@ class TestPublishedAtParsing:
         uc = _make_use_case(
             dedup_repo=dedup_repo,
             document_repo=document_repo,
-            object_store=store,
+            bronze_store=store,
             lsh_client=lsh_client,
         )
         summary = await uc.execute(_make_article(published_at=None))

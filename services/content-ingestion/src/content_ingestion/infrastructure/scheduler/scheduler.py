@@ -30,6 +30,11 @@ ADAPTER_REGISTRY: dict[SourceType, type[SourceAdapter]] = {
     SourceType.SEC_EDGAR: SECEdgarAdapter,
     SourceType.FINNHUB: FinnhubAdapter,
     SourceType.NEWSAPI: NewsAPIAdapter,
+    # NOTE: SourceType.POLYMARKET is intentionally NOT registered here.
+    # Polymarket tasks are routed directly to _execute_polymarket_task() in
+    # worker.py (R24 compliance: batch-collect first, then short-lived session
+    # for dedup). The scheduler uses PolymarketAdapter only for the dedup
+    # fetch_log_exists_fn; it does NOT go through the standard adapter path.
 }
 
 

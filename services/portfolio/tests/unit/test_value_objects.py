@@ -15,7 +15,7 @@ pytestmark = pytest.mark.unit
 class TestMoney:
     def test_zero_returns_zero_amount(self) -> None:
         m = Money.zero("USD")
-        assert m.amount == Decimal("0")
+        assert m.amount == Decimal(0)
         assert m.currency == "USD"
 
     def test_from_string_parses_decimal(self) -> None:
@@ -27,14 +27,14 @@ class TestMoney:
         a = Money.from_string("100", "USD")
         b = Money.from_string("50", "USD")
         result = a + b
-        assert result.amount == Decimal("150")
+        assert result.amount == Decimal(150)
         assert result.currency == "USD"
 
     def test_sub_same_currency(self) -> None:
         a = Money.from_string("100", "USD")
         b = Money.from_string("30", "USD")
         result = a - b
-        assert result.amount == Decimal("70")
+        assert result.amount == Decimal(70)
         assert result.currency == "USD"
 
     def test_add_different_currencies_raises(self) -> None:
@@ -66,18 +66,18 @@ class TestMoney:
     def test_neg(self) -> None:
         m = Money.from_string("50", "USD")
         neg = -m
-        assert neg.amount == Decimal("-50")
+        assert neg.amount == Decimal(-50)
         assert neg.currency == "USD"
 
     def test_mul_by_decimal(self) -> None:
         m = Money.from_string("10", "USD")
-        result = m * Decimal("3")
-        assert result.amount == Decimal("30")
+        result = m * Decimal(3)
+        assert result.amount == Decimal(30)
 
     def test_mul_by_int(self) -> None:
         m = Money.from_string("10", "USD")
         result = m * 4
-        assert result.amount == Decimal("40")
+        assert result.amount == Decimal(40)
 
     def test_precision_is_quantized_to_8_places(self) -> None:
         m = Money.from_string("1.123456789", "USD")
@@ -87,7 +87,7 @@ class TestMoney:
     def test_frozen_dataclass(self) -> None:
         m = Money.from_string("10", "USD")
         with pytest.raises(Exception):  # noqa: B017
-            m.amount = Decimal("20")  # type: ignore[misc]
+            m.amount = Decimal(20)  # type: ignore[misc]
 
 
 # ── InstrumentKey ─────────────────────────────────────────────────────────────
@@ -119,44 +119,44 @@ class TestInstrumentKey:
 class TestQuantity:
     def test_zero_returns_zero_value(self) -> None:
         q = Quantity.zero()
-        assert q.value == Decimal("0")
+        assert q.value == Decimal(0)
 
     def test_add(self) -> None:
-        q1 = Quantity(value=Decimal("10"))
-        q2 = Quantity(value=Decimal("5"))
+        q1 = Quantity(value=Decimal(10))
+        q2 = Quantity(value=Decimal(5))
         result = q1 + q2
-        assert result.value == Decimal("15")
+        assert result.value == Decimal(15)
 
     def test_sub(self) -> None:
-        q1 = Quantity(value=Decimal("10"))
-        q2 = Quantity(value=Decimal("3"))
+        q1 = Quantity(value=Decimal(10))
+        q2 = Quantity(value=Decimal(3))
         result = q1 - q2
-        assert result.value == Decimal("7")
+        assert result.value == Decimal(7)
 
     def test_mul_by_decimal(self) -> None:
-        q = Quantity(value=Decimal("10"))
-        result = q * Decimal("2")
-        assert result.value == Decimal("20")
+        q = Quantity(value=Decimal(10))
+        result = q * Decimal(2)
+        assert result.value == Decimal(20)
 
     def test_mul_by_int(self) -> None:
-        q = Quantity(value=Decimal("10"))
+        q = Quantity(value=Decimal(10))
         result = q * 3
-        assert result.value == Decimal("30")
+        assert result.value == Decimal(30)
 
     def test_neg(self) -> None:
-        q = Quantity(value=Decimal("5"))
+        q = Quantity(value=Decimal(5))
         neg = -q
-        assert neg.value == Decimal("-5")
+        assert neg.value == Decimal(-5)
 
     def test_is_positive(self) -> None:
-        assert Quantity(value=Decimal("1")).is_positive() is True
-        assert Quantity(value=Decimal("0")).is_positive() is False
-        assert Quantity(value=Decimal("-1")).is_positive() is False
+        assert Quantity(value=Decimal(1)).is_positive() is True
+        assert Quantity(value=Decimal(0)).is_positive() is False
+        assert Quantity(value=Decimal(-1)).is_positive() is False
 
     def test_is_negative(self) -> None:
-        assert Quantity(value=Decimal("-1")).is_negative() is True
-        assert Quantity(value=Decimal("0")).is_negative() is False
-        assert Quantity(value=Decimal("1")).is_negative() is False
+        assert Quantity(value=Decimal(-1)).is_negative() is True
+        assert Quantity(value=Decimal(0)).is_negative() is False
+        assert Quantity(value=Decimal(1)).is_negative() is False
 
     def test_is_zero(self) -> None:
         assert Quantity.zero().is_zero() is True
@@ -167,6 +167,6 @@ class TestQuantity:
         assert str(q.value) == "1.12345679"
 
     def test_frozen_dataclass(self) -> None:
-        q = Quantity(value=Decimal("10"))
+        q = Quantity(value=Decimal(10))
         with pytest.raises(Exception):  # noqa: B017
-            q.value = Decimal("20")  # type: ignore[misc]
+            q.value = Decimal(20)  # type: ignore[misc]

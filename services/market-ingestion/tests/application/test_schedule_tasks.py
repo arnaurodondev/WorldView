@@ -517,3 +517,78 @@ async def test_backfill_last_chunk_dedupe_key_stable() -> None:
     assert (
         first_last_key == second_last_key
     ), f"Backfill last-chunk dedupe key must be stable: {first_last_key!r} != {second_last_key!r}"
+
+
+# ---------------------------------------------------------------------------
+# Regression: _build_incremental_task must handle ECONOMIC_EVENTS /
+# MACRO_INDICATOR / INSIDER_TRANSACTIONS (BP-??? fix 2026-04-27).
+# Previously these dataset types fell through to the unsupported_dataset_type
+# debug log and returned None, so no tasks were ever enqueued.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_economic_events_policy_creates_task() -> None:
+    """ECONOMIC_EVENTS policy must produce an IngestionTask, not silently drop."""
+    policy = _make_policy(
+        symbol="EVENTS.USA",
+        dataset_type=DatasetType.ECONOMIC_EVENTS,
+    )
+    wm = _make_watermark(current_bar_ts=None)
+    uow = _make_uow(policies=[policy], watermark=wm, add_many_return=1)
+
+    uc = ScheduleDueTasksUseCase(uow)
+    await uc.execute()
+
+    uow.tasks.add_many.assert_awaited_once()
+    tasks = uow.tasks.add_many.call_args[0][0]
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert isinstance(task, IngestionTask)
+    assert task.dataset_type == DatasetType.ECONOMIC_EVENTS
+    assert task.symbol == "EVENTS.USA"
+    # dedupe_key must be deterministic (stable within same UTC day)
+    assert "economic_events" in task.dedupe_key
+    assert "EVENTS.USA" in task.dedupe_key
+
+
+@pytest.mark.unit
+async def test_macro_indicator_policy_creates_task() -> None:
+    """MACRO_INDICATOR policy must produce an IngestionTask, not silently drop."""
+    policy = _make_policy(
+        symbol="USA.gdp_current_usd",
+        dataset_type=DatasetType.MACRO_INDICATOR,
+    )
+    wm = _make_watermark(current_bar_ts=None)
+    uow = _make_uow(policies=[policy], watermark=wm, add_many_return=1)
+
+    uc = ScheduleDueTasksUseCase(uow)
+    await uc.execute()
+
+    uow.tasks.add_many.assert_awaited_once()
+    tasks = uow.tasks.add_many.call_args[0][0]
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert task.dataset_type == DatasetType.MACRO_INDICATOR
+    assert task.symbol == "USA.gdp_current_usd"
+
+
+@pytest.mark.unit
+async def test_insider_transactions_policy_creates_task() -> None:
+    """INSIDER_TRANSACTIONS policy must produce an IngestionTask, not silently drop."""
+    policy = _make_policy(
+        symbol="AAPL",
+        dataset_type=DatasetType.INSIDER_TRANSACTIONS,
+    )
+    wm = _make_watermark(current_bar_ts=None)
+    uow = _make_uow(policies=[policy], watermark=wm, add_many_return=1)
+
+    uc = ScheduleDueTasksUseCase(uow)
+    await uc.execute()
+
+    uow.tasks.add_many.assert_awaited_once()
+    tasks = uow.tasks.add_many.call_args[0][0]
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert task.dataset_type == DatasetType.INSIDER_TRANSACTIONS
+    assert task.symbol == "AAPL"

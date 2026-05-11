@@ -1,13 +1,18 @@
-"""Alert preference API routes."""
+"""Alert preference API routes.
+
+Auth: InternalJWTMiddleware sets request.state.tenant_id / user_id from the
+verified RS256 JWT. Routes read these values from request.state, never from
+raw headers (PRD-0025, F-CRIT-001 remediation).
+"""
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Header, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 
-from portfolio.api.dependencies import UoWDep
+from portfolio.api.dependencies import ReadUoWDep, UoWDep
 from portfolio.api.schemas import (
     AlertPreferenceResponse,
     AlertPreferencesListResponse,
@@ -28,12 +33,29 @@ from portfolio.application.use_cases.alert_preferences import (
 router = APIRouter(tags=["alert-preferences"])
 
 
+def _extract_tenant_id(request: Request) -> UUID:
+    """Read tenant_id from request.state set by InternalJWTMiddleware."""
+    raw = getattr(request.state, "tenant_id", None)
+    if not raw:
+        raise HTTPException(status_code=401, detail="Missing tenant_id in JWT")
+    return UUID(str(raw))
+
+
+def _extract_owner_id(request: Request) -> UUID:
+    """Read user_id (owner) from request.state set by InternalJWTMiddleware."""
+    raw = getattr(request.state, "user_id", None)
+    if not raw:
+        raise HTTPException(status_code=401, detail="Missing user_id in JWT")
+    return UUID(str(raw))
+
+
 @router.get("", response_model=AlertPreferencesListResponse)
 async def get_alert_preferences(
-    uow: UoWDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-    x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
+    uow: ReadUoWDep,
+    request: Request,
 ) -> AlertPreferencesListResponse:
+    x_tenant_id = _extract_tenant_id(request)
+    x_owner_id = _extract_owner_id(request)
     uc = GetAlertPreferencesUseCase()
     preferences, suppressions = await uc.execute(x_owner_id, x_tenant_id, uow)
     return AlertPreferencesListResponse(
@@ -56,9 +78,10 @@ async def upsert_alert_preference(
     alert_type: str,
     body: AlertPreferenceUpdateRequest,
     uow: UoWDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-    x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
+    request: Request,
 ) -> AlertPreferenceResponse:
+    x_tenant_id = _extract_tenant_id(request)
+    x_owner_id = _extract_owner_id(request)
     uc = UpsertAlertPreferenceUseCase()
     pref = await uc.execute(
         UpsertAlertPreferenceCommand(
@@ -80,9 +103,10 @@ async def upsert_alert_preference(
 async def set_entity_suppression(
     body: EntitySuppressionCreateRequest,
     uow: UoWDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-    x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
+    request: Request,
 ) -> EntitySuppressionResponse:
+    x_tenant_id = _extract_tenant_id(request)
+    x_owner_id = _extract_owner_id(request)
     uc = SetEntitySuppressionUseCase()
     suppression = await uc.execute(
         SetEntitySuppressionCommand(
@@ -96,14 +120,18 @@ async def set_entity_suppression(
 
 
 @router.delete(
-    "/suppressions/{entity_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response, response_model=None
+    "/suppressions/{entity_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    response_model=None,
 )
 async def remove_entity_suppression(
     entity_id: UUID,
     uow: UoWDep,
-    x_tenant_id: UUID = Header(..., alias="X-Tenant-ID"),
-    x_owner_id: UUID = Header(..., alias="X-Owner-ID"),
+    request: Request,
 ) -> None:
+    x_tenant_id = _extract_tenant_id(request)
+    x_owner_id = _extract_owner_id(request)
     uc = RemoveEntitySuppressionUseCase()
     await uc.execute(
         RemoveEntitySuppressionCommand(

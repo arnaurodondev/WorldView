@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -14,8 +15,6 @@ from portfolio.infrastructure.db.models.alert_preference import AlertPreferenceM
 from portfolio.infrastructure.db.models.entity_suppression import EntitySuppressionModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -38,7 +37,7 @@ class SqlAlchemyAlertPreferenceRepository(AlertPreferenceRepository):
             select(AlertPreferenceModel).where(
                 AlertPreferenceModel.user_id == user_id,
                 AlertPreferenceModel.tenant_id == tenant_id,
-            )
+            ),
         )
         return [self._to_entity(r) for r in result.scalars()]
 
@@ -83,7 +82,7 @@ class SqlAlchemyEntitySuppressionRepository(EntitySuppressionRepository):
             select(EntitySuppressionModel).where(
                 EntitySuppressionModel.user_id == user_id,
                 EntitySuppressionModel.tenant_id == tenant_id,
-            )
+            ),
         )
         return [self._to_entity(r) for r in result.scalars()]
 
@@ -92,7 +91,7 @@ class SqlAlchemyEntitySuppressionRepository(EntitySuppressionRepository):
             select(EntitySuppressionModel).where(
                 EntitySuppressionModel.user_id == user_id,
                 EntitySuppressionModel.entity_id == entity_id,
-            )
+            ),
         )
         row = result.scalar_one_or_none()
         return self._to_entity(row) if row else None
@@ -115,7 +114,7 @@ class SqlAlchemyEntitySuppressionRepository(EntitySuppressionRepository):
             select(EntitySuppressionModel).where(
                 EntitySuppressionModel.user_id == user_id,
                 EntitySuppressionModel.entity_id == entity_id,
-            )
+            ),
         )
         row = result.scalar_one_or_none()
         if row is not None:

@@ -3,6 +3,7 @@ name: plan
 description: "Generate a structured implementation plan from a PRD. Breaks the PRD into distinct service-level plans, each decomposed into dependency-ordered waves of tasks. Use after /prd to prepare for implementation."
 user-invocable: true
 argument-hint: "[PRD ID or path, e.g. PRD-0001 or docs/specs/0001-feature.md]"
+effort: medium
 ---
 
 # Plan Generation — From PRD to Implementation Waves
@@ -12,6 +13,40 @@ You are a **Staff Engineer / Technical Program Manager** responsible for breakin
 ## Input
 
 PRD reference: `$ARGUMENTS`
+
+## Phase -1 — Pre-Flight ID Collision Check (MANDATORY — Run Before Anything Else)
+
+Before loading any context or writing any plan content, run these mechanical checks to avoid ID collisions:
+
+```bash
+# 1. Find highest existing rule number in RULES.md
+grep -oE 'R[0-9]+' RULES.md | sort -V | tail -5
+
+# 2. Find highest existing PLAN-XXXX in TRACKING.md and docs/plans/
+grep -oE 'PLAN-[0-9]+' docs/plans/TRACKING.md | sort -V | tail -5
+ls docs/plans/ | grep -oE '^[0-9]+' | sort -V | tail -5
+
+# 3. Find highest existing PRD-XXXX in docs/specs/ and TRACKING.md
+ls docs/specs/ | grep -oE '^[0-9]+' | sort -V | tail -5
+grep -oE 'PRD-[0-9]+' docs/plans/TRACKING.md | sort -V | tail -5
+
+# 4. Find existing Worker IDs (e.g. W-NNN, Block 13X-N patterns)
+grep -rE 'Worker-[0-9]+|Block [0-9]+-[0-9]+|W-[0-9]+' docs/plans/ | grep -oE '(Worker|Block|W)-[0-9]+' | sort -V | uniq | tail -10
+
+# 5. Find highest Alembic migration number per affected service (to avoid number collisions)
+# Run this for EVERY service the plan will create migrations for:
+ls services/<service>/alembic/versions/ | sort -V | tail -3
+ls services/intelligence-migrations/alembic/versions/ | sort -V | tail -3
+```
+
+**Alembic migration pre-flight rule**: For every service that will receive a new migration, record the current HEAD filename. The new migration filename must use the next integer (e.g., if HEAD is `0029_foo.py`, the new migration is `0030_bar.py`). Never assign migration numbers from memory or assumptions — the filesystem is authoritative. This prevented a PLAN-0074 collision where the plan assumed HEAD was `0024` but actual HEAD was `0029`.
+
+Record the highest existing number for each ID class. When assigning IDs in this plan:
+- **PLAN-XXXX**: next integer after the highest found above
+- **R##**: next integer after the highest rule number found above
+- **Worker/Block IDs**: next integer after the highest found above
+
+> **Why mandatory**: ID collisions (e.g., two plans both claiming PLAN-0028, or two rules both claiming R28) create irreversible confusion that takes multiple sessions to untangle. The grep above takes 5 seconds and prevents the problem entirely.
 
 ## Phase 0 — Context Loading (Silent)
 
@@ -25,6 +60,55 @@ PRD reference: `$ARGUMENTS`
 8. Read `docs/plans/TRACKING.md` for active work
 9. Read `docs/BUG_PATTERNS.md` for patterns to guard against
 10. Read existing service source code (especially mature services like portfolio, market-ingestion, market-data) to understand implementation patterns the agent should follow
+
+## Phase 0.5 — PRD Pre-Flight Gate (Mandatory, Blocking)
+
+Before decomposing a single wave, explicitly verify the PRD is ready to plan:
+
+| Check | How to verify | Result |
+|-------|--------------|--------|
+| No unresolved BLOCKING open questions | Read §14 of the PRD; any OQ without "~~Resolved~~" or classified BLOCKING is a blocker | PASS/FAIL |
+| No unverified external API fields | Check if §2.7 Reality Check was done; if PRD was written before this enhancement, manually verify any external fields referenced | PASS/FAIL |
+| No active cross-plan conflicts | Read TRACKING.md; no other `in-progress` plan modifies the same service's tables/topics/entities | PASS/FAIL |
+| PRD recency check | If PRD `Created` date is > 14 days ago AND the architecture has changed since (check git log), flag for `/revise-prd` before proceeding | PASS/WARN |
+| Architecture compliance | No RULES.md violations visible in the PRD design (cross-check §6 against RULES.md) | PASS/FAIL |
+
+**If any row is FAIL**: Present to the user and require resolution before generating waves.
+**If WARN (stale PRD)**: Ask the user: "This PRD is X days old. Run `/revise-prd` first, or proceed with awareness?"
+
+## Phase 0.6 — Checkpoint Artifact (Write Early — MANDATORY)
+
+Before beginning any deep exploration or wave decomposition, **write a skeleton plan file** to `docs/plans/<NNNN>-<slug>-plan.md`. This is the session boundary guard: if the session hits a context limit or is interrupted mid-exploration, this artifact preserves at least the plan ID, PRD link, and high-level structure so work can resume without starting over.
+
+Minimum skeleton to write immediately after Phase 0.5 passes:
+
+```markdown
+---
+id: PLAN-<NNNN>
+title: <Plan Title>
+prd: PRD-<NNNN>
+status: draft
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+---
+
+# PLAN-<NNNN> — <Title>
+
+## Overview
+PRD: [PRD-<NNNN>](../specs/<NNNN>-<slug>.md)
+Services affected: <list>
+Total estimated waves: TBD (in progress)
+
+## Sub-Plans
+<!-- To be populated during Phase 1-2 decomposition -->
+
+## Checkpoint: Plan generation in progress
+This file was written as a session boundary guard. If you are resuming a partial plan session, continue from Phase 1 of the /plan skill.
+```
+
+Also append this plan immediately to `docs/plans/TRACKING.md` with status `draft` and `0/TBD` waves. This ensures the plan ID is registered even if the session ends before completion.
+
+> **Why mandatory**: Multiple sessions have lost all planning work (hypotheses, service analysis, wave structure) when reaching a context limit mid-decomposition. Writing this skeleton costs 30 seconds and saves the full re-run.
 
 ## Phase 1 — Plan Decomposition Strategy
 
@@ -46,6 +130,69 @@ Determine the execution order of plans:
 - Cross-cutting plans (observability, security hardening) can run in parallel with service plans
 
 Present the plan dependency graph to the user for approval.
+
+### 1.3 Codebase State Verification (Mandatory — Read the Code)
+
+For each entity, table, topic, or endpoint referenced in the PRD, **read the actual source files** and document the current state. Do not rely on documentation alone — read the code.
+
+**What to read for each affected service**:
+- `services/<svc>/src/<svc>/domain/entities/*.py` — actual entity fields and types
+- `services/<svc>/src/<svc>/infrastructure/db/models/*.py` — actual ORM model columns
+- `services/<svc>/alembic/versions/` — most recent migration file (current schema head)
+- `services/<svc>/src/<svc>/api/routers/*.py` — actual endpoint signatures (path, params, response model)
+- `services/<svc>/src/<svc>/application/use_cases/*.py` — existing use case interfaces
+- `services/<svc>/tests/` — existing test files (to know what tests will break)
+- `infra/kafka/schemas/*.avsc` — actual Avro schema fields and types
+- `libs/contracts/src/contracts/*.py` — existing canonical models
+
+Fill in this table with actual values from code (not assumptions):
+
+| PRD Reference | Type | Service | Actual Current State (from code) | PRD Expected State | Delta |
+|--------------|------|---------|----------------------------------|--------------------|-------|
+| `entity_embedding_state` | DB table | S7 | 6 columns: id, entity_id, model_id, embedding, created_at, updated_at | add `embedding_version` column | migration needed |
+| `market.signal.v1` | Kafka topic / Avro schema | S6→S3 | does not exist | new | create schema + topic |
+| `GET /api/v1/entities/{id}` | endpoint | S9 | returns EntityPublic (6 fields) | add `description` field | response schema change |
+| ... | ... | ... | ... | ... | ... |
+
+**Rules**:
+- Every row with a Delta ≠ "none" must have a task in Wave 1 or a prerequisite wave that brings the codebase to the PRD's baseline
+- Every Alembic migration delta must specify: current head revision, new revision name, column type with server_default
+- Every entity extension delta must specify: which existing tests will break and how they'll be updated
+- Every endpoint change must specify: whether existing frontend/consumer code will break
+
+**Do not write any wave tasks until this table is complete.** Tasks written against a stale baseline produce broken implementations.
+
+### 1.4 Name Verification — Mandatory `git grep` Pass (BP-405 Guard)
+
+Before writing any task, **mechanically verify** that every class, method, port field, file path, env var, and Avro schema name mentioned in the plan actually exists in the repository (or is explicitly tagged as new). This pass is non-negotiable — humans cannot reliably catch a hallucinated class name during review because the name *reads correctly*.
+
+**Procedure**:
+
+1. List every class, method, port field, file path, env var, and Avro schema name you intend to mention in the plan. Include both targets you propose to *modify* and targets you propose to *call into*.
+2. For each name, run a `git grep` (or `Bash` `grep -rE`) and confirm at least one definition exists. The exact tooling varies by name kind:
+
+| Name kind | Verification command |
+|---|---|
+| Python class | `git grep -E "^class <Name>(\\(\|:)"` |
+| Python function/method | `git grep -E "^( {4})?(async )?def <name>\\("` |
+| Pydantic / dataclass field | `git grep -E "<field>: " <suspected_file>` (or scope to the class file) |
+| File path | `ls <path>` (must exit 0) |
+| Env var | `git grep -E "<ENV_NAME>"` (settings, env files, examples) |
+| Avro schema | `ls infra/kafka/schemas/<name>.avsc` |
+| Kafka topic | `git grep "<topic.name.v1>"` |
+| Endpoint path | `git grep -E "['\"]<path>['\"]"` |
+
+3. Tag every result in the plan body:
+   - **Existing target** (the verification returned ≥1 hit) — fine, no tag needed.
+   - **NEW target** (the verification returned no hits) — add `(NEW — created in this plan)` next to the first mention. Plan readers (and `/implement`) see this tag and know not to look for the target before this plan ships.
+   - **RENAMED target** (an old name is being replaced) — add `(RENAMED in PLAN-NNNN: <old> → <new>)` and write a §0 Revision Log entry on every other plan that references the old name.
+4. If a name verification fails and the target is *not* meant to be new, **stop**. Either correct the plan to use the actual name or add a precursor plan/wave that creates the target. Do not paper over it with `(NEW)` if the intent is to call into existing code.
+
+**Why this is mandatory** (not optional):
+
+The 2026-05-07 `/investigate` against PLAN-0066/0067/0074 found three concurrent plans that all referenced classes (`ChatOrchestratorUseCase`, `RunChatUseCase`) and port fields (`ChunkSearchRequest.entity_tickers`, `entity_mentions`) that did not exist anywhere in the repo. Each plan was reviewed by humans and approved. The names *read correctly*, so editorial review didn't catch the drift. The fix has to be mechanical. See BP-405 for the full pattern and rationale.
+
+**Do not advance to Phase 2 (wave decomposition) until every name in your plan body has been verified or tagged.**
 
 ## Phase 2 — Wave Decomposition (Per Plan)
 
@@ -103,6 +250,18 @@ For each entity, class, or module this task creates:
 - **Key methods**: <list with signatures and behavior>
 - **Invariants**: <what must always be true>
 - **Depends on**: <other entities/modules from this or prior waves>
+
+**Port interfaces** (MANDATORY for every use case or worker task):
+List every ABC port interface the use case/worker depends on. Concrete infrastructure classes MUST NOT be imported in use cases (R25).
+- `IThingRepository` (ABC in `application/ports/repositories.py`) — implemented by `ThingRepository` (infra)
+- `IExternalClient` (ABC in `application/ports/clients.py`) — implemented by `ExternalAPIClient` (infra)
+
+If no port exists yet, add a sub-task: "Create ABC port `IThingRepository` in `application/ports/` before this task."
+
+**Read/Write classification** (MANDATORY for every use case task):
+- **Read-only?** YES → depends on `ReadOnlyUnitOfWork`; API route uses `ReadUoWDep` (R27)
+- **Write?** YES → depends on `UnitOfWork`; API route uses `UoWDep`
+- **Dual write (DB + Kafka)?** YES → outbox pattern required (R8)
 
 **Logic & Behavior** (for impl tasks):
 - <Step-by-step description of the processing logic>
@@ -171,8 +330,33 @@ Each wave must include:
 - [ ] Documentation updated (if API/events/schema changed)
 - [ ] No architecture violations (domain has no infra imports)
 
-#### Regression Guardrails
-- BP-XXX: <specific pattern to watch for and how it applies to this wave>
+#### Architecture Compliance (MANDATORY — every wave, no exceptions)
+These are the most commonly missed patterns; they must be explicitly checked per wave:
+- [ ] **R25 — ABC ports**: Every new use case lists its ABC port dependency in the task spec; no concrete infrastructure class (e.g. `ChunkANNRepository`) is imported in any use case
+- [ ] **R27 — ReadOnlyUoW**: Every read-only use case / GET endpoint specifies `ReadOnlyUnitOfWork` + `ReadUoWDep`; write use cases use `UnitOfWork` + `UoWDep`
+- [ ] **R10 — UUIDv7**: Every new entity ID field specifies `common.ids.new_uuid7()` — never `uuid.uuid4()`
+- [ ] **R11 — UTC timestamps**: Every new timestamp field specifies `common.time.utc_now()` — never `datetime.now()` or `datetime.utcnow()`
+- [ ] **R12 — structlog**: Every new worker or use case specifies `structlog.get_logger(__name__)` — never `import logging` or `print()`
+- [ ] **R8 — Outbox**: Any task that writes to both DB and Kafka specifies the outbox pattern from `libs/messaging`
+- [ ] **R9 — No cross-service DB**: No task queries another service's database directly
+- [ ] **R32 — Alembic numbers**: Migration filenames are based on verified current HEAD, not assumed HEAD
+
+#### Break Impact (Mandatory — must not be empty)
+List every file outside the target files that will break when this wave's changes are applied, and how to fix each:
+
+| Broken File | Why It Breaks | Fix Required |
+|-------------|--------------|-------------|
+| `services/S5/tests/unit/test_article.py` | Article entity gains `relevance_score` field | Add `relevance_score=None` to all Article(...) constructor calls in test fixtures |
+| `libs/contracts/src/contracts/article.py` | Canonical model must match new entity | Add `relevance_score: float \| None = None` field |
+| `services/S9/tests/api/test_news.py` | GET /api/v1/news response shape changed | Update assert for new `top` path and new response fields |
+
+**Rule**: An agent picking up this wave MUST update all items in this table as part of the wave — not as a follow-up. A wave is not complete until all break-impact items are resolved and all tests pass.
+
+#### Regression Guardrails (Mandatory — must not be empty)
+Scan `docs/BUG_PATTERNS.md` and list every pattern applicable to this wave's changes:
+- BP-XXX: <specific pattern, how it applies, and what the agent must do to avoid it>
+
+At minimum one guardrail per wave. Waves touching DB: check BP-007, BP-019, BP-032. Waves touching Kafka: check BP-001, BP-017, BP-024. Waves touching external I/O: check BP-025, BP-026, BP-027.
 ```
 
 ## Phase 3 — Cross-Cutting Concerns

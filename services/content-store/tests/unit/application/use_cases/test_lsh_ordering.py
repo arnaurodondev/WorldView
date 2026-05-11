@@ -62,7 +62,7 @@ class TestLSHOrderingUseCase:
             dedup_repo=dedup_repo,
             minhash_repo=AsyncMock(),
             outbox_repo=AsyncMock(),
-            object_store=store,
+            bronze_store=store,
             bronze_bucket="worldview-bronze",
             silver_storage=silver_storage,
             lsh_client=lsh_client,

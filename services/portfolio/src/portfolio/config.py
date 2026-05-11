@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
+
 import structlog
-from pydantic import model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,8 +26,8 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # Database (R23 — read/write split)
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/portfolio_db"
-    database_url_read: str = ""  # Optional read-replica URL; falls back to database_url when empty
+    database_url: SecretStr = SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/portfolio_db")
+    database_url_read: SecretStr = SecretStr("")  # Optional read-replica URL; falls back to database_url when empty
     db_pool_size: int = 10
     db_max_overflow: int = 20
     db_pool_size_read: int = 20
@@ -41,6 +43,13 @@ class Settings(BaseSettings):
     topic_portfolio_events: str = "portfolio.events.v1"
 
     # Kafka topics (consumed)
+    # PLAN-0057 Wave D-2: ``topic_instrument_discovered`` is the new
+    # lightweight event emitted by ohlcv/quotes consumers when an instrument
+    # is first observed (no fundamentals yet).  ``topic_instrument_created``
+    # is now restricted to the fundamentals_consumer enrichment path (real
+    # EODHD ``Name`` always present).  The instrument consumer subscribes to
+    # all three so InstrumentRef materialises as soon as we see the symbol.
+    topic_instrument_discovered: str = "market.instrument.discovered.v1"
     topic_instrument_created: str = "market.instrument.created"
     topic_instrument_updated: str = "market.instrument.updated"
     consumer_group_instrument: str = "portfolio-instrument-sync"
@@ -61,8 +70,59 @@ class Settings(BaseSettings):
     valkey_url: str = "redis://localhost:6379/0"
     watchlist_cache_ttl_seconds: int = 300
 
-    # Internal service-to-service auth (S10 → S1)
-    internal_service_token: str = ""
+    # Internal JWT (RS256) — PRD-0025
+    # S1 fetches the public key from S9's JWKS endpoint at startup.
+    api_gateway_url: str = "http://api-gateway:8000"
+    internal_jwt_issuer: str = Field(default="worldview-gateway")
+
+    # F-001: When True, InternalJWTMiddleware decodes JWTs WITHOUT signature
+    # verification if the JWKS public key is unavailable. NEVER enable in
+    # production — only for E2E tests that run without a full S9 stack.
+    internal_jwt_skip_verification: bool = False
+
+    # SnapTrade brokerage sync (PRD-0022 §4.3, §12)
+    # WHY PORTFOLIO_* listed first: docker-compose brokerage-sync sets bare SNAPTRADE_*
+    # vars to "" (empty) via shell expansion when host env is unset. Putting the prefixed
+    # alias first ensures the non-empty docker.env value wins over the empty bare var.
+    snaptrade_client_id: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("PORTFOLIO_SNAPTRADE_CLIENT_ID", "SNAPTRADE_CLIENT_ID"),
+    )
+    snaptrade_consumer_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("PORTFOLIO_SNAPTRADE_CONSUMER_KEY", "SNAPTRADE_CONSUMER_KEY"),
+    )
+    snaptrade_redirect_uri: str = Field(
+        default="http://localhost:3001/portfolio/brokerage/callback",
+        validation_alias=AliasChoices("PORTFOLIO_SNAPTRADE_REDIRECT_URI", "SNAPTRADE_REDIRECT_URI"),
+    )
+    snaptrade_secret_encryption_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "PORTFOLIO_SNAPTRADE_SECRET_ENCRYPTION_KEY",
+            "SNAPTRADE_SECRET_ENCRYPTION_KEY",
+        ),
+    )
+    brokerage_sync_cycle_seconds: int = 14400  # 4 hours
+    brokerage_sync_history_days: int = 730  # 2 years initial import
+    # S3 (market-data) URL for instrument resolution fallback in BrokerageTransactionSyncWorker
+    market_data_service_url: str = "http://market-data:8003"
+
+    # Feedback subsystem (PLAN-0052 Wave D)
+    # Screenshot URLs are stored as S3 keys / pre-signed URLs; the upload itself
+    # is performed by the frontend via a pre-signed PUT (not yet implemented —
+    # follow-up wave). The bucket and TTLs below are the source-of-truth for
+    # the lifecycle policy that DevOps applies in worldview-gitops.
+    feedback_s3_bucket: str = "worldview-feedback-screenshots"
+    feedback_screenshot_ttl_days: int = 90
+    feedback_console_logs_ttl_days: int = 7
+    # F-Q1-04: anonymous (no-JWT) feedback submissions land under a
+    # "platform support" tenant id. Admins read these via
+    # ``GET /api/v1/feedback/submissions/anonymous`` (admin-only).
+    # Defaults to the nil UUID — matches the gateway's issue_public_jwt()
+    # tenant claim. Override via PORTFOLIO_FEEDBACK_ANONYMOUS_TENANT_ID
+    # if you provision a dedicated tenant for anon traffic.
+    feedback_anonymous_tenant_id: str = "00000000-0000-0000-0000-000000000000"
 
     # Observability (STANDARDS.md §8.3 — mandatory in every service)
     log_level: str = "INFO"
@@ -70,19 +130,61 @@ class Settings(BaseSettings):
     log_format: str = "json"
     otlp_endpoint: str = ""
 
-    @model_validator(mode="after")
-    def _warn_missing_internal_token(self) -> Settings:
-        """Warn at startup if internal_service_token is unset (F-SEC-001).
+    # F-Q2-02: validate at settings load so a misconfigured tenant id fails
+    # the service startup loud-and-clear instead of producing a 500 on the
+    # first ``GET /api/v1/feedback/submissions/anonymous`` request. The route
+    # parses this with ``UUID(...)`` which throws ValueError; raising at load
+    # time gives operators a stack trace they can act on.
+    @field_validator("feedback_anonymous_tenant_id")
+    @classmethod
+    def _validate_anonymous_tenant_id(cls, v: str) -> str:
+        from uuid import UUID
 
-        Uses structlog so the warning is captured by the structured log pipeline
-        in production log aggregators.
-        """
-        if not self.internal_service_token:
+        try:
+            UUID(v)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(
+                f"PORTFOLIO_FEEDBACK_ANONYMOUS_TENANT_ID must be a valid UUID, got {v!r}: {exc}",
+            ) from exc
+        return v
+
+    @model_validator(mode="after")
+    def _warn_default_db_credentials(self) -> Settings:
+        """Warn at startup if database_url still contains default superuser credentials (D-7)."""
+        # F-007: Production guard — reject skip_verification in production.
+        if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").lower() == "production":
+            raise ValueError(
+                "internal_jwt_skip_verification MUST NOT be enabled in production. "
+                "Set APP_ENV != 'production' or remove the flag."
+            )
+        if "postgres:postgres" in self.database_url.get_secret_value():
             structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
-                "missing_internal_service_token",
+                "default_db_credentials_detected",
                 message=(
-                    "PORTFOLIO_INTERNAL_SERVICE_TOKEN is not set — all internal API endpoints "
-                    "will return 401. Set this env var before deploying to production."
+                    "PORTFOLIO_DATABASE_URL still uses the default 'postgres:postgres' credentials. "
+                    "Set this env var to a secure database URL before deploying to production."
+                ),
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _warn_missing_snaptrade_credentials(self) -> Settings:
+        """Warn at startup if SnapTrade credentials are unset (PRD-0022 F-23)."""
+        if not self.snaptrade_client_id.get_secret_value():
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "missing_snaptrade_client_id",
+                message=(
+                    "SNAPTRADE_CLIENT_ID is not set — brokerage connection endpoints will fail. "
+                    "Set this env var to enable SnapTrade brokerage sync."
+                ),
+            )
+        if not self.snaptrade_secret_encryption_key:
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "missing_snaptrade_encryption_key",
+                message=(
+                    "SNAPTRADE_SECRET_ENCRYPTION_KEY is not set — snaptrade_user_secret will be "
+                    "stored in plaintext (dev mode only). Generate a key with: "
+                    'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
                 ),
             )
         return self

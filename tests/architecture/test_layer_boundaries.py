@@ -10,18 +10,22 @@ are respected across all mature services:
 Specifically:
   - domain must NOT import from application, api, or infrastructure
   - application must NOT import from api or infrastructure (uses interfaces only)
-  - api must NOT import infrastructure internals directly
+  - api must NOT have MODULE-LEVEL imports from infrastructure (D-1 / IG-LAYER-002)
+    (function-body lazy imports are acceptable as an established DI pattern)
 
 Only mature (non-scaffolded) services are checked.
 """
 
 from __future__ import annotations
 
+import ast
+
 from tests.architecture._utils import (
     ArchViolation,
     ServiceInfo,
     assert_no_violations,
     discover_mature_services,
+    discover_services,
     iter_py_files,
     layer_of,
     scan_imports,
@@ -130,3 +134,66 @@ class TestLayerBoundaries:
                         )
 
         assert_no_violations(violations, rule="LAYER-APP-ISOLATION")
+
+    def test_api_no_module_level_infrastructure_imports(self) -> None:
+        """API layer files must not have module-level (top-level) imports from
+        infrastructure/.  Lazy imports inside function bodies are allowed because
+        they follow the established DI pattern (portfolio reference implementation)
+        and don't load infrastructure at module-import time.
+
+        Violation pattern (D-1 / IG-LAYER-002):
+            # BAD — top of file
+            from portfolio.infrastructure.db.repositories.foo import FooRepo
+            ...
+            def get_foo(session: Session) -> FooUseCase:
+                return FooUseCase(FooRepo(session))
+
+        Acceptable alternative (deferred):
+            def get_foo(session: Session) -> FooUseCase:
+                from portfolio.infrastructure.db.repositories.foo import FooRepo  # lazy
+                return FooUseCase(FooRepo(session))
+        """
+        violations: list[ArchViolation] = []
+
+        # Check all services (including scaffolded) — this rule has no exclusions
+        for svc in discover_services(include_scaffolded=True):
+            api_dir = svc.pkg_dir / "api"
+            if not api_dir.is_dir():
+                continue
+
+            for py_file in iter_py_files(api_dir):
+                try:
+                    source = py_file.read_text(encoding="utf-8", errors="replace")
+                    tree = ast.parse(source, filename=str(py_file))
+                except (SyntaxError, OSError):
+                    continue
+
+                # Only examine top-level statements (direct children of Module)
+                for node in tree.body:
+                    if not isinstance(node, ast.Import | ast.ImportFrom):
+                        continue
+                    module = node.module if isinstance(node, ast.ImportFrom) else ""
+                    if not module:
+                        continue
+
+                    pkg_infra_prefix = svc.pkg_name + ".infrastructure"
+                    if not module.startswith(pkg_infra_prefix):
+                        continue
+
+                    violations.append(
+                        ArchViolation(
+                            service=svc.name,
+                            file=str(py_file.relative_to(svc.service_dir.parent.parent)),
+                            line=node.lineno,
+                            rule="API-MODULE-LEVEL-INFRA",
+                            detail=(
+                                f"api/ has a module-level import from infrastructure/ "
+                                f"(`{module}`). "
+                                "Move to a function-body lazy import (D-1 / IG-LAYER-002). "
+                                "Example: `from <pkg>.infrastructure... import X` inside "
+                                "the dependency function, not at the top of the file."
+                            ),
+                        )
+                    )
+
+        assert_no_violations(violations, rule="API-MODULE-LEVEL-INFRA")

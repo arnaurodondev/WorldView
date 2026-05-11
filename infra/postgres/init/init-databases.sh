@@ -42,6 +42,12 @@ psql -d market_data_db -v ON_ERROR_STOP=0 <<SQL
     CREATE EXTENSION IF NOT EXISTS timescaledb;
 SQL
 
+# pgcrypto for content_ingestion_db (required by PLAN-0055 B-1 config_hash GENERATED column)
+echo "Enabling pgcrypto in content_ingestion_db"
+psql -d content_ingestion_db -v ON_ERROR_STOP=0 <<SQL
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+SQL
+
 # pgvector for nlp_db
 echo "Enabling pgvector in nlp_db"
 psql -d nlp_db -v ON_ERROR_STOP=0 <<SQL

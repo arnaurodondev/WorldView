@@ -152,7 +152,7 @@ def _parse_file(path: Path) -> ast.Module | None:
 # ---------------------------------------------------------------------------
 
 R23_BASELINE: dict[tuple[str, str], str] = {
-    # All services are now R23-compliant (PLAN-0012 Waves A-1, B-1, B-2, B-3).
+    # All services are now R23-compliant (PLAN-0012 + QA follow-up fixes).
 }
 
 _KNOWN_RULE_IDS: frozenset[str] = frozenset(

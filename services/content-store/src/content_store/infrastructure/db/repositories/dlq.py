@@ -7,6 +7,7 @@ application-layer types (``DLQEntryData``), never ORM models.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import func, select, update
 
@@ -16,8 +17,6 @@ from content_store.application.ports.repositories import DLQEntryData, DLQReposi
 from content_store.infrastructure.db.models import DeadLetterQueueModel, OutboxEventModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

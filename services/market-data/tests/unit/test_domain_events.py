@@ -46,19 +46,25 @@ class TestInstrumentCreatedEvent:
             exchange="NASDAQ",
         )
         assert event.event_type == "market.instrument.created"
-        assert event.schema_version == 2  # bumped in Wave 5 (QA-016)
+        # PLAN-0057 Wave C-1: schema bumped to 3 (added cusip/figi/lei/primary_ticker)
+        assert event.schema_version == 3
         assert event.instrument_id == "inst-1"
         assert event.security_id == "sec-1"
         assert event.symbol == "AAPL"
         assert event.exchange == "NASDAQ"
 
     def test_instrument_created_optional_fields_default_none(self) -> None:
-        """name, isin, instrument_type, description default to None for backward compat."""
+        """name, isin, instrument_type, description, cusip, figi, lei, primary_ticker default to None."""
         event = InstrumentCreated(instrument_id="inst-1", symbol="AAPL", exchange="NASDAQ")
         assert event.name is None
         assert event.isin is None
         assert event.instrument_type is None
         assert event.description is None
+        # PLAN-0057 Wave C-1 fields default to None for backward compatibility.
+        assert event.cusip is None
+        assert event.figi is None
+        assert event.lei is None
+        assert event.primary_ticker is None
 
     def test_instrument_created_has_description_field(self) -> None:
         """description field is present in InstrumentCreated and defaults to None (T-E-2-01)."""
@@ -126,8 +132,44 @@ class TestInstrumentCreatedEvent:
         assert InstrumentCreated.event_type == "market.instrument.created"  # type: ignore[attr-defined]
 
     def test_instrument_created_schema_version(self) -> None:
-        # schema_version=2 since Wave 5: added name, isin, instrument_type fields (QA-016)
-        assert InstrumentCreated.schema_version == 2  # type: ignore[attr-defined]
+        # PLAN-0057 Wave C-1: schema_version=3 — added cusip, figi, lei, primary_ticker.
+        # (Previous v2 added name, isin, instrument_type, description in Wave 5 QA-016.)
+        assert InstrumentCreated.schema_version == 3  # type: ignore[attr-defined]
+
+    def test_instrument_created_v3_extra_identifiers_can_be_set(self) -> None:
+        """PLAN-0057 Wave C-1: cusip, figi, lei, primary_ticker can be populated."""
+        event = InstrumentCreated(
+            instrument_id="inst-1",
+            symbol="AAPL",
+            exchange="NASDAQ",
+            cusip="037833100",
+            figi="BBG000B9XRY4",
+            lei="HWUPKR0MPOU8FGXBT394",
+            primary_ticker="AAPL.US",
+        )
+        assert event.cusip == "037833100"
+        assert event.figi == "BBG000B9XRY4"
+        assert event.lei == "HWUPKR0MPOU8FGXBT394"
+        assert event.primary_ticker == "AAPL.US"
+
+    def test_instrument_created_v3_fields_in_avro_dict(self) -> None:
+        """PLAN-0057 Wave C-1: new fields surface via dataclasses.asdict() for Avro encoding."""
+        import dataclasses
+
+        event = InstrumentCreated(
+            instrument_id="inst-1",
+            symbol="AAPL",
+            exchange="NASDAQ",
+            cusip="037833100",
+            figi="BBG000B9XRY4",
+            lei="HWUPKR0MPOU8FGXBT394",
+            primary_ticker="AAPL.US",
+        )
+        raw = dataclasses.asdict(event)
+        assert raw["cusip"] == "037833100"
+        assert raw["figi"] == "BBG000B9XRY4"
+        assert raw["lei"] == "HWUPKR0MPOU8FGXBT394"
+        assert raw["primary_ticker"] == "AAPL.US"
 
 
 # ── T-E2-2-02: ClassVar fields not in dataclass fields ────────────────────────

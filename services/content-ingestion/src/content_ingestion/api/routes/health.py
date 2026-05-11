@@ -29,7 +29,7 @@ async def readyz(request: Request) -> Response:
 
     # Database check
     try:
-        async with request.app.state.session_factory() as session:
+        async with request.app.state.write_factory() as session:
             await session.execute(text("SELECT 1"))
         checks["database"] = "ok"
     except Exception:

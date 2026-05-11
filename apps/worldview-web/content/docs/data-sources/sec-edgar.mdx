@@ -1,0 +1,62 @@
+---
+title: SEC EDGAR
+description: EDGAR filings coverage — 8-K, 10-K, 10-Q, Form 4 insider transactions.
+section: Data Sources
+order: 5
+updated: 2026-05-05
+---
+
+SEC EDGAR is the U.S. Securities and Exchange Commission's public filing database. Worldview ingests EDGAR filings for all US public companies and processes them through the NLP pipeline to extract key information.
+
+## Filing types covered
+
+| Filing type | Frequency | What it contains |
+|-------------|-----------|-----------------|
+| 8-K | On material event | Material events: earnings, acquisitions, CEO changes, guidance updates |
+| 10-K | Annual | Full annual report with MD&A, audited financials, risk factors |
+| 10-Q | Quarterly | Quarterly financials and management commentary |
+| Form 4 | Within 2 business days | Insider transactions — executive stock purchases and sales |
+| S-1 / S-11 | On IPO | Registration statements for new public offerings |
+| DEF 14A | Annual | Proxy statement — executive compensation, board composition |
+
+## Filing ingestion pipeline
+
+When a new filing appears on EDGAR:
+
+1. **Ingestion** — the Content Ingestion service polls EDGAR's RSS feed every 5 minutes
+2. **Parsing** — the filing is parsed from SEC XBRL format into structured data
+3. **NLP processing** — the NLP pipeline extracts named entities, key phrases, and generates a 1-paragraph AI summary
+4. **Indexing** — the filing is indexed in the vector store for RAG retrieval
+
+<Callout type="info" title="Processing latency">
+Most 8-K filings appear in Worldview within 10–15 minutes of being filed with the SEC. 10-K and 10-Q filings take longer to process (30–60 minutes) due to their larger size.
+</Callout>
+
+## Insider transactions (Form 4)
+
+Form 4 filings are displayed in the Instruments → Filings tab as a transactions table:
+
+| Field | Description |
+|-------|-------------|
+| Person | Executive or director name and title |
+| Transaction type | Purchase (P), Sale (S), Grant (A), Exercise (M) |
+| Shares | Number of shares transacted |
+| Price | Per-share price (for market transactions) |
+| Value | Total transaction value |
+| Ownership after | Post-transaction share count |
+| Filed date | Date the Form 4 was submitted to EDGAR |
+
+**Significance signals:** Large purchases by insiders are considered a bullish signal; large sales by executives (beyond pre-scheduled 10b5-1 plans) can be bearish. Worldview does not automatically flag significance — this is left to your judgment.
+
+## AI summaries
+
+Each 8-K filing includes a one-paragraph AI-generated summary at the top of the filing detail view. The summary captures:
+- The material event described
+- Quantitative figures mentioned (revenue, EPS, guidance)
+- Management sentiment (raised/lowered/maintained guidance, tone)
+
+Click **View full filing** to open the original SEC EDGAR document in a new tab.
+
+## Coverage
+
+EDGAR covers all US companies with registered securities. International companies listed on US exchanges (via ADR or direct listing) that file with the SEC are also covered. Foreign private issuers that file Form 20-F (annual) or Form 6-K (material events) are included.

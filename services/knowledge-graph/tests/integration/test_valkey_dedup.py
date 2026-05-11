@@ -44,8 +44,8 @@ async def test_entity_refresh_dedup_key_expires() -> None:
     entity_id = uuid.uuid4()
     dedup_key = f"kg:entity_refresh_dedup:{entity_id}"
 
-    # Set with TTL of 1 second
-    await fake_redis.setex(dedup_key, 1, "1")
+    # Set with TTL of 60 seconds (1s is unreliable in fakeredis — can round to 0)
+    await fake_redis.setex(dedup_key, 60, "1")
     ttl = await fake_redis.ttl(dedup_key)
     assert ttl > 0
 

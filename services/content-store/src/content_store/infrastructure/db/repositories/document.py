@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select
 
-from content_store.application.ports.repositories import DocumentRepositoryPort
+from content_store.application.ports.repositories import DocumentMetadataDTO, DocumentRepositoryPort
 from content_store.infrastructure.db.models import DocumentModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from content_store.domain.entities import CanonicalDocument
@@ -24,7 +23,13 @@ class DocumentRepository(DocumentRepositoryPort):
         self._session = session
 
     async def create(self, doc: CanonicalDocument) -> None:
-        """Insert a new canonical document."""
+        """Insert a new canonical document.
+
+        Flushes immediately so that FK-referencing tables (dedup_hashes,
+        minhash_signatures) added in the same transaction can see this row.
+        SQLAlchemy 2.0.x does not auto-order inserts by FK without relationship()
+        declarations, so an explicit flush is required.
+        """
         self._session.add(
             DocumentModel(
                 doc_id=doc.id,
@@ -35,6 +40,9 @@ class DocumentRepository(DocumentRepositoryPort):
                 ingested_at=doc.ingested_at,
                 content_hash=doc.content_hash,
                 normalized_hash=doc.normalized_hash,
+                # PLAN-0086 Wave C-1: persist tenant_id so documents table supports
+                # per-tenant isolation. NULL = public/global content.
+                tenant_id=doc.tenant_id,
                 status=doc.status,
                 dedup_result=doc.dedup_result,
                 minio_silver_key=doc.minio_silver_key,
@@ -44,6 +52,7 @@ class DocumentRepository(DocumentRepositoryPort):
                 is_backfill=doc.is_backfill,
             )
         )
+        await self._session.flush()
 
     async def get_by_id(self, doc_id: UUID) -> DocumentModel | None:
         """Fetch a document by its primary key."""
@@ -78,3 +87,32 @@ class DocumentRepository(DocumentRepositoryPort):
             .offset(offset)
         )
         return list(result.scalars().all())
+
+    async def batch_get_metadata(self, doc_ids: list[UUID]) -> list[DocumentMetadataDTO]:
+        """Fetch lightweight metadata for a list of doc_ids.
+
+        Missing doc_ids are silently omitted.  ``source_name`` is always
+        ``None`` — the ``documents`` table has no such column.
+        """
+        result = await self._session.execute(
+            select(
+                DocumentModel.doc_id,
+                DocumentModel.title,
+                DocumentModel.source_url,
+                DocumentModel.published_at,
+                DocumentModel.source_type,
+                DocumentModel.word_count,
+            ).where(DocumentModel.doc_id.in_(doc_ids))
+        )
+        return [
+            DocumentMetadataDTO(
+                doc_id=row.doc_id,
+                title=row.title,
+                url=row.source_url,
+                published_at=row.published_at,
+                source_name=None,
+                source_type=row.source_type,
+                word_count=row.word_count,
+            )
+            for row in result
+        ]

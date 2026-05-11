@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import os
+
+import structlog
+from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +14,11 @@ class EODHDProviderSettings(BaseModel):
 
     base_url: str = "https://eodhd.com/api/news"
     page_size: int = 100
+    # OPT-3: Cap pages fetched per fetch_all_pages() call to avoid runaway credit
+    # consumption on busy news days. Each page costs 5 EODHD API credits; default 3
+    # yields at most 3 x page_size articles per cycle, which covers all normal cases.
+    # ge=1 prevents a zero/negative value from silently truncating all ingestion.
+    max_pages_per_cycle: int = Field(default=3, ge=1, le=50)
     rate_limit_per_second: float = 10.0
 
 
@@ -27,6 +35,12 @@ class NewsAPIProviderSettings(BaseModel):
     base_url: str = "https://newsapi.org/v2/everything"
     page_size: int = 100
     quota_ttl_seconds: int = 86400
+    # BP-460: NewsAPI free tier allows only 100 requests/day.
+    # With 2 enabled sources polling every 60 s (the global scheduler_interval_seconds),
+    # the daily quota is exhausted within minutes.  Override polling to 4 hours
+    # (14 400 s): 2 sources x 6 polls/day = 12 requests, well under the 100-request cap.
+    # Configurable via CONTENT_INGESTION_NEWSAPI__POLL_INTERVAL_SECONDS.
+    poll_interval_seconds: int = 14400
 
 
 class SECEdgarProviderSettings(BaseModel):
@@ -36,6 +50,16 @@ class SECEdgarProviderSettings(BaseModel):
     filing_base_url: str = "https://www.sec.gov/Archives/edgar/data"
     default_forms: str = "10-K,10-Q,8-K,DEF14A"
     max_concurrent: int = 8
+    market_hours_interval_seconds: int = 60
+    off_hours_interval_seconds: int = 1800
+
+
+class PolymarketProviderSettings(BaseModel):
+    """Operational parameters for the Polymarket Gamma API provider."""
+
+    base_url: str = "https://gamma-api.polymarket.com/markets"
+    page_size: int = Field(default=500, ge=1, le=1000)
+    max_pages_per_cycle: int = Field(default=20, ge=1, le=100)
 
 
 class HTTPClientSettings(BaseModel):
@@ -71,8 +95,8 @@ class Settings(BaseSettings):
     newsapi_key: str = ""
 
     # ── Database ──────────────────────────────────────────────────────────────
-    db_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/content_ingestion_db"
-    db_url_read: str = ""  # Falls back to db_url if empty (R23)
+    db_url: SecretStr = SecretStr("postgresql+asyncpg://postgres:postgres@localhost:5432/content_ingestion_db")
+    db_url_read: SecretStr = SecretStr("")  # Falls back to db_url if empty (R23)
 
     # ── Kafka ─────────────────────────────────────────────────────────────────
     kafka_bootstrap_servers: str = "localhost:9092"
@@ -89,8 +113,12 @@ class Settings(BaseSettings):
 
     # ── Security ──────────────────────────────────────────────────────────────
     admin_token: str = ""  # CONTENT_INGESTION_ADMIN_TOKEN — admin/DevOps only
-    # Inter-service token shared across all services (no CONTENT_INGESTION_ prefix)
-    internal_service_token: str = Field(default="", validation_alias="INTERNAL_SERVICE_TOKEN")
+    api_gateway_url: str = "http://api-gateway:8000"
+
+    # F-001: When True, InternalJWTMiddleware decodes JWTs WITHOUT signature
+    # verification if the JWKS public key is unavailable. NEVER enable in
+    # production — only for E2E tests that run without a full S9 stack.
+    internal_jwt_skip_verification: bool = False
 
     # ── Scheduler (process — R22) ────────────────────────────────────────────
     scheduler_interval_seconds: int = 300
@@ -103,6 +131,10 @@ class Settings(BaseSettings):
     worker_idle_sleep_seconds: float = 5.0
     worker_concurrency: int = 2
     worker_task_timeout_seconds: float = 120.0
+    # D-04: Polymarket tasks paginate the full market catalogue via the Gamma API
+    # (up to 20 pages x 500 markets = 10 000 results + MinIO writes per result).
+    # The default 120 s timeout is too short; use a dedicated timeout of 900 s.
+    worker_polymarket_task_timeout_seconds: float = 900.0
 
     # ── Outbox / dispatcher ────────────────────────────────────────────────
     outbox_batch_size: int = 100
@@ -124,11 +156,24 @@ class Settings(BaseSettings):
     backfill_sources: str = ""
     backfill_batch_delay_seconds: float = 0.5
 
+    # PLAN-0055 Sub-Plan A — auto-backfill on startup. Independent of
+    # ``backfill_enabled`` (which gates per-source behavior). ``backfill_on_startup``
+    # seeds NULL watermarks to (now - INITIAL_DAYS) so the scheduler tick can
+    # fetch backwards. OFF by default in code; gitops env flips it ON.
+    backfill_on_startup: bool = False
+    # Plain int defaults — pre-commit's older pydantic-settings doesn't surface
+    # ``Field(default=N, ge=1)``-annotated attrs to mypy. Runtime clamping in
+    # ``seed_source_watermarks.py`` covers the validation that ``ge=1`` provided.
+    backfill_initial_days: int = 14
+    # Hard cap on horizon — runtime clamps INITIAL_DAYS to YEARS * 365.
+    backfill_years: int = 3
+
     # ── Provider settings (operational params — overridable via ConfigMap) ───
     eodhd: EODHDProviderSettings = EODHDProviderSettings()
     finnhub: FinnhubProviderSettings = FinnhubProviderSettings()
     newsapi: NewsAPIProviderSettings = NewsAPIProviderSettings()
     sec_edgar: SECEdgarProviderSettings = SECEdgarProviderSettings()
+    polymarket: PolymarketProviderSettings = PolymarketProviderSettings()
     http_client: HTTPClientSettings = HTTPClientSettings()
 
     # ── Observability (STANDARDS.md §5 — mandatory in every service) ─────────
@@ -136,3 +181,26 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
     otlp_endpoint: str = ""
+
+    @model_validator(mode="after")
+    def _warn_default_db_credentials(self) -> Settings:
+        """Warn at startup if db_url still contains default superuser credentials (D-7).
+
+        Uses structlog so the warning is captured by the structured log pipeline
+        in production log aggregators (F-SEC-001).
+        """
+        # F-007: Production guard — reject skip_verification in production.
+        if self.internal_jwt_skip_verification and os.getenv("APP_ENV", "").lower() == "production":
+            raise ValueError(
+                "internal_jwt_skip_verification MUST NOT be enabled in production. "
+                "Set APP_ENV != 'production' or remove the flag.",
+            )
+        if "postgres:postgres" in self.db_url.get_secret_value():
+            structlog.get_logger(__name__).warning(  # type: ignore[no-untyped-call]
+                "default_db_credentials_detected",
+                message=(
+                    "CONTENT_INGESTION_DB_URL still uses the default 'postgres:postgres' credentials. "
+                    "Set this env var to a secure database URL before deploying to production."
+                ),
+            )
+        return self

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from content_ingestion.api.routes import admin, dlq, health
 from content_ingestion.infrastructure.db.models import DeadLetterQueueModel
+from content_ingestion.infrastructure.db.unit_of_work import SqlaReadOnlyUnitOfWork, SqlaUnitOfWork
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
@@ -40,7 +41,10 @@ def test_app(session_factory):
     settings = MagicMock()
     settings.admin_token = ADMIN_TOKEN
     app.state.settings = settings
-    app.state.session_factory = session_factory
+    app.state.write_factory = session_factory
+    app.state.read_factory = session_factory
+    app.state.uow_factory = lambda: SqlaUnitOfWork(session_factory)
+    app.state.read_uow_factory = lambda: SqlaReadOnlyUnitOfWork(session_factory)
     app.state.trigger_fn = AsyncMock()
 
     app.include_router(health.router, tags=["health"])

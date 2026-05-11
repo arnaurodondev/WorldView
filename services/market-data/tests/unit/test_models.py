@@ -30,6 +30,8 @@ from market_data.infrastructure.db.models import (
     OHLCVBarModel,
     OutboxEventModel,
     OutstandingSharesModel,
+    PredictionMarketModel,
+    PredictionMarketSnapshotModel,
     QuoteModel,
     SecurityModel,
     ShareStatisticsModel,
@@ -111,6 +113,43 @@ class TestOHLCVBarModel:
         cols = _columns(OHLCVBarModel)
         for price_col in ("open", "high", "low", "close", "adjusted_close", "volume"):
             assert price_col in cols, f"missing column: {price_col}"
+
+    def test_ohlcv_has_is_partial(self):
+        """PLAN-0040 B-1: ohlcv_bars must have an is_partial boolean column."""
+        cols = _columns(OHLCVBarModel)
+        assert "is_partial" in cols
+
+    def test_ohlcv_has_is_derived(self):
+        """PLAN-0036: ohlcv_bars must have an is_derived boolean column."""
+        cols = _columns(OHLCVBarModel)
+        assert "is_derived" in cols
+
+    def test_ohlcv_complete_column_set(self):
+        """DDL alignment: all expected ohlcv_bars columns must exist.
+
+        If a migration adds or removes a column, update this set to keep
+        the test in sync with the ORM model.
+        """
+        expected = {
+            "instrument_id",
+            "timeframe",
+            "bar_date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "adjusted_close",
+            "source",
+            "provider_priority",
+            "is_derived",
+            "is_partial",
+        }
+        actual = _columns(OHLCVBarModel)
+        missing = expected - actual
+        extra = actual - expected
+        assert not missing, f"Missing columns: {missing}"
+        assert not extra, f"Unexpected columns: {extra}"
 
 
 class TestQuoteModel:
@@ -234,6 +273,65 @@ class TestInfrastructureModels:
         # Legacy column name must NOT exist
         assert "leased_until" not in cols
 
+    def test_outbox_event_has_partition_key(self):
+        """PLAN-0057-followup Wave B (F-DATA-06): outbox_events must expose
+        a nullable ``partition_key`` column so the dispatcher can forward
+        the optional Kafka partition key to ``producer.produce(key=...)``.
+
+        The column is nullable so events with no ordering invariant (legacy
+        rows) continue to dispatch via Kafka's round-robin partitioner.
+        """
+        table = _table(OutboxEventModel)
+        cols = _columns(OutboxEventModel)
+        assert "partition_key" in cols
+        # Must be nullable — NULL = round-robin (legacy behaviour).
+        partition_col = table.c["partition_key"]
+        assert partition_col.nullable is True
+
+
+class TestPredictionMarketModels:
+    """DDL alignment tests for prediction market tables (PRD-0019, BP-019)."""
+
+    def test_prediction_market_tablename(self) -> None:
+        assert PredictionMarketModel.__tablename__ == "prediction_markets"
+
+    def test_prediction_market_columns(self) -> None:
+        cols = _columns(PredictionMarketModel)
+        assert "id" in cols
+        assert "market_id" in cols
+        assert "source" in cols
+        assert "question" in cols
+        assert "description" in cols
+        assert "outcomes" in cols
+        assert "close_time" in cols
+        assert "resolution_status" in cols
+        assert "resolved_answer" in cols
+        assert "created_at" in cols
+        assert "updated_at" in cols
+
+    def test_prediction_market_unique_market_id(self) -> None:
+        table = _table(PredictionMarketModel)
+        constraint_names = {c.name for c in table.constraints}
+        assert "uq_prediction_markets_market_id" in constraint_names
+
+    def test_prediction_market_snapshot_tablename(self) -> None:
+        assert PredictionMarketSnapshotModel.__tablename__ == "prediction_market_snapshots"
+
+    def test_prediction_market_snapshot_columns(self) -> None:
+        cols = _columns(PredictionMarketSnapshotModel)
+        assert "id" in cols
+        assert "market_id" in cols
+        assert "snapshot_at" in cols
+        assert "outcomes_prices" in cols
+        assert "volume_24h" in cols
+        assert "liquidity" in cols
+        assert "source_event_id" in cols
+
+    def test_prediction_market_snapshot_unique_market_snapshot(self) -> None:
+        table = _table(PredictionMarketSnapshotModel)
+        constraint_names = {c.name for c in table.constraints}
+        assert "uq_pms_market_snapshot" in constraint_names
+
 
 class TestBaseMetadataCompleteness:
     EXPECTED_TABLES: ClassVar[set[str]] = {
@@ -262,6 +360,9 @@ class TestBaseMetadataCompleteness:
         "ingestion_events",
         "failed_tasks",
         "outbox_events",
+        # PRD-0019: prediction markets
+        "prediction_markets",
+        "prediction_market_snapshots",
     }
 
     def test_all_tables_in_metadata(self):

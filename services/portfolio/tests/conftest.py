@@ -11,7 +11,9 @@ import pytest
 # before Settings() is instantiated in create_app() or any test fixture.
 os.environ.setdefault("PORTFOLIO_STORAGE_ACCESS_KEY", "minioadmin-test")
 os.environ.setdefault("PORTFOLIO_STORAGE_SECRET_KEY", "minioadmin-test")
-os.environ.setdefault("PORTFOLIO_INTERNAL_SERVICE_TOKEN", "e2e-internal-token")
+# Skip RS256 JWT verification in tests — no JWKS server runs in CI (BP-134).
+# InternalJWTMiddleware will accept any well-formed JWT without signature check.
+os.environ.setdefault("PORTFOLIO_INTERNAL_JWT_SKIP_VERIFICATION", "true")
 from httpx import ASGITransport, AsyncClient
 from portfolio.app import create_app
 
@@ -92,26 +94,70 @@ async def db_session(integration_session_factory):
 
 @pytest.fixture(scope="function")
 async def integration_client(postgres_container: str) -> AsyncGenerator[AsyncClient, None]:
-    """TestClient that uses the testcontainer DB directly for all requests."""
-    from portfolio.api.dependencies import get_uow
-    from portfolio.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
+    """TestClient that uses the testcontainer DB directly for all requests.
+
+    Seeds INTEGRATION_TENANT_ID and INTEGRATION_USER_ID so that routes reading
+    tenant_id/user_id from request.state (InternalJWTMiddleware, F-CRIT-001) find
+    valid rows. PORTFOLIO_INTERNAL_JWT_SKIP_VERIFICATION=true (set at module level)
+    so that InternalJWTMiddleware accepts the HS256 test JWT without a JWKS server.
+    """
+    from uuid import UUID
+
+    from portfolio.api.dependencies import get_read_uow, get_uow
+    from portfolio.infrastructure.db.models.tenant import TenantModel
+    from portfolio.infrastructure.db.models.user import UserModel
+    from portfolio.infrastructure.db.unit_of_work import (
+        SqlAlchemyReadOnlyUnitOfWork,
+        SqlAlchemyUnitOfWork,
+    )
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
 
+    from tests.integration.helpers import (
+        _INTERNAL_HEADERS,
+        INTEGRATION_TENANT_ID,
+        INTEGRATION_USER_ID,
+    )
+
     engine = create_async_engine(postgres_container, echo=False)
     session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    # Seed integration identity rows so watchlist/portfolio routes can resolve
+    # tenant_id/user_id from request.state (set by InternalJWTMiddleware, BP-165).
+    async with session_factory() as session:
+        await session.merge(TenantModel(id=UUID(INTEGRATION_TENANT_ID), name="Integration Tenant"))
+        await session.merge(
+            UserModel(
+                id=UUID(INTEGRATION_USER_ID),
+                tenant_id=UUID(INTEGRATION_TENANT_ID),
+                email="integration@test.com",
+            )
+        )
+        await session.commit()
 
     async def _test_uow() -> AsyncGenerator:
         async with SqlAlchemyUnitOfWork(session_factory) as uow:
             yield uow
 
+    # PLAN-0088 (2026-05-10): R27 read/write split (PLAN-0076 B-5) introduced
+    # get_read_uow which reads request.app.state.read_factory. Tests created
+    # apps without populating it, so every read endpoint 500'd with
+    # AttributeError. Production app.py:87-90 wires read_factory to a separate
+    # replica factory; in tests we point it at the same testcontainer factory.
+    async def _test_read_uow() -> AsyncGenerator:
+        async with SqlAlchemyReadOnlyUnitOfWork(session_factory) as uow:
+            yield uow
+
     app = create_app()
     app.dependency_overrides[get_uow] = _test_uow
+    app.dependency_overrides[get_read_uow] = _test_read_uow
     app.state.session_factory = session_factory
     app.state.engine = engine
+    app.state.write_factory = session_factory
+    app.state.read_factory = session_factory
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(transport=transport, base_url="http://test", headers=_INTERNAL_HEADERS) as ac:
         yield ac
 
     app.dependency_overrides.clear()

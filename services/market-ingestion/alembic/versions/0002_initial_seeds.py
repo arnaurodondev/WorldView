@@ -28,14 +28,84 @@ def _ulid_from_seed(seed: str) -> str:
     return f"01HX{h[:22].upper()}"
 
 
-_SEED_IDS = [f"01HXSEED{str(i).zfill(18)}" for i in range(1, 32)]
+# Budget row uses a fixed deterministic seed (not positional) so it is stable
+# regardless of how many policy symbols are defined above it.
+_BUDGET_ID = _ulid_from_seed("eodhd:provider_budget:eodhd")
 
 _SYMBOLS: list[tuple[str, str]] = [
+    # ── Top 30 US Equities (S&P 500 leaders, sector-diverse) ──────────────────
     ("AAPL", "US"),
-    ("TSLA", "US"),
-    ("VTI", "US"),
+    ("MSFT", "US"),
+    ("GOOGL", "US"),
     ("AMZN", "US"),
+    ("NVDA", "US"),
+    ("TSLA", "US"),
+    ("META", "US"),
+    ("BRK-B", "US"),
+    ("JNJ", "US"),
+    ("V", "US"),
+    ("WMT", "US"),
+    ("JPM", "US"),
+    ("PG", "US"),
+    ("XOM", "US"),
+    ("MA", "US"),
+    ("UNH", "US"),
+    ("HD", "US"),
+    ("COST", "US"),
+    ("MRK", "US"),
+    ("BA", "US"),
+    ("PFE", "US"),
+    ("LLY", "US"),
+    ("AXP", "US"),
+    ("MS", "US"),
+    ("DIS", "US"),
+    ("IBM", "US"),
+    ("EXC", "US"),
+    ("CAT", "US"),
+    ("KO", "US"),
+    ("CVX", "US"),
+    # ── Mandatory Sector ETFs ─────────────────────────────────────────────────
+    ("XLK", "US"),  # Technology
+    ("XLV", "US"),  # Health Care
+    ("XLE", "US"),  # Energy
+    ("XLY", "US"),  # Consumer Discretionary
+    ("VTV", "US"),  # Vanguard Value
+    ("QQQ", "US"),  # Nasdaq 100
+    ("IBIT", "US"),  # iShares Bitcoin Mini Trust
+    ("MSTR", "US"),  # MicroStrategy (crypto-correlated equity)
+    ("PPA", "US"),  # Invesco Aerospace & Defense
+    # ── Broad Market ETFs ─────────────────────────────────────────────────────
+    ("SPY", "US"),
+    ("IVV", "US"),
+    ("VOO", "US"),
+    ("VTI", "US"),
+    # ── Fixed Income ETFs ─────────────────────────────────────────────────────
+    ("IEF", "US"),  # 7-10Y Treasuries
+    ("TLT", "US"),  # 20+Y Treasuries
+    ("AGG", "US"),  # Aggregate Bonds
+    ("SHY", "US"),  # 1-3Y Treasuries
+    # ── Commodity ETFs ────────────────────────────────────────────────────────
+    ("GLD", "US"),  # Gold
+    ("SLV", "US"),  # Silver
+    ("USO", "US"),  # Oil
+    # ── Major Indices ─────────────────────────────────────────────────────────
+    ("GSPC", "INDX"),  # S&P 500
+    ("CCMP", "INDX"),  # NASDAQ Composite
+    ("INDU", "INDX"),  # Dow Jones Industrial Average
+    ("RUT", "INDX"),  # Russell 2000
+    ("VIX", "INDX"),  # CBOE Volatility Index
+    # ── Top 10 Cryptocurrencies by market cap ─────────────────────────────────
     ("BTC-USD", "CC"),
+    ("ETH-USD", "CC"),
+    ("BNB-USD", "CC"),
+    ("SOL-USD", "CC"),
+    ("XRP-USD", "CC"),
+    ("ADA-USD", "CC"),
+    ("DOGE-USD", "CC"),
+    ("AVAX-USD", "CC"),
+    ("MATIC-USD", "CC"),
+    ("LTC-USD", "CC"),
+    # ── Forex ─────────────────────────────────────────────────────────────────
     ("EURUSD", "FOREX"),
 ]
 
@@ -113,6 +183,17 @@ def _insert_policy(
     )
 
 
+def _core_policy_ids() -> list[str]:
+    """Return all deterministic IDs for the core per-symbol policies (quotes + ohlcv + fundamentals)."""
+    ids: list[str] = []
+    for symbol, exchange in _SYMBOLS:
+        ids.append(_ulid_from_seed(f"eodhd:quotes:{symbol}:{exchange}::"))
+        for tf in ("1d", "1w", "1mo"):
+            ids.append(_ulid_from_seed(f"eodhd:ohlcv:{symbol}:{exchange}:{tf}:"))
+        ids.append(_ulid_from_seed(f"eodhd:fundamentals:{symbol}:{exchange}::General"))
+    return ids
+
+
 def _extended_seed_ids() -> list[str]:
     ids: list[str] = []
 
@@ -150,12 +231,12 @@ def _extended_seed_ids() -> list[str]:
 def upgrade() -> None:
     now = datetime.now(tz=UTC)
     policies: list[dict] = []
-    idx = 0
 
     for symbol, exchange in _SYMBOLS:
+        # quotes policy — adaptive, high-priority, polled every 5 minutes
         policies.append(
             {
-                "id": _SEED_IDS[idx],
+                "id": _ulid_from_seed(f"eodhd:quotes:{symbol}:{exchange}::"),
                 "provider": "eodhd",
                 "dataset_type": "quotes",
                 "dataset_variant": None,
@@ -177,12 +258,12 @@ def upgrade() -> None:
                 "updated_at": now,
             }
         )
-        idx += 1
 
+        # ohlcv policies — one per timeframe (1d / 1w / 1mo)
         for tf, base_int, prio in [("1d", 21600, 5), ("1w", 43200, 4), ("1mo", 86400, 3)]:
             policies.append(
                 {
-                    "id": _SEED_IDS[idx],
+                    "id": _ulid_from_seed(f"eodhd:ohlcv:{symbol}:{exchange}:{tf}:"),
                     "provider": "eodhd",
                     "dataset_type": "ohlcv",
                     "dataset_variant": None,
@@ -204,11 +285,11 @@ def upgrade() -> None:
                     "updated_at": now,
                 }
             )
-            idx += 1
 
+        # fundamentals policy — daily, low-priority
         policies.append(
             {
-                "id": _SEED_IDS[idx],
+                "id": _ulid_from_seed(f"eodhd:fundamentals:{symbol}:{exchange}::General"),
                 "provider": "eodhd",
                 "dataset_type": "fundamentals",
                 "dataset_variant": "General",
@@ -230,7 +311,6 @@ def upgrade() -> None:
                 "updated_at": now,
             }
         )
-        idx += 1
 
     op.bulk_insert(_POLICIES_TABLE, policies)
 
@@ -238,7 +318,7 @@ def upgrade() -> None:
         _BUDGETS_TABLE,
         [
             {
-                "id": _SEED_IDS[30],
+                "id": _BUDGET_ID,
                 "provider": "eodhd",
                 "max_tokens": 1000,
                 "current_tokens": 1000.0,
@@ -280,7 +360,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    core_policy_ids = _SEED_IDS[:30]
-    extended_policy_ids = _extended_seed_ids()
-    op.execute(_POLICIES_TABLE.delete().where(_POLICIES_TABLE.c.id.in_(core_policy_ids + extended_policy_ids)))
-    op.execute(_BUDGETS_TABLE.delete().where(_BUDGETS_TABLE.c.id == _SEED_IDS[30]))
+    all_policy_ids = _core_policy_ids() + _extended_seed_ids()
+    op.execute(_POLICIES_TABLE.delete().where(_POLICIES_TABLE.c.id.in_(all_policy_ids)))
+    op.execute(_BUDGETS_TABLE.delete().where(_BUDGETS_TABLE.c.id == _BUDGET_ID))

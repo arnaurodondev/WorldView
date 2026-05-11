@@ -21,20 +21,22 @@ dependencies = [
     "messaging",
     "observability",
     "storage",
+    "snaptrade-python-sdk>=11.0,<12",  # v11 API: register_snap_trade_user, login_snap_trade_user, remove_brokerage_authorization
+    "PyJWT[cryptography]>=2.8,<3",  # RS256 JWT verification (PRD-0025 InternalJWTMiddleware)
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest==8.0",
-    "pytest-asyncio==0.23.4",
-    "pytest-httpx==0.30",
-    "pytest-cov==5.0",
-    "ruff==0.4",
-    "mypy==1.10",
-    "testcontainers[postgres]==4.8",
-    "fastavro==1.9",
-    "aiosqlite==0.20",
-    "fakeredis[aioredis]==2.23",
+    "pytest>=8,<9",
+    "pytest-asyncio>=0.23,<1",
+    "pytest-httpx>=0.30,<1",
+    "pytest-cov>=5,<6",
+    "ruff>=0.4,<1",
+    "mypy>=1.10,<2",
+    "testcontainers[postgres]>=4.8,<5",
+    "fastavro>=1.9,<2",
+    "aiosqlite>=0.20,<1",
+    "fakeredis[aioredis]>=2.23,<3",
 ]
 
 [tool.hatch.build.targets.wheel]

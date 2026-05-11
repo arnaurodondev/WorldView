@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import select, update
 
@@ -12,8 +13,6 @@ from portfolio.application.ports.repositories import OutboxRecord, OutboxReposit
 from portfolio.infrastructure.db.models.outbox import OutboxEventModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -29,7 +28,7 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         topic = EVENT_TOPIC_MAP.get(row.event_type)
         if topic is None:
             raise ValueError(
-                f"No topic mapping for event_type={row.event_type!r}. Add it to EVENT_TOPIC_MAP in topics.py."
+                f"No topic mapping for event_type={row.event_type!r}. Add it to EVENT_TOPIC_MAP in topics.py.",
             )
         return OutboxRecord(
             id=row.id,
@@ -44,10 +43,18 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         )
 
     async def save(self, record: OutboxRecord) -> None:
+        # F-003 / PLAN-0087 #9: persist the resolved Kafka topic on every
+        # outbox row so SQL replay tooling and observability can see the
+        # routing target without loading service code. Falls back to None if
+        # the event_type is not in the canonical map — dispatch will reject
+        # those rows with a clear error at publish time anyway, so a NULL
+        # topic is informative (a known event_type has no excuse to be NULL).
+        topic = EVENT_TOPIC_MAP.get(record.event_type)
         row = OutboxEventModel(
             id=record.id,
             tenant_id=record.tenant_id,
             event_type=record.event_type,
+            topic=topic,
             payload=record.payload,
             status=record.status,
             attempt_count=record.attempt_count,
@@ -67,7 +74,7 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
                 (OutboxEventModel.lease_expires == None) | (OutboxEventModel.lease_expires < now),  # noqa: E711
             )
             .limit(batch_size)
-            .with_for_update(skip_locked=True)
+            .with_for_update(skip_locked=True),
         )
         rows = list(result.scalars())
 
@@ -82,7 +89,7 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
         await self._session.execute(
             update(OutboxEventModel)
             .where(OutboxEventModel.id == record_id)
-            .values(status="published", published_at=_utc_now(), lease_owner=None, lease_expires=None)
+            .values(status="published", published_at=_utc_now(), lease_owner=None, lease_expires=None),
         )
 
     async def increment_attempts(self, record_id: UUID) -> None:
@@ -94,12 +101,12 @@ class SqlAlchemyOutboxRepository(OutboxRepository):
                 status="pending",
                 lease_owner=None,
                 lease_expires=None,
-            )
+            ),
         )
 
     async def move_to_dead_letter(self, record_id: UUID) -> None:
         await self._session.execute(
             update(OutboxEventModel)
             .where(OutboxEventModel.id == record_id)
-            .values(status="dead_letter", lease_owner=None, lease_expires=None)
+            .values(status="dead_letter", lease_owner=None, lease_expires=None),
         )

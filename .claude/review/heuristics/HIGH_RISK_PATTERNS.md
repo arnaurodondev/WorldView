@@ -275,3 +275,645 @@ loop = asyncio.get_event_loop()  # too late — after _cb definition
 ```
 **Risk**: librdkafka delivery callbacks run on a C thread, not the asyncio event loop thread. Direct `event.set()` is not thread-safe (BP-050). Rare deadlocks under contention.
 **Fix**: Capture `loop` before defining `_cb`; use `loop.call_soon_threadsafe(delivery_event.set)` inside the callback.
+
+---
+
+## RED — Added from PLAN-0025 QA Review (2026-04-12)
+
+### HR-026: JWT Decode Without Issuer Validation
+```python
+# BAD — issuer parameter missing
+payload = jwt.decode(token, public_key, algorithms=["RS256"])
+# attacker can forge a token signed with their own key and a spoofed "iss" claim
+```
+**Risk**: Without `issuer=expected_issuer`, a valid JWT from any other provider (or an attacker with their own RS256 key) is accepted (BP-145). Issuer spoofing = auth bypass.
+**Fix**: Always pass `issuer=oidc_config.issuer` (or equivalent) to `jwt.decode()`. Verify both `iss` and `aud` claims.
+**Grep pattern**:
+```bash
+grep -rn "jwt.decode(" services/ --include="*.py" | grep -v "issuer="
+```
+
+### HR-029: Repository `save()` Calls `session.rollback()` — Poisons Shared Session
+```python
+# BAD — repo-level rollback poisons the shared session context
+async def save(self, entity):
+    try:
+        self._session.add(entity)
+        await self._session.flush()
+    except IntegrityError:
+        await self._session.rollback()  # ← kills the shared session
+        raise DuplicateEntityError(...)
+```
+**Risk**: `session.rollback()` inside a repository method rolls back the shared session created by the outer `async with session_factory() as session:` context manager. Any code that continues after catching the domain error operates on a dead session, causing `InvalidRequestError` (BP-141).
+**Fix**: Remove `session.rollback()` from repository `save()` methods. Let the exception propagate; the use-case `async with session_factory()` context manager owns rollback via `__aexit__`.
+
+---
+
+## ORANGE — Added from PLAN-0025 QA Review (2026-04-12)
+
+### HR-027: Non-transactional Pipeline for Atomic State Removal (Valkey/Redis)
+```python
+# BAD — GET + DEL are two separate commands — window between them allows replay
+async def retrieve_and_delete(self, key: str):
+    value = await self._client.get(key)
+    await self._client.delete(key)
+    return value
+```
+**Risk**: Two concurrent requests both execute `GET` before either `DEL` runs (BP-146). Both receive the value (e.g., a PKCE code verifier), enabling replay attacks on one-time-use state.
+**Fix**: Use `GETDEL` (atomic single command, Redis 6.2+/Valkey 7+) or a Lua script. Never use `GET` + `DEL` in a pipeline for security-sensitive one-time tokens.
+**Grep pattern**:
+```bash
+grep -rn "\.get(" services/ --include="*.py" -A2 | grep "\.delete("
+```
+
+### HR-028: Middleware / Dependency Reads App State at Construction Time (Stores `None`)
+```python
+# BAD — valkey_client captured at startup before app.state is populated
+class RateLimitMiddleware:
+    def __init__(self, app, valkey_client):
+        self.valkey = valkey_client  # None if app.state not ready at __init__
+
+    async def dispatch(self, request, call_next):
+        if self.valkey is None:  # always None — rate limiting permanently disabled!
+            return await call_next(request)
+```
+**Risk**: FastAPI lifespan populates `app.state` after middleware is instantiated. If the middleware captures `app.state.x` (or a DI argument that resolves to `None`) at `__init__` time, the feature is silently disabled for the entire process lifetime (BP-144).
+**Fix**: Read from `request.app.state` inside `dispatch()`, not in `__init__`:
+```python
+async def dispatch(self, request, call_next):
+    valkey = getattr(request.app.state, "valkey", None)
+    if valkey is None:
+        return await call_next(request)
+```
+
+---
+
+## RED — Frontend Patterns (Next.js / TypeScript)
+
+### HR-030: Direct Backend Service URL in Frontend
+```typescript
+// BAD — bypasses S9 auth, CORS, rate limiting, and gateway contract
+const res = await fetch('http://localhost:8006/v1/entities')
+const res = await fetch(process.env.NLP_PIPELINE_URL + '/entities')
+```
+**Risk**: The frontend MUST only call S9 API Gateway at `/api/*`. Direct backend URLs bypass authentication (no `X-Internal-JWT`), break in production (services not publicly exposed), and violate the gateway contract (R14).
+**Fix**: Use `gatewayClient.<method>()` which always calls `/api/*` (proxied to S9 via `next.config.ts`).
+
+### HR-031: `dangerouslySetInnerHTML` Without Sanitization
+```typescript
+// BAD — XSS attack vector
+<div dangerouslySetInnerHTML={{ __html: article.content }} />
+<div dangerouslySetInnerHTML={{ __html: userInput }} />
+```
+**Risk**: If `content` contains `<script>` tags or event handlers injected by a malicious news source or user input, this executes arbitrary JavaScript (XSS).
+**Fix**: Sanitize with DOMPurify before rendering: `DOMPurify.sanitize(content)`. Or render as plain text. Only use `dangerouslySetInnerHTML` for trusted static content.
+
+### HR-032: `any` Type in TypeScript
+```typescript
+// BAD — defeats type system
+const data: any = await gatewayClient.getCompanyOverview(id)
+const handler = (event: any) => { ... }
+```
+**Risk**: `any` silences type errors, leading to runtime `TypeError` crashes and undefined behavior when API response shapes change. Violates the no-`any` rule (AGENTS.md §TypeScript Strictness).
+**Fix**: Define the interface from the gateway response or import the generated type. Use `unknown` + type narrowing if the shape is genuinely dynamic.
+
+### HR-033: `useState + useEffect` for Server Data Fetching
+```typescript
+// BAD — no caching, no deduplication, no loading state management
+const [data, setData] = useState(null)
+useEffect(() => {
+  fetch('/api/companies').then(r => r.json()).then(setData)
+}, [])
+```
+**Risk**: Race conditions on unmount, duplicate in-flight requests, no stale-while-revalidate, no error state, no retry.
+**Fix**: Use TanStack Query v5: `const { data, isLoading, error } = useQuery({ queryKey: [...], queryFn: ... })`.
+
+### HR-034: Missing Loading / Error / Empty States
+```typescript
+// BAD — blank panel while loading, no feedback on error
+function DataPanel({ id }: { id: string }) {
+  const { data } = useQuery(...)
+  return <Table data={data} />  // crashes if data is undefined
+}
+```
+**Risk**: Users see blank panels, UI crashes (`TypeError: Cannot read properties of undefined`), or silent failures with no recovery path. Violates the required pattern (DESIGN_SYSTEM.md §6.1).
+**Fix**: Handle all three states explicitly: `if (isLoading) return <Skeleton />; if (error) return <ErrorCard />; if (!data) return <EmptyState />`.
+
+### HR-035: Access Token in `localStorage`
+```typescript
+// BAD — XSS-accessible storage
+localStorage.setItem('access_token', token)
+const token = localStorage.getItem('access_token')
+```
+**Risk**: Any XSS vulnerability (HR-031, injected third-party script) can steal the access token from `localStorage`, leading to account takeover.
+**Fix**: Store `access_token` in React state only (in-memory). The `refresh_token` is stored in an httpOnly cookie, which is XSS-immune. On page reload, re-acquire via `POST /api/v1/auth/refresh`.
+
+## ORANGE — Frontend Patterns
+
+### HR-036: Non-exact pnpm Dependency Versions
+```json
+// BAD
+{ "next": "^15.0.0", "react": "~18.3.0" }
+```
+**Risk**: `^` and `~` allow automatic minor/patch upgrades that can introduce breaking changes, CVEs, or subtle behavior differences between installs (pnpm enforcement rule).
+**Fix**: Use exact versions: `"next": "15.1.3"`. Run `pnpm audit` after any version change; it must show 0 vulnerabilities.
+
+### HR-037: Color Outside CSS Variables (Dark Theme Violation)
+```typescript
+// BAD — hardcoded hex bypasses dark theme system
+<div style={{ backgroundColor: '#0f172a' }} />
+<div className="bg-slate-950" />  // OK but prefer var
+```
+**Risk**: Hardcoded colors don't respond to CSS variable changes, make theme maintenance brittle, and violate the design system constraint (DESIGN_SYSTEM.md §2).
+**Fix**: Use CSS variable utilities: `bg-background`, `text-foreground`, `text-muted-foreground`, `border-border`, etc.
+
+### HR-038: WebSocket Without Auth Token (Post-PRD-0025)
+```typescript
+// BAD — after PRD-0025, user_id query param is an auth bypass
+const ws = new WebSocket(`/api/v1/alerts/stream?user_id=${userId}`)
+```
+**Risk**: Any client can specify any `user_id` — no verification that the caller is that user. This is an auth bypass (ADR-F-02 addressed this).
+**Fix**: Pass `?token=<access_token>` instead: `new WebSocket(\`/api/v1/alerts/stream?token=\${accessToken}\`)`.
+
+### HR-039: SSE / Streaming Without `AbortController`
+```typescript
+// BAD — no way to cancel, stream leaks on component unmount
+const es = new EventSource('/api/v1/chat/stream?q=' + message)
+es.onmessage = (e) => setOutput(prev => prev + e.data)
+// no cleanup, no cancel
+```
+**Risk**: If the component unmounts (user navigates away), the EventSource stays alive, callbacks fire on a dead component (state update on unmounted component warning → memory leak).
+**Fix**: Use an `AbortController`; close the EventSource in the cleanup function of `useEffect`.
+
+## ORANGE — Added 2026-04-13 (restart/idempotency investigation)
+
+### HR-029: Consumer Entity PKs Are new_uuid7() + ON CONFLICT DO NOTHING on PK
+```python
+section_id=common.ids.new_uuid7(),  # generated fresh on every run
+# ...
+await session.execute(
+    pg_insert(SectionModel).values(...).on_conflict_do_nothing(index_elements=["section_id"])
+)
+```
+**Risk**: ON CONFLICT on `section_id` never fires on Kafka re-delivery because the ID is different each time. Duplicate rows accumulate silently (BP-149).
+**Fix**: Either (a) derive IDs deterministically from input (`uuid5(namespace, f"{doc_id}:{index}")`), or (b) add an explicit pipeline-completion check before the write transaction (query a "sentinel" row like `routing_decisions.doc_id`).
+
+### HR-030: Kafka Topic Without Explicit Retention Config
+```bash
+"content.article.stored.v1:12:1"   # no retention.ms set → 7-day broker default
+```
+**Risk**: Services down >7 days silently lose the backlog. Consumer resumes from oldest *remaining* message, skipping everything from the outage window (BP-150).
+**Fix**: Add explicit `retention.ms=2592000000` (30 days) via `kafka-configs --alter` for all primary pipeline topics in `create-topics.sh`.
+
+---
+
+## RED — Added from Observability Audit (2026-04-23)
+
+### HR-040: Shared Metrics Library Using `registry or CollectorRegistry()` Default
+```python
+# BAD — creates a new isolated registry every call; metrics never reach generate_latest()
+def create_metrics(service_name: str, registry: CollectorRegistry | None = None):
+    reg = registry or CollectorRegistry()   # ← WRONG: always isolated when None passed
+    requests_total = Counter("...", registry=reg)
+    return ServiceMetrics(registry=reg, ...)
+```
+**Risk**: All metrics registered in `reg` are invisible to `prometheus_client.generate_latest()`, which reads the global `REGISTRY` singleton. Every service using this helper ships with zero observable metrics — 10 services × 6 metric families = 60 dead metric families (BP-173).
+**Fix**: Use `reg = registry if registry is not None else REGISTRY` (importing `REGISTRY` from `prometheus_client`). Tests that pass an isolated registry continue to work; production code uses the global registry.
+**Grep pattern**:
+```bash
+grep -rn "registry or CollectorRegistry()" libs/ --include="*.py"
+```
+
+### HR-041: Prometheus Metric Defined But Never Called
+```python
+# BAD — metric declared, never wired to any code that calls .inc()/.set()/.observe()
+s5_articles_processed_total = Counter("s5_articles_processed_total", "...", ["tier"])
+s5_processing_duration_seconds = Histogram("s5_processing_duration_seconds", "...", ["tier"])
+# ... neither metric appears anywhere else in services/content-store/
+```
+**Risk**: Metric shows value `0` permanently. Dashboards that rely on it appear healthy ("no failures") rather than broken ("metric not instrumented"). Alerts built on it either never fire or always fire based on `absent()` behavior. Silent instrumentation gap (BP-174).
+**Fix**: For every new metric definition, verify at least one `.inc()`/`.set()`/`.observe()` call site exists in the same service. If no call site exists, delete the metric definition.
+**Grep pattern**:
+```bash
+# Find all metric variable names in a metrics module, then verify usage:
+grep -rn "s5_articles_processed_total" services/content-store/src/ --include="*.py"
+# Must return ≥2 lines: definition + call site.
+```
+
+---
+
+## ORANGE — Added 2026-05-07 (Session failure analysis)
+
+### HR-042: Running `pytest <touched-file>` Only After a Fix (Fix-Induced Regression Risk)
+```bash
+# BAD — only tests the changed file
+python -m pytest tests/unit/test_my_worker.py
+
+# GOOD — tests the entire service
+python -m pytest tests/ -x -q
+```
+**Risk**: A fix that changes a shared utility, port interface, or consumer behavior can break tests in files that were not modified. Touched-file-only test runs never catch these regressions (BP-408). The fix ships appearing correct.
+**Action**: After any fix commit, always run the full service test suite. If a broader test scope reveals failures, classify each as: (a) fix-induced regression → fix before proceeding, (b) pre-existing → file separately, (c) stale expectation → update with justification.
+**Grep pattern**:
+```bash
+# Detect if only a single file was run in a pytest invocation
+# Look for explicit file paths in pytest args (warning sign):
+grep -rn "pytest tests/unit/test_" Makefile scripts/ --include="*.sh"
+```
+
+### HR-043: Commit Without `docker compose build` for a Runtime Behavior Fix
+```bash
+# BAD — commits fix but never rebuilds the container
+git commit -m "fix: ..."
+# <declares done — container still running old code>
+
+# GOOD
+git commit -m "fix: ..."
+docker compose build <svc>
+docker compose up -d --no-deps <svc>
+# verify: docker compose logs <svc> | tail -20
+```
+**Risk**: Unit tests pass against source, but the live Docker container still has the old code because `docker compose build` was never run. The bug persists in the running service despite the source fix (BP-410). Related: BP-257 (`restart` does not swap image), BP-319 (stale Alembic image), BP-346 (missing module after build).
+**Action**: For every commit that modifies service runtime behavior, verify that the Docker image is rebuilt. Check image build time against commit time: `docker inspect <container> | grep -i created`.
+**Grep pattern**:
+```bash
+# Confirm image was rebuilt after last commit
+docker inspect <container-name> --format '{{.Created}}'
+git log -1 --format="%ci" HEAD
+# Image Created timestamp must be AFTER the commit timestamp
+```
+
+### HR-044: Parallel Subagent Run Without Verifying Commits Landed in Main Branch
+```bash
+# BAD — orchestrator launches agents, checks "status: success", moves on
+# Agents applied fixes in their worktrees but never committed
+
+# GOOD — after parallel agents complete, always verify
+git log --oneline -10          # confirm new commit messages from subagents
+git diff HEAD~N --name-only    # confirm expected files were changed
+git status                     # confirm no uncommitted changes remain
+```
+**Risk**: Subagents operating in isolated git worktrees can apply fixes without committing. The worktree is destroyed on cleanup, taking all changes with it. The orchestrator receives a success status but the main branch is unchanged (BP-409). Discovering this after multiple further commits makes recovery harder.
+**Action**: Any time parallel agents are used with `isolation: "worktree"`, the orchestrating agent MUST verify the changes appear in the main working tree before proceeding to the test phase.
+
+### HR-045: Assigning a New R##, BP-NNN, or PLAN-XXXX by Incrementing from Memory
+```markdown
+<!-- BAD — author estimated next BP number from memory -->
+## BP-185 — Some New Pattern
+<!-- BP-185 was already assigned to "Content-Ingestion TokenBucket..." -->
+
+<!-- GOOD — grep first -->
+# grep -o 'BP-[0-9]\+' docs/BUG_PATTERNS.md | sort -t- -k2 -n | tail -1
+# → BP-411  →  use BP-412
+```
+**Risk**: ID collision creates two entries with the same number, making all references to that ID ambiguous. The quick-lookup table acquires duplicate rows. Cross-document references (plans citing BP numbers, checklists citing HR numbers) become unreliable (BP-411).
+**Action**: Before assigning any new numbered ID, grep the canonical file for the current maximum. Use `highest + 1`. Never estimate from memory in a fast-moving document.
+**Grep pattern**:
+```bash
+# Highest BP number
+grep -o 'BP-[0-9]\+' docs/BUG_PATTERNS.md | sort -t- -k2 -n | tail -1
+# Highest R-rule number
+grep -o '^R[0-9]\+' RULES.md | sort -t R -k2 -n | tail -1
+# Highest HR number
+grep -o 'HR-[0-9]\+' .claude/review/heuristics/HIGH_RISK_PATTERNS.md | sort -t- -k2 -n | tail -1
+# Highest PLAN number
+grep -o 'PLAN-[0-9]\+' docs/plans/TRACKING.md | sort -t- -k2 -n | tail -1
+```
+
+### HR-046: `is_duplicate(self, event_id) -> bool: return False` Stub (or Ad-Hoc Valkey Dedup)
+```python
+# BAD — stub or hand-rolled dedup (CONSUMER-DEDUP-001 will flag this)
+class MyConsumer(BaseKafkaConsumer[None]):
+    async def is_duplicate(self, event_id: str) -> bool:
+        return False  # silent no-op; every event is reprocessed on replay
+    async def mark_processed(self, event_id: str) -> None:
+        pass
+
+# ALSO BAD — hand-rolled Valkey logic
+class MyConsumer(BaseKafkaConsumer[None]):
+    async def is_duplicate(self, event_id: str) -> bool:
+        return bool(await self._valkey.exists(f"my_key:{event_id}"))
+
+# GOOD — inherit mixin; set prefix + optional TTL
+class MyConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
+    _dedup_prefix = "my_service:dedup:my_consumer"
+    _dedup_ttl_seconds = 86400
+```
+**Risk**: `return False` stub disables dedup entirely — every duplicate event is processed on replay. Hand-rolled logic diverges in TTL policy, key naming, and error handling from the standard mixin, making cross-service reasoning unreliable (BP-415, R9).
+**Action**: Any `is_duplicate` or `mark_processed` implementation that does not delegate to `ValkeyDedupMixin` is a yellow flag. Require either: (a) `ValkeyDedupMixin` inheritance, or (b) a docstring documenting the natural-key idempotency guarantee AND an allowlist entry in `tests/architecture/_consumer_dedup_allowlist.yaml`.
+**Grep pattern**:
+```bash
+# Find consumers with hand-rolled or stub is_duplicate
+grep -rn "async def is_duplicate" services/ | grep -v ".pyc"
+# Cross-check against mixin usage
+grep -rn "ValkeyDedupMixin" services/ | grep -v ".pyc"
+```
+
+### HR-047: Circuit Breaker `is_open()` Without HALF_OPEN Probe Gating
+```python
+# BAD — cooldown expiry admits ALL concurrent callers at once
+async def is_open(self) -> bool:
+    state = await self._valkey.get(self._state_key)
+    return state == "open"  # no probe slot → stampede when cooldown expires
+
+# GOOD — SETNX probe key admits only the first caller per probe_ttl window
+async def is_open(self) -> bool:
+    state = await self._valkey.get(self._state_key)
+    if state != "open":
+        return False
+    # Try to acquire the probe slot; only the first caller in the TTL window succeeds
+    probe_acquired = await self._valkey.set_nx(
+        self._probe_key, "1", ex=self._probe_ttl_seconds
+    )
+    return not probe_acquired  # True = still open (probe taken by another); False = this caller probes
+```
+**Risk**: When a circuit-breaker cooldown expires, every in-flight coroutine simultaneously transitions from "open" to "probing" and hammers the recovering downstream service. This typically retrips the breaker before the first probe response returns, creating an oscillation loop (BP-413).
+**Action**: Any circuit-breaker `is_open()` that compares state without a SETNX probe slot is a red flag when `cool_down_seconds >= 60` (high-concurrency paths). Require a probe key with `probe_ttl_seconds` (recommended 5 s). Flag during review; do not merge without the probe gate.
+**Grep pattern**:
+```bash
+# Find is_open implementations that lack a probe/SETNX step
+grep -A 10 "async def is_open" services/ -r | grep -v "set_nx\|setnx\|probe"
+```
+
+---
+
+### HR-048: `except Exception: logger.warning(...) # DON'T re-raise` After Second-Session Commit
+
+**Pattern** (RED):
+```python
+try:
+    await intel_session.commit()
+except Exception:
+    logger.warning("d004_intel_commit_failed", doc_id=str(doc_id), exc_info=True)
+    # DON'T re-raise — intel writes are idempotent on retry
+```
+
+**Risk**: Silently swallowing a second-session commit failure in a dual-session consumer causes
+permanent data loss when the message has an early-skip guard. On re-delivery, the early-skip
+fires (e.g. "routing_decision already exists") before the second session's writes are retried.
+The "idempotent on retry" claim is technically true for the WRITE, but the retry never happens.
+Downstream effects: entities extracted by the NLP pipeline never appear in the KG; provisional
+queue rows are never created. The service appears healthy (no exception, no metric spike).
+See BP-419.
+**Action**: Any `except Exception: ... # DON'T re-raise` after a session commit in a
+multi-session consumer is a RED flag. Require: (a) re-raise so the message is nacked and
+re-delivered; AND (b) a Prometheus counter so failures are observable; AND (c) verify that
+re-delivery actually retries the second session's writes (no early-skip bypasses them).
+**Grep pattern**:
+```bash
+grep -n "DON'T re-raise\|do not re-raise\|# don't raise" services/ -r --include="*.py"
+```
+
+---
+
+### HR-049: Fire-and-Forget `producer.produce()` After `session.commit()` for Lifecycle Events
+
+**Pattern** (YELLOW for repeat events, RED for one-time lifecycle events):
+```python
+await session.commit()
+# ... loop outside transaction ...
+for entity_id in entity_ids_to_dirty:
+    try:
+        await direct_producer.produce(topic=..., value=...)
+    except Exception:
+        logger.warning("dirtied_emit_failed", ...)
+```
+
+**Risk**: A process crash between `session.commit()` and the `produce()` calls permanently
+drops the event. For frequently-repeated events (entity enriched on next article), loss is
+tolerable. For one-time lifecycle events (entity promoted from provisional, entity first
+created, entity deleted), loss is permanent: the downstream pipeline (embeddings, enrichment)
+never receives the trigger. The entity exists in the DB but is invisible to downstream
+services.
+**Action**: Require the outbox pattern (`outbox_repo.add()` + dispatcher) for any lifecycle
+event that fires at most once per entity transition. Fire-and-forget is acceptable ONLY when
+(a) the event is high-frequency AND (b) a missed emission will be corrected by the next
+occurrence. Must be justified in a code comment. See BP-418.
+**Grep pattern**:
+```bash
+# Find direct produce calls outside outbox transaction context
+grep -n "direct_producer\|DirectProducer\|producer\.produce" services/ -r --include="*.py" | \
+  grep -v "outbox\|test_"
+```
+
+---
+
+### HR-050: `BaseKafkaConsumer` Subclass With Hand-Rolled `is_duplicate`/`mark_processed` and No try/except on Valkey Calls
+
+**Pattern** (RED):
+```python
+class MyConsumer(BaseKafkaConsumer[None]):
+    async def is_duplicate(self, event_id: str) -> bool:
+        key = f"{self._dedup_prefix}:{event_id}"
+        return bool(await self._dedup_client.exists(key))  # ← NO try/except
+```
+
+**Risk**: Any Valkey outage causes `ConnectionError` to propagate through `_handle_message()`,
+stalling the consumer. If `mark_processed()` crashes after the DB commit succeeds, the message
+is treated as a failure and re-delivered — producing a duplicate if downstream writes are not
+idempotent.
+**Action**: Migrate to `ValkeyDedupMixin` which wraps all Valkey calls in try/except with
+fail-open semantics. Architecture test `CONSUMER-DEDUP-001` enforces this. See BP-421.
+**Grep pattern**:
+```bash
+grep -n "async def is_duplicate\|async def mark_processed" services/ -r --include="*.py" | \
+  grep -v "dedup.py\|test_"
+```
+
+---
+
+### HR-051: Redis `pipeline(transaction=True)` Where DEL and Bulk-Write Target the Same Key
+
+**Pattern** (RED):
+```python
+async with self._client.pipeline(transaction=True) as pipe:
+    pipe.delete(self._key)          # ← if network drops here, key is wiped
+    pipe.sadd(self._key, *values)
+    await pipe.execute()
+```
+
+**Risk**: MULTI/EXEC is atomic on the server once EXEC is processed. If the network drops
+between server-side DEL and client-side EXEC, the key is wiped and SADD never runs. The
+except block logs a warning; the cache is empty until the next successful refresh.
+**Action**: Replace with a Lua script via `ValkeyClient.execute_lua_script()` for true
+server-side atomicity. See BP-422.
+**Grep pattern**:
+```bash
+# Find DEL followed by bulk-write to same key inside pipeline blocks
+grep -n "pipe\.delete\|pipe\.sadd\|pipe\.hset" services/ -r --include="*.py" | \
+  grep -v "test_"
+```
+
+---
+
+### HR-052: Background `while True` Loop With Fixed `asyncio.sleep` on Exception
+
+**Pattern** (YELLOW):
+```python
+while True:
+    try:
+        await asyncio.sleep(self._interval_s)
+        await self.refresh()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.warning("refresh_loop_error", exc_info=True)
+        await asyncio.sleep(60)   # ← fixed, not exponential
+```
+
+**Risk**: During a sustained outage, this emits O(duration/60) identical warning tracebacks
+with no indication of how many failures have accumulated. No alerting surface.
+**Action**: Replace with exponential backoff (`min(2**failures * base, ceiling)`) and add a
+Prometheus counter for consecutive failures. See BP-423.
+**Grep pattern**:
+```bash
+# Find fixed sleep in except blocks inside while True loops
+grep -n "asyncio.sleep" services/ -r --include="*.py" | \
+  grep -A2 "except" | grep "sleep([0-9]"
+```
+
+### HR-053: Vector Search / HNSW Query Without Tenant Filter
+
+**Pattern** (RED):
+```python
+# BAD — returns top-K chunks from ALL tenants
+results = await session.execute(
+    select(Chunk)
+    .order_by(Chunk.embedding.cosine_distance(query_vec))
+    .limit(k)
+)
+```
+
+**Risk**: Cross-tenant data leak via semantic similarity search. A user of Tenant B can receive
+document chunks ingested by Tenant A if the content overlaps semantically. This is the
+highest-impact multi-tenant breach vector because it bypasses all API-layer tenant checks —
+the HNSW index is globally ordered by cosine similarity with no knowledge of tenancy.
+**Action**: Add `WHERE tenant_id = :tid OR tenant_id IS NULL` to all chunk/embedding queries.
+Ensure the `chunks` table has a `tenant_id` column and `CREATE INDEX ON chunks(tenant_id)`.
+Do NOT rely on application-layer filtering after the query — the index must be scoped at query time.
+See: GAP-2 in `docs/audits/2026-05-07-investigate-multi-tenant-gaps.md`.
+**Grep pattern**:
+```bash
+# Find HNSW/cosine distance queries missing tenant_id filter
+grep -rn "cosine_distance\|l2_distance\|max_inner_product" services/ --include="*.py" | \
+  xargs -I{} sh -c 'grep -L "tenant_id" $(echo {} | cut -d: -f1)' 2>/dev/null
+```
+
+### HR-054: Avro Schema for User-Attributable Event Without `tenant_id` Field
+
+**Pattern** (YELLOW):
+```json
+// BAD — no tenant routing possible
+{"name": "content.article.raw.v1", "fields": [
+  {"name": "event_id", "type": "string"},
+  ...
+  // no tenant_id field
+]}
+```
+
+**Risk**: Kafka consumers processing user-attributable events (content, NLP, intelligence pipeline)
+have no tenant routing context. They cannot write `tenant_id` to destination tables because the
+event carries no tenant information. Any table downstream of this event will be globally scoped.
+**Action**: Add `{"name": "tenant_id", "type": ["null", "string"], "default": null}` to all
+user-attributable event schemas. Market data and instrument schemas are global reference data
+and may omit `tenant_id`. Rule R5 (forward compatibility) is satisfied by using `"default": null`.
+See: GAP-4 in `docs/audits/2026-05-07-investigate-multi-tenant-gaps.md`.
+**Grep pattern**:
+```bash
+# Find Avro schemas missing tenant_id (market data schemas are expected to be absent)
+for schema in infra/kafka/schemas/*.avsc; do
+  if ! grep -q '"tenant_id"' "$schema"; then echo "MISSING: $schema"; fi
+done
+```
+
+---
+
+### HR-055: `from fastapi import …, Field, …` — Pydantic Symbol in FastAPI Import
+
+**Pattern** (RED):
+```python
+# BAD — Field is a pydantic symbol, not fastapi
+from fastapi import APIRouter, Field, HTTPException
+from pydantic import BaseModel
+```
+
+**Risk**: `Field` does not exist in `fastapi.__init__`. The import fails at module load time
+with `ImportError: cannot import name 'Field' from 'fastapi'`. Because FastAPI route modules
+are imported when the app starts, this error makes the entire service unbootable — Docker
+containers crash on start, all tests fail to collect, all HTTP traffic 5xxs.
+
+The mistake is easy to make when a developer adds a Pydantic-validation field
+(`Field(ge=0, max_length=N, …)`) to an existing route module: the route's existing line
+already imports from fastapi, and reflex appends `Field` there instead of crossing to the
+pydantic import line below.
+
+**Correct**:
+```python
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+```
+
+**Detection**:
+```bash
+rg "from fastapi import.*\bField\b" services/ libs/
+```
+Must return nothing. A pre-commit hook for this exact pattern is high-value (prevention is
+cheap, the failure mode is catastrophic).
+
+---
+
+## RED — Added from AI Architecture Investigation (2026-05-10)
+
+### HR-046: Agent Tool Dispatch Accepting Tenant/Org Scope from LLM Payload
+```python
+# BAD — LLM controls which tenant's data is queried
+async def find_entities_tool(entity_name: str, organization_id: str) -> dict:
+    return await repo.search(entity_name, organization_id=organization_id)
+```
+**Risk**: Under prompt injection, the LLM can override the authenticated user's tenant scope by passing a foreign `organization_id` in the tool arguments. This enables cross-tenant data access without any authentication bypass.
+**Fix**: Inject `organization_id` and `user_id` at dispatch time from the authenticated request context — never advertise them in the tool's JSON schema (they must not be LLM-visible parameters). Use keyword-only args enforced at dispatch registration:
+```python
+# CORRECT — organization_id injected by dispatcher, not LLM
+async def find_entities_tool(entity_name: str, *, organization_id: str) -> dict:
+    return await repo.search(entity_name, organization_id=organization_id)
+# registered with: registry.register(find_entities_tool, inject=["organization_id", "user_id"])
+```
+**Detection**:
+```bash
+rg "organization_id.*str" services/rag-chat/src/ --include="*.py" | grep "def.*tool"
+```
+Any tool handler that accepts `organization_id` as a non-injected positional parameter is vulnerable.
+
+**Compounding**: BP-428 documents the same pattern with bug-history references.
+
+---
+
+### HR-056: Relation Evidence Promotion Without Quality Gate
+```python
+# BAD — promotes all non-duplicate evidence regardless of confidence
+INSERT INTO relation_evidence
+SELECT * FROM relation_evidence_raw
+WHERE entity_provisional = false
+  AND NOT EXISTS (dedup check)
+```
+**Risk**: Single-document LLM hallucinations enter the knowledge graph as confirmed relations. Phantom triples inflate path confidence products in BFS traversal, pollute S8 graph neighborhood queries, and are nearly impossible to retract once promoted (FK references accumulate across `relation_evidence`, `relation_summaries`, chat answers).
+
+**Fix**: Gate promotion on at least one of:
+- `extraction_confidence >= 0.70` (strong LLM signal from a single document), OR
+- `evidence_density >= 0.05` (triple appears in ≥5% of documents mentioning both entities)
+
+```python
+# CORRECT — quality gate before promotion
+WHERE entity_provisional = false
+  AND NOT EXISTS (dedup check)
+  AND (extraction_confidence >= 0.70
+       OR evidence_count::float / NULLIF(total_docs_mentioning_both, 0) >= 0.05)
+```
+
+**Detection**:
+```bash
+grep -n "INSERT INTO relation_evidence" services/knowledge-graph/src/ -r
+```
+Any promotion INSERT without a confidence/density WHERE clause is vulnerable.
+
+**Reference**: E-3 (2026-05-10-ai-architecture-enhancement-roi-analysis.md).

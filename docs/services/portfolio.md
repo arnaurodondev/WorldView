@@ -24,7 +24,7 @@ direct market data ingestion, cross-service DB queries.
 |--------|------|-------------|------------|
 | GET | `/healthz` | Liveness probe | — |
 | GET | `/readyz` | Readiness probe (DB check) | — |
-| GET | `/metrics` | Prometheus metrics | — |
+| GET | `/metrics` | Prometheus metrics — requires `X-Internal-Token` header (M-004) | — |
 | POST | `/api/v1/tenants` | Create tenant | private |
 | GET | `/api/v1/tenants/{id}` | Get tenant | private |
 | POST | `/api/v1/users` | Create user | private |
@@ -34,6 +34,7 @@ direct market data ingestion, cross-service DB queries.
 | GET | `/api/v1/portfolios/{id}` | Get portfolio | private |
 | PUT | `/api/v1/portfolios/{id}` | Rename portfolio | private |
 | DELETE | `/api/v1/portfolios/{id}` | Archive portfolio | private |
+| GET | `/api/v1/portfolios/{id}/realized-pnl` | Realised P&L (FIFO) over `[from, to]` — PLAN-0051 / T-A-1-04 | private |
 | POST | `/api/v1/transactions` | Record transaction | private |
 | GET | `/api/v1/transactions` | List transactions (by portfolio) — paginated (`limit`, `offset`) | private |
 | GET | `/api/v1/holdings/{portfolio_id}` | Get holdings for portfolio | private |
@@ -160,6 +161,71 @@ All three return a `PaginatedResponse<T>`:
 
 ---
 
+## Feedback subsystem (PLAN-0052 Wave D)
+
+The portfolio service hosts the in-app feedback / NPS / public roadmap / micro-survey / beta-program backend. Decision D-3 in `docs/audits/2026-04-28-qa-frontend-design-roadmap.md` placed this in `portfolio_db` rather than spinning up a dedicated feedback service. The api-gateway proxies `/v1/feedback/*` → these routes (see `docs/services/api-gateway.md` → "Feedback Endpoints").
+
+### Tables (migration `0015_create_feedback_tables.py`)
+
+| Table | Purpose | PK |
+|-------|---------|----|
+| `feedback_submissions` | Bug / feature / UX / design free-text submissions | `id` (UUID v7) |
+| `nps_scores` | One NPS rating per (tenant, user) per 30 days (rate-limited at use-case layer; index `ix_nps_scores_user_recent`) | `id` |
+| `feature_requests` | Public roadmap items (admin-curated) | `id` |
+| `feature_votes` | One upvote per (feature, user) | `(feature_request_id, user_id)` |
+| `micro_survey_responses` | Thumbs up/down keyed on `survey_key` (e.g. `docs:/instruments/overview`) | `id` |
+| `beta_enrollments` | User's opt-in state per beta program | `(tenant_id, user_id)` |
+
+All tables are tenant-scoped — every row has `tenant_id` and every repo query carries a `WHERE tenant_id = :tid` predicate.
+
+### Application layer
+
+Ports: `portfolio.application.ports.feedback` — six abstract repositories (`FeedbackSubmissionRepo`, `NPSScoreRepo`, `FeatureRequestRepo`, `FeatureVoteRepo`, `MicroSurveyRepo`, `BetaEnrollmentRepo`).
+
+Use cases (`portfolio.application.use_cases.feedback`):
+- `CreateFeedbackSubmissionUseCase` — applies PII redaction before persist
+- `ListFeedbackSubmissionsUseCase` (`mine=true` filters to caller; otherwise admin-only at the route layer)
+- `GetFeedbackSubmissionUseCase`, `UpdateFeedbackSubmissionUseCase` (admin), `DeleteFeedbackSubmissionUseCase` (admin)
+- `SubmitNPSScoreUseCase` — application-layer rate limit (SELECT-then-INSERT via `find_recent_by_user`) raises `NPSRateLimitError` → 409. WHY application-layer: Postgres rejects `now()` in index predicates (must be IMMUTABLE), so a partial-unique index on `WHERE created_at > now() - INTERVAL '30 days'` is non-deployable. The repo's `add()` also maps `IntegrityError` → `NPSRateLimitError` as belt-and-suspenders against a tiny SELECT-then-INSERT race window.
+- `GetNPSAggregateUseCase` — promoter/passive/detractor counts + NPS score over the last N days
+- `ListFeatureRequestsUseCase` (returns `(record, has_voted)` tuples), `CreateFeatureRequestUseCase`, `UpdateFeatureRequestUseCase` (admin)
+- `UpsertFeatureVoteUseCase` — idempotent (PK conflict → no-op), recomputes denorm `vote_count`
+- `SubmitMicroSurveyUseCase` — comment redacted before persist
+- `GetBetaEnrollmentUseCase` (returns synthetic `enrolled=false` row when no record exists), `UpsertBetaEnrollmentUseCase`
+
+### PII redaction guarantees
+
+`portfolio.security.pii_redaction.redact()` and `redact_json()` scrub these patterns from `feedback_submissions.description`, `feedback_submissions.console_logs`, `nps_scores.comment`, `micro_survey_responses.comment`, and `feature_requests.description` before they hit the database:
+
+| Pattern | Replacement marker |
+|---------|---------------------|
+| Bearer tokens (`Bearer abcdef...`) | `Bearer [REDACTED:JWT]` |
+| JWT-shaped strings (`eyJ...eyJ....`) | `[REDACTED:JWT]` |
+| API key assignments (`api_key=...` / `api-key: ...`) | `api_key=[REDACTED:API_KEY]` |
+| Header lines (`authorization: ...`, `x-api-key: ...`, `cookie: ...`) | `<header>: [REDACTED:HEADER]` |
+| Email addresses | `[REDACTED:EMAIL]` |
+| 16-digit credit-card-shaped strings | `[REDACTED:CC]` |
+| US SSN (`xxx-xx-xxxx`) | `[REDACTED:SSN]` |
+
+Redaction is idempotent (running it twice produces the same output). The dedicated `feedback_submissions.email` column is **not** scrubbed — that field is structured user-supplied contact info, not free text.
+
+### Configuration
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `PORTFOLIO_FEEDBACK_S3_BUCKET` | `worldview-feedback-screenshots` | Bucket for screenshot uploads (frontend pre-signed PUT) |
+| `PORTFOLIO_FEEDBACK_SCREENSHOT_TTL_DAYS` | `90` | Lifecycle policy applied by DevOps in worldview-gitops |
+| `PORTFOLIO_FEEDBACK_CONSOLE_LOGS_TTL_DAYS` | `7` | Console-log JSONB retention (cron purge — follow-up wave) |
+| `PORTFOLIO_FEEDBACK_ANONYMOUS_TENANT_ID` | `00000000-0000-0000-0000-000000000000` | Tenant id under which anonymous submissions land. The gateway's `issue_public_jwt` carries this same nil-UUID; admins read the anon backlog via `GET /api/v1/feedback/submissions/anonymous` (admin-only). |
+
+### Anonymous tenant routing (F-Q1-04)
+
+Anonymous (no-JWT) feedback submissions land under the configured "platform support" tenant id (`feedback_anonymous_tenant_id`, default nil-UUID). Real-tenant admins **cannot** see anon submissions via the standard `GET /submissions` endpoint because that route filters strictly by the caller's `tenant_id`. Admins therefore have a dedicated route `GET /submissions/anonymous` that pulls submissions from the configured anon tenant. This was added to fix the original bug where anonymous feedback was effectively black-holed in production.
+
+The S3 PUT itself is out of scope for Wave D — only the schema field `screenshot_url` is persisted.
+
+---
+
 ## Kafka Topics
 
 ### Produced
@@ -167,7 +233,7 @@ All three return a `PaginatedResponse<T>`:
 | Topic | Event Types | Key | Schema |
 |-------|-------------|-----|--------|
 | `portfolio.events.v1` | `tenant.created`, `user.created`, `portfolio.created`, `portfolio.renamed`, `portfolio.archived`, `transaction.recorded`, `holding.changed`, `instrument_ref.created`, `watchlist.created`, `watchlist.deleted` | `aggregate_id` | Per-event `.avsc` files |
-| `portfolio.watchlist.updated.v1` | `watchlist.item_added`, `watchlist.item_removed` | `aggregate_id` | `watchlist.item_added.avsc`, `watchlist.item_removed.avsc` |
+| `portfolio.watchlist.updated.v1` | `watchlist.item_added`, `watchlist.item_removed`, `watchlist.renamed` | `aggregate_id` | `watchlist.item_added.avsc`, `watchlist.item_removed.avsc` |
 
 ### Consumed
 
@@ -175,6 +241,17 @@ All three return a `PaginatedResponse<T>`:
 |-------|---------------|------------|-----------------|
 | `market.instrument.created` | `portfolio-instrument-sync` | `InstrumentCreated` | `event_id` via `idempotency` table |
 | `market.instrument.updated` | `portfolio-instrument-sync` | `InstrumentUpdated` | `event_id` via `idempotency` table |
+| `market.instrument.discovered.v1` | `portfolio-instrument-sync` | `InstrumentDiscovered` | `event_id` via `idempotency` table |
+
+PLAN-0057 Wave D-2: portfolio's `InstrumentEventConsumer` subscribes to all
+three instrument topics in one consumer group. Discovered events seed an
+`InstrumentRef` with `name=None` (fundamentals not yet resolved); the
+subsequent `InstrumentCreated` event carries the EODHD enrichment and is
+processed via the same `idempotency` table (different `event_id`s) so the
+ref's `name` / `isin` / `cusip` / `figi` / `lei` / `primary_ticker` fields
+are populated on second arrival. Consumers of `InstrumentRef` should treat
+`name` as best-effort because an instrument seen only via discovered.v1
+(no fundamentals yet) keeps `name=None` until the next fundamentals refresh.
 
 ---
 
@@ -536,3 +613,198 @@ make migrate-new MSG="add_column_foo"  # generate new migration
 - **Watchlist soft-delete does not prevent GET** — `DeleteWatchlistUseCase` saves the watchlist
   with `status=deleted` but does not remove it from the DB. `GetWatchlistUseCase` will still
   return it. Consumers must check `status` if they need to filter deleted watchlists.
+
+
+---
+
+## Realised P&L Endpoint (PLAN-0051 / T-A-1-04)
+
+`GET /api/v1/portfolios/{portfolio_id}/realized-pnl` computes realised P&L for
+a portfolio over a date window using **FIFO** (First-In-First-Out) lot
+matching. The use case walks the FULL transaction history (including
+fully-closed positions) so cost basis is correct even when the requested
+window starts long after the original BUYs.
+
+### Query params
+
+| Param | Default | Notes |
+|-------|---------|-------|
+| `from` | First day of current UTC year | ISO date `YYYY-MM-DD`. Disposal date filter (inclusive). |
+| `to` | Today UTC | ISO date `YYYY-MM-DD`. Disposal date filter (inclusive). |
+
+`from > to` returns **400**. Missing portfolio (or wrong tenant) returns
+**404**. Wrong owner inside the same tenant returns **403**.
+
+### Response shape
+
+```jsonc
+{
+  "total_realized": "250.00000000",          // sum of long+short
+  "realized_long_term": "0.00000000",        // lots held > 365 days
+  "realized_short_term": "250.00000000",     // lots held ≤ 365 days
+  "count": 1,                                // number of disposals counted
+  "breakdown_by_instrument": [
+    {
+      "instrument_id": "…uuid…",
+      "ticker": "AAPL",                      // null when local cache miss
+      "name": "Apple Inc.",                  // null when local cache miss
+      "realized": "250.00000000"
+    }
+  ],
+  "currency": "USD",
+  "from_date": "2026-01-01",
+  "to_date": "2026-04-30"
+}
+```
+
+### FIFO semantics
+
+- BUY: opens a lot with `cost_per_share = (qty * price + fees) / qty` (buy
+  fees roll into cost basis, so SELLs implicitly recover them).
+- SELL: pops the oldest open lot first, chunk by chunk. The SELL's `fees`
+  are allocated **pro-rata** across matched chunks. Realised P&L for a
+  chunk = `matched_qty * (sell_price - cost_per_share) - allocated_fee`.
+- DIVIDEND / DEPOSIT / WITHDRAWAL / FEE: skipped (not disposition events).
+- Holding period: `(sell.executed_at - lot.executed_at).days`.
+  > 365 → long-term; ≤ 365 → short-term.
+- Short sale (SELL with no open lot): logged as
+  `realized_pnl_short_sale_skipped` warning, the row is dropped from the
+  calculation, the use case never crashes.
+- Disposals **outside** `[from, to]` still consume lots so cost basis
+  stays correct, but their realised P&L is not added to the totals.
+
+### Caching
+
+The S9 proxy adds `Cache-Control: max-age=300` on **200** responses only.
+Realised P&L only changes when a new SELL is recorded, so 5 minutes of
+edge caching is safe and cuts the FIFO walk for read-heavy dashboards.
+
+---
+
+## Operational Recovery
+
+### Holdings drift from transaction-replay (BP-264)
+
+Before PLAN-0046, `RecordTransactionUseCase` mutated `holdings.quantity` via
+`Holding.apply_delta` on every transaction. Because the SnapTrade adapter's
+dual-path activity feed (legacy → per-account fallback) could return the same
+trade twice with different IDs, holdings inflated by 8-10x over time.
+
+**Fix landed in PLAN-0046 Wave 1:**
+
+- `RecordTransactionUseCase` no longer touches the `holdings` table; transactions
+  are now history-only.
+- `UpsertHoldingsFromSnapshotUseCase` overwrites the table after every brokerage
+  sync from the broker's authoritative position snapshot
+  (`SnapTradeClient.get_account_positions`).
+- The `HoldingChanged` event is now emitted by the snapshot use case, not by
+  `RecordTransactionUseCase`.
+
+**To recover affected portfolios** (one-time per environment):
+
+```bash
+# F-502 (QA iter-5): scripts now ship inside the portfolio image at
+# /app/scripts/. Invoke via `docker compose exec` — no `docker cp` needed.
+
+# 1) Dry-run — print affected portfolios + duplicate transaction groups.
+docker compose -f infra/compose/docker-compose.yml \
+    exec portfolio python /app/scripts/repair_holdings_after_replay_drift.py --dry-run
+
+# 2) Live run — zero out holdings on portfolios that have a brokerage
+#    connection. The next BrokerageTransactionSyncWorker cycle will repopulate
+#    them from the broker's snapshot.
+docker compose -f infra/compose/docker-compose.yml \
+    exec portfolio python /app/scripts/repair_holdings_after_replay_drift.py
+
+# 3) Trigger the sync worker (or wait for the 4-hour cycle).
+#    See ``trigger_brokerage_resync.py`` for the on-demand path.
+```
+
+The script is idempotent: re-running on already-clean state is a no-op apart
+from one extra sync round-trip. Duplicate-transaction detection is read-only
+and always safe.
+
+---
+
+## Operational Recovery
+
+PLAN-0046 added five operator scripts, all under `services/portfolio/scripts/`.
+This section is the canonical reference. Every script supports `--dry-run`
+and is idempotent — re-running is safe.
+
+**F-502 (QA iter-5)**: the scripts are now baked into the portfolio container
+image at `/app/scripts/`. Operators no longer need `docker cp` — invoke them
+directly via `docker compose exec`. The patterns below show the in-container
+form; the older `python -m portfolio.scripts.X` host form has been removed
+(`portfolio.scripts` is not an importable package — the scripts are
+standalone files that import `portfolio.*` modules via `PYTHONPATH=/app/src`,
+which the runtime image already sets).
+
+```bash
+# Generic invocation pattern from the host:
+docker compose -f infra/compose/docker-compose.yml \
+    exec portfolio python /app/scripts/<script_name>.py [--dry-run]
+```
+
+### `repair_holdings_after_replay_drift.py`
+- **When**: holdings quantities are inflated because the brokerage adapter
+  replayed activities multiple times (BP-264). Symptom: SnapTrade reports
+  100 AAPL but the user sees 800.
+- **What it mutates**: zeroes `holdings.quantity` and `holdings.average_cost`
+  for every portfolio with at least one `brokerage_connection`. Subsequent
+  sync cycles repopulate the rows from the broker's snapshot.
+- **Read-only side**: also reports duplicate transaction groups (same
+  `instrument_id, executed_at, quantity, price`) for operator review.
+- **Run**: `docker compose exec portfolio python /app/scripts/repair_holdings_after_replay_drift.py [--dry-run]`
+
+### `backfill_root_portfolios.py`
+- **When**: PLAN-0046 Wave 3 introduced the ROOT portfolio. Existing users
+  predate the auto-provisioning hook and need a one-shot backfill.
+- **What it mutates**: creates one `kind='root'` portfolio per user that
+  doesn't already have one. Idempotent — skips users that do.
+- **Run**: `docker compose exec portfolio python /app/scripts/backfill_root_portfolios.py [--dry-run]`
+
+### `backfill_portfolio_value_snapshots.py`
+- **When**: bringing up a fresh environment, or after a long worker outage.
+  Recovers historical equity-curve rows by replaying transactions backward
+  and multiplying by close prices.
+- **What it mutates**: writes rows into `portfolio_value_snapshots` (idempotent
+  upsert on `(portfolio_id, snapshot_date)`).
+- **Caveats**: replays at most 365 calendar days. The live snapshot worker
+  uses authoritative current `Holding` rows for "today"; this script must
+  NOT overwrite today's row.
+- **Run**: `docker compose exec portfolio python /app/scripts/backfill_portfolio_value_snapshots.py [--dry-run] [--lookback-days N]`
+
+### `backfill_watchlist_member_denorm.py`
+- **When**: existing `watchlist_members` rows have `NULL ticker/name/instrument_id`
+  (the denormalised columns added in Alembic 0010 are populated only at
+  add-time, so legacy rows need a one-shot fill).
+- **What it mutates**: a single UPDATE-FROM that copies
+  `instruments.symbol/name/id` into the matching `watchlist_members` row
+  by `entity_id`. Rows with no matching local instrument are left untouched
+  (still NULL). Frontend renders a "resolving…" badge for those.
+- **Run**: `docker compose exec portfolio python /app/scripts/backfill_watchlist_member_denorm.py [--dry-run]`
+
+### `trigger_brokerage_resync.py`
+- **When**: after deploying the `transactions.amount` column (Alembic 0009)
+  to make every active brokerage connection re-fetch activities so historical
+  dividend rows pick up the cash amount they were missing.
+- **What it mutates**: zeroes `last_synced_at` and `last_sync_cursor` on
+  every connection with `status IN ('active', 'error')`. The
+  `BrokerageTransactionSyncWorker` picks the connection up on its next
+  cycle and re-fetches the full activity window. Does NOT make any network
+  calls itself.
+- **Caveats**: duplicates are de-duplicated by SnapTrade activity id, so
+  re-syncing produces zero new rows for already-synced activities. The
+  only material effect is on rows that previously had `amount=NULL`.
+- **Run**: `docker compose exec portfolio python /app/scripts/trigger_brokerage_resync.py [--dry-run]`
+
+### Recovery flow checklist (typical day-1 deploy)
+1. Apply migrations (Alembic head must be `0012` for PLAN-0046).
+2. `repair_holdings_after_replay_drift --dry-run` → review duplicate report.
+3. `repair_holdings_after_replay_drift` (live) → zero out drifted holdings.
+4. `backfill_root_portfolios` → ensure every user has an aggregate.
+5. `backfill_watchlist_member_denorm` → resolve legacy watchlist rows.
+6. `backfill_portfolio_value_snapshots` → seed the equity curve.
+7. `trigger_brokerage_resync` → kick the sync worker (optional; the
+   regular 4-hour cycle will catch up otherwise).

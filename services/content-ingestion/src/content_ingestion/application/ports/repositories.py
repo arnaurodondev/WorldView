@@ -5,14 +5,12 @@ Use cases depend only on these protocols, never on infrastructure classes direct
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from uuid import UUID
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
     from content_ingestion.domain.entities import ContentIngestionTask
-
 
 # ── Existing ports ───────────────────────────────────────────────────────────
 
@@ -127,6 +125,8 @@ class TaskPort(Protocol):
 
     async def has_active_task(self, source_id: UUID) -> bool: ...
 
+    async def recover_expired_leases(self, now: datetime, lease_timeout_seconds: int) -> int: ...
+
     async def count_by_status(self) -> dict[str, int]: ...
 
 
@@ -146,6 +146,7 @@ class AdapterStatePort(Protocol):
         next_run_at: datetime | None = None,
         error_count: int | None = None,
         last_error: str | None = None,
+        last_run_config_hash: str | None = None,
     ) -> Any: ...
 
     async def reset_errors(self, source_id: UUID) -> None: ...
@@ -166,3 +167,22 @@ class DLQPort(Protocol):
     async def requeue(self, dlq_id: UUID) -> UUID | None: ...
 
     async def count_failed(self) -> int: ...
+
+
+@runtime_checkable
+class PredictionMarketFetchLogPort(Protocol):
+    """Port for the prediction_market_fetch_log repository."""
+
+    async def exists_by_market_snapshot(self, market_id: str, snapshot_at: datetime) -> bool: ...
+
+    async def create_market_fetch_log(
+        self,
+        *,
+        source_id: UUID | None,
+        market_id: str,
+        snapshot_at: datetime,
+        resolution_status: str,
+        fetched_at: datetime,
+    ) -> UUID | None:
+        """Insert a fetch log row; return the UUID or None if already exists."""
+        ...

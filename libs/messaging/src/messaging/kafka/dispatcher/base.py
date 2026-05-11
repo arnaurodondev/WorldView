@@ -12,6 +12,16 @@ Architecture summary:
 
 Delivery guarantee: **at-least-once** (idempotent consumers required).
 
+Canonical outbox table shape — single source of truth:
+    See ``docs/STANDARDS.md`` §3.4 for the canonical column names and
+    types every service's ``outbox_events`` table MUST expose. Two
+    columns are load-bearing for cross-service operational tooling:
+    ``topic`` (Kafka target — never derive at dispatch time) and
+    ``dispatched_at`` (per-row dispatch timestamp — used by replay
+    tooling to identify the still-pending window). Historical drift
+    on these two columns was reconciled by PLAN-0087 #9 (see
+    ``docs/audits/2026-05-09-qa-beta-data-platform.md`` F-003).
+
 See ADR-0005 and the outbox-pattern section of ``docs/libs/messaging.md``
 for operational details.
 """
@@ -75,6 +85,29 @@ class OutboxRecordProtocol(Protocol):
     @property
     def leased_until(self) -> datetime | None:
         """Lease expiry timestamp, or ``None`` if unlocked."""
+        ...
+
+    @property
+    def partition_key(self) -> str | None:
+        """Optional Kafka partition key for per-entity ordering.
+
+        When set, the dispatcher passes ``key=partition_key.encode("utf-8")``
+        to ``producer.produce(...)`` so that all events for the same key land
+        on the same Kafka partition (preserving per-entity ordering).
+
+        When ``None`` (the legacy default), Kafka's sticky/round-robin
+        partitioning is used — fine for events without ordering invariants.
+
+        Per F-DATA-06 (audit ``2026-05-01-investigation-plan-0057-open-items``
+        §2.2): events that mutate the same aggregate (e.g., all
+        ``market.instrument.created`` events for the same ``instrument_id``)
+        MUST set ``partition_key`` to that aggregate id, otherwise consumers
+        can observe re-orderings across partitions.
+
+        For backwards compatibility, ``OutboxRecordProtocol`` implementations
+        that pre-date this property still work — the dispatcher reads it via
+        ``getattr(record, "partition_key", None)``.
+        """
         ...
 
 
@@ -317,12 +350,20 @@ class BaseOutboxDispatcher(ABC):
         try:
             producer = self.get_producer()
             value = OutboxKafkaValue(event_type=record.event_type, payload=record.payload)
+            # F-DATA-06 / PLAN-0057-followup Wave B: pass ``key=`` for per-entity
+            # Kafka ordering. ``getattr(...)`` gives a safe fallback so that
+            # outbox record types that pre-date the ``partition_key`` property
+            # (legacy services) still work — they simply route via Kafka's
+            # sticky/round-robin partitioner.
+            partition_key = getattr(record, "partition_key", None)
+            kafka_key = partition_key.encode("utf-8") if partition_key else None
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None,
                 lambda: producer.produce(
                     topic=record.topic,
                     value=value,
+                    key=kafka_key,
                     on_delivery=_delivery_callback,
                 ),
             )

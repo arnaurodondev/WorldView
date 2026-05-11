@@ -9,6 +9,8 @@ from nlp_pipeline.infrastructure.intelligence_db.session import (
     create_intelligence_session_factory,
 )
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.unit
 class TestAlembicGuard:
@@ -62,4 +64,4 @@ class TestAlembicGuard:
         # Dispose immediately — no real connection attempted in unit test
         import asyncio
 
-        asyncio.get_event_loop().run_until_complete(engine.dispose())
+        asyncio.run(engine.dispose())

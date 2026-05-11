@@ -8,7 +8,7 @@
 
 ## Overview
 
-`ml-clients` provides three structural Protocol interfaces and seven concrete adapter
+`ml-clients` provides four structural Protocol interfaces and ten concrete adapter
 implementations. It deliberately uses `typing.Protocol` (structural subtyping) rather than
 `ABC`/`abstractmethod` so that services can swap adapters transparently — the service code
 never imports from a concrete adapter module directly.
@@ -17,8 +17,9 @@ never imports from a concrete adapter module directly.
 
 1. **No naked exceptions** — every adapter catches all exceptions and re-raises only as
    `RetryableError` (transient, back off and retry) or `FatalError` (permanent, dead-letter).
-2. **Semaphore injection** — every adapter requires an `asyncio.Semaphore` at construction to
-   bound concurrent ML calls. Never construct an adapter without one.
+2. **Semaphore injection** — most adapters require an `asyncio.Semaphore` at construction to
+   bound concurrent ML calls. `AdaptiveGLiNERHTTPAdapter` is the exception: it manages its own
+   internal `ResizableSemaphore` that adjusts at runtime (see [Adaptive GLiNER](#adaptive-gliner-concurrency) below).
 3. **Executor for blocking calls** — `GLiNERLocalAdapter` wraps all synchronous GLiNER calls
    in `loop.run_in_executor(None, ...)` to avoid blocking the event loop.
 4. **Optional extras** — `gliner`, `anthropic`, `google-genai`, and `openai` are optional
@@ -35,6 +36,7 @@ All services code against these interfaces, never against concrete adapter class
 | `EmbeddingClient` | `embed` | `async (inputs: list[EmbeddingInput]) -> list[EmbeddingOutput]` | S6 NLP Pipeline |
 | `NERClient` | `extract_entities` | `async (inp: NERInput) -> NEROutput` | S6 NLP Pipeline |
 | `ExtractionClient` | `extract` | `async (inp: ExtractionInput) -> ExtractionOutput` | S6 NLP Pipeline, S7 Knowledge Graph |
+| `EntityDescriptionClient` | `generate_description` | `async (entity_id, canonical_name, entity_type, context_hints) -> str \| None` | S7 Knowledge Graph (`DefinitionRefreshWorker`) |
 
 All protocols are `@runtime_checkable`, so `isinstance(adapter, EmbeddingClient)` works at runtime.
 
@@ -67,10 +69,14 @@ containers (lists, dicts) are frozen by reference.
 | `OllamaEmbeddingAdapter` | `EmbeddingClient` | Ollama REST `/api/embeddings` | `bge-large-en-v1.5` (1024-dim) | — |
 | `OllamaExtractionAdapter` | `ExtractionClient` | Ollama REST `/api/chat` | `qwen2.5:7b-instruct` | — |
 | `GLiNERLocalAdapter` | `NERClient` | Local GLiNER model (in-process) | `urchade/gliner_large-v2.1` | `ml-clients[gliner]` |
+| `GLiNERHTTPAdapter` | `NERClient` | GLiNER server REST `/ner/batch` (fixed concurrency) | — | — |
+| `AdaptiveGLiNERHTTPAdapter` | `NERClient` | GLiNER server REST `/ner/batch` (AIMD adaptive concurrency) | — | — |
 | `AnthropicExtractionAdapter` | `ExtractionClient` | Anthropic Messages API | `claude-sonnet-4-6` | `ml-clients[anthropic]` |
 | `GeminiExtractionAdapter` | `ExtractionClient` | Google GenAI API | `gemini-2.5-pro` | `ml-clients[gemini]` |
+| `GeminiDescriptionAdapter` | `EntityDescriptionClient` | Google GenAI API | `gemini-3.1-flash-lite` | `ml-clients[gemini]` |
 | `ChatGPTExtractionAdapter` | `ExtractionClient` | OpenAI Chat Completions API | `gpt-5-mini` | `ml-clients[openai]` |
-| `DeepSeekExtractionAdapter` | `ExtractionClient` | DeepSeek (OpenAI-compatible) | `deepseek-chat` | `ml-clients[openai]` |
+| `DeepSeekExtractionAdapter` | `ExtractionClient` | DeepSeek (OpenAI-compatible) | `DeepSeek R1 Distill 32B` | `ml-clients[openai]` |
+| `NullDescriptionAdapter` | `EntityDescriptionClient` | No-op (always returns None) | — | — |
 
 All adapters implement the error mapping contract:
 
@@ -79,6 +85,77 @@ All adapters implement the error mapping contract:
 | Timeout / network / 5xx / 429 | `RetryableError` |
 | 4xx / malformed JSON / bad input | `FatalError` |
 | Missing optional package | `FatalError` |
+
+---
+
+## Adaptive GLiNER Concurrency
+
+`AdaptiveGLiNERHTTPAdapter` (in `gliner_adaptive.py`) solves the question:
+*"How many concurrent HTTP requests can the GLiNER server actually handle?"*
+
+Rather than requiring manual tuning, it uses **Additive-Increase / Multiplicative-Decrease
+(AIMD)** — the same algorithm that underpins TCP congestion control — to discover and maintain
+the right concurrency level automatically.
+
+### How it works
+
+1. **One HTTP request per input text** — `batch_extract_entities` fans out N requests rather
+   than batching them. This allows individual texts to be served by different GLiNER replicas.
+
+2. **ResizableSemaphore** — a custom asyncio semaphore whose permit limit can be adjusted at
+   runtime. Unlike `asyncio.Semaphore` (fixed at construction), `set_limit(n)` can grow or
+   shrink the limit while requests are in-flight. Increasing the limit immediately wakes blocked
+   waiters; decreasing it takes effect on the next acquire.
+
+3. **AIMDController** — records request latency and adjusts the semaphore:
+
+   | Condition | Action |
+   |-----------|--------|
+   | Rolling avg latency < `target_latency_ms` | `limit += 1` (additive increase) |
+   | Rolling avg latency > `target_latency_ms * 1.5` | `limit -= 1` (soft decrease) |
+   | HTTP 5xx | `limit -= 1` (server error) |
+   | Timeout | `limit //= 2` (multiplicative decrease) |
+
+   The controller waits for `min_samples` observations (default: 3) before making any
+   adjustment, avoiding over-reaction to cold-start variance.
+
+### Steady-state behavior
+
+| Deployment | Expected steady-state limit |
+|------------|-----------------------------|
+| 1 CPU GLiNER replica | ~1 (CPU saturates per request; latency doubles at N=2) |
+| N CPU replicas | ~N (one active request per replica) |
+| N GPU replicas | N to 2N (GPU inference is faster; more overlap tolerated) |
+
+No configuration changes are required when scaling replicas — the adapter discovers N
+automatically within a few dozen requests.
+
+### Usage
+
+```python
+from ml_clients.adapters import AdaptiveGLiNERHTTPAdapter
+from ml_clients.dataclasses import NERInput
+
+adapter = AdaptiveGLiNERHTTPAdapter(
+    base_url="http://gliner-server:8080",
+    initial_concurrency=2,        # starting limit (adjusted quickly)
+    max_concurrency=30,           # hard upper bound
+    target_latency_ms=2000.0,     # CPU inference target; use ~200 for GPU
+    timeout_seconds=60.0,
+    window_size=10,               # rolling average window
+)
+
+inputs = [NERInput(text=section, entity_classes=["ORG", "PERSON"]) for section in sections]
+outputs = await adapter.batch_extract_entities(inputs)  # fan-out, order preserved
+```
+
+### When to use which GLiNER adapter
+
+| Adapter | Use when |
+|---------|----------|
+| `GLiNERLocalAdapter` | Model runs in-process (same container as service; no network hop) |
+| `GLiNERHTTPAdapter` | Fixed-concurrency; simpler when replica count is known and stable |
+| `AdaptiveGLiNERHTTPAdapter` | Replica count varies (scaling), GPU vs CPU unknown, or production use |
 
 ---
 

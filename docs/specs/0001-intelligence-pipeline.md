@@ -2160,7 +2160,7 @@ The entity embedding system maintains 3 independent views per entity in `entity_
 - **Source text (ticker entities)**: EODHD `General.Description` from `market.instrument.created` event or MinIO fundamentals data
 - **Source text (non-ticker entities)**: LLM-generated profile from Block 13E provisional enrichment
 - **Change detection**: `SHA-256(new_source_text) != entity_embedding_state.source_hash` — skip if unchanged
-- **LLM fallback chain**: Ollama (local, 3 retries × 30s/60s/120s backoff) → Gemini 2.0 Flash Lite (external, 2 retries) → write `embedding=NULL`, schedule retry in 1 hour. All calls logged to `llm_usage_log`.
+- **LLM fallback chain**: Ollama (local, 3 retries × 30s/60s/120s backoff) → Gemini 3.1 Flash Lite (external, 2 retries) → write `embedding=NULL`, schedule retry in 1 hour. All calls logged to `llm_usage_log`.
 - **UPSERT**: `entity_embedding_state SET embedding=:vec, source_text=:text, source_hash=:hash, last_refreshed_at=now(), next_refresh_at=now() + INTERVAL '90 days', refresh_count=refresh_count+1 WHERE entity_id=:eid AND view_type='definition'`
 
 **13D-2: Narrative State Embedding Refresh Worker**
@@ -2237,7 +2237,7 @@ The entity embedding system maintains 3 independent views per entity in `entity_
 ```
 Ollama (local, $0) → 3 retries with 30s/60s/120s backoff
     ↓ all failed
-Gemini 2.0 Flash Lite ($0.01/1K tokens) → 2 retries
+Gemini 3.1 Flash Lite ($0.01/1K tokens) → 2 retries
     ↓ all failed
 Write result=NULL, schedule retry in 1 hour, log failure
 ```

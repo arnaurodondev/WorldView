@@ -1,0 +1,68 @@
+---
+title: Price Alerts
+description: Set alerts for price crossing a level or moving more than N% in a session.
+section: Alerts
+order: 3
+updated: 2026-05-05
+---
+
+Price alerts are the most common alert type. They fire when an instrument's price crosses a threshold or moves beyond a percentage range within a session.
+
+## Price level alerts
+
+A price level alert triggers when the instrument's price crosses above or below a specific value.
+
+### One-directional: ABOVE / BELOW
+
+Set a condition like `AAPL price ABOVE 210` to fire whenever AAPL's last price is above $210. With a 1-hour cooldown, this fires once per hour while the price remains above $210.
+
+### Crossing: CROSSES ABOVE / CROSSES BELOW
+
+`AAPL price CROSSES ABOVE 200` fires exactly once when the price transitions from below $200 to above $200. It will not re-fire until the price drops back below $200 and crosses up again.
+
+<Callout type="tip" title="Crossing vs. level">
+Use CROSSES conditions for breakout alerts — they are much quieter than level conditions. Use ABOVE/BELOW with a cooldown for range monitoring (e.g. alert me every 2 hours while TSLA is below $150).
+</Callout>
+
+## Percent move alerts
+
+Percent move alerts trigger when an instrument moves more than a specified percentage within a time window.
+
+### Session move
+
+```
+NVDA moves MORE THAN 5% TODAY
+```
+
+Fires when NVDA's intraday change (vs. prior close) exceeds ±5% on any given trading day. The direction can be specified: `NVDA moves MORE THAN 5% DOWN TODAY` fires only on a 5%+ decline.
+
+### Intraday window
+
+```
+SPY moves MORE THAN 2% IN 1H
+```
+
+Fires when SPY moves more than 2% in any rolling 1-hour window. This is useful for detecting unusual intraday volatility that may not reach the full-session threshold.
+
+## Setting up a price alert from an instrument page
+
+The fastest way to create a price alert:
+
+<Steps>
+  <Step title="Open any instrument page">
+    Navigate to an instrument (e.g. search AAPL in the TopBar).
+  </Step>
+  <Step title="Click Set alert">
+    Click the **Set alert** button in the instrument header. The rule builder opens pre-filled with the instrument.
+  </Step>
+  <Step title="Choose level or % move">
+    Select **Price level** or **% move**. Enter your threshold value.
+  </Step>
+  <Step title="Set severity and save">
+    Choose a severity and click **Save**. The rule is active immediately.
+  </Step>
+</Steps>
+
+## Price data source
+
+Price alerts use EODHD intraday data polled every 60 seconds. Alert evaluation happens server-side — you do not need to have Worldview open in a browser for alerts to fire. Notifications are queued and delivered the next time you connect.

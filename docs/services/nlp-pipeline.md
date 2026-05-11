@@ -31,13 +31,16 @@ performs read/write operations only.
 | GET | `/healthz` | Liveness | — |
 | GET | `/readyz` | Readiness (DB + Ollama) | — |
 | GET | `/metrics` | Prometheus | — |
-| GET | `/api/v1/signals` | Signal feed (query: entity_id, type, severity) | fast |
+| GET | `/api/v1/news/top` | Top-ranked news articles (params: hours, limit, offset, min_display_score, routing_tier) — returns `RankedArticleResponse` list with `sentiment` and `impact_score` fields (PLAN-0050 Wave E) | fast |
+| GET | `/api/v1/signals` | Signal feed (query: doc_id, min_impact_score, order_by) — returns `market_impact_score` per signal | fast |
 | GET | `/api/v1/entities` | Search entities | medium |
 | GET | `/api/v1/entities/{id}` | Entity detail + aliases | medium |
-| GET | `/api/v1/entities/{id}/articles` | Articles linked to entity | fast |
+| GET | `/api/v1/entities/{id}/articles` | Articles linked to entity — response includes `sentiment` (positive/negative/neutral/mixed/null) and `impact_score` (FLOAT 0-1, null until price windows computed) | fast |
 | POST | `/api/v1/search/vector` | Vector similarity search (body: query_text, top_k) | fast |
 | POST | `/api/v1/reprocess/{article_id}` | Re-run NLP on an article (admin) | — |
 | GET | `/api/v1/topics` | Active topic clusters | fast |
+| GET | `/internal/v1/llm-costs` | LLM cost aggregates (PLAN-0033); params: `period` (YYYY-MM), `provider`, `breakdown` | X-Internal-JWT (system) |
+| GET | `/api/v1/search/documents` | Full-text search across articles + EDGAR with entity facets. Params: q (req), entity_id (multi), scope, source_type, date_from, date_to, date_preset, page, page_size. Response: SearchDocumentsResponse with results + facets + latency_ms. Internal JWT required. PLAN-0064 W6. | X-Internal-JWT |
 
 ---
 
@@ -65,9 +68,9 @@ performs read/write operations only.
 |-------|------|---------------|--------|
 | 3 | **Sectioning** | 4 source-specific sectioners: `NewsParagraphSectioner` (double-newline, ≥30 chars), `SECEdgarSectioner` (^Item N header), `FinnhubTranscriptSectioner` (speaker-turn), `SyntheticSectioner` (fallback). Factory dispatches by `source_type`. Always returns ≥1 section. | ✅ Done |
 | 4 | **GLiNER NER** | **11-class** ontology (organization, government_body, regulatory_body, financial_institution, person, financial_instrument, location, commodity, index, currency, **macroeconomic_indicator**); `GLINER_THRESHOLD=0.35` (routing), `GLINER_RESOLUTION_THRESHOLD=0.45` (cascade); NMS (IoU **strictly > 0.5**); OOM retry with reduced batch; **CRITICAL: zero mentions → never suppress**, returns `([], stats)`; updates `document_entity_stats`. | ✅ Done |
-| 5 | **Routing Score** | 7-signal weighted formula (weights must sum to 1.0, enforced by module-level assertion). Signals: `entity_density` (0.30), `source_reliability` (0.20), `novelty` (0.15), `recency` (0.10), `watchlist_match` (0.10), `document_type` (0.10), `extraction_yield` (0.05). Tier boundaries: ≥0.70 DEEP, ≥0.45 MEDIUM, ≥0.20 LIGHT, <0.20 SUPPRESS. Watchlist signal: Valkey SET `nlp:v1:watched_entities`, best-effort (returns 0.0 on unavailability). Watchlist consumer: `portfolio.watchlist.updated.v1` → `nlp-watchlist-group`. | ✅ Done |
+| 5 | **Routing Score** | 8-signal weighted formula (weights must sum to 1.0, enforced by module-level assertion). Signals: `entity_density` (0.25), `source_reliability` (0.20), `novelty` (0.15), `recency` (0.10), `watchlist` (0.10), `price_impact` (0.10), `document_type` (0.05), `extraction_yield` (0.05). Tier boundaries: ≥0.70 DEEP, ≥0.45 MEDIUM, ≥0.20 LIGHT, <0.20 SUPPRESS. Watchlist signal: Valkey SET `nlp:v1:watched_entities`, best-effort (returns 0.0 on unavailability). `price_impact` signal: reads from `article_price_impacts` table (0.0 when no label exists yet). | ✅ Done |
 | 6 | **Suppression** | SUPPRESS → `ProcessingPath.HALT` (no downstream); LIGHT → `SECTION_EMBEDDINGS_ONLY` (no NER reprocessing, no extraction); MEDIUM/DEEP → `FULL_PIPELINE`. Uses `final_routing_tier` if set (novelty correction). | ✅ Done |
-| 7 | **Embedding** | Sentence-aware 512-token chunks with 64-token overlap (never split mid-sentence). Section embeddings for ALL tiers; chunk embeddings for MEDIUM/DEEP only. Failed → `EmbeddingPendingEntry` (never raises). BGE 1024-dim via `EmbeddingClient`. | ✅ Done |
+| 7 | **Embedding** | Sentence-aware 512-token chunks with 64-token overlap (never split mid-sentence). Section embeddings for ALL tiers; chunk embeddings for MEDIUM/DEEP only. Failed → `EmbeddingPendingEntry` (never raises). BGE 1024-dim via `EmbeddingClient`. **Chunk text upload to MinIO for ALL tiers** (Option B — `ChunkTextStorePort`): each chunk text stored at `nlp-pipeline/chunk-text/{doc_id}/{chunk_id}/body/v1.txt`; `chunk_text_key` set on `Chunk` domain object (graceful: failure sets `None`, never raises). | ✅ Done |
 | 8 | **Novelty Gate** | Stage 1: MinHash/Valkey LSH (`s5:minhash:article:<doc_id>`, threshold 0.80) — downgrades DEEP→LIGHT on near-duplicate. Stage 2: per-entity embedding similarity (cosine threshold 0.90 on `narrative` view) — if ALL entities near-dup → downgrade. Both stages best-effort (Valkey fail → novel). novelty_score = 1.0 − minhash_sim. | ✅ Done |
 | 9 | **Entity Resolution** | 4-stage cascade: (1) exact alias match (conf 1.0); (2) ticker/ISIN (conf 0.95); (3) fuzzy trigram `similarity > 0.75` (conf = sim×0.90); (4) ANN HNSW `definition` view (dist < 0.35, margin > 0.10, conf = (1−dist)×0.80). AUTO_RESOLVE ≥ 0.72; PROVISIONAL ≥ 0.45 → `provisional_entity_queue`; UNRESOLVED → **NEVER discarded**. `mention_resolutions` audit trail per stage. | ✅ Done |
 | 10 | **Deep Extraction** | Qwen2.5-7B-Instruct via `ExtractionClient`. **MEDIUM AND DEEP** tier (not LIGHT). ≤24k tokens → single window; >24k → 6k-token windows with 500-token overlap. Evidence date = `coalesce(published_at, extracted_at)` — NEVER `now()`. Claims → nlp_db outbox (never direct intelligence_db). Signals ≥ 0.80 confidence → `nlp.signal.detected.v1`. | ✅ Done |
@@ -113,6 +116,7 @@ CREATE TABLE chunks (
     sentence_end_idx    INT,
     speaker             TEXT,
     heading_path        TEXT,
+    chunk_text_key      TEXT,         -- MinIO object key (Option B); NULL when upload disabled/failed
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_chunks_doc ON chunks (doc_id, chunk_index);
@@ -241,6 +245,46 @@ CREATE TABLE dead_letter_queue (
     resolved_at       TIMESTAMPTZ,
     resolution_note   TEXT
 );
+
+-- sentiment + impact_score columns on document_source_metadata (migration 0011, PLAN-0050 Wave E).
+-- sentiment: populated by ArticleRelevanceScoringWorker in the SAME LLM call as llm_relevance_score
+--   (single-pass JSON: {"score": float, "reason": str, "sentiment": str}).
+--   Valid values: positive / negative / neutral / mixed.
+--   PLAN-0050 QA iter-1 F-Q1-07: sentiment was extended in ArticleRelevanceScoringWorker
+--   prompt; the worker now writes sentiment alongside score in every UPDATE.
+-- impact_score: populated by PriceImpactLabellingWorker (nullable — null until price
+--   windows are computed). Written atomically with article_impact_windows rows in the
+--   same DB transaction (Phase 3 of the worker). Derivation: max(abs(impact_score))
+--   across all computed windows for that article, already normalized [0,1]. WHY max:
+--   reflects the strongest price-movement signal from any entity/window combination.
+-- Both columns exposed in GET /api/v1/news/top and GET /api/v1/entities/{id}/articles.
+ALTER TABLE document_source_metadata
+    ADD COLUMN sentiment    TEXT         CHECK (sentiment IN ('positive','negative','neutral','mixed')),
+    ADD COLUMN impact_score NUMERIC(6,4) CHECK (impact_score >= 0 AND impact_score <= 1);
+CREATE INDEX idx_dsm_sentiment ON document_source_metadata (sentiment, published_at DESC)
+    WHERE sentiment IS NOT NULL;
+
+-- Retroactive price-impact labels for processed articles (migration 0005, PRD-0020).
+-- One row per article (UNIQUE on article_id).
+-- Populated by PriceImpactLabellingWorker; queried by Block 5 price_impact signal.
+CREATE TABLE article_price_impacts (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    article_id            UUID        NOT NULL UNIQUE,       -- content-store doc_id
+    entity_id             UUID        NOT NULL,              -- resolved entity with highest impact
+    symbol                TEXT        NOT NULL,              -- mention_text of financial_instrument
+    published_at          TIMESTAMPTZ NOT NULL,
+    ohlcv_date            DATE        NOT NULL,
+    price_open            NUMERIC(18,8) NOT NULL,
+    price_close           NUMERIC(18,8) NOT NULL,
+    price_delta_pct       NUMERIC(10,6) NOT NULL,
+    next_day_delta_pct    NUMERIC(10,6),
+    max_intraday_range_pct NUMERIC(10,6),
+    impact_score          NUMERIC(6,4) NOT NULL,             -- normalised [0.0, 1.0]
+    computed_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Partial index for Block 5 high-impact lookups
+CREATE INDEX idx_article_price_impacts_high ON article_price_impacts (impact_score)
+    WHERE impact_score > 0.3;
 ```
 
 ---
@@ -305,35 +349,86 @@ Key tables S6 writes to:
 | `ROUTING_THRESHOLD_MEDIUM` | `0.45` | Medium tier lower bound |
 | `ROUTING_THRESHOLD_LIGHT` | `0.20` | Light tier (below = suppressed) |
 | `OUTBOX_POLL_INTERVAL_SECONDS` | `2` | Dispatcher cadence |
+| `NLP_PIPELINE_IMPACT_NORMALISATION_CAP_PCT` | `5.0` | Absolute % price move mapped to `impact_score=1.0` |
+| `NLP_PIPELINE_PRICE_IMPACT_CYCLE_SECONDS` | `14400` | Labelling cycle interval (4 h) |
+| `NLP_PIPELINE_PRICE_IMPACT_MIN_AGE_HOURS` | `25` | Min article age before labelling (OHLCV bar must be closed) |
+| `NLP_PIPELINE_MARKET_DATA_INTERNAL_URL` | `http://market-data:8003` | S3 Market Data internal base URL |
 
 ---
+
+## Standalone Processes (R22)
+
+| Process | Entry Point | Purpose |
+|---------|------------|---------|
+| API | `app.py` (uvicorn) | FastAPI HTTP service |
+| ArticleProcessingConsumer | `infrastructure/messaging/consumers/article_consumer_main.py` | Kafka consumer for NLP enrichment pipeline |
+| NLPPipelineOutboxDispatcher | `infrastructure/messaging/outbox/dispatcher_main.py` | Polls `outbox_events`, produces to Kafka |
+| WatchlistEventConsumer | `infrastructure/messaging/consumers/watchlist_consumer_main.py` | Maintains Valkey `nlp:v1:watched_entities` SET |
+| EmbeddingRetryWorker | `infrastructure/workers/embedding_retry_worker.py` (via dispatcher_main) | Re-embeds failed pending entries with backoff |
+| **PriceImpactLabellingWorker** | `workers/price_impact_labelling_worker.py` | Retroactively labels articles with OHLCV price-impact scores every 4h. Phase 3 writes `article_impact_windows` rows AND updates `document_source_metadata.impact_score` in the same DB transaction (PLAN-0050 QA iter-2 F-Q2-02). |
+| **UnresolvedResolutionWorker** | `infrastructure/workers/unresolved_resolution_worker.py` (spawned in `app.py` lifespan) | Two-phase re-resolution of UNRESOLVED entity mentions: Phase 1 = free cascade re-run (Block 9 logic); Phase 2 = Qwen2.5:3b LLM classification (entity_created or noise); stale-lock recovery on startup. Controlled by `NLP_PIPELINE_UNRESOLVED_RESOLUTION_ENABLED` (default: true, interval: 30 min). |
 
 ## Internal Modules
 
 ```
 services/nlp-pipeline/src/nlp_pipeline/
 ├── app.py              # FastAPI app factory
-├── config.py           # Settings (DB, Ollama, Kafka, thresholds)
+├── config.py           # Settings (DB, Ollama, Kafka, thresholds, impact worker)
 ├── api/                # Signal/entity/search routes
-├── domain/             # Entity, Signal, Embedding, Chunk models
+├── domain/             # Entity, Signal, Embedding, Chunk, ArticlePriceImpact models
 ├── application/        # Enrichment use-cases (blocks 3–10)
 │   ├── block3_sectioning.py
 │   ├── block4_gliner.py
-│   ├── block5_routing.py
+│   ├── block5_routing.py  # 8-signal weighted formula including price_impact
 │   ├── block6_suppression.py
 │   ├── block7_embedding.py
 │   ├── block8_novelty.py
 │   ├── block9_entity_resolution.py
 │   └── block10_deep_extraction.py
-└── infrastructure/     # DB, Kafka, Ollama adapters, MinHash/LSH
+├── infrastructure/     # DB, Kafka, Ollama adapters, MinHash/LSH
+│   ├── http/           # MarketDataClient (S3 OHLCV API adapter)
+│   └── workers/        # EmbeddingRetryWorker, PriceImpactLabellingWorker
+└── workers/            # Standalone process entry points
+    └── price_impact_labelling_worker.py
 ```
 
 ---
 
 ## Observability
 
-- **Metrics**: `articles_enriched_total`, `articles_suppressed_total`, `embedding_duration_seconds`, `gliner_entities_detected_total`, `resolution_cascade_steps_total`, `signal_emitted_total`
+- **Metrics**: `articles_enriched_total`, `articles_suppressed_total`, `embedding_duration_seconds`, `gliner_entities_detected_total`, `resolution_cascade_steps_total`, `signal_emitted_total`, `news_display_score_path_total{path}` (PLAN-0063 W5-5 — tracks which `display_relevance_score` formula branch was used per article: `full_formula` / `no_price_impact` / `no_llm_score` / `routing_only`; emitted from `_row_to_ranked_article` in `infrastructure/nlp_db/repositories/news_query.py`)
 - **Log fields**: `service=nlp-pipeline`, `article_id`, `routing_score`, `entity_count`, `block`
+
+---
+
+## Canonical Tickers Cache (PLAN-0084 C-1)
+
+`infrastructure/cache/canonical_tickers_cache.py`
+
+Valkey-backed SET (`nlp:v1:canonical_tickers`) of all known ticker symbols used by the rare-token analyzer (W5-3) to disambiguate genuine tickers from noise uppercase tokens (`CEO`, `USA`, `IPO`, ...).
+
+### Lifecycle
+
+| Phase | What happens |
+|-------|-------------|
+| `startup()` | Calls `refresh()` once to warm the SET, then launches `_refresh_loop()` as a background asyncio task. |
+| `_refresh_loop()` | Sleeps `canonical_tickers_refresh_interval_s` seconds, then calls `refresh()`. Transient errors are swallowed (60s back-off). `CancelledError` propagates immediately. |
+| `close()` | Cancels and awaits the background task. Safe to call before `startup()`. |
+
+### Staleness guarantee
+
+The SET is at most `canonical_tickers_refresh_interval_s` seconds stale after a source-of-truth change in `intelligence_db.canonical_entities`. Default: **600 seconds** (10 minutes).
+
+### Atomic swap
+
+`refresh()` uses `pipeline(transaction=True)` (MULTI/EXEC) so the DEL and SADD execute atomically. Concurrent `is_known_ticker()` callers cannot observe an empty SET between the two commands (F-X03 fix).
+
+### Configuration
+
+| Env var | Default | Range | Purpose |
+|---------|---------|-------|---------|
+| `NLP_PIPELINE_CANONICAL_TICKERS_REFRESH_INTERVAL_S` | `600` | 60-3600 | Background refresh interval in seconds |
+| `NLP_PIPELINE_VALKEY_CANONICAL_TICKERS_KEY` | `nlp:v1:canonical_tickers` | — | Valkey SET key (shared across replicas) |
 
 ---
 
@@ -355,3 +450,20 @@ make run       # port 8006
 make test
 make lint
 ```
+
+## PLAN-0057 changes (2026-04-30 → 2026-05-01)
+
+This plan closed audit findings F-CRIT-02..12 + 8 MAJORs across the S4→S5→S6→S7 pipeline. Material changes inside nlp-pipeline:
+
+| Wave | Change |
+|------|--------|
+| A-1 | Migration `0015` — `routing_decisions.processing_path` + idempotent re-add of `final_routing_tier`. Persists Block 8 novelty downgrade so downstream queries can filter on it. |
+| A-4 | `article_consumer._record_resolution_audit` — now calls `mr_repo.add_batch(resolution_audit)` (was iterated for metrics only — silent persistence failure pattern). |
+| A-5 | `usage_logger` threading — `SessionScopedNlpUsageLogger` instantiated in every worker entry point; every Phase-2 LLM call writes one row to `nlp_db.llm_usage_log` (was permanently empty). |
+| B-1 | `_build_raw_*` (`article_consumer`) carries `entity_provisional` + `provisional_queue_id` for unresolved mentions (~80% of dropped raw_relations/events/claims now flow downstream). |
+| B-2 | `_PROVISIONAL_INSERT_SQL` rewritten to match the real `provisional_entity_queue` schema; SAVEPOINT no longer silently swallows errors. |
+| B-3 | `UnresolvedResolutionWorker` prompt rewrite — financial-domain criterion + 4 worked examples + `context_sentence` (±200 chars). |
+| E-1 | `MarketDataClient` mints internal JWT via S9 `POST /v1/auth/dev-login`; cached 240 s; sent as `X-Internal-JWT` (unblocks `article_impact_windows`). **BP-303**: this path is disabled in production — see `BUG_PATTERNS.md`. |
+| E-4 | New standalone process `nlp_pipeline.workers.embedding_retry_worker_main` drains `embedding_pending` queue. Migration `0016` adds `last_attempted_at`. `EmbeddingPendingRepository.claim_batch` uses `FOR UPDATE SKIP LOCKED`. Worker emits `embedding_retry_abandoned` log on final retry. Registered as `nlp-pipeline-embedding-retry-worker` in `infra/compose/docker-compose.yml`. |
+
+**Removed**: `claim.extracted` orphan producer (D-1; no consumer existed; was wasting outbox capacity).

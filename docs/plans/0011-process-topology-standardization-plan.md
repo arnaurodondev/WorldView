@@ -119,11 +119,11 @@ Sub-Plan C (Scaffolded Services) — can start after A-2 + B-1
 | T-C-2-02 | S6: create `messaging/consumers/{article,watchlist}_consumer_main.py` | C-2 | done | T-A-2-01 |
 | T-C-2-03 | S6: remove background tasks from `app.py` lifespan | C-2 | done | T-C-2-01, T-C-2-02 |
 | T-C-2-04 | S6: add compose containers + validate | C-2 | done | T-C-2-03 |
-| T-C-3-01 | S7: create `messaging/outbox/dispatcher_main.py` entry point | C-3 | pending | T-A-2-01 |
-| T-C-3-02 | S7: create `messaging/consumers/*_consumer_main.py` entry points | C-3 | pending | T-A-2-01 |
-| T-C-3-03 | S7: create `scheduler/scheduler_main.py` entry point | C-3 | pending | T-A-2-01 |
-| T-C-3-04 | S7: remove background tasks from `app.py` lifespan | C-3 | pending | T-C-3-01, T-C-3-02, T-C-3-03 |
-| T-C-3-05 | S7: add compose containers + validate | C-3 | pending | T-C-3-04 |
+| T-C-3-01 | S7: create `messaging/outbox/dispatcher_main.py` entry point | C-3 | done | T-A-2-01 |
+| T-C-3-02 | S7: create `messaging/consumers/*_consumer_main.py` entry points | C-3 | done | T-A-2-01 |
+| T-C-3-03 | S7: create `scheduler/scheduler_main.py` entry point | C-3 | done | T-A-2-01 |
+| T-C-3-04 | S7: remove background tasks from `app.py` lifespan | C-3 | done | T-C-3-01, T-C-3-02, T-C-3-03 |
+| T-C-3-05 | S7: add compose containers + validate | C-3 | done | T-C-3-04 |
 | T-C-4-01 | S10: create `messaging/outbox/dispatcher_main.py` entry point | C-4 | done | T-A-2-01 |
 | T-C-4-02 | S10: create `messaging/consumers/*_consumer_main.py` entry points | C-4 | done | T-A-2-01 |
 | T-C-4-03 | S10: remove background tasks from `app.py` lifespan | C-4 | done | T-C-4-01, T-C-4-02 |

@@ -181,3 +181,111 @@ class TestFetchSummary:
         assert summary.fetched == 0
         assert summary.skipped == 0
         assert summary.failed == 0
+
+
+class TestBatchBoundaryCommits:
+    """Verify that batch-size boundaries trigger mid-loop commits."""
+
+    async def test_exactly_batch_size_triggers_one_mid_commit(self) -> None:
+        """batch_size=3 with 3 results → 1 mid-loop commit, 0 final commit."""
+        results = [_make_result(url_hash=f"h{i}") for i in range(3)]
+        adapter = AsyncMock(fetch=AsyncMock(return_value=results))
+        commit_fn = AsyncMock()
+        use_case = FetchAndWriteUseCase(
+            adapter=adapter,
+            bronze=AsyncMock(put_object=AsyncMock(return_value="k")),
+            fetch_log_repo=AsyncMock(exists_by_url_hash=AsyncMock(return_value=False), create=AsyncMock()),
+            outbox_repo=AsyncMock(append=AsyncMock()),
+            commit_fn=commit_fn,
+            batch_size=3,
+        )
+
+        summary = await use_case.execute(_make_source())
+
+        assert summary.fetched == 3
+        assert commit_fn.call_count == 1
+
+    async def test_more_than_batch_size_triggers_multiple_commits(self) -> None:
+        """batch_size=2 with 5 results → 2 mid-loop + 1 final = 3 total commits."""
+        results = [_make_result(url_hash=f"h{i}") for i in range(5)]
+        adapter = AsyncMock(fetch=AsyncMock(return_value=results))
+        commit_fn = AsyncMock()
+        use_case = FetchAndWriteUseCase(
+            adapter=adapter,
+            bronze=AsyncMock(put_object=AsyncMock(return_value="k")),
+            fetch_log_repo=AsyncMock(exists_by_url_hash=AsyncMock(return_value=False), create=AsyncMock()),
+            outbox_repo=AsyncMock(append=AsyncMock()),
+            commit_fn=commit_fn,
+            batch_size=2,
+        )
+
+        summary = await use_case.execute(_make_source())
+
+        assert summary.fetched == 5
+        # 5 // 2 = 2 mid-loop commits + 1 final commit for 1 leftover
+        assert commit_fn.call_count == 3
+
+    async def test_final_batch_commit_failure_counts_as_failed(self) -> None:
+        """If final commit raises, pending_in_batch articles counted as failed."""
+        results = [_make_result(url_hash="only-one")]
+        adapter = AsyncMock(fetch=AsyncMock(return_value=results))
+        commit_fn = AsyncMock(side_effect=RuntimeError("DB commit failed"))
+        rollback_fn = AsyncMock()
+        bronze = AsyncMock(put_object=AsyncMock(return_value="bronze-key"), delete_object=AsyncMock())
+        use_case = FetchAndWriteUseCase(
+            adapter=adapter,
+            bronze=bronze,
+            fetch_log_repo=AsyncMock(exists_by_url_hash=AsyncMock(return_value=False), create=AsyncMock()),
+            outbox_repo=AsyncMock(append=AsyncMock()),
+            commit_fn=commit_fn,
+            rollback_fn=rollback_fn,
+            batch_size=25,
+        )
+
+        summary = await use_case.execute(_make_source())
+
+        assert summary.fetched == 0
+        assert summary.failed == 1
+        assert any("final_batch" in e for e in summary.errors)
+        # GC attempted for the uncommitted MinIO key
+        bronze.delete_object.assert_called_once_with("bronze-key")
+        rollback_fn.assert_called_once()
+
+    async def test_intra_batch_duplicate_url_hash_is_skipped(self) -> None:
+        """Two FetchResults with the same url_hash within one batch: second is skipped."""
+        r1 = _make_result(url_hash="same-hash")
+        r2 = _make_result(url_hash="same-hash")  # duplicate
+        adapter = AsyncMock(fetch=AsyncMock(return_value=[r1, r2]))
+        use_case = _build_use_case(adapter=adapter)
+
+        summary = await use_case.execute(_make_source())
+
+        assert summary.fetched == 1
+        assert summary.skipped == 1
+
+    async def test_rollback_called_on_article_write_failure(self) -> None:
+        """If fetch_log.create raises, rollback is called and error is counted."""
+        result = _make_result()
+        adapter = AsyncMock(fetch=AsyncMock(return_value=[result]))
+        rollback_fn = AsyncMock()
+        fetch_log = AsyncMock(
+            exists_by_url_hash=AsyncMock(return_value=False),
+            create=AsyncMock(side_effect=RuntimeError("write failed")),
+        )
+        bronze = AsyncMock(put_object=AsyncMock(return_value="k"), delete_object=AsyncMock())
+        use_case = FetchAndWriteUseCase(
+            adapter=adapter,
+            bronze=bronze,
+            fetch_log_repo=fetch_log,
+            outbox_repo=AsyncMock(append=AsyncMock()),
+            commit_fn=AsyncMock(),
+            rollback_fn=rollback_fn,
+            batch_size=25,
+        )
+
+        summary = await use_case.execute(_make_source())
+
+        assert summary.failed == 1
+        rollback_fn.assert_called_once()
+        # MinIO GC for the orphaned key
+        bronze.delete_object.assert_called_once_with("k")

@@ -132,7 +132,7 @@ class TestEnrichedConsumerOrchestration:
     def test_process_empty_message_completes_without_error(self) -> None:
         consumer = self._make_consumer()
         msg = _build_enriched_message()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
         )
 
@@ -140,7 +140,7 @@ class TestEnrichedConsumerOrchestration:
         session = _make_mock_session()
         consumer = self._make_consumer(session)
         msg = _build_enriched_message()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
         )
         session.commit.assert_called_once()
@@ -190,7 +190,7 @@ class TestEnrichedConsumerOrchestration:
                 side_effect=mock_materialize,
             ),
         ):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
             )
 
@@ -238,7 +238,7 @@ class TestEnrichedConsumerIdempotency:
 
     def test_is_duplicate_returns_false_without_dedup(self) -> None:
         consumer = self._make_consumer()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             consumer.is_duplicate(str(uuid4()))  # type: ignore[attr-defined]
         )
         assert result is False
@@ -246,7 +246,7 @@ class TestEnrichedConsumerIdempotency:
     def test_mark_processed_noop_without_dedup(self) -> None:
         consumer = self._make_consumer()
         # Should not raise
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             consumer.mark_processed(str(uuid4()))  # type: ignore[attr-defined]
         )
 
@@ -283,7 +283,7 @@ class TestEntityCreatedConsumer:
             "entity_type": "financial_instrument",
             "provisional_queue_id": str(uuid4()),
         }
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
         )
         session.commit.assert_called_once()
@@ -298,7 +298,7 @@ class TestEntityCreatedConsumer:
             "entity_type": "financial_instrument",
             "provisional_queue_id": str(uuid4()),
         }
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             consumer.process_message(None, msg, {})  # type: ignore[attr-defined]
         )
         # UPDATE relation_evidence_raw must have been called
@@ -311,3 +311,93 @@ class TestEntityCreatedConsumer:
         payload = {"event_id": "x"}
         result = consumer.deserialize_value(json.dumps(payload).encode())  # type: ignore[attr-defined]
         assert result == payload
+
+
+# ---------------------------------------------------------------------------
+# EntityCreatedConsumer — dedup resilience (P-4 regression)
+# ---------------------------------------------------------------------------
+
+
+class TestEntityCreatedConsumerDedupResilience:
+    def _make_consumer_with_dedup(self, dedup_client: object) -> object:
+        from knowledge_graph.infrastructure.messaging.consumers.entity_consumer import (
+            EntityCreatedConsumer,
+        )
+
+        from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
+
+        return EntityCreatedConsumer(
+            config=ConsumerConfig(
+                bootstrap_servers="localhost:9092",
+                group_id="kg-entity-group",
+                topics=["entity.canonical.created.v1"],
+            ),
+            session_factory=_make_session_factory(),
+            dedup_client=dedup_client,
+        )
+
+    def test_entity_consumer_dedup_check_failure_returns_false(self) -> None:
+        """is_duplicate() returns False (not crash) when Valkey is down (P-4)."""
+        dedup_client = AsyncMock()
+        dedup_client.exists = AsyncMock(side_effect=ConnectionError("valkey down"))
+
+        consumer = self._make_consumer_with_dedup(dedup_client)
+
+        result = asyncio.run(
+            consumer.is_duplicate("event-1")  # type: ignore[attr-defined]
+        )
+        assert result is False
+
+    def test_entity_consumer_dedup_check_failure_logs_warning(self) -> None:
+        """is_duplicate() emits dedup.valkey_check_failed warning on error (P-4).
+
+        Now logged by ValkeyDedupMixin (messaging.kafka.consumer.dedup module),
+        not by the consumer's own logger — updated for B-2 mixin migration.
+        """
+        dedup_client = AsyncMock()
+        dedup_client.exists = AsyncMock(side_effect=ConnectionError("valkey down"))
+
+        consumer = self._make_consumer_with_dedup(dedup_client)
+
+        with patch("messaging.kafka.consumer.dedup.logger") as mock_logger:
+            asyncio.run(
+                consumer.is_duplicate("event-1")  # type: ignore[attr-defined]
+            )
+
+        mock_logger.warning.assert_called_once()
+        call_args = mock_logger.warning.call_args
+        assert call_args.args[0] == "dedup.valkey_check_failed"
+        assert call_args.kwargs.get("event_id") == "event-1"
+
+    def test_entity_consumer_dedup_mark_failure_does_not_crash(self) -> None:
+        """mark_processed() does not raise when Valkey is down (P-4)."""
+        dedup_client = AsyncMock()
+        dedup_client.set = AsyncMock(side_effect=ConnectionError("valkey down"))
+
+        consumer = self._make_consumer_with_dedup(dedup_client)
+
+        # Should not raise
+        asyncio.run(
+            consumer.mark_processed("event-1")  # type: ignore[attr-defined]
+        )
+
+    def test_entity_consumer_dedup_mark_failure_logs_warning(self) -> None:
+        """mark_processed() emits dedup.valkey_mark_failed warning on error (P-4).
+
+        Now logged by ValkeyDedupMixin (messaging.kafka.consumer.dedup module),
+        not by the consumer's own logger — updated for B-2 mixin migration.
+        """
+        dedup_client = AsyncMock()
+        dedup_client.set = AsyncMock(side_effect=ConnectionError("valkey down"))
+
+        consumer = self._make_consumer_with_dedup(dedup_client)
+
+        with patch("messaging.kafka.consumer.dedup.logger") as mock_logger:
+            asyncio.run(
+                consumer.mark_processed("event-1")  # type: ignore[attr-defined]
+            )
+
+        mock_logger.warning.assert_called_once()
+        call_args = mock_logger.warning.call_args
+        assert call_args.args[0] == "dedup.valkey_mark_failed"
+        assert call_args.kwargs.get("event_id") == "event-1"

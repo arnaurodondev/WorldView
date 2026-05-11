@@ -1,0 +1,20 @@
+{
+  "_comment": "PLAN-0059 W0 fix F-005 (2026-04-30): depcheck config. Plan §T-A-2-02 acceptance: `pnpm exec depcheck` exits 0.",
+  "ignores": [
+    "@types/*",
+    "autoprefixer",
+    "postcss",
+    "tailwindcss",
+    "tailwindcss-animate",
+    "babel-plugin-react-compiler",
+    "@playwright/test",
+    "@vitest/coverage-v8",
+    "eslint-config-next",
+    "@hookform/resolvers",
+    "depcheck",
+    "knip",
+    "bundlewatch",
+    "@lhci/cli"
+  ],
+  "ignore-dirs": ["node_modules", ".next", "coverage", "dist"]
+}

@@ -54,12 +54,14 @@ class PgInstrumentRepository(InstrumentRepository):
     # ── queries ────────────────────────────────────────────────────────────────
 
     async def find_by_symbol_exchange(self, symbol: str, exchange: str) -> Instrument | None:
-        result = await self._session.execute(
-            select(InstrumentModel).where(
-                InstrumentModel.symbol == symbol,
-                InstrumentModel.exchange == exchange,
-            )
-        )
+        # When exchange is empty string, treat it as "no exchange filter" so that
+        # callers (e.g. rag-chat BriefingContextGatherer) can look up a ticker
+        # without knowing its exchange.  An exact empty-string exchange would
+        # never match any real instrument (all have values like 'US', 'CC', etc.).
+        conditions = [InstrumentModel.symbol == symbol]
+        if exchange:
+            conditions.append(InstrumentModel.exchange == exchange)
+        result = await self._session.execute(select(InstrumentModel).where(*conditions))
         row = result.scalar_one_or_none()
         return self._to_domain(row) if row else None
 
@@ -85,10 +87,16 @@ class PgInstrumentRepository(InstrumentRepository):
         if query:
             escaped = self._escape_like(query)
             pattern = f"%{escaped}%"
+            # PLAN-0053 T-B-2-01: extend ILIKE search to the company ``name``
+            # field. Previously the search clause was ``symbol`` + ``exchange``
+            # only — so queries like "apple" returned 0 rows. Adding ``name``
+            # (with a pg_trgm GIN index from migration 0011) lets users search
+            # by company name reliably.
             conditions.append(
                 or_(
                     InstrumentModel.symbol.ilike(pattern, escape="\\"),
                     InstrumentModel.exchange.ilike(pattern, escape="\\"),
+                    InstrumentModel.name.ilike(pattern, escape="\\"),
                 )
             )
         if has_ohlcv is not None:
@@ -123,10 +131,16 @@ class PgInstrumentRepository(InstrumentRepository):
         if query:
             escaped = self._escape_like(query)
             pattern = f"%{escaped}%"
+            # PLAN-0053 T-B-2-01: extend ILIKE search to the company ``name``
+            # field. Previously the search clause was ``symbol`` + ``exchange``
+            # only — so queries like "apple" returned 0 rows. Adding ``name``
+            # (with a pg_trgm GIN index from migration 0011) lets users search
+            # by company name reliably.
             conditions.append(
                 or_(
                     InstrumentModel.symbol.ilike(pattern, escape="\\"),
                     InstrumentModel.exchange.ilike(pattern, escape="\\"),
+                    InstrumentModel.name.ilike(pattern, escape="\\"),
                 )
             )
         if has_ohlcv is not None:
@@ -146,6 +160,14 @@ class PgInstrumentRepository(InstrumentRepository):
         return cast("int", result.scalar_one())
 
     async def upsert(self, instrument: Instrument) -> Instrument:
+        # PLAN-0057 QA DS-001 / F-DS-06 fix: use atomic OR-merge for the
+        # boolean flags so a race between ohlcv_consumer + quotes_consumer
+        # (both seeing find_by_symbol_exchange == None and racing to INSERT)
+        # never clears the loser's flag. Without this, the second INSERT
+        # becomes an UPDATE that sets {has_ohlcv: False, has_quotes: True,
+        # has_fundamentals: False} — silently clobbering has_ohlcv that the
+        # first INSERT just established. Mirror of update_flags() below.
+        excluded = insert(InstrumentModel).excluded
         stmt = (
             insert(InstrumentModel)
             .values(
@@ -161,9 +183,12 @@ class PgInstrumentRepository(InstrumentRepository):
                 constraint="uq_instruments_symbol_exchange",
                 set_={
                     "security_id": instrument.security_id,
-                    "has_ohlcv": instrument.flags.has_ohlcv,
-                    "has_quotes": instrument.flags.has_quotes,
-                    "has_fundamentals": instrument.flags.has_fundamentals,
+                    "has_ohlcv": case((excluded.has_ohlcv, True), else_=InstrumentModel.has_ohlcv),
+                    "has_quotes": case((excluded.has_quotes, True), else_=InstrumentModel.has_quotes),
+                    "has_fundamentals": case(
+                        (excluded.has_fundamentals, True),
+                        else_=InstrumentModel.has_fundamentals,
+                    ),
                 },
             )
             .returning(InstrumentModel)
@@ -195,3 +220,13 @@ class PgInstrumentRepository(InstrumentRepository):
         if not updates:
             return
         await self._session.execute(update(InstrumentModel).where(InstrumentModel.id == id).values(**updates))
+
+    async def find_by_isin(self, isin: str) -> Instrument | None:
+        result = await self._session.execute(select(InstrumentModel).where(InstrumentModel.isin == isin))
+        row = result.scalars().first()
+        return self._to_domain(row) if row else None
+
+    async def find_by_symbol_icase(self, symbol: str) -> Instrument | None:
+        result = await self._session.execute(select(InstrumentModel).where(InstrumentModel.symbol.ilike(symbol)))
+        row = result.scalars().first()
+        return self._to_domain(row) if row else None

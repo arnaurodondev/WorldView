@@ -19,7 +19,17 @@ storage:
       path: /var/tempo/wal
 
 metrics_generator:
+  # Tempo 2.7+ schema: each processor is a sub-key under ``processor`` (was
+  # a flat ``processors:`` list pre-2.4 — that schema is what triggered
+  # ``field processors not found in type generator.Config`` on the 2.7.2
+  # image we ship.  The two processors below give Grafana service-graph
+  # visualization + span-derived RED metrics. (F-013)
+  processor:
+    span_metrics: {}
+    service_graphs: {}
   storage:
     path: /var/tempo/generator/wal
-  traces_storage:
-    path: /var/tempo/generator/traces
+    remote_write_flush_deadline: 1m
+    remote_write:
+      - url: http://prometheus:9090/api/v1/write
+        send_exemplars: true

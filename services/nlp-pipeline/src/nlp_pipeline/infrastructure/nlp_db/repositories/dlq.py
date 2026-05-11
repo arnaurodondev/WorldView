@@ -7,6 +7,7 @@ Implements ``DLQRepositoryPort`` for admin operations in addition to the consume
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import func, select, update
 
@@ -16,8 +17,6 @@ from nlp_pipeline.application.ports.repositories import DLQEntryData, DLQReposit
 from nlp_pipeline.infrastructure.nlp_db.models import DeadLetterQueueModel, OutboxEventModel
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 

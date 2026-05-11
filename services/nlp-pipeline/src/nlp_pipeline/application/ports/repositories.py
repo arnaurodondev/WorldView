@@ -7,13 +7,19 @@ No infrastructure imports are permitted in this module.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
+
+# PLAN-0084 D-1/D-2: ChunkSearchPort and CanonicalEntityPort moved to their own modules.
+# Re-exported here so that existing imports continue to work.
+from nlp_pipeline.application.ports.canonical_entity import CanonicalEntityPort as CanonicalEntityPort
+from nlp_pipeline.application.ports.chunk_search import ChunkSearchPort as ChunkSearchPort
 
 if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
-
+    from nlp_pipeline.domain.models import ArticleImpactWindow, ArticlePriceImpact
 
 # ── DLQ data transfer object ──────────────────────────────────────────────────
 
@@ -76,8 +82,14 @@ class SignalsQueryPort(ABC):
         limit: int,
         offset: int,
         doc_id: UUID | None,
+        min_impact_score: float = 0.0,
+        order_by: str = "created_at",
     ) -> tuple[list[dict[str, Any]], int]:
-        """Return outbox events for the signal topic, with total count."""
+        """Return outbox events for the signal topic, with total count.
+
+        Each row dict contains: event_id, partition_key, payload_avro,
+        created_at, and impact_score (float, 0.0 when not yet labelled).
+        """
         ...
 
     @abstractmethod
@@ -105,8 +117,8 @@ class SignalsQueryPort(ABC):
         ...
 
     @abstractmethod
-    async def vector_search_sections(self, limit: int) -> list[dict[str, Any]]:
-        """Return sections for vector search (keyword fallback)."""
+    async def vector_search_sections(self, query: str, limit: int) -> list[dict[str, Any]]:
+        """Return sections for vector search (keyword ILIKE fallback until embedding client injected)."""
         ...
 
     @abstractmethod
@@ -123,4 +135,260 @@ class SignalsQueryPort(ABC):
         payload_avro: bytes,
     ) -> None:
         """Insert an outbox event and commit."""
+        ...
+
+
+# ── ChunkTextStore port ───────────────────────────────────────────────────────
+
+
+class ChunkTextStorePort(ABC):
+    """Port for persisting and retrieving chunk text via object storage.
+
+    Implemented by ``MinIOChunkTextStore`` in the infrastructure layer.
+    The port decouples Block 7 and the search use case from MinIO details.
+    """
+
+    @abstractmethod
+    async def put(self, chunk_id: UUID, doc_id: UUID, text: str) -> str:
+        """Upload chunk text; return the storage key (e.g. MinIO object key)."""
+        ...
+
+    @abstractmethod
+    async def get_batch(self, key_map: dict[UUID, str]) -> dict[UUID, str]:
+        """Fetch texts for multiple chunks concurrently.
+
+        Args:
+            key_map: Mapping of chunk_id → storage_key for chunks to fetch.
+
+        Returns:
+            Mapping of chunk_id → text for successfully retrieved chunks.
+            Chunks whose key is missing or whose fetch fails are omitted.
+        """
+        ...
+
+
+# ── DocumentSourceMetadata port ───────────────────────────────────────────────
+
+
+class DocumentSourceMetadataRepository(ABC):
+    """Port for caching article citation metadata for S8 RAG retrieval.
+
+    Populated by the S6 article consumer as a best-effort side effect.
+    Queried by S8 to attach citation data to chunk search results.
+    """
+
+    @abstractmethod
+    async def upsert(self, metadata: Any) -> None:
+        """Persist metadata; ON CONFLICT (doc_id) DO NOTHING — idempotent."""
+        ...
+
+    @abstractmethod
+    async def batch_get(self, doc_ids: list[UUID]) -> dict[UUID, Any]:
+        """Return metadata keyed by doc_id; only present doc_ids are included."""
+        ...
+
+
+# ── PriceImpact repository port ───────────────────────────────────────────────
+
+
+class PriceImpactRepositoryPort(ABC):
+    """Port for article price-impact label persistence (PRD-0020 §6.5).
+
+    Used by ``PriceImpactLabellingWorker`` (writes) and Block 5 (reads).
+    Concrete implementation: ``ArticlePriceImpactRepository`` in infrastructure.
+    """
+
+    @abstractmethod
+    async def upsert(self, impact: ArticlePriceImpact) -> None:
+        """Persist a price-impact label; ON CONFLICT (article_id) DO NOTHING — idempotent."""
+        ...
+
+    @abstractmethod
+    async def get_by_article_id(self, article_id: UUID) -> ArticlePriceImpact | None:
+        """Return the label for a given article, or ``None`` if not yet labelled."""
+        ...
+
+    @abstractmethod
+    async def get_max_impact_for_doc(self, doc_id: UUID) -> Decimal:
+        """Return the max ``impact_score`` across all entities for an article.
+
+        Returns ``Decimal("0.0")`` when no labels exist (article not yet labelled).
+        Block 5 uses this to up-weight articles that coincide with large price moves.
+        """
+        ...
+
+    @abstractmethod
+    async def get_unlabelled_articles(self, min_age_hours: int, batch_size: int) -> list[tuple[UUID, list[UUID]]]:
+        """Return ``[(doc_id, [entity_id, ...])]`` for unlabelled articles.
+
+        Selects articles that:
+          - have at least one resolved entity_mention
+          - are NOT already in ``article_price_impacts``
+          - were published more than ``min_age_hours`` ago (OHLCV bar must be closed)
+
+        Returns at most ``batch_size`` rows, grouped by ``doc_id``.
+        """
+        ...
+
+    @abstractmethod
+    async def get_unlabelled_article_details(
+        self, min_age_hours: int, batch_size: int
+    ) -> list[tuple[UUID, UUID, str, datetime]]:
+        """Return ``(doc_id, entity_id, symbol, published_at)`` rows for unlabelled articles.
+
+        Joins ``entity_mentions`` (``mention_class = 'financial_instrument'``) with
+        ``document_source_metadata`` to retrieve the symbol (``mention_text``) and
+        ``published_at`` in a single query.  Returns one row per
+        ``(doc_id, entity_id)`` pair so the worker can compute a score per entity and
+        keep the maximum.
+
+        Limits to ``batch_size`` *distinct doc_ids* — multiple rows per doc are normal
+        when a document mentions several financial instruments.
+        """
+        ...
+
+
+# ── RankedArticle data transfer object ──────────────────────────────────────
+
+
+@dataclass
+class RankedArticleData:
+    """Application-layer DTO for a ranked news article (PRD-0026 §6.5).
+
+    Returned by NewsQueryPort — combines document_source_metadata, routing
+    score, LLM relevance score, and multi-window price-impact scores into a
+    single flat structure.  The use case layer passes it through unchanged;
+    the API layer maps it to RankedArticleResponse.
+    """
+
+    article_id: UUID
+    title: str | None
+    url: str | None
+    published_at: datetime | None
+    source_type: str | None
+    source_name: str | None
+    routing_tier: str | None
+    routing_score: float | None
+    market_impact_score: float | None
+    llm_relevance_score: float | None
+    display_relevance_score: float
+    day_t0_score: float | None
+    day_t1_score: float | None
+    day_t2_score: float | None
+    day_t5_score: float | None
+    # Only populated by the global top-news query (Flow C); None for entity queries.
+    primary_entity_id: UUID | None = field(default=None)
+    primary_entity_symbol: str | None = field(default=None)
+    # PLAN-0050 Wave E: article-level signals for News-tab pills.
+    # sentiment: one of "positive" | "negative" | "neutral" | "mixed"; null until scored.
+    # impact_score: MAX(day_t0, day_t1) from article_impact_windows convenience column;
+    #               null until price-impact windows computed.
+    sentiment: str | None = field(default=None)
+    impact_score: float | None = field(default=None)
+
+
+# ── News query port ───────────────────────────────────────────────────────────
+
+
+class NewsQueryPort(ABC):
+    """Port for ranked news API read queries (PRD-0026 §6.7 Flow C + Flow D).
+
+    Read-only — implementers must NOT write data.
+    Concrete implementation: ``SqlaNewsQueryRepo`` in infrastructure.
+    """
+
+    @abstractmethod
+    async def get_top_news(
+        self,
+        hours: int,
+        limit: int,
+        offset: int,
+        min_display_score: float | None,
+        routing_tier: str | None,
+    ) -> tuple[list[RankedArticleData], int]:
+        """Return top-N globally ranked articles within the given hour window.
+
+        The composite ``display_relevance_score`` is computed at query time
+        (PRD-0026 §6.5 CASE expression).
+
+        Args:
+            hours: Look-back window from now (``published_at >= now() - hours * interval '1 hour'``).
+            limit: Max articles to return.
+            offset: Pagination offset.
+            min_display_score: Exclude articles below this score (``None`` = no filter).
+            routing_tier: Filter by effective routing tier (``None`` = all tiers).
+
+        Returns:
+            ``(articles, total_count)`` — total_count is computed before LIMIT/OFFSET.
+        """
+        ...
+
+    @abstractmethod
+    async def get_entity_articles(
+        self,
+        entity_id: UUID,
+        start_date: datetime,
+        end_date: datetime,
+        order_by: str,
+        limit: int,
+        offset: int,
+        tenant_id: str | None = None,
+    ) -> tuple[list[RankedArticleData], int]:
+        """Return articles mentioning the given entity, with full scoring fields.
+
+        Args:
+            entity_id: Canonical entity UUID.
+            start_date: Include articles published on or after this datetime.
+            end_date: Include articles published on or before this datetime.
+            order_by: ``"display_relevance_score"`` (default) or ``"published_at"`` — always DESC.
+            limit: Max articles to return.
+            offset: Pagination offset.
+            tenant_id: Filter entity_mentions by tenant (F-009). None = no filter.
+
+        Returns:
+            ``(articles, total_count)`` — empty list if entity has no articles (not 404).
+        """
+        ...
+
+
+# ── ArticleImpactWindow repository port ─────────────────────────────────────
+
+
+class ArticleImpactWindowRepositoryPort(ABC):
+    """Port for multi-window price-impact label persistence (PRD-0026 §6.5).
+
+    Used by ``PriceImpactLabellingWorker`` (writes) and news API use cases (reads).
+    Concrete implementation: ``ArticleImpactWindowRepository`` in infrastructure.
+    """
+
+    @abstractmethod
+    async def upsert_batch(self, windows: list[ArticleImpactWindow]) -> None:
+        """Bulk INSERT ON CONFLICT (article_id, entity_id, window_type) DO NOTHING.
+
+        Idempotent (R9): re-inserting the same (article_id, entity_id, window_type)
+        triple is a no-op. Caller is responsible for commit.
+        """
+        ...
+
+    @abstractmethod
+    async def get_articles_needing_windows(
+        self,
+        min_age_hours: int,
+        batch_size: int,
+    ) -> list[tuple[UUID, UUID, str, datetime]]:
+        """Return ``(doc_id, entity_id, symbol, published_at)`` for articles with missing windows.
+
+        Finds article/entity pairs where at least one daily window (day_t0/t1/t2/t5)
+        is due (article old enough) but not yet written to ``article_impact_windows``.
+        Returns at most ``batch_size`` distinct doc_id rows.
+        """
+        ...
+
+    @abstractmethod
+    async def get_max_impact_for_doc(self, doc_id: UUID) -> Decimal:
+        """Return max ``impact_score`` across all windows and entities for ``doc_id``.
+
+        Returns ``Decimal("0.0")`` when no windows exist yet.
+        Used by Block 5 (signal scoring) in the article consumer.
+        """
         ...

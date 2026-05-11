@@ -9,11 +9,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from market_ingestion.domain.enums import DatasetType, Provider
     from market_ingestion.domain.value_objects import ObjectRef
 
@@ -36,6 +35,7 @@ class ProviderFetchResult:
     range_start: datetime | None = None
     range_end: datetime | None = None
     provider_metadata: dict[str, Any] | None = None
+    bars_returned: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -63,11 +63,13 @@ class ProviderAdapter(ABC):
     ) -> ProviderFetchResult:
         """Fetch real-time quotes for a symbol.
 
-        Raises:
+        Raises
+        ------
             ProviderRateLimited: HTTP 429.
             ProviderUnavailable: HTTP 5xx or connection timeout.
             ProviderAuthError: HTTP 401/403.
             ProviderDataError: Malformed response.
+
         """
 
     @abstractmethod
@@ -90,6 +92,17 @@ class ProviderAdapter(ABC):
     ) -> ProviderFetchResult:
         """Fetch fundamental data for a symbol."""
 
+    @property
+    def supports_batch(self) -> bool:
+        """True if this adapter supports multi-symbol batch fetching.
+
+        When True, the worker layer may call ``fetch_ohlcv_batch(symbols, ...)``
+        to batch multiple tasks into a single HTTP request instead of making one
+        call per symbol.  Defaults to False — only adapters with a native
+        multi-symbol endpoint (e.g. Alpaca) should override this.
+        """
+        return False
+
     async def health_check(self) -> bool:
         """Check if the provider is reachable. Returns True if healthy."""
         return True
@@ -111,8 +124,10 @@ class ObjectStoreAdapter(ABC):
     ) -> ObjectRef:
         """Store an object and return its reference.
 
-        Raises:
+        Raises
+        ------
             StorageUnavailable: If storage is unreachable.
+
         """
 
     @abstractmethod
@@ -172,4 +187,33 @@ class CanonicalSerializer(ABC):
 
         ``data`` must contain fields required by ``CanonicalFundamentals``.
         Returns UTF-8-encoded JSONL with a single record.
+        """
+
+    @abstractmethod
+    def serialize_passthrough(
+        self,
+        raw_data: Any,
+        dataset_type: str,
+        symbol: str,
+        source: str,
+    ) -> bytes:
+        """Wrap raw provider data in a self-describing canonical envelope.
+
+        Used for dataset types that have no domain-specific canonical model
+        (economic_events, macro_indicator, insider_transactions,
+        earnings_calendar, news_sentiment, yield_curve, market_cap).
+        The envelope is self-describing so downstream consumers (e.g. S7)
+        can identify and parse it without additional context.
+
+        Args:
+        ----
+            raw_data: The parsed JSON payload from the provider (dict or list).
+            dataset_type: String value of the DatasetType enum (e.g. "economic_events").
+            symbol: The task symbol (e.g. "EVENTS.USA", "AAPL").
+            source: String value of the Provider enum (e.g. "eodhd").
+
+        Returns:
+        -------
+            UTF-8-encoded NDJSON with a single envelope record, newline-terminated.
+
         """

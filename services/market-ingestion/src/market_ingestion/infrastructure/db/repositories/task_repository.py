@@ -5,13 +5,16 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from market_ingestion.application.ports.repositories import TaskRepository
 from market_ingestion.domain.entities.ingestion_task import IngestionTask
 from market_ingestion.domain.enums import DatasetType, IngestionTaskStatus, Provider
 from market_ingestion.infrastructure.db.models.ingestion_task import IngestionTaskModel
+from observability.logging import get_logger  # type: ignore[import-untyped]
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -51,6 +54,7 @@ def _to_domain(row: IngestionTaskModel) -> IngestionTask:
         error_message=row.last_error,
         next_attempt_at=row.next_attempt_at,
         result_ref=result_ref,
+        fetched_by_provider=row.fetched_by_provider,
         completed_at=row.completed_at,
         created_at=row.created_at,
     )
@@ -77,6 +81,7 @@ def _to_model(task: IngestionTask) -> IngestionTaskModel:
         locked_until=task.lease_expires,
         dedupe_key=task.dedupe_key,
         is_backfill=task.range_start is not None,
+        fetched_by_provider=task.fetched_by_provider,
         created_at=task.created_at,
     )
 
@@ -156,10 +161,25 @@ class SqlaTaskRepository(TaskRepository):
             inserted += cast("Any", result).rowcount
         return inserted
 
-    async def save(self, task: IngestionTask) -> None:
+    async def save(self, task: IngestionTask, *, original_lease_owner: str | None = None) -> None:
+        # Determine which worker-id to use in the WHERE clause.
+        #
+        # Domain state-machine methods (succeed/retry/fail) clear task.lease_owner
+        # to None *before* save() is called.  Without the original owner value the
+        # WHERE would silently fail (rowcount=0) because the DB row still carries
+        # the worker's locked_by.  Callers that perform a state transition must
+        # pass the pre-transition lease_owner as `original_lease_owner` so the
+        # correct row is matched (BP-NEW-task-save-lease).
+        effective_owner = original_lease_owner if original_lease_owner is not None else task.lease_owner
         stmt = (
             update(IngestionTaskModel)
-            .where(IngestionTaskModel.id == task.id)
+            .where(
+                IngestionTaskModel.id == task.id,
+                or_(
+                    IngestionTaskModel.locked_by == effective_owner,
+                    IngestionTaskModel.locked_by.is_(None),  # allow save when no owner (e.g., initial schedule)
+                ),
+            )
             .values(
                 status=task.status.value,
                 attempt=task.attempt_count,
@@ -172,9 +192,16 @@ class SqlaTaskRepository(TaskRepository):
                 result_ref_sha256=task.result_ref.sha256 if task.result_ref else None,
                 result_ref_mime_type=task.result_ref.mime_type if task.result_ref else None,
                 completed_at=task.completed_at,
+                fetched_by_provider=task.fetched_by_provider,
             )
         )
-        await self._w.execute(stmt)
+        result = await self._w.execute(stmt)
+        if cast("Any", result).rowcount == 0:
+            logger.warning(
+                "task_save_lease_mismatch",
+                task_id=task.id,
+                worker_id=effective_owner,
+            )
 
     async def claim_batch(
         self,
@@ -183,11 +210,15 @@ class SqlaTaskRepository(TaskRepository):
         limit: int,
         lease_seconds: int,
     ) -> list[IngestionTask]:
-        """Atomically claim PENDING/RETRY tasks using a CTE + UPDATE … RETURNING.
+        """Atomically claim PENDING/RETRY tasks, plus RUNNING tasks with expired leases.
 
         A single SQL statement selects candidates (FOR UPDATE SKIP LOCKED) and
         updates them in one round-trip, closing the race window that existed when
         SELECT and UPDATE were two separate statements (M-006).
+
+        Expired-lease reclaim: RUNNING tasks whose locked_until < now are included
+        so that tasks left in RUNNING state after a worker crash are automatically
+        recovered without requiring manual intervention (BP-112).
         """
         now = datetime.now(UTC)
         lease_until = now + timedelta(seconds=lease_seconds)
@@ -198,10 +229,15 @@ class SqlaTaskRepository(TaskRepository):
         )
 
         # CTE locks candidate rows; UPDATE operates on the locked set atomically.
+        # Include RUNNING tasks with expired leases so crashed-worker tasks recover.
         cte = (
             select(IngestionTaskModel.id)
             .where(
-                IngestionTaskModel.status.in_(claimable_statuses),
+                or_(
+                    IngestionTaskModel.status.in_(claimable_statuses),
+                    (IngestionTaskModel.status == IngestionTaskStatus.RUNNING.value)
+                    & (IngestionTaskModel.locked_until < now),
+                ),
                 (IngestionTaskModel.next_attempt_at.is_(None)) | (IngestionTaskModel.next_attempt_at <= now),
             )
             .order_by(IngestionTaskModel.created_at)

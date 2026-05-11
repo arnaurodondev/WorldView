@@ -17,6 +17,9 @@
 #   content-store-test      — Postgres(pgvector) + MinIO + Valkey + Kafka + Schema Registry + content-store migrate + API
 #   intelligence-test       — Postgres(pgvector) + MinIO + Valkey + Kafka + intelligence-migrations + nlp-pipeline migrate + nlp-pipeline API + knowledge-graph API + Schema Registry
 #   alert-test              — Postgres(pgvector) + Valkey + Kafka + Schema Registry + alert migrate + alert API
+#   rag-chat-test           — Postgres + Valkey + rag-chat migrate + rag-chat API
+#   api-gateway-test        — Valkey + api-gateway API (stateless BFF)
+#   frontend-test           — api-gateway + worldview-web Next.js frontend
 #   dev-tools               — infra + developer UIs (Kafka UI, pgAdmin)
 #   all                     — starts every service in this compose file
 #
@@ -61,7 +64,9 @@ services:
 
   # ── TimescaleDB for market-data (separate from plain postgres) ────────────────
   timescaledb:
-    image: timescale/timescaledb:latest-pg16
+    # WHY pinned: matches docker-compose.yml production version; latest-pg16 is a floating
+    # tag that can change TimescaleDB SQL API or extension versions between test runs.
+    image: timescale/timescaledb:2.17.2-pg16
     profiles: [market-data-test, dev-tools, all]
     ports:
       - "5433:5432"
@@ -118,7 +123,9 @@ services:
       start_period: 10s
 
   minio-init-test:
-    image: minio/mc:latest
+    # WHY pinned: mc client version should match the MinIO server version to avoid
+    # API compatibility drift. latest can change silently and break bucket init.
+    image: minio/mc:RELEASE.2024-01-16T16-07-38Z
     profiles: [market-ingestion-test, market-data-test, content-ingestion-test, content-store-test, intelligence-test, dev-tools, all]
     depends_on:
       minio:
@@ -245,6 +252,29 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 5
+
+  # ── Portfolio instrument consumer (long-running) ────────────────────────────
+  portfolio-instrument-consumer:
+    build:
+      context: ../..
+      dockerfile: services/portfolio/Dockerfile
+    profiles: [portfolio-test, all]
+    depends_on:
+      portfolio-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/portfolio/configs/docker.env
+    command: ["python", "-m", "portfolio.infrastructure.messaging.consumers.instrument_consumer_main"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   # ── Portfolio outbox dispatcher (long-running) ──────────────────────────────
   portfolio-dispatcher:
@@ -446,9 +476,104 @@ services:
       retries: 3
       start_period: 5s
 
+  # ── Market-data consumers (long-running) ─────────────────────────────────
+  market-data-ohlcv-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.ohlcv_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  market-data-quotes-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.quotes_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  market-data-fundamentals-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.fundamentals_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  market-data-prediction-market-consumer:
+    build:
+      context: ../..
+      dockerfile: services/market-data/Dockerfile
+    profiles: [market-data-test, all]
+    depends_on:
+      market-data-migrate:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/market-data/configs/docker.env
+    command: ["python", "-m", "market_data.infrastructure.messaging.consumers.prediction_market_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
   # ── Developer tools ────────────────────────────────────────────────────────
   kafka-ui:
-    image: provectuslabs/kafka-ui:latest
+    # WHY pinned: third-party image; floating :latest can introduce UI breaking changes
+    # or pull a version with known vulnerabilities without notice.
+    image: provectuslabs/kafka-ui:v0.7.2
     profiles: [dev-tools, all]
     ports:
       - "8082:8080"
@@ -699,6 +824,56 @@ services:
     # entrypoint.sh: 1) alembic upgrade head 2) run seed SQL 3) populate embeddings (non-blocking)
     restart: "no"
 
+  # ── Ollama — embedding / LLM inference ────────────────────────────────────
+  ollama:
+    image: ollama/ollama:0.6.7
+    profiles: [intelligence-test, all]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Ollama model init — pre-pulls qwen3:0.6b + bge-large for CI/test runs ──
+  ollama-init:
+    image: ollama/ollama:0.6.7
+    profiles: [intelligence-test, all]
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        ollama pull qwen3:0.6b &&
+        ollama pull bge-large
+      "
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+  # ── GLiNER server — NER inference ──────────────────────────────────────────
+  gliner-server:
+    build:
+      context: ../gliner
+      dockerfile: Dockerfile
+    profiles: [intelligence-test, all]
+    ports:
+      - "8090:8080"
+    environment:
+      GLINER_MODEL_PATH: "urchade/gliner_large-v2.1"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
   # ── NLP Pipeline (S6) ──────────────────────────────────────────────────────
   nlp-pipeline-migrate:
     build:
@@ -783,6 +958,10 @@ services:
         condition: service_completed_successfully
       valkey:
         condition: service_healthy
+      gliner-server:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
     env_file:
       - ../../services/nlp-pipeline/configs/docker.env
     command: ["python", "-m", "nlp_pipeline.infrastructure.messaging.consumers.article_consumer_main"]
@@ -814,6 +993,50 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+
+  nlp-pipeline-price-impact-worker:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.workers.price_impact_labelling_worker"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  nlp-pipeline-unresolved-resolution-worker:
+    build:
+      context: ../..
+      dockerfile: services/nlp-pipeline/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      nlp-pipeline-migrate:
+        condition: service_completed_successfully
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    env_file:
+      - ../../services/nlp-pipeline/configs/docker.env
+    command: ["python", "-m", "nlp_pipeline.workers.unresolved_resolution_worker_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
   # ── Knowledge Graph (S7) ───────────────────────────────────────────────────
   # S7 has no Alembic migrations — intelligence_db DDL is owned by intelligence-migrations.
@@ -913,6 +1136,40 @@ services:
       retries: 3
       start_period: 10s
 
+  # Hot-path provisional-entity enrichment consumer (PLAN-0061 Wave E + PLAN-0062 Wave C).
+  # Reacts to entity.provisional.queued.v1 events emitted by S6 UnresolvedResolutionWorker
+  # so newly-discovered provisional entities are enriched without waiting for the 5-min
+  # ProvisionalEnrichmentWorker polling sweep.
+  knowledge-graph-provisional-queued-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command:
+      [
+        "python",
+        "-m",
+        "knowledge_graph.infrastructure.messaging.consumers.provisional_queued_consumer_main",
+      ]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
   knowledge-graph-entity-consumer:
     build:
       context: ../..
@@ -980,6 +1237,88 @@ services:
     env_file:
       - ../../services/knowledge-graph/configs/docker.env
     command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.instrument_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # PLAN-0057 Wave D-2: lightweight canonical seeder.  Mirrors the
+  # ``knowledge-graph-instrument-consumer`` block above but consumes the new
+  # ``market.instrument.discovered.v1`` topic and runs a slimmer pipeline (no
+  # LLM client, no description embedding — just symbol-only canonical + 2
+  # aliases + 3 embedding-state placeholders).  When fundamentals_consumer
+  # later emits ``market.instrument.created`` for the same instrument_id the
+  # existing instrument-consumer above does the rich enrichment.
+  knowledge-graph-instrument-discovered-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.instrument_discovered_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  knowledge-graph-temporal-event-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.temporal_event_consumer_main"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  knowledge-graph-earnings-calendar-consumer:
+    build:
+      context: ../..
+      dockerfile: services/knowledge-graph/Dockerfile
+    profiles: [intelligence-test, all]
+    depends_on:
+      intelligence-migrations:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-registry-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/knowledge-graph/configs/docker.env
+    command: ["python", "-m", "knowledge_graph.infrastructure.messaging.consumers.earnings_calendar_dataset_consumer_main"]
     restart: on-failure
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
@@ -1096,5 +1435,102 @@ services:
       retries: 3
       start_period: 5s
 
+  alert-email-scheduler:
+    build:
+      context: ../..
+      dockerfile: services/alert/Dockerfile
+    profiles: [alert-test, all]
+    depends_on:
+      alert-migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/alert/configs/docker.env
+    command: ["python", "-m", "alert.infrastructure.email.scheduler_main"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # ── RAG Chat (S8) ───────────────────────────────────────────────────────────
+  rag-chat-migrate:
+    build:
+      context: ../..
+      dockerfile: services/rag-chat/Dockerfile
+    profiles: [rag-chat-test, all]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../../services/rag-chat/configs/docker.env
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  rag-chat:
+    build:
+      context: ../..
+      dockerfile: services/rag-chat/Dockerfile
+    profiles: [rag-chat-test, all]
+    depends_on:
+      rag-chat-migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/rag-chat/configs/docker.env
+    ports:
+      - "8008:8008"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/readyz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  # ── API Gateway (S9) ─────────────────────────────────────────────────────────
+  api-gateway:
+    build:
+      context: ../..
+      dockerfile: services/api-gateway/Dockerfile
+    profiles: [api-gateway-test, all]
+    depends_on:
+      valkey:
+        condition: service_healthy
+    env_file:
+      - ../../services/api-gateway/configs/docker.env
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  # ── Worldview Web (Next.js 15 frontend) ────────────────────────────────────
+  worldview-web:
+    build:
+      context: ../..
+      dockerfile: apps/worldview-web/Dockerfile
+    profiles: [frontend-test, all]
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+    environment:
+      API_GATEWAY_URL: http://api-gateway:8000
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
 volumes:
   pgadmin_data:
+  ollama_data:

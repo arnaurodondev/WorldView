@@ -112,3 +112,51 @@ class ReadyResponse(BaseModel):
 
     status: str
     checks: dict[str, str]
+
+
+# ---------------------------------------------------------------------------
+# EODHD quota admin responses (W3-8)
+# ---------------------------------------------------------------------------
+
+
+class DailyBudgetDetail(BaseModel):
+    """Daily sub-budget breakdown within the quota status response."""
+
+    # Credits allotted for today (burst_capacity * safety_factor).
+    allotted: int
+    # Credits spent today (burst_capacity - remaining_tokens).
+    spent: int
+    # Headroom ratio: (allotted - spent) / allotted.
+    # Positive = within budget; negative = over budget.
+    headroom_ratio: float
+
+
+class CircuitBreakerDetail(BaseModel):
+    """Circuit breaker state within the quota status response."""
+
+    # Human-readable state: "closed" | "open" | "half_open".
+    state: str
+    # Number of times the breaker has tripped today (trips_total is cumulative;
+    # this field is always 0 until the circuit-breaker component is wired in).
+    trips_today: int
+
+
+class EodhdQuotaStatusResponse(BaseModel):
+    """Response for GET /api/v1/eodhd/quota/status.
+
+    Combines token-bucket quota data with daily-budget and circuit-breaker info.
+    """
+
+    provider: str
+    # ISO month string, e.g. "2026-04".
+    month: str
+    # Tokens consumed since last full refill (proxy for credits_used).
+    credits_used: int
+    # Burst capacity of the token bucket (proxy for monthly_budget).
+    monthly_budget: int
+    # Percentage of the burst capacity consumed (0.0-100.0+).
+    utilization_pct: float
+    # Daily sub-budget breakdown.
+    daily_budget: DailyBudgetDetail
+    # Circuit breaker state (stubbed until the CB component is added).
+    circuit_breaker: CircuitBreakerDetail

@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
+from datetime import datetime
+from uuid import UUID
 
 
 @dataclass(frozen=True)
@@ -17,6 +14,12 @@ class WatchlistMember:
     ``entity_id`` is the KG canonical entity UUID — intentionally not a
     cross-service FK (R7). ``entity_type`` is a free-form label such as
     ``"company"`` or ``"etf"``.
+
+    ``ticker``, ``name`` and ``instrument_id`` are denormalised snapshots
+    resolved at add-time (PLAN-0046 T-46-2-01). They may be ``None`` for
+    historical rows that pre-date Alembic 0010 or when the lookup against the
+    local ``instruments`` table failed (caller still wins — the write
+    succeeds and the row appears with a "—" placeholder until re-added).
     """
 
     id: UUID
@@ -24,3 +27,6 @@ class WatchlistMember:
     entity_id: UUID
     entity_type: str
     added_at: datetime
+    ticker: str | None = None
+    name: str | None = None
+    instrument_id: UUID | None = None

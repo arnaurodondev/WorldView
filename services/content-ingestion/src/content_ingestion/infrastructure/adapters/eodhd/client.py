@@ -37,6 +37,9 @@ class EODHDClient:
         self._api_key = api_key
         self._base_url = provider_cfg.base_url
         self._page_size = provider_cfg.page_size
+        # Store the full provider config so fetch_all_pages() can read
+        # max_pages_per_cycle without hardcoding it here (rule: no hardcoded values).
+        self._provider_cfg = provider_cfg
 
     async def fetch_news(
         self,
@@ -93,13 +96,29 @@ class EODHDClient:
         ticker: str = "",
         from_date: str = "",
         to_date: str = "",
+        max_pages: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Paginate through all available news articles.
+        """Paginate through news articles up to a maximum page count (OPT-3).
 
-        Continues fetching while the response length equals ``page_size``.
+        Continues fetching while the response length equals ``page_size`` AND
+        the number of pages fetched is below ``max_pages``.  When the limit is
+        reached the method logs a warning so the truncation is visible in prod.
+
+        Args:
+            ticker: Symbol filter (e.g. ``"AAPL.US"``).  Empty for general news.
+            from_date: Start date ``YYYY-MM-DD``.
+            to_date: End date ``YYYY-MM-DD``.
+            max_pages: Override the per-cycle page cap.  When ``None`` (the
+                default) the value from ``provider_cfg.max_pages_per_cycle``
+                is used — never a hardcoded constant.
         """
+        # Resolve the effective page cap: caller override takes precedence,
+        # otherwise fall back to the value from provider config (config.py).
+        limit = max_pages if max_pages is not None else self._provider_cfg.max_pages_per_cycle
+
         all_articles: list[dict[str, Any]] = []
         offset = 0
+        page_count = 0
 
         while True:
             page = await self.fetch_news(
@@ -109,9 +128,26 @@ class EODHDClient:
                 offset=offset,
             )
             all_articles.extend(page)
+            page_count += 1
 
+            # Normal termination: API returned a partial page — no more data.
             if len(page) < self._page_size:
                 break
+
+            # OPT-3: Safety cap — stop before consuming more API credits.
+            if page_count >= limit:
+                logger.warning(
+                    "eodhd_fetch_truncated",
+                    ticker=ticker,
+                    page_count=page_count,
+                    max_pages=limit,
+                    articles_fetched=len(all_articles),
+                    message=(
+                        "fetch_all_pages stopped at the page cap; " "some articles may have been skipped this cycle."
+                    ),
+                )
+                break
+
             offset += self._page_size
 
         return all_articles

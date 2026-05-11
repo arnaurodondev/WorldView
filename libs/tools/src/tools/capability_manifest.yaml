@@ -1,0 +1,532 @@
+version: "4"
+tools:
+  - name: get_price_history
+    description: >
+      Fetches OHLCV (open/high/low/close/volume) bar history for a stock ticker
+      over a specified date range. Use when the user asks about price movement,
+      trend, range, or performance over a time period.
+    parameters:
+      - name: ticker
+        type: string
+        description: Stock ticker symbol (e.g. "AAPL")
+        required: true
+      - name: from_date
+        type: date
+        description: Start of date range (YYYY-MM-DD)
+        required: true
+      - name: to_date
+        type: date
+        description: End of date range (YYYY-MM-DD)
+        required: true
+      - name: interval
+        type: string
+        enum: [day, week, month]
+        description: Bar granularity. Default "week".
+        required: false
+    source_type: ohlcv  # used by TrustScorer — trust_weight NOT stored here (PLAN-0067 §0 A-2)
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "How has AAPL performed over the last 3 months?"
+      - "What was NVDA's price range in Q1 2026?"
+
+  - name: get_fundamentals_history
+    description: >
+      Fetches quarterly fundamental metrics (revenue, gross profit, net income,
+      EPS, P/E ratio, market cap) for a ticker over N periods. Use when the user
+      asks about revenue trends, EPS growth, or multi-quarter financial performance.
+    parameters:
+      - name: ticker
+        type: string
+        description: Stock ticker symbol (e.g. "MSFT")
+        required: true
+      - name: periods
+        type: integer
+        description: Number of quarters to return (1-20). Default 8.
+        required: false
+    source_type: fundamentals  # used by TrustScorer — trust_weight NOT stored here (PLAN-0067 §0 A-2)
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "Show me MSFT's revenue trend over 8 quarters"
+      - "What has AAPL's EPS been over the last 2 years?"
+
+  - name: search_documents
+    description: >
+      Searches the platform's document corpus using hybrid BM25 + ANN embedding search.
+      Returns text excerpts from news articles, SEC filings (10-K, 10-Q, 8-K), earnings
+      call transcripts, and analyst reports. Use for factual questions, news, company
+      announcements, and any question requiring text evidence. This is the primary
+      retrieval tool for unstructured information.
+    parameters:
+      - name: query
+        type: string
+        description: Natural language search query
+        required: true
+      - name: entity_tickers
+        type: array
+        description: List of stock tickers to constrain results (e.g. ["AAPL", "MSFT"])
+        required: false
+      - name: date_from
+        type: date
+        description: Earliest document date (YYYY-MM-DD). Optional.
+        required: false
+      - name: date_to
+        type: date
+        description: Latest document date (YYYY-MM-DD). Optional.
+        required: false
+      - name: source_types
+        type: array
+        description: "Filter by source: ['sec_filing', 'earnings', 'news', 'analyst_report']"
+        required: false
+    source_type: "mixed"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "What risks does AAPL mention in their latest 10-K?"
+      - "What did analysts say about NVDA's data centre revenue?"
+
+  - name: get_entity_graph
+    description: >
+      Retrieves the egocentric knowledge graph for a named entity — the entity's
+      immediate neighbours, relationships, and their summaries. Use when the question
+      asks about connections, subsidiaries, partnerships, board members, or the
+      entity's place in a larger structure. Returns nodes and edges with confidence scores.
+    parameters:
+      - name: entity_name
+        type: string
+        description: Name of the entity (company, person, fund) to build the graph around
+        required: true
+      - name: depth
+        type: integer
+        description: Graph hop depth (1 or 2). Default 1. Use 2 for broader connectivity.
+        required: false
+      - name: relation_types
+        type: array
+        description: "Filter by relation type: ['subsidiary_of', 'board_member_of', 'partnership', 'competitor_of']"
+        required: false
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "What companies is Elon Musk connected to?"
+      - "Who are AAPL's main subsidiaries?"
+
+  - name: traverse_graph
+    description: >
+      Executes a targeted knowledge graph traversal to find multi-hop paths between
+      entities. More powerful than get_entity_graph for finding indirect connections,
+      competitive relationships, or shared investors. Use when the question requires
+      tracing a path or finding how two entities are linked.
+    parameters:
+      - name: start_entity
+        type: string
+        description: Starting entity name
+        required: true
+      - name: target_entity
+        type: string
+        description: Target entity name to find paths to. Optional.
+        required: false
+      - name: depth
+        type: integer
+        description: Maximum path depth (2-4). Default 3.
+        required: false
+      - name: cypher_pattern
+        type: string
+        description: Optional Cypher relationship filter (e.g. "[:INVESTS_IN|:BOARD_MEMBER_OF]")
+        required: false
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "How is Sam Altman connected to Microsoft?"
+      - "Are AAPL and MSFT connected through any shared board members?"
+
+  - name: search_entity_relations
+    description: >
+      Searches for relation triplets involving an entity in the knowledge graph.
+      Returns structured (subject, relation_type, object) triples with confidence scores.
+      Use for listing what is known about an entity's relationships in structured form.
+    parameters:
+      - name: entity_name
+        type: string
+        description: Entity to find relations for
+        required: true
+      - name: relation_type
+        type: string
+        description: "Specific relation type to filter: 'invests_in', 'competes_with', 'acquired', etc."
+        required: false
+      - name: min_confidence
+        type: number
+        description: Minimum confidence threshold (0.0-1.0). Default 0.6.
+        required: false
+      - name: limit
+        type: integer
+        description: Maximum number of relations to return. Default 15.
+        required: false
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "List all companies that Microsoft has acquired"
+      - "What companies compete with NVIDIA in the GPU market?"
+
+  - name: search_claims
+    description: >
+      Searches for analyst claims and extracted assertions about an entity. Claims are
+      LLM-extracted structured statements from financial documents (e.g., "AAPL will
+      expand into India"). Use for opinion-type questions, target price questions, or
+      when you need to contrast what analysts are saying.
+    parameters:
+      - name: entity_name
+        type: string
+        description: Entity the claims are about
+        required: true
+      - name: claim_type
+        type: string
+        description: "Type of claim: 'price_target', 'revenue_forecast', 'risk_factor', 'strategic_move'"
+        required: false
+      - name: date_from
+        type: date
+        description: Earliest claim extraction date (YYYY-MM-DD)
+        required: false
+      - name: date_to
+        type: date
+        description: Latest claim extraction date (YYYY-MM-DD)
+        required: false
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "What are analysts saying about AAPL's AI strategy?"
+      - "What are analysts forecasting for MSFT's revenue next quarter?"
+
+  - name: search_events
+    description: >
+      Retrieves structured corporate events involving an entity — earnings releases,
+      M&A activity, leadership changes, product launches, regulatory filings. Use for
+      timeline or event-based questions.
+    parameters:
+      - name: entity_name
+        type: string
+        description: Entity involved in the events
+        required: true
+      - name: event_type
+        type: string
+        description: "Event type: 'earnings', 'merger', 'acquisition', 'ipo', 'leadership_change', 'product_launch'"
+        required: false
+      - name: date_from
+        type: date
+        description: Earliest event date
+        required: false
+      - name: date_to
+        type: date
+        description: Latest event date
+        required: false
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "When did AAPL last announce a major acquisition?"
+      - "What leadership changes happened at Tesla in 2025?"
+
+  - name: get_contradictions
+    description: >
+      Retrieves cross-source contradictions detected in analyst claims about an entity.
+      Returns pairs of conflicting statements with their strength and sources.
+      Use when the question is about disagreement, uncertainty, or conflicting signals.
+    parameters:
+      - name: entity_name
+        type: string
+        description: Entity to find contradictions for
+        required: true
+      - name: confidence_threshold
+        type: number
+        description: Minimum contradiction strength (0.0-1.0). Default 0.5.
+        required: false
+    source_type: "knowledge_graph"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "Are there conflicting analyst views on TSLA's profitability?"
+      - "Are there contradictions between analysts about Amazon's profitability?"
+
+  - name: get_portfolio_context
+    description: >
+      Retrieves the current user's portfolio holdings and watchlist. Use when the
+      question references the user's own positions, portfolio P&L, or watchlisted stocks.
+      Do NOT call this tool unless the question explicitly references "my portfolio",
+      "my holdings", "my watchlist", or similar personal context.
+    parameters: []
+    source_type: "portfolio"
+    since: "v1"
+    deprecated_at: null
+    example_queries:
+      - "How is my portfolio performing today?"
+      - "Which of my holdings have the highest exposure to AI?"
+
+  - name: get_entity_narrative
+    description: >
+      Retrieves the current LLM-generated narrative for an entity — a curated markdown
+      summary of the entity's recent developments, strategic position, and key signals.
+      Use when the user asks for an overview, summary, or what's been happening with an entity.
+      Returns the latest narrative version. High-authority source (platform-curated).
+    parameters:
+      - name: entity_id
+        type: string
+        description: UUID of the entity to retrieve the narrative for. Auto-injected from entity scope when available.
+        required: false
+    source_type: "narrative"
+    since: "v2"
+    deprecated_at: null
+    example_queries:
+      - "Give me a summary of what's been happening with Apple"
+      - "What's the latest narrative on NVDA?"
+
+  - name: get_entity_paths
+    description: >
+      Retrieves top-N pre-computed multi-hop relationship paths anchored on an entity,
+      ranked by composite_score. Use when the user asks about indirect connections,
+      how entities are linked through intermediaries, or wants to explore the entity's
+      broader network relationships.
+    parameters:
+      - name: entity_id
+        type: string
+        description: UUID of the entity to retrieve paths for. Auto-injected from entity scope when available.
+        required: false
+      - name: top_n
+        type: integer
+        description: Number of top paths to return (1-20). Default 5.
+        required: false
+    source_type: "knowledge_graph"
+    since: "v2"
+    deprecated_at: null
+    example_queries:
+      - "What are the most significant connections in AAPL's network?"
+      - "Show me the top relationship paths for Microsoft"
+
+  - name: get_entity_health
+    description: >
+      Retrieves the entity health score, key metrics, source distribution, and 90-day
+      confidence trend. Use when the user asks about data quality, confidence in the
+      entity's information, how well-covered the entity is, or signal health.
+    parameters:
+      - name: entity_id
+        type: string
+        description: UUID of the entity to retrieve health data for. Auto-injected from entity scope when available.
+        required: false
+    source_type: "narrative"
+    since: "v2"
+    deprecated_at: null
+    example_queries:
+      - "How confident are we in the data on Apple?"
+      - "What is TSLA's data health score?"
+
+  - name: get_entity_intelligence
+    description: >
+      Retrieves the full intelligence bundle for an entity — combining narrative,
+      relationship paths, health score, and relations summary in a single call.
+      Use when the user asks for a comprehensive overview or says "tell me everything
+      about X". Prefer this over calling individual intelligence tools separately.
+    parameters:
+      - name: entity_id
+        type: string
+        description: UUID of the entity to retrieve intelligence for. Auto-injected from entity scope when available.
+        required: false
+    source_type: "narrative"
+    since: "v2"
+    deprecated_at: null
+    example_queries:
+      - "Tell me everything about Apple"
+      - "Give me the full intelligence report on NVDA"
+
+  - name: get_morning_brief
+    description: >
+      Retrieves the user's latest morning brief — a curated daily summary of
+      portfolio-relevant news, earnings, and macro events. Use when the user asks
+      for their brief, today's brief, morning brief, or "what's happening today".
+      Returns the brief headline, lead, and all sections.
+    parameters: []
+    source_type: "narrative"
+    since: "v3"
+    deprecated_at: null
+    example_queries:
+      - "Show me my morning brief"
+      - "What's in my brief today?"
+
+  - name: compare_entities
+    description: >
+      Side-by-side comparison of 2-4 financial entities: fundamentals highlights
+      (market cap, P/E, revenue, EPS) and latest price quote. Use when the user
+      asks to compare multiple stocks or companies against each other.
+    parameters:
+      - name: entity_tickers
+        type: array
+        description: List of 2-4 stock tickers to compare (e.g. ["AAPL", "MSFT"])
+        required: true
+    source_type: "fundamentals"
+    since: "v3"
+    deprecated_at: null
+    example_queries:
+      - "Compare AAPL and MSFT side by side"
+      - "Show me a comparison of NVDA, AMD, and INTC"
+
+  - name: screen_universe
+    description: >
+      Quantitative screener — filters the instrument universe by market cap, P/E ratio,
+      sector, and region. Use when the user asks to screen, filter, or find stocks that
+      meet specific fundamental criteria.
+    parameters:
+      - name: market_cap_min
+        type: number
+        description: Minimum market cap in USD (e.g. 1000000000 for $1B)
+        required: false
+      - name: market_cap_max
+        type: number
+        description: Maximum market cap in USD
+        required: false
+      - name: pe_ratio_max
+        type: number
+        description: Maximum P/E ratio (e.g. 25.0)
+        required: false
+      - name: sector
+        type: string
+        description: "Sector filter (e.g. 'Technology', 'Healthcare')"
+        required: false
+      - name: region
+        type: string
+        description: "Region filter (e.g. 'US', 'EU')"
+        required: false
+      - name: limit
+        type: integer
+        description: Maximum number of results (1-100). Default 20.
+        required: false
+    source_type: "fundamentals"
+    since: "v3"
+    deprecated_at: null
+    example_queries:
+      - "Screen for tech stocks with P/E under 20 and market cap over $10B"
+      - "Find large-cap US healthcare companies"
+
+  - name: get_market_movers
+    description: >
+      Returns the top gainers, losers, or most-active stocks over a time period.
+      Use when the user asks about market movers, top performers, biggest gainers/losers,
+      or most-active stocks.
+    parameters:
+      - name: mover_type
+        type: string
+        enum: [gainers, losers]
+        description: "Type of movers: 'gainers' or 'losers'. Default 'gainers'."
+        required: false
+      - name: limit
+        type: integer
+        description: Number of results (1-50). Default 10.
+        required: false
+      - name: period
+        type: string
+        description: "Time period: '1D', '1W', '1M'. Default '1D'."
+        required: false
+    source_type: "market_data"
+    since: "v3"
+    deprecated_at: null
+    example_queries:
+      - "What are the top market movers today?"
+      - "Show me the biggest losers this week"
+
+  - name: get_economic_calendar
+    description: >
+      Retrieves upcoming and past macro economic events (CPI, FOMC, GDP releases,
+      PMI data) with actual vs. forecast vs. prior values. Use when the user asks about
+      economic events, macro calendar, upcoming data releases, or central bank decisions.
+    parameters:
+      - name: from_date
+        type: date
+        description: Start of date range (YYYY-MM-DD). Optional.
+        required: false
+      - name: to_date
+        type: date
+        description: End of date range (YYYY-MM-DD). Optional.
+        required: false
+      - name: region
+        type: string
+        description: "Region filter: 'US', 'EU', 'global'. Optional."
+        required: false
+    source_type: "market_data"
+    since: "v3"
+    deprecated_at: null
+    example_queries:
+      - "What economic events are coming up this week?"
+      - "When is the next FOMC meeting?"
+
+  - name: get_earnings_calendar
+    description: >
+      Returns earnings release dates for companies including EPS estimates and actuals.
+      Use when the user asks about upcoming earnings, earnings season, or when a
+      specific company reports.
+    parameters:
+      - name: from_date
+        type: date
+        description: Start of date range (YYYY-MM-DD). Optional.
+        required: false
+      - name: to_date
+        type: date
+        description: End of date range (YYYY-MM-DD). Optional.
+        required: false
+    source_type: "market_data"
+    since: "v3"
+    deprecated_at: null
+    example_queries:
+      - "What companies are reporting earnings this week?"
+      - "When does Apple next report earnings?"
+
+  - name: get_alerts
+    description: >
+      Retrieves the user's active (pending) alerts — price alerts, signal alerts,
+      and watchlist triggers. Use when the user asks "show me my alerts", "what
+      alerts do I have", or "are there any active alerts for my portfolio".
+    parameters: []
+    source_type: "alert"
+    since: "v4"
+    deprecated_at: null
+    requires_confirmation: false
+    example_queries:
+      - "Show me my active alerts"
+      - "What alerts do I have set up?"
+
+  - name: create_alert
+    description: >
+      Creates a user-initiated alert rule for a specific entity and condition.
+      Use when the user explicitly asks to set, create, or add an alert
+      (e.g. "alert me when AAPL drops below $200" or "set a price alert for NVDA").
+      IMPORTANT: this tool requires explicit user confirmation before execution
+      (requires_confirmation: true). Do NOT call this tool unless the user has
+      clearly and unambiguously asked to create an alert — never create alerts
+      speculatively or as a follow-up to an unrelated question.
+    parameters:
+      - name: entity_id
+        type: string
+        description: UUID of the entity to watch (auto-injected from entity scope when available)
+        required: true
+      - name: condition
+        type: string
+        enum: [price_below, price_above, volume_spike, percent_change]
+        description: "Alert trigger condition: price_below | price_above | volume_spike | percent_change"
+        required: true
+      - name: threshold
+        type: object
+        description: "Condition parameters as a JSON object, e.g. {\"value\": 200.0} or {\"percent\": 5.0, \"window\": \"1d\"}"
+        required: true
+      - name: severity
+        type: string
+        enum: [low, medium, high, critical]
+        description: "Alert severity tier. Default: low."
+        required: false
+    source_type: "alert"
+    since: "v4"
+    deprecated_at: null
+    requires_confirmation: true
+    example_queries:
+      - "Alert me when AAPL drops below $200"
+      - "Set a price alert for NVDA above $1000"
+      - "Notify me if there's a volume spike on TSLA"

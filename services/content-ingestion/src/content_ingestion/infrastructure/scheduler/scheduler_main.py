@@ -14,6 +14,7 @@ import asyncio
 import signal
 from contextlib import suppress
 
+import common.time  # type: ignore[import-untyped]
 from content_ingestion.application.use_cases.schedule_sources import ScheduleDueSourcesUseCase
 from content_ingestion.config import Settings
 from content_ingestion.infrastructure.db.session import _build_factories
@@ -42,7 +43,7 @@ class SchedulerProcess:
         self._tick_interval = tick_interval_seconds or settings.scheduler_tick_interval_seconds
         self._max_tasks_per_tick = max_tasks_per_tick or settings.scheduler_max_tasks_per_tick
         self._stop_event = asyncio.Event()
-        _, self._write_factory, self._read_factory = _build_factories(settings)
+        _, _, self._write_factory, self._read_factory = _build_factories(settings)
 
     def stop(self) -> None:
         """Signal the scheduler loop to stop after the current tick."""
@@ -55,23 +56,100 @@ class SchedulerProcess:
             tick_interval_seconds=self._tick_interval,
             max_tasks_per_tick=self._max_tasks_per_tick,
         )
+
+        # PLAN-0055 B-1: one-shot config-drift detection at startup. WARNs (does
+        # not fail) for any source whose live config_hash differs from the snapshot
+        # at the last successful fetch — informational, not load-bearing.
+        await self._warn_on_config_drift()
+
         while not self._stop_event.is_set():
             await self._tick()
             with suppress(TimeoutError):
                 await asyncio.wait_for(
-                    asyncio.shield(self._stop_event.wait()),
+                    self._stop_event.wait(),
                     timeout=self._tick_interval,
                 )
 
         logger.info("scheduler_stopped")
 
+    async def _warn_on_config_drift(self) -> None:
+        """Surface sources where ``last_run_config_hash`` differs from live ``config_hash``.
+
+        Best-effort; any failure logs at debug and the scheduler continues.
+        """
+        from sqlalchemy import text
+
+        try:
+            async with self._read_factory() as session:
+                rows = (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT s.id, s.name, sas.last_run_config_hash, s.config_hash
+                            FROM sources s
+                            JOIN source_adapter_state sas ON sas.source_id = s.id
+                            WHERE sas.last_run_config_hash IS NOT NULL
+                              AND sas.last_run_config_hash <> s.config_hash
+                            """
+                        )
+                    )
+                ).all()
+            for row in rows:
+                logger.warning(
+                    "config_drift_detected",
+                    source_id=str(row.id),
+                    name=row.name,
+                    last_run_hash=row.last_run_config_hash,
+                    current_hash=row.config_hash,
+                    detail="last_watermark may refer to old config; consider re-backfill",
+                )
+        except Exception as exc:
+            logger.debug("config_drift_check_skipped", error=str(exc))
+
     async def _tick(self) -> None:
-        """Execute one scheduler tick."""
+        """Execute one scheduler tick.
+
+        Recovery runs first so that sources blocked by crashed workers are
+        unblocked before the scheduling pass evaluates them.
+        """
+        now = common.time.utc_now()
+
+        # 1. Recover tasks whose worker lease has expired (crashed/killed workers).
+        try:
+            uow_recover = SqlaUnitOfWork(self._write_factory, self._read_factory)
+            async with uow_recover:
+                recovered = await uow_recover.tasks.recover_expired_leases(
+                    now,
+                    lease_timeout_seconds=self._settings.worker_lease_seconds,
+                )
+                await uow_recover.commit()
+            if recovered:
+                logger.warning(
+                    "scheduler_leases_recovered",
+                    count=recovered,
+                    lease_timeout_seconds=self._settings.worker_lease_seconds,
+                )
+        except Exception as exc:
+            logger.error("scheduler_lease_recovery_error", error=str(exc))
+
+        # 2. Evaluate sources and enqueue new tasks.
+        #
+        # BP-460: inject per-source-type interval overrides so rate-limited
+        # providers (NewsAPI: 100 req/day free tier) are not polled at the
+        # global tick cadence.  The override is read from provider settings so
+        # it remains configurable via env vars without touching this file.
+        from content_ingestion.domain.entities import SourceType
+
+        source_type_intervals: dict[SourceType, float] = {
+            SourceType.NEWSAPI: float(self._settings.newsapi.poll_interval_seconds),
+        }
+
         uow = SqlaUnitOfWork(self._write_factory, self._read_factory)
         use_case = ScheduleDueSourcesUseCase(
             uow=uow,
             scheduler_interval_seconds=self._settings.scheduler_interval_seconds,
             max_tasks_per_tick=self._max_tasks_per_tick,
+            source_type_intervals=source_type_intervals,
         )
         try:
             result = await use_case.execute()

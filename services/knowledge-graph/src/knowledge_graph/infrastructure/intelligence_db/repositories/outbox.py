@@ -13,16 +13,25 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from knowledge_graph.application.ports.repositories import OutboxRepositoryPort
+from messaging.topics import (  # type: ignore[import-untyped]
+    ENTITY_CANONICAL_CREATED,
+    GRAPH_STATE_CHANGED,
+)
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-# Outbox topics produced by S7 (entity.dirtied.v1 is direct-produce, NOT via outbox)
-TOPIC_GRAPH_STATE_CHANGED = "graph.state.changed.v1"
+# Outbox topics produced by S7.
+# NOTE (D-014, PLAN-0084 QA fix): entity.dirtied.v1 now uses the outbox
+# (changed from fire-and-forget direct-produce in provisional_enrichment.py).
+TOPIC_GRAPH_STATE_CHANGED = GRAPH_STATE_CHANGED
 TOPIC_CONTRADICTION = "intelligence.contradiction.v1"
 TOPIC_RELATION_PROPOSED = "relation.type.proposed.v1"
+TOPIC_ENTITY_CANONICAL_CREATED = ENTITY_CANONICAL_CREATED
 
 
-class OutboxRepository:
+class OutboxRepository(OutboxRepositoryPort):
     """Append/read repository for ``intelligence_db.outbox_events``."""
 
     def __init__(self, session: AsyncSession) -> None:

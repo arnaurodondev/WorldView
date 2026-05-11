@@ -11,17 +11,18 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
-from nlp_pipeline.api.dependencies import NlpDbSessionDep
+from nlp_pipeline.api.dependencies import AdminAuthDep, NewsQueryRepoDep, SignalsQueryRepoDep
+from nlp_pipeline.api.routes.news import _to_response as _article_to_response
 from nlp_pipeline.api.schemas import (
-    EntityArticleResponse,
-    EntityArticlesResponse,
     EntityDetailResponse,
     EntityListResponse,
     EntitySearchResponse,
+    RankedNewsResponse,
     ReprocessResponse,
     SignalListResponse,
     SignalResponse,
@@ -37,7 +38,6 @@ from nlp_pipeline.application.use_cases.signals import (
     SearchEntitiesUseCase,
     VectorSearchUseCase,
 )
-from nlp_pipeline.infrastructure.nlp_db.repositories.signals_query import SqlaSignalsQueryRepo
 from observability import get_logger  # type: ignore[import-untyped]
 
 router = APIRouter(prefix="/api/v1", tags=["nlp"])
@@ -49,14 +49,27 @@ _log = get_logger(__name__)  # type: ignore[no-any-return]
 
 @router.get("/signals", response_model=SignalListResponse)
 async def list_signals(
-    session: NlpDbSessionDep,
+    repo: SignalsQueryRepoDep,
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     doc_id: UUID | None = Query(default=None),
+    min_impact_score: float = Query(default=0.0, ge=0.0, le=1.0),
+    order_by: str = Query(default="created_at", pattern="^(created_at|market_impact_score)$"),
 ) -> SignalListResponse:
-    """List high-confidence financial signals (from outbox_events)."""
-    repo = SqlaSignalsQueryRepo(session)
-    items, total = await ListSignalsUseCase().execute(repo, limit, offset, doc_id)
+    """List high-confidence financial signals (from outbox_events).
+
+    Optional filters:
+    - ``min_impact_score``: only return signals where market_impact_score >= threshold
+    - ``order_by``: ``created_at`` (default) or ``market_impact_score`` (desc)
+    """
+    items, total = await ListSignalsUseCase().execute(
+        repo,
+        limit,
+        offset,
+        doc_id,
+        min_impact_score=min_impact_score,
+        order_by=order_by,
+    )
     return SignalListResponse(
         items=[
             SignalResponse(
@@ -67,6 +80,8 @@ async def list_signals(
                 confidence=item.confidence,
                 evidence_text=item.evidence_text,
                 detected_at=item.detected_at,
+                market_impact_score=item.market_impact_score,
+                polarity=item.polarity,
             )
             for item in items
         ],
@@ -81,13 +96,12 @@ async def list_signals(
 
 @router.get("/entities", response_model=EntityListResponse)
 async def search_entities(
-    session: NlpDbSessionDep,
+    repo: SignalsQueryRepoDep,
     q: str = Query(min_length=1, max_length=256),
     limit: int = Query(default=20, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> EntityListResponse:
     """Search entities by mention text (case-insensitive substring)."""
-    repo = SqlaSignalsQueryRepo(session)
     items, total = await SearchEntitiesUseCase().execute(repo, q, limit, offset)
     return EntityListResponse(
         items=[
@@ -111,15 +125,14 @@ async def search_entities(
 @router.post("/vector-search", response_model=VectorSearchResponse)
 async def vector_search(
     body: VectorSearchRequest,
-    session: NlpDbSessionDep,
+    repo: SignalsQueryRepoDep,
 ) -> VectorSearchResponse:
     """Semantic search over section embeddings using pgvector ANN.
 
     Returns section snippets ranked by cosine similarity to the query embedding.
     The embedding is computed via the app-scoped embedding client at runtime.
     """
-    repo = SqlaSignalsQueryRepo(session)
-    hits_data = await VectorSearchUseCase().execute(repo, body.limit)
+    hits_data = await VectorSearchUseCase().execute(repo, query=body.query, limit=body.limit)
     return VectorSearchResponse(
         query=body.query,
         hits=[
@@ -140,10 +153,9 @@ async def vector_search(
 @router.get("/entities/{entity_id}", response_model=EntityDetailResponse)
 async def get_entity(
     entity_id: UUID,
-    session: NlpDbSessionDep,
+    repo: SignalsQueryRepoDep,
 ) -> EntityDetailResponse:
     """Retrieve entity detail with resolution counts."""
-    repo = SqlaSignalsQueryRepo(session)
     data = await GetEntityDetailUseCase().execute(repo, entity_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Entity not found")
@@ -161,30 +173,66 @@ async def get_entity(
 # ── GET /entities/{id}/articles ───────────────────────────────────────────────
 
 
-@router.get("/entities/{entity_id}/articles", response_model=EntityArticlesResponse)
+@router.get("/entities/{entity_id}/articles", response_model=RankedNewsResponse)
 async def get_entity_articles(
     entity_id: UUID,
-    session: NlpDbSessionDep,
+    request: Request,
+    repo: NewsQueryRepoDep,
+    start_date: datetime | None = Query(
+        default=None,
+        description="Include articles published on or after this datetime (ISO 8601). Defaults to 30 days ago.",
+    ),
+    end_date: datetime | None = Query(
+        default=None,
+        description="Include articles published on or before this datetime (ISO 8601). Defaults to now.",
+    ),
+    order_by: str = Query(
+        default="display_relevance_score",
+        pattern="^(display_relevance_score|published_at)$",
+        description="Sort field — always descending.",
+    ),
     limit: int = Query(default=20, ge=1, le=200),
-) -> EntityArticlesResponse:
-    """List articles that mention this entity (most recent first)."""
-    repo = SqlaSignalsQueryRepo(session)
-    entity = await GetEntityDetailUseCase().execute(repo, entity_id)
-    if entity is None:
-        raise HTTPException(status_code=404, detail="Entity not found")
-    items_data, total = await GetEntityArticlesUseCase().execute(repo, entity_id, limit)
-    return EntityArticlesResponse(
+    offset: int = Query(default=0, ge=0),
+) -> RankedNewsResponse:
+    """List articles that mention this entity, ranked by display_relevance_score.
+
+    Returns an empty list (not 404) when the entity has no articles in range.
+    Date range defaults to the last 30 days when not specified.
+    """
+    # PLAN-0087 (2026-05-09): F-010 watchlist-ownership guard removed for
+    # dev/beta. Returning 404 for entities not in the user's watchlist broke
+    # every instrument-page News tab and dashboard watchlist news cards.
+    # News is read-only data; the entity_id is itself the auth (users navigate
+    # to /instruments/{id} freely). Re-enable selectively on /watchlist/*
+    # surfaces in production multi-tenant deployment.
+    _nil_uuid = "00000000-0000-0000-0000-000000000000"
+    tenant_id: str = ""
+    if False:  # disabled in PLAN-0087; see note above
+        watchlist_cache = getattr(request.app.state, "watchlist_cache", None)
+        if watchlist_cache is not None and not await watchlist_cache.is_watched(entity_id):
+            raise HTTPException(status_code=404, detail="Entity not found")
+
+    now = datetime.now(tz=UTC)
+    resolved_end = end_date or now
+    resolved_start = start_date or (now - timedelta(days=30))
+
+    if resolved_start > resolved_end:
+        raise HTTPException(status_code=422, detail="start_date must be before end_date")
+
+    # F-009 Option B + F-010 Option B: pass tenant_id for tenant-scoped
+    # entity_mentions filtering at the query level.
+    articles_data, total = await GetEntityArticlesUseCase().execute(
+        repo=repo,
         entity_id=entity_id,
-        items=[
-            EntityArticleResponse(
-                doc_id=item.doc_id,
-                source_type="unknown",  # not stored in mentions; would need content-store join
-                published_at=None,
-                routing_tier=item.routing_tier,
-                mention_count=item.mention_count,
-            )
-            for item in items_data
-        ],
+        start_date=resolved_start,
+        end_date=resolved_end,
+        order_by=order_by,
+        limit=limit,
+        offset=offset,
+        tenant_id=tenant_id or None,
+    )
+    return RankedNewsResponse(
+        articles=[_article_to_response(a) for a in articles_data],
         total=total,
     )
 
@@ -195,14 +243,14 @@ async def get_entity_articles(
 @router.post("/reprocess/{article_id}", response_model=ReprocessResponse)
 async def reprocess_article(
     article_id: UUID,
-    session: NlpDbSessionDep,
+    repo: SignalsQueryRepoDep,
+    _auth: AdminAuthDep,
 ) -> ReprocessResponse:
     """Requeue an article for reprocessing by inserting a synthetic outbox event.
 
     The event will trigger the outbox dispatcher which republishes to the
     consumer group for re-ingestion.  This is a best-effort admin operation.
     """
-    repo = SqlaSignalsQueryRepo(session)
     found = await ReprocessArticleUseCase().execute(repo, article_id)
     if not found:
         raise HTTPException(status_code=404, detail="Article not found")

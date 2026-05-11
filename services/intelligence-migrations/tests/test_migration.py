@@ -103,9 +103,9 @@ def test_source_trust_weights_seeded(conn: sa.engine.Connection) -> None:
 
 
 def test_relation_type_registry_seeded(conn: sa.engine.Connection) -> None:
-    """20 relation types seeded."""
+    """27 relation types seeded (20 from 0001 + 4 from 0002 + 3 new from 0004)."""
     result = conn.execute(text("SELECT count(*) FROM relation_type_registry"))
-    assert result.scalar() == 20
+    assert result.scalar() == 27
 
 
 def test_relation_type_registry_has_embedding_column(conn: sa.engine.Connection) -> None:
@@ -234,3 +234,1311 @@ def test_entity_embedding_state_pk(conn: sa.engine.Connection) -> None:
     )
     pk_cols = [row[0] for row in result]
     assert pk_cols == ["entity_id", "view_type"]
+
+
+# ── Migration 0002: events columns + relation types ───────────────────────────
+
+
+def test_events_new_columns_exist(conn: sa.engine.Connection) -> None:
+    """Migration 0002 adds event_subtype, source_type, structured_data to events."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, data_type "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'events' "
+            "  AND column_name IN ('event_subtype', 'source_type', 'structured_data') "
+            "ORDER BY column_name"
+        )
+    )
+    rows = {row[0]: row[1] for row in result}
+    assert "event_subtype" in rows, "event_subtype column missing from events"
+    assert "source_type" in rows, "source_type column missing from events"
+    assert "structured_data" in rows, "structured_data column missing from events"
+    assert rows["structured_data"] == "jsonb", f"structured_data expected jsonb, got {rows['structured_data']}"
+
+
+def test_events_new_columns_are_nullable(conn: sa.engine.Connection) -> None:
+    """Migration 0002 event columns are nullable (backward-compatible)."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, is_nullable "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'events' "
+            "  AND column_name IN ('event_subtype', 'source_type', 'structured_data')"
+        )
+    )
+    for col_name, is_nullable in result:
+        assert is_nullable == "YES", f"Column {col_name} expected nullable, got {is_nullable}"
+
+
+def test_events_composite_index_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0002 creates ix_events_entity_type_date index on events parent table."""
+    result = conn.execute(
+        text("SELECT indexname FROM pg_indexes WHERE tablename = 'events' AND indexname = 'ix_events_entity_type_date'")
+    )
+    assert result.fetchone() is not None, "ix_events_entity_type_date index missing from events"
+
+
+def test_relation_type_registry_new_types(conn: sa.engine.Connection) -> None:
+    """Migration 0002 inserts 4 new canonical_types into relation_type_registry."""
+    result = conn.execute(
+        text(
+            "SELECT canonical_type, semantic_mode, decay_class, base_confidence "
+            "FROM relation_type_registry "
+            "WHERE canonical_type IN ('is_in_sector', 'is_in_industry', 'earnings_released', 'corporate_action') "
+            "ORDER BY canonical_type"
+        )
+    )
+    rows = {row[0]: row for row in result}
+    assert len(rows) == 4, f"Expected 4 new relation types, found {len(rows)}"
+
+    # Verify key attributes match the plan spec (§6.4 relation_type_registry)
+    assert rows["is_in_sector"][1] == "RELATION_STATE"
+    assert rows["is_in_sector"][2] == "PERMANENT"
+    assert rows["is_in_sector"][3] == pytest.approx(0.90)
+
+    assert rows["is_in_industry"][1] == "RELATION_STATE"
+    assert rows["is_in_industry"][2] == "DURABLE"
+    assert rows["is_in_industry"][3] == pytest.approx(0.85)
+
+    assert rows["earnings_released"][1] == "TEMPORAL_CLAIM"
+    assert rows["earnings_released"][2] == "MEDIUM"
+    assert rows["earnings_released"][3] == pytest.approx(0.95)
+
+    assert rows["corporate_action"][1] == "TEMPORAL_CLAIM"
+    assert rows["corporate_action"][2] == "DURABLE"
+    assert rows["corporate_action"][3] == pytest.approx(0.90)
+
+
+# ── Migration 0003: fundamentals_ohlcv orphan cleanup ────────────────────────
+
+
+def test_migration_0003_cleanup_preserves_company_rows(conn: sa.engine.Connection) -> None:
+    """Migration 0003 cleanup SQL leaves fundamentals_ohlcv rows for financial_instrument intact."""
+    entity_id = str(uuid.uuid4())
+    conn.execute(
+        text(
+            "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type) "
+            "VALUES (:id, 'Acme Corp', 'financial_instrument')"
+        ),
+        {"id": entity_id},
+    )
+    conn.execute(
+        text("INSERT INTO entity_embedding_state (entity_id, view_type) VALUES (:id, 'fundamentals_ohlcv')"),
+        {"id": entity_id},
+    )
+
+    # Run the same DELETE SQL used in migration 0003.
+    conn.execute(
+        text("""
+            DELETE FROM entity_embedding_state ees
+            WHERE ees.view_type = 'fundamentals_ohlcv'
+              AND EXISTS (
+                  SELECT 1 FROM canonical_entities ce
+                  WHERE ce.entity_id = ees.entity_id
+                    AND ce.entity_type != 'financial_instrument'
+              )
+        """)
+    )
+
+    result = conn.execute(
+        text("SELECT count(*) FROM entity_embedding_state WHERE entity_id = :id AND view_type = 'fundamentals_ohlcv'"),
+        {"id": entity_id},
+    )
+    assert result.scalar() == 1, "fundamentals_ohlcv row for financial_instrument must NOT be deleted"
+    conn.rollback()
+
+
+def test_migration_0003_cleanup_removes_non_company_rows(conn: sa.engine.Connection) -> None:
+    """Migration 0003 cleanup SQL removes fundamentals_ohlcv rows for non-company entities."""
+    non_company_types = ["person", "country", "organization", "regulatory_body", "index"]
+    entity_ids: list[str] = []
+
+    for entity_type in non_company_types:
+        eid = str(uuid.uuid4())
+        entity_ids.append(eid)
+        conn.execute(
+            text("INSERT INTO canonical_entities (entity_id, canonical_name, entity_type) VALUES (:id, :name, :type)"),
+            {"id": eid, "name": f"Test {entity_type}", "type": entity_type},
+        )
+        conn.execute(
+            text("INSERT INTO entity_embedding_state (entity_id, view_type) VALUES (:id, 'fundamentals_ohlcv')"),
+            {"id": eid},
+        )
+
+    # Run the migration cleanup SQL.
+    conn.execute(
+        text("""
+            DELETE FROM entity_embedding_state ees
+            WHERE ees.view_type = 'fundamentals_ohlcv'
+              AND EXISTS (
+                  SELECT 1 FROM canonical_entities ce
+                  WHERE ce.entity_id = ees.entity_id
+                    AND ce.entity_type != 'financial_instrument'
+              )
+        """)
+    )
+
+    result = conn.execute(
+        text(
+            "SELECT count(*) FROM entity_embedding_state "
+            "WHERE entity_id = ANY(:ids) AND view_type = 'fundamentals_ohlcv'"
+        ),
+        {"ids": entity_ids},
+    )
+    assert result.scalar() == 0, "fundamentals_ohlcv rows for non-company entities must all be deleted"
+    conn.rollback()
+
+
+def test_migration_0003_cleanup_preserves_other_view_types(conn: sa.engine.Connection) -> None:
+    """Migration 0003 cleanup SQL does not touch definition or narrative rows."""
+    entity_id = str(uuid.uuid4())
+    conn.execute(
+        text(
+            "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type) VALUES (:id, 'Jane Doe', 'person')"
+        ),
+        {"id": entity_id},
+    )
+    for view_type in ("definition", "narrative", "fundamentals_ohlcv"):
+        conn.execute(
+            text("INSERT INTO entity_embedding_state (entity_id, view_type) VALUES (:id, :vt)"),
+            {"id": entity_id, "vt": view_type},
+        )
+
+    # Run the migration cleanup SQL.
+    conn.execute(
+        text("""
+            DELETE FROM entity_embedding_state ees
+            WHERE ees.view_type = 'fundamentals_ohlcv'
+              AND EXISTS (
+                  SELECT 1 FROM canonical_entities ce
+                  WHERE ce.entity_id = ees.entity_id
+                    AND ce.entity_type != 'financial_instrument'
+              )
+        """)
+    )
+
+    result = conn.execute(
+        text("SELECT view_type FROM entity_embedding_state WHERE entity_id = :id ORDER BY view_type"),
+        {"id": entity_id},
+    )
+    remaining = [row[0] for row in result]
+    assert remaining == ["definition", "narrative"], f"Expected only definition+narrative to remain, got: {remaining}"
+    conn.rollback()
+
+
+# ── Migration 0004: AGE + temporal_events + entity_event_exposures ─────────────
+
+
+def test_temporal_events_table_exists(conn: sa.engine.Connection) -> None:
+    """temporal_events table created by migration 0004."""
+    result = conn.execute(
+        text("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'temporal_events'")
+    )
+    assert result.fetchone() is not None, "temporal_events table missing"
+
+
+def test_temporal_events_columns(conn: sa.engine.Connection) -> None:
+    """temporal_events has all required columns from PRD-0018 §6.4."""
+    result = conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'temporal_events' ORDER BY ordinal_position"
+        )
+    )
+    columns = {row[0] for row in result}
+    required = {
+        "event_id",
+        "event_type",
+        "scope",
+        "region",
+        "title",
+        "description",
+        "source_article_ids",
+        "source_url",
+        "active_from",
+        "active_until",
+        "residual_impact_days",
+        "confidence",
+        "created_at",
+        "updated_at",
+    }
+    missing = required - columns
+    assert not missing, f"temporal_events missing columns: {missing}"
+
+
+def test_temporal_events_natural_key_unique_index(conn: sa.engine.Connection) -> None:
+    """temporal_events has functional unique index for deduplication."""
+    result = conn.execute(
+        text(
+            "SELECT indexname FROM pg_indexes "
+            "WHERE tablename = 'temporal_events' AND indexname = 'uidx_temporal_events_natural_key'"
+        )
+    )
+    assert result.fetchone() is not None, "uidx_temporal_events_natural_key index missing"
+
+
+def test_temporal_events_natural_key_prevents_duplicates(conn: sa.engine.Connection) -> None:
+    """Inserting same (event_type, region, title, active_from::date) twice raises IntegrityError."""
+    eid1 = uuid.uuid4()
+    eid2 = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO temporal_events "
+            "(event_id, event_type, scope, region, title, active_from, residual_impact_days, confidence) "
+            "VALUES (:id, 'macro', 'NATIONAL', 'US', 'CPI Report', '2026-04-01 06:00:00+00', 30, 1.0)"
+        ),
+        {"id": str(eid1)},
+    )
+    with pytest.raises(sa.exc.IntegrityError):
+        conn.execute(
+            text(
+                "INSERT INTO temporal_events "
+                "(event_id, event_type, scope, region, title, active_from, residual_impact_days, confidence) "
+                "VALUES (:id, 'macro', 'NATIONAL', 'US', 'CPI Report', '2026-04-01 08:00:00+00', 30, 1.0)"
+            ),
+            {"id": str(eid2)},
+        )
+    conn.rollback()
+
+
+def test_entity_event_exposures_table_exists(conn: sa.engine.Connection) -> None:
+    """entity_event_exposures table created by migration 0004."""
+    result = conn.execute(
+        text("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = 'entity_event_exposures'")
+    )
+    assert result.fetchone() is not None, "entity_event_exposures table missing"
+
+
+def test_entity_event_exposures_unique_constraint(conn: sa.engine.Connection) -> None:
+    """(event_id, entity_id, exposure_type) is unique in entity_event_exposures."""
+    event_id = uuid.uuid4()
+    entity_id = uuid.uuid4()
+    exp_id1 = uuid.uuid4()
+    exp_id2 = uuid.uuid4()
+    # Insert event first (FK constraint)
+    conn.execute(
+        text(
+            "INSERT INTO temporal_events "
+            "(event_id, event_type, scope, title, active_from, residual_impact_days, confidence) "
+            "VALUES (:eid, 'geopolitical', 'GLOBAL', 'Test Event', '2026-04-01 00:00:00+00', 90, 0.9)"
+        ),
+        {"eid": str(event_id)},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO entity_event_exposures "
+            "(exposure_id, event_id, entity_id, exposure_type, confidence) "
+            "VALUES (:xid, :eid, :entid, 'sector_exposure', 0.9)"
+        ),
+        {"xid": str(exp_id1), "eid": str(event_id), "entid": str(entity_id)},
+    )
+    with pytest.raises(sa.exc.IntegrityError):
+        conn.execute(
+            text(
+                "INSERT INTO entity_event_exposures "
+                "(exposure_id, event_id, entity_id, exposure_type, confidence) "
+                "VALUES (:xid, :eid, :entid, 'sector_exposure', 0.7)"
+            ),
+            {"xid": str(exp_id2), "eid": str(event_id), "entid": str(entity_id)},
+        )
+    conn.rollback()
+
+
+def test_relations_has_updated_at_column(conn: sa.engine.Connection) -> None:
+    """relations table has updated_at TIMESTAMPTZ column (needed by AgeSyncWorker watermark)."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_name = 'relations' AND column_name = 'updated_at'"
+        )
+    )
+    row = result.fetchone()
+    assert row is not None, "relations.updated_at column missing"
+    assert "timestamp" in row[1].lower(), f"Unexpected data_type: {row[1]}"
+
+
+def test_age_extension_active(conn: sa.engine.Connection) -> None:
+    """Apache AGE extension is installed (required for Cypher path queries)."""
+    result = conn.execute(text("SELECT extname FROM pg_extension WHERE extname = 'age'"))
+    assert result.fetchone() is not None, "AGE extension not installed"
+
+
+def test_prd_0018_relation_types_seeded(conn: sa.engine.Connection) -> None:
+    """3 new relation types from PRD-0018 are seeded in relation_type_registry."""
+    result = conn.execute(
+        text(
+            "SELECT canonical_type FROM relation_type_registry "
+            "WHERE canonical_type IN ('has_executive', 'revenue_from_country', 'operates_in_country') "
+            "ORDER BY canonical_type"
+        )
+    )
+    seeded = {row[0] for row in result}
+    assert seeded == {"has_executive", "revenue_from_country", "operates_in_country"}
+
+
+# ── PLAN-0057 A-2: entity_aliases UNIQUE per (entity_id, normalized, alias_type) ───
+
+
+def test_entity_aliases_uidx_entity_norm_type_exists(conn: sa.engine.Connection) -> None:
+    """The PLAN-0057 A-2 unique index is present after migration 0008."""
+    result = conn.execute(
+        text("SELECT indexdef FROM pg_indexes WHERE indexname = 'uidx_entity_aliases_entity_norm_type'")
+    )
+    row = result.scalar_one_or_none()
+    assert row is not None, "uidx_entity_aliases_entity_norm_type missing — migration 0008 did not run"
+    # Sanity-check the index covers the right columns
+    assert "entity_id" in row
+    assert "normalized_alias_text" in row
+    assert "alias_type" in row
+    assert "is_active" in row  # partial: WHERE is_active = true
+
+
+def test_entity_aliases_unique_blocks_duplicate_ticker(conn: sa.engine.Connection) -> None:
+    """Inserting two TICKER aliases with same (entity_id, normalized_alias_text)
+    raises IntegrityError. This guards the 32-of-38 duplicate seed_demo TICKER
+    pattern called out in audit F-CRIT-12.
+    """
+    eid = uuid.uuid4()
+    # Need a canonical to satisfy FK
+    conn.execute(
+        text(
+            "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type, metadata) "
+            "VALUES (:eid, 'TestCo', 'financial_instrument', '{}'::jsonb)"
+        ),
+        {"eid": str(eid)},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO entity_aliases (entity_id, alias_text, normalized_alias_text, alias_type, is_active, source) "
+            "VALUES (:eid, 'TSTC', 'tstc', 'TICKER', true, 'test')"
+        ),
+        {"eid": str(eid)},
+    )
+    with pytest.raises(sa.exc.IntegrityError):
+        conn.execute(
+            text(
+                "INSERT INTO entity_aliases "
+                "(entity_id, alias_text, normalized_alias_text, alias_type, is_active, source) "
+                "VALUES (:eid, 'TSTC', 'tstc', 'TICKER', true, 'test_dup')"
+            ),
+            {"eid": str(eid)},
+        )
+    conn.rollback()
+
+
+def test_entity_aliases_unique_allows_distinct_alias_types(conn: sa.engine.Connection) -> None:
+    """Two aliases with same (entity_id, normalized_alias_text) but DIFFERENT
+    alias_types are allowed (e.g., 'AAPL' as both TICKER and PRIMARY_TICKER).
+    """
+    eid = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type, metadata) "
+            "VALUES (:eid, 'AlphaCo', 'financial_instrument', '{}'::jsonb)"
+        ),
+        {"eid": str(eid)},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO entity_aliases (entity_id, alias_text, normalized_alias_text, alias_type, is_active, source) "
+            "VALUES (:eid, 'ALFA', 'alfa', 'TICKER', true, 'test')"
+        ),
+        {"eid": str(eid)},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO entity_aliases (entity_id, alias_text, normalized_alias_text, alias_type, is_active, source) "
+            "VALUES (:eid, 'ALFA', 'alfa', 'PRIMARY_TICKER', true, 'test')"
+        ),
+        {"eid": str(eid)},
+    )
+    conn.rollback()
+
+
+def test_entity_aliases_unique_allows_distinct_entities(conn: sa.engine.Connection) -> None:
+    """Same alias_text + alias_type for two DIFFERENT entities is allowed (the
+    older partial unique index handles cross-entity uniqueness for EXACT only).
+    """
+    eid_a = uuid.uuid4()
+    eid_b = uuid.uuid4()
+    for eid, name in ((eid_a, "AlphaCo"), (eid_b, "BravoCo")):
+        conn.execute(
+            text(
+                "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type, metadata) "
+                "VALUES (:eid, :name, 'financial_instrument', '{}'::jsonb)"
+            ),
+            {"eid": str(eid), "name": name},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO entity_aliases "
+                "(entity_id, alias_text, normalized_alias_text, alias_type, is_active, source) "
+                "VALUES (:eid, 'XYZ', 'xyz', 'CUSIP', true, 'test')"
+            ),
+            {"eid": str(eid)},
+        )
+    conn.rollback()
+
+
+# ── PLAN-0057 A-3: canonical-seed bootstrap (F-CRIT-10) ──────────────────────
+
+
+def test_seed_canonicals_F_CRIT_10_present_per_class(conn: sa.engine.Connection) -> None:
+    """Migration 0009 seeds at least the expected minimum count per entity_type."""
+    expected_min = {
+        "currency": 30,
+        "regulatory_body": 20,
+        "government_body": 20,
+        "index": 25,
+        "commodity": 20,
+        "macroeconomic_indicator": 25,
+        "location": 25,
+        "person": 15,
+        "financial_institution": 5,
+    }
+    for etype, mn in expected_min.items():
+        row = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM canonical_entities "
+                "WHERE entity_type = :t AND metadata ->> 'seed_source' = 'F-CRIT-10'"
+            ),
+            {"t": etype},
+        ).scalar_one()
+        assert row >= mn, f"{etype}: expected >= {mn}, got {row}"
+
+
+def test_seed_canonicals_have_descriptions(conn: sa.engine.Connection) -> None:
+    """Every F-CRIT-10 seed has a non-empty description in metadata."""
+    missing = conn.execute(
+        text(
+            "SELECT canonical_name FROM canonical_entities "
+            "WHERE metadata ->> 'seed_source' = 'F-CRIT-10' "
+            "AND (metadata ->> 'description' IS NULL OR length(metadata ->> 'description') < 20)"
+        )
+    ).fetchall()
+    assert not missing, f"Seeded canonicals missing/short descriptions: {[r[0] for r in missing]}"
+
+
+def test_seed_canonicals_have_at_least_one_exact_alias(conn: sa.engine.Connection) -> None:
+    """Every F-CRIT-10 seed has at least 1 EXACT alias (matches own name)."""
+    missing = conn.execute(
+        text(
+            "SELECT ce.canonical_name FROM canonical_entities ce "
+            "WHERE ce.metadata ->> 'seed_source' = 'F-CRIT-10' "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM entity_aliases ea "
+            "  WHERE ea.entity_id = ce.entity_id AND ea.alias_type = 'EXACT' AND ea.is_active"
+            ")"
+        )
+    ).fetchall()
+    assert not missing, f"Seeded canonicals without EXACT alias: {[r[0] for r in missing]}"
+
+
+def test_seed_canonicals_have_two_embedding_state_rows(conn: sa.engine.Connection) -> None:
+    """Every F-CRIT-10 seed has exactly 2 entity_embedding_state rows
+    (definition + narrative). financial_instrument's third view is N/A here
+    because none of the F-CRIT-10 seeds are financial_instrument type.
+    """
+    rows = conn.execute(
+        text(
+            "SELECT ce.entity_id, COUNT(ees.view_type) "
+            "FROM canonical_entities ce "
+            "LEFT JOIN entity_embedding_state ees ON ees.entity_id = ce.entity_id "
+            "WHERE ce.metadata ->> 'seed_source' = 'F-CRIT-10' "
+            "GROUP BY ce.entity_id"
+        )
+    ).fetchall()
+    assert rows, "Expected F-CRIT-10 seeds with embedding_state rows"
+    for entity_id, n_views in rows:
+        assert n_views == 2, f"{entity_id}: expected 2 views, got {n_views}"
+
+
+def test_seed_currency_has_iso_code_metadata(conn: sa.engine.Connection) -> None:
+    """Currencies carry an ``iso_code`` metadata field (sanity-check for downstream UI)."""
+    missing = conn.execute(
+        text(
+            "SELECT canonical_name FROM canonical_entities "
+            "WHERE entity_type = 'currency' AND metadata ->> 'seed_source' = 'F-CRIT-10' "
+            "AND metadata ->> 'iso_code' IS NULL"
+        )
+    ).fetchall()
+    assert not missing, f"Currency seeds missing iso_code: {[r[0] for r in missing]}"
+
+
+def test_seed_round_trip_idempotent(conn: sa.engine.Connection) -> None:
+    """Re-applying the data via the same INSERT pattern is idempotent."""
+    before = conn.execute(
+        text("SELECT COUNT(*) FROM canonical_entities WHERE metadata ->> 'seed_source' = 'F-CRIT-10'")
+    ).scalar_one()
+    # Exercise the ON CONFLICT DO NOTHING path with a known-existing entity_id.
+    eid = conn.execute(
+        text("SELECT entity_id FROM canonical_entities WHERE metadata ->> 'seed_source' = 'F-CRIT-10' LIMIT 1")
+    ).scalar_one()
+    conn.execute(
+        text(
+            "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type, metadata) "
+            "VALUES (:eid, 'Re-attempt', 'currency', '{\"seed_source\":\"F-CRIT-10\"}'::jsonb) "
+            "ON CONFLICT (entity_id) DO NOTHING"
+        ),
+        {"eid": eid},
+    )
+    after = conn.execute(
+        text("SELECT COUNT(*) FROM canonical_entities WHERE metadata ->> 'seed_source' = 'F-CRIT-10'")
+    ).scalar_one()
+    assert before == after
+
+
+# ── PLAN-0057 QA pass — additional coverage from 2026-04-30 audit ─────────────
+
+
+def test_seed_canonicals_exclude_ambiguous_last_names(conn: sa.engine.Connection) -> None:
+    """F-MINOR-04 follow-up: Cook / Fink / Pick last names are explicitly
+    excluded from the seed because they are common English words (Tim Cook is
+    seeded as 'Tim Cook' but NOT as just 'Cook'). Verify the absence to guard
+    against future migrations that might forget this exclusion.
+    """
+    excluded_last_names = ("Cook", "Fink", "Pick")
+    for last_name in excluded_last_names:
+        rows = conn.execute(
+            text(
+                "SELECT ea.alias_text, ce.canonical_name "
+                "FROM entity_aliases ea "
+                "JOIN canonical_entities ce ON ce.entity_id = ea.entity_id "
+                "WHERE ea.alias_text = :ln "
+                "AND ea.alias_type = 'EXACT' "
+                "AND ce.metadata ->> 'seed_source' = 'F-CRIT-10'"
+            ),
+            {"ln": last_name},
+        ).fetchall()
+        assert (
+            not rows
+        ), f"Last-name-only alias '{last_name}' should be excluded to avoid common-word collision; found rows: {rows}"
+
+
+def test_entity_aliases_pre_clean_actually_dedups(conn: sa.engine.Connection) -> None:
+    """F-MINOR-04 follow-up: simulate the duplicate scenario the Wave A-2 pre-
+    clean DELETE was written to handle, then verify only one row survives per
+    (entity_id, normalized_alias_text, alias_type) triple.
+
+    We can't easily replay the migration, but we CAN insert duplicates and run
+    the pre-clean SQL inline to verify its semantics. The (created_at, alias_id)
+    ordering ensures the OLDEST row is preserved.
+    """
+    eid = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type, metadata) "
+            "VALUES (:eid, 'PreCleanCo', 'financial_instrument', '{}'::jsonb)"
+        ),
+        {"eid": str(eid)},
+    )
+    # Insert 3 duplicate aliases with explicit timestamps. is_active=false on
+    # all so neither the existing 0001 partial unique index nor the new 0008
+    # uidx_entity_aliases_entity_norm_type fires (both are partial WHERE is_active).
+    for hours_ago in (3, 2, 1):
+        conn.execute(
+            text(
+                "INSERT INTO entity_aliases "
+                "(entity_id, alias_text, normalized_alias_text, alias_type, is_active, source, created_at) "
+                "VALUES (:eid, 'PCC', 'pcc', 'TICKER', false, 'test_dup', "
+                "        now() - (:h || ' hours')::interval)"
+            ),
+            {"eid": str(eid), "h": str(hours_ago)},
+        )
+    # Run the same pre-clean SQL the migration uses.
+    conn.execute(
+        text(
+            "DELETE FROM entity_aliases a "
+            "USING entity_aliases b "
+            "WHERE (a.created_at, a.alias_id) > (b.created_at, b.alias_id) "
+            "AND a.entity_id              = b.entity_id "
+            "AND a.normalized_alias_text  = b.normalized_alias_text "
+            "AND a.alias_type             = b.alias_type"
+        )
+    )
+    # Verify exactly one survivor remains for this triple.
+    n = conn.execute(
+        text(
+            "SELECT COUNT(*) FROM entity_aliases "
+            "WHERE entity_id = :eid AND normalized_alias_text = 'pcc' AND alias_type = 'TICKER'"
+        ),
+        {"eid": str(eid)},
+    ).scalar_one()
+    assert n == 1, f"Pre-clean DELETE should keep exactly 1 row, kept {n}"
+    conn.rollback()
+
+
+# ── PLAN-0057 C-5 (T-C-5-03) — sector seed self-aliases ──────────────────────
+#
+# These tests apply seeds/003_seed_sector_entities.sql in-test (the file is a
+# free-standing seed script — not wired into Alembic — so we read it from disk
+# and execute it against the migrated test DB) and assert that every sector
+# and industry_group canonical row has at least 1 active EXACT alias whose
+# alias_text matches its own canonical_name.
+
+
+def _read_seed_003_sql() -> str:
+    """Read the seed file from the package; located at intelligence-migrations/seeds/003_*.sql."""
+    import os
+
+    seed_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "seeds",
+        "003_seed_sector_entities.sql",
+    )
+    with open(os.path.abspath(seed_path), encoding="utf-8") as f:
+        return f.read()
+
+
+def test_seed_003_sector_canonicals_have_exact_self_alias(conn: sa.engine.Connection) -> None:
+    """PLAN-0057 C-5 (T-C-5-03): every sector + industry_group canonical seeded
+    by 003_seed_sector_entities.sql gains an EXACT alias_text == canonical_name
+    via the appended INSERT … SELECT block.
+    """
+    # Apply the seed file. ON CONFLICT DO NOTHING makes this idempotent w.r.t.
+    # existing canonical rows; the appended alias INSERT also uses ON CONFLICT.
+    conn.execute(text(_read_seed_003_sql()))
+
+    missing = conn.execute(
+        text(
+            """
+SELECT ce.canonical_name
+FROM canonical_entities ce
+WHERE ce.entity_type IN ('sector', 'industry_group')
+  AND (ce.entity_id::text LIKE '0195daad-a0%' OR ce.entity_id::text LIKE '0195daad-b0%')
+  AND NOT EXISTS (
+        SELECT 1 FROM entity_aliases ea
+        WHERE ea.entity_id = ce.entity_id
+          AND ea.alias_type = 'EXACT'
+          AND ea.is_active
+          AND lower(ea.alias_text) = lower(ce.canonical_name)
+  )
+"""
+        )
+    ).fetchall()
+    assert not missing, f"Sector/industry_group canonicals missing EXACT self-alias: {[r[0] for r in missing]}"
+    conn.rollback()
+
+
+# ── PLAN-0073 Wave A-1: enrichment columns + relation provenance ──────────────
+
+
+def test_canonical_entities_enrichment_columns_exist(conn: sa.engine.Connection) -> None:
+    """Migration 0022 adds description, data_completeness, enriched_at, enrichment_attempts."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, data_type, is_nullable, column_default "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'canonical_entities' "
+            "  AND column_name IN ('description', 'data_completeness', 'enriched_at', 'enrichment_attempts') "
+            "ORDER BY column_name"
+        )
+    )
+    rows = {row[0]: (row[1], row[2], row[3]) for row in result}
+
+    assert "description" in rows, "description column missing from canonical_entities"
+    assert rows["description"][1] == "YES", "description must be nullable"
+
+    assert "data_completeness" in rows, "data_completeness column missing"
+    assert rows["data_completeness"][1] == "YES", "data_completeness must be nullable"
+
+    assert "enriched_at" in rows, "enriched_at column missing"
+    assert rows["enriched_at"][1] == "YES", "enriched_at must be nullable"
+
+    assert "enrichment_attempts" in rows, "enrichment_attempts column missing"
+    assert rows["enrichment_attempts"][1] == "NO", "enrichment_attempts must be NOT NULL"
+    assert rows["enrichment_attempts"][2] == "0", "enrichment_attempts default must be 0"
+
+
+def test_enrichment_sweep_index_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0022 creates ix_canonical_entities_enrichment_sweep partial index."""
+    result = conn.execute(
+        text("SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_canonical_entities_enrichment_sweep'")
+    )
+    row = result.scalar_one_or_none()
+    assert row is not None, "ix_canonical_entities_enrichment_sweep index missing"
+    assert "enrichment_attempts" in row
+    assert "enriched_at" in row
+    assert "enrichment_attempts < 3" in row
+
+
+def test_enrichment_attempts_defaults_to_zero_on_insert(conn: sa.engine.Connection) -> None:
+    """New canonical_entities rows get enrichment_attempts=0 without explicit value."""
+    import uuid as _uuid
+
+    eid = str(_uuid.uuid4())
+    conn.execute(
+        text(
+            "INSERT INTO canonical_entities (entity_id, canonical_name, entity_type) "
+            "VALUES (:eid, 'TestEnrichCo', 'financial_instrument')"
+        ),
+        {"eid": eid},
+    )
+    val = conn.execute(
+        text("SELECT enrichment_attempts FROM canonical_entities WHERE entity_id = :eid"),
+        {"eid": eid},
+    ).scalar_one()
+    assert val == 0, f"enrichment_attempts should default to 0, got {val}"
+    conn.rollback()
+
+
+def test_relation_type_registry_source_columns_exist(conn: sa.engine.Connection) -> None:
+    """Migration 0023 adds data_source and source_field to relation_type_registry."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, is_nullable "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'relation_type_registry' "
+            "  AND column_name IN ('data_source', 'source_field') "
+            "ORDER BY column_name"
+        )
+    )
+    rows = {row[0]: row[1] for row in result}
+    assert "data_source" in rows, "data_source column missing from relation_type_registry"
+    assert rows["data_source"] == "YES", "data_source must be nullable"
+    assert "source_field" in rows, "source_field column missing from relation_type_registry"
+    assert rows["source_field"] == "YES", "source_field must be nullable"
+
+
+def test_relation_type_registry_market_data_mappings_seeded(conn: sa.engine.Connection) -> None:
+    """Migration 0023 seeds 4 market-data relation type mappings.
+
+    QA report 2026-05-05 (F-D01/F-D03/F-A06): consolidated from the original
+    six-row EODHD+market_data seed to four lowercase market_data rows. The
+    canonical_type values MUST match the lowercase forms seeded by migrations
+    0001/0002 (else the UPDATE matches zero rows). The source_field values MUST
+    match the normalized metadata keys (sector / industry / country / exchange)
+    used by S2/S5 enrichment payloads, NOT the EODHD-prefixed dotted paths.
+    """
+    result = conn.execute(
+        text(
+            "SELECT canonical_type, data_source, source_field "
+            "FROM relation_type_registry "
+            "WHERE data_source IS NOT NULL "
+            "ORDER BY canonical_type, data_source"
+        )
+    )
+    rows = [(r[0], r[1], r[2]) for r in result]
+    expected = {
+        ("is_in_sector", "market_data", "sector"),
+        ("is_in_industry", "market_data", "industry"),
+        ("headquartered_in", "market_data", "country"),
+        ("listed_on", "market_data", "exchange"),
+    }
+    assert set(rows) == expected, f"Unexpected seed data: {rows}"
+
+
+def test_relation_type_registry_seed_idempotent(conn: sa.engine.Connection) -> None:
+    """Re-applying the seed UPDATE does not change rows that already have data_source."""
+    # Verify that rows updated by 0023 keep their values after a second UPDATE
+    conn.execute(
+        sa.text(
+            "UPDATE relation_type_registry "
+            "SET data_source = :src, source_field = :field "
+            "WHERE canonical_type = :type AND data_source IS NULL"
+        ).bindparams(src="market_data", field="sector", type="is_in_sector")
+    )
+    result = conn.execute(
+        text(
+            "SELECT COUNT(*) FROM relation_type_registry "
+            "WHERE canonical_type = 'is_in_sector' AND data_source = 'market_data'"
+        )
+    ).scalar_one()
+    # Still exactly 1 row — the second UPDATE was a no-op (data_source IS NULL condition)
+    assert result == 1, f"Seed idempotency broken: found {result} rows"
+    conn.rollback()
+
+
+def test_relations_relation_source_column_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0024 adds relation_source TEXT NULL to the relations table."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, is_nullable "
+            "FROM information_schema.columns "
+            "WHERE table_name = 'relations' AND column_name = 'relation_source'"
+        )
+    )
+    row = result.fetchone()
+    assert row is not None, "relation_source column missing from relations"
+    assert row[1] == "YES", "relation_source must be nullable"
+
+
+def test_relations_partitions_have_relation_source(conn: sa.engine.Connection) -> None:
+    """relation_source column is present on all 8 child partitions."""
+    for i in range(8):
+        result = conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = :partition AND column_name = 'relation_source'"
+            ),
+            {"partition": f"relations_p{i}"},
+        )
+        assert result.fetchone() is not None, f"relation_source missing from relations_p{i}"
+
+
+def test_relations_relation_source_nullable_on_existing_rows(conn: sa.engine.Connection) -> None:
+    """Inserting a relation without relation_source leaves it NULL."""
+    import uuid as _uuid
+
+    s = str(_uuid.uuid4())
+    o = str(_uuid.uuid4())
+    conn.execute(
+        text(
+            "INSERT INTO relations "
+            "(subject_entity_id, canonical_type, object_entity_id, decay_class, decay_alpha) "
+            "VALUES (:s, 'employs', :o, 'DURABLE', 0.000950)"
+        ),
+        {"s": s, "o": o},
+    )
+    val = conn.execute(
+        text("SELECT relation_source FROM relations WHERE subject_entity_id = :s"),
+        {"s": s},
+    ).scalar_one_or_none()
+    assert val is None, f"relation_source should default to NULL, got {val!r}"
+    conn.rollback()
+
+
+def test_seed_003_sector_self_alias_idempotent(conn: sa.engine.Connection) -> None:
+    """PLAN-0057 C-5: re-running 003_seed_sector_entities.sql does not create
+    duplicate alias rows — the ON CONFLICT clause on the partial UNIQUE index
+    `uidx_entity_aliases_entity_norm_type` short-circuits.
+    """
+    seed_sql = _read_seed_003_sql()
+
+    # First application
+    conn.execute(text(seed_sql))
+    count_before = conn.execute(
+        text("SELECT COUNT(*) FROM entity_aliases WHERE source = '003_seed' AND alias_type = 'EXACT' AND is_active")
+    ).scalar_one()
+    assert count_before > 0, "Expected the seed to insert at least one '003_seed' EXACT alias"
+
+    # Second application (idempotent re-run)
+    conn.execute(text(seed_sql))
+    count_after = conn.execute(
+        text("SELECT COUNT(*) FROM entity_aliases WHERE source = '003_seed' AND alias_type = 'EXACT' AND is_active")
+    ).scalar_one()
+    assert count_after == count_before, f"Re-run created duplicates: {count_before} → {count_after}"
+    conn.rollback()
+
+
+# ── PLAN-0057 follow-up Wave A (D-005): CONCURRENTLY alias-norm index ────────
+
+
+def test_migration_0011_alias_norm_stage2_index_exists(conn: sa.engine.Connection) -> None:
+    """After ``alembic upgrade head`` migration 0011 leaves the Stage-2 index in place.
+
+    The migration drops + re-creates ``idx_entity_aliases_norm_stage2`` with
+    ``CREATE INDEX CONCURRENTLY``. The end state must be identical to the
+    pre-migration state (same name, same columns, same partial predicate)
+    so the planner keeps using it.
+    """
+    result = conn.execute(text("SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_entity_aliases_norm_stage2'"))
+    row = result.scalar_one_or_none()
+    assert row is not None, "idx_entity_aliases_norm_stage2 missing — migration 0011 did not leave it in place"
+    # Sanity-check: same shape as 0010/0011 definition.
+    assert "normalized_alias_text" in row
+    assert "alias_type" in row
+    assert "TICKER" in row
+    assert "PRIMARY_TICKER" in row
+    assert "ISIN" in row
+    assert "is_active" in row
+
+
+# ── PLAN-0074 Wave A: intelligence layer DDL migrations 0031-0036 ──────────────
+
+
+def test_entity_narrative_versions_table_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0031 creates entity_narrative_versions with all required columns."""
+    result = conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'entity_narrative_versions' ORDER BY ordinal_position"
+        )
+    )
+    columns = {row[0] for row in result}
+    required = {
+        "version_id",
+        "entity_id",
+        "tenant_id",
+        "narrative_text",
+        "model_id",
+        "generation_reason",
+        "input_snapshot",
+        "generated_at",
+        "is_current",
+        "word_count",
+        "quality_score",
+    }
+    missing = required - columns
+    assert not missing, f"entity_narrative_versions missing columns: {missing}"
+
+
+def test_entity_narrative_versions_partial_unique_index(conn: sa.engine.Connection) -> None:
+    """Migration 0031 creates partial UNIQUE index uq_entity_narrative_current."""
+    result = conn.execute(text("SELECT indexdef FROM pg_indexes WHERE indexname = 'uq_entity_narrative_current'"))
+    row = result.scalar_one_or_none()
+    assert row is not None, "uq_entity_narrative_current index missing"
+    assert "is_current" in row, f"Partial predicate missing from index definition: {row}"
+
+
+def test_canonical_entities_narrative_pointer_columns(conn: sa.engine.Connection) -> None:
+    """Migration 0031 adds current_narrative_version_id and health_score to canonical_entities."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, is_nullable FROM information_schema.columns "
+            "WHERE table_name = 'canonical_entities' "
+            "  AND column_name IN ('current_narrative_version_id', 'health_score') "
+            "ORDER BY column_name"
+        )
+    )
+    rows = {row[0]: row[1] for row in result}
+    assert "current_narrative_version_id" in rows, "current_narrative_version_id missing from canonical_entities"
+    assert rows["current_narrative_version_id"] == "YES", "current_narrative_version_id must be nullable"
+    assert "health_score" in rows, "health_score missing from canonical_entities"
+    assert rows["health_score"] == "YES", "health_score must be nullable"
+
+
+def test_path_insight_jobs_table_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0032 creates path_insight_jobs with required columns."""
+    result = conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'path_insight_jobs' ORDER BY ordinal_position"
+        )
+    )
+    columns = {row[0] for row in result}
+    required = {
+        "job_id",
+        "entity_id",
+        "tenant_id",
+        "status",
+        "claimed_by",
+        "claimed_at",
+        "completed_at",
+        "paths_found",
+        "error_text",
+        "retry_count",
+    }
+    missing = required - columns
+    assert not missing, f"path_insight_jobs missing columns: {missing}"
+
+
+def test_path_insight_jobs_unique_active_index(conn: sa.engine.Connection) -> None:
+    """Migration 0032 creates partial UNIQUE index preventing 2 active jobs per entity."""
+    result = conn.execute(text("SELECT indexdef FROM pg_indexes WHERE indexname = 'uq_path_insight_jobs_active'"))
+    row = result.scalar_one_or_none()
+    assert row is not None, "uq_path_insight_jobs_active index missing"
+    assert "entity_id" in row, f"entity_id missing from index: {row}"
+    assert "pending" in row or "running" in row, f"Partial predicate missing from index: {row}"
+
+
+def test_path_insights_table_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0032 creates path_insights with all required columns."""
+    result = conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'path_insights' ORDER BY ordinal_position"
+        )
+    )
+    columns = {row[0] for row in result}
+    required = {
+        "insight_id",
+        "anchor_entity_id",
+        "tenant_id",
+        "path_nodes",
+        "path_edges",
+        "hop_count",
+        "harmonic_score",
+        "diversity_score",
+        "surprise_score",
+        "template_match",
+        "composite_score",
+        "llm_explanation",
+        "explanation_model",
+        "computed_at",
+        "explanation_at",
+    }
+    missing = required - columns
+    assert not missing, f"path_insights missing columns: {missing}"
+
+
+def test_relations_contra_active_index_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0033 creates idx_relations_contra_active partial index."""
+    result = conn.execute(text("SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_relations_contra_active'"))
+    row = result.scalar_one_or_none()
+    assert row is not None, "idx_relations_contra_active index missing"
+    assert "strongest_contra_score" in row or "contra" in row.lower(), f"Partial predicate missing from index: {row}"
+
+
+def test_relations_active_period_index_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0033 creates idx_relations_active_period partial index."""
+    result = conn.execute(text("SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_relations_active_period'"))
+    row = result.scalar_one_or_none()
+    assert row is not None, "idx_relations_active_period index missing"
+    assert "valid_to IS NULL" in row or "ongoing" in row.lower(), f"Partial predicate missing: {row}"
+
+
+def test_relations_period_type_check_constraint(conn: sa.engine.Connection) -> None:
+    """Migration 0033 adds CHECK constraint on relation_period_type."""
+    result = conn.execute(
+        text(
+            "SELECT conname FROM pg_constraint "
+            "WHERE conrelid = 'relations'::regclass AND conname = 'chk_relation_period_type'"
+        )
+    )
+    assert result.fetchone() is not None, "chk_relation_period_type constraint missing from relations"
+
+
+def test_relation_summaries_hnsw_index_has_correct_predicate(conn: sa.engine.Connection) -> None:
+    """Migration 0034 ensures idx_relation_summary_emb_hnsw has correct partial predicate."""
+    result = conn.execute(text("SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_relation_summary_emb_hnsw'"))
+    row = result.scalar_one_or_none()
+    assert row is not None, "idx_relation_summary_emb_hnsw index missing"
+    assert "is_current" in row, f"is_current condition missing from index: {row}"
+    assert "summary_embedding IS NOT NULL" in row, f"NOT NULL condition missing from index: {row}"
+
+
+def test_relation_evidence_raw_source_columns_exist(conn: sa.engine.Connection) -> None:
+    """Migration 0035 adds source_name and source_type to relation_evidence_raw."""
+    result = conn.execute(
+        text(
+            "SELECT column_name, is_nullable FROM information_schema.columns "
+            "WHERE table_name = 'relation_evidence_raw' "
+            "  AND column_name IN ('source_name', 'source_type') "
+            "ORDER BY column_name"
+        )
+    )
+    rows = {row[0]: row[1] for row in result}
+    assert "source_name" in rows, "source_name column missing from relation_evidence_raw"
+    assert rows["source_name"] == "YES", "source_name must be nullable"
+    assert "source_type" in rows, "source_type column missing from relation_evidence_raw"
+    assert rows["source_type"] == "YES", "source_type must be nullable"
+
+
+def test_relation_evidence_source_diversity_index_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0035 creates idx_relation_evidence_source_diversity partial index."""
+    result = conn.execute(
+        text("SELECT indexdef FROM pg_indexes " "WHERE indexname = 'idx_relation_evidence_source_diversity'")
+    )
+    row = result.scalar_one_or_none()
+    assert row is not None, "idx_relation_evidence_source_diversity index missing"
+    assert "processed" in row, f"processed partial predicate missing from index: {row}"
+
+
+def test_path_templates_table_exists(conn: sa.engine.Connection) -> None:
+    """Migration 0036 creates path_templates table with all required columns."""
+    result = conn.execute(
+        text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'path_templates' ORDER BY ordinal_position"
+        )
+    )
+    columns = {row[0] for row in result}
+    required = {
+        "template_id",
+        "template_name",
+        "entity_type_sequence",
+        "relation_type_sequence",
+        "description",
+        "enabled",
+        "created_at",
+    }
+    missing = required - columns
+    assert not missing, f"path_templates missing columns: {missing}"
+
+
+def test_path_templates_seeded(conn: sa.engine.Connection) -> None:
+    """Migration 0036 seeds 3 enabled templates."""
+    result = conn.execute(text("SELECT COUNT(*) FROM path_templates WHERE enabled = TRUE"))
+    count = result.scalar()
+    assert count >= 3, f"Expected >= 3 enabled path_templates, got {count}"
+
+
+def test_path_templates_seed_names(conn: sa.engine.Connection) -> None:
+    """Migration 0036 seeds the 3 expected template names."""
+    result = conn.execute(
+        text(
+            "SELECT template_name FROM path_templates "
+            "WHERE template_name IN ('supply_chain_3hop', 'financial_holding_chain', 'sector_supply_chain') "
+            "ORDER BY template_name"
+        )
+    )
+    names = {row[0] for row in result}
+    assert names == {
+        "supply_chain_3hop",
+        "financial_holding_chain",
+        "sector_supply_chain",
+    }, f"Unexpected seed template names: {names}"
+
+
+def test_path_templates_sequences_are_jsonb_arrays(conn: sa.engine.Connection) -> None:
+    """Migration 0036 seed rows have entity_type_sequence and relation_type_sequence as JSON arrays."""
+    result = conn.execute(
+        text(
+            "SELECT template_name, jsonb_typeof(entity_type_sequence), jsonb_typeof(relation_type_sequence) "
+            "FROM path_templates"
+        )
+    )
+    for name, ets_type, rts_type in result:
+        assert ets_type == "array", f"{name}.entity_type_sequence is not a JSON array (got {ets_type})"
+        assert rts_type == "array", f"{name}.relation_type_sequence is not a JSON array (got {rts_type})"
+
+
+# ── Migration 0037: defensive re-create of temporal_events / event_exposures ──
+#
+# Regression coverage for D-P3-002 / D-P3-003 (and D-P1-002 / D-P1-003): the
+# 2026-05-09 P3 audit caught a Postgres volume that had advanced its
+# alembic_version stamp past 0007 + 0018 but lacked the actual ``temporal_events``
+# / ``entity_event_exposures`` tables. Migration 0037 re-runs the CREATE TABLE
+# IF NOT EXISTS DDL so the gold-write path is restored without manual SQL.
+
+
+def test_migration_0037_creates_temporal_events_when_missing(conn: sa.engine.Connection) -> None:
+    """Drop temporal_events + entity_event_exposures inside a transaction, then
+    re-apply the 0037 DDL fragments and verify both tables come back.
+
+    We do not actually re-run alembic because the test fixture already ran
+    upgrade head end-to-end; instead we exercise the SAME DDL constants that
+    the migration imports so any drift between the test and the migration is
+    caught immediately.
+    """
+    # Sanity check: tables exist after `alembic upgrade head` ran in the
+    # session-scoped fixture. If this fails the broader migration chain is
+    # broken and the rest of the test is meaningless.
+    pre_temporal = conn.execute(text("SELECT 1 FROM pg_class WHERE relname = 'temporal_events'")).fetchone()
+    pre_exposure = conn.execute(text("SELECT 1 FROM pg_class WHERE relname = 'entity_event_exposures'")).fetchone()
+    assert pre_temporal is not None, "fixture precondition: temporal_events must exist after upgrade head"
+    assert pre_exposure is not None, "fixture precondition: entity_event_exposures must exist after upgrade head"
+
+    # Simulate the audit's drift: drop both tables. CASCADE handles the FK
+    # from entity_event_exposures → temporal_events automatically.
+    conn.execute(text("DROP TABLE IF EXISTS entity_event_exposures CASCADE"))
+    conn.execute(text("DROP TABLE IF EXISTS temporal_events CASCADE"))
+    assert (
+        conn.execute(text("SELECT 1 FROM pg_class WHERE relname = 'temporal_events'")).fetchone() is None
+    ), "test setup: temporal_events should be gone after DROP"
+
+    # Import the live DDL constants from migration 0037 and execute them
+    # directly; if the migration body changes shape, this test follows.
+    import importlib.util
+    import os
+
+    migration_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "alembic",
+        "versions",
+        "0037_recreate_temporal_events_idempotent.py",
+    )
+    spec = importlib.util.spec_from_file_location("mig_0037", os.path.abspath(migration_path))
+    assert spec is not None and spec.loader is not None
+    mig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig)
+
+    conn.execute(text(mig._CREATE_TEMPORAL_EVENTS))
+    for stmt in mig._CREATE_TEMPORAL_EVENTS_INDEXES:
+        conn.execute(text(stmt))
+    conn.execute(text(mig._CREATE_ENTITY_EVENT_EXPOSURES))
+    for stmt in mig._CREATE_ENTITY_EVENT_EXPOSURES_INDEXES:
+        conn.execute(text(stmt))
+
+    # Tables back, indexes back, CHECK widened for 'corporate'.
+    assert conn.execute(text("SELECT 1 FROM pg_class WHERE relname = 'temporal_events'")).fetchone() is not None
+    assert conn.execute(text("SELECT 1 FROM pg_class WHERE relname = 'entity_event_exposures'")).fetchone() is not None
+    natural_key = conn.execute(
+        text("SELECT 1 FROM pg_indexes WHERE indexname = 'uidx_temporal_events_natural_key'")
+    ).fetchone()
+    assert natural_key is not None, "natural-key unique index must be re-created"
+
+    conn.rollback()
+
+
+def test_migration_0037_temporal_events_accepts_corporate_event_type(conn: sa.engine.Connection) -> None:
+    """The CK constraint embedded in 0037's DDL must allow event_type='corporate'.
+
+    This is the regression target for D-P3-002 (EarningsCalendarDatasetConsumer)
+    which writes ``EventType.CORPORATE`` rows.
+    """
+    eid = uuid.uuid4()
+    conn.execute(
+        text(
+            "INSERT INTO temporal_events "
+            "(event_id, event_type, scope, region, title, active_from, residual_impact_days, confidence) "
+            "VALUES (:id, 'corporate', 'LOCAL', 'AAPL', "
+            "        'AAPL Earnings — 2026-05-09', '2026-05-09 12:30:00+00', 7, 1.0)"
+        ),
+        {"id": str(eid)},
+    )
+    n = conn.execute(
+        text("SELECT count(*) FROM temporal_events WHERE event_id = :id"),
+        {"id": str(eid)},
+    ).scalar_one()
+    assert n == 1, "corporate event_type must be insertable post-0037"
+    conn.rollback()
+
+
+def test_migration_0037_idempotent_when_tables_already_exist(conn: sa.engine.Connection) -> None:
+    """Re-running 0037's DDL on a DB where the tables already exist must NOT
+    raise — every CREATE statement uses ``IF NOT EXISTS`` so the migration is
+    safe to re-apply during partial-failure recovery.
+    """
+    import importlib.util
+    import os
+
+    migration_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "alembic",
+        "versions",
+        "0037_recreate_temporal_events_idempotent.py",
+    )
+    spec = importlib.util.spec_from_file_location("mig_0037_idem", os.path.abspath(migration_path))
+    assert spec is not None and spec.loader is not None
+    mig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig)
+
+    # Tables already exist (fixture ran upgrade head). Running 0037's DDL
+    # again must be a no-op — this catches accidental drops of IF NOT EXISTS.
+    conn.execute(text(mig._CREATE_TEMPORAL_EVENTS))
+    conn.execute(text(mig._CREATE_ENTITY_EVENT_EXPOSURES))
+    for stmt in mig._CREATE_TEMPORAL_EVENTS_INDEXES:
+        conn.execute(text(stmt))
+    for stmt in mig._CREATE_ENTITY_EVENT_EXPOSURES_INDEXES:
+        conn.execute(text(stmt))
+    # No assertions needed beyond "didn't raise" — but we double-check the
+    # tables are still queryable.
+    conn.execute(text("SELECT count(*) FROM temporal_events"))
+    conn.execute(text("SELECT count(*) FROM entity_event_exposures"))
+    conn.rollback()
+
+
+# ── Original test (must stay last) ───────────────────────────────────────────
+
+
+def test_seed_canonicals_downgrade_purges_f_crit_10(conn: sa.engine.Connection) -> None:
+    """F-MINOR-04 follow-up: verify the migration 0009 downgrade SQL
+    (DELETE WHERE metadata->>'seed_source' = 'F-CRIT-10') actually purges
+    every seeded canonical AND its cascaded aliases / embedding_state rows.
+
+    We don't run the alembic downgrade here (would require a separate
+    fixture); we just verify the SQL pattern works.
+    """
+    # Count BEFORE
+    canonicals_before = conn.execute(
+        text("SELECT COUNT(*) FROM canonical_entities WHERE metadata ->> 'seed_source' = 'F-CRIT-10'")
+    ).scalar_one()
+    # Run the downgrade SQL inside a transaction we'll rollback.
+    conn.execute(text("DELETE FROM canonical_entities WHERE metadata ->> 'seed_source' = 'F-CRIT-10'"))
+    # AFTER: zero canonical_entities, zero aliases (CASCADE), zero embedding_state (CASCADE).
+    canonicals_after = conn.execute(
+        text("SELECT COUNT(*) FROM canonical_entities WHERE metadata ->> 'seed_source' = 'F-CRIT-10'")
+    ).scalar_one()
+    aliases_after = conn.execute(
+        text("SELECT COUNT(*) FROM entity_aliases WHERE source = 'seed:F-CRIT-10'")
+    ).scalar_one()
+    assert canonicals_before > 0, "test prerequisite: F-CRIT-10 seeds must exist after upgrade"
+    assert canonicals_after == 0, f"Downgrade left {canonicals_after} F-CRIT-10 canonicals"
+    assert aliases_after == 0, f"Downgrade should CASCADE aliases; {aliases_after} survived"
+    conn.rollback()

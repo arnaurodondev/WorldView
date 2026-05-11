@@ -15,25 +15,25 @@ Writes ``relation_contradiction_links`` and emits
 from __future__ import annotations
 
 import dataclasses
-import json
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from common.ids import new_uuid7  # type: ignore[import-untyped]
 from common.time import utc_now  # type: ignore[import-untyped]
 from knowledge_graph.application.ports.repositories import (
     TOPIC_CONTRADICTION,
 )
+from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
+
+_CONTRADICTION_SCHEMA_PATH = get_schema_path("intelligence.contradiction.v1.avsc")
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from knowledge_graph.application.ports.repositories import (
         ContradictionRepositoryPort as ContradictionRepository,
     )
     from knowledge_graph.application.ports.repositories import (
         OutboxRepositoryPort as OutboxRepository,
     )
-
 
 # ---------------------------------------------------------------------------
 # Result dataclass
@@ -83,6 +83,7 @@ async def detect_and_record_contradictions(
     an ``intelligence.contradiction.v1`` outbox event.
 
     Args:
+    ----
         raw_evidence_id: ID of the ``relation_evidence_raw`` row that
             triggered this detection.
         claim_id: The newly inserted claim's ID.
@@ -100,8 +101,10 @@ async def detect_and_record_contradictions(
         correlation_id: Propagated correlation ID.
 
     Returns:
+    -------
         List of :class:`ContradictionDetected` for all new contradictions
         found.  Empty list when polarity is neutral or no matches found.
+
     """
     # Neutral polarity cannot form a contradiction
     if polarity == "neutral":
@@ -135,7 +138,13 @@ async def detect_and_record_contradictions(
             detected_at=now,
         )
 
-        # Emit intelligence.contradiction.v1 via outbox
+        # Emit intelligence.contradiction.v1 via outbox.
+        # PLAN-0062 Wave C: write Confluent-Avro wire-format bytes (5-byte
+        # magic header + Avro body) so the alert IntelligenceConsumer can
+        # decode via deserialize_confluent_avro.  The dispatcher emits the
+        # bytes verbatim — the producer is responsible for the full envelope.
+        from messaging.kafka.serialization_utils import serialize_confluent_avro  # type: ignore[import-untyped]
+
         contradiction_payload = {
             "event_id": str(new_uuid7()),
             "event_type": "intelligence.contradiction",
@@ -153,7 +162,7 @@ async def detect_and_record_contradictions(
         await outbox_repo.append(
             topic=TOPIC_CONTRADICTION,
             partition_key=str(subject_entity_id),
-            payload_avro=json.dumps(contradiction_payload).encode(),
+            payload_avro=serialize_confluent_avro(_CONTRADICTION_SCHEMA_PATH, contradiction_payload),
         )
 
         results.append(
@@ -165,7 +174,7 @@ async def detect_and_record_contradictions(
                 contradicting_claim_id=opposing_claim_id,
                 strength=strength,
                 is_backfill=is_backfill,
-            )
+            ),
         )
 
     return results

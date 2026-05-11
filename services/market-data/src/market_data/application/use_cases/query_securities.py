@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from market_data.application.ports.uow import UnitOfWork
+    from market_data.application.ports.uow import ReadOnlyUnitOfWork
     from market_data.domain.entities import Security
 
 
@@ -17,7 +17,7 @@ class GetSecurityUseCase:
     - Otherwise → try FIGI, fall back to ISIN
     """
 
-    def __init__(self, uow: UnitOfWork) -> None:
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
 
     async def execute(self, security_id: str) -> Security | None:
@@ -38,7 +38,7 @@ class ListSecuritiesUseCase:
     Returns ``(items, total)`` where total is the count for the given filter.
     """
 
-    def __init__(self, uow: UnitOfWork) -> None:
+    def __init__(self, uow: ReadOnlyUnitOfWork) -> None:
         self._uow = uow
 
     async def execute(

@@ -60,6 +60,30 @@ class Consumer:
     def close(self) -> None: ...
     def assignment(self) -> list[Any]: ...
     def position(self, partitions: list[Any]) -> list[Any]: ...
+    def pause(self, partitions: list[Any]) -> None: ...
+    def resume(self, partitions: list[Any]) -> None: ...
+    def get_watermark_offsets(
+        self,
+        partition: Any,
+        timeout: float = -1.0,
+        cached: bool = False,
+    ) -> tuple[int, int]: ...
+
+class TopicPartition:
+    """Represents a Kafka topic partition with optional offset."""
+
+    topic: str
+    partition: int
+    offset: int
+
+    def __init__(
+        self,
+        topic: str,
+        partition: int = -1,
+        offset: int = -1001,
+    ) -> None: ...
+    def __hash__(self) -> int: ...
+    def __eq__(self, other: object) -> bool: ...
 
 class Producer:
     """Low-level Kafka producer."""

@@ -1,0 +1,64 @@
+---
+title: Intelligence Graph
+description: The knowledge graph of entity relationships — how to read it and what the edges mean.
+section: Instruments
+order: 4
+updated: 2026-05-05
+---
+
+The Intelligence tab renders an interactive knowledge graph showing how the selected instrument's entity relates to other companies, executives, regulators, suppliers, and macro factors. The graph is built from named entity recognition (NER) and relation extraction run over the news and filing corpus.
+
+## Graph layout
+
+The graph uses **Cytoscape.js** with the COSE-Bilkent force-directed layout. The selected entity (the instrument you are viewing) is rendered as a larger node at the center. Related entities radiate outward, with edge thickness proportional to the number of co-occurrence instances.
+
+## Node types
+
+| Node shape | Entity type |
+|------------|-------------|
+| Circle | Company (financial instrument) |
+| Square | Person (executive, regulator) |
+| Diamond | Organization (non-public, e.g. regulator, index) |
+| Triangle | Macro factor (commodity, currency, interest rate) |
+
+Node color uses the same 7-step HeatCell scale as the heatmap — green nodes represent entities with positive recent sentiment; red nodes represent entities with negative recent sentiment.
+
+## Edge types
+
+| Edge label | Meaning | Example |
+|-----------|---------|---------|
+| `COMPETES_WITH` | Direct product/market competitor | AAPL ↔ MSFT |
+| `SUPPLIES_TO` | Supplier / customer relationship | TSMC → AAPL |
+| `EMPLOYS` | Executive or key person | AAPL → Tim Cook |
+| `REGULATES` | Regulatory authority | SEC → AAPL |
+| `CORRELATED_WITH` | Statistical price correlation | AAPL ↔ QQQ |
+| `EXPOSED_TO` | Macro factor exposure | AAPL → USD/CNY |
+
+<Callout type="info" title="Relation evidence">
+Every edge is backed by article co-occurrences stored as evidence. Hover an edge to see the count of supporting articles and the most recent publication date. Click an edge to open a filtered news view showing only articles that mention both entities.
+</Callout>
+
+## Interaction
+
+- **Pan** — click and drag the canvas background
+- **Zoom** — scroll wheel, or pinch on trackpad
+- **Select node** — click to highlight that entity's edges and show a side panel with name, type, and recent news
+- **Navigate** — double-click a node to navigate to that entity's instrument page (if it is a financial instrument)
+- **Expand** — right-click a node and select "Expand" to load second-degree relationships
+- **Reset** — click the reset button in the toolbar to return to the original layout
+
+## Filtering the graph
+
+The filter panel on the right allows:
+
+- **Show only** — filter to specific edge types (e.g. show only SUPPLIES_TO edges)
+- **Minimum co-occurrences** — hide edges with fewer than N supporting articles
+- **Time window** — restrict evidence to articles from the last 7/30/90/365 days
+
+<Callout type="tip" title="Graph depth">
+By default, the graph shows 1-degree relationships (direct connections). Use the depth slider to expand to 2 degrees for a broader competitive and supply-chain picture — useful for sector-level research.
+</Callout>
+
+## Graph coverage
+
+Graph population depends on the NLP pipeline's extraction quality. Entities with high news coverage (e.g. AAPL, MSFT, TSLA) have rich graphs. Less-covered instruments may have sparse graphs with only a few edges. The graph grows over time as new articles are processed.

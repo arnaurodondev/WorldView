@@ -78,12 +78,17 @@ class TestDispatcherTopicRouting:
             assert event_type in EVENT_TOPIC_MAP, f"Missing route for {event_type}"
 
     def test_each_event_type_routes_to_matching_topic(self) -> None:
-        """Each event type must be the same as its topic name (self-referential routing)."""
+        """Each event type must route to a topic whose name is either:
+        * exactly equal (self-referential routing — the historical default), OR
+        * the event_type plus a ``.v1`` version suffix (introduced in
+          PLAN-0057 Wave D-2 for ``market.instrument.discovered`` →
+          ``market.instrument.discovered.v1``).
+        """
         for event_type, topic in EVENT_TOPIC_MAP.items():
-            assert event_type == topic, (
-                f"event_type '{event_type}' routes to topic '{topic}' — "
-                f"expected self-referential routing (event_type == topic)"
-            )
+            assert topic in (
+                event_type,
+                f"{event_type}.v1",
+            ), f"event_type '{event_type}' routes to topic '{topic}' — expected '{event_type}' or '{event_type}.v1'"
 
     def test_instrument_created_event_type_field(self) -> None:
         """InstrumentCreated.event_type must match the routing key."""
@@ -187,12 +192,16 @@ class TestEventToOutboxPayload:
         assert payload["fields_updated"] == ["has_ohlcv"]
 
     def test_outbox_payload_includes_classvars(self) -> None:
-        """event_to_outbox_payload must include event_type and schema_version."""
+        """event_to_outbox_payload must include event_type and schema_version.
+
+        PLAN-0057 Wave C-1: schema_version=3 (was 2) — added cusip, figi, lei,
+        primary_ticker EODHD identifier fields.
+        """
         event = InstrumentCreated(instrument_id="x", symbol="AAPL", exchange="NASDAQ")
         payload = event_to_outbox_payload(event)
 
         assert payload["event_type"] == "market.instrument.created"
-        assert payload["schema_version"] == 2
+        assert payload["schema_version"] == 3
 
     def test_outbox_payload_updated_schema_version(self) -> None:
         """InstrumentUpdated schema_version must be 1."""

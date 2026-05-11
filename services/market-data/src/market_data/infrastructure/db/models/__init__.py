@@ -25,6 +25,7 @@ from market_data.infrastructure.db.models.fundamentals import (
     TechnicalsSnapshotModel,
     ValuationRatiosModel,
 )
+from market_data.infrastructure.db.models.fundamentals_snapshot import InstrumentFundamentalsSnapshotModel
 from market_data.infrastructure.db.models.infrastructure import (
     FailedTaskModel,
     IngestionEventModel,
@@ -32,6 +33,10 @@ from market_data.infrastructure.db.models.infrastructure import (
 )
 from market_data.infrastructure.db.models.instruments import InstrumentModel
 from market_data.infrastructure.db.models.ohlcv import OHLCVBarModel
+from market_data.infrastructure.db.models.prediction_markets import (
+    PredictionMarketModel,
+    PredictionMarketSnapshotModel,
+)
 from market_data.infrastructure.db.models.quotes import QuoteModel
 from market_data.infrastructure.db.models.securities import SecurityModel
 
@@ -51,10 +56,13 @@ __all__ = [
     "IngestionEventModel",
     "InsiderTransactionsSnapshotModel",
     "InstitutionalHoldersModel",
+    "InstrumentFundamentalsSnapshotModel",
     "InstrumentModel",
     "OHLCVBarModel",
     "OutboxEventModel",
     "OutstandingSharesModel",
+    "PredictionMarketModel",
+    "PredictionMarketSnapshotModel",
     "QuoteModel",
     "SecurityModel",
     "ShareStatisticsModel",

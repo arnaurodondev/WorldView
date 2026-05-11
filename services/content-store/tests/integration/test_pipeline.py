@@ -14,6 +14,7 @@ from content_store.infrastructure.db.repositories.dedup import DedupHashReposito
 from content_store.infrastructure.db.repositories.document import DocumentRepository
 from content_store.infrastructure.db.repositories.minhash import MinHashRepository
 from content_store.infrastructure.db.repositories.outbox import OutboxRepository
+from content_store.infrastructure.storage.minio_silver import SilverStorageAdapter
 from sqlalchemy import select
 
 import common.ids  # type: ignore[import-untyped]
@@ -48,14 +49,13 @@ async def _put_bronze(minio_storage, bucket: str, key: str, raw_bytes: bytes) ->
 async def _make_use_case(session, minio_storage, lsh_client, bronze_bucket: str, silver_bucket: str):
     """Build a ProcessArticleUseCase with real repos."""
     return ProcessArticleUseCase(
-        session=session,
         document_repo=DocumentRepository(session),
         dedup_repo=DedupHashRepository(session),
         minhash_repo=MinHashRepository(session),
         outbox_repo=OutboxRepository(session),
         object_store=minio_storage,
         bronze_bucket=bronze_bucket,
-        silver_bucket=silver_bucket,
+        silver_storage=SilverStorageAdapter(minio_storage, silver_bucket),
         lsh_client=lsh_client,
         output_topic="content.article.stored.v1",
         num_perm=128,

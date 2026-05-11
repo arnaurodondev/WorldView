@@ -1,0 +1,226 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": { "list": [] },
+  "description": "Cross-provider API usage analytics — Prometheus metrics and Loki log events",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Prometheus Metrics",
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 1},
+      "collapsed": false,
+      "id": 1
+    },
+    {
+      "id": 2,
+      "title": "Requests/min by Provider",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {"x": 0, "y": 1, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (provider) (rate(s2_mi_provider_requests_total{provider=~\"$provider\"}[5m])) * 60",
+          "legendFormat": "{{provider}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": {}
+    },
+    {
+      "id": 3,
+      "title": "Credits Consumed by Dataset Type",
+      "type": "bargauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {"x": 12, "y": 1, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (dataset_type) (increase(s2_mi_provider_credits_total[$__range]))",
+          "legendFormat": "{{dataset_type}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 4,
+      "title": "P95 Latency by Provider",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {"x": 0, "y": 9, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (provider, le) (rate(s2_mi_provider_latency_seconds_bucket{provider=~\"$provider\"}[5m])))",
+          "legendFormat": "P95 {{provider}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": {}
+    },
+    {
+      "id": 5,
+      "title": "Rate Limit Hits by Provider",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {"x": 12, "y": 9, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (provider) (rate(s2_mi_provider_rate_limited_total[5m])) * 60",
+          "legendFormat": "429/min {{provider}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "red" }
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "type": "row",
+      "title": "Loki Log Analytics",
+      "gridPos": {"x": 0, "y": 17, "w": 24, "h": 1},
+      "collapsed": false,
+      "id": 6
+    },
+    {
+      "id": 7,
+      "title": "API Calls/min by Dataset Type",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": {"x": 0, "y": 18, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (dataset_type) (rate({container=~\".*market-ingestion.*\"} |= \"provider_api_call\" | json | dataset_type=~\"$dataset_type\" [5m])) * 60",
+          "legendFormat": "{{dataset_type}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": {}
+    },
+    {
+      "id": 8,
+      "title": "Top 10 Tickers by Call Count",
+      "type": "table",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": {"x": 12, "y": 18, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "topk(10, sum by (symbol) (count_over_time({container=~\".*market-ingestion.*\"} |= \"provider_api_call\" | json [$__range])))",
+          "legendFormat": "{{symbol}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "Value"},
+            "properties": [{"id": "displayName", "value": "Calls"}]
+          }
+        ]
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "showHeader": true }
+    },
+    {
+      "id": 9,
+      "title": "Avg Bars Returned by Timeframe",
+      "type": "bargauge",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": {"x": 0, "y": 26, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (timeframe) (sum_over_time({container=~\".*market-ingestion.*\"} |= \"provider_api_call\" | json | unwrap bars_returned [$__range])) / clamp_min(sum by (timeframe) (count_over_time({container=~\".*market-ingestion.*\"} |= \"provider_api_call\" | json [$__range])), 1)",
+          "legendFormat": "{{timeframe}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 10,
+      "title": "Credit Cost Distribution (Loki)",
+      "type": "piechart",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": {"x": 12, "y": 26, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (dataset_type) (sum_over_time({container=~\".*market-ingestion.*\"} |= \"provider_api_call\" | json | unwrap credit_cost [$__range]))",
+          "legendFormat": "{{dataset_type}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {}
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["loki", "prometheus", "api-usage", "provider"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(s2_mi_provider_requests_total, provider)",
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "name": "provider",
+        "options": [],
+        "query": {
+          "query": "label_values(s2_mi_provider_requests_total, provider)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 0,
+        "type": "query",
+        "label": "Provider"
+      },
+      {
+        "current": {},
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(s2_mi_provider_requests_total, dataset_type)",
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "name": "dataset_type",
+        "options": [],
+        "query": {
+          "query": "label_values(s2_mi_provider_requests_total, dataset_type)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 0,
+        "type": "query",
+        "label": "Dataset Type"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Provider API Usage Analytics",
+  "uid": "api-usage-analytics-v1",
+  "version": 1,
+  "weekStart": ""
+}

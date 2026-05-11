@@ -24,7 +24,8 @@ def _make_client(httpserver: HTTPServer) -> S1Client:
 
     settings = Settings(
         s1_portfolio_base_url=httpserver.url_for(""),
-        internal_service_token="test-token",
+        s8_internal_jwt="test-s8-token",
+        s1_internal_token="test-s1-token",
     )
     return S1Client(settings, client=AsyncClient(timeout=5.0))
 
@@ -43,7 +44,7 @@ class TestS1Contract:
                     {"user_id": "user-aaa", "watchlist_id": "wl-1", "alert_types": ["SIGNAL"]},
                     {"user_id": "user-bbb", "watchlist_id": "wl-2", "alert_types": []},
                 ],
-            }
+            },
         )
 
         client = _make_client(httpserver)
@@ -70,8 +71,8 @@ class TestS1Contract:
                         {"user_id": "u2", "watchlist_id": "w2", "alert_types": ["GRAPH_CHANGE"]},
                         {"user_id": "u3", "watchlist_id": "w3", "alert_types": []},
                     ],
-                }
-            }
+                },
+            },
         )
 
         client = _make_client(httpserver)

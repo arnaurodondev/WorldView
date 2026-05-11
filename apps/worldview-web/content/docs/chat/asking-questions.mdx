@@ -1,0 +1,68 @@
+---
+title: Asking Questions
+description: Tips for context-aware questions, portfolio questions, and market research queries.
+section: Chat & AI
+order: 2
+updated: 2026-05-05
+---
+
+The quality of AI answers improves significantly with better-structured questions. Here are patterns that work well with Worldview's RAG system.
+
+## Be specific about the instrument
+
+Mention the ticker when asking about a specific company:
+
+**Less effective:**
+> "What's happening with the chip company that makes GPUs?"
+
+**More effective:**
+> "What's driving NVDA's recent move? /:NVDA"
+
+The `/:NVDA` slash command (see [Slash Commands](/docs/chat/slash-commands)) loads NVDA's current price, fundamentals, and recent news directly into the context window — making the answer far more accurate and grounded.
+
+## Ask for synthesis, not just facts
+
+The AI is best at synthesizing multiple sources. Ask for synthesis explicitly:
+
+> "Synthesize the last week of AAPL news — what are the main themes and what do analysts seem to be watching?"
+
+> "Compare the earnings quality of MSFT and GOOGL this quarter — which has better FCF conversion?"
+
+## Portfolio-scoped questions
+
+When you want the AI to reference your actual holdings, include that context:
+
+> "Given my current portfolio, which of my holdings are most exposed to rising interest rates?"
+
+> "What's the biggest macro risk to my tech-heavy portfolio right now?"
+
+The assistant queries your Portfolio service for current holdings when you phrase questions this way. It uses live prices and recent news to give you portfolio-relevant answers.
+
+<Callout type="info" title="Portfolio privacy">
+Portfolio data is only accessed when you ask a portfolio-scoped question in your own authenticated session. Portfolio data is never used to train models or shared with other users.
+</Callout>
+
+## Time-bounded questions
+
+Specify a time frame when recency matters:
+
+> "What has changed for TSLA in the last 48 hours?"
+
+> "What were the key macro events in Q1 2026 that affected equity markets?"
+
+The retrieval pipeline filters the document corpus by the time range you specify.
+
+## Structured output requests
+
+Ask for specific formats when you want scannable output:
+
+> "Give me a bull/bear table for NVDA based on the last month's news and fundamentals."
+
+> "List the top 5 risks for AAPL as bullet points with evidence."
+
+## What the AI cannot do
+
+- **Real-time data** — prices in answers are sourced from the last data refresh, not live tick data. Use the instrument chart for live prices.
+- **Future predictions** — the model generates probabilistic synthesis, not forecasts. Treat forward-looking statements as hypotheses.
+- **Non-covered instruments** — instruments not in the EODHD + Finnhub coverage universe may return limited or no context.
+- **Very recent events** — articles published in the last hour may not yet be in the vector store.

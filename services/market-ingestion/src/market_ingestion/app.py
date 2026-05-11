@@ -11,8 +11,10 @@ from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from market_ingestion.config import Settings
-from observability import configure_logging, get_logger  # type: ignore[import-untyped]
+from market_ingestion.infrastructure.middleware.internal_jwt import InternalJWTMiddleware
+from observability import configure_logging, get_logger, register_error_handlers  # type: ignore[import-untyped]
 from observability.metrics import add_prometheus_middleware, create_metrics  # type: ignore[import-untyped]
+from observability.sentry import SentrySettings, init_sentry  # type: ignore[import-untyped]
 from observability.tracing import add_otel_middleware, configure_tracing  # type: ignore[import-untyped]
 
 if TYPE_CHECKING:
@@ -65,12 +67,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             otlp_endpoint=settings.otlp_endpoint,
         )
 
+    # 2b. Sentry — fourth observability pillar (default-off: SENTRY_ENABLED=false)
+    init_sentry(service_name=settings.service_name, settings=SentrySettings())
+
     # 3. DB session factories — built once at startup, shared across all requests
     from market_ingestion.infrastructure.db.session import _build_factories
 
     write_factory, read_factory = _build_factories(settings)
     app.state.write_session_factory = write_factory
     app.state.read_session_factory = read_factory
+
+    # 4. InternalJWTMiddleware startup (PRD-0025 Wave D)
+    jwt_middleware = InternalJWTMiddleware(
+        app,
+        jwks_url=f"{settings.api_gateway_url}/internal/jwks",
+        skip_verification=settings.internal_jwt_skip_verification,
+    )
+    await jwt_middleware.startup()
+    app.state._jwt_middleware = jwt_middleware
 
     log.info("service_started", service=settings.service_name, version=app.version)
     yield
@@ -84,12 +98,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="2026.3.0",
         lifespan=lifespan,
     )
-    settings = settings or Settings()  # type: ignore[call-arg]
-    app.state.settings = settings
+    _settings = settings or Settings()  # type: ignore[call-arg]
+    app.state.settings = _settings
+
+    # Exception handlers — must be registered before middleware so that handler
+    # responses are still processed by middleware layers (e.g. Prometheus timing).
+    register_error_handlers(app)
 
     # Middleware — must be registered before app starts (Starlette requirement)
     app.add_middleware(RequestIdMiddleware)
-    metrics = create_metrics(service_name=settings.service_name)
+    app.add_middleware(
+        InternalJWTMiddleware,
+        jwks_url=f"{_settings.api_gateway_url}/internal/jwks",
+        skip_verification=_settings.internal_jwt_skip_verification,
+    )
+    metrics = create_metrics(service_name=_settings.service_name)
     add_prometheus_middleware(app, metrics)
     add_otel_middleware(app)
     app.state.metrics = metrics

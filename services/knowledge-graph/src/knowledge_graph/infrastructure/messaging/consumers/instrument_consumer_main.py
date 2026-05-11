@@ -32,7 +32,7 @@ async def main() -> None:
     from messaging.kafka.consumer.base import ConsumerConfig  # type: ignore[import-untyped]
     from messaging.valkey import create_valkey_client_from_url  # type: ignore[import-untyped]
 
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     configure_logging(
         service_name="knowledge-graph-instrument-consumer",
         level=settings.log_level,
@@ -52,19 +52,32 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
-    engine, write_factory, _read_factory = _build_factories(settings)
+    engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
     valkey = create_valkey_client_from_url(settings.valkey_url)
 
     # FallbackChainClient with no adapters — ML calls return None (graceful no-op)
+    from knowledge_graph.infrastructure.intelligence_db.usage_log_factory import (
+        SessionScopedKgUsageLogger,
+    )
     from knowledge_graph.infrastructure.llm.fallback_chain import FallbackChainClient
     from knowledge_graph.infrastructure.workers.definition_refresh import DefinitionRefreshWorker
 
-    llm_client = FallbackChainClient()
-    definition_worker = DefinitionRefreshWorker(write_factory, llm_client)
+    # PLAN-0057 A-5 / F-CRIT-03: thread the session-scoped KG usage logger
+    # into FallbackChainClient so every embed/extract attempt (success OR
+    # failure) writes one row to intelligence_db.llm_usage_log.  Without
+    # this, the KG cost-log table stayed permanently empty.
+    kg_usage_logger = SessionScopedKgUsageLogger(write_factory)
+
+    llm_client = FallbackChainClient(usage_logger=kg_usage_logger)
+    definition_worker = DefinitionRefreshWorker(
+        write_factory,
+        llm_client,
+        embedding_model_id=settings.embedding_model_id,
+    )
 
     config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,
-        group_id="kg-instrument-group",
+        group_id=f"{settings.kafka_consumer_group}-instrument",
         topics=[settings.kafka_topic_instrument_created],
     )
     consumer = InstrumentEntityConsumer(
@@ -79,9 +92,12 @@ async def main() -> None:
         consumer_task = asyncio.create_task(consumer.run())
         await stop_event.wait()
         consumer.stop()  # type: ignore[attr-defined]
-        consumer_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await consumer_task
+        try:
+            await asyncio.wait_for(consumer_task, timeout=30.0)
+        except TimeoutError:
+            consumer_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await consumer_task
     except Exception as exc:
         log.error("instrument_consumer_fatal_error", error=str(exc))
         sys.exit(1)

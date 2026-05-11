@@ -1,0 +1,146 @@
+"""FastAPI dependency injection for the RAG-Chat API (T-D-4-02).
+
+R27: read-only UoW (read_factory) used for GET endpoints;
+     write UoW (write_factory) used for POST/DELETE endpoints.
+
+Auth: tenant_id and user_id are read from ``request.state`` set by
+InternalJWTMiddleware (PRD-0025). Legacy X-Tenant-Id / X-User-Id headers
+are no longer used (F-CRIT-001 remediation).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Annotated, Any
+from uuid import UUID
+
+from fastapi import Depends, HTTPException, Request
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from rag_chat.infrastructure.db.repositories.brief_archive_repository import BriefArchiveRepository
+    from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork
+
+
+async def get_uow(request: Request) -> AsyncGenerator[RagUnitOfWork, None]:
+    """Yield a write-capable RagUnitOfWork (R23: write session factory)."""
+    from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork as _RagUoW
+
+    async with _RagUoW(request.app.state.write_factory) as uow:
+        yield uow
+
+
+async def get_read_uow(request: Request) -> AsyncGenerator[RagUnitOfWork, None]:
+    """Yield a read-only RagUnitOfWork (R27: read replica session factory)."""
+    from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork as _RagUoW
+
+    async with _RagUoW(request.app.state.read_factory) as uow:
+        yield uow
+
+
+async def get_auth_context(request: Request) -> tuple[UUID, UUID]:
+    """Extract tenant_id and user_id from request.state set by InternalJWTMiddleware.
+
+    Returns ``(tenant_id, user_id)`` or raises 401 if either value is missing
+    or not a valid UUID. PRD-0025: backends MUST use the JWT-derived state,
+    never raw headers (F-CRIT-001 remediation).
+    """
+    raw_tenant_id = getattr(request.state, "tenant_id", None)
+    raw_user_id = getattr(request.state, "user_id", None)
+
+    if not raw_tenant_id or not raw_user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing required auth context (tenant_id / user_id not set by JWT middleware)",
+        )
+    try:
+        return UUID(str(raw_tenant_id)), UUID(str(raw_user_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Invalid UUID in JWT auth context") from exc
+
+
+# D-1 / D-4: RagUnitOfWork is a concrete infra class; a proper application-layer
+# port (RagUnitOfWorkPort) will replace `Any` when D-4 is implemented.
+# Using Any here keeps the Annotated alias runtime-safe without importing infra
+# at module level (IG-LAYER-002 / R25).
+UoWDep = Annotated[Any, Depends(get_uow)]
+ReadUoWDep = Annotated[Any, Depends(get_read_uow)]
+AuthContextDep = Annotated[tuple[UUID, UUID], Depends(get_auth_context)]
+
+
+async def get_brief_archive_dep(request: Request) -> AsyncGenerator[BriefArchiveRepository, None]:  # type: ignore[type-arg]
+    """Yield a BriefArchiveRepository backed by a read-only session (R27).
+
+    WHY read-only factory: GET /v1/briefings/morning/history only reads rows —
+    it never mutates. R27 mandates ReadUoWDep for read-only routes so that
+    reads go to the replica and do not contend with write transactions.
+
+    WHY infrastructure import inside function body: preserves R25 compliance —
+    the module-level dependencies.py imports only from the application layer.
+    The concrete BriefArchiveRepository is only resolved at request time via
+    the Depends() call, keeping the import lazy and the dependency arrow correct.
+
+    WHY direct session_factory (not RagUnitOfWork): RagUnitOfWork does not
+    expose a public .session property — it wires thread/message repositories
+    internally. The brief archive repository needs a raw AsyncSession, which
+    we create directly from the read_factory. The session is closed in the
+    finally block (same lifetime management as the UoW __aexit__).
+    """
+    from rag_chat.infrastructure.db.repositories.brief_archive_repository import (
+        BriefArchiveRepository as _BriefArchiveRepository,
+    )
+
+    # WHY read_factory: R27 — history endpoint is read-only.
+    session = request.app.state.read_factory()
+    try:
+        yield _BriefArchiveRepository(session=session)
+    finally:
+        await session.close()
+
+
+BriefArchiveRepositoryDep = Annotated[Any, Depends(get_brief_archive_dep)]
+
+
+def get_tool_executor(request: Request) -> Any:
+    """Return a ToolExecutor wired with the default registry and S3Port (PLAN-0066 Wave H T-W10-H-05).
+
+    WHY lazy import: R25 compliance — api/dependencies.py must not import from
+    infrastructure/ at module level. The concrete S3Client and ToolExecutor are
+    resolved only at request time.
+
+    WHY get from app.state: the S3 adapter is constructed once at app startup
+    (in app.py lifespan) and stored on request.app.state, consistent with how
+    all other upstream clients are accessed (e.g. app.state.s3_client).
+    """
+    from rag_chat.application.pipeline.tool_executor import (
+        ToolExecutor,
+        build_default_registry,
+    )
+
+    s3_client = request.app.state.s3_client
+    registry = build_default_registry()
+    return ToolExecutor(registry=registry, s3=s3_client)
+
+
+def make_write_uow(request: Request) -> Any:
+    """Return a context-manager that yields a write-capable RagUnitOfWork.
+
+    DEF-026: SSE streaming routes cannot use Depends() for UoW because FastAPI
+    closes yield-based dependencies when the route function *returns*, which is
+    before the EventSourceResponse generator starts iterating.  Streaming routes
+    must instead obtain a *factory* here and call it inside the generator so the
+    UoW lifetime is bound to the generator, not the route function.
+
+    Usage in a streaming route::
+
+        async def event_generator() -> AsyncGenerator[dict, None]:
+            async with make_write_uow(request) as uow:
+                async for event in orchestrator.execute_streaming(chat_req, uow):
+                    yield event
+
+    The infrastructure import is deferred inside the factory to maintain
+    R25 compliance — the route file only imports from the application layer.
+    """
+    from rag_chat.infrastructure.db.unit_of_work import RagUnitOfWork as _RagUoW
+
+    return _RagUoW(request.app.state.write_factory)

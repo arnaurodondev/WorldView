@@ -1,0 +1,50 @@
+---
+title: Chat & AI Assistant
+description: Overview of the AI research assistant — RAG pipeline, citations, slash commands.
+section: Chat & AI
+order: 1
+updated: 2026-05-05
+---
+
+The Chat section (`/chat`) is a conversational research assistant built on a Retrieval-Augmented Generation (RAG) pipeline. Every answer is grounded in the Worldview data corpus — news articles, SEC filings, knowledge graph facts, and your portfolio data.
+
+## What you can ask
+
+The AI assistant is designed for financial research questions:
+
+- **Instrument-specific** — "What's driving NVDA's recent move?"
+- **Portfolio-scoped** — "What risk factors are affecting my top 5 holdings?"
+- **Macro/sector** — "How does a Fed rate cut typically affect bank net interest margins?"
+- **Comparative** — "Compare AAPL and MSFT on free cash flow yield"
+- **News synthesis** — "Summarize the last 3 days of news about Tesla"
+- **Knowledge graph** — "What companies supply chips to Apple?"
+
+<Callout type="warn" title="Not investment advice">
+The AI assistant provides research context and synthesis — it is not a financial advisor and does not provide investment advice. Do not make investment decisions based solely on AI-generated content. Always verify information with primary sources.
+</Callout>
+
+## How it works
+
+1. **Intent classification** — the question is classified into a query type (instrument, portfolio, macro, comparative, etc.)
+2. **Retrieval** — relevant context is retrieved from the vector store (articles, filings), knowledge graph, and live market data
+3. **Generation** — DeepSeek R1 Distill 32B synthesizes the retrieved context into an answer
+4. **Citation** — every factual claim is tagged with the source document reference
+
+## Model
+
+The chat assistant uses **DeepSeek R1 Distill 32B** via DeepInfra. This is a 32-billion parameter reasoning model distilled from DeepSeek-R1. It shows its reasoning process before giving the final answer, which helps you evaluate the logic behind responses.
+
+## Conversation threading
+
+Each conversation is a thread. Threads persist in your account history. You can:
+
+- Start a new thread (click **+ New chat** or press `⌘N`)
+- Return to a previous thread from the sidebar
+- Rename a thread by clicking its title
+- Delete a thread from the ellipsis menu
+
+## Related pages
+
+- [Asking questions](/docs/chat/asking-questions) — tips for better prompts
+- [Citations](/docs/chat/citations) — how source attribution works
+- [Slash commands](/docs/chat/slash-commands) — `/ticker`, `/brief`, `/compare`

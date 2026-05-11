@@ -55,20 +55,22 @@ async def test_range_spanning_year_boundary_correct_chunks() -> None:
 
 
 @pytest.mark.unit
-async def test_max_100_chunks_enforced() -> None:
+async def test_max_500_chunks_enforced() -> None:
+    # PLAN-0055 A-1 bumped the limit from 100 → 500 to support 10y daily horizons.
+    # 1826 daily chunks (2020-01-01 → 2024-12-31 with chunk_days=1) exceeds 500.
     start = datetime(2020, 1, 1, tzinfo=UTC)
     end = datetime(2024, 12, 31, tzinfo=UTC)  # ~1826 days / 1 = 1826 chunks
     uow = _make_uow(inserted=0)
     uc = BackfillUseCase(uow)
-    with pytest.raises(ValueError, match="100"):
+    with pytest.raises(ValueError, match="500"):
         await uc.execute(Provider.EODHD, "AAPL", start, end, "1d", chunk_days=1)
 
 
 @pytest.mark.unit
-async def test_101_chunks_raises_value_error() -> None:
+async def test_501_chunks_raises_value_error() -> None:
+    # 501 daily chunks exceeds the 500-chunk ceiling introduced in PLAN-0055 A-1.
     start = datetime(2020, 1, 1, tzinfo=UTC)
-    # 101 * 1 day = 101 days, chunk_days=1
-    end = start + timedelta(days=101)
+    end = start + timedelta(days=501)
     uow = _make_uow(inserted=0)
     uc = BackfillUseCase(uow)
     with pytest.raises(ValueError):

@@ -9,9 +9,12 @@ Dependencies are injected via port ABCs — no infrastructure imports at runtime
 
 from __future__ import annotations
 
+import base64
+import json
 from dataclasses import dataclass
 from datetime import UTC
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import structlog
 
@@ -27,10 +30,9 @@ from content_store.domain.entities import (
     MinHashSignature,
 )
 from content_store.domain.enums import DedupOutcome, DocumentStatus
+from content_store.domain.errors import BronzeObjectNotFoundError
 
 if TYPE_CHECKING:
-    from uuid import UUID
-
     from content_store.application.ports.lsh import LSHClientPort
     from content_store.application.ports.repositories import (
         DedupHashRepositoryPort,
@@ -38,8 +40,7 @@ if TYPE_CHECKING:
         MinHashRepositoryPort,
         OutboxPort,
     )
-    from content_store.application.ports.storage import SilverStoragePort
-    from storage.interface import ObjectStorage  # type: ignore[import-untyped]
+    from content_store.application.ports.storage import BronzeStoragePort, SilverStoragePort
 
 logger = structlog.get_logger(__name__)  # type: ignore[no-any-return]
 
@@ -57,6 +58,9 @@ class RawArticleEvent:
     title: str | None
     published_at: str | None
     is_backfill: bool
+    # tenant_id propagated from content.article.raw.v1 (PLAN-0086 Wave A-1)
+    # None = public/global news; non-None = private tenant content
+    tenant_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -86,7 +90,7 @@ class ProcessArticleUseCase:
         dedup_repo: DedupHashRepositoryPort,
         minhash_repo: MinHashRepositoryPort,
         outbox_repo: OutboxPort,
-        object_store: ObjectStorage,
+        bronze_store: BronzeStoragePort,
         bronze_bucket: str,
         silver_storage: SilverStoragePort,
         lsh_client: LSHClientPort,
@@ -97,18 +101,22 @@ class ProcessArticleUseCase:
         self._dedup_repo = dedup_repo
         self._minhash_repo = minhash_repo
         self._outbox_repo = outbox_repo
-        self._store = object_store
+        self._bronze_store = bronze_store
         self._bronze_bucket = bronze_bucket
         self._silver_storage = silver_storage
         self._lsh = lsh_client
         self._output_topic = output_topic
         self._num_perm = num_perm
 
-    async def execute(self, article: RawArticleEvent) -> ProcessingSummary:
+    async def execute(
+        self,
+        article: RawArticleEvent,
+        prefetched_bytes: bytes | None = None,
+    ) -> ProcessingSummary:
         """Process a single raw article through the full dedup pipeline.
 
         Steps:
-        1. Fetch raw bytes from MinIO bronze
+        1. Fetch raw bytes from MinIO bronze (skipped if *prefetched_bytes* provided)
         2. Clean text (extract + normalize)
         3. Stage A: exact raw hash check
         4. Stage B: normalized hash check
@@ -119,23 +127,64 @@ class ProcessArticleUseCase:
 
         Args:
             article: Deserialized raw article event.
+            prefetched_bytes: Raw bytes already fetched from bronze (R24 — pre-fetched
+                before the DB session opened).  When ``None``, the use case fetches
+                them itself (legacy / test path).
 
         Returns:
             ProcessingSummary with decision and outcome.
         """
         log = logger.bind(article_id=article.doc_id, source=article.source_type)
 
-        # 1. Fetch raw bytes from bronze
-        raw_bytes = await self._store.get_bytes(self._bronze_bucket, article.minio_bronze_key)
+        # 1. Fetch raw bytes from bronze (R24: caller should pre-fetch before opening session)
+        # F-DP2-05 (PLAN-deep-qa-iter2): catch storage.exceptions.ObjectNotFoundError
+        # and translate to BronzeObjectNotFoundError so the consumer can skip the
+        # message gracefully (no traceback in logs, offset committed).  Bronze-tier
+        # corruption is operational — retrying the same key won't help, so we
+        # short-circuit instead of dead-lettering.
+        if prefetched_bytes is not None:
+            raw_bytes = prefetched_bytes
+        else:
+            try:
+                raw_bytes = await self._bronze_store.get_bytes(self._bronze_bucket, article.minio_bronze_key)
+            except Exception as exc:
+                # WHY broad except: storage adapters live behind a port and may raise
+                # any of: storage.exceptions.ObjectNotFoundError, OSError (per port
+                # contract), or backend-specific errors.  We pattern-match on the
+                # type *name* to cover all "missing key" cases without importing
+                # the storage library here (domain layer purity).
+                exc_name = type(exc).__name__
+                if exc_name in {"ObjectNotFoundError", "NoSuchKey", "FileNotFoundError"}:
+                    log.warning(
+                        "bronze_object_missing",
+                        bronze_key=article.minio_bronze_key,
+                        bronze_bucket=self._bronze_bucket,
+                        error=str(exc),
+                    )
+                    msg = f"bronze object missing: {self._bronze_bucket}/{article.minio_bronze_key}"
+                    raise BronzeObjectNotFoundError(msg) from exc
+                raise
         log.info("bronze_fetched", byte_size=len(raw_bytes))
 
         # 2. Clean text
+        # Unwrap S4 Bronze envelope (JSON with raw_b64) to get actual article bytes
+        article_bytes = _unwrap_bronze_envelope(raw_bytes)
         content_type = _guess_content_type(article.source_type)
-        cleaned_text = clean(raw_bytes, content_type)
+        cleaned_text = clean(article_bytes, content_type)
         word_count = len(cleaned_text.split()) if cleaned_text else 0
 
+        # PLAN-0086 Wave C-1: convert raw tenant_id string from the Avro event
+        # into a UUID for scoped dedup lookups and document storage.
+        # None means public/global content — dedup hash lookups use the global namespace.
+        tenant_id_uuid: UUID | None = UUID(article.tenant_id) if article.tenant_id else None
+
         # 3. Stage A: exact raw hash
-        raw_hash, stage_a_decision = await check_stage_a(raw_bytes, self._dedup_repo)
+        # Use the content_hash from the event (computed by S4 from original bytes).
+        # This ensures consistent deduplication across the S4→S5 pipeline boundary,
+        # independent of the bronze envelope format.
+        raw_hash, stage_a_decision = await check_stage_a(
+            article.content_hash, self._dedup_repo, tenant_id=tenant_id_uuid
+        )
         if stage_a_decision is not None:
             log.info("stage_a_duplicate", matched=str(stage_a_decision.matched_doc_id))
             return ProcessingSummary(
@@ -147,7 +196,9 @@ class ProcessArticleUseCase:
 
         # 4. Stage B: normalized hash
         url = article.source_url or ""
-        normalized_hash, stage_b_decision = await check_stage_b(url, cleaned_text, self._dedup_repo)
+        normalized_hash, stage_b_decision = await check_stage_b(
+            url, cleaned_text, self._dedup_repo, tenant_id=tenant_id_uuid
+        )
         if stage_b_decision is not None:
             log.info("stage_b_duplicate", matched=str(stage_b_decision.matched_doc_id))
             return ProcessingSummary(
@@ -213,6 +264,8 @@ class ProcessArticleUseCase:
             word_count=word_count,
             is_backfill=article.is_backfill,
             corroborates_doc_id=decision.matched_doc_id if decision.outcome == DedupOutcome.CORROBORATING else None,
+            # PLAN-0086 Wave C-1: propagate tenant scope to stored document.
+            tenant_id=tenant_id_uuid,
         )
 
         # Write to MinIO silver via injected port
@@ -222,7 +275,9 @@ class ProcessArticleUseCase:
         # DB writes: document + dedup hashes + minhash + outbox
         # (transaction managed by the calling consumer)
         await self._document_repo.create(doc)
-        await self._dedup_repo.insert_pair(doc_id, raw_hash, normalized_hash)
+        # PLAN-0086 Wave C-1: scope dedup hash pairs by tenant so that the same
+        # article hash is allowed to exist independently under different tenants.
+        await self._dedup_repo.insert_pair(doc_id, raw_hash, normalized_hash, tenant_id=tenant_id_uuid)
 
         sig_entity = MinHashSignature(
             id=common.ids.new_uuid7(),
@@ -262,6 +317,24 @@ class ProcessArticleUseCase:
         )
 
 
+def _unwrap_bronze_envelope(raw_bytes: bytes) -> bytes:
+    """Extract the actual article bytes from an S4 Bronze envelope.
+
+    S4 content-ingestion wraps raw article bytes in a JSON envelope:
+        {"raw_b64": "<base64-encoded article bytes>", "url": ..., ...}
+
+    If raw_bytes is such an envelope, return the decoded article bytes.
+    Otherwise return raw_bytes unchanged (passthrough for legacy/direct formats).
+    """
+    try:
+        envelope = json.loads(raw_bytes)
+        if isinstance(envelope, dict) and "raw_b64" in envelope:
+            return base64.b64decode(envelope["raw_b64"])
+    except (json.JSONDecodeError, KeyError, ValueError):
+        pass
+    return raw_bytes
+
+
 def _guess_content_type(source_type: str) -> str:
     """Map source type to content type for text extraction."""
     mapping: dict[str, str] = {
@@ -295,4 +368,7 @@ def _build_stored_payload(doc: CanonicalDocument, article: RawArticleEvent) -> d
         "published_at": article.published_at,
         "is_backfill": doc.is_backfill,
         "correlation_id": None,
+        # Propagated from the raw event (PLAN-0086 Wave A-1).
+        # None = public/global news; UUID string = tenant-private content.
+        "tenant_id": article.tenant_id,
     }

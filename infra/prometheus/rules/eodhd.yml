@@ -1,0 +1,77 @@
+groups:
+  - name: eodhd_quota
+    rules:
+      # Alert: Quota > 80% consumed
+      # Fires when the monthly EODHD API credit utilisation exceeds 80%.
+      # This is an early warning that gives the on-call engineer time to
+      # reduce ingestion frequency before the quota is exhausted.
+      # Metric: s2_eodhd_monthly_credits_used / s2_eodhd_monthly_credits_limit
+      - alert: EodhdQuotaWarning
+        expr: s2_eodhd_monthly_credits_used / clamp_min(s2_eodhd_monthly_credits_limit, 1) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: market-ingestion
+        annotations:
+          summary: "EODHD quota above 80%"
+          description: "EODHD monthly quota utilization is {{ $value | humanizePercentage }}. Budget will be exhausted soon."
+          runbook_url: "https://github.com/your-org/worldview/tree/main/docs/runbooks/market-ingestion-operations.md"
+
+      # Alert: Quota > 95% consumed
+      # At 95% the circuit breaker is very close to opening (threshold: 100%).
+      # Page immediately — ingestion will halt within minutes.
+      - alert: EodhdQuotaCritical
+        expr: s2_eodhd_monthly_credits_used / clamp_min(s2_eodhd_monthly_credits_limit, 1) > 0.95
+        for: 2m
+        labels:
+          severity: critical
+          service: market-ingestion
+        annotations:
+          summary: "EODHD quota above 95% — circuit breaker will open soon"
+          description: "EODHD monthly quota utilization is {{ $value | humanizePercentage }}. Ingestion will stop when quota is fully exhausted."
+
+      # Alert: Circuit breaker open (s2_eodhd_circuit_breaker_state == 1)
+      # When the breaker is open, all EODHD fetches are short-circuited and
+      # market-data consumers fall back to stale PriceSnapshot records.
+      # This is a critical incident — prices will go stale until the circuit
+      # resets at the start of the next billing month.
+      - alert: EodhdCircuitBreakerOpen
+        expr: max(s2_eodhd_circuit_breaker_state) == 1
+        for: 1m
+        labels:
+          severity: critical
+          service: market-ingestion
+        annotations:
+          summary: "EODHD circuit breaker is OPEN"
+          description: "Market data ingestion from EODHD is halted. Prices are being served from stale snapshots."
+
+      # Alert: Sustained 429 rate over a 10-minute window
+      # A burst of 429s is expected during aggressive back-fill; this alert
+      # fires only when the rate stays above 0.1/s for 5+ minutes, which
+      # indicates the Retry-After back-off logic is not working correctly.
+      # Metric: s2_eodhd_rate_limited_total (labeled by endpoint)
+      - alert: EodhdSustained429s
+        expr: sum(rate(s2_eodhd_rate_limited_total[10m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: market-ingestion
+        annotations:
+          summary: "EODHD returning sustained rate limit responses"
+          description: "Rate of HTTP 429 responses from EODHD is {{ $value | humanize }}/s averaged over 10m."
+
+      # Alert: Daily budget headroom negative
+      # The daily budget is burst_capacity × 0.85 (safety factor).
+      # Negative headroom means today's calls have already exceeded the
+      # per-day allotment; the monthly quota will be exhausted ahead of
+      # schedule if this continues.
+      # Metric: s2_eodhd_daily_budget_headroom (updated by quota status endpoint)
+      - alert: EodhdDailyBudgetExceeded
+        expr: s2_eodhd_daily_budget_headroom < 0
+        for: 1m
+        labels:
+          severity: warning
+          service: market-ingestion
+        annotations:
+          summary: "EODHD daily credit budget exceeded"
+          description: "Daily budget headroom is {{ $value | humanizePercentage }}. Credits consumed above daily allotment."

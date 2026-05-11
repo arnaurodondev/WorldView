@@ -69,7 +69,7 @@ class TestExactMatch:
         )
 
         registry = _make_registry_repo(exact_return=_EXACT_ROW)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             canonicalize_relation_type(
                 raw_type="employs",
                 semantic_mode_hint="RELATION_STATE",
@@ -91,7 +91,7 @@ class TestExactMatch:
 
         registry = _make_registry_repo(exact_return=_EXACT_ROW)
         emb = _make_embedding_client()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             canonicalize_relation_type(
                 raw_type="employs",
                 semantic_mode_hint="RELATION_STATE",
@@ -111,7 +111,7 @@ class TestExactMatch:
         )
 
         outbox = _make_outbox_repo()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             canonicalize_relation_type(
                 raw_type="employs",
                 semantic_mode_hint="RELATION_STATE",
@@ -130,7 +130,7 @@ class TestExactMatch:
             canonicalize_relation_type,
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             canonicalize_relation_type(
                 raw_type="employs",
                 semantic_mode_hint="RELATION_STATE",
@@ -156,7 +156,7 @@ class TestSoftMap:
             canonicalize_relation_type,
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             canonicalize_relation_type(
                 raw_type="serves_on_board_of",
                 semantic_mode_hint="RELATION_STATE",
@@ -177,7 +177,7 @@ class TestSoftMap:
         )
 
         emb = _make_embedding_client()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             canonicalize_relation_type(
                 raw_type="serves_on_board_of",
                 semantic_mode_hint="RELATION_STATE",
@@ -197,7 +197,7 @@ class TestSoftMap:
         )
 
         outbox = _make_outbox_repo()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             canonicalize_relation_type(
                 raw_type="serves_on_board_of",
                 semantic_mode_hint="RELATION_STATE",
@@ -223,7 +223,7 @@ class TestPropose:
             canonicalize_relation_type,
         )
 
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             canonicalize_relation_type(
                 raw_type="invented_by",
                 semantic_mode_hint="RELATION_STATE",
@@ -245,7 +245,7 @@ class TestPropose:
         )
 
         # Should not raise
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             canonicalize_relation_type(
                 raw_type="invented_by",
                 semantic_mode_hint="RELATION_STATE",
@@ -265,7 +265,7 @@ class TestPropose:
         )
 
         outbox = _make_outbox_repo()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             canonicalize_relation_type(
                 raw_type="invented_by",
                 semantic_mode_hint="RELATION_STATE",
@@ -282,14 +282,19 @@ class TestPropose:
         assert call_kwargs["topic"] == "relation.type.proposed.v1"
 
     def test_propose_payload_contains_proposed_type(self) -> None:
-        import json
-
+        # PLAN-0062 F-006: outbox payload is Confluent-Avro framed bytes
+        # (5-byte ``\x00<schema-id>`` header + Avro body), not raw JSON.
         from knowledge_graph.application.blocks.canonicalization import (
             canonicalize_relation_type,
         )
 
+        from messaging.kafka.schema_paths import get_schema_path  # type: ignore[import-untyped]
+        from messaging.kafka.serialization_utils import (  # type: ignore[import-untyped]
+            deserialize_confluent_avro,
+        )
+
         outbox = _make_outbox_repo()
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             canonicalize_relation_type(
                 raw_type="invented_by",
                 semantic_mode_hint="TEMPORAL_CLAIM",
@@ -302,6 +307,97 @@ class TestPropose:
             )
         )
         raw_payload = outbox.append.call_args.kwargs["payload_avro"]
-        payload = json.loads(raw_payload)
+        # Confluent magic byte present → decode via Avro path.
+        assert raw_payload[:1] == b"\x00", "expected Confluent-Avro framed bytes"
+        payload = deserialize_confluent_avro(
+            get_schema_path("relation.type.proposed.v1.avsc"),
+            raw_payload,
+        )
         assert payload["proposed_type"] == "invented_by"
         assert payload["semantic_mode"] == "TEMPORAL_CLAIM"
+
+
+# ---------------------------------------------------------------------------
+# PLAN-0072 T-72-1-02 — case normalization before exact match
+# ---------------------------------------------------------------------------
+
+
+class TestCaseNormalization:
+    """Step 1 exact match is now case-insensitive (PLAN-0072 T-72-1-02)."""
+
+    def test_exact_match_case_insensitive(self) -> None:
+        """UPPERCASE raw_type resolves to lowercase canonical via exact match."""
+        from knowledge_graph.application.blocks.canonicalization import (
+            canonicalize_relation_type,
+        )
+
+        row = dict(_EXACT_ROW, canonical_type="competes_with")
+        # Registry receives the normalized lowercase key and returns the row.
+        registry = _make_registry_repo(exact_return=row)
+
+        result = asyncio.run(
+            canonicalize_relation_type(
+                raw_type="COMPETES_WITH",
+                semantic_mode_hint="RELATION_STATE",
+                subject_entity_id=uuid4(),
+                object_entity_id=uuid4(),
+                source_doc_id=None,
+                registry_repo=registry,
+                outbox_repo=_make_outbox_repo(),
+                embedding_client=_make_embedding_client(),
+            )
+        )
+        assert result.canonical_type == "competes_with"
+        assert result.step == "exact"
+        # find_exact must have been called with the lowercased key, not the original.
+        registry.find_exact.assert_called_once_with("competes_with")
+
+    def test_uppercase_llm_output_canonicalized(self) -> None:
+        """Mixed-case LLM output like 'HAS_EXECUTIVE' resolves via normalized exact match."""
+        from knowledge_graph.application.blocks.canonicalization import (
+            canonicalize_relation_type,
+        )
+
+        row = dict(_EXACT_ROW, canonical_type="has_executive")
+        registry = _make_registry_repo(exact_return=row)
+
+        result = asyncio.run(
+            canonicalize_relation_type(
+                raw_type="HAS_EXECUTIVE",
+                semantic_mode_hint="RELATION_STATE",
+                subject_entity_id=uuid4(),
+                object_entity_id=uuid4(),
+                source_doc_id=None,
+                registry_repo=registry,
+                outbox_repo=_make_outbox_repo(),
+                embedding_client=_make_embedding_client(),
+            )
+        )
+        assert result.step == "exact"
+        registry.find_exact.assert_called_once_with("has_executive")
+
+    def test_unknown_type_still_proposed(self) -> None:
+        """Truly unknown type falls through to Step 3 (proposal) even after normalization."""
+        from knowledge_graph.application.blocks.canonicalization import (
+            canonicalize_relation_type,
+        )
+
+        registry = _make_registry_repo(exact_return=None, ann_return=None)
+        outbox = _make_outbox_repo()
+
+        result = asyncio.run(
+            canonicalize_relation_type(
+                raw_type="INVENTED_BY",
+                semantic_mode_hint="RELATION_STATE",
+                subject_entity_id=uuid4(),
+                object_entity_id=uuid4(),
+                source_doc_id=None,
+                registry_repo=registry,
+                outbox_repo=outbox,
+                embedding_client=_make_embedding_client(),
+            )
+        )
+        assert result.canonical_type is None
+        assert result.step == "proposed"
+        # Registry received normalized key, still found nothing.
+        registry.find_exact.assert_called_once_with("invented_by")

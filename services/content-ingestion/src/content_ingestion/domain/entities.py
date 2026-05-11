@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from datetime import timedelta
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from datetime import datetime
-    from uuid import UUID
+from datetime import UTC, datetime, timedelta
+from typing import Any
+from uuid import UUID
 
 import common.ids
 import common.time
@@ -37,7 +35,8 @@ class Source:
 class FetchResult:
     """Raw result of a single HTTP fetch attempt.
 
-    Attributes:
+    Attributes
+    ----------
         published_at: Publication datetime as reported by the source API, or None if not
             available. This is the article's *editorial* date, distinct from ``fetched_at``
             (when our crawler pulled it). Used as ``evidence_date`` when writing
@@ -45,6 +44,7 @@ class FetchResult:
         is_backfill: True when this result was produced during a boot-time historical
             backfill run (i.e. ``BACKFILL_ENABLED=true``).  Propagated through the
             pipeline so that S10 can suppress alert fan-out for historical documents.
+
     """
 
     source_id: UUID
@@ -56,18 +56,21 @@ class FetchResult:
     content_type: str
     published_at: datetime | None = None
     is_backfill: bool = False
+    title: str | None = None
 
 
 @dataclass(frozen=True)
 class RawArticle:
     """A raw article ready for storage and Kafka publish.
 
-    Attributes:
+    Attributes
+    ----------
         published_at: Source-reported publication datetime, or None.  When present, S7
             MUST use this as ``relation_evidence.evidence_date`` so the temporal decay
             formula reflects the article's *actual* age, not when it was ingested.
         is_backfill: True for documents ingested during a historical backfill run.
             Propagated through the Kafka event so S10 can suppress alert fan-out.
+
     """
 
     source_type: SourceType
@@ -82,7 +85,6 @@ class RawArticle:
 
 
 # ── Scheduler-Worker task entity ──────────────────────────────────────────────
-
 
 _CLAIMABLE_STATUSES = frozenset({IngestionTaskStatus.PENDING, IngestionTaskStatus.RETRY})
 
@@ -119,6 +121,15 @@ class ContentIngestionTask:
     # Scheduling
     is_backfill: bool = False
     window_start: datetime | None = None
+
+    # Retry backoff — earliest time this task may be picked up by the scheduler.
+    # NULL means the task is ready to be claimed immediately.
+    next_attempt_at: datetime | None = None
+
+    # Source configuration — carried from the sources table so adapters can
+    # read symbol, from_date, to_date, etc. without a second DB round-trip.
+    # Populated by TaskRepository.claim_batch via JOIN on sources.
+    source_config: dict = field(default_factory=dict)
 
     # Audit
     id: UUID = field(default_factory=common.ids.new_uuid7)
@@ -167,12 +178,35 @@ class ContentIngestionTask:
             self.status = IngestionTaskStatus.RETRY
         self.updated_at = common.time.utc_now()
 
+    def retry(self, reason: str) -> None:
+        """Transition RUNNING → RETRY unconditionally (e.g. advisory lock held).
+
+        Unlike ``fail()``, this always transitions to RETRY regardless of
+        ``attempt_count`` vs ``max_attempts``.  The attempt is not counted as
+        a true failure — it was pre-empted by contention, not an error.
+        """
+        if self.status != IngestionTaskStatus.RUNNING:
+            raise InvalidStateTransition(f"Cannot retry task in status {self.status!r}; must be RUNNING")
+        self.error_detail = reason
+        self.worker_id = None
+        self.lease_expires = None
+        self.status = IngestionTaskStatus.RETRY
+        self.updated_at = common.time.utc_now()
+
     # ── Queries ───────────────────────────────────────────────────────────
 
     @property
     def is_claimable(self) -> bool:
-        """True if the task can be claimed by a worker."""
-        return self.status in _CLAIMABLE_STATUSES
+        """True if the task can be claimed by a worker.
+
+        Returns False if ``next_attempt_at`` is set to a future time, meaning
+        the task is in a EODHD 429 backoff window and must not be dispatched.
+        The repository's ``claim_batch`` query enforces the same filter at the
+        SQL level; this property is here for use-case / unit-test assertions.
+        """
+        if self.status not in _CLAIMABLE_STATUSES:
+            return False
+        return not (self.next_attempt_at is not None and self.next_attempt_at > common.time.utc_now())
 
     def is_lease_expired(self, now: datetime) -> bool:
         """True if the current lease has passed its expiry time."""
@@ -197,4 +231,381 @@ class ContentIngestionTask:
             source_type=source.source_type,
             is_backfill=is_backfill,
             window_start=window_start,
+        )
+
+
+# ── Prediction Market entities ─────────────────────────────────────────────────
+
+
+# PLAN-0053 T-C-3-04: category normalization map.
+# WHY this lives here (and not on the consumer/adapter): the canonical category
+# is part of the domain DTO — a market's category is a property of the data, not
+# of any specific provider. Keeping the normalisation pure-domain means consumers,
+# tests, and the API layer all see the same buckets without duplication.
+#
+# Each entry maps a lowercase Polymarket tag/category (the dictionary key) to
+# one of our four canonical frontend buckets ("politics" | "crypto" | "sports" |
+# "macro").  Tags not appearing here fall through to the title-keyword heuristic.
+# Order is irrelevant — lookup is direct dict access.
+_CATEGORY_NORMALIZATION_MAP: dict[str, str] = {
+    # Politics
+    "politics": "politics",
+    "pol": "politics",
+    "election": "politics",
+    "elections": "politics",
+    "2024 election": "politics",
+    "2024 elections": "politics",
+    "us election": "politics",
+    "us politics": "politics",
+    "president": "politics",
+    "presidential": "politics",
+    "trump": "politics",
+    "biden": "politics",
+    # Crypto / DeFi
+    "crypto": "crypto",
+    "cryptocurrency": "crypto",
+    "defi": "crypto",
+    "bitcoin": "crypto",
+    "btc": "crypto",
+    "ethereum": "crypto",
+    "eth": "crypto",
+    "solana": "crypto",
+    "sol": "crypto",
+    # Sports — Polymarket tags individual leagues frequently.
+    "sports": "sports",
+    "nba": "sports",
+    "nfl": "sports",
+    "nhl": "sports",
+    "mlb": "sports",
+    "soccer": "sports",
+    "football": "sports",
+    "champions league": "sports",
+    "world cup": "sports",
+    "olympics": "sports",
+    # Macro / Economy
+    "macro": "macro",
+    "macroeconomics": "macro",
+    "economy": "macro",
+    "economics": "macro",
+    "fed": "macro",
+    "fomc": "macro",
+    "inflation": "macro",
+    "cpi": "macro",
+    "interest rates": "macro",
+    "rates": "macro",
+    "tariffs": "macro",
+    "tariff": "macro",
+}
+
+
+# Title-keyword heuristic — used when no tag maps cleanly. Mirrors the frontend
+# ``categorize()`` function so server- and client-side classification agree on
+# the same set of titles. Order matters: macro is checked first so a "Fed cuts
+# rates AND BTC > 100k" market is tagged macro (correct call for finance UX).
+_TITLE_HEURISTIC_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "macro",
+        (
+            "fed",
+            "rate",
+            "inflation",
+            "gdp",
+            "cpi",
+            "unemployment",
+            "recession",
+            "fomc",
+            "payroll",
+            "pce",
+            "treasury",
+            "yield",
+            "deficit",
+            "tariff",
+            "economic",
+            "fiscal",
+            "monetary",
+            "pmi",
+        ),
+    ),
+    (
+        "politics",
+        (
+            "election",
+            "president",
+            "presidential",
+            "senate",
+            "congress",
+            "vote",
+            "primary",
+            "governor",
+            "supreme court",
+            "impeach",
+        ),
+    ),
+    (
+        "sports",
+        (
+            "nba",
+            "nfl",
+            "mlb",
+            "nhl",
+            "superbowl",
+            "super bowl",
+            "world cup",
+            "olympics",
+            "champion",
+            "f1",
+            "fifa",
+            "uefa",
+        ),
+    ),
+    (
+        "crypto",
+        (
+            "bitcoin",
+            "ethereum",
+            "btc",
+            "eth",
+            "crypto",
+            "solana",
+            "sol",
+            "altcoin",
+        ),
+    ),
+)
+
+
+def _normalize_category(raw: str) -> str | None:
+    """Map a raw Polymarket tag/category string to a canonical bucket or None.
+
+    PLAN-0053 T-C-3-04. Returns one of {"politics", "crypto", "sports", "macro"}
+    when the tag matches our normalisation table, else None to signal "unmapped"
+    (caller should fall back to title-keyword heuristics or keep the raw tag).
+    """
+    key = raw.strip().lower()
+    if not key:
+        return None
+    return _CATEGORY_NORMALIZATION_MAP.get(key)
+
+
+def _categorize_by_title(title: str) -> str | None:
+    """Heuristic: assign a canonical category based on title keywords.
+
+    PLAN-0053 T-C-3-04 — fallback when no tag maps cleanly. Mirrors the
+    frontend's ``categorize()`` so client and server stay in sync. Returns
+    None when no keyword matches; caller decides what to do (keep raw tag,
+    leave NULL, etc).
+    """
+    text = title.strip().lower()
+    if not text:
+        return None
+    for canonical, keywords in _TITLE_HEURISTIC_RULES:
+        if any(kw in text for kw in keywords):
+            return canonical
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class OutcomeSnapshot:
+    """A single binary outcome of a prediction market (e.g. "Yes" or "No").
+
+    Invariants:
+        - ``name`` and ``token_id`` must be non-empty strings.
+        - ``price`` must be in the closed interval [0.0, 1.0].
+    """
+
+    name: str
+    token_id: str
+    price: float
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("OutcomeSnapshot.name must not be empty")
+        if not self.token_id:
+            raise ValueError("OutcomeSnapshot.token_id must not be empty")
+        if not (0.0 <= self.price <= 1.0):
+            raise ValueError(f"OutcomeSnapshot.price must be in [0.0, 1.0], got {self.price}")
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionMarketFetchResult:
+    """Immutable result of fetching one prediction market from Polymarket.
+
+    This is a pure domain object — no infrastructure imports.  The adapter
+    constructs instances via :meth:`from_gamma_response` and may attach the
+    MinIO key via ``dataclasses.replace()`` after upload.
+
+    Invariants:
+        - ``fetched_at`` must be UTC-aware.
+        - ``outcomes`` must contain at least 2 entries.
+    """
+
+    source_type: SourceType
+    market_id: str
+    question: str
+    outcomes: list[OutcomeSnapshot]
+    raw_bytes: bytes
+    fetched_at: datetime
+    description: str | None = None
+    volume_24h: float | None = None
+    liquidity: float | None = None
+    close_time: datetime | None = None
+    resolution_status: str = "open"
+    resolved_answer: str | None = None
+    minio_bronze_key: str | None = None
+    # WHY market_slug: Polymarket event slug (e.g. "will-bitcoin-reach-100k") used to
+    # construct the Polymarket event URL on the frontend. Absent from older Gamma API
+    # responses → default "". Forward-compatible: new field with safe default.
+    market_slug: str = ""
+    # F-DP1-06: high-level Polymarket category (politics, crypto, sports, business, ...).
+    # Sourced from Gamma API ``category`` field; falls back to the first ``tags`` entry
+    # when ``category`` is absent. ``None`` means "no category provided" — the downstream
+    # writer leaves the prediction_markets.category column untouched (COALESCE preserve).
+    category: str | None = None
+    id: UUID = field(default_factory=common.ids.new_uuid7)
+
+    def __post_init__(self) -> None:
+        if self.fetched_at.tzinfo is None:
+            raise ValueError("PredictionMarketFetchResult.fetched_at must be UTC-aware")
+        if len(self.outcomes) < 2:
+            raise ValueError("PredictionMarketFetchResult.outcomes must have at least 2 entries")
+
+    @classmethod
+    def from_gamma_response(
+        cls,
+        raw: dict,
+        fetched_at: datetime,
+    ) -> PredictionMarketFetchResult:
+        """Construct from a Polymarket Gamma API market dict.
+
+        Maps Gamma API field names to domain attributes.  All optional fields
+        use defensive ``.get()`` with None defaults to tolerate absent keys.
+        """
+        # WHY dual-format parsing: The Polymarket Gamma API changed its response schema
+        # circa April 2026.  Old format: `tokens` list of {outcome, token_id, price}.
+        # New format: `outcomes` (JSON string of names), `outcomePrices` (JSON string of
+        # decimal strings), `clobTokenIds` (JSON string of token ID strings).
+        # We parse both and prefer the old format when `tokens` is present.
+        tokens: list[dict] = raw.get("tokens") or []
+        if tokens:
+            # Old Gamma API format: tokens is a list of {outcome, token_id, price} dicts
+            outcomes = [
+                OutcomeSnapshot(
+                    name=t.get("outcome", ""),
+                    token_id=t.get("token_id", ""),
+                    price=float(t.get("price", 0.0)),
+                )
+                for t in tokens
+            ]
+        else:
+            # New Gamma API format: outcomes/outcomePrices/clobTokenIds are JSON strings
+            try:
+                outcome_names: list[str] = json.loads(raw.get("outcomes") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                outcome_names = []
+            try:
+                outcome_prices_raw: list[str] = json.loads(raw.get("outcomePrices") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                outcome_prices_raw = []
+            try:
+                clob_ids: list[str] = json.loads(raw.get("clobTokenIds") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                clob_ids = []
+            # Zip to shortest to avoid IndexError on mismatched lengths
+            outcomes = [
+                OutcomeSnapshot(
+                    name=name,
+                    token_id=clob_ids[i] if i < len(clob_ids) else "",
+                    price=float(outcome_prices_raw[i]) if i < len(outcome_prices_raw) else 0.0,
+                )
+                for i, name in enumerate(outcome_names)
+            ]
+
+        # Map Gamma "closed" status → domain "cancelled" (R15: stable values)
+        raw_status = raw.get("status", "active")
+        if raw_status == "closed":
+            resolution_status = "cancelled"
+        elif raw_status == "resolved":
+            resolution_status = "resolved"
+        else:
+            resolution_status = "open"
+
+        close_time: datetime | None = None
+        raw_end_date = raw.get("endDate")
+        if raw_end_date:
+            try:
+                close_time = datetime.fromisoformat(raw_end_date.replace("Z", "+00:00")).astimezone(UTC)
+            except (ValueError, AttributeError):
+                close_time = None
+
+        # WHY try multiple slug fields: Gamma API uses "slug" on market objects and
+        # "groupItemSlug" on grouped markets. The "market_slug" key is used in older
+        # snapshots. Prefer whichever is populated; default "" for missing/null values.
+        market_slug = raw.get("slug") or raw.get("market_slug") or raw.get("groupItemSlug") or ""
+
+        # F-DP1-06: extract category from Gamma API.  The new Gamma API exposes a
+        # top-level ``category`` string (e.g. "Politics", "Crypto", "Sports").  Some
+        # market records instead have a ``tags`` list of dicts (``[{"label": "Crypto"}]``)
+        # or a ``tags`` list of plain strings.  We accept either shape and fall back to
+        # the first non-empty tag when ``category`` is absent.  None preserves existing
+        # DB values via the consumer's COALESCE upsert.
+        #
+        # PLAN-0053 T-C-3-04: extended categorization. The previous logic took the
+        # FIRST tag verbatim — which produced 60%+ "other" buckets because Polymarket
+        # tags individual events ("NBA", "FOMC", "Bitcoin") rather than coarse buckets.
+        # We now:
+        #   1. Walk the ENTIRE tag list (not just the first), trying to map any to
+        #      one of our 4 canonical buckets via _CATEGORY_NORMALIZATION_MAP.
+        #   2. Fall back to title-keyword heuristics when no tag maps cleanly.
+        #   3. Last-resort: keep the first non-empty raw tag (preserves backward-
+        #      compat for callers querying by raw category names like "elections").
+        raw_category: Any = raw.get("category")
+        category: str | None = None
+        if isinstance(raw_category, str) and raw_category.strip():
+            normalized = _normalize_category(raw_category)
+            category = normalized if normalized is not None else raw_category.strip().lower()
+        else:
+            tags_raw = raw.get("tags") or []
+            collected_tags: list[str] = []
+            if isinstance(tags_raw, list):
+                for tag in tags_raw:
+                    if isinstance(tag, str) and tag.strip():
+                        collected_tags.append(tag.strip())
+                    elif isinstance(tag, dict):
+                        label = tag.get("label") or tag.get("name") or ""
+                        if isinstance(label, str) and label.strip():
+                            collected_tags.append(label.strip())
+
+            # First pass: walk every tag looking for one that maps cleanly.
+            for tag in collected_tags:
+                normalized = _normalize_category(tag)
+                if normalized is not None:
+                    category = normalized
+                    break
+
+            # Second pass: title-keyword heuristic if no tag matched.
+            if category is None:
+                title_text = raw.get("question") or raw.get("title") or ""
+                if isinstance(title_text, str) and title_text:
+                    category = _categorize_by_title(title_text)
+
+            # Third pass: keep raw first tag verbatim (existing behaviour).
+            if category is None and collected_tags:
+                category = collected_tags[0].lower()
+
+        return cls(
+            source_type=SourceType.POLYMARKET,
+            market_id=raw.get("conditionId", ""),
+            question=raw.get("question", ""),
+            description=raw.get("description"),
+            outcomes=outcomes,
+            volume_24h=float(raw["volume24hr"]) if raw.get("volume24hr") is not None else None,
+            liquidity=float(raw["liquidity"]) if raw.get("liquidity") is not None else None,
+            close_time=close_time,
+            resolution_status=resolution_status,
+            resolved_answer=raw.get("resolvedAnswer"),
+            raw_bytes=json.dumps(raw).encode(),
+            fetched_at=fetched_at,
+            minio_bronze_key=None,
+            market_slug=market_slug,
+            category=category,
         )

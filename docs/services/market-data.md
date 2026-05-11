@@ -9,7 +9,8 @@
 
 **Owns**: Materializing OHLCV bars, quotes, and fundamentals from claim-check pointers.
 Serving query APIs for charts, fundamentals, and instrument metadata. Security/instrument
-master data. Instrument lifecycle events.
+master data. Instrument lifecycle events. Materializing Polymarket prediction market
+snapshots from `market.prediction.v1` Kafka events.
 
 **Never does**: Fetch data from upstream providers (Market Ingestion's job), store news
 or articles, perform NLP processing, manage portfolios.
@@ -22,10 +23,10 @@ or articles, perform NLP processing, manage portfolios.
 |--------|------|-------------|------------|
 | GET | `/healthz` | Liveness probe — always 200 | — |
 | GET | `/readyz` | Readiness (DB + Valkey + Storage + Kafka) | — |
-| GET | `/metrics` | Prometheus metrics (via middleware) | — |
+| GET | `/metrics` | Prometheus metrics — requires `X-Internal-Token` header (M-004) | — |
 | GET | `/api/v1/instruments` | List instruments — query params: `query`, `has_ohlcv`, `has_quotes`, `has_fundamentals`, `exchange`, `limit`, `offset` (all DB-side) | — |
-| GET | `/api/v1/instruments/symbol/{symbol}` | Instrument by symbol (query param: `exchange`) | — |
-| GET | `/api/v1/instruments/{instrument_id}` | Instrument detail by UUID | — |
+| GET | `/api/v1/instruments/lookup` | Unified instrument lookup — query params: `symbol` (icase), `isin`, `id` (UUID), `extra_info` (bool, default false). Priority: id > isin > symbol. `extra_info=true` also returns `name`, `description`, `sector`, `industry`, `country`, `currency_code`. Requires `X-Internal-JWT`. | — |
+| GET | `/api/v1/instruments/on-demand-profile` | On-demand instrument profile — query param: `ticker` or `isin`. DB-first (returns `source="db"` if description populated); falls back to EODHD, persists result (`source="eodhd_persisted"`). Raises 429 if EODHD rate-limited. Requires `X-Internal-JWT`. | — |
 | GET | `/api/v1/ohlcv/bulk` | Bulk OHLCV for multiple instruments | — |
 | GET | `/api/v1/ohlcv/{instrument_id}` | OHLCV bars (query: `timeframe`, `start`, `end`) | — |
 | GET | `/api/v1/ohlcv/{instrument_id}/timeframes` | Available timeframes for instrument | — |
@@ -46,15 +47,16 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/fundamentals/{instrument_id}/institutional-holders` | Institutional holders | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/fund-holders` | Fund holders | — |
 | GET | `/api/v1/fundamentals/{instrument_id}/insider-transactions-snapshot` | Insider transactions snapshot | — |
+| GET | `/api/v1/fundamentals/{instrument_id}/snapshot` | Pre-computed derived metrics snapshot — returns one flat row from `instrument_fundamentals_snapshot` table (eps_ttm, beta, avg_volume_30d, operating_cash_flow, capex, free_cash_flow, fcf_margin, interest_coverage, net_debt_to_ebitda, credit_rating, updated_at). Always 200 — all fields null for un-backfilled instruments. PLAN-0050 Wave D. | — |
 | GET | `/api/v1/fundamentals/timeseries` | Metric timeseries — query params: `instrument_id`, `metric`, `start_date`, `end_date`, `period_type`, `limit`. Returns 422 if `start_date > end_date`. | — |
-| POST | `/api/v1/fundamentals/screen` | Screen instruments by metric thresholds (AND logic) — JSON body: `filters[]` (each filter may include `metric`, `min_value`, `max_value`, `period_type`, `sector`), `limit`, `offset` | — |
+| POST | `/api/v1/fundamentals/screen` | Screen instruments by metric thresholds (AND logic) — JSON body: `filters[]` (each filter may include `metric`, `min_value`, `max_value`, `period_type`, `sector`), `limit` (default 50, max 200), `offset` (max 5000), `sort_by` (metric name, `ticker`, or `name`; validated whitelist — SQL injection guard), `sort_order` (`asc`/`desc`). Response includes `ticker`, `name`, `exchange`, `sector` fields + `total` (COUNT(*) OVER()). | — |
 | GET | `/api/v1/fundamentals/metrics/{instrument_id}` | List available metric names for an instrument | — |
 | GET | `/api/v1/securities` | List securities — query params: `figi`, `isin`, `limit`, `offset` (paginated DB scan when unfiltered) | — |
 | GET | `/api/v1/securities/{security_id}` | Security detail by FIGI or ISIN | — |
 
 > **Note on path ordering**: Literal-segment routes (`/ohlcv/bulk`, `/quotes/latest`,
-> `/instruments/symbol/{symbol}`) are registered **before** path-param routes
-> (`/ohlcv/{instrument_id}`, `/quotes/{instrument_id}`, `/instruments/{instrument_id}`)
+> `/instruments/lookup`, `/instruments/on-demand-profile`) are registered **before** path-param routes
+> (`/ohlcv/{instrument_id}`, `/quotes/{instrument_id}`)
 > to avoid FastAPI matching the literal as a path param. The `fundamental_metrics` router
 > is registered before the `fundamentals` router so that `/fundamentals/timeseries`,
 > `/fundamentals/screen`, and `/fundamentals/metrics/{id}` are not matched by
@@ -78,13 +80,25 @@ or articles, perform NLP processing, manage portfolios.
 | `market.dataset.fetched` | `market-data-ohlcv` | Materialize OHLCV bars | `event_id` in `ingestion_events` |
 | `market.dataset.fetched` | `market-data-quotes` | Materialize quotes | `event_id` |
 | `market.dataset.fetched` | `market-data-fundamentals` | Materialize fundamentals | `event_id` |
+| `market.prediction.v1` | `market-data-prediction-markets` | Materialize prediction market snapshots (PRD-0019) | Atomic `create_if_not_exists` + `insert_if_not_exists` |
 
 ### Produced
 
 | Topic | Event Type | Key |
 |-------|-----------|-----|
-| `market.instrument.created` | `InstrumentCreated` | `instrument_id` |
+| `market.instrument.created` | `InstrumentCreated` (v3) | `instrument_id` |
 | `market.instrument.updated` | `InstrumentUpdated` | `instrument_id` |
+| `market.instrument.discovered.v1` | `InstrumentDiscovered` | `instrument_id` |
+
+PLAN-0057 Wave D-2: ohlcv/quotes consumers emit `market.instrument.discovered.v1`
+on first-seen symbols (lightweight: just `instrument_id` + `symbol` + `exchange`).
+fundamentals_consumer emits the rich `market.instrument.created` (v3, schema with
+the four EODHD identifier fields cusip / figi / lei / primary_ticker — all
+nullable + null defaults for forward-compat) on every False→True transition of
+`has_fundamentals`, gated on the presence of a real EODHD `Name`. KG subscribes
+to both topics: discovered.v1 seeds a placeholder canonical, created promotes it
+to a fully-named, alias-rich, embedding-backed canonical via the
+UPSERT-after-discover branch in `InstrumentEntityConsumer`.
 
 ---
 
@@ -191,11 +205,62 @@ CREATE INDEX ix_fundamental_metrics_metric_date
     ON fundamental_metrics (metric, as_of_date);
 CREATE INDEX ix_fundamental_metrics_instrument_metric
     ON fundamental_metrics (instrument_id, metric, as_of_date);
+
+-- PLAN-0050 Wave D: One-row-per-instrument pre-computed snapshot of 10 derived metrics.
+-- Populated by: services/market-ingestion/scripts/backfill_fundamentals.py (nightly UPSERT).
+-- Purpose: avoids multi-section JSONB joins at query time for InstrumentKeyMetrics + FundamentalsTab.
+-- Note: credit_rating is always NULL (EODHD does not expose S&P/Moody's ratings).
+CREATE TABLE instrument_fundamentals_snapshot (
+    instrument_id       UUID PRIMARY KEY REFERENCES instruments(id) ON DELETE CASCADE,
+    eps_ttm             NUMERIC(18, 6) NULL,
+    beta                NUMERIC(10, 6) NULL,
+    avg_volume_30d      BIGINT NULL,
+    operating_cash_flow NUMERIC(24, 2) NULL,
+    capex               NUMERIC(24, 2) NULL,
+    free_cash_flow      NUMERIC(24, 2) NULL,
+    fcf_margin          NUMERIC(10, 6) NULL,
+    interest_coverage   NUMERIC(12, 4) NULL,
+    net_debt_to_ebitda  NUMERIC(12, 4) NULL,
+    credit_rating       VARCHAR(10) NULL,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ix_fundamentals_snapshot_updated_at ON instrument_fundamentals_snapshot (updated_at);
+
+-- PRD-0019: Polymarket prediction markets
+CREATE TABLE prediction_markets (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    market_id           TEXT NOT NULL,
+    source              TEXT NOT NULL DEFAULT 'polymarket',
+    question            TEXT NOT NULL,
+    description         TEXT,
+    outcomes            JSONB NOT NULL DEFAULT '[]',
+    close_time          TIMESTAMPTZ,
+    resolution_status   VARCHAR(20) NOT NULL DEFAULT 'open',
+    resolved_answer     TEXT,
+    created_at          TIMESTAMPTZ DEFAULT now(),
+    updated_at          TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_prediction_markets_market_id UNIQUE (market_id)
+);
+CREATE INDEX ix_pm_status_updated ON prediction_markets (resolution_status, updated_at DESC);
+
+-- PRD-0019: One price snapshot per (market_id, timestamp) — TimescaleDB hypertable
+CREATE TABLE prediction_market_snapshots (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    market_id       TEXT NOT NULL,
+    snapshot_at     TIMESTAMPTZ NOT NULL,
+    outcomes_prices JSONB NOT NULL DEFAULT '{}',
+    volume_24h      NUMERIC(20, 4),
+    liquidity       NUMERIC(20, 4),
+    source_event_id TEXT NOT NULL,
+    CONSTRAINT uq_pms_market_snapshot UNIQUE (market_id, snapshot_at)
+);
+CREATE INDEX ix_pms_market_time ON prediction_market_snapshots (market_id, snapshot_at DESC);
+SELECT create_hypertable('prediction_market_snapshots', 'snapshot_at', if_not_exists => TRUE);
 ```
 
 ---
 
-## Runtime Processes (5)
+## Runtime Processes (6)
 
 | Process | Purpose |
 |---------|---------|
@@ -204,6 +269,7 @@ CREATE INDEX ix_fundamental_metrics_instrument_metric
 | Quotes Consumer | Materialize latest quotes |
 | Fundamentals Consumer | Materialize fundamentals data |
 | Outbox Dispatcher | Publish instrument lifecycle events |
+| Prediction Market Consumer | Materialize `market.prediction.v1` events into `prediction_markets` + `prediction_market_snapshots` |
 
 ---
 
@@ -297,6 +363,10 @@ All consumers extend `BaseKafkaConsumer[dict]` from `libs/messaging`. They:
 4. Upsert records using the UoW's repository (with provider-priority logic for OHLCV).
 5. Upsert the instrument record and update `has_ohlcv / has_quotes / has_fundamentals` flag.
 6. Emit `InstrumentCreated` or `InstrumentUpdated` domain events to the outbox.
+
+**FundamentalsConsumer snapshot UPSERT (PLAN-0050 QA iter-1 F-Q1-03)**: After processing all sections, `FundamentalsConsumer` calls `_upsert_fundamentals_snapshot()` which derives all 10 snapshot metrics from the section JSONB data already in `payload` and UPSERTs one row into `instrument_fundamentals_snapshot`. This makes the snapshot table eventually consistent with each fundamentals ingest cycle — no separate backfill run is needed for continuously-ingested instruments. The helper logic lives in `infrastructure/db/fundamentals_snapshot_writer.py`. The call is best-effort: any exception is logged as a warning and does not dead-letter the Kafka message.
+
+**Snapshot UPSERT COALESCE policy (PLAN-0050 QA iter-2 F-Q2-03)**: The `ON CONFLICT DO UPDATE` clause in `_UPSERT_SQL` uses `COALESCE(EXCLUDED.col, instrument_fundamentals_snapshot.col)` for all 10 nullable metric columns (`eps_ttm`, `beta`, `avg_volume_30d`, `operating_cash_flow`, `capex`, `free_cash_flow`, `fcf_margin`, `interest_coverage`, `net_debt_to_ebitda`, `credit_rating`). This prevents a partial EODHD re-poll (e.g., missing cash-flow section) from silently overwriting previously-valid data with NULL. `updated_at` is always refreshed unconditionally via `now()` regardless of which sections were present. A poll that provides no new data for a column simply preserves the existing value.
 
 **Quote NULL semantics (D-004)**: `Quote.bid`, `.ask`, `.last`, `.volume` are `Decimal | None` / `int | None`. `NULL` means "no data available"; `Decimal("0")` means "zero trading activity". `CanonicalQuote.from_dict()` and the quote repo both preserve `None` — no coercion to zero.
 
@@ -456,8 +526,9 @@ are auto-populated at construction time.
 
 | Class | `event_type` | `schema_version` | Payload Fields | Trigger |
 |-------|-------------|-----------------|----------------|---------|
-| `InstrumentCreated` | `market.instrument.created` | 1 | `instrument_id`, `security_id`, `symbol`, `exchange` | First-seen instrument |
-| `InstrumentUpdated` | `market.instrument.updated` | 1 | `instrument_id`, `symbol`, `exchange`, `has_ohlcv`, `has_quotes`, `has_fundamentals` | Capability flags change |
+| `InstrumentCreated` | `market.instrument.created` | 3 | `instrument_id`, `security_id`, `symbol`, `exchange`, `name`, `description`, `isin`, `cusip`, `figi`, `lei`, `primary_ticker` | Fundamentals materialised — first time `has_fundamentals` flips True with a real EODHD `Name`. v3 adds the four EODHD identifier fields (PLAN-0057 Wave C-1). |
+| `InstrumentUpdated` | `market.instrument.updated` | 1 | `instrument_id`, `symbol`, `exchange`, `has_ohlcv`, `has_quotes`, `has_fundamentals` | Capability flag transitions OTHER than first-fundamentals. |
+| `InstrumentDiscovered` | `market.instrument.discovered.v1` | 1 | `instrument_id`, `symbol`, `exchange`, `entity_id` (= instrument_id) | OHLCV / Quotes saw a previously-unknown symbol; KG seeds a lightweight placeholder canonical from this event (PLAN-0057 Wave D-2). |
 
 ### Usage Example
 
@@ -609,6 +680,7 @@ Each table stores one period-specific snapshot of one fundamentals section:
 | Table | PK | Key columns | Notes |
 |---|---|---|---|
 | `fundamental_metrics` | `id UUID` | `instrument_id FK→instruments`, `as_of_date DATE`, `metric VARCHAR(64)`, `value_numeric NUMERIC(24,6)`, `value_text TEXT`, `period_type VARCHAR(20)`, `section VARCHAR(64)`, `ingested_at TIMESTAMPTZ` | Derived projection populated on write. UNIQUE on `(instrument_id, as_of_date, metric, period_type)`. Indexes: `(metric, as_of_date)` for screening, `(instrument_id, metric, as_of_date)` for timeseries. |
+| `screen_field_metadata` | `field_name TEXT` | `label TEXT`, `field_type TEXT` (CHECK IN `'numeric','text'`), `unit TEXT`, `description TEXT`, `observed_min NUMERIC`, `observed_max NUMERIC`, `null_fraction NUMERIC` (CHECK 0–1), `last_computed_at TIMESTAMPTZ` | Metadata for screenable metric fields (PRD-0017 §6.4). ~50 rows; populated by Wave B-2 background job. Used as Valkey fallback for `GET /screen/fields`. |
 
 **Metric catalog** (expanded set extracted from section JSONB data on write):
 
@@ -643,6 +715,35 @@ Each table stores one period-specific snapshot of one fundamentals section:
 **Consistency model**: Upserted in the same transaction as section writes (transactionally consistent for processed records). Snapshot sections use last-write-wins at date-level granularity. If `upsert_metrics` raises after a section write, the exception propagates to the caller's transaction manager for rollback.
 
 **Screening semantics**: `POST /fundamentals/screen` uses the **latest** `as_of_date` per instrument for each metric filter. All filters combine with AND logic. Each filter may optionally specify a `sector` (matched against `instruments.sector`); specifying sector on any filter restricts results to that sector.
+
+**Authoritative screener metric names** (PLAN-0051 Wave B, T-B-2-01 — frontend MUST use these names verbatim in `POST /fundamentals/screen` requests):
+
+| UI category | UI label | Metric name (use exactly) | Unit | Source section |
+|---|---|---|---|---|
+| Valuation | P/E (TTM) | `pe_ratio` | ratio | `valuation_ratios` / `highlights` |
+| Valuation | P/B | `pb_ratio` | ratio | `valuation_ratios` |
+| Valuation | P/S (TTM) | `price_sales_ttm` | ratio | `valuation_ratios` |
+| Valuation | Forward P/E | `forward_pe` | ratio | `valuation_ratios` |
+| Valuation | EV / EBITDA | `enterprise_value_ebitda` | ratio | `valuation_ratios` |
+| Valuation | Dividend yield | `dividend_yield` | decimal (0.015 = 1.5%) | `highlights` |
+| Profitability | ROE (TTM) | `roe_ttm` | decimal | `highlights` |
+| Profitability | ROA (TTM) | `roa_ttm` | decimal | `highlights` |
+| Profitability | Operating margin (TTM) | `operating_margin_ttm` | decimal | `highlights` |
+| Profitability | Net (profit) margin | `profit_margin` | decimal | `highlights` |
+| Growth | Quarterly revenue growth YoY | `quarterly_revenue_growth_yoy` | decimal | `highlights` |
+| Growth | Quarterly earnings growth YoY | `quarterly_earnings_growth_yoy` | decimal | `highlights` |
+| Cap | Market capitalization | `market_capitalization` | USD | `highlights` |
+| Risk | Beta | `beta` | ratio | `technicals_snapshot` |
+
+**Documented gaps** (PLAN-0051 T-B-2-01) — frontend renders these inputs as `disabled` with a "Backend pending" badge; fix tracked in `docs/audits/2026-04-29-screener-metric-gap.md`:
+
+- **Gross margin** — only `gross_profit_ttm` and `revenue_ttm` are extracted. The ratio is not stored. Future work: derive in `backfill_fundamental_metrics.py`.
+- **Debt / Equity** — only `long_term_debt` and `total_equity` are stored. Ratio not stored.
+- **Current ratio** — only `total_current_assets` and `total_current_liabilities` are stored. Ratio not stored.
+- **Technical filters** (RSI, distance from 52W high/low, volume vs 30d avg, above 50d MA) — not in `fundamental_metrics`. Some live in `instrument_fundamentals_snapshot` (`avg_volume_30d`, `beta`); others (RSI, MA50, 52W range) require a new extractor or live computation from OHLCV. Frontend applies these as **client-side post-fetch filters** until a server endpoint exists.
+- **News & signals filters** (news velocity 7d, controversy score, recent earnings, insider activity) — fields live in S6 / S7 (signals + knowledge graph); a composed S9 endpoint would be required. Frontend stubs them as client-side TODOs.
+
+**Seed mismatch** (`_seed_fields()` in `app.py`): the 12 names seeded into `screen_field_metadata` (e.g. `revenue_usd`, `return_on_equity`, `dividend_yield_pct`, `market_cap_usd`) **do not match** the metric names actually populated by `metric_extractor.py`. Frontend ignores the seeded names and uses the extractor's truth column above. Fixing the seed is in the audit's remediation list.
 
 **Timeseries date validation**: `start_date > end_date` returns HTTP 422 with a descriptive error before querying the DB.
 
@@ -694,6 +795,8 @@ Backfill summary includes `scanned_rows`, `extracted_metric_rows`, `inserted_row
 | `004` | `003` | Add infrastructure tables (ingestion_events, failed_tasks, outbox_events) with new column schema |
 | `005` | `004` | Add 4 non-period fundamentals tables (company_profiles, highlights, institutional_holders, fund_holders, insider_transactions_snapshot); drop dividend_summary |
 | `002` (consolidated) | `001` (consolidated) | Add `fundamental_metrics` read-optimized projection table with unique constraint and indexes |
+| `003` (consolidated) | `002` (consolidated) | Add `lowercase_outbox_status` migration |
+| `004` (consolidated) | `003` (consolidated) | Add `screen_field_metadata` table (PRD-0017 Wave B-1) |
 
 > **Note**: Migrations 001–005 were consolidated into a single `001` initial schema.
 > The `fundamental_metrics` migration is `002` relative to the consolidated `001`.

@@ -4,17 +4,20 @@ Hits the LIVE portfolio service running on localhost:8001.
 Started by: make test-e2e (docker-compose.test.yml --profile portfolio-test)
 
 Workflow exercised:
-  POST /tenants → POST /users → POST /portfolios
+  DB-seed tenant/user → POST /portfolios
   → POST /transactions (BUY) → GET /holdings
   → POST /transactions (SELL) → GET /holdings
   → GET /transactions
   → Outbox event created in DB (white-box assertion)
+
+Auth note (PRD-0025 Wave C): POST /tenants now requires role=system
+(set by InternalJWTMiddleware from S9). E2E tests that need a tenant/user
+seed directly via DB to avoid requiring S9 in the test compose.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 from typing import TYPE_CHECKING
 
@@ -27,27 +30,14 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 _EXECUTED_AT = "2025-06-01T10:00:00Z"
-_INTERNAL_HEADERS = {"X-Internal-Token": os.getenv("PORTFOLIO_INTERNAL_SERVICE_TOKEN", "e2e-internal-token")}
 
 
 async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: AsyncSession) -> None:
-    """Happy-path: create tenant/user/portfolio, BUY, SELL, verify holdings and transactions."""
-    # 1. Create tenant
-    resp = await e2e_client.post(
-        "/api/v1/tenants", json={"name": f"FlowCo-{uuid.uuid4().hex[:6]}"}, headers=_INTERNAL_HEADERS
-    )
-    assert resp.status_code == 201, resp.text
-    tenant_id = resp.json()["id"]
+    """Happy-path: create tenant/user via DB seed, BUY, SELL, verify holdings and transactions."""
+    # 1. Seed tenant + user directly (POST /tenants now requires role=system from S9 JWT)
+    tenant_id, user_id = await _seed_tenant_and_user(e2e_db_session, email=f"trader-{uuid.uuid4().hex[:6]}@flowco.com")
 
-    # 2. Create user
-    resp = await e2e_client.post(
-        "/api/v1/users",
-        json={"tenant_id": tenant_id, "email": f"trader-{uuid.uuid4().hex[:6]}@flowco.com"},
-    )
-    assert resp.status_code == 201, resp.text
-    user_id = resp.json()["id"]
-
-    # 3. Create portfolio
+    # 2. Create portfolio via API (no auth restriction on POST /portfolios)
     resp = await e2e_client.post(
         "/api/v1/portfolios",
         json={"name": f"E2E Portfolio {uuid.uuid4().hex[:6]}", "owner_user_id": user_id, "currency": "USD"},
@@ -61,16 +51,16 @@ async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: As
     from sqlalchemy import select
 
     result = await e2e_db_session.execute(
-        select(OutboxEventModel).where(OutboxEventModel.event_type == "portfolio.created")
+        select(OutboxEventModel).where(OutboxEventModel.event_type == "portfolio.created"),
     )
     assert result.scalars().first() is not None, "PortfolioCreated event missing from outbox"
 
-    # 4. Seed instrument directly via DB (no instrument-sync Kafka in test compose)
+    # 3. Seed instrument directly via DB (no instrument-sync Kafka in test compose)
     instrument_id = await _seed_instrument(e2e_db_session, f"AAPL_{uuid.uuid4().hex[:4]}", "NASDAQ")
 
     common_headers = {"X-Tenant-ID": tenant_id, "X-Owner-ID": user_id}
 
-    # 5. BUY 10 shares @ $150
+    # 4. BUY 10 shares @ $150
     resp = await e2e_client.post(
         "/api/v1/transactions",
         json={
@@ -87,7 +77,7 @@ async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: As
     )
     assert resp.status_code == 201, resp.text
 
-    # 6. GET holdings → quantity=10, avg_cost=150
+    # 5. GET holdings → quantity=10, avg_cost=150
     resp = await e2e_client.get(f"/api/v1/holdings/{portfolio_id}", headers=common_headers)
     assert resp.status_code == 200, resp.text
     holdings = resp.json()
@@ -95,7 +85,7 @@ async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: As
     assert holdings[0]["quantity"] == "10.00000000"
     assert holdings[0]["average_cost"] == "150.00000000"
 
-    # 7. SELL 5 shares @ $160
+    # 6. SELL 5 shares @ $160
     resp = await e2e_client.post(
         "/api/v1/transactions",
         json={
@@ -112,14 +102,14 @@ async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: As
     )
     assert resp.status_code == 201, resp.text
 
-    # 8. GET holdings → quantity=5
+    # 7. GET holdings → quantity=5
     resp = await e2e_client.get(f"/api/v1/holdings/{portfolio_id}", headers=common_headers)
     assert resp.status_code == 200, resp.text
     holdings = resp.json()
     assert len(holdings) == 1
     assert holdings[0]["quantity"] == "5.00000000"
 
-    # 9. GET transactions → paginated payload with 2 records
+    # 8. GET transactions → paginated payload with 2 records
     resp = await e2e_client.get(
         "/api/v1/transactions",
         headers={**common_headers, "X-Portfolio-ID": portfolio_id},
@@ -129,13 +119,13 @@ async def test_full_transaction_flow(e2e_client: AsyncClient, e2e_db_session: As
     assert transactions["total"] == 2
     assert len(transactions["items"]) == 2
 
-    # 10. Outbox rows are persisted for this tenant (delivery is async/best-effort in test infra)
+    # 9. Outbox rows are persisted for this tenant (delivery is async/best-effort in test infra)
     outbox_rows = 0
     for _ in range(10):
         result = await e2e_db_session.execute(
             select(OutboxEventModel).where(
                 OutboxEventModel.tenant_id == tenant_id,
-            )
+            ),
         )
         outbox_rows = len(result.scalars().all())
         await e2e_db_session.rollback()
@@ -159,29 +149,20 @@ async def test_healthz_returns_ok(e2e_client: AsyncClient) -> None:
     assert resp.status_code == 200
 
 
-async def test_create_tenant_returns_valid_id(e2e_client: AsyncClient) -> None:
-    """POST /tenants returns 201 with a UUID id field."""
-    resp = await e2e_client.post(
-        "/api/v1/tenants", json={"name": f"IdCheck-{uuid.uuid4().hex[:6]}"}, headers=_INTERNAL_HEADERS
-    )
-    assert resp.status_code == 201, resp.text
-    data = resp.json()
-    assert "id" in data
-    uuid.UUID(data["id"])  # raises if not a valid UUID
+async def test_create_tenant_requires_system_role(unauthenticated_e2e_client: AsyncClient) -> None:
+    """POST /tenants without X-Internal-JWT → 401 (SEC-005 fix enforced in E2E).
+
+    The endpoint now requires role=system via InternalJWTMiddleware (PRD-0025 Wave C).
+    Callers without a valid JWT from S9 gateway receive 401.
+    """
+    resp = await unauthenticated_e2e_client.post("/api/v1/tenants", json={"name": f"NoCreds-{uuid.uuid4().hex[:6]}"})
+    # Without X-Internal-JWT header, the middleware returns 401
+    assert resp.status_code == 401, f"Expected 401 (SEC-005), got {resp.status_code}: {resp.text}"
 
 
-async def test_duplicate_portfolio_name_rejected(e2e_client: AsyncClient) -> None:
+async def test_duplicate_portfolio_name_rejected(e2e_client: AsyncClient, e2e_db_session: AsyncSession) -> None:
     """POST /portfolios with duplicate name for same owner returns 409 or 422."""
-    resp = await e2e_client.post(
-        "/api/v1/tenants", json={"name": f"DupCo-{uuid.uuid4().hex[:6]}"}, headers=_INTERNAL_HEADERS
-    )
-    tenant_id = resp.json()["id"]
-    resp = await e2e_client.post(
-        "/api/v1/users",
-        json={"tenant_id": tenant_id, "email": f"dup-{uuid.uuid4().hex[:6]}@dupco.com"},
-    )
-    user_id = resp.json()["id"]
-
+    tenant_id, user_id = await _seed_tenant_and_user(e2e_db_session, email=f"dup-{uuid.uuid4().hex[:6]}@dupco.com")
     name = f"DupPortfolio-{uuid.uuid4().hex[:6]}"
     headers = {"X-Tenant-ID": tenant_id}
 
@@ -202,15 +183,7 @@ async def test_duplicate_portfolio_name_rejected(e2e_client: AsyncClient) -> Non
 
 async def test_sell_exceeding_holdings_rejected(e2e_client: AsyncClient, e2e_db_session: AsyncSession) -> None:
     """SELL more than held quantity returns 409 or 422 (InsufficientHoldingsError)."""
-    resp = await e2e_client.post(
-        "/api/v1/tenants", json={"name": f"SellCo-{uuid.uuid4().hex[:6]}"}, headers=_INTERNAL_HEADERS
-    )
-    tenant_id = resp.json()["id"]
-    resp = await e2e_client.post(
-        "/api/v1/users",
-        json={"tenant_id": tenant_id, "email": f"sell-{uuid.uuid4().hex[:6]}@sellco.com"},
-    )
-    user_id = resp.json()["id"]
+    tenant_id, user_id = await _seed_tenant_and_user(e2e_db_session, email=f"sell-{uuid.uuid4().hex[:6]}@sellco.com")
     resp = await e2e_client.post(
         "/api/v1/portfolios",
         json={"name": f"SellPort-{uuid.uuid4().hex[:6]}", "owner_user_id": user_id, "currency": "USD"},
@@ -242,27 +215,19 @@ async def test_sell_exceeding_holdings_rejected(e2e_client: AsyncClient, e2e_db_
             "instrument_id": str(instrument_id),
             "transaction_type": "SELL",
             "direction": "OUTFLOW",
-            "quantity": "5",
-            "price": "110.00",
+            "quantity": "999",  # exceeds held quantity
+            "price": "100.00",
             "currency": "USD",
             "executed_at": _EXECUTED_AT,
         },
         headers=headers,
     )
-    assert resp.status_code in (409, 422), f"Expected rejection, got {resp.status_code}: {resp.text}"
+    assert resp.status_code in (409, 422), f"Expected business rule rejection, got {resp.status_code}: {resp.text}"
 
 
-async def test_archive_portfolio(e2e_client: AsyncClient) -> None:
+async def test_archive_portfolio(e2e_client: AsyncClient, e2e_db_session: AsyncSession) -> None:
     """DELETE /portfolios/{id} transitions portfolio to ARCHIVED status."""
-    resp = await e2e_client.post(
-        "/api/v1/tenants", json={"name": f"ArchCo-{uuid.uuid4().hex[:6]}"}, headers=_INTERNAL_HEADERS
-    )
-    tenant_id = resp.json()["id"]
-    resp = await e2e_client.post(
-        "/api/v1/users",
-        json={"tenant_id": tenant_id, "email": f"arch-{uuid.uuid4().hex[:6]}@archco.com"},
-    )
-    user_id = resp.json()["id"]
+    tenant_id, user_id = await _seed_tenant_and_user(e2e_db_session, email=f"arch-{uuid.uuid4().hex[:6]}@archco.com")
     resp = await e2e_client.post(
         "/api/v1/portfolios",
         json={"name": f"ToArchive-{uuid.uuid4().hex[:6]}", "owner_user_id": user_id, "currency": "USD"},
@@ -278,7 +243,31 @@ async def test_archive_portfolio(e2e_client: AsyncClient) -> None:
     assert resp.status_code in (200, 204), f"Expected archive success, got {resp.status_code}: {resp.text}"
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+async def _seed_tenant_and_user(session: AsyncSession, email: str) -> tuple[str, str]:
+    """Seed a tenant + user directly in the DB; return (tenant_id, user_id) as strings.
+
+    Used instead of POST /tenants (which now requires role=system from S9 JWT).
+    """
+    from portfolio.infrastructure.db.models.tenant import TenantModel
+    from portfolio.infrastructure.db.models.user import UserModel
+
+    t_id = uuid.uuid4()
+    u_id = uuid.uuid4()
+
+    session.add(TenantModel(id=t_id, name=f"E2ETenant-{t_id.hex[:6]}", status="active"))
+    session.add(
+        UserModel(
+            id=u_id,
+            tenant_id=t_id,
+            email=email,
+            status="active",
+        ),
+    )
+    await session.commit()
+    return str(t_id), str(u_id)
 
 
 async def _seed_instrument(session: AsyncSession, symbol: str, exchange: str) -> uuid.UUID:
@@ -295,7 +284,7 @@ async def _seed_instrument(session: AsyncSession, symbol: str, exchange: str) ->
             currency="USD",
             asset_class="equity",
             source_event_id=uuid.uuid4(),
-        )
+        ),
     )
     await session.commit()
     return inst_id

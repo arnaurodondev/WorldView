@@ -41,12 +41,19 @@ async def main() -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
-    _engine, write_factory, _read_factory = _build_factories(settings)
+    _engine, _read_engine, write_factory, _read_factory = _build_factories(settings)
 
     consumer_config = ConsumerConfig(
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=settings.consumer_group_instrument,
-        topics=[settings.topic_instrument_created, settings.topic_instrument_updated],
+        topics=[
+            # PLAN-0057 Wave D-2: discovered.v1 is the new lightweight event
+            # that fires BEFORE fundamentals enrichment, so we materialise
+            # InstrumentRef as soon as ohlcv/quotes consumers see the symbol.
+            settings.topic_instrument_discovered,
+            settings.topic_instrument_created,
+            settings.topic_instrument_updated,
+        ],
     )
     consumer = InstrumentEventConsumer(consumer_config, write_factory)
 
@@ -54,9 +61,12 @@ async def main() -> None:
         consumer_task = asyncio.create_task(consumer.run())
         await stop_event.wait()
         consumer.stop()
-        consumer_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await consumer_task
+        try:
+            await asyncio.wait_for(consumer_task, timeout=30.0)
+        except TimeoutError:
+            consumer_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await consumer_task
     except Exception as exc:
         log.error("instrument_consumer_fatal_error", error=str(exc))
         sys.exit(1)
