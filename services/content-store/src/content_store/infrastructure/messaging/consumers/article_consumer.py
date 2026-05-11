@@ -10,6 +10,7 @@ CR-3: LSH indexing happens AFTER DB commit in _handle_message override.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from typing import TYPE_CHECKING, Any, cast
@@ -79,8 +80,24 @@ class _SessionUnitOfWork(UnitOfWorkProtocol):
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        # SA-1 fix (BP-443): Explicit close() prevents MissingGreenlet.
+        #
+        # Root cause: without an explicit close(), asyncpg's pool reset fires
+        # ``await_only()`` outside a greenlet_spawn context when the connection
+        # is returned to the pool → RuntimeError: greenlet_spawn has not been called.
+        #
+        # Fix: close the session first (while inside a normal asyncio frame),
+        # letting SQLAlchemy's greenlet_spawn machinery issue the final ROLLBACK
+        # cleanly.  This mirrors the identical fix in stored_article_dedup_consumer.py.
+        session = self.session
+        self.session = None  # prevent any further access through self.session
+        if session is not None:
+            with contextlib.suppress(Exception):
+                await session.close()
+        # Delegate to the session context-manager to release remaining resources.
         if self._session_cm is not None:
-            await self._session_cm.__aexit__(*args)
+            with contextlib.suppress(Exception):
+                await self._session_cm.__aexit__(*args)
 
     async def commit(self) -> None:
         if self.session is not None:
