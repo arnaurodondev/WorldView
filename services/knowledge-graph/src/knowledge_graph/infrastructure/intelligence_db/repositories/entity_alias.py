@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -87,16 +88,26 @@ LIMIT 1
         alias_type: str,
         source: str | None = None,
     ) -> UUID | None:
-        """Insert a new alias row, returning alias_id (None on conflict).
+        """Insert a new alias row, returning alias_id (None on any conflict).
 
-        Uses ON CONFLICT DO NOTHING on the partial unique index
-        (entity_id, normalized_alias_text, alias_type) WHERE is_active = true
-        so callers that attempt to re-insert an existing active alias (e.g.
-        provisional_enrichment_core after a recovery sweep) silently succeed
-        instead of raising UniqueViolationError and aborting the batch session.
+        The entity_aliases table has TWO unique indexes that can fire:
+          1. uidx_entity_aliases_entity_norm_type — per-entity partial index
+             (entity_id, normalized_alias_text, alias_type) WHERE is_active=true.
+             Handled by the ON CONFLICT clause below (same entity, same alias → skip).
+          2. uidx_entity_aliases_normalized — global EXACT index
+             (normalized_alias_text) WHERE alias_type='EXACT' AND is_active=true.
+             NOT handled by ON CONFLICT (different entity owns the alias).
+
+        BP-449 fix: wraps the INSERT in a SAVEPOINT (begin_nested) so that a
+        UniqueViolationError from either index is caught without aborting the outer
+        session transaction. Returns None in both conflict cases. Callers that
+        already use their own begin_nested (e.g. instrument_consumer._try_insert_alias)
+        are unaffected — nested SAVEPOINTs work correctly in Postgres/SQLAlchemy.
         """
-        result = await self._session.execute(
-            text("""
+        try:
+            async with self._session.begin_nested():
+                result = await self._session.execute(
+                    text("""
 INSERT INTO entity_aliases (entity_id, alias_text, normalized_alias_text, alias_type, source)
 VALUES (:entity_id, :alias_text, :normalized_alias_text, :alias_type, :source)
 ON CONFLICT (entity_id, normalized_alias_text, alias_type)
@@ -104,16 +115,23 @@ WHERE is_active = true
 DO NOTHING
 RETURNING alias_id
 """),
-            {
-                "entity_id": str(entity_id),
-                "alias_text": alias_text,
-                "normalized_alias_text": normalized_alias_text,
-                "alias_type": alias_type,
-                "source": source,
-            },
-        )
-        row = result.fetchone()
-        return UUID(str(row[0])) if row else None
+                    {
+                        "entity_id": str(entity_id),
+                        "alias_text": alias_text,
+                        "normalized_alias_text": normalized_alias_text,
+                        "alias_type": alias_type,
+                        "source": source,
+                    },
+                )
+                row = result.fetchone()
+                return UUID(str(row[0])) if row else None
+        except IntegrityError as exc:
+            pgcode = getattr(getattr(exc, "orig", None), "pgcode", None)
+            if pgcode == "23505":
+                # Global uidx_entity_aliases_normalized fired — a different entity
+                # already owns this EXACT alias. Treat as soft conflict: skip.
+                return None
+            raise
 
     async def get_for_entity(self, entity_id: UUID) -> list[dict[str, object]]:
         """Fetch all active aliases for an entity."""

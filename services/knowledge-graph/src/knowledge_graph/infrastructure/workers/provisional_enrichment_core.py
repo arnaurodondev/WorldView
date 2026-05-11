@@ -457,7 +457,10 @@ SET retry_count = LEAST(q.retry_count + 1, :max_retries),
         -- Failed terminal rows do not need a retry deadline (they will
         -- never be re-claimed) — leave it NULL for clarity.
         WHEN q.retry_count + 1 >= :max_retries THEN NULL
-        ELSE :base_now
+        -- BP-449 fix: explicit CAST(:base_now AS timestamptz) prevents asyncpg
+        -- DatatypeMismatchError — the CASE NULL branch makes asyncpg infer
+        -- :base_now as interval type from the +interval context without the cast.
+        ELSE CAST(:base_now AS timestamptz)
              + (LEAST(
                     :base_minutes * (2 ^ COALESCE((SELECT rc FROM current), 0))::int,
                     :max_minutes
