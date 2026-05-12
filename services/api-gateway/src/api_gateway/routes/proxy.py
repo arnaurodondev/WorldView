@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 from api_gateway.clients import (
     DownstreamError,
     ServiceClients,
-    get_company_overview,
     get_dashboard_snapshot,
     get_instrument_page_bundle,
     get_map_layers,
@@ -118,6 +117,9 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
 
     Passes a JWT factory so each of the 4 parallel downstream calls gets a fresh
     JWT with a unique JTI, preventing replay detection on market-data.
+
+    PLAN-0089 B-1: delegates to CompanyOverviewUseCase (application layer).
+    The external behaviour is identical — the use case wraps get_company_overview.
     """
     if getattr(request.state, "user", None) is None:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -126,10 +128,19 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
         _uuid.UUID(company_id)
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid company_id — must be a UUID")  # noqa: B904
+
+    from api_gateway.application.use_cases.company_overview import CompanyOverviewUseCase
+
+    use_case = CompanyOverviewUseCase(
+        # http_client not used directly (ServiceClients holds the per-service clients),
+        # but GatewayUseCase requires it — pass a dummy reference for now.
+        http_client=_clients(request).market_data,
+        settings=request.app.state.settings,
+        service_clients=_clients(request),
+    )
     try:
-        return await get_company_overview(
-            _clients(request),
-            company_id,
+        return await use_case.execute(
+            company_id=company_id,
             make_headers=lambda: _auth_headers(request),
         )
     except DownstreamError as e:
@@ -775,6 +786,36 @@ async def acknowledge_alert(alert_id: str, request: Request) -> Any:
 # TODO: WebSocket /alerts/stream proxying requires a dedicated WS proxy implementation.
 # S9 does not yet support transparent WebSocket proxying — clients must connect
 # directly to S10 (alert-delivery:8010) using a short-lived token from S9.
+
+
+@router.get("/alerts/stream/ws-url")
+async def get_alerts_ws_url(request: Request) -> dict[str, str | int]:
+    """Issue a short-lived WS token and return the full WebSocket URL.
+
+    Replaces the client-side pattern of calling /v1/auth/ws-token then
+    constructing the URL manually.  Returns ws_url ready for new WebSocket().
+    Auth: requires Bearer access token.  Token TTL: 30 s (hardcoded in jwt_utils._WS_TTL).
+    """
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="authentication_required")
+
+    private_key = getattr(request.app.state, "rsa_private_key", None)
+    kid = getattr(request.app.state, "rsa_kid", None)
+    if private_key is None or kid is None:
+        raise HTTPException(status_code=503, detail="jwt_signing_unavailable")
+
+    user_id = user.get("user_id") or user.get("sub")
+    tenant_id = user.get("tenant_id")
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="incomplete_auth_claims")
+
+    from api_gateway.jwt_utils import issue_ws_jwt
+
+    token = issue_ws_jwt(user_id=user_id, tenant_id=tenant_id, private_key=private_key, kid=kid)
+    settings = request.app.state.settings
+    ws_url = f"{settings.alert_ws_url}/api/v1/alerts/stream?token={token}"
+    return {"ws_url": ws_url, "token": token, "expires_in": 30}
 
 
 # ── Alert ack/snooze/history proxies (PLAN-0051 T-D-4-02) ────────────────────
