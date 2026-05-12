@@ -323,9 +323,15 @@ async def test_scheduler_active_guard_prevents_duplicate_active_tasks(
     """Scheduler should not keep more than one active task per stream tuple.
 
     Validates the guard behind `scheduler_skip_active_task` for incremental
-    streams where variant is not used (OHLCV/QUOTES), checking there are no
-    duplicate active rows (PENDING/RUNNING/RETRY) for the same:
+    (non-backfill) streams where variant is not used (OHLCV/QUOTES), checking
+    there are no duplicate active rows (PENDING/RUNNING/RETRY) for the same:
     provider + dataset_type + symbol + exchange + timeframe + variant.
+
+    Backfill tasks are intentionally excluded from this check: a backfill for
+    90 days with 30-day chunks legitimately produces 3 active tasks for the
+    same (provider, dataset_type, symbol) stream — one per date-range chunk.
+    The scheduler dedup guard only applies to incremental (is_backfill=False)
+    polling tasks, not to multi-chunk backfill jobs.
     """
     from market_ingestion.infrastructure.db.models.ingestion_task import IngestionTaskModel
     from sqlalchemy import func, select
@@ -348,6 +354,10 @@ async def test_scheduler_active_guard_prevents_duplicate_active_tasks(
                 .where(
                     IngestionTaskModel.status.in_(["pending", "running", "retry"]),
                     IngestionTaskModel.dataset_type.in_(["ohlcv", "quotes"]),
+                    # Exclude backfill tasks: a 90-day backfill with 30-day chunks
+                    # legitimately creates 3 active tasks for the same stream tuple.
+                    # The dedup invariant only applies to incremental polling tasks.
+                    IngestionTaskModel.is_backfill.is_(False),
                 )
                 .group_by(
                     IngestionTaskModel.provider,
