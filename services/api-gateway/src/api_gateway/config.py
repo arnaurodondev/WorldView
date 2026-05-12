@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     knowledge_graph_url: str = "http://localhost:8007"
     rag_chat_url: str = "http://localhost:8008"
     alert_url: str = "http://localhost:8010"
+    alert_ws_url: str = "ws://localhost:8010"  # env: API_GATEWAY_ALERT_WS_URL
 
     # Rate limiting
     # WHY 300: authenticated users on the instrument detail page fire 4+ simultaneous
