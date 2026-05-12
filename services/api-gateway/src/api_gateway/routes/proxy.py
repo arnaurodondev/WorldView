@@ -17,11 +17,8 @@ from pydantic import BaseModel, Field
 from api_gateway.clients import (
     DownstreamError,
     ServiceClients,
-    get_dashboard_snapshot,
-    get_instrument_page_bundle,
     get_map_layers,
     get_market_heatmap,
-    get_portfolio_bundle,
     get_relevant_news,
     get_top_movers,
     get_watchlist_insights,
@@ -171,9 +168,20 @@ async def instrument_page_bundle(instrument_id: str, request: Request) -> dict[s
         _uuid.UUID(instrument_id)
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid instrument_id — must be a UUID")  # noqa: B904
-    return await get_instrument_page_bundle(
-        _clients(request),
-        instrument_id,
+
+    # PLAN-0089 B-2: delegates to InstrumentPageBundleUseCase (application layer).
+    # The external behaviour is identical — the use case wraps get_instrument_page_bundle.
+    from api_gateway.application.use_cases.instrument_page_bundle import InstrumentPageBundleUseCase
+
+    use_case = InstrumentPageBundleUseCase(
+        # http_client not used directly (ServiceClients holds the per-service clients),
+        # but GatewayUseCase requires it — pass a dummy reference for now.
+        http_client=_clients(request).market_data,
+        settings=request.app.state.settings,
+        service_clients=_clients(request),
+    )
+    return await use_case.execute(
+        instrument_id=instrument_id,
         make_headers=lambda: _auth_headers(request),
     )
 
@@ -2986,9 +2994,19 @@ async def get_portfolio_bundle_endpoint(
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid portfolio_id — must be a UUID")  # noqa: B904
 
-    result = await get_portfolio_bundle(
-        _clients(request),
-        portfolio_id,
+    # PLAN-0089 B-2: delegates to PortfolioBundleUseCase (application layer).
+    # The external behaviour is identical — the use case wraps get_portfolio_bundle.
+    from api_gateway.application.use_cases.portfolio_bundle import PortfolioBundleUseCase
+
+    use_case = PortfolioBundleUseCase(
+        # http_client not used directly (ServiceClients holds the per-service clients),
+        # but GatewayUseCase requires it — pass a dummy reference for now.
+        http_client=_clients(request).portfolio,
+        settings=request.app.state.settings,
+        service_clients=_clients(request),
+    )
+    result = await use_case.execute(
+        portfolio_id=portfolio_id,
         # WHY lambda (not _auth_headers() called once): each downstream leg needs
         # a fresh JWT with a unique JTI. Calling _auth_headers() once and sharing
         # the result would trigger JTI replay detection on all 4 parallel calls.
@@ -3032,8 +3050,18 @@ async def get_dashboard_snapshot_endpoint(request: Request) -> dict[str, Any]:
     if not getattr(request.state, "user", None):
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    result = await get_dashboard_snapshot(
-        _clients(request),
+    # PLAN-0089 B-2: delegates to DashboardSnapshotUseCase (application layer).
+    # The external behaviour is identical — the use case wraps get_dashboard_snapshot.
+    from api_gateway.application.use_cases.dashboard_snapshot import DashboardSnapshotUseCase
+
+    use_case = DashboardSnapshotUseCase(
+        # http_client not used directly (ServiceClients holds the per-service clients),
+        # but GatewayUseCase requires it — pass a dummy reference for now.
+        http_client=_clients(request).market_data,
+        settings=request.app.state.settings,
+        service_clients=_clients(request),
+    )
+    result = await use_case.execute(
         # WHY lambda (not _auth_headers() called once): each of the 6 downstream
         # legs needs a fresh JWT with a unique JTI. Calling _auth_headers() once
         # and sharing the result would trigger JTI replay detection.
