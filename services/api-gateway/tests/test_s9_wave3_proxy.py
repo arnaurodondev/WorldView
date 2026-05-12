@@ -101,29 +101,40 @@ async def test_heatmap_requires_auth(app, mock_clients) -> None:
 
 @pytest.mark.asyncio
 async def test_heatmap_returns_11_sectors(authed_app, authed_mock_clients) -> None:
-    """GET /v1/market/heatmap returns 11 GICS sectors."""
-    sector_resp = _mock_response(
+    """GET /v1/market/heatmap returns 11 GICS sectors.
+
+    After BP-fix 2026-05-11 the heatmap uses a single GET /sector-returns call
+    (not 11 parallel screener POSTs) — mock market_data.get instead of .post.
+    """
+    _all_sectors = [
+        "Energy",
+        "Materials",
+        "Industrials",
+        "Consumer Discretionary",
+        "Consumer Staples",
+        "Health Care",
+        "Financials",
+        "Information Technology",
+        "Communication Services",
+        "Utilities",
+        "Real Estate",
+    ]
+    sector_returns_resp = _mock_response(
         200,
         json.dumps(
             {
-                "results": [
+                "sectors": [
                     {
-                        "instrument_id": "i1",
-                        "ticker": "XOM",
-                        "name": "Exxon",
-                        "exchange": "US",
-                        "sector": "Energy",
-                        # WHY 0.015 (not 1.5): daily_return is a decimal fraction
-                        # (0.015 = 1.5%). Using 1.5 would mean 150% which is unrealistic.
-                        "metrics": {"daily_return": 0.015},
-                    },
-                ],
-                "count": 1,
-                "total": 1,
+                        "name": name,
+                        "change_pct": 1.5 if name == "Energy" else 0.5,
+                        "instrument_count": 1,
+                    }
+                    for name in _all_sectors
+                ]
             }
         ).encode(),
     )
-    authed_mock_clients.market_data.post = AsyncMock(return_value=sector_resp)
+    authed_mock_clients.market_data.get = AsyncMock(return_value=sector_returns_resp)
 
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -136,17 +147,20 @@ async def test_heatmap_returns_11_sectors(authed_app, authed_mock_clients) -> No
     body = resp.json()
     assert len(body["sectors"]) == 11
     assert body["sectors"][0]["name"] == "Energy"
-    # Regression guard: daily_return=0.015 (1.5% fraction) → change_pct=1.5 (percentage).
-    # BP-243: S3 daily_return is a decimal fraction; frontend expects percentage values.
     energy_sector = next(s for s in body["sectors"] if s["name"] == "Energy")
     assert energy_sector["change_pct"] == 1.5
 
 
 @pytest.mark.asyncio
 async def test_heatmap_handles_partial_failure(authed_app, authed_mock_clients) -> None:
-    """Heatmap returns null change_pct for sectors where S3 fails."""
+    """Heatmap propagates upstream error when sector-returns fails.
+
+    After BP-fix 2026-05-11 the heatmap delegates to a single GET /sector-returns
+    endpoint. When that endpoint returns 5xx, there is no partial-success path;
+    the heatmap returns the upstream status code to the caller.
+    """
     error_resp = _mock_response(500, b'{"detail": "Internal Server Error"}')
-    authed_mock_clients.market_data.post = AsyncMock(return_value=error_resp)
+    authed_mock_clients.market_data.get = AsyncMock(return_value=error_resp)
 
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -155,10 +169,8 @@ async def test_heatmap_handles_partial_failure(authed_app, authed_mock_clients) 
             headers={"Authorization": f"Bearer {_make_jwt()}"},
         )
 
-    assert resp.status_code == 200
-    body = resp.json()
-    # All sectors should have null change_pct due to S3 failure
-    assert all(s["change_pct"] is None for s in body["sectors"])
+    # DownstreamError → HTTPException with the upstream status code.
+    assert resp.status_code == 500
 
 
 # ── Top movers ───────────────────────────────────────────────────────────────
@@ -363,36 +375,32 @@ async def test_patch_watchlist_proxy_forwards_body(authed_app, authed_mock_clien
 
 @pytest.mark.asyncio
 async def test_heatmap_mixed_success_failure(authed_app, authed_mock_clients) -> None:
-    """Heatmap with some sectors succeeding and others failing.
+    """Heatmap passes through mixed null/non-null sector data from sector-returns.
 
-    First 5 sector screener calls return valid data; remaining 6 return 500.
-    Successful sectors should have a computed change_pct; failed sectors should
-    have null change_pct.
+    After BP-fix 2026-05-11 the heatmap uses a single GET /sector-returns response.
+    Sectors with no trading data return null change_pct; sectors with data return
+    a float. Verifies the passthrough preserves both variants correctly.
     """
-    success_resp = _mock_response(
-        200,
-        json.dumps(
-            {
-                "results": [
-                    {
-                        "instrument_id": "i1",
-                        "ticker": "XOM",
-                        "name": "Exxon",
-                        "exchange": "US",
-                        "sector": "Energy",
-                        # WHY 0.015: decimal fraction (0.015 = 1.5%). BP-243.
-                        "metrics": {"daily_return": 0.015},
-                    },
-                ],
-                "count": 1,
-                "total": 1,
-            }
-        ).encode(),
+    _all_sectors = [
+        "Energy",
+        "Materials",
+        "Industrials",
+        "Consumer Discretionary",
+        "Consumer Staples",
+        "Health Care",
+        "Financials",
+        "Information Technology",
+        "Communication Services",
+        "Utilities",
+        "Real Estate",
+    ]
+    # First 5 sectors have data; remaining 6 have null change_pct (no trading activity).
+    sector_data = [{"name": name, "change_pct": 1.5, "instrument_count": 1} for name in _all_sectors[:5]] + [
+        {"name": name, "change_pct": None, "instrument_count": 0} for name in _all_sectors[5:]
+    ]
+    authed_mock_clients.market_data.get = AsyncMock(
+        return_value=_mock_response(200, json.dumps({"sectors": sector_data}).encode())
     )
-    error_resp = _mock_response(500, b'{"detail": "Internal Server Error"}')
-    # First 5 calls succeed, remaining 6 fail
-    responses = [success_resp] * 5 + [error_resp] * 6
-    authed_mock_clients.market_data.post = AsyncMock(side_effect=responses)
 
     transport = ASGITransport(app=authed_app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -404,11 +412,10 @@ async def test_heatmap_mixed_success_failure(authed_app, authed_mock_clients) ->
     assert resp.status_code == 200
     body = resp.json()
     assert len(body["sectors"]) == 11
-    # First 5 sectors should have a non-null change_pct (1.5 percentage after * 100)
+    # First 5 sectors have data → non-null change_pct
     for sector in body["sectors"][:5]:
-        assert sector["change_pct"] is not None
         assert sector["change_pct"] == 1.5
-    # Remaining 6 sectors should have null change_pct due to 500 errors
+    # Remaining 6 sectors have no data → null change_pct
     for sector in body["sectors"][5:]:
         assert sector["change_pct"] is None
 
