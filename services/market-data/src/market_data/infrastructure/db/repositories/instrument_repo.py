@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from sqlalchemy import case, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 
 from market_data.application.ports.repositories import InstrumentRepository
@@ -175,6 +175,7 @@ class PgInstrumentRepository(InstrumentRepository):
                 security_id=instrument.security_id,
                 symbol=instrument.symbol,
                 exchange=instrument.exchange,
+                isin=instrument.isin,
                 has_ohlcv=instrument.flags.has_ohlcv,
                 has_quotes=instrument.flags.has_quotes,
                 has_fundamentals=instrument.flags.has_fundamentals,
@@ -183,6 +184,7 @@ class PgInstrumentRepository(InstrumentRepository):
                 constraint="uq_instruments_symbol_exchange",
                 set_={
                     "security_id": instrument.security_id,
+                    "isin": func.coalesce(excluded.isin, InstrumentModel.isin),
                     "has_ohlcv": case((excluded.has_ohlcv, True), else_=InstrumentModel.has_ohlcv),
                     "has_quotes": case((excluded.has_quotes, True), else_=InstrumentModel.has_quotes),
                     "has_fundamentals": case(
