@@ -25,8 +25,10 @@ from market_data.infrastructure.eodhd.client import EodhHdClient
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 
+# Use a symbol unique to this test file to avoid contamination from
+# test_repositories.py which inserts AAPL/XNAS into the shared testcontainer DB.
 _ISIN = "US0378331005"
-_SYMBOL = "AAPL"
+_SYMBOL = "AAPL_LK"
 _EXCHANGE = "US"
 
 
