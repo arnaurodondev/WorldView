@@ -115,7 +115,7 @@ def test_evaluate_query_uses_doc_id_lowercase_compare() -> None:
         "intent": "FACTUAL_LOOKUP",
         "relevant_doc_ids": [{"doc_id": "ABC123", "relevance": 3}],
     }
-    candidates = [{"doc_id": "abc123", "chunk_id": "c1"}]
+    candidates = [{"doc_id": "abc123"}]
     out = eval_retrieval.evaluate_query(row, candidates, top_k=10)
     assert out["ndcg_at_10"] == pytest.approx(1.0)
     assert out["mrr"] == pytest.approx(1.0)
@@ -463,7 +463,7 @@ def test_per_class_regression_check_passes_when_within_threshold(tmp_path: Path)
             idx = int(query_text.split()[-1])
         except (ValueError, IndexError):
             idx = 0
-        return [{"doc_id": f"doc{idx}", "chunk_id": f"chunk{idx}"}]
+        return [{"doc_id": f"doc{idx}"}]
 
     with unittest.mock.patch.object(eval_retrieval, "call_retrieve", side_effect=_good_retrieve):
         rc = asyncio.run(eval_retrieval.run_eval(args))
