@@ -130,7 +130,81 @@ Batches: B2 = `865fee5b`+`90441519`, B3 = `8a0583fc`+`3a5bcb68` (this session)
 
 ---
 
-## 7. Prevention Recommendations
+## 8. Batch 4 — Remaining CI Failures (RC-G through RC-K)
+
+**Commit**: `e6ef9bd0` (2026-05-12 Session 4)
+
+### RC-G — E2E conftest fixtures missing X-Internal-JWT header (8 services)
+
+**Jobs affected**: All 8 E2E jobs (alert, portfolio, content-ingestion, content-store, market-ingestion, market-data, knowledge-graph, nlp-pipeline)
+
+**Root cause**: After Batch 3 added `INTERNAL_JWT_SKIP_VERIFICATION=true` to all `docker.env.example` files (RC-2), services start without fetching JWKS. But `InternalJWTMiddleware` still requires the `X-Internal-JWT` header on non-health routes — it just skips signature verification. Every E2E test client fixture was making requests WITHOUT the header.
+
+- portfolio: header was present, but `tenant_id: ""` (empty string) caused `{"detail":"Missing tenant_id in JWT"}` on tenant-scoped routes
+- content-ingestion: `_E2E_INTERNAL_JWT` was defined at module level but never wired into the `e2e_client` headers
+- alert, market-ingestion, knowledge-graph, nlp-pipeline, content-store, market-data: no JWT at all
+
+**Fix**: Added `_make_e2e_system_jwt()` + `_INTERNAL_JWT` constant to all 8 conftest files; wired `headers={"X-Internal-JWT": _INTERNAL_JWT}` into `e2e_client`. Portfolio: changed `tenant_id: ""` → `tenant_id: "e2e-tenant"`.
+
+### RC-H — Unit test assertions not updated after B3 behavior changes
+
+**Tests affected**: `services/alert/tests/unit/api/test_health.py`, `services/portfolio/tests/test_health.py`
+
+- **alert** `test_readyz_503_when_s1_unhealthy`: RC-E changed S1 from hard-blocking to informational (`"degraded"`), but the test still asserted 503. Renamed to `test_readyz_200_when_s1_degraded` and updated assertions.
+- **portfolio** `test_readyz_jwks_not_loaded`: `create_app()` sets `app.state._internal_jwt_skip_verification = True` from the test env's `PORTFOLIO_INTERNAL_JWT_SKIP_VERIFICATION=true`. The RC-F readyz guard then SKIPS the JWKS check, falls through to DB check, returns `reason: "db"` not `"jwks_not_loaded"`. Fix: test now explicitly clears `_internal_jwt_skip_verification` from `app.state` before asserting the JWKS-not-loaded path.
+
+### RC-I — market-data integration test respx mock URL using hardcoded symbol
+
+**Tests affected**: `services/market-data/tests/integration/test_instrument_lookup_integration.py`
+
+**Root cause**: A recent commit changed `_SYMBOL` from `"AAPL_LK"` to `"APLQ"` (underscore not in ticker validation regex), but two `respx.get()` mock URLs still had hardcoded `"eodhd.com/api/fundamentals/AAPL.US"`. The mock never matched the actual request URL, causing `test_on_demand_eodhd_fallback_mocked` and `test_on_demand_eodhd_429_propagates_rate_limit_live_db` to fail.
+
+**Fix**: Changed hardcoded URLs to `f"https://eodhd.com/api/fundamentals/{_SYMBOL}.{_EXCHANGE}"`.
+
+### RC-J — content-ingestion E2E app fixture missing `bronze_storage` on app.state
+
+**Root cause 1**: The `e2e_app` fixture in `tests/e2e/conftest.py` did not set `app.state.bronze_storage`. Routes using `BronzeStorageDep` read directly from `request.app.state.bronze_storage`, raising `AttributeError: 'State' object has no attribute 'bronze_storage'`.
+
+**Root cause 2**: `SourceRepository.create()` returns `tuple[SourceModel, bool]` (model + was_created flag). The `_seed_source` helper in `test_scheduler_e2e.py` called `.id` directly on the returned tuple.
+
+**Fix**: Added `app.state.bronze_storage = AsyncMock()` to `e2e_app` fixture. Changed `model = await repo.create(...)` to `model, _ = await repo.create(...)`.
+
+### RC-K — market-ingestion E2E duplicate-stream assertion false positive on backfill tasks
+
+**Root cause**: The backfill scheduler legitimately creates multiple active tasks for the same stream key (one per date-range chunk). The duplicate-active-task dedup assertion in `test_scheduler_active_guard_prevents_duplicate_active_tasks` queried ALL active tasks without filtering, so backfill chunks from `test_backfill_90_days_produces_3_chunks` triggered it.
+
+**Fix**: Added `.where(IngestionTaskModel.is_backfill.is_(False))` filter — the dedup invariant only applies to incremental (non-backfill) streams.
+
+---
+
+## 9. Full Root Cause × Batch Matrix (Complete)
+
+| E2E Job | RC-1 (minio) | RC-2 (skip env) | RC-A (startup fix) | RC-B (nlp db url) | RC-D (startup all) | RC-E (readyz s1) | RC-F (readyz jwks) | RC-G (e2e headers) |
+|---------|--------|--------|--------|--------|--------|--------|--------|--------|
+| content-ingestion | ✓ B2 | | | | ✓ B3 | | | ✓ B4 |
+| content-store | ✓ B2 | | | | ✓ B3 | | | ✓ B4 |
+| knowledge-graph | ✓ B2 | | | ✓ B3 | ✓ B3 | | | ✓ B4 |
+| market-data | ✓ B2 | | | | | | | ✓ B4 |
+| market-ingestion | ✓ B2 | | | | ✓ B3 | | | ✓ B4 |
+| nlp-pipeline | ✓ B2 | | | ✓ B3 | ✓ B3 | | | ✓ B4 |
+| alert | | ✓ B2 | ✓ B3 | | | ✓ B3 | | ✓ B4 |
+| portfolio | | ✓ B2 | ✓ B3 | | ✓ B3 | ✓ B3 | | ✓ B4 |
+
+Batches: B2 = `865fee5b`+`90441519`, B3 = `8a0583fc`+`3a5bcb68`+`86b019a5`+`571ae62d`, B4 = `e6ef9bd0`
+
+---
+
+## 10. New Bug Patterns Added (Batch 4)
+
+- **BP-474** (new): E2E conftest `e2e_client` missing `X-Internal-JWT` default header — when `skip_verification=True`, InternalJWTMiddleware still gates on header presence. Every service `e2e_client` fixture must include it.
+- **BP-475** (new): Unit tests asserting on pre-fix behavior not updated after fix — after RC-E changed alert's S1 check from 503→200, test still expected 503. Rule: when behavior-changing fixes land, grep all tests for old assertion values.
+- **BP-476** (new): `respx` mock URLs using hardcoded symbol strings instead of module-level test constants — when the constant is updated, hardcoded mock URLs silently stop matching. Rule: always reference `_SYMBOL`/`_EXCHANGE` constants in mock URL strings.
+- **BP-477** (new): E2E `e2e_app` fixture missing `app.state` attributes required by routes — `BronzeStorageDep` and similar deps read directly from `app.state`; the test fixture must stub them.
+- **BP-478** (new): `SourceRepository.create()` returns `tuple[Model, bool]`; callers that treat it as a plain model get `AttributeError: 'tuple' object has no attribute 'id'`.
+
+---
+
+## 11. Prevention Recommendations
 
 1. **Shared middleware library**: The root cause of RC-D and RC-F is that each service has its own copy of `InternalJWTMiddleware`. A single copy in `libs/common` or `libs/observability` would ensure fixes are applied once. However, this is a refactor (PLAN-level change), not a quick fix.
 
