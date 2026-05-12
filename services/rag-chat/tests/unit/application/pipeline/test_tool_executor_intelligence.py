@@ -151,15 +151,15 @@ def _make_executor(
     user_id: UUID | None = _FAKE_USER_ID,
     tenant_id: UUID | None = _FAKE_TENANT_ID,
 ) -> Any:
-    """Build a ToolExecutor with the given s7_intel port and entity context."""
-    from rag_chat.application.pipeline.tool_executor import ToolExecutor
+    """Build a NarrativeHandler with the given s7_intel port and entity context.
 
-    return ToolExecutor(
-        registry=_make_registry(),
-        s3=_make_s3_port(),
+    PLAN-0089 C-1: narrative/intelligence tools moved to NarrativeHandler; tests
+    now target the handler directly instead of routing through ToolExecutor.
+    """
+    from rag_chat.application.pipeline.handlers.narrative import NarrativeHandler
+
+    return NarrativeHandler(
         s7_intel=s7_intel,
-        user_id=user_id,
-        tenant_id=tenant_id,
         entity_context=entity_context,
         timeout=5.0,
     )
