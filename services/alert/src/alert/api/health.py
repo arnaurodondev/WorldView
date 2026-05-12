@@ -65,16 +65,15 @@ async def readyz(request: Request) -> Response:
         checks["valkey"] = "error"
         ok = False
 
-    # 4. S1 internal health
+    # 4. S1 internal health (best-effort — S10 degrades gracefully when S1 is unavailable)
+    # PRD §12.1: S1 is not a hard dependency; watchlist lookups degrade to empty results.
+    # Do NOT set ok=False here — alert-test compose profile has no portfolio container.
     try:
         s1_healthy = await request.app.state.s1_client.health_check()
-        checks["s1"] = "ok" if s1_healthy else "error"
-        if not s1_healthy:
-            ok = False
+        checks["s1"] = "ok" if s1_healthy else "degraded"
     except Exception:
         _log.warning("readyz_s1_failed", exc_info=True)  # type: ignore[no-any-return]
-        checks["s1"] = "error"
-        ok = False
+        checks["s1"] = "degraded"
 
     status_code = 200 if ok else 503
     return Response(

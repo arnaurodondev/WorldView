@@ -88,6 +88,8 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
 
     async def startup(self) -> None:
         """Fetch JWKS from S9 at startup with up to 3 retries (3-second sleep between attempts)."""
+        if self._skip_verification:
+            return
         for attempt in range(3):
             try:
                 key = await self._fetch_public_key()
