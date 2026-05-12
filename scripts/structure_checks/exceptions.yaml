@@ -51,3 +51,36 @@ exceptions:
       follow-up cleanup task outside the current wave scope.
     owner: platform
     expires_on: "2026-12-31"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # api-gateway: BFF proxy service — hexagonal domain layers do not apply.
+  # The service has no domain entities, no infrastructure adapters (stateless
+  # HTTP proxy), and uses routes/ instead of api/. PLAN-0089 B-1/B-2 added
+  # application/ (use cases + http_utils) which un-flagged it as "scaffolded",
+  # but domain/, api/, and infrastructure/ are intentionally absent by design.
+  # ─────────────────────────────────────────────────────────────────────────
+  - service: api-gateway
+    rule_id: STR-004
+    reason: >
+      api-gateway is a stateless BFF proxy. It has no domain entities and
+      domain.py is a flat module (not a package). Hexagonal domain/ layer
+      does not apply to a pure API gateway.
+    owner: platform
+    expires_on: "2027-12-31"
+
+  - service: api-gateway
+    rule_id: STR-006
+    reason: >
+      api-gateway uses routes/ instead of api/ by historical convention.
+      The layer contains the same FastAPI routers; renaming is cosmetic and
+      deferred to a future housekeeping wave.
+    owner: platform
+    expires_on: "2027-12-31"
+
+  - service: api-gateway
+    rule_id: STR-007
+    reason: >
+      api-gateway is stateless — it owns no database, no Kafka producers, and
+      no external-storage adapters. There is no infrastructure layer by design.
+    owner: platform
+    expires_on: "2027-12-31"

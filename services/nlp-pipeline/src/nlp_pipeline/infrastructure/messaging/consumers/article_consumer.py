@@ -742,10 +742,11 @@ class ArticleProcessingConsumer(ValkeyDedupMixin, BaseKafkaConsumer[None]):
         try:
             async with self._nlp_sf() as session:
                 event_uuid = uuid.UUID(failure.event_id) if _is_valid_uuid(failure.event_id) else common.ids.new_uuid7()
+                diagnostic_bytes = failure.event_id.encode("utf-8")
                 await DLQRepository(session).move_to_dlq(
                     original_event_id=event_uuid,
                     topic=_TOPIC,
-                    payload_avro=json.dumps({"event_id": failure.event_id}).encode(),
+                    payload_avro=diagnostic_bytes,
                     error_detail=str(failure.last_error)[:1024],
                 )
                 await session.commit()
