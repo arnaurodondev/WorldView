@@ -33,10 +33,15 @@ pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 
 async def _seed_source(session_factory, name: str = "sched-e2e-src") -> UUID:
-    """Insert an enabled source and return its ID."""
+    """Insert an enabled source and return its ID.
+
+    SourceRepository.create() returns (SourceModel, was_created: bool); unpack
+    the tuple so that we access the model's .id rather than a tuple's .id
+    (which would raise AttributeError: 'tuple' object has no attribute 'id').
+    """
     async with session_factory() as session:
         repo = SourceRepository(session)
-        model = await repo.create(name=name, source_type="eodhd", config={}, enabled=True)
+        model, _ = await repo.create(name=name, source_type="eodhd", config={}, enabled=True)
         await session.commit()
         return model.id
 
