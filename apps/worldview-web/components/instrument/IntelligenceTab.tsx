@@ -61,7 +61,7 @@ import { IntelligenceFilters, DEFAULT_FILTERS } from "@/components/instrument/in
 import type { IntelligenceFilterState } from "@/components/instrument/intelligence/IntelligenceFilters";
 import { GraphDetailSidebar } from "@/components/instrument/intelligence/GraphDetailSidebar";
 import type { SelectedNodeInfo } from "@/components/instrument/intelligence/GraphDetailSidebar";
-import { ContradictionCard, SEVERITY_STYLES } from "@/components/instrument/intelligence/ContradictionCard";
+import { ContradictionCard } from "@/components/instrument/intelligence/ContradictionCard";
 import { InstrumentBriefSection } from "@/components/instrument/intelligence/InstrumentBriefSection";
 
 // ── EntityGraph dynamic import (ssr:false) ────────────────────────────────────
