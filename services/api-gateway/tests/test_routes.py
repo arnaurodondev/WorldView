@@ -521,7 +521,7 @@ async def test_get_email_preferences_forwards_auth_headers(authed_client, authed
     # Inject fake JWT payload into request state via the app
     from unittest.mock import patch
 
-    with patch("api_gateway.routes.proxy._auth_headers", return_value={"X-Tenant-Id": "t1", "X-User-Id": "u1"}):
+    with patch("api_gateway.routes.alerts._auth_headers", return_value={"X-Tenant-Id": "t1", "X-User-Id": "u1"}):
         response = await authed_client.get(
             "/v1/email/preferences",
             headers={"Authorization": f"Bearer {_make_jwt()}"},
