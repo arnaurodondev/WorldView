@@ -26,7 +26,7 @@ def _make_adapter():
 @pytest.mark.asyncio
 async def test_get_latest_creates_and_closes_session():
     """Session must always be closed (R27 — no connection leak)."""
-    adapter, factory, mock_session = _make_adapter()
+    adapter, _factory, mock_session = _make_adapter()
 
     mock_repo = AsyncMock()
     mock_repo.get_latest = AsyncMock(return_value=[])
@@ -44,7 +44,7 @@ async def test_get_latest_creates_and_closes_session():
 @pytest.mark.asyncio
 async def test_get_latest_closes_session_on_exception():
     """Session must close even if repo raises (finally block)."""
-    adapter, factory, mock_session = _make_adapter()
+    adapter, _factory, mock_session = _make_adapter()
 
     mock_repo = AsyncMock()
     mock_repo.get_latest = AsyncMock(side_effect=RuntimeError("db error"))

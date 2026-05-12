@@ -14,11 +14,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID
 
 
-class NarrativeGenerationReason(str, Enum):
+class NarrativeGenerationReason(StrEnum):
     """Trigger reasons for a narrative generation pass.
 
     Values map directly to the ``generation_reason`` column in

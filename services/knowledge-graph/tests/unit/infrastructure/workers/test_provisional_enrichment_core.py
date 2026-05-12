@@ -503,7 +503,7 @@ class TestPersistEnrichment:
     async def test_happy_path_returns_entity_id_and_persists_aliases(self) -> None:
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
         profile = {
             "canonical_name": "Apple Inc.",
             "entity_type": "financial_instrument",
@@ -555,7 +555,7 @@ class TestPersistEnrichment:
     async def test_skips_ticker_and_isin_when_absent(self) -> None:
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
         profile = {
             "canonical_name": "Some Org",
             "entity_type": "ORGANIZATION",
@@ -579,7 +579,7 @@ class TestPersistEnrichment:
     async def test_alias_collision_skips_llm_alias(self) -> None:
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
         # DEF-014 / Wave A-1: persist_enrichment no longer issues a pre-INSERT
         # alias_find_exact call for the canonical name itself — dedup now lives
         # inside ``CanonicalEntityRepository.create_or_get`` via ON CONFLICT.
@@ -622,7 +622,7 @@ class TestPersistEnrichment:
         """
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
         # Atomic INSERT hit ON CONFLICT — Apple Inc. already exists.
         repos.canonical_create_or_get = AsyncMock(return_value=(_EXISTING_OTHER_ID, False))
         profile = {
@@ -664,7 +664,7 @@ class TestPersistEnrichment:
         import structlog.testing
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
         repos.canonical_create_or_get = AsyncMock(return_value=(_EXISTING_OTHER_ID, False))
         profile = {
             "canonical_name": "Apple Inc.",
@@ -701,7 +701,7 @@ class TestPersistEnrichment:
     async def test_truncates_llm_aliases_to_first_five(self) -> None:
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
         profile = {
             "canonical_name": "Big Co",
             "entity_type": "ORGANIZATION",
@@ -735,7 +735,7 @@ class TestEntityTypeNormalisation:
         """A canonical type is stored as-is."""
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
         profile = {
             "canonical_name": "Apple Inc.",
             "entity_type": "company",
@@ -758,7 +758,7 @@ class TestEntityTypeNormalisation:
         """entity_type='ORGANIZATION' → normalised to 'organization' (valid)."""
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
         profile = {"canonical_name": "Fed", "entity_type": "ORGANIZATION", "ticker": None, "isin": None, "aliases": []}
 
         with _patch_persist_repos(repos):
@@ -783,7 +783,7 @@ class TestEntityTypeNormalisation:
         """entity_type='corp' → alias-mapped to 'company' (valid, no warning)."""
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
         profile = {"canonical_name": "Acme Corp", "entity_type": "corp", "ticker": None, "isin": None, "aliases": []}
 
         with _patch_persist_repos(repos):
@@ -809,7 +809,7 @@ class TestEntityTypeNormalisation:
         import structlog.testing
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
         profile = {
             "canonical_name": "MegaCorp",
             "entity_type": "conglomerate",
@@ -961,7 +961,7 @@ class TestPersistEnrichmentUnblocksSubjectAndObject:
         """The UPDATE SQL must include CASE expressions for both subject and object columns."""
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
         profile = {
             "canonical_name": "Acme Corp",
             "entity_type": "company",
@@ -1005,7 +1005,7 @@ class TestPersistEnrichmentUnblocksSubjectAndObject:
         """The UPDATE params must pass both :queue_id and :entity_id."""
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
         profile = {
             "canonical_name": "Beta Co",
             "entity_type": "company",
@@ -1058,7 +1058,7 @@ class TestPersistEnrichmentFuzzyDedup:
         import structlog.testing
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
 
         # Simulate fuzzy_search returning a high-similarity alias hit (sim=0.92).
         # This mimics "apple inc" matching an existing "apple inc." entity.
@@ -1150,7 +1150,7 @@ class TestPersistEnrichmentFuzzyDedup:
         """
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
 
         # Fuzzy search returns a low-similarity match — should NOT short-circuit.
         low_sim_match = {
@@ -1222,7 +1222,7 @@ class TestPersistEnrichmentFuzzyDedup:
         """Empty fuzzy_search result → create_or_get called as normal (no short-circuit)."""
         from knowledge_graph.infrastructure.workers import provisional_enrichment_core as core
 
-        session, repos = _make_persist_session()
+        session, _repos = _make_persist_session()
 
         alias_repo_mock = MagicMock()
         # fuzzy_search returns empty list — no candidates at all

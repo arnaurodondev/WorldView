@@ -84,7 +84,7 @@ class TestNarrativeGenerationWorkerBatch:
 
     def test_run_batch_all_fail_returns_only_failed_count(self) -> None:
         """All entities failing → failed=N, generated=0, skipped=0."""
-        worker, use_case = _make_worker(
+        worker, _use_case = _make_worker(
             execute_results={
                 _E1: ValueError("DB error"),
                 _E2: ValueError("DB error"),

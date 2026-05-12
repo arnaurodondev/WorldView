@@ -174,7 +174,7 @@ class TestDeadLetterCap:
         # _dead_letter_impl must have been called exactly twice (the 2 within-cap calls).
         assert len(consumer.dead_lettered) == 2
 
-    async def test_default_dead_letter_cap_is_100(self) -> None:
-        """ConsumerConfig must default to dead_letter_cap=100."""
+    async def test_default_dead_letter_cap_is_5000(self) -> None:
+        """ConsumerConfig must default to dead_letter_cap=5000 (schema-migration burst tolerance)."""
         config = ConsumerConfig()
-        assert config.dead_letter_cap == 100
+        assert config.dead_letter_cap == 5000
