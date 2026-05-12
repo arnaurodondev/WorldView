@@ -36,6 +36,16 @@ allowlist:
       "DB dedup" category (not hand-rolled Valkey; different mechanism entirely).
     granted_at: "2026-05-07"
 
+  - class_name: StoredArticleDedupConsumer
+    module_path: services.content-store.src.content_store.infrastructure.messaging.consumers.stored_article_dedup_consumer
+    justification: >
+      Uses PostgreSQL-backed dedup via ProcessedEventsRepository.is_duplicate() and
+      mark_processed() — same pattern as ArticleConsumer. The dedup check and write
+      occur within the same DB transaction as the duplicate_clusters write, providing
+      exactly-once guarantees. ValkeyDedupMixin's TTL-based dedup would be weaker and
+      redundant here. Exempt under the "DB dedup" category.
+    granted_at: "2026-05-11"
+
   # ── market-data ───────────────────────────────────────────────────────────
   - class_name: QuotesConsumer
     module_path: services.market-data.src.market_data.infrastructure.messaging.consumers.quotes_consumer

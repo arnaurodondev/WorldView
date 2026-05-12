@@ -339,7 +339,7 @@ class TestRelationEvidencePromoterQualityGate:
         _sf, session1, *_ = sf, *[None] * 4  # noqa: F841 — unpack to inspect  # type: ignore[misc]
         # Retrieve via the side_effect list tracking what sf() was called with.
         # Because _make_session_factory returns session1 as the 2nd tuple element:
-        _, session1_actual, *_ = _make_session_factory.__code__.co_varnames  # won't work
+        _, _session1_actual, *_ = _make_session_factory.__code__.co_varnames  # won't work
         # Simpler: just verify the worker itself saw promoted=3 by checking
         # that 4 execute calls happened on session1 (1 SELECT + 3 INSERTs).
         # We need session1 from the original factory call above.

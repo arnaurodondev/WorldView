@@ -89,7 +89,7 @@ class TestDeleteTenantDocumentUseCase:
     async def test_happy_path_deletes_and_commits(self) -> None:
         """A PROCESSING document should be soft-deleted and the UoW committed."""
         doc = _make_doc(UploadStatus.PROCESSING)
-        uc, upload_repo, outbox, uow = _make_use_case(doc=doc)
+        uc, upload_repo, _outbox, uow = _make_use_case(doc=doc)
 
         with (
             patch("common.ids.new_uuid7", return_value=EVENT_ID),

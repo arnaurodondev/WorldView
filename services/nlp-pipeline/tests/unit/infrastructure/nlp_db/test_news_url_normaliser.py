@@ -8,7 +8,10 @@ rewrites it to ``https://finnhub.io/news/<hash>`` (the public web view).
 
 from __future__ import annotations
 
+import pytest
 from nlp_pipeline.infrastructure.nlp_db.repositories.news_query import _normalise_finnhub_api_url
+
+pytestmark = pytest.mark.unit
 
 
 def test_finnhub_api_url_rewritten_to_public_path() -> None:

@@ -104,7 +104,7 @@ def upgrade() -> None:
             FROM (VALUES {values_sql}) AS m(event_type, topic)
             WHERE o.event_type = m.event_type
               AND o.topic IS NULL
-            """  # noqa: S608 -- values are static repo constants, not user input
+            """
         )
 
 

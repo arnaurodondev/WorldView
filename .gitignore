@@ -91,3 +91,8 @@ out.txt
 # Non-project directories
 SF_trip/
 meshx-ai-engineers/
+
+# Personal files (resume, cover letters) at repo root — not project artifacts
+arnau_*.typ
+arnau_*.pdf
+*.pdf

@@ -32,3 +32,22 @@ exceptions:
       FastAPI microservice. It has no src/ Python package by design.
     owner: platform
     expires_on: "2027-01-01"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # market-ingestion: legacy kafka/ subdirectory predates STR-013.
+  # The mapper.py and serialization.py files inside kafka/ are dead code —
+  # the canonical copies live at infrastructure/messaging/mapper.py and
+  # infrastructure/messaging/serialization.py respectively. No service code
+  # imports from the kafka/ subdirectory. Flattening is tracked as a
+  # follow-up cleanup task.
+  # ─────────────────────────────────────────────────────────────────────────
+  - service: market-ingestion
+    rule_id: STR-013
+    reason: >
+      Legacy subdirectory organisation predates STR-013. The kafka/ subtree
+      contains dead-code duplicates of mapper.py and serialization.py that are
+      not imported anywhere; the canonical copies live at
+      infrastructure/messaging/{mapper,serialization}.py. Removal is a
+      follow-up cleanup task outside the current wave scope.
+    owner: platform
+    expires_on: "2026-12-31"

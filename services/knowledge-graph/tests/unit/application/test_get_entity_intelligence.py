@@ -110,7 +110,7 @@ async def _make_uc():
 class TestGetEntityIntelligenceUseCase:
     async def test_returns_none_when_entity_not_found(self) -> None:
         """Use case returns None when entity_repo returns None (404 case)."""
-        uc, entity_repo, narrative_repo, aggregates_repo = await _make_uc()
+        uc, entity_repo, _narrative_repo, _aggregates_repo = await _make_uc()
         entity_repo.get_by_id = AsyncMock(return_value=None)
 
         result = await uc.execute(entity_id=_ENTITY_ID)

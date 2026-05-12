@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
-from api_gateway.schemas.intelligence import NarrativeVersionPublic  # noqa: TCH001
+from api_gateway.schemas.intelligence import NarrativeVersionPublic
 
 
 class NarrativeListResponse(BaseModel):
