@@ -80,8 +80,12 @@ def postgres_container() -> Any:
     with PostgresContainer("postgres:16-alpine") as pg:
         async_url = pg.get_connection_url().replace("psycopg2", "asyncpg")
 
+        import shutil
+
         service_dir = os.path.join(os.path.dirname(__file__), "..", "..")
-        alembic_bin = os.path.join(service_dir, ".venv", "bin", "alembic")
+        alembic_bin = shutil.which("alembic")
+        if not alembic_bin:
+            raise RuntimeError("alembic not found on PATH")
         env = os.environ.copy()
         result = subprocess.run(
             [alembic_bin, "upgrade", "head"],

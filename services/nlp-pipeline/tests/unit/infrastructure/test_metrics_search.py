@@ -62,3 +62,37 @@ def test_search_duration_histogram_has_expected_buckets() -> None:
     actual_upper_bounds = s6_search_documents_duration_seconds._upper_bounds  # type: ignore[attr-defined]
     for b in expected_buckets:
         assert b in actual_upper_bounds, f"Expected bucket {b} not found in {actual_upper_bounds}"
+
+
+# ── display-score path metric (PRD-0026) ─────────────────────────────────────
+
+
+class TestDisplayScorePathMetric:
+    """Tests for record_display_score_path — moved from rag-chat tests (RC-6a:
+    this function lives in nlp_pipeline and must be tested in its own service)."""
+
+    def _count(self, path: str) -> float:
+        registry = prometheus_client.REGISTRY
+        for m in registry.collect():
+            for s in m.samples:
+                if s.name == "news_display_score_path_total" and s.labels.get("path") == path:
+                    return s.value
+        return 0.0
+
+    @pytest.mark.unit
+    def test_display_score_path_full_formula_emitted(self) -> None:
+        """market>0 AND llm present → path='full_formula'."""
+        from nlp_pipeline.infrastructure.metrics.prometheus import record_display_score_path
+
+        before = self._count("full_formula")
+        record_display_score_path(market_impact_score=0.6, llm_relevance_score=0.8)
+        assert self._count("full_formula") == before + 1
+
+    @pytest.mark.unit
+    def test_display_score_path_no_price_impact_emitted(self) -> None:
+        """market=None (no price impact), llm present → path='no_price_impact'."""
+        from nlp_pipeline.infrastructure.metrics.prometheus import record_display_score_path
+
+        before = self._count("no_price_impact")
+        record_display_score_path(market_impact_score=None, llm_relevance_score=0.7)
+        assert self._count("no_price_impact") == before + 1
