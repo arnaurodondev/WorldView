@@ -153,7 +153,7 @@ test-arch:
 ## Kills any local process holding port 3001 first so worldview-web always wins.
 dev:
 	@lsof -ti :3001 | xargs -r kill -9 2>/dev/null || true
-	$(COMPOSE_DEV) up -d --build
+	-$(COMPOSE_DEV) up -d --build
 	@docker ps -aq --filter status=created | xargs -r docker start 2>/dev/null || true
 	@echo ""
 	@echo "🚀 Worldview dev stack is running!"
