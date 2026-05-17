@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+_REPO_ROOT = Path(__file__).parent.parent
 SRC_ROOT = Path(
-    "/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints"
+    os.environ.get("EODHD_SKILLS_ROOT", str(_REPO_ROOT / "eodhd-claude-skills/skills/eodhd-api/references/endpoints"))
 )
-OUT_FILE = Path(
-    "/Users/arnaurodon/Projects/University/Final Thesis/worldview/docs/" "references/eodhd-endpoints-reference.md"
-)
+OUT_FILE = _REPO_ROOT / "docs/references/eodhd-endpoints-reference.md"
 
 
 def _extract_section(lines: list[str], name: str) -> str:

@@ -377,6 +377,7 @@ Rules:
 | R25 | Architecture | MUST NOT |
 | R26 | Infrastructure | MUST NOT |
 | R27 | Architecture | MUST |
+| R28 | Contracts | MUST |
 | R29 | Architecture | MUST |
 | R30 | Architecture | MUST NOT |
 | R31 | Operational | MUST |

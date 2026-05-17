@@ -140,7 +140,7 @@ All of these are started by `make dev` (or `docker compose --profile infra up -d
 | MinIO API / Console | 7480 / 7481 |
 | Valkey | 6379 |
 | Ollama | 11434 |
-| Kafka UI (dev tool) | 8090 |
+| Kafka UI (dev tool) | 8092 |
 | pgweb (dev tool) | 8091 |
 | MailHog SMTP / UI (dev tool) | 1025 / 8025 |
 
@@ -385,7 +385,7 @@ The dev overlay (`docker-compose.dev.yml`, started by `make dev`) includes three
 |------|-----|---------|
 | **MailHog** | http://localhost:8025 | Captures all outbound email (SMTP on :1025). View alert emails, registration confirmations without a real mail server. |
 | **pgweb** | http://localhost:8091 | Browser-based PostgreSQL client. Browse all 11 databases, run ad-hoc queries. |
-| **Kafka UI** | http://localhost:8090 | Inspect topics, consumer groups, messages. Useful for debugging event pipelines. |
+| **Kafka UI** | http://localhost:8092 | Inspect topics, consumer groups, messages. Useful for debugging event pipelines. |
 
 These tools are **not** included in the production overlay.
 

@@ -10,7 +10,7 @@
 ```mermaid
 graph TB
     subgraph "Client Layer"
-        UI[Web Frontend<br/>React / Vite]
+        UI[worldview-web<br/>Next.js 15 + shadcn/ui :3001]
     end
 
     subgraph "Gateway Layer"
@@ -26,6 +26,7 @@ graph TB
         S6[S6 · NLP Pipeline<br/>FastAPI + Workers :8006]
         S7[S7 · Knowledge Graph<br/>FastAPI + AGE :8007]
         S8[S8 · RAG / Chat<br/>FastAPI + SSE :8008]
+        S10[S10 · Alert<br/>FastAPI + WebSocket :8010]
     end
 
     subgraph "Infrastructure"
@@ -33,7 +34,7 @@ graph TB
         PG[(PostgreSQL 16<br/>+ TimescaleDB<br/>+ pgvector<br/>+ Apache AGE)]
         MINIO[(MinIO<br/>Object Storage)]
         VALKEY[(Valkey / Redis<br/>Cache + Rate Limits)]
-        LLM_EXT[LLM Providers<br/>Ollama / Groq / OpenRouter]
+        LLM_EXT[LLM Providers<br/>DeepInfra / Groq / OpenRouter / Ollama]
     end
 
     subgraph "External Data"

@@ -1,6 +1,6 @@
 # Worldview Documentation Index
 
-> Single entry point for all project documentation. Updated 2026-03-27.
+> Single entry point for all project documentation. Updated 2026-05-17.
 
 ---
 
@@ -32,7 +32,7 @@ Read in this order:
 | [MASTER_PLAN.md](MASTER_PLAN.md) | Single source of truth — services, data flows, infrastructure, roadmap |
 | [STANDARDS.md](STANDARDS.md) | Engineering standards, DDD patterns, testing conventions |
 | [Architecture Diagrams](architecture/diagrams.md) | Mermaid component, dataflow, and sequence diagrams |
-| [ADR Index](architecture/decisions/) | Architecture Decision Records (ADR-0001 through ADR-0006) |
+| [ADR Index](architecture/decisions/) | Architecture Decision Records (ADR-0001 through ADR-0006, plus ADR-F-02, ADR-AUTH-002, ADR-TENANT-001, ADR-EODHD-FAILOVER) |
 
 ---
 
@@ -72,6 +72,8 @@ Read in this order:
 | storage | S3/MinIO abstraction | [storage.md](libs/storage.md) |
 | observability | structlog, metrics, tracing | [observability.md](libs/observability.md) |
 | ml-clients | ML model abstraction | [ml-clients.md](libs/ml-clients.md) |
+| prompts | LLM prompt templates | [prompts.md](libs/prompts.md) |
+| tools | LLM tool manifest + capability registry (R29) | (doc pending) |
 
 ---
 
@@ -79,6 +81,7 @@ Read in this order:
 
 | Guide | Purpose |
 |-------|---------|
+| **[Infrastructure Guide](infrastructure.md)** | **Complete setup guide: prerequisites, quick start, ports, env vars, Makefile, runbooks** |
 | [Local Development](workflows/local-dev.md) | Bootstrap, Docker profiles, port map, troubleshooting |
 | [Testing Strategy](testing/testing-strategy.md) | Test pyramid, markers, coverage targets, infrastructure |
 | [CI/CD Pipeline](workflows/ci-cd.md) | GitHub Actions, fast path, gated jobs |
@@ -94,6 +97,7 @@ Read in this order:
 
 | Service | Runbook |
 |---------|---------|
+| Infrastructure | [infrastructure.md#runbooks](infrastructure.md#12-runbooks) |
 | Market Data (S3) | [market-data-operations.md](runbooks/market-data-operations.md) |
 | Market Ingestion (S2) | [market-ingestion-operations.md](runbooks/market-ingestion-operations.md) |
 | General | [debugging-guide.md](runbooks/debugging-guide.md) |
@@ -107,7 +111,7 @@ Read in this order:
 |------|---------|
 | [CLAUDE.md](../CLAUDE.md) | Primary entry point — skills, hooks, hard rules, context loading |
 | [AGENTS.md](../AGENTS.md) | Coding standards, architecture patterns, shared libraries |
-| [RULES.md](../RULES.md) | 18 hard rules (MUST/NEVER) |
+| [RULES.md](../RULES.md) | 34 hard rules (MUST/NEVER), R1–R34 |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | Contribution workflow for humans and AI |
 | [PRODUCT_CONTEXT.md](PRODUCT_CONTEXT.md) | Product vision, target users, journeys, constraints |
 | [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) | P0-P3 production readiness checklist |

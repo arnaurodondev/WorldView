@@ -1,7 +1,7 @@
 # EODHD Endpoints Canonical Reference
 
 - Generated from eodhd-claude-skills endpoint docs on 2026-03-13.
-- Source folder: /Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints
+- Source: EODHD API reference files
 - Endpoint count: 72
 - Scope: endpoint purpose, inputs (parameters), and outputs (response shapes), plus method/auth/URL metadata.
 - Usage: reference this file from execution prompts and implementation notes when endpoint contract details are needed.
@@ -10,78 +10,78 @@
 
 | Endpoint | Slug | Source file |
 |---|---|---|
-| [Bulk Fundamentals API](#bulk-fundamentals) | bulk-fundamentals | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/bulk-fundamentals.md` |
-| [Cboe Index Data API](#cboe-index-data) | cboe-index-data | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/cboe-index-data.md` |
-| [Cboe Indices List API](#cboe-indices-list) | cboe-indices-list | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/cboe-indices-list.md` |
-| [Financial News API](#company-news) | company-news | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/company-news.md` |
-| [Earnings Trends API](#earnings-trends) | earnings-trends | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/earnings-trends.md` |
-| [Economic Events API](#economic-events) | economic-events | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/economic-events.md` |
-| [Exchange Details API (Trading Hours, Stock Market Holidays)](#exchange-details) | exchange-details | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/exchange-details.md` |
-| [Exchange Symbol List API](#exchange-tickers) | exchange-tickers | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/exchange-tickers.md` |
-| [Exchanges List API](#exchanges-list) | exchanges-list | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/exchanges-list.md` |
-| [Fundamentals Data API](#fundamentals-data) | fundamentals-data | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/fundamentals-data.md` |
-| [Historical Market Capitalization API](#historical-market-cap) | historical-market-cap | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/historical-market-cap.md` |
-| [Historical Stock Prices API (End-of-Day)](#historical-stock-prices) | historical-stock-prices | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/historical-stock-prices.md` |
-| [Illio Market Insights — Best and Worst Days API](#illio-market-insights-best-worst) | illio-market-insights-best-worst | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-market-insights-best-worst.md` |
-| [Illio Market Insights — Beta Bands API](#illio-market-insights-beta-bands) | illio-market-insights-beta-bands | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-market-insights-beta-bands.md` |
-| [Illio Market Insights — Largest Volatility Change API](#illio-market-insights-largest-volatility) | illio-market-insights-largest-volatility | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-market-insights-largest-volatility.md` |
-| [Illio Market Insights — Performance vs Market API](#illio-market-insights-performance) | illio-market-insights-performance | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-market-insights-performance.md` |
-| [Illio Market Insights — Risk-Return API](#illio-market-insights-risk-return) | illio-market-insights-risk-return | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-market-insights-risk-return.md` |
-| [Illio Market Insights — Volatility Bands API](#illio-market-insights-volatility) | illio-market-insights-volatility | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-market-insights-volatility.md` |
-| [Illio Performance Insights API](#illio-performance-insights) | illio-performance-insights | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-performance-insights.md` |
-| [Illio Risk Insights API](#illio-risk-insights) | illio-risk-insights | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-risk-insights.md` |
-| [Index Components API](#index-components) | index-components | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/index-components.md` |
-| [List of Indices with Details API](#indices-list) | indices-list | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/indices-list.md` |
-| [Insider Transactions API](#insider-transactions) | insider-transactions | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/insider-transactions.md` |
-| [Intraday Historical Data API](#intraday-historical-data) | intraday-historical-data | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/intraday-historical-data.md` |
-| [Investverte ESG List Companies API](#investverte-esg-list-companies) | investverte-esg-list-companies | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/investverte-esg-list-companies.md` |
-| [Investverte ESG List Countries API](#investverte-esg-list-countries) | investverte-esg-list-countries | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/investverte-esg-list-countries.md` |
-| [Investverte ESG List Sectors API](#investverte-esg-list-sectors) | investverte-esg-list-sectors | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/investverte-esg-list-sectors.md` |
-| [Investverte ESG View Company API](#investverte-esg-view-company) | investverte-esg-view-company | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/investverte-esg-view-company.md` |
-| [Investverte ESG View Country API](#investverte-esg-view-country) | investverte-esg-view-country | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/investverte-esg-view-country.md` |
-| [Investverte ESG View Sector API](#investverte-esg-view-sector) | investverte-esg-view-sector | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/investverte-esg-view-sector.md` |
-| [Live/Real-Time Price Data API](#live-price-data) | live-price-data | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/live-price-data.md` |
-| [Macro Indicator API](#macro-indicator) | macro-indicator | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/macro-indicator.md` |
-| [Marketplace Tick Data API (US Stock Market)](#marketplace-tick-data) | marketplace-tick-data | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/marketplace-tick-data.md` |
-| [News Word Weights API](#news-word-weights) | news-word-weights | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/news-word-weights.md` |
-| [Praams Bank Balance Sheet by ISIN API](#praams-bank-balance-sheet-by-isin) | praams-bank-balance-sheet-by-isin | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-bank-balance-sheet-by-isin.md` |
-| [Praams Bank Balance Sheet by Ticker API](#praams-bank-balance-sheet-by-ticker) | praams-bank-balance-sheet-by-ticker | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-bank-balance-sheet-by-ticker.md` |
-| [Praams Bank Income Statement by ISIN API](#praams-bank-income-statement-by-isin) | praams-bank-income-statement-by-isin | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-bank-income-statement-by-isin.md` |
-| [Praams Bank Income Statement by Ticker API](#praams-bank-income-statement-by-ticker) | praams-bank-income-statement-by-ticker | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-bank-income-statement-by-ticker.md` |
-| [Praams Bond Analysis by ISIN API](#praams-bond-analyze-by-isin) | praams-bond-analyze-by-isin | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-bond-analyze-by-isin.md` |
-| [Praams Multi-Factor Bond Report by ISIN API](#praams-report-bond-by-isin) | praams-report-bond-by-isin | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-report-bond-by-isin.md` |
-| [Praams Multi-Factor Equity Report by ISIN API](#praams-report-equity-by-isin) | praams-report-equity-by-isin | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-report-equity-by-isin.md` |
-| [Praams Multi-Factor Equity Report by Ticker API](#praams-report-equity-by-ticker) | praams-report-equity-by-ticker | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-report-equity-by-ticker.md` |
-| [Praams Equity Risk & Return Scoring by ISIN API](#praams-risk-scoring-by-isin) | praams-risk-scoring-by-isin | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-risk-scoring-by-isin.md` |
-| [Praams Equity Risk & Return Scoring by Ticker API](#praams-risk-scoring-by-ticker) | praams-risk-scoring-by-ticker | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-risk-scoring-by-ticker.md` |
-| [Praams Smart Investment Screener Bond API](#praams-smart-investment-screener-bond) | praams-smart-investment-screener-bond | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-smart-investment-screener-bond.md` |
-| [Praams Smart Investment Screener Equity API](#praams-smart-investment-screener-equity) | praams-smart-investment-screener-equity | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-smart-investment-screener-equity.md` |
-| [Sentiment Data API](#sentiment-data) | sentiment-data | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/sentiment-data.md` |
-| [Stock Market Logos API (SVG Extension)](#stock-market-logos-svg) | stock-market-logos-svg | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/stock-market-logos-svg.md` |
-| [Stock Market Logos API](#stock-market-logos) | stock-market-logos | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/stock-market-logos.md` |
-| [Stock Screener API](#stock-screener-data) | stock-screener-data | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/stock-screener-data.md` |
-| [Stocks From Search API](#stocks-from-search) | stocks-from-search | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/stocks-from-search.md` |
-| [Symbol Change History API](#symbol-change-history) | symbol-change-history | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/symbol-change-history.md` |
-| [Technical Indicators API](#technical-indicators) | technical-indicators | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/technical-indicators.md` |
-| [TradingHours List All Markets API](#tradinghours-list-markets) | tradinghours-list-markets | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/tradinghours-list-markets.md` |
-| [TradingHours Lookup Markets API](#tradinghours-lookup-markets) | tradinghours-lookup-markets | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/tradinghours-lookup-markets.md` |
-| [TradingHours Get Market Details API](#tradinghours-market-details) | tradinghours-market-details | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/tradinghours-market-details.md` |
-| [TradingHours Market Status Details API](#tradinghours-market-status) | tradinghours-market-status | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/tradinghours-market-status.md` |
-| [Historical & Upcoming Dividends API](#upcoming-dividends) | upcoming-dividends | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/upcoming-dividends.md` |
-| [Historical & Upcoming Earnings API](#upcoming-earnings) | upcoming-earnings | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/upcoming-earnings.md` |
-| [Historical & Upcoming IPOs API](#upcoming-ipos) | upcoming-ipos | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/upcoming-ipos.md` |
-| [Historical & Upcoming Splits API](#upcoming-splits) | upcoming-splits | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/upcoming-splits.md` |
-| [US Live Extended Quotes API (Live v2)](#us-live-extended-quotes) | us-live-extended-quotes | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/us-live-extended-quotes.md` |
-| [US Options Contracts API](#us-options-contracts) | us-options-contracts | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/us-options-contracts.md` |
-| [US Options EOD (End-of-Day) API](#us-options-eod) | us-options-eod | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/us-options-eod.md` |
-| [US Options Underlying Symbols API](#us-options-underlyings) | us-options-underlyings | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/us-options-underlyings.md` |
-| [Tick Data API](#us-tick-data) | us-tick-data | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/us-tick-data.md` |
-| [User Details API](#user-details) | user-details | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/user-details.md` |
-| [US Treasury Bill Rates API](#ust-bill-rates) | ust-bill-rates | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/ust-bill-rates.md` |
-| [US Treasury Long-Term Rates API](#ust-long-term-rates) | ust-long-term-rates | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/ust-long-term-rates.md` |
-| [US Treasury Real Yield Rates API (Par Real Yield Curve)](#ust-real-yield-rates) | ust-real-yield-rates | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/ust-real-yield-rates.md` |
-| [US Treasury Yield Rates API (Par Yield Curve)](#ust-yield-rates) | ust-yield-rates | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/ust-yield-rates.md` |
-| [WebSockets Real-Time Data API](#websockets-realtime) | websockets-realtime | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/websockets-realtime.md` |
+| [Bulk Fundamentals API](#bulk-fundamentals) | bulk-fundamentals | `bulk-fundamentals.md` |
+| [Cboe Index Data API](#cboe-index-data) | cboe-index-data | `cboe-index-data.md` |
+| [Cboe Indices List API](#cboe-indices-list) | cboe-indices-list | `cboe-indices-list.md` |
+| [Financial News API](#company-news) | company-news | `company-news.md` |
+| [Earnings Trends API](#earnings-trends) | earnings-trends | `earnings-trends.md` |
+| [Economic Events API](#economic-events) | economic-events | `economic-events.md` |
+| [Exchange Details API (Trading Hours, Stock Market Holidays)](#exchange-details) | exchange-details | `exchange-details.md` |
+| [Exchange Symbol List API](#exchange-tickers) | exchange-tickers | `exchange-tickers.md` |
+| [Exchanges List API](#exchanges-list) | exchanges-list | `exchanges-list.md` |
+| [Fundamentals Data API](#fundamentals-data) | fundamentals-data | `fundamentals-data.md` |
+| [Historical Market Capitalization API](#historical-market-cap) | historical-market-cap | `historical-market-cap.md` |
+| [Historical Stock Prices API (End-of-Day)](#historical-stock-prices) | historical-stock-prices | `historical-stock-prices.md` |
+| [Illio Market Insights — Best and Worst Days API](#illio-market-insights-best-worst) | illio-market-insights-best-worst | `illio-market-insights-best-worst.md` |
+| [Illio Market Insights — Beta Bands API](#illio-market-insights-beta-bands) | illio-market-insights-beta-bands | `illio-market-insights-beta-bands.md` |
+| [Illio Market Insights — Largest Volatility Change API](#illio-market-insights-largest-volatility) | illio-market-insights-largest-volatility | `illio-market-insights-largest-volatility.md` |
+| [Illio Market Insights — Performance vs Market API](#illio-market-insights-performance) | illio-market-insights-performance | `illio-market-insights-performance.md` |
+| [Illio Market Insights — Risk-Return API](#illio-market-insights-risk-return) | illio-market-insights-risk-return | `illio-market-insights-risk-return.md` |
+| [Illio Market Insights — Volatility Bands API](#illio-market-insights-volatility) | illio-market-insights-volatility | `illio-market-insights-volatility.md` |
+| [Illio Performance Insights API](#illio-performance-insights) | illio-performance-insights | `illio-performance-insights.md` |
+| [Illio Risk Insights API](#illio-risk-insights) | illio-risk-insights | `illio-risk-insights.md` |
+| [Index Components API](#index-components) | index-components | `index-components.md` |
+| [List of Indices with Details API](#indices-list) | indices-list | `indices-list.md` |
+| [Insider Transactions API](#insider-transactions) | insider-transactions | `insider-transactions.md` |
+| [Intraday Historical Data API](#intraday-historical-data) | intraday-historical-data | `intraday-historical-data.md` |
+| [Investverte ESG List Companies API](#investverte-esg-list-companies) | investverte-esg-list-companies | `investverte-esg-list-companies.md` |
+| [Investverte ESG List Countries API](#investverte-esg-list-countries) | investverte-esg-list-countries | `investverte-esg-list-countries.md` |
+| [Investverte ESG List Sectors API](#investverte-esg-list-sectors) | investverte-esg-list-sectors | `investverte-esg-list-sectors.md` |
+| [Investverte ESG View Company API](#investverte-esg-view-company) | investverte-esg-view-company | `investverte-esg-view-company.md` |
+| [Investverte ESG View Country API](#investverte-esg-view-country) | investverte-esg-view-country | `investverte-esg-view-country.md` |
+| [Investverte ESG View Sector API](#investverte-esg-view-sector) | investverte-esg-view-sector | `investverte-esg-view-sector.md` |
+| [Live/Real-Time Price Data API](#live-price-data) | live-price-data | `live-price-data.md` |
+| [Macro Indicator API](#macro-indicator) | macro-indicator | `macro-indicator.md` |
+| [Marketplace Tick Data API (US Stock Market)](#marketplace-tick-data) | marketplace-tick-data | `marketplace-tick-data.md` |
+| [News Word Weights API](#news-word-weights) | news-word-weights | `news-word-weights.md` |
+| [Praams Bank Balance Sheet by ISIN API](#praams-bank-balance-sheet-by-isin) | praams-bank-balance-sheet-by-isin | `praams-bank-balance-sheet-by-isin.md` |
+| [Praams Bank Balance Sheet by Ticker API](#praams-bank-balance-sheet-by-ticker) | praams-bank-balance-sheet-by-ticker | `praams-bank-balance-sheet-by-ticker.md` |
+| [Praams Bank Income Statement by ISIN API](#praams-bank-income-statement-by-isin) | praams-bank-income-statement-by-isin | `praams-bank-income-statement-by-isin.md` |
+| [Praams Bank Income Statement by Ticker API](#praams-bank-income-statement-by-ticker) | praams-bank-income-statement-by-ticker | `praams-bank-income-statement-by-ticker.md` |
+| [Praams Bond Analysis by ISIN API](#praams-bond-analyze-by-isin) | praams-bond-analyze-by-isin | `praams-bond-analyze-by-isin.md` |
+| [Praams Multi-Factor Bond Report by ISIN API](#praams-report-bond-by-isin) | praams-report-bond-by-isin | `praams-report-bond-by-isin.md` |
+| [Praams Multi-Factor Equity Report by ISIN API](#praams-report-equity-by-isin) | praams-report-equity-by-isin | `praams-report-equity-by-isin.md` |
+| [Praams Multi-Factor Equity Report by Ticker API](#praams-report-equity-by-ticker) | praams-report-equity-by-ticker | `praams-report-equity-by-ticker.md` |
+| [Praams Equity Risk & Return Scoring by ISIN API](#praams-risk-scoring-by-isin) | praams-risk-scoring-by-isin | `praams-risk-scoring-by-isin.md` |
+| [Praams Equity Risk & Return Scoring by Ticker API](#praams-risk-scoring-by-ticker) | praams-risk-scoring-by-ticker | `praams-risk-scoring-by-ticker.md` |
+| [Praams Smart Investment Screener Bond API](#praams-smart-investment-screener-bond) | praams-smart-investment-screener-bond | `praams-smart-investment-screener-bond.md` |
+| [Praams Smart Investment Screener Equity API](#praams-smart-investment-screener-equity) | praams-smart-investment-screener-equity | `praams-smart-investment-screener-equity.md` |
+| [Sentiment Data API](#sentiment-data) | sentiment-data | `sentiment-data.md` |
+| [Stock Market Logos API (SVG Extension)](#stock-market-logos-svg) | stock-market-logos-svg | `stock-market-logos-svg.md` |
+| [Stock Market Logos API](#stock-market-logos) | stock-market-logos | `stock-market-logos.md` |
+| [Stock Screener API](#stock-screener-data) | stock-screener-data | `stock-screener-data.md` |
+| [Stocks From Search API](#stocks-from-search) | stocks-from-search | `stocks-from-search.md` |
+| [Symbol Change History API](#symbol-change-history) | symbol-change-history | `symbol-change-history.md` |
+| [Technical Indicators API](#technical-indicators) | technical-indicators | `technical-indicators.md` |
+| [TradingHours List All Markets API](#tradinghours-list-markets) | tradinghours-list-markets | `tradinghours-list-markets.md` |
+| [TradingHours Lookup Markets API](#tradinghours-lookup-markets) | tradinghours-lookup-markets | `tradinghours-lookup-markets.md` |
+| [TradingHours Get Market Details API](#tradinghours-market-details) | tradinghours-market-details | `tradinghours-market-details.md` |
+| [TradingHours Market Status Details API](#tradinghours-market-status) | tradinghours-market-status | `tradinghours-market-status.md` |
+| [Historical & Upcoming Dividends API](#upcoming-dividends) | upcoming-dividends | `upcoming-dividends.md` |
+| [Historical & Upcoming Earnings API](#upcoming-earnings) | upcoming-earnings | `upcoming-earnings.md` |
+| [Historical & Upcoming IPOs API](#upcoming-ipos) | upcoming-ipos | `upcoming-ipos.md` |
+| [Historical & Upcoming Splits API](#upcoming-splits) | upcoming-splits | `upcoming-splits.md` |
+| [US Live Extended Quotes API (Live v2)](#us-live-extended-quotes) | us-live-extended-quotes | `us-live-extended-quotes.md` |
+| [US Options Contracts API](#us-options-contracts) | us-options-contracts | `us-options-contracts.md` |
+| [US Options EOD (End-of-Day) API](#us-options-eod) | us-options-eod | `us-options-eod.md` |
+| [US Options Underlying Symbols API](#us-options-underlyings) | us-options-underlyings | `us-options-underlyings.md` |
+| [Tick Data API](#us-tick-data) | us-tick-data | `us-tick-data.md` |
+| [User Details API](#user-details) | user-details | `user-details.md` |
+| [US Treasury Bill Rates API](#ust-bill-rates) | ust-bill-rates | `ust-bill-rates.md` |
+| [US Treasury Long-Term Rates API](#ust-long-term-rates) | ust-long-term-rates | `ust-long-term-rates.md` |
+| [US Treasury Real Yield Rates API (Par Real Yield Curve)](#ust-real-yield-rates) | ust-real-yield-rates | `ust-real-yield-rates.md` |
+| [US Treasury Yield Rates API (Par Yield Curve)](#ust-yield-rates) | ust-yield-rates | `ust-yield-rates.md` |
+| [WebSockets Real-Time Data API](#websockets-realtime) | websockets-realtime | `websockets-realtime.md` |
 
 ---
 
@@ -102,7 +102,7 @@
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `bulk-fundamentals` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/bulk-fundamentals.md` |
+| Source File | `bulk-fundamentals.md` |
 
 ### Purpose
 
@@ -430,7 +430,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `cboe-index-data` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/cboe-index-data.md` |
+| Source File | `cboe-index-data.md` |
 
 ### Purpose
 
@@ -570,7 +570,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `cboe-indices-list` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/cboe-indices-list.md` |
+| Source File | `cboe-indices-list.md` |
 
 ### Purpose
 
@@ -686,7 +686,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `company-news` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/company-news.md` |
+| Source File | `company-news.md` |
 
 ### Purpose
 
@@ -864,7 +864,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `earnings-trends` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/earnings-trends.md` |
+| Source File | `earnings-trends.md` |
 
 ### Purpose
 
@@ -1055,7 +1055,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `economic-events` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/economic-events.md` |
+| Source File | `economic-events.md` |
 
 ### Purpose
 
@@ -1237,7 +1237,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `exchange-details` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/exchange-details.md` |
+| Source File | `exchange-details.md` |
 
 ### Purpose
 
@@ -1470,7 +1470,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `exchange-tickers` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/exchange-tickers.md` |
+| Source File | `exchange-tickers.md` |
 
 ### Purpose
 
@@ -1646,7 +1646,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `exchanges-list` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/exchanges-list.md` |
+| Source File | `exchanges-list.md` |
 
 ### Purpose
 
@@ -1818,7 +1818,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `fundamentals-data` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/fundamentals-data.md` |
+| Source File | `fundamentals-data.md` |
 
 ### Purpose
 
@@ -2003,7 +2003,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `historical-market-cap` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/historical-market-cap.md` |
+| Source File | `historical-market-cap.md` |
 
 ### Purpose
 
@@ -2197,7 +2197,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `historical-stock-prices` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/historical-stock-prices.md` |
+| Source File | `historical-stock-prices.md` |
 
 ### Purpose
 
@@ -2372,7 +2372,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `illio-market-insights-best-worst` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-market-insights-best-worst.md` |
+| Source File | `illio-market-insights-best-worst.md` |
 
 ### Purpose
 
@@ -2512,7 +2512,7 @@ curl "https://eodhd.com/api/mp/illio/chapters/best-and-worst/SnP500?api_token=de
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `illio-market-insights-beta-bands` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-market-insights-beta-bands.md` |
+| Source File | `illio-market-insights-beta-bands.md` |
 
 ### Purpose
 
@@ -2655,7 +2655,7 @@ curl "https://eodhd.com/api/mp/illio/chapters/beta-bands/SnP500?api_token=demo"
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `illio-market-insights-largest-volatility` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-market-insights-largest-volatility.md` |
+| Source File | `illio-market-insights-largest-volatility.md` |
 
 ### Purpose
 
@@ -2810,7 +2810,7 @@ curl "https://eodhd.com/api/mp/illio/chapters/volume/SnP500?api_token=demo"
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `illio-market-insights-performance` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-market-insights-performance.md` |
+| Source File | `illio-market-insights-performance.md` |
 
 ### Purpose
 
@@ -2969,7 +2969,7 @@ curl "https://eodhd.com/api/mp/illio/chapters/performance/SnP500?api_token=demo"
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `illio-market-insights-risk-return` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-market-insights-risk-return.md` |
+| Source File | `illio-market-insights-risk-return.md` |
 
 ### Purpose
 
@@ -3110,7 +3110,7 @@ curl "https://eodhd.com/api/mp/illio/chapters/risk/SnP500?api_token=demo"
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `illio-market-insights-volatility` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-market-insights-volatility.md` |
+| Source File | `illio-market-insights-volatility.md` |
 
 ### Purpose
 
@@ -3248,7 +3248,7 @@ curl "https://eodhd.com/api/mp/illio/chapters/volatility/SnP500?api_token=demo"
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `illio-performance-insights` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-performance-insights.md` |
+| Source File | `illio-performance-insights.md` |
 
 ### Purpose
 
@@ -3419,7 +3419,7 @@ curl "https://eodhd.com/api/mp/illio/categories/performance/SnP500?api_token=dem
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `illio-risk-insights` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/illio-risk-insights.md` |
+| Source File | `illio-risk-insights.md` |
 
 ### Purpose
 
@@ -3601,7 +3601,7 @@ curl "https://eodhd.com/api/mp/illio/categories/risk/SnP500?api_token=demo"
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `index-components` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/index-components.md` |
+| Source File | `index-components.md` |
 
 ### Purpose
 
@@ -3752,7 +3752,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `indices-list` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/indices-list.md` |
+| Source File | `indices-list.md` |
 
 ### Purpose
 
@@ -3881,7 +3881,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `insider-transactions` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/insider-transactions.md` |
+| Source File | `insider-transactions.md` |
 
 ### Purpose
 
@@ -4071,7 +4071,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `intraday-historical-data` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/intraday-historical-data.md` |
+| Source File | `intraday-historical-data.md` |
 
 ### Purpose
 
@@ -4279,7 +4279,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `investverte-esg-list-companies` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/investverte-esg-list-companies.md` |
+| Source File | `investverte-esg-list-companies.md` |
 
 ### Purpose
 
@@ -4395,7 +4395,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `investverte-esg-list-countries` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/investverte-esg-list-countries.md` |
+| Source File | `investverte-esg-list-countries.md` |
 
 ### Purpose
 
@@ -4521,7 +4521,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `investverte-esg-list-sectors` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/investverte-esg-list-sectors.md` |
+| Source File | `investverte-esg-list-sectors.md` |
 
 ### Purpose
 
@@ -4637,7 +4637,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `investverte-esg-view-company` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/investverte-esg-view-company.md` |
+| Source File | `investverte-esg-view-company.md` |
 
 ### Purpose
 
@@ -4797,7 +4797,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `investverte-esg-view-country` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/investverte-esg-view-country.md` |
+| Source File | `investverte-esg-view-country.md` |
 
 ### Purpose
 
@@ -4956,7 +4956,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `investverte-esg-view-sector` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/investverte-esg-view-sector.md` |
+| Source File | `investverte-esg-view-sector.md` |
 
 ### Purpose
 
@@ -5115,7 +5115,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `live-price-data` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/live-price-data.md` |
+| Source File | `live-price-data.md` |
 
 ### Purpose
 
@@ -5264,7 +5264,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `macro-indicator` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/macro-indicator.md` |
+| Source File | `macro-indicator.md` |
 
 ### Purpose
 
@@ -5411,7 +5411,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `marketplace-tick-data` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/marketplace-tick-data.md` |
+| Source File | `marketplace-tick-data.md` |
 
 ### Purpose
 
@@ -5578,7 +5578,7 @@ for i in range(len(data["ts"])):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `news-word-weights` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/news-word-weights.md` |
+| Source File | `news-word-weights.md` |
 
 ### Purpose
 
@@ -5741,7 +5741,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `praams-bank-balance-sheet-by-isin` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-bank-balance-sheet-by-isin.md` |
+| Source File | `praams-bank-balance-sheet-by-isin.md` |
 
 ### Purpose
 
@@ -5993,7 +5993,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `praams-bank-balance-sheet-by-ticker` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-bank-balance-sheet-by-ticker.md` |
+| Source File | `praams-bank-balance-sheet-by-ticker.md` |
 
 ### Purpose
 
@@ -6239,7 +6239,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `praams-bank-income-statement-by-isin` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-bank-income-statement-by-isin.md` |
+| Source File | `praams-bank-income-statement-by-isin.md` |
 
 ### Purpose
 
@@ -6469,7 +6469,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `praams-bank-income-statement-by-ticker` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-bank-income-statement-by-ticker.md` |
+| Source File | `praams-bank-income-statement-by-ticker.md` |
 
 ### Purpose
 
@@ -6694,7 +6694,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `praams-bond-analyze-by-isin` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-bond-analyze-by-isin.md` |
+| Source File | `praams-bond-analyze-by-isin.md` |
 
 ### Purpose
 
@@ -7022,7 +7022,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `praams-report-bond-by-isin` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-report-bond-by-isin.md` |
+| Source File | `praams-report-bond-by-isin.md` |
 
 ### Purpose
 
@@ -7141,7 +7141,7 @@ print(f"Report saved to: {path}")
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `praams-report-equity-by-isin` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-report-equity-by-isin.md` |
+| Source File | `praams-report-equity-by-isin.md` |
 
 ### Purpose
 
@@ -7260,7 +7260,7 @@ print(f"Report saved to: {path}")
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `praams-report-equity-by-ticker` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-report-equity-by-ticker.md` |
+| Source File | `praams-report-equity-by-ticker.md` |
 
 ### Purpose
 
@@ -7378,7 +7378,7 @@ print(f"Report saved to: {path}")
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `praams-risk-scoring-by-isin` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-risk-scoring-by-isin.md` |
+| Source File | `praams-risk-scoring-by-isin.md` |
 
 ### Purpose
 
@@ -7713,7 +7713,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `praams-risk-scoring-by-ticker` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-risk-scoring-by-ticker.md` |
+| Source File | `praams-risk-scoring-by-ticker.md` |
 
 ### Purpose
 
@@ -7995,7 +7995,7 @@ def make_api_request(url, params):
 | Method | POST |
 | Auth | `api_token` query parameter |
 | Slug | `praams-smart-investment-screener-bond` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-smart-investment-screener-bond.md` |
+| Source File | `praams-smart-investment-screener-bond.md` |
 
 ### Purpose
 
@@ -8273,7 +8273,7 @@ def make_api_request(url, params, json_body):
 | Method | POST |
 | Auth | `api_token` query parameter |
 | Slug | `praams-smart-investment-screener-equity` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/praams-smart-investment-screener-equity.md` |
+| Source File | `praams-smart-investment-screener-equity.md` |
 
 ### Purpose
 
@@ -8534,7 +8534,7 @@ def make_api_request(url, params, json_body):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `sentiment-data` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/sentiment-data.md` |
+| Source File | `sentiment-data.md` |
 
 ### Purpose
 
@@ -8711,7 +8711,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `stock-market-logos-svg` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/stock-market-logos-svg.md` |
+| Source File | `stock-market-logos-svg.md` |
 
 ### Purpose
 
@@ -8855,7 +8855,7 @@ download_logos_svg_batch(symbols, "YOUR_API_TOKEN")
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `stock-market-logos` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/stock-market-logos.md` |
+| Source File | `stock-market-logos.md` |
 
 ### Purpose
 
@@ -8994,7 +8994,7 @@ download_logos_batch(symbols, "YOUR_API_TOKEN")
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `stock-screener-data` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/stock-screener-data.md` |
+| Source File | `stock-screener-data.md` |
 
 ### Purpose
 
@@ -9143,7 +9143,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `stocks-from-search` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/stocks-from-search.md` |
+| Source File | `stocks-from-search.md` |
 
 ### Purpose
 
@@ -9336,7 +9336,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `symbol-change-history` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/symbol-change-history.md` |
+| Source File | `symbol-change-history.md` |
 
 ### Purpose
 
@@ -9518,7 +9518,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `technical-indicators` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/technical-indicators.md` |
+| Source File | `technical-indicators.md` |
 
 ### HTTP Status Codes
 
@@ -9593,7 +9593,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `tradinghours-list-markets` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/tradinghours-list-markets.md` |
+| Source File | `tradinghours-list-markets.md` |
 
 ### Purpose
 
@@ -9729,7 +9729,7 @@ for m in markets:
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `tradinghours-lookup-markets` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/tradinghours-lookup-markets.md` |
+| Source File | `tradinghours-lookup-markets.md` |
 
 ### Purpose
 
@@ -9857,7 +9857,7 @@ for m in markets:
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `tradinghours-market-details` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/tradinghours-market-details.md` |
+| Source File | `tradinghours-market-details.md` |
 
 ### Purpose
 
@@ -9980,7 +9980,7 @@ for market in details:
 | Method | GET |
 | Auth | `api_token` query parameter |
 | Slug | `tradinghours-market-status` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/tradinghours-market-status.md` |
+| Source File | `tradinghours-market-status.md` |
 
 ### Purpose
 
@@ -10170,7 +10170,7 @@ def get_market_status_cached(fin_id, api_token, cache={}):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `upcoming-dividends` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/upcoming-dividends.md` |
+| Source File | `upcoming-dividends.md` |
 
 ### Purpose
 
@@ -10347,7 +10347,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `upcoming-earnings` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/upcoming-earnings.md` |
+| Source File | `upcoming-earnings.md` |
 
 ### Purpose
 
@@ -10525,7 +10525,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `upcoming-ipos` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/upcoming-ipos.md` |
+| Source File | `upcoming-ipos.md` |
 
 ### Purpose
 
@@ -10712,7 +10712,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `upcoming-splits` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/upcoming-splits.md` |
+| Source File | `upcoming-splits.md` |
 
 ### Purpose
 
@@ -10892,7 +10892,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `us-live-extended-quotes` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/us-live-extended-quotes.md` |
+| Source File | `us-live-extended-quotes.md` |
 
 ### Purpose
 
@@ -11157,7 +11157,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `us-options-contracts` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/us-options-contracts.md` |
+| Source File | `us-options-contracts.md` |
 
 ### Purpose
 
@@ -11406,7 +11406,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `us-options-eod` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/us-options-eod.md` |
+| Source File | `us-options-eod.md` |
 
 ### Purpose
 
@@ -11671,7 +11671,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `us-options-underlyings` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/us-options-underlyings.md` |
+| Source File | `us-options-underlyings.md` |
 
 ### Purpose
 
@@ -11822,7 +11822,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `us-tick-data` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/us-tick-data.md` |
+| Source File | `us-tick-data.md` |
 
 ### Purpose
 
@@ -12015,7 +12015,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `user-details` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/user-details.md` |
+| Source File | `user-details.md` |
 
 ### Purpose
 
@@ -12200,7 +12200,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `ust-bill-rates` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/ust-bill-rates.md` |
+| Source File | `ust-bill-rates.md` |
 
 ### Purpose
 
@@ -12369,7 +12369,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `ust-long-term-rates` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/ust-long-term-rates.md` |
+| Source File | `ust-long-term-rates.md` |
 
 ### Purpose
 
@@ -12534,7 +12534,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `ust-real-yield-rates` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/ust-real-yield-rates.md` |
+| Source File | `ust-real-yield-rates.md` |
 
 ### Purpose
 
@@ -12703,7 +12703,7 @@ def make_api_request(url, params):
 | Method | GET |
 | Auth | api_token (query) |
 | Slug | `ust-yield-rates` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/ust-yield-rates.md` |
+| Source File | `ust-yield-rates.md` |
 
 ### Purpose
 
@@ -12881,4 +12881,4 @@ def make_api_request(url, params):
 | Method | WebSocket (persistent connection) |
 | Auth | `api_token` query parameter validated during handshake |
 | Slug | `websockets-realtime` |
-| Source File | `/Users/arnaurodon/Projects/University/Final Thesis/eodhd-claude-skills/skills/eodhd-api/references/endpoints/websockets-realtime.md` |
+| Source File | `websockets-realtime.md` |

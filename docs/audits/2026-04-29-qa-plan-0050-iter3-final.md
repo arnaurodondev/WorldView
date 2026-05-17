@@ -42,7 +42,7 @@ services/alert           → 385 passed, 0 failed (unit only)
 
 ### Live container state
 
-Docker Desktop socket is now present (`/Users/arnaurodon/.docker/run/docker.sock` exists). However, no worldview containers are currently running (`docker ps` returns empty). The iter-2 BLOCKING finding F-Q2-01 required rebuilding container images that predated the iter-1 fix commits. That rebuild has NOT been confirmed as executed in this session. The code fixes are correct and fully unit-tested; live endpoint re-validation remains pending operator action (see NIT-3 below).
+Docker Desktop socket is now present (`/var/run/docker.sock` exists). However, no worldview containers are currently running (`docker ps` returns empty). The iter-2 BLOCKING finding F-Q2-01 required rebuilding container images that predated the iter-1 fix commits. That rebuild has NOT been confirmed as executed in this session. The code fixes are correct and fully unit-tested; live endpoint re-validation remains pending operator action (see NIT-3 below).
 
 ---
 

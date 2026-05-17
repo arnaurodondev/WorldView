@@ -1,7 +1,7 @@
-# Market Data Service
+# Market Data Service (S3)
 
 > **Owner**: Market Data domain · **Database**: `market_data_db` (TimescaleDB) · **Port**: 8003
-> **Status**: Complete (waves 01–04 shipped)
+> **Status**: Production-ready (waves 01–16 shipped, including intraday resampling, prediction markets, price snapshots, and sector aggregations)
 
 ---
 
@@ -17,7 +17,7 @@ or articles, perform NLP processing, manage portfolios.
 
 ---
 
-## API Surface (30 routes)
+## API Surface (38 routes)
 
 | Method | Path | Description | Cache Tier |
 |--------|------|-------------|------------|
@@ -53,6 +53,13 @@ or articles, perform NLP processing, manage portfolios.
 | GET | `/api/v1/fundamentals/metrics/{instrument_id}` | List available metric names for an instrument | — |
 | GET | `/api/v1/securities` | List securities — query params: `figi`, `isin`, `limit`, `offset` (paginated DB scan when unfiltered) | — |
 | GET | `/api/v1/securities/{security_id}` | Security detail by FIGI or ISIN | — |
+| GET | `/api/v1/prediction-markets` | List prediction markets — query params: `status` (`open`/`resolved`/`cancelled`/`all`), `limit`, `offset` | — |
+| GET | `/api/v1/prediction-markets/{market_id}` | Prediction market detail with latest snapshot | — |
+| GET | `/api/v1/prediction-markets/{market_id}/history` | Prediction market price history — query params: `from_dt`, `to_dt` (HTTP 400 if `from_dt >= to_dt`) | — |
+| GET | `/api/v1/market/sector-returns` | Sector heatmap data — query param: `period` (`1D`, `1W`, `1M`). Returns average period return per GICS sector from OHLCV bars. | — |
+| GET | `/api/v1/market/period-movers` | Top gainers or losers — query params: `period` (`1W`/`1M`), `type` (`gainers`/`losers`), `limit` (1–50, default 10). Returns instruments sorted by period_return_pct. | — |
+| GET | `/internal/v1/price/{instrument_id}` | Price snapshot for a single instrument — cache-aside: Valkey → Quote → OHLCV fallback. Returns 404 if no data available. **Internal endpoint — S9 only.** | Valkey |
+| POST | `/internal/v1/price/batch` | Price snapshots for up to 50 instruments. Instruments with no data are silently omitted (partial results valid). **Internal endpoint — S9 only.** | Valkey |
 
 > **Note on path ordering**: Literal-segment routes (`/ohlcv/bulk`, `/quotes/latest`,
 > `/instruments/lookup`, `/instruments/on-demand-profile`) are registered **before** path-param routes
@@ -260,15 +267,16 @@ SELECT create_hypertable('prediction_market_snapshots', 'snapshot_at', if_not_ex
 
 ---
 
-## Runtime Processes (6)
+## Runtime Processes (7)
 
 | Process | Purpose |
 |---------|---------|
-| API Server | Serve query APIs (OHLCV, quotes, fundamentals, instruments) |
-| OHLCV Consumer | Materialize OHLCV bars from claim-check events |
-| Quotes Consumer | Materialize latest quotes |
-| Fundamentals Consumer | Materialize fundamentals data |
-| Outbox Dispatcher | Publish instrument lifecycle events |
+| API Server | Serve query APIs (OHLCV, quotes, fundamentals, instruments, sectors, movers, price snapshots) |
+| OHLCV Consumer | Materialize OHLCV bars from claim-check events; emit `InstrumentDiscovered` on first-seen symbols |
+| Quotes Consumer | Materialize latest quotes; emit `InstrumentDiscovered` on first-seen symbols |
+| Fundamentals Consumer | Materialize all 18 fundamentals sections + derived snapshot; emit `InstrumentCreated` v3 |
+| Intraday Resampling Consumer | Consume 1m bars and derive 5m/15m/30m/1h/4h/1d derived bars (`IntradayResamplingWorker`) |
+| Outbox Dispatcher | Publish instrument lifecycle events (`InstrumentCreated`, `InstrumentUpdated`, `InstrumentDiscovered`) |
 | Prediction Market Consumer | Materialize `market.prediction.v1` events into `prediction_markets` + `prediction_market_snapshots` |
 
 ---
@@ -414,40 +422,121 @@ logic change.
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MARKET_DATA_DATABASE_URL` | `postgresql+asyncpg://postgres:postgres@localhost:5432/market_data_db` | Primary (write) DB |
-| `MARKET_DATA_READ_REPLICA_URL` | _(unset)_ | Optional read replica URL. When unset, reads use `DATABASE_URL` |
-| `MARKET_DATA_VALKEY_URL` | `redis://localhost:6379/0` | Valkey (Redis-compatible) cache URL |
-| `MARKET_DATA_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka broker address |
-| `MARKET_DATA_STORAGE_ENDPOINT` | `localhost:7480` | MinIO / S3-compatible endpoint |
+All variables are prefixed with `MARKET_DATA_`.
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `MARKET_DATA_DATABASE_URL` | `postgresql+asyncpg://postgres:postgres@localhost:5432/market_data_db` | Yes | Primary (write) DB URL |
+| `MARKET_DATA_READ_REPLICA_URL` | `None` | No | Optional read-replica URL. When `None`, reads use the write URL. |
+| `MARKET_DATA_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Yes | Kafka broker address |
+| `MARKET_DATA_SCHEMA_REGISTRY_URL` | `http://localhost:8081` | Yes | Confluent Schema Registry URL |
+| `MARKET_DATA_STORAGE_ENDPOINT` | `http://localhost:7480` | Yes | MinIO / S3-compatible endpoint |
+| `MARKET_DATA_STORAGE_ACCESS_KEY` | — | **Required** | MinIO access key (no default — startup fails without it) |
+| `MARKET_DATA_STORAGE_SECRET_KEY` | — | **Required** | MinIO secret key (no default — startup fails without it) |
+| `MARKET_DATA_VALKEY_URL` | `redis://localhost:6379/0` | No | Valkey (Redis-compatible) cache URL for quotes |
+| `MARKET_DATA_API_GATEWAY_URL` | `http://api-gateway:8000` | No | S9 URL for JWKS endpoint (internal JWT auth, PRD-0025) |
+| `MARKET_DATA_INTERNAL_JWT_SKIP_VERIFICATION` | `false` | No | Skip JWT signature verification. **Never true in production** (rejected when `APP_ENV=production`). |
+| `MARKET_DATA_INTERNAL_JWT_JTI_CHECK_ENABLED` | `false` | No | Enable JTI replay detection. Set `true` in production with proper JWT rotation. |
+| `MARKET_DATA_EODHD_API_KEY` | `""` | No | EODHD API key for `GET /instruments/on-demand-profile` fallback enrichment. |
+| `MARKET_DATA_EODHD_BASE_URL` | `https://eodhd.com` | No | EODHD base URL (overridable for staging). |
+| `MARKET_DATA_OHLCV_MAX_DAYS` | `365` | No | Maximum date range for OHLCV queries. Requests exceeding this receive HTTP 422. |
+| `MARKET_DATA_INTRADAY_SOURCE_TF` | `1m` | No | Source timeframe for intraday resampling (`IntradayResamplingWorker`). Valid: `1m`, `5m`, `15m`, `1h`. |
+| `MARKET_DATA_LOG_LEVEL` | `INFO` | No | Log level |
+| `MARKET_DATA_LOG_JSON` | `true` | No | Structured JSON logs |
+| `MARKET_DATA_OTLP_ENDPOINT` | `""` | No | OpenTelemetry OTLP endpoint |
 
 ---
 
-## Testing Plan
+## How to Run Locally
 
-| Type | Marker | Count | Command |
-|------|--------|-------|---------|
-| Unit | `unit` | 180 | `make test` (fast path, no Docker) |
-| Integration — repositories | `integration slow` | 19 | `make test -- tests/integration/test_repositories.py` |
-| Integration — outbox + UoW | `integration slow` | 9 | `make test -- tests/integration/test_outbox_integration.py` |
-| Integration — infra smoke | `integration slow` | 5 | `make test -- tests/integration/test_infra_smoke.py` |
-| Integration — contracts | `integration` | 13 | `make test -- tests/integration/test_contracts.py` |
-| E2E — pipeline | `integration slow` | 4 | `make test -- tests/integration/test_e2e_pipeline.py` |
-| Performance — benchmarks | `integration slow` | 5 | `make test -- tests/integration/test_benchmarks.py` |
+```bash
+# 1. Start platform infra (TimescaleDB, Kafka, MinIO, Valkey)
+make dev  # from repo root
+
+# 2. Set up the service
+cd services/market-data
+cp configs/dev.local.env.example .env
+# Edit .env — set MARKET_DATA_STORAGE_ACCESS_KEY and _SECRET_KEY
+
+# 3. Install dependencies
+source ../../.venv312/bin/activate
+pip install -e ".[dev]"
+
+# 4. Run database migrations
+make migrate   # → alembic upgrade head
+
+# 5. Start the API server
+make run       # API on port 8003
+
+# 6. Verify health
+curl http://localhost:8003/healthz     # → {"status": "ok"}
+curl http://localhost:8003/readyz      # → {"status": "ready"}
+
+# 7. Example: get available instruments
+curl http://localhost:8003/api/v1/instruments?limit=10
+
+# 8. Example: get OHLCV bars
+curl "http://localhost:8003/api/v1/ohlcv/INSTRUMENT_UUID?timeframe=1d&start=2024-01-01&end=2024-12-31"
+```
+
+**Running background consumers** (in separate terminals after `make dev`):
+
+```bash
+# OHLCV consumer (group: market-data-ohlcv)
+python -m market_data.infrastructure.messaging.consumers.ohlcv_consumer_main
+
+# Quotes consumer (group: market-data-quotes)
+python -m market_data.infrastructure.messaging.consumers.quotes_consumer_main
+
+# Fundamentals consumer (group: market-data-fundamentals)
+python -m market_data.infrastructure.messaging.consumers.fundamentals_consumer_main
+
+# Outbox dispatcher (instrument lifecycle events)
+python -m market_data.infrastructure.messaging.outbox.dispatcher_main
+```
 
 ---
 
-## Local Run
+## How to Run Tests
 
 ```bash
 cd services/market-data
-cp configs/dev.local.env.example .env
-make run       # API on port 8003
+
+# Unit tests (fast, no Docker needed)
 make test
+# or:
+python -m pytest tests/unit -v -m unit
+
+# Integration tests (requires Docker — TimescaleDB, Kafka, MinIO, Valkey)
+make test-integration
+# or:
+python -m pytest tests/integration/ -v -m integration
+
+# Contract tests (Avro schema alignment)
+python -m pytest tests/contract -v
+
+# Live tests (real EODHD demo API)
+python -m pytest tests/live/ -v
+
+# Full suite
+make test-all
+
+# Lint and type checks
 make lint
-make migrate
+python -m mypy src/ --config-file mypy.ini
 ```
+
+**Test categories:**
+
+| Type | Marker | Description | Needs Docker? |
+|------|--------|-------------|---------------|
+| Unit | `unit` | Domain entities, use cases, routers with mocked deps | No |
+| Integration — repositories | `integration slow` | Real TimescaleDB repository tests | Yes |
+| Integration — outbox + UoW | `integration slow` | Transactional outbox and UoW tests | Yes |
+| Integration — infra smoke | `integration slow` | Container connectivity smoke tests | Yes |
+| Integration — contracts | `integration` | Avro schema ↔ Python model alignment | No |
+| E2E — pipeline | `integration slow` | Full claim-check pipeline (Kafka → MinIO → DB) | Yes |
+| Performance — benchmarks | `integration slow` | TimescaleDB query benchmarks | Yes |
 
 ---
 
@@ -963,3 +1052,54 @@ make test -- tests/unit/ -v
 | `tests/integration/fixtures/sample_ohlcv.jsonl` | 5 valid daily OHLCV bars for `test-inst-001` |
 | `tests/integration/fixtures/sample_quotes.json` | 1 valid quote |
 | `tests/integration/fixtures/sample_fundamentals.json` | Income statement, balance sheet, valuation ratios (3 of 14 sections) |
+
+---
+
+## External Dependencies
+
+### EODHD (On-Demand Profile Enrichment Only)
+
+Market Data uses EODHD **only** for the `GET /api/v1/instruments/on-demand-profile` fallback path when the instrument description is not yet in the database. The Market Ingestion service (S2) handles all scheduled EODHD data polling.
+
+- **Variable**: `MARKET_DATA_EODHD_API_KEY` (default empty — feature disabled when empty)
+- **Rate limit**: 429 is surfaced to the caller as HTTP 429
+
+### MinIO (Object Storage)
+
+Market Data reads canonical NDJSON objects from MinIO silver tier to materialize OHLCV, quotes, and fundamentals data. The service does not write to MinIO directly — that is Market Ingestion's job.
+
+- **Variables**: `MARKET_DATA_STORAGE_ENDPOINT`, `MARKET_DATA_STORAGE_ACCESS_KEY`, `MARKET_DATA_STORAGE_SECRET_KEY`
+
+---
+
+## Runbook
+
+**Service not returning data for an instrument:**
+1. Check `GET /readyz` — 503 indicates DB/Valkey/MinIO connectivity issue.
+2. Check `GET /api/v1/instruments?query=AAPL` — does the instrument exist? If not, Market Ingestion has not yet emitted an `InstrumentCreated` event.
+3. Check `GET /api/v1/ohlcv/{id}/range` — does the instrument have any OHLCV data?
+4. Check Kafka consumer lag for `market.dataset.fetched` topic (kafka-ui at port 8080).
+5. Check `ingestion_events` table — are events being recorded (idempotency check passing)?
+
+**OHLCV chart shows no data:**
+- Check available timeframes: `GET /api/v1/ohlcv/{id}/timeframes`
+- Check date range: `GET /api/v1/ohlcv/{id}/range`
+- OHLCV max days limit: requests spanning >365 days return HTTP 422. Reduce the range.
+- Intraday bars (5m/15m/30m/1h/4h) are derived from 1m bars by the `IntradayResamplingWorker`. If 1m bars are missing, derived timeframes will also be empty.
+
+**Quotes returning stale data:**
+- Quotes are cached in Valkey with a 5-second TTL.
+- Check Valkey key `quote:v1:{instrument_id}` for the cached value.
+- On cache miss, the API reads from the database — check the `quotes` table `updated_at` column.
+- Quote data is only as fresh as the last poll by Market Ingestion (typically 5-minute cadence during market hours).
+
+**Fundamentals screener returning no results:**
+- The screener uses the `fundamental_metrics` read-optimized projection table.
+- Check `GET /api/v1/fundamentals/metrics/{instrument_id}` — are metrics populated?
+- The `FundamentalsConsumer` populates `fundamental_metrics` on each ingest cycle. If the instrument has never been ingested, the table will be empty.
+- Run the backfill script to populate historical metrics: `python scripts/backfill_fundamental_metrics.py`
+
+**Prediction market consumer not updating:**
+- Check consumer group `market-data-prediction-markets` lag on topic `market.prediction.v1`.
+- Events use Confluent Avro wire format (0x00 magic byte) — consumer detects and handles both Avro and JSON formats (BP-122 fix).
+- `PredictionMarketSnapshot` requires `len(outcomes_prices) >= 2` — consumer pads to 2 entries to avoid crashes on malformed events.

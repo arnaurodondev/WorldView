@@ -25,7 +25,7 @@ POS = "#26A69A"  # positive
 NEG = "#EF5350"  # negative
 WARN = "#F59E0B"  # warning
 
-FILE = Path("/Users/arnaurodon/Projects/University/final_thesis/worldview/apps/frontend/designs/worldview-mvp_v2.pen")
+FILE = Path(__file__).parent.parent / "apps/worldview-web/designs/worldview-mvp_v2.pen"
 
 # ─── Load & backup ────────────────────────────────────────────────────────────
 with open(FILE) as f:

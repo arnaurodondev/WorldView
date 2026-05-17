@@ -1,6 +1,10 @@
 # observability
 
-Structured logging, Prometheus metrics, and OpenTelemetry tracing.
+Structured logging (structlog JSON), Prometheus metrics, OpenTelemetry tracing,
+and Sentry error tracking.
+
+Every backend service imports this for consistent, correlated telemetry with
+automatic trace_id + span_id injection into every log line.
 
 See [docs/libs/observability.md](../../docs/libs/observability.md) for full documentation.
 
@@ -8,4 +12,10 @@ See [docs/libs/observability.md](../../docs/libs/observability.md) for full docu
 
 ```bash
 pip install -e ".[dev]"
+```
+
+## Run tests
+
+```bash
+python -m pytest tests/ -v
 ```

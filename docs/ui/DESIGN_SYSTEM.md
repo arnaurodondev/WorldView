@@ -998,3 +998,74 @@ Test mocks must export the SeriesDefinition string sentinels and an `addSeries: 
 | `comfortable` | h-10 px-5 text-sm | h-10 px-3 text-sm |
 
 Default kept on `default` to preserve all existing call sites; new code opts into `compact` for institutional 22px-row contexts.
+
+---
+
+## 13. Tailwind Config Reference
+
+The Tailwind configuration (`tailwind.config.ts`) maps the CSS variables from `app/globals.css`
+into Tailwind utility classes. Additional tokens added beyond the shadcn/ui defaults:
+
+### 13.1 Financial Domain Tokens
+
+These tokens have no equivalent in standard Tailwind. They are defined in `globals.css` and
+consumed as Tailwind utilities:
+
+| Utility | CSS Variable | Purpose |
+|---------|-------------|---------|
+| `text-positive` / `bg-positive` | `--positive` | Price up, portfolio gains (#26A69A teal) |
+| `text-negative` / `bg-negative` | `--negative` | Price down, losses (#EF5350 muted red) |
+| `text-warning` / `bg-warning` | `--warning` | Medium severity alerts (#F59E0B amber) |
+| `bg-surface-2` | `--surface-2` | Third elevation level (alias for `--muted`, #18181B) |
+| `bg-surface-3` | `--surface-3` | Fourth elevation level, borders (#27272A) |
+
+### 13.2 Custom Animations
+
+Defined in `tailwind.config.ts` `keyframes` / `animation` blocks:
+
+| Class | Duration | Use |
+|-------|---------|-----|
+| `animate-flash-in` | 150ms ease-out | FlashOverlay entrance (urgent CRITICAL alerts) |
+| `animate-skeleton-pulse` | 2s infinite | Loading skeleton shimmer (slower than Tailwind default — less distracting for finance users) |
+| `animate-accordion-down` | 200ms | shadcn/ui Accordion expand |
+| `animate-accordion-up` | 200ms | shadcn/ui Accordion collapse |
+
+### 13.3 Border Radius — Terminal Sharp
+
+All three Tailwind radius levels (`rounded-lg`, `rounded-md`, `rounded-sm`) map to the same
+`--radius` value (2px). This is intentional: terminal/finance UIs use uniformly sharp corners.
+The shadcn/ui default 6px / 4px / 2px consumer-app scale does not apply here.
+
+---
+
+## 14. Package-Level Policy
+
+### 14.1 Whitelisted Third-Party Libraries
+
+These are the only third-party UI/utility libraries approved for use. Any addition requires
+an ADR and `pnpm audit` showing 0 CVEs:
+
+| Library | Purpose | CVE policy |
+|---------|---------|-----------|
+| shadcn/ui (Radix UI primitives) | All UI components | clean |
+| AG Grid Community | Data-heavy screener/portfolio tables only | clean |
+| sigma.js + graphology | Knowledge graph visualisation only | clean |
+| lightweight-charts | OHLCV candlestick charts | clean |
+| recharts | Portfolio donut/bar charts (code-split) | clean |
+| write-excel-file | Excel export (replaces SheetJS — CVEs) | clean |
+| jspdf + jspdf-autotable | PDF export | clean (4.x+ only; 2.x/3.x had CVEs) |
+| papaparse | CSV parsing/generation | clean |
+
+### 14.2 Banned Patterns
+
+| Pattern | Reason | Alternative |
+|---------|--------|------------|
+| `localStorage` for auth tokens | XSS risk | React state (AuthContext) |
+| `sessionStorage` for auth tokens | XSS risk | React state (AuthContext) |
+| Direct backend URL construction | Bypasses S9 gateway | `/api/*` rewrites |
+| `Math.random()` for security values | Not cryptographically secure | `crypto.getRandomValues()` |
+| Hardcoded hex colors | Breaks theme tokens | Tailwind CSS variables |
+| Tailwind `slate-950` or `blue-500` | Wrong palette | Terminal Dark tokens |
+| `any` TypeScript type | Loses type safety | Proper interface/type |
+| `useState+useEffect` for API calls | Bypasses TanStack Query | `useQuery` / `useMutation` |
+| Importing `infrastructure/` in domain | Architecture violation | Use cases / ports |
