@@ -30,7 +30,10 @@ interface MetricValueProps {
 const COLOR_CLASS: Record<MetricColor, string> = {
   positive: "text-positive",
   negative: "text-negative",
-  amber: "text-amber-400",
+  // WHY text-warning (not text-amber-400): the architecture test
+  // __tests__/architecture/no-off-palette-colors.test.ts bans raw Tailwind
+  // amber-N classes; `--warning` resolves to #FFB000 (Bloomberg amber).
+  amber: "text-warning",
   muted: "text-muted-foreground",
   default: "text-foreground",
 };

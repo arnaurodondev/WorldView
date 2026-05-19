@@ -56,7 +56,8 @@ export function AnalystMiniBar({ strongBuy, buy, hold, sell, strongSell }: Analy
           distinct blocks even at very thin widths. */}
       <div className="flex h-[4px] rounded-full overflow-hidden gap-px">
         <div style={{ width: pct(buyCount) }} className="h-full bg-positive" />
-        <div style={{ width: pct(holdCount) }} className="h-full bg-amber-400" />
+        {/* WHY bg-warning (not bg-amber-400): off-palette colors test. */}
+        <div style={{ width: pct(holdCount) }} className="h-full bg-warning" />
         <div style={{ width: pct(sellCount) }} className="h-full bg-negative" />
       </div>
       {/* WHY "{B}B · {H}H · {S}S": short for 22px row; mono dots centre cleanly. */}

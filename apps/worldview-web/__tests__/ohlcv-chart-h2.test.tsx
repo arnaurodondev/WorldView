@@ -199,7 +199,10 @@ import { OHLCVChart } from "@/components/instrument/chart/OHLCVChart";
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe("PLAN-0059 H-2 — CrosshairHUD rendering", () => {
+// PLAN-0090 T-B-01 removed CrosshairHUD from OHLCVChart. The tests below
+// pin output from the deleted feature; T-E-02 may replace with assertions
+// against the new minimalist chart surface.
+describe.skip("PLAN-0059 H-2 — CrosshairHUD rendering (obsolete; see PLAN-0090 T-B-01)", () => {
   afterEach(() => {
     cleanup();
   });
@@ -275,7 +278,8 @@ describe("PLAN-0059 H-2 — Log scale toggle", () => {
   });
 });
 
-describe("PLAN-0059 H-2 — Compare overlay", () => {
+// PLAN-0090 T-B-01 removed the compare-overlay UI from OHLCVChart.
+describe.skip("PLAN-0059 H-2 — Compare overlay (obsolete; see PLAN-0090 T-B-01)", () => {
   beforeEach(() => {
     mockAddSeries.mockClear();
     mockGetOHLCV.mockClear();
