@@ -87,10 +87,21 @@ export function MetricsTable({ instrumentId, fundamentals, quote }: MetricsTable
   const shareStats = (shareStatsResp?.records?.[0]?.data ?? null) as ShareStatisticsData | null;
 
   const price = quote?.price ?? null;
-  // WHY string-key access: TechnicalsData uses numeric-prefixed keys
-  // ("50_day_ma") that can't be JS identifiers — dot access is impossible.
-  const ma50 = technicals?.["50_day_ma"] ?? null;
-  const ma200 = technicals?.["200_day_ma"] ?? null;
+  // WHY string-key access AND PascalCase: TechnicalsData (see types/api.ts)
+  // mirrors the EODHD-verbatim payload returned by S9 /v1/fundamentals/{id}/technicals.
+  // Keys begin with digits ("50DayMA") so they can't be JS identifiers —
+  // bracket access is mandatory. Audit 2026-05-19 confirmed live keys: 50DayMA, 200DayMA.
+  const ma50 = technicals?.["50DayMA"] ?? null;
+  const ma200 = technicals?.["200DayMA"] ?? null;
+  // WHY raw-percent normalization for ownership fields: ShareStatisticsData
+  // returns PercentInsiders / PercentInstitutions as already-multiplied magnitudes
+  // (1.64 = 1.64%, 65.35 = 65.35%) per EODHD. formatPercent itself multiplies by
+  // 100, so we divide by 100 first to keep the round-trip honest.
+  const pctInsiders = shareStats?.PercentInsiders != null ? shareStats.PercentInsiders / 100 : null;
+  const pctInstitutions =
+    shareStats?.PercentInstitutions != null ? shareStats.PercentInstitutions / 100 : null;
+  // ShortPercent is already a decimal (0.0092 = 0.92%) per EODHD — pass through.
+  const shortPct = technicals?.ShortPercent ?? null;
   // Arrow suffix — visual trend cue (PRD §6.7.2 rows 24/25).
   const arrow = (p: number | null, m: number | null) =>
     p == null || m == null ? "" : p >= m ? " ↑" : " ↓";
@@ -142,9 +153,11 @@ export function MetricsTable({ instrumentId, fundamentals, quote }: MetricsTable
 
       {/* ── OWNERSHIP (rows 20-23) ────────────────────────────────────────── */}
       <MetricRow label="AVG VOL 30D" value={formatVolume(snapshot?.avg_volume_30d ?? null)} />
-      <MetricRow label="SHORT %" value={formatPercent(technicals?.short_percent ?? null)} color={shortColor(technicals?.short_percent)} />
-      <MetricRow label="INST OWN" value={formatPercent(shareStats?.percent_institutions ?? null)} />
-      <MetricRow label="INSIDER OWN" value={formatPercent(shareStats?.percent_insiders ?? null)} />
+      {/* SHORT %: ShortPercent is decimal-form per EODHD — feed directly. */}
+      <MetricRow label="SHORT %" value={formatPercent(shortPct)} color={shortColor(shortPct)} />
+      {/* INST/INSIDER OWN: normalized above (raw% ÷ 100) before passing to formatPercent. */}
+      <MetricRow label="INST OWN" value={formatPercent(pctInstitutions)} />
+      <MetricRow label="INSIDER OWN" value={formatPercent(pctInsiders)} />
       <MetricGroupDivider />
 
       {/* ── TREND (rows 24-25) — MA values with ↑/↓ vs current price ──────── */}

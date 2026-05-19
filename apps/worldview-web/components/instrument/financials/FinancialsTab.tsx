@@ -36,11 +36,15 @@
 // browser runtime. Marking the orchestrator client-side avoids forcing every
 // presentational child to opt-in individually.
 
+import { useQuery } from "@tanstack/react-query";
 import { useFinancialsTabData } from "@/components/instrument/hooks/useFinancialsTabData";
 import { FlatMetricsGrid } from "@/components/instrument/financials/FlatMetricsGrid";
 import { IncomeStatementTable } from "@/components/instrument/financials/IncomeStatementTable";
 import { EarningsBarChart } from "@/components/instrument/financials/EarningsBarChart";
 import { AnalystSidebar } from "@/components/instrument/financials/AnalystSidebar";
+import { createGateway } from "@/lib/gateway";
+import { useAccessToken } from "@/lib/api-client";
+import { qk } from "@/lib/query/keys";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -65,16 +69,33 @@ export function FinancialsTab({ instrumentId }: FinancialsTabProps) {
   const { fundamentals, snapshot, technicals, shareStats } =
     useFinancialsTabData(instrumentId);
 
+  // WHY a dedicated splits-dividends fetch (not bundled in useFinancialsTabData):
+  // splits-dividends is rarely-changing (filing-cadence) — 24h staleTime works.
+  // We keep this query co-located with the consumer rather than spreading another
+  // 6th field through the multi-tab hook contract. Audit 2026-05-19: previously
+  // the dividends prop was hardcoded to null, hiding EX-DIV / PAY-DATE.
+  const token = useAccessToken();
+  const { data: splitsDivResp } = useQuery({
+    queryKey: qk.instruments.splitsDividends(instrumentId),
+    queryFn: () => createGateway(token).getSplitsDividends(instrumentId),
+    staleTime: 24 * 60 * 60 * 1000,
+    enabled: !!instrumentId,
+  });
+
   // WHY extract from FundamentalsSectionResponse: useFinancialsTabData's
   // `technicals` and `shareStats` come back as section envelopes; FlatMetricsGrid
   // expects the typed inner data shapes. Pull `records[0].data` defensively —
   // an empty section is rendered as null, MetricCell handles the "—" placeholder.
   const technicalsData = technicals?.records?.[0]?.data ?? null;
   const shareStatsData = shareStats?.records?.[0]?.data ?? null;
-  // Splits/dividends are inside fundamentals.splits_dividends per the
-  // /v1/fundamentals/{id} response — keep as null for now; FlatMetricsGrid
-  // gracefully renders "—" in dividend-date cells when null.
-  const dividendsData = null;
+  // Splits/dividends data — extract typed PascalCase fields (ExDividendDate,
+  // DividendDate) from records[0].data per the EODHD-verbatim section convention.
+  const dividendsData = splitsDivResp?.records?.[0]?.data
+    ? (splitsDivResp.records[0].data as {
+        ExDividendDate?: string | null;
+        DividendDate?: string | null;
+      })
+    : null;
 
   return (
     // WHY h-full overflow-hidden on the root: locks the tab height so the LEFT

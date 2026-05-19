@@ -517,19 +517,32 @@ export function FlatMetricsGrid({
       <MetricCell label="OWNERSHIP" isHeader value="" />
       <MetricCell
         label="SHARES OUT"
-        value={fmt(shareStats?.shares_outstanding, formatMarketCap)}
+        // WHY PascalCase keys: ShareStatisticsData mirrors EODHD verbatim — see
+        // types/api.ts. SharesOutstanding, SharesFloat, PercentInsiders,
+        // PercentInstitutions are the real keys (audit 2026-05-19).
+        value={fmt(shareStats?.SharesOutstanding, formatMarketCap)}
       />
       <MetricCell
         label="FLOAT"
-        value={fmt(shareStats?.shares_float, formatMarketCap)}
+        value={fmt(shareStats?.SharesFloat, formatMarketCap)}
       />
       <MetricCell
         label="% INSIDERS"
-        value={fmt(shareStats?.percent_insiders, formatPercent)}
+        // WHY ÷ 100: PercentInsiders is raw-percent (1.64 = 1.64%); formatPercent
+        // multiplies by 100 → divide first so the round-trip preserves magnitude.
+        value={fmt(
+          shareStats?.PercentInsiders != null ? shareStats.PercentInsiders / 100 : null,
+          formatPercent,
+        )}
       />
       <MetricCell
         label="% INSTITUTIONS"
-        value={fmt(shareStats?.percent_institutions, formatPercent)}
+        value={fmt(
+          shareStats?.PercentInstitutions != null
+            ? shareStats.PercentInstitutions / 100
+            : null,
+          formatPercent,
+        )}
       />
 
       {/* ────────────────────────────────────────────────────────────────────
@@ -544,17 +557,20 @@ export function FlatMetricsGrid({
       />
       <MetricCell
         label="52W HIGH"
+        // WHY PascalCase: TechnicalsData mirrors EODHD verbatim (audit 2026-05-19).
+        // Live keys: 52WeekHigh, 52WeekLow, 50DayMA, 200DayMA. Falls back to the
+        // aggregate fundamentals row when the technicals section hasn't backfilled.
         value={
-          technicals?.["52_week_high"] != null
-            ? formatPrice(technicals["52_week_high"])
+          technicals?.["52WeekHigh"] != null
+            ? formatPrice(technicals["52WeekHigh"])
             : fmt(fundamentals?.week_52_high, formatPrice)
         }
       />
       <MetricCell
         label="52W LOW"
         value={
-          technicals?.["52_week_low"] != null
-            ? formatPrice(technicals["52_week_low"])
+          technicals?.["52WeekLow"] != null
+            ? formatPrice(technicals["52WeekLow"])
             : fmt(fundamentals?.week_52_low, formatPrice)
         }
       />
@@ -566,16 +582,16 @@ export function FlatMetricsGrid({
       <MetricCell
         label="50D MA"
         value={
-          technicals?.["50_day_ma"] != null
-            ? formatPrice(technicals["50_day_ma"])
+          technicals?.["50DayMA"] != null
+            ? formatPrice(technicals["50DayMA"])
             : SAFE_DASH
         }
       />
       <MetricCell
         label="200D MA"
         value={
-          technicals?.["200_day_ma"] != null
-            ? formatPrice(technicals["200_day_ma"])
+          technicals?.["200DayMA"] != null
+            ? formatPrice(technicals["200DayMA"])
             : SAFE_DASH
         }
       />
@@ -596,15 +612,18 @@ export function FlatMetricsGrid({
       />
       <MetricCell
         label="SHARES SHORT"
-        value={fmt(technicals?.shares_short, formatVolume)}
+        // WHY PascalCase: TechnicalsData mirrors EODHD verbatim. Live keys:
+        // SharesShort, ShortRatio, ShortPercent (audit 2026-05-19).
+        value={fmt(technicals?.SharesShort, formatVolume)}
       />
       <MetricCell
         label="SHORT RATIO"
-        value={fmt(technicals?.short_ratio, formatRatio)}
+        value={fmt(technicals?.ShortRatio, formatRatio)}
       />
       <MetricCell
         label="SHORT %"
-        value={fmt(technicals?.short_percent, formatPercent)}
+        // ShortPercent is decimal-form (0.0092 = 0.92%) per EODHD — pass through.
+        value={fmt(technicals?.ShortPercent, formatPercent)}
       />
     </div>
   );

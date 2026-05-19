@@ -155,6 +155,11 @@ export const qk = {
       ["instruments", "detail", instrumentId, "income-statement"] as const,
     earningsHistory: (instrumentId: string) =>
       ["instruments", "detail", instrumentId, "earnings-history"] as const,
+    // WHY splitsDividends key: FlatMetricsGrid renders EX-DIV DATE / DIV PAY DATE
+    // from the splits_dividends section returned by S9 /v1/fundamentals/{id}/splits-dividends.
+    // Audit 2026-05-19 — previously hard-coded to null in FinancialsTab.
+    splitsDividends: (instrumentId: string) =>
+      ["instruments", "detail", instrumentId, "splits-dividends"] as const,
     // WHY pageBundle: the instrument detail page pre-fetches a bundle of all
     // sub-resources in one round-trip and seeds child-component caches. This
     // key is ONLY for the bundle fetch — child components continue using their
