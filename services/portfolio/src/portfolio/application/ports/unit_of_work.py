@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         HoldingRepository,
         IdempotencyRepository,
         InstrumentRepository,
+        NotificationPreferencesRepository,
         OutboxRepository,
         PortfolioRepository,
         PortfolioValueSnapshotRepository,
@@ -144,6 +145,10 @@ class ReadOnlyUnitOfWork(ABC):
     @property
     @abstractmethod
     def beta_enrollments(self) -> BetaEnrollmentRepo: ...
+
+    @property
+    @abstractmethod
+    def notification_preferences(self) -> NotificationPreferencesRepository: ...
 
     async def __aenter__(self) -> ReadOnlyUnitOfWork:
         return self

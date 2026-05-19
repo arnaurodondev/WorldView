@@ -348,6 +348,12 @@ class FakeUoW(UnitOfWork):
     def beta_enrollments(self):
         return None
 
+    # W1-BACKEND: notification preferences (MED-022) — unused in transaction
+    # tests but required to satisfy the ReadOnlyUnitOfWork ABC.
+    @property
+    def notification_preferences(self):
+        return None
+
     commit_count: int = 0
 
     async def commit(self) -> None:
