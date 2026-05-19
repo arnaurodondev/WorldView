@@ -511,13 +511,15 @@ export function AskAiPanel({
                * (bordered list) separates "answer" from "references" — the same
                * visual convention used in the full Chat page's CitationList.
                */}
-              <p className="whitespace-pre-wrap text-sm text-foreground">
+              {/* HIGH-015: animate-pulse removed from cursor — Bloomberg terminal mandate.
+                  text-sm → text-[11px] for terminal density alignment. */}
+              <p className="whitespace-pre-wrap text-[11px] text-foreground">
                 {isStreaming
                   ? (
                     <>
                       {response}
-                      {/* Blinking cursor while streaming */}
-                      <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-primary" />
+                      {/* Static cursor while streaming — no animate-pulse per HIGH-015 */}
+                      <span className="ml-0.5 inline-block h-4 w-0.5 bg-primary" />
                     </>
                   )
                   : renderWithCitations(parsedBody)}
@@ -563,7 +565,8 @@ export function AskAiPanel({
           rows={2}
           disabled={isStreaming}
           // WHY rounded-[2px] (was rounded-md): terminal 2px radius rule
-          className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
+          // text-sm → text-[11px]: terminal density alignment (HIGH-015)
+          className="flex-1 resize-none rounded-[2px] border border-border bg-muted px-2 py-1 text-[11px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:bg-[hsl(var(--disabled-bg))] disabled:text-[hsl(var(--disabled-foreground))] disabled:border-[hsl(var(--disabled-border))]"
         />
         {/* PLAN-0059 W0 F-VISUAL-022: --accent-ai violet bg (was amber-500/90).
             WHY text-white: --accent-ai (#A855F7) has medium luminance — white reaches

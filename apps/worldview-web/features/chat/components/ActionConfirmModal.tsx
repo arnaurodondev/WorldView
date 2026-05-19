@@ -52,6 +52,10 @@
 import { useCallback, useState } from "react";
 import { AlertTriangle, CheckCircle, XCircle } from "lucide-react";
 
+// FR-5.6 (MED-013): shared SSE line parser — eliminates duplicate inline
+// field extraction logic; protocol changes only need to land in one place.
+import { parseSSELine } from "@/lib/sse-parser";
+
 import {
   Dialog,
   DialogContent,
@@ -246,13 +250,19 @@ export function ActionConfirmModal({
       // ── Build request body ────────────────────────────────────────────────
       // Mirror the `ConfirmProposalRequest` schema from proposal.py.
       // All params come from the ``pending_action`` SSE event the hook received.
-      const body = {
+      // FR-5.4 (MED-014): severity is omitted when not provided by the backend,
+      // rather than silently defaulting to "low". This lets the backend (S10)
+      // apply its own default per the AlertSeverity enum — removing the
+      // client-side override that could mask missing severity from the LLM.
+      const body: Record<string, unknown> = {
         tool_name: pendingAction.tool,
         entity_id: String(pendingAction.params.entity_id ?? ""),
         condition: String(pendingAction.params.condition ?? ""),
         threshold: (pendingAction.params.threshold as Record<string, unknown>) ?? {},
-        severity: String(pendingAction.params.severity ?? "low"),
       };
+      if (pendingAction.params.severity != null) {
+        body.severity = String(pendingAction.params.severity);
+      }
 
       const response = await fetch(
         `/api/v1/chat/proposals/${pendingAction.proposal_id}/confirm`,
@@ -301,53 +311,58 @@ export function ActionConfirmModal({
         buffer = lines.pop() ?? "";
 
         for (const line of lines) {
-          const trimmed = line.trimEnd();
+          // FR-5.6 (MED-013): use parseSSELine for field extraction.
+          // The stateful currentEvent accumulation stays here (caller-owned).
+          const parsedLine = parseSSELine(line.trimEnd());
+          if (!parsedLine) continue;
 
-          if (trimmed.startsWith("event:")) {
-            // Track the event type for the next `data:` line.
-            currentEvent = trimmed.slice(6).trim();
-          } else if (trimmed.startsWith("data:")) {
-            const raw = trimmed.slice(5).trim();
-
-            // ── [DONE] sentinel ────────────────────────────────────────────
-            if (raw === "[DONE]") {
-              break outer;
-            }
-
-            // ── Parse JSON payload ─────────────────────────────────────────
-            let parsed: Record<string, unknown> = {};
-            try {
-              parsed = JSON.parse(raw) as Record<string, unknown>;
-            } catch {
-              // Non-JSON data line — skip
-              continue;
-            }
-
-            if (currentEvent === "action_executed") {
-              // Success — alert was created.
-              const result = parsed as { result?: { alert_id?: string; condition?: string } };
-              const alertId = result.result?.alert_id ?? "unknown";
-              setStatus("success");
-              setStatusMessage(`Alert created successfully (ID: ${alertId})`);
-              // Auto-dismiss after 2.5s so the user sees the success state.
-              setTimeout(() => {
-                setStatus("idle");
-                setStatusMessage("");
-                onDismiss();
-              }, 2500);
-              break outer;
-            } else if (currentEvent === "action_rejected") {
-              // Failure — alert was NOT created.
-              const rejection = parsed as { reason?: string };
-              const reason = rejection.reason ?? "unknown";
-              setStatus("error");
-              setStatusMessage(`Action rejected: ${reason}. Please try again.`);
-              break outer;
-            }
-
-            // Reset event name after consuming its data line
-            currentEvent = "";
+          // event: line — update current event name.
+          if (parsedLine.type !== "message") {
+            currentEvent = parsedLine.type;
+            continue;
           }
+
+          // data: line
+          const raw = parsedLine.data;
+
+          // ── [DONE] sentinel ──────────────────────────────────────────────
+          if (raw === "[DONE]") {
+            break outer;
+          }
+
+          // ── Parse JSON payload ───────────────────────────────────────────
+          let parsed: Record<string, unknown> = {};
+          try {
+            parsed = JSON.parse(raw) as Record<string, unknown>;
+          } catch {
+            // Non-JSON data line — skip
+            continue;
+          }
+
+          if (currentEvent === "action_executed") {
+            // Success — alert was created.
+            const result = parsed as { result?: { alert_id?: string; condition?: string } };
+            const alertId = result.result?.alert_id ?? "unknown";
+            setStatus("success");
+            setStatusMessage(`Alert created successfully (ID: ${alertId})`);
+            // Auto-dismiss after 2.5s so the user sees the success state.
+            setTimeout(() => {
+              setStatus("idle");
+              setStatusMessage("");
+              onDismiss();
+            }, 2500);
+            break outer;
+          } else if (currentEvent === "action_rejected") {
+            // Failure — alert was NOT created.
+            const rejection = parsed as { reason?: string };
+            const reason = rejection.reason ?? "unknown";
+            setStatus("error");
+            setStatusMessage(`Action rejected: ${reason}. Please try again.`);
+            break outer;
+          }
+
+          // Reset event name after consuming its data line
+          currentEvent = "";
         }
       }
     } catch (err) {
