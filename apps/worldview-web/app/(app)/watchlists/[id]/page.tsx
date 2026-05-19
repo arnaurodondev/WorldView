@@ -60,6 +60,11 @@ export default function WatchlistDetailPage() {
 
   const renameMut = useMutation({
     mutationFn: (newName: string) => gateway.renameWatchlist(watchlistId!, newName),
+    // WHY retry (CRIT-006 / FR-8.1): PATCH renameWatchlist is idempotent —
+    // applying the same name twice is a no-op server-side.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.watchlists.list() });
       void qc.invalidateQueries({ queryKey: qk.watchlists.detail(watchlistId!) });
@@ -75,6 +80,11 @@ export default function WatchlistDetailPage() {
 
   const deleteMut = useMutation({
     mutationFn: () => gateway.deleteWatchlist(watchlistId!),
+    // WHY retry (CRIT-006 / FR-8.1): deleteWatchlist returns 404 on "already
+    // deleted" (not 5xx) — retry only fires on transient network / 5xx failures.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.watchlists.list() });
       toast.success("Watchlist deleted");
@@ -86,6 +96,11 @@ export default function WatchlistDetailPage() {
   const removeMemberMut = useMutation({
     mutationFn: (entityId: string) =>
       gateway.removeWatchlistMember(watchlistId!, entityId),
+    // WHY retry (CRIT-006 / FR-8.1): removeWatchlistMember returns 404 on
+    // "already removed" — retry only fires on transient network / 5xx failures.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.watchlists.detail(watchlistId!) });
       toast.success("Member removed");

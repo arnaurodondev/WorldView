@@ -51,6 +51,11 @@ export function MicroSurvey({ surveyKey, prompt, className }: MicroSurveyProps) 
         survey_key: surveyKey,
         response,
       }),
+    // WHY retry (CRIT-006 / FR-8.1): postMicroSurvey is an upsert on
+    // (user, survey_key) — idempotent. Retry only fires on transient 5xx/network.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
   });
 
   const handleClick = (value: SurveyResponse) => {

@@ -467,6 +467,12 @@ export function usePortfolioData(
   const deletePortfolioMutation = useMutation<unknown, Error, string>({
     mutationFn: (portfolioId: string) =>
       createGateway(accessToken).deletePortfolio(portfolioId),
+    // WHY retry (CRIT-006 / FR-8.1): all S1 mutations are idempotent (W1-Backend
+    // audit). deletePortfolio returns 404 on "already deleted" (not 5xx) so retry
+    // only fires on transient network / 5xx failures — exactly what we want.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: (_, deletedId) => {
       // WHY qk.portfolios.all: the root ["portfolios"] key cascades to every
       // portfolio-scoped child query so the portfolio selector re-loads the

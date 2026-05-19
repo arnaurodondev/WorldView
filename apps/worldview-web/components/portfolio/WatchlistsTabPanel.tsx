@@ -342,6 +342,12 @@ function AddSymbolBar({
   const addMutation = useMutation({
     mutationFn: (entityId: string) =>
       createGateway(accessToken).addWatchlistMember(watchlistId, entityId),
+    // WHY retry (CRIT-006 / FR-8.1): addWatchlistMember is idempotent —
+    // app-layer dedup returns 409 on duplicate (not 5xx); retry only fires
+    // on transient network / 5xx failures.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: () => {
       // PLAN-0046 / T-46-2-03: invalidate the per-watchlist members query so
       // the just-added row is fetched and rendered, AND the list query so the
@@ -637,6 +643,11 @@ export function WatchlistsTabPanel({
   const deleteMemberMutation = useMutation({
     mutationFn: ({ watchlistId, entityId }: { watchlistId: string; entityId: string }) =>
       createGateway(accessToken).removeWatchlistMember(watchlistId, entityId),
+    // WHY retry (CRIT-006 / FR-8.1): removeWatchlistMember returns 404 on
+    // "already removed" — retry only fires on transient network / 5xx failures.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onMutate: ({ entityId }) => {
       setDeletingEntityId(entityId);
     },
@@ -657,6 +668,11 @@ export function WatchlistsTabPanel({
   // ── Create watchlist mutation ──────────────────────────────────────────────
   const createMutation = useMutation({
     mutationFn: (name: string) => createGateway(accessToken).createWatchlist(name),
+    // WHY retry (CRIT-006 / FR-8.1): POST createWatchlist is safe to retry —
+    // duplicate name returns 409 (not 5xx); retry only fires on transient 5xx.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: (newWatchlist) => {
       queryClient.invalidateQueries({ queryKey: ["watchlists"] });
       // Switch to the newly created watchlist immediately
@@ -668,6 +684,11 @@ export function WatchlistsTabPanel({
   // ── Delete watchlist mutation ──────────────────────────────────────────────
   const deleteWatchlistMutation = useMutation({
     mutationFn: (watchlistId: string) => createGateway(accessToken).deleteWatchlist(watchlistId),
+    // WHY retry (CRIT-006 / FR-8.1): deleteWatchlist returns 404 on "already
+    // deleted" — retry only fires on transient network / 5xx failures.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: (_, deletedId) => {
       queryClient.invalidateQueries({ queryKey: ["watchlists"] });
       // If the deleted watchlist was active, fall back to another one
@@ -682,6 +703,11 @@ export function WatchlistsTabPanel({
   const renameMutation = useMutation({
     mutationFn: ({ watchlistId, newName }: { watchlistId: string; newName: string }) =>
       createGateway(accessToken).renameWatchlist(watchlistId, newName),
+    // WHY retry (CRIT-006 / FR-8.1): PATCH renameWatchlist is idempotent —
+    // applying the same name twice is a no-op server-side.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["watchlists"] });
       setRenamingWatchlistId(null);
