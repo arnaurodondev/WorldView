@@ -103,12 +103,50 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
   const [selectedNode, setSelectedNode] = useState<SelectedNodeInfo | null>(null);
 
   // ── Entity graph query ──────────────────────────────────────────────────────
-  const { data: graphData, dataUpdatedAt: graphUpdatedAt } = useQuery({
+  // T-D-01 BUG 2 (depth=3 504 timeout): the backend AGE Cypher traversal at
+  // depth=3 routinely exceeds the gateway's 5s budget and surfaces as a generic
+  // error.  We enforce a 3s client-side abort, tag the error with a stable
+  // identifier ("GRAPH_TIMEOUT"), and render an inline fallback below so the
+  // rest of the Intelligence tab keeps working.  Lower depths rarely time out
+  // but share the same code path — the controller is cheap to create per fetch.
+  const { data: graphData, dataUpdatedAt: graphUpdatedAt, error: graphError } = useQuery({
     queryKey: ["entity-graph", entityId, graphFilters.depth, graphFilters.timeWindow],
-    queryFn: () => createGateway(accessToken).getEntityGraph(entityId, graphFilters.depth, graphFilters.timeWindow),
+    queryFn: async () => {
+      // WHY AbortController per queryFn invocation: TanStack Query also passes a
+      // signal we could reuse, but creating a dedicated one keeps the timeout
+      // intent explicit and lets us tag the error before it bubbles up.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3000);
+      try {
+        return await createGateway(accessToken).getEntityGraph(
+          entityId,
+          graphFilters.depth,
+          graphFilters.timeWindow,
+          controller.signal,
+        );
+      } catch (err) {
+        // WHY tag on AbortError: fetch() throws DOMException("AbortError") when
+        // the signal fires.  We rewrap so the consumer can switch on a stable
+        // string instead of brittle `instanceof DOMException` checks.
+        if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
+          const e = new Error("GRAPH_TIMEOUT");
+          e.name = "GraphTimeoutError";
+          throw e;
+        }
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
     enabled: !!accessToken && !!entityId,
     staleTime: 10 * 60_000,
+    // WHY retry:false on timeout: the timeout will just fire again — retrying
+    // wastes user time and stacks 3 × 3s = 9s before the user sees feedback.
+    retry: (failureCount, error) =>
+      !(error instanceof Error && error.message === "GRAPH_TIMEOUT") && failureCount < 2,
   });
+  // Convenience flag for the inline fallback render below.
+  const graphTimedOut = graphError instanceof Error && graphError.message === "GRAPH_TIMEOUT";
 
   // ── Dynamic entity types ────────────────────────────────────────────────────
   const availableEntityTypes = useMemo<string[]>(() => {
@@ -214,7 +252,23 @@ export function IntelligenceTab({ entityId }: IntelligenceTabProps) {
           )}
 
           {/* Graph canvas */}
-          {filteredGraphData ? (
+          {/* T-D-01 BUG 2: inline timeout fallback.  When the depth=3 query
+              aborts at 3s we render a self-contained message instead of an
+              error boundary so the rest of the Intelligence tab (contradictions,
+              brief, etc.) keeps rendering normally. */}
+          {graphTimedOut ? (
+            <div className="flex h-[460px] flex-col items-center justify-center gap-2 rounded-[2px] border border-warning/40 bg-warning/5 px-4 text-center">
+              <p className="text-[11px] text-warning">
+                Graph too large at depth {graphFilters.depth} — try depth 2.
+              </p>
+              {graphFilters.depth > 2 && (
+                <button
+                  onClick={() => setGraphFilters({ ...graphFilters, depth: 2 })}
+                  className="rounded-[2px] border border-warning/40 px-3 py-1 text-[10px] text-warning hover:bg-warning/10"
+                >Switch to depth 2</button>
+              )}
+            </div>
+          ) : filteredGraphData ? (
             <>
               {filteredGraphData.nodes.length === 0 ? (
                 <div className="flex h-[460px] items-center justify-center rounded-[2px] border border-border/40 bg-card/30">

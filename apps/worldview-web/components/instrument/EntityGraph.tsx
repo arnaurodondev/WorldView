@@ -175,7 +175,18 @@ export function EntityGraph({ data, centerEntityId, onNodeClick }: EntityGraphPr
           to #09090B; the Tailwind utility keeps a single source of truth. */}
       <div
         ref={containerRef}
-        className="relative h-[460px] overflow-hidden rounded-[2px] border border-border/40 bg-background"
+        // WHY bg-background (was inline #0A0E14): the retired Bloomberg Dark
+        // background hex; the Terminal Dark `--background` token now resolves
+        // to #09090B and the graph wrapper inherits the canonical app surface
+        // color via the Tailwind utility — no inline hex required on the div.
+        // T-D-01 BUG 1 (black void below graph): added `h-full w-full` alongside
+        // the legacy `min-h-[460px]` fallback. Previously this div was fixed at
+        // `h-[460px]` regardless of its column, so the sigma canvas was painted
+        // 460px tall while the grid cell stretched taller — the gap below the
+        // canvas was the column background bleeding through as a black void.
+        // `h-full` lets the wrapper expand to fill the column; `min-h-[460px]`
+        // preserves the old minimum height for narrow layouts.
+        className="relative h-full w-full min-h-[460px] overflow-hidden rounded-[2px] border border-border/40 bg-background"
       >
         <SigmaContainer
           className="h-full w-full"

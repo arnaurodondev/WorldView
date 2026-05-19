@@ -44,6 +44,12 @@ export function createKnowledgeGraphApi(t: string | undefined) {
       // S9 may ignore unknown params gracefully — the query is additive and never breaks
       // the response shape. "all" is the default (no param sent).
       timeWindow = "all",
+      // WHY signal param (T-D-01 BUG 2): callers can pass an AbortSignal so they
+      // can enforce a client-side timeout (e.g. depth=3 backend queries often
+      // exceed 5s — we abort at 3s and surface a friendly fallback instead of
+      // showing a generic 504 / spinner-of-death).  The fetch() call propagates
+      // the signal so the underlying HTTP connection is torn down on abort.
+      signal?: AbortSignal,
     ): Promise<EntityGraph> {
       // WHY separate limits per depth level:
       // S7 returns 1-hop direct relations only (no true multi-hop traverse). The
@@ -92,9 +98,12 @@ export function createKnowledgeGraphApi(t: string | undefined) {
         params.set("time_window", timeWindow);
       }
 
+      // T-D-01 BUG 2: forward the optional AbortSignal so callers can enforce a
+      // 3s client-side timeout for depth=3 graphs.  apiFetch spreads the options
+      // into fetch(), which natively understands `signal`.
       return apiFetch<EntityGraph>(
         `/v1/entities/${encodeURIComponent(entityId)}/graph?${params.toString()}`,
-        { token: t },
+        { token: t, signal },
       );
     },
 
