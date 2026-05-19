@@ -278,7 +278,8 @@ export function WatchlistMoversWidget() {
                 aria-selected={isSelected}
                 onClick={() => setSelectedSector(pill.value)}
                 className={cn(
-                  "shrink-0 rounded border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors",
+                  // WHY rounded-[2px]: design system mandates 2px radius; bare `rounded` = 4px default
+                  "shrink-0 rounded-[2px] border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider transition-colors",
                   isSelected
                     ? "bg-primary text-primary-foreground"
                     : "bg-muted text-muted-foreground hover:bg-muted/70",
