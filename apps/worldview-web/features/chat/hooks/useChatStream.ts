@@ -43,6 +43,7 @@ import {
 } from "react";
 
 import { parseInput } from "@/lib/chat/slash-commands";
+import { parseSSELine } from "@/lib/sse-parser";
 import type { Message } from "@/types/api";
 import type {
   LogEntry,
@@ -314,6 +315,15 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
         setActiveThreadId(threadId);
       }
 
+      // FR-5.3 (LOW-006): isStreamingRef.current = true is set HERE, before the
+      // first setLocalMessages call, to close the race window between the React
+      // re-render triggered by setStreaming and the ref update. Any concurrent
+      // send() call that fires after setLocalMessages but before the ref was
+      // previously set would see isStreamingRef.current === false and pass the
+      // guard — dispatching a second overlapping stream. Setting the ref first
+      // makes the guard race-free regardless of React batching semantics.
+      isStreamingRef.current = true;
+
       // Optimistically append the user bubble before the request fires —
       // perceived-latency win.
       const userMessage: Message = {
@@ -329,7 +339,6 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
 
       const controller = new AbortController();
       abortRef.current = controller;
-      isStreamingRef.current = true;
       setStreaming({ text: "", active: true });
 
       // `reader` declared outside try so the finally block can cancel it
@@ -416,14 +425,21 @@ export function useChatStream(args: UseChatStreamArgs): UseChatStreamResult {
           buffer = lines.pop() ?? "";
 
           for (const line of lines) {
-            // Capture the event type for the next data line.
-            if (line.startsWith("event: ")) {
-              pendingEventName = line.slice(7).trim();
+            // FR-5.6 (MED-013): use parseSSELine for field extraction — single
+            // canonical parser (lib/sse-parser.ts) instead of inline slicing.
+            // The stateful pendingEventName accumulation stays here because it
+            // is tightly coupled to the streaming state machine.
+            const parsed = parseSSELine(line);
+            if (!parsed) continue;
+
+            // event: line — update pending event name and move to next line.
+            if (parsed.type !== "message") {
+              pendingEventName = parsed.type;
               continue;
             }
 
-            if (!line.startsWith("data: ")) continue;
-            const payload = line.slice(6);
+            // data: line — extract payload and consume the pending event name.
+            const payload = parsed.data;
 
             // Consume and reset the pending event name for this data line.
             const eventName = pendingEventName;

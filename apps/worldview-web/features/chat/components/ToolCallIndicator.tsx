@@ -87,12 +87,12 @@ export function ToolCallIndicator({ tools }: ToolCallIndicatorProps) {
       {running.map((t) => (
         <div key={t.name} className="flex items-center gap-2">
           {/*
-           * WHY Loader2 + animate-spin:
-           * - Loader2 is the standard lucide-react loading icon (circular arrow).
-           * - animate-spin is a Tailwind utility (rotates 360° over 1s linear).
-           * - shrink-0 prevents the icon from being squashed if the label is long.
+           * FR-5.2 (HIGH-015): animate-spin removed per Bloomberg terminal mandate.
+           * Static Loader2 icon communicates "in progress" without violating the
+           * no-animation rule on interactive surfaces. The icon shape alone (circular
+           * partial arc) is a universally understood loading indicator.
            */}
-          <Loader2 className="h-3 w-3 animate-spin shrink-0" aria-hidden="true" />
+          <Loader2 className="h-3 w-3 shrink-0" aria-hidden="true" />
           <span>{t.label}</span>
         </div>
       ))}
