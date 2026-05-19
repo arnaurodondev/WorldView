@@ -40,6 +40,9 @@ import dynamic from "next/dynamic";
 import { useQuery } from "@tanstack/react-query";
 import { useApiClient } from "@/lib/api-client";
 import { useSelectedEntity } from "@/contexts/SelectedEntityContext";
+// WHY useGraphDepth: depth state lifted to GraphDepthContext so EntitySidebar
+// can use the same depth in its query key — ensures cache hits and data consistency.
+import { useGraphDepth } from "@/contexts/GraphDepthContext";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -77,14 +80,16 @@ export function GraphPanel({ entityId }: GraphPanelProps) {
   // Read the cross-panel selection state — node clicks update this
   const { setSelectedEntityId, selectedEntityId } = useSelectedEntity();
 
-  // ── Local state ──────────────────────────────────────────────────────────
-
-  // WHY depth 1-5 (default 2):
+  // WHY useGraphDepth (not local useState):
+  // Depth is now shared with EntitySidebar via GraphDepthContext so the sidebar's
+  // graph query key matches the depth the analyst has selected. EntitySidebar
+  // reads the same depth to hit the same cache entry — no duplicate network fetch.
+  //
   // depth=1 → limit=15 (compact — shows immediate neighbours only)
   // depth=2 → limit=40 (default — good balance of context vs clutter)
   // depth=3 → limit=80 (expanded — for deeply-connected entities)
   // depth=4 → limit=120, depth=5 → limit=200 (dense exploration mode)
-  const [depth, setDepth] = useState(2);
+  const { depth, setDepth } = useGraphDepth();
 
   // WHY confidence_breakdown toggle (not always on):
   // Fetching confidence breakdown adds ~50ms to the graph response (extra

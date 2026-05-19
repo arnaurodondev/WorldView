@@ -49,6 +49,10 @@ import {
 // These are the correct v4.10.0 export names.
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { SelectedEntityProvider } from "@/contexts/SelectedEntityContext";
+// WHY GraphDepthProvider here: GraphPanel (col-1) and EntitySidebar (col-3) are
+// siblings — both need the same depth so EntitySidebar's query key matches the
+// cache primed by GraphPanel. Context is simpler than lifting state to page.tsx.
+import { GraphDepthProvider } from "@/contexts/GraphDepthContext";
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -79,7 +83,20 @@ export function IntelligenceLayout({
     // share the same selectedEntityId / anchorEntityId without prop drilling.
     // WHY here (not in the page): the provider must wrap all three panels
     // simultaneously so they can all react to the same selection event.
-    <SelectedEntityProvider anchorEntityId={entityId}>
+    //
+    // WHY key={entityId} on SelectedEntityProvider (FR-3.1 CRIT-008):
+    // When navigating /intelligence/A → /intelligence/B, React may keep the
+    // component tree mounted if it shares a layout. key={entityId} forces a
+    // full unmount+remount of the provider subtree whenever entityId changes,
+    // resetting selectedEntityId so stale A-entity state never leaks into B.
+    // The provider's internal useEffect also resets on pathname change as a
+    // belt-and-suspenders safeguard; key= is the primary fix.
+    <SelectedEntityProvider key={entityId} anchorEntityId={entityId}>
+      {/* GraphDepthProvider wraps both SelectedEntityProvider children so that
+          GraphPanel (writes depth) and EntitySidebar (reads depth) share state.
+          WHY nested inside SelectedEntityProvider: both contexts are needed by
+          the same panels; nesting order doesn't matter since they're independent. */}
+      <GraphDepthProvider>
       {/* ── Desktop layout (≥1280px) ─────────────────────────────────────── */}
       {/* WHY hidden xl:flex: below 1280px we render the mobile tab layout instead.
           xl = 1280px breakpoint in Tailwind. Three panels + a chat row below. */}
@@ -211,6 +228,7 @@ export function IntelligenceLayout({
         </Tabs>
       </div>
 
+      </GraphDepthProvider>
     </SelectedEntityProvider>
   );
 }
