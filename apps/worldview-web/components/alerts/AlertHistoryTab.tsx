@@ -1,5 +1,5 @@
 /**
- * components/alerts/AlertHistoryTab.tsx — paginated alert history table.
+ * components/alerts/AlertHistoryTab.tsx — alert history table with infinite scroll.
  *
  * WHY THIS EXISTS (PLAN-0051 Wave D T-D-4-04):
  * The History tab needs server-side filtering (severity, date range, entity,
@@ -10,18 +10,25 @@
  * BACKEND ENDPOINT: GET /v1/alerts/history (parallel S10 agent owns the
  * implementation; gateway wrapper is `getAlertHistory` in lib/gateway.ts).
  *
- * WHY 30s staleTime (cited in queryFn): alerts arrive every few minutes; a
- * 30-second cache prevents the list from re-fetching on every prop change
- * (e.g. opening / closing the AlertDetailSheet) but still feels live —
- * users will see new alerts within half a minute of the next render.
+ * WHY useInfiniteQuery (MED-021):
+ * Alert history can grow to thousands of rows. The previous useQuery approach
+ * expanded `limit` by PAGE_SIZE on each "Load more" click — this re-fetched
+ * the entire dataset from offset=0 every time (wasteful). useInfiniteQuery
+ * fetches only the next PAGE_SIZE rows by passing the correct offset, then
+ * concatenates pages in memory. The IntersectionObserver at the list bottom
+ * auto-triggers the next page when the user scrolls there, eliminating the
+ * manual "Load more" button click.
+ *
+ * WHY 30s staleTime: alerts arrive every few minutes; a 30s cache prevents
+ * the table from flickering on every prop change but still feels live.
  */
 
 "use client";
-// WHY "use client": uses useState (filters), useQuery (paged data), and
-// useDebounce (entity-filter input).
+// WHY "use client": uses useState (filters), useInfiniteQuery (paged data),
+// useDebounce (entity-filter input), and useEffect (IntersectionObserver).
 
-import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useMemo, useEffect, useRef } from "react";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -29,7 +36,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { cn } from "@/lib/utils";
 import { DataTable } from "@/components/ui/data-table";
 import { alertHistoryColumns } from "./alert-history-columns";
-import type { AlertHistoryParams, AlertSeverity } from "@/types/api";
+import type { AlertHistoryParams, AlertSeverity, AlertsResponse } from "@/types/api";
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -39,19 +46,69 @@ import type { AlertHistoryParams, AlertSeverity } from "@/types/api";
  */
 const SEVERITY_OPTIONS: Array<AlertSeverity | "ALL"> = ["ALL", "LOW", "MEDIUM", "HIGH", "CRITICAL"];
 
-/** Page size — default to 50 rows per page; "Load more" appends another 50. */
+/**
+ * PAGE_SIZE — rows fetched per page.
+ * WHY 50: gives enough context for pattern scanning without over-fetching.
+ * The IntersectionObserver triggers the next page when the sentinel div
+ * at the bottom of the list enters the viewport.
+ */
 const PAGE_SIZE = 50;
 
-// ── Hook: useAlertHistory ──────────────────────────────────────────────────
+// ── Hook: useAlertHistoryInfinite ──────────────────────────────────────────
 
 /**
- * useAlertHistory — typed wrapper around the /v1/alerts/history endpoint.
+ * useAlertHistoryInfinite — offset-based infinite query for alert history.
  *
- * WHY 30s staleTime: alerts arrive every few minutes; a 30s cache prevents
- * the table from flickering on every prop change but still feels live.
+ * WHY useInfiniteQuery (not useQuery + expanding limit):
+ * The previous approach sent `limit = PAGE_SIZE * pageCount` on each "Load
+ * more" click, which re-fetched all previously seen rows every time the user
+ * wanted more. useInfiniteQuery keeps each PAGE_SIZE slice in its own cache
+ * entry and only fetches the delta (next 50 rows) on scroll.
  *
- * WHY a hook (not inline useQuery): exporting it lets the SnoozedTab and
- * AcknowledgedTab share the exact same caching key + transform layer.
+ * WHY offset as pageParam:
+ * The /v1/alerts/history endpoint uses standard offset+limit pagination (not
+ * a cursor). `pageParam` starts at 0; getNextPageParam increments by PAGE_SIZE
+ * until the last page returns fewer than PAGE_SIZE rows, signalling exhaustion.
+ */
+export function useAlertHistoryInfinite(baseFilters: Omit<AlertHistoryParams, "limit" | "offset">) {
+  const { accessToken } = useAuth();
+  return useInfiniteQuery<AlertsResponse>({
+    // WHY include baseFilters in key: filter changes bust the cache so we start
+    // fetching from page 1 again rather than showing stale filtered pages.
+    queryKey: ["alerts-history-infinite", baseFilters],
+    queryFn: ({ pageParam }: { pageParam: number }) => {
+      const filters: AlertHistoryParams = {
+        ...baseFilters,
+        limit: PAGE_SIZE,
+        // WHY use pageParam directly (not cast): initialPageParam is typed as
+        // `number`, so TanStack infers pageParam as `number` here. No cast needed.
+        offset: pageParam,
+      };
+      return createGateway(accessToken).getAlertHistory(filters);
+    },
+    // WHY 0 as initialPageParam: offset starts at the first row.
+    initialPageParam: 0,
+    getNextPageParam: (lastPage: AlertsResponse, allPages: AlertsResponse[]) => {
+      // WHY prefer has_more: the server signals exhaustion explicitly.
+      // Fallback: if the last page returned a full PAGE_SIZE we assume there
+      // are more rows; once it returns fewer we stop.
+      const serverSaysMore = lastPage.has_more ?? (lastPage.alerts.length === PAGE_SIZE);
+      return serverSaysMore ? allPages.length * PAGE_SIZE : undefined;
+    },
+    enabled: Boolean(accessToken),
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * useAlertHistory — legacy typed wrapper kept for backward compatibility.
+ * New code should use useAlertHistoryInfinite instead.
+ *
+ * WHY keep this: RuleManagerDialog and other consumers import this hook by
+ * name. Removing it would break those callers before they migrate. It can be
+ * deleted once all call sites have migrated to useAlertHistoryInfinite.
+ *
+ * @deprecated Use useAlertHistoryInfinite for new consumers.
  */
 export function useAlertHistory(filters: AlertHistoryParams) {
   const { accessToken } = useAuth();
@@ -80,46 +137,85 @@ export function AlertHistoryTab({ fixedStatus }: AlertHistoryTabProps = {}) {
   const [entitySearch, setEntitySearch] = useState<string>("");
   const debouncedEntity = useDebounce(entitySearch, 300);
 
-  // ── Pagination state ──────────────────────────────────────────────────
-  const [pageCount, setPageCount] = useState(1); // # of "Load more" clicks +1
-
-  // ── Derive query params ───────────────────────────────────────────────
-  const params = useMemo<AlertHistoryParams>(() => {
-    const p: AlertHistoryParams = {
-      limit: PAGE_SIZE * pageCount,
-      offset: 0,
-    };
+  // ── Derive base filter params (without pagination) ────────────────────
+  // WHY omit limit/offset: useAlertHistoryInfinite injects its own pagination
+  // params per page. Including them here would create a stale params object
+  // that overrides the per-page offset inside the queryFn.
+  const baseFilters = useMemo<Omit<AlertHistoryParams, "limit" | "offset">>(() => {
+    const p: Omit<AlertHistoryParams, "limit" | "offset"> = {};
     if (fixedStatus) p.status = fixedStatus;
     if (severity !== "ALL") p.severity = severity;
     if (from) p.from = new Date(`${from}T00:00:00Z`).toISOString();
     if (to) p.to = new Date(`${to}T23:59:59Z`).toISOString();
     if (debouncedEntity.trim()) p.entity_id = debouncedEntity.trim();
     return p;
-  }, [fixedStatus, severity, from, to, debouncedEntity, pageCount]);
+  }, [fixedStatus, severity, from, to, debouncedEntity]);
 
-  const { data, isLoading, isError, refetch } = useAlertHistory(params);
+  // ── Infinite query ────────────────────────────────────────────────────
+  // WHY useAlertHistoryInfinite (not useQuery + expanding limit):
+  // See the hook JSDoc above. Short version: this only fetches the delta
+  // (next 50 rows) on scroll rather than re-fetching all previously seen rows.
+  const {
+    data,
+    isLoading,
+    isError,
+    refetch,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useAlertHistoryInfinite(baseFilters);
 
-  const rows = data?.alerts ?? [];
-  const total = data?.total ?? 0;
-  // Are there more rows on the server we haven't loaded yet?
-  // WHY both `has_more` and a row-count fallback: QA-iter1 C-3 — backend
-  // ``total`` is now the universe size, so ``rows.length < total`` is
-  // correct. We still prefer the server-provided flag when present so any
-  // future tweak to pagination semantics doesn't drift between server and
-  // client (e.g. cursor-based pagination later).
-  const hasMore = data?.has_more ?? rows.length < total;
+  // Flatten all pages into a single array for the DataTable.
+  // WHY flatMap (not concat/reduce): flatMap is the idiomatic TanStack pattern
+  // for infinite queries and handles the empty initial state (undefined data)
+  // cleanly via the `?? []` fallback.
+  const rows = useMemo(
+    () => data?.pages.flatMap((p: AlertsResponse) => p.alerts) ?? [],
+    [data],
+  );
+
+  // ── IntersectionObserver — auto-fetch next page on scroll ─────────────
+  // WHY IntersectionObserver (not a "Load more" button):
+  // MED-021 requirement. The sentinel div at the bottom of the list enters
+  // the viewport once the user scrolls past the last visible row. At that
+  // point we call fetchNextPage() so the next 50 rows load automatically.
+  // threshold:0.5 means the sentinel must be at least half-visible before
+  // the callback fires — avoids a spurious fetch when the list is very short
+  // and the sentinel is visible on initial render.
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const sentinel = bottomRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        // WHY guard on !isFetchingNextPage: prevents duplicate parallel fetches
+        // if the sentinel stays in view while a fetch is in progress.
+        if (entry.isIntersecting && hasNextPage && !isFetchingNextPage) {
+          void fetchNextPage();
+        }
+      },
+      { threshold: 0.5 },
+    );
+
+    observer.observe(sentinel);
+    // WHY disconnect in cleanup: prevents the observer from firing after the
+    // component unmounts (e.g. when the user switches to the Active tab) which
+    // would call fetchNextPage on a now-stale query.
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // ── Handlers ──────────────────────────────────────────────────────────
 
   /**
-   * handleResetPagination — when filters change we want to reset to page 1.
-   * WHY only on filter change (not every state update): pageCount is part
-   * of params; we can't reset it inside the same setState pass without
-   * losing the filter that triggered the change.
+   * handleSeverityChange — severity filter also resets to page 1.
+   * WHY: when filters change the query key changes, causing useInfiniteQuery
+   * to automatically reset its page cursor to page 0. We don't need to
+   * manually track pageCount anymore — filter state change is the trigger.
    */
   function handleSeverityChange(next: AlertSeverity | "ALL") {
     setSeverity(next);
-    setPageCount(1);
   }
 
   return (
@@ -152,10 +248,7 @@ export function AlertHistoryTab({ fixedStatus }: AlertHistoryTabProps = {}) {
           <input
             type="date"
             value={from}
-            onChange={(e) => {
-              setFrom(e.target.value);
-              setPageCount(1);
-            }}
+            onChange={(e) => setFrom(e.target.value)}
             className="h-6 rounded-[2px] border border-border bg-background px-1 text-[11px] text-foreground"
             aria-label="From date"
           />
@@ -165,10 +258,7 @@ export function AlertHistoryTab({ fixedStatus }: AlertHistoryTabProps = {}) {
           <input
             type="date"
             value={to}
-            onChange={(e) => {
-              setTo(e.target.value);
-              setPageCount(1);
-            }}
+            onChange={(e) => setTo(e.target.value)}
             className="h-6 rounded-[2px] border border-border bg-background px-1 text-[11px] text-foreground"
             aria-label="To date"
           />
@@ -178,10 +268,7 @@ export function AlertHistoryTab({ fixedStatus }: AlertHistoryTabProps = {}) {
         <input
           type="text"
           value={entitySearch}
-          onChange={(e) => {
-            setEntitySearch(e.target.value);
-            setPageCount(1);
-          }}
+          onChange={(e) => setEntitySearch(e.target.value)}
           placeholder="Entity id…"
           className="h-6 rounded-[2px] border border-border bg-background px-2 text-[11px] text-foreground placeholder:text-muted-foreground"
           aria-label="Entity filter"
@@ -222,16 +309,25 @@ export function AlertHistoryTab({ fixedStatus }: AlertHistoryTabProps = {}) {
             }
           />
 
-          {/* Load-more button — only visible when loaded and server has more rows */}
-          {!isLoading && hasMore && (
-            <div className="flex justify-center pt-2">
-              <button
-                type="button"
-                onClick={() => setPageCount((p) => p + 1)}
-                className="rounded-[2px] border border-border/40 bg-muted/20 px-3 py-1 text-[11px] text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-              >
-                Load more ({total - rows.length} remaining)
-              </button>
+          {/* ── Infinite scroll sentinel ─────────────────────────────── */}
+          {/* WHY h-px (not h-0): a zero-height element may not be detected by
+              IntersectionObserver in all browsers. 1px guarantees it has a
+              measurable bounding rect even when adjacent content is empty. */}
+          <div ref={bottomRef} className="h-px" aria-hidden="true" />
+
+          {/* Loading indicator for subsequent pages (not the initial skeleton) */}
+          {isFetchingNextPage && (
+            <div className="flex justify-center py-2">
+              <span className="text-[11px] text-muted-foreground">Loading more…</span>
+            </div>
+          )}
+
+          {/* End-of-list message — only shown after all pages are loaded */}
+          {!hasNextPage && rows.length > 0 && !isLoading && (
+            <div className="flex justify-center py-2">
+              <span className="text-[10px] text-muted-foreground/60">
+                All {rows.length} alert{rows.length === 1 ? "" : "s"} loaded
+              </span>
             </div>
           )}
         </>
