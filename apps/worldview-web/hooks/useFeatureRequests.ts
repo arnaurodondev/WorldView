@@ -64,6 +64,11 @@ export function useVoteFeature() {
 
   return useMutation({
     mutationFn: (id: string) => createGateway(accessToken).voteFeature(id),
+    // WHY retry (CRIT-006 / FR-8.1): voteFeature is an idempotent upvote —
+    // second click is a no-op server-side (documented in gateway method).
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onMutate: async (id: string) => {
       // Cancel in-flight refetches so they don't overwrite our optimistic state.
       await queryClient.cancelQueries({ queryKey: ["feature-requests"] });

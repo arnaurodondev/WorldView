@@ -78,6 +78,12 @@ export function CreateWatchlistDialog({ open, onOpenChange, onCreated }: Props) 
 
   const createMut = useMutation({
     mutationFn: (n: string) => gateway.createWatchlist(n),
+    // WHY retry (CRIT-006 / FR-8.1): POST createWatchlist is safe to retry —
+    // duplicate name gets a 409 (not 5xx); retry only fires on transient
+    // network / 5xx failures.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: (wl) => {
       // Invalidate the list so the hub refreshes.
       void qc.invalidateQueries({ queryKey: qk.watchlists.list() });

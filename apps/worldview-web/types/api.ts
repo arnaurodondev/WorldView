@@ -2098,3 +2098,46 @@ export interface ConcentrationResponse {
   top_positions: TopPositionItem[];
   prices_stale: boolean;
 }
+
+// ── Notification Preferences (MED-022 / FR-6.3) ─────────────────────────────
+
+/**
+ * NotificationPreferences — per-user notification toggle state.
+ *
+ * Returned by GET /v1/users/me/notification-preferences and PATCH of the same
+ * route (upsert semantics — the backend creates the row on first PATCH).
+ *
+ * All alert flags default to `true` server-side on first creation so new users
+ * opt in automatically. The PATCH payload only needs to send the fields to
+ * change — omitted fields are preserved (partial update).
+ *
+ * NOTE: the trailing `updated_at` is an ISO-8601 UTC string; the frontend
+ * displays it as "Last updated: <relative time>" in the settings panel.
+ */
+export interface NotificationPreferences {
+  /** Price alert notifications — e.g. "AAPL crossed $200 threshold". */
+  price_alerts: boolean;
+  /** News alert notifications — breaking headlines for watchlist entities. */
+  news_alerts: boolean;
+  /** Movers alert notifications — top gainers / losers above a threshold. */
+  movers_alerts: boolean;
+  /** Contradiction alert notifications — KG-detected conflicting signals. */
+  contradiction_alerts: boolean;
+  /** UTC ISO-8601 timestamp of the last PATCH. Null when never updated. */
+  updated_at: string | null;
+}
+
+/**
+ * UpdateNotificationPreferencesPayload — partial PATCH body.
+ *
+ * Only fields that need to change are required — the backend merges them
+ * into the existing row (upsert). Sending an empty object {} is valid and
+ * returns the current preferences unchanged (useful for a "GET via PATCH"
+ * fallback pattern).
+ */
+export interface UpdateNotificationPreferencesPayload {
+  price_alerts?: boolean;
+  news_alerts?: boolean;
+  movers_alerts?: boolean;
+  contradiction_alerts?: boolean;
+}

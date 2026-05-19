@@ -104,6 +104,11 @@ export function useInitiateBrokerageConnection() {
     // WHY no onSuccess invalidation: the connection is still pending; the list
     // doesn't meaningfully change until the user completes the OAuth flow.
     // ConnectBrokerageModal handles the redirect after the mutate succeeds.
+    // WHY retry (CRIT-006 / FR-8.1): initiateBrokerageConnection is safe to retry
+    // — a duplicate pending connection from a retry is benign (same portfolio).
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
   });
 }
 
@@ -122,6 +127,12 @@ export function useDisconnectBrokerageConnection() {
   return useMutation({
     mutationFn: (connectionId: string) =>
       createGateway(accessToken).disconnectBrokerageConnection(connectionId),
+    // WHY retry (CRIT-006 / FR-8.1): disconnectBrokerageConnection is safe to retry
+    // — S1 returns 404 on "already disconnected" (not 5xx); retry only fires on
+    // transient network / 5xx failures.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: () => {
       // WHY invalidate with partial key: queryClient.invalidateQueries with a
       // partial key prefix invalidates ALL queries whose key starts with
@@ -150,6 +161,11 @@ export function useTriggerBrokerageSync() {
   return useMutation({
     mutationFn: (connectionId: string) =>
       createGateway(accessToken).triggerBrokerageSync(connectionId),
+    // WHY retry (CRIT-006 / FR-8.1): POST /v1/brokerage-connections/{id}/sync
+    // is 202-async and retry-safe by design (W1-Backend audit).
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: () => {
       // WHY setTimeout: give the async sync worker ~3s to pick up the task
       // before we refetch, so the user sees an updated status immediately.

@@ -465,6 +465,12 @@ function useFeatureSubmit() {
         description: payload.description,
         category: payload.category,
       }),
+    // WHY retry (CRIT-006 / FR-8.1): postFeatureRequest creates a new proposal;
+    // retry on transient 5xx is safe — a duplicate feature request from a retry
+    // is preferable to losing the user's input entirely on a network blip.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onError: (err) => {
       // Surface as plain Error — the formatter handles GatewayError.
       if (err instanceof GatewayError) {
