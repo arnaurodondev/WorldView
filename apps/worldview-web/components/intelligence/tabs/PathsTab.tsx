@@ -215,7 +215,7 @@ export function PathsTab({ entityId, selectedEntityId }: PathsTabProps) {
   // The "Filtered to:" banner shows the selected entity's name, not its UUID.
   // We read from the same queryKey as RelationsTab/EvidenceTab — guaranteed
   // cache hit (no extra network fetch) when GraphPanel is mounted. FR-3.2 MED-009.
-  const { data: graphData } = useQuery<EntityGraph>({
+  const { data: graphData } = useQuery<EntityGraph | null>({
     queryKey: ["intelligence-graph", entityId, 2, false],
     queryFn: () => gw.getEntityGraph(entityId, 2, "all"),
     staleTime: 60_000,

@@ -163,17 +163,19 @@ export function createInstrumentsApi(t: string | undefined) {
               apiFetch<Quote>(`/v1/quotes/${encodeURIComponent(id)}`, { token: t }),
             ),
           );
-          const quotes: BatchQuoteResponse = {};
+          // WHY Record<string, Quote> accumulator: BatchQuoteResponse wraps quotes in
+          // a { quotes: Record<string, Quote> } envelope — build the inner map first.
+          const quotesMap: Record<string, Quote> = {};
           settled.forEach((result, idx) => {
             if (result.status === "fulfilled") {
               // WHY index into ids: the settled array preserves the same order as ids.
               const id = ids[idx];
               if (id !== undefined) {
-                quotes[id] = result.value;
+                quotesMap[id] = result.value;
               }
             }
           });
-          return quotes;
+          return { quotes: quotesMap };
         }
         throw err;
       }

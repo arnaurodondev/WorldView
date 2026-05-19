@@ -28,7 +28,7 @@
 // useDebounce (entity-filter input), and useEffect (IntersectionObserver).
 
 import { useState, useMemo, useEffect, useRef } from "react";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, type InfiniteData } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
@@ -72,11 +72,13 @@ const PAGE_SIZE = 50;
  */
 export function useAlertHistoryInfinite(baseFilters: Omit<AlertHistoryParams, "limit" | "offset">) {
   const { accessToken } = useAuth();
-  return useInfiniteQuery<AlertsResponse>({
+  // WHY five generics: the 5th type param pins pageParam to `number` so
+  // TanStack Query doesn't infer it as `unknown` (TQ v5 breaking change).
+  return useInfiniteQuery<AlertsResponse, Error, InfiniteData<AlertsResponse>, readonly unknown[], number>({
     // WHY include baseFilters in key: filter changes bust the cache so we start
     // fetching from page 1 again rather than showing stale filtered pages.
     queryKey: ["alerts-history-infinite", baseFilters],
-    queryFn: ({ pageParam }: { pageParam: number }) => {
+    queryFn: ({ pageParam }) => {
       const filters: AlertHistoryParams = {
         ...baseFilters,
         limit: PAGE_SIZE,

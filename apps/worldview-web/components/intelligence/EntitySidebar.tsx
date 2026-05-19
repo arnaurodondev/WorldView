@@ -162,7 +162,7 @@ export function EntitySidebar({ entityId }: EntitySidebarProps) {
   // GraphPanel writes on slider change) so the key matches the cache primed by
   // GraphPanel. Previously hardcoded to 2 — this was a cache miss whenever the
   // analyst used depth 3+ (FR-3.3 fix).
-  const { data: graphData } = useQuery<EntityGraph>({
+  const { data: graphData } = useQuery<EntityGraph | null>({
     queryKey: ["intelligence-graph", displayEntityId, graphDepth, false],
     queryFn: () => gw.getEntityGraph(displayEntityId, graphDepth as 1 | 2 | 3 | 4 | 5, "all"),
     // WHY staleTime 60_000: matches GraphPanel's staleTime so both components

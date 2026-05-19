@@ -202,9 +202,9 @@ export default function SettingsNotificationsPage() {
                   // keys are a strict subset of NotificationPreferences keys, so
                   // this access is always valid. The cast avoids an index-type error.
                   checked={
-                    resolvedPrefs[
-                      row.field as keyof typeof resolvedPrefs
-                    ] ?? true
+                    Boolean(
+                      resolvedPrefs[row.field as keyof typeof resolvedPrefs] ?? true,
+                    )
                   }
                   onCheckedChange={(checked) => {
                     // WHY computed property: generates { price_alerts: true }

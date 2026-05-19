@@ -121,7 +121,7 @@ export function GraphPanel({ entityId }: GraphPanelProps) {
     isLoading: baseLoading,
     isError: baseError,
     refetch: refetchBase,
-  } = useQuery<EntityGraphData>({
+  } = useQuery<EntityGraphData | null>({
     queryKey: ["intelligence-graph", entityId, baseDepth, showConfidenceBreakdown],
     queryFn: () =>
       gw.getEntityGraph(
@@ -143,7 +143,7 @@ export function GraphPanel({ entityId }: GraphPanelProps) {
     data: extData,
     isLoading: extLoading,
     isError: extError,
-  } = useQuery<EntityGraphData>({
+  } = useQuery<EntityGraphData | null>({
     queryKey: ["intelligence-graph", entityId, depth, showConfidenceBreakdown],
     queryFn: () =>
       gw.getEntityGraph(

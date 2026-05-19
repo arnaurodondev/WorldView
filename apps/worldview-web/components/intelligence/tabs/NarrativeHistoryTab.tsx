@@ -177,7 +177,7 @@ export function NarrativeHistoryTab({ entityId, selectedEntityId }: NarrativeHis
   // The "Filtered to:" banner shows the selected entity's name, not its raw UUID.
   // We read from the same query key as RelationsTab/EvidenceTab so this is a
   // cache hit (no extra network fetch) when the graph is already loaded.
-  const { data: graphData } = useQuery<EntityGraph>({
+  const { data: graphData } = useQuery<EntityGraph | null>({
     queryKey: ["intelligence-graph", entityId, 2, false],
     queryFn: () => gw.getEntityGraph(entityId, 2, "all"),
     staleTime: 60_000,

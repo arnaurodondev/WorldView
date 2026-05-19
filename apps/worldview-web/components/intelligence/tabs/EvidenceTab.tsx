@@ -61,7 +61,7 @@ export function EvidenceTab({ entityId, selectedEntityId }: EvidenceTabProps) {
   const gw = useApiClient();
 
   // Read the cached graph for relation context
-  const { data: graphData, isLoading: graphLoading } = useQuery<EntityGraph>({
+  const { data: graphData, isLoading: graphLoading } = useQuery<EntityGraph | null>({
     queryKey: ["intelligence-graph", entityId, 2, false],
     queryFn: () => gw.getEntityGraph(entityId, 2, "all"),
     staleTime: 60_000,
