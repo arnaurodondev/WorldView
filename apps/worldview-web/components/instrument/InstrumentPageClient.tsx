@@ -36,6 +36,7 @@ import { useInstrumentBundle } from "@/components/instrument/hooks/useInstrument
 import { InstrumentHeader } from "@/components/instrument/header/InstrumentHeader";
 import { AiBriefBanner } from "@/components/instrument/brief/AiBriefBanner";
 import { InstrumentTabs } from "@/components/instrument/tabs/InstrumentTabs";
+import { FinancialsTab } from "@/components/instrument/financials/FinancialsTab";
 
 // ── Public props ─────────────────────────────────────────────────────────────
 //
@@ -160,11 +161,14 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
             Quote tab — coming in Wave B
           </div>
         )}
-        {/* Placeholder for Wave C — replaced when Financials tab lands. */}
+        {/* Wave C: Financials tab orchestrator (T-C-03). WHY guard on the
+            bundle's instrument_id: FinancialsTab keys all its fetches off the
+            S9 instrument_id (NOT entityId — the KG entity id can't address
+            /v1/fundamentals/*). Until the page-bundle resolves, no fetches
+            should fire — pass undefined-coerced empty string makes useQuery's
+            enabled flag false. */}
         {activeTab === "financials" && (
-          <div className="flex-1 flex items-center justify-center text-[11px] text-muted-foreground">
-            Financials tab — coming in Wave C
-          </div>
+          <FinancialsTab instrumentId={bundle?.instrument_id ?? ""} />
         )}
         {/* Placeholder for Wave D — replaced when Intelligence tab lands. */}
         {activeTab === "intelligence" && (

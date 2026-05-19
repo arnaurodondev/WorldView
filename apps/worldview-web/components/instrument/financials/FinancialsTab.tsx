@@ -56,9 +56,25 @@ export interface FinancialsTabProps {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function FinancialsTab({ instrumentId }: FinancialsTabProps) {
-  // Single coordinated fetch — see T-A-03 for the underlying query keys.
-  const { metrics, incomeStatement, earnings, analyst, updatedAt, isLoading } =
+  // T-A-03 actual return shape: { fundamentals, snapshot, incomeStatement,
+  // earningsHistory, technicals, shareStats, isLoading }. The hook composes
+  // the six sub-resources behind a single isLoading gate so the tab renders
+  // coherently. IncomeStatementTable and EarningsBarChart are self-fetching
+  // (they call into the same query keys), so we don't need to thread their
+  // data through — TanStack dedupes on the shared keys.
+  const { fundamentals, snapshot, technicals, shareStats } =
     useFinancialsTabData(instrumentId);
+
+  // WHY extract from FundamentalsSectionResponse: useFinancialsTabData's
+  // `technicals` and `shareStats` come back as section envelopes; FlatMetricsGrid
+  // expects the typed inner data shapes. Pull `records[0].data` defensively —
+  // an empty section is rendered as null, MetricCell handles the "—" placeholder.
+  const technicalsData = technicals?.records?.[0]?.data ?? null;
+  const shareStatsData = shareStats?.records?.[0]?.data ?? null;
+  // Splits/dividends are inside fundamentals.splits_dividends per the
+  // /v1/fundamentals/{id} response — keep as null for now; FlatMetricsGrid
+  // gracefully renders "—" in dividend-date cells when null.
+  const dividendsData = null;
 
   return (
     // WHY h-full overflow-hidden on the root: locks the tab height so the LEFT
@@ -72,20 +88,26 @@ export function FinancialsTab({ instrumentId }: FinancialsTabProps) {
       <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
         {/* Block 1: flat key-metrics grid. Always at the top — gives analysts
             the snapshot they need before drilling into multi-year history. */}
-        <FlatMetricsGrid metrics={metrics} isLoading={isLoading} />
-
-        {/* Block 2: full income-statement table.
-            WHY below the grid (not beside it): the table is wide (5+ columns
-            of YoY history). Stacking gives every column the room it needs. */}
-        <IncomeStatementTable
-          rows={incomeStatement}
-          isLoading={isLoading}
+        <FlatMetricsGrid
+          instrumentId={instrumentId}
+          fundamentals={fundamentals ?? null}
+          snapshot={snapshot ?? null}
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- envelope→typed cast (see WHY note above)
+          technicals={technicalsData as any}
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- envelope→typed cast (see WHY note above)
+          shareStats={shareStatsData as any}
+          dividends={dividendsData}
         />
 
-        {/* Block 3: quarterly earnings bar chart — fits below the table because
-            it shares the temporal axis (quarters) and reads naturally as a
-            visual companion. */}
-        <EarningsBarChart earnings={earnings} isLoading={isLoading} />
+        {/* Block 2: full income-statement table. WHY self-fetch (no props): the
+            child component reads /v1/income-statement/{id} via its own useQuery;
+            staleTime=24h means it joins the in-flight request fired by the
+            useFinancialsTabData hook with no extra round-trip. */}
+        <IncomeStatementTable instrumentId={instrumentId} />
+
+        {/* Block 3: annual earnings bar chart — self-fetching for the same
+            reason as IncomeStatementTable. */}
+        <EarningsBarChart instrumentId={instrumentId} />
       </div>
 
       {/* ── Right column — fixed 280px sidebar.
@@ -94,13 +116,15 @@ export function FinancialsTab({ instrumentId }: FinancialsTabProps) {
           unusually long content. */}
       <div className="w-[280px] shrink-0">
         <AnalystSidebar
-          strongBuy={analyst.strongBuy}
-          buy={analyst.buy}
-          hold={analyst.hold}
-          sell={analyst.sell}
-          strongSell={analyst.strongSell}
-          targetPrice={analyst.targetPrice}
-          updatedAt={updatedAt}
+          // WHY pull from fundamentals (not snapshot): analyst counts live on
+          // Fundamentals (analyst_*_count fields). targetPrice → analyst_target_price.
+          strongBuy={fundamentals?.analyst_strong_buy_count ?? null}
+          buy={fundamentals?.analyst_buy_count ?? null}
+          hold={fundamentals?.analyst_hold_count ?? null}
+          sell={fundamentals?.analyst_sell_count ?? null}
+          strongSell={fundamentals?.analyst_strong_sell_count ?? null}
+          targetPrice={fundamentals?.analyst_target_price ?? null}
+          updatedAt={fundamentals?.updated_at ?? null}
         />
       </div>
     </div>
