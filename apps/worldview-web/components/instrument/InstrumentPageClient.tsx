@@ -1,0 +1,168 @@
+/**
+ * components/instrument/InstrumentPageClient.tsx — Instrument Detail page shell (Wave A)
+ *
+ * WHY THIS EXISTS (PLAN-0090 T-A-05): the previous monolithic page.tsx mixed
+ * server-side params handling, client-side data fetching, tab state, hotkeys,
+ * skeleton, cache-priming, and resizable panels in one ~525-line file. The
+ * redesign (PRD-0088) replaces that with a 3-tab structure (Quote / Financials
+ * / Intelligence) and a slim client component. This shell:
+ *   1. Owns the active-tab state.
+ *   2. Fetches the page-bundle once via useInstrumentBundle().
+ *   3. Seeds the per-section TanStack Query caches so child tab components
+ *      paint from cache on first mount (PRD-0088 §6.3).
+ *   4. Composes the new InstrumentHeader / AiBriefBanner / InstrumentTabs
+ *      components (T-A-04) and the Wave A placeholder tab contents.
+ *
+ * WHY SPLIT INTO SERVER + CLIENT: page.tsx remains a Next.js 15 Server
+ * Component (just unwraps the `params` Promise). Everything that needs
+ * browser APIs (useState, useEffect, TanStack Query, useRouter) lives here
+ * under "use client".
+ *
+ * LINE LIMIT: this file must stay ≤200 lines per PLAN-0090 T-A-05.
+ */
+
+"use client";
+// WHY "use client": this component uses useState (activeTab), useEffect
+// (entityId guard + cache seeding), useRouter / useQueryClient (browser-only
+// React contexts), and the useInstrumentBundle TanStack Query hook. All of
+// these require the React client runtime.
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+
+import { qk } from "@/lib/query/keys";
+import { useInstrumentBundle } from "@/components/instrument/hooks/useInstrumentBundle";
+import { InstrumentHeader } from "@/components/instrument/header/InstrumentHeader";
+import { AiBriefBanner } from "@/components/instrument/brief/AiBriefBanner";
+import { InstrumentTabs } from "@/components/instrument/tabs/InstrumentTabs";
+
+// ── Public props ─────────────────────────────────────────────────────────────
+//
+// WHY just entityId: the server component pulls the URL param and hands the
+// pre-resolved string in. This keeps the client-side `useParams` indirection
+// out of the redesigned page (one fewer ambient dependency to mock in tests).
+
+export interface InstrumentPageClientProps {
+  /** Authoritative KG entity_id from the URL segment. */
+  readonly entityId: string;
+}
+
+// ── Tab union ────────────────────────────────────────────────────────────────
+//
+// WHY a string union (not enum): TabsTrigger components in InstrumentTabs.tsx
+// (T-A-04) are typed with the same literal union. Sharing string literals
+// keeps the controlled-Tabs `value`/`onValueChange` plumbing type-safe.
+
+type ActiveTab = "quote" | "financials" | "intelligence";
+
+export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
+  const router = useRouter();
+  const queryClient = useQueryClient();
+
+  // ── Active tab state ──────────────────────────────────────────────────────
+  // WHY controlled (not Tabs `defaultValue`): later waves may need to switch
+  // tabs programmatically (e.g. an "Open in Intelligence" deep-link from
+  // Quote). Controlled state from day one avoids a future refactor.
+  const [activeTab, setActiveTab] = useState<ActiveTab>("quote");
+
+  // ── entityId === "undefined" guard ────────────────────────────────────────
+  // WHY this guard exists: PLAN-0052 platform-QA round 7 (BP-302) — broken
+  // link generators (notably an early screener-row bug) produced URLs like
+  // /instruments/undefined. The literal slug "undefined" hits the page-bundle
+  // endpoint and returns 200 with synthetic data, so the page renders a fake
+  // instrument. Redirecting to the list route is the safe behaviour.
+  useEffect(() => {
+    if (!entityId || entityId === "undefined") {
+      router.replace("/instruments");
+    }
+  }, [entityId, router]);
+
+  // ── Bundle fetch (T-A-03) ─────────────────────────────────────────────────
+  // The hook owns the queryKey (qk.instruments.pageBundle), staleTime, and
+  // gateway wiring. We only consume its data + loading state here.
+  const { data: bundle, isLoading } = useInstrumentBundle(entityId);
+
+  // ── Cache priming (PRD-0088 §6.3) ─────────────────────────────────────────
+  // We seed the per-section query caches so when a tab content component
+  // mounts and runs its own useQuery, TanStack Query returns the cached
+  // payload immediately and skips the network round-trip. The dedicated
+  // hooks remain authoritative for refetch/invalidation semantics — this
+  // setQueryData call only PRIMES the cache.
+  useEffect(() => {
+    if (!bundle) return;
+    const instrumentId = bundle.instrument_id;
+
+    // WHY overview seed: child Quote-tab components read overview via
+    // qk.instruments.overview to render price + instrument metadata.
+    if (bundle.overview) {
+      queryClient.setQueryData(qk.instruments.overview(entityId), bundle.overview);
+    }
+
+    // WHY technicals seed: TechnicalSnapshot / chart toolbar widgets read
+    // qk.instruments.technicals(instrumentId). The bundle returns the same
+    // shape as the standalone /technicals endpoint so seeding is safe.
+    if (bundle.technicals) {
+      queryClient.setQueryData(qk.instruments.technicals(instrumentId), bundle.technicals);
+    }
+
+    // WHY insider/ownership seed: the Quote-tab "Recent Insider Transactions"
+    // strip and Ownership panels read qk.instruments.ownership(instrumentId).
+    if (bundle.insider) {
+      queryClient.setQueryData(qk.instruments.ownership(instrumentId), bundle.insider);
+    }
+
+    // WHY NOT fundamentals (BP-379): the bundle's `fundamentals` field is a
+    // raw FundamentalsSectionResponse (section-records array). The
+    // qk.instruments.fundamentalsSnapshot cache key is consumed by the
+    // Financials tab which expects the flat `Fundamentals` shape returned by
+    // getFundamentals(). Seeding the wrong shape locks the cache for the
+    // entire staleTime window (~5min) and the Financials tab renders all
+    // "—". The snapshot hook fires its own fetch on tab open instead.
+  }, [bundle, entityId, queryClient]);
+
+  // ── Layout ────────────────────────────────────────────────────────────────
+  // WHY flex column + h-screen: the page must fill the viewport so the active
+  // tab pane can scroll inside its own box (min-h-0 + overflow-hidden on the
+  // child container). overflow-hidden on the outer element prevents the whole
+  // page from scrolling — only the active tab's content scrolls.
+  return (
+    <div className="flex flex-col h-screen overflow-hidden bg-background">
+      {/* Sticky header: ticker + price + key stats (T-A-04). */}
+      <InstrumentHeader entityId={entityId} bundle={bundle} isLoading={isLoading} />
+
+      {/* AI brief banner: returns null when no brief is available, so the
+          banner area disappears cleanly with no reserved space. */}
+      <AiBriefBanner entityId={entityId} />
+
+      {/* Controlled 3-tab nav (Quote / Financials / Intelligence). The
+          Q/F/I mnemonic hotkeys live inside InstrumentTabs (T-A-04) — the
+          legacy D/F/N/I bindings from the old page have been removed. */}
+      <InstrumentTabs activeTab={activeTab} onTabChange={setActiveTab} />
+
+      {/* Active-tab content. WHY min-h-0 overflow-hidden: lets each tab's
+          own component own its scroll container (e.g. the Quote tab chart
+          will have its own internal scroll area in Wave B). */}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        {/* Placeholder for Wave B — replaced when Quote tab lands. */}
+        {activeTab === "quote" && (
+          <div className="flex-1 flex items-center justify-center text-[11px] text-muted-foreground">
+            Quote tab — coming in Wave B
+          </div>
+        )}
+        {/* Placeholder for Wave C — replaced when Financials tab lands. */}
+        {activeTab === "financials" && (
+          <div className="flex-1 flex items-center justify-center text-[11px] text-muted-foreground">
+            Financials tab — coming in Wave C
+          </div>
+        )}
+        {/* Placeholder for Wave D — replaced when Intelligence tab lands. */}
+        {activeTab === "intelligence" && (
+          <div className="flex-1 flex items-center justify-center text-[11px] text-muted-foreground">
+            Intelligence tab — coming in Wave D
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
