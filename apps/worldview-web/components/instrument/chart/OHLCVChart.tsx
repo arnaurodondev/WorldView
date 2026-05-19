@@ -153,8 +153,14 @@ export function OHLCVChart({ instrumentId, initialBars }: OHLCVChartProps) {
         // WHY containerRef stays mounted: removing it destroys the WebGL
         // context (visible flash + re-init). No left-gutter padding now that
         // the drawing palette is gone.
-        <div className="relative w-full" data-testid="chart-wrapper">
-          <div ref={containerRef} className={`w-full ${isFullscreen ? "flex-1" : ""}`} />
+        // WHY h-full on wrapper + container (PLAN-0090 Y-axis scaling fix):
+        // QuoteTab nests the chart in a `flex-1 min-h-0` slot; without h-full
+        // the inner divs collapsed to their content (the chart canvas was
+        // sized from clientHeight=0 → fallback 280px, leaving 70% empty).
+        // h-full propagates the flex slot's height down to the lightweight-
+        // charts container ref so chart.height = full slot height.
+        <div className="relative w-full h-full" data-testid="chart-wrapper">
+          <div ref={containerRef} className={`w-full h-full ${isFullscreen ? "flex-1" : ""}`} />
           {isLoading && !data && (
             <Skeleton className="pointer-events-none absolute inset-0 w-full" style={{ height: CHART_HEIGHT }} />
           )}

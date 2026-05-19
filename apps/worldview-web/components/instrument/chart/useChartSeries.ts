@@ -138,9 +138,17 @@ export function useChartSeries({
         // WHY null check after await: component may have unmounted during the import.
         if (!containerRef.current) return;
 
+        // WHY clientHeight || CHART_HEIGHT (PLAN-0090 Y-axis scaling fix):
+        // QuoteTab places the chart inside a `flex-1 min-h-0` slot that grows
+        // to fill the left column (~600-800px). Hard-coding height=CHART_HEIGHT
+        // (280px) made the chart render only in the top ~20% of its slot,
+        // leaving the rest as empty container background with stray "0.00"
+        // gridlines. Reading the live container height lets the chart canvas
+        // match the slot. Fallback to CHART_HEIGHT if clientHeight is 0 (e.g.
+        // the slot has not been laid out yet — never happened in testing).
         chart = createChart(containerRef.current, {
           width: containerRef.current.clientWidth,
-          height: CHART_HEIGHT,
+          height: containerRef.current.clientHeight || CHART_HEIGHT,
           layout: CHART_THEME.layout,
           grid: CHART_THEME.grid,
           crosshair: CHART_THEME.crosshair,
@@ -196,9 +204,17 @@ export function useChartSeries({
 
     void initChart();
 
+    // WHY also track height (PLAN-0090 Y-axis scaling fix): previously only
+    // width was synced, so when the parent flex slot was taller than 280px the
+    // chart canvas stayed pinned at its initial height, leaving most of the
+    // available vertical space blank. Mirroring height keeps the chart filling
+    // its flex slot as it grows (e.g. on viewport resize / fullscreen toggle).
     const observer = new ResizeObserver(() => {
       if (chartRef.current && containerRef.current && !isFullscreenRef.current) {
-        chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
+        chartRef.current.applyOptions({
+          width: containerRef.current.clientWidth,
+          height: containerRef.current.clientHeight || CHART_HEIGHT,
+        });
       }
     });
     observer.observe(containerRef.current);
