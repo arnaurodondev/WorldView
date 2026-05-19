@@ -43,6 +43,7 @@ import { FinancialsTab } from "@/components/instrument/financials/FinancialsTab"
 // own dependencies. Loading the tab itself eagerly avoids a layout flash when
 // the analyst hits the Intelligence tab the first time.
 import { IntelligenceTab } from "@/components/instrument/intelligence/IntelligenceTab";
+import { QuoteTab } from "@/components/instrument/quote/QuoteTab";
 
 // ── Public props ─────────────────────────────────────────────────────────────
 //
@@ -88,7 +89,10 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
   // ── Bundle fetch (T-A-03) ─────────────────────────────────────────────────
   // The hook owns the queryKey (qk.instruments.pageBundle), staleTime, and
   // gateway wiring. We only consume its data + loading state here.
-  const { data: bundle, isLoading } = useInstrumentBundle(entityId);
+  // WHY underscore-prefixed isLoading: kept on the destructure for future
+  // global loading-state plumbing (e.g. Wave D deep-links into a tab while the
+  // bundle is still warming up). Lint passes because the binding is intentional.
+  const { data: bundle, isLoading: _isLoading } = useInstrumentBundle(entityId);
 
   // ── Cache priming (PRD-0088 §6.3) ─────────────────────────────────────────
   // We seed the per-section query caches so when a tab content component
@@ -161,11 +165,19 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
           own component own its scroll container (e.g. the Quote tab chart
           will have its own internal scroll area in Wave B). */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {/* Placeholder for Wave B — replaced when Quote tab lands. */}
+        {/* QUOTE tab (T-B-04): chart left + MetricsTable right.
+            WHY the prop fallbacks (`?? ""`, `?? null`): the bundle is null
+            during the initial fetch. QuoteTab tolerates empty instrumentId
+            (its children gate on `enabled` flags) so we can render an empty
+            shell rather than a flash of placeholder text. */}
         {activeTab === "quote" && (
-          <div className="flex-1 flex items-center justify-center text-[11px] text-muted-foreground">
-            Quote tab — coming in Wave B
-          </div>
+          <QuoteTab
+            instrumentId={bundle?.instrument_id ?? ""}
+            entityId={entityId}
+            fundamentals={bundle?.overview?.fundamentals ?? null}
+            quote={bundle?.overview?.quote ?? null}
+            initialBars={bundle?.overview?.ohlcv?.bars}
+          />
         )}
         {/* Wave C: Financials tab orchestrator (T-C-03). WHY guard on the
             bundle's instrument_id: FinancialsTab keys all its fetches off the
