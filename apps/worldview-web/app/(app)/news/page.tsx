@@ -13,19 +13,27 @@
  * Per-article detail (`/news/[id]`) and channel manager (`/news/feeds`) are
  * deferred to a follow-up. Clicks on an article currently link out to the
  * source URL (matches the existing alerts-tab behaviour).
+ *
+ * W4-NEWS changes (2026-05-19):
+ *   FR-2.1  — py-1 → py-1.5 for 28px row height (HIGH-001)
+ *   FR-2.2  — primary_entity as clickable Link to /intelligence/[id] (CRIT-001)
+ *   FR-2.3  — sentiment derived from display_relevance_score when null (CRIT-002)
+ *   FR-2.4  — SignalBadge replaces icon-only sentiment render (CRIT-002)
+ *   FR-2.5  — window + tier + sentiment stored in URL params via nuqs (HIGH-005)
+ *   FR-2.6  — sentiment filter button group (MED-007)
+ *   FR-2.7  — load-more: aria-busy, 1000-article cap, tabular-nums score
  */
 
 "use client";
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { parseAsString, useQueryState } from "nuqs";
+import Link from "next/link";
 import {
   ExternalLink,
   Filter,
   Newspaper,
-  TrendingDown,
-  TrendingUp,
-  Zap,
 } from "lucide-react";
 import { useApiClient } from "@/lib/api-client";
 import { DEFAULT_STALE } from "@/lib/api/_client";
@@ -34,6 +42,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineEmptyState } from "@/components/data/InlineEmptyState";
 import { ClusterArticlesModal } from "@/components/news/ClusterArticlesModal";
+import { SignalBadge } from "@/components/ui/SignalBadge";
 import { cn } from "@/lib/utils";
 import type { RankedArticle, TopNewsParams } from "@/types/api";
 
@@ -41,6 +50,8 @@ import type { RankedArticle, TopNewsParams } from "@/types/api";
 
 type WindowKey = "1h" | "24h" | "7d";
 type TierFilter = "ALL" | "LIGHT" | "MEDIUM" | "DEEP";
+// FR-2.6: sentiment filter options for client-side filtering
+type SentimentFilter = "all" | "bullish" | "bearish" | "neutral";
 
 const WINDOWS: Array<{ key: WindowKey; label: string; hours: number }> = [
   { key: "1h", label: "1h", hours: 1 },
@@ -60,12 +71,71 @@ function formatPublishedAt(iso: string | null): string {
   return `${Math.floor(sec / 86400)}d`;
 }
 
+/**
+ * deriveSentiment — map article fields to SignalBadge's bullish/bearish/neutral.
+ *
+ * WHY this function (FR-2.3, CRIT-002):
+ * S6 currently emits sentiment as "positive" / "negative" / "mixed" / null.
+ * SignalBadge only knows "bullish" / "bearish" / "neutral".
+ * For LIGHT-tier articles where sentiment is never set, we fall back to
+ * display_relevance_score thresholds (≥0.7 → bullish, ≤0.3 → bearish).
+ * This gives traders a visual direction signal even when S6 hasn't scored yet.
+ */
+function deriveSentiment(
+  sentiment: "positive" | "negative" | "neutral" | "mixed" | null | undefined,
+  score: number | null | undefined,
+): "bullish" | "bearish" | "neutral" | null {
+  // Explicit sentiment from S6 takes priority — map to SignalBadge vocabulary.
+  if (sentiment === "positive") return "bullish";
+  if (sentiment === "negative") return "bearish";
+  if (sentiment === "neutral") return "neutral";
+  // "mixed" maps to neutral (both directions, no net signal)
+  if (sentiment === "mixed") return "neutral";
+  // No sentiment field — derive from composite relevance score.
+  if (score == null) return null; // no data at all
+  if (score >= 0.7) return "bullish";
+  if (score <= 0.3) return "bearish";
+  return "neutral";
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export default function NewsHubPage() {
   const gateway = useApiClient();
-  const [windowKey, setWindowKey] = useState<WindowKey>("24h");
-  const [tier, setTier] = useState<TierFilter>("ALL");
+
+  // FR-2.5: window + tier stored in URL via nuqs so filter state survives
+  // navigation and can be shared via URL. parseAsString with default handles
+  // unknown values gracefully; we validate with WINDOWS/TIERS arrays below.
+  // WHY nuqs over useState: bookmarkable links, browser back/forward, deep links.
+  const [rawWindow, setWindowKey] = useQueryState(
+    "window",
+    parseAsString.withDefault("24h"),
+  );
+  const [rawTier, setTier] = useQueryState(
+    "tier",
+    parseAsString.withDefault("ALL"),
+  );
+  // FR-2.6: sentiment stored in URL for shareability; client-side only (no API param).
+  const [rawSentiment, setSentimentFilter] = useQueryState(
+    "sentiment",
+    parseAsString.withDefault("all"),
+  );
+
+  // Validate the raw URL values against known keys to prevent URL tampering
+  // from propagating invalid values to the UI or API.
+  const windowKey: WindowKey =
+    (["1h", "24h", "7d"] as const).includes(rawWindow as WindowKey)
+      ? (rawWindow as WindowKey)
+      : "24h";
+  const tier: TierFilter =
+    (["ALL", "LIGHT", "MEDIUM", "DEEP"] as const).includes(rawTier as TierFilter)
+      ? (rawTier as TierFilter)
+      : "ALL";
+  const sentimentFilter: SentimentFilter =
+    (["all", "bullish", "bearish", "neutral"] as const).includes(rawSentiment as SentimentFilter)
+      ? (rawSentiment as SentimentFilter)
+      : "all";
+
   // QA-iter1: explicit "Load more" pagination — was hard-capped at 50 with
   // no signal when total > 50. Now the consumer can grow the page; UI shows
   // "Showing N of M" so silent truncation is impossible.
@@ -76,14 +146,16 @@ export default function NewsHubPage() {
   // IS the open-state signal. null unambiguously means "closed".
   const [clusterModalId, setClusterModalId] = useState<string | null>(null);
 
+  // Derive hours from the windowKey for the API call.
+  const windowHours = WINDOWS.find((w) => w.key === windowKey)?.hours ?? 24;
+
   const params: TopNewsParams = useMemo(() => {
-    const hours = WINDOWS.find((w) => w.key === windowKey)?.hours ?? 24;
     return {
-      hours,
+      hours: windowHours,
       limit: pageSize,
       ...(tier !== "ALL" ? { routing_tier: tier } : {}),
     };
-  }, [windowKey, tier, pageSize]);
+  }, [windowHours, tier, pageSize]);
 
   const { data, isLoading, isFetching, isError, refetch } = useQuery({
     // qk.news.top accepts a generic record; cast preserves call-site clarity
@@ -102,6 +174,18 @@ export default function NewsHubPage() {
   });
 
   const articles = data?.articles ?? [];
+
+  // FR-2.6: client-side sentiment filter applied on top of API results.
+  // WHY client-side (not API param): sentiment is derived, not a stored DB field.
+  // Sending it to the API would require S6 to compute the same derivation we do
+  // here, coupling two systems to the same heuristic. Client filter is instant.
+  const filteredArticles = useMemo(() => {
+    if (sentimentFilter === "all") return articles;
+    return articles.filter((a: RankedArticle) => {
+      const derived = deriveSentiment(a.sentiment, a.display_relevance_score);
+      return derived === sentimentFilter;
+    });
+  }, [articles, sentimentFilter]);
 
   return (
     <>
@@ -166,6 +250,31 @@ export default function NewsHubPage() {
               </button>
             ))}
           </div>
+
+          <span className="h-3 w-px bg-border/50" aria-hidden />
+
+          {/* FR-2.6: Sentiment filter button group — client-side filter derived
+              from display_relevance_score when explicit sentiment is null.
+              WHY here (not below header): keeps all filters in one toolbar row
+              at the top, consistent with Bloomberg-style dense control bars. */}
+          <div className="flex items-center gap-1">
+            {(["all", "bullish", "bearish", "neutral"] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setSentimentFilter(s)}
+                className={cn(
+                  "h-6 rounded-[2px] px-2 text-[10px] uppercase tracking-wide font-mono transition-colors",
+                  sentimentFilter === s
+                    ? "bg-primary/10 text-primary border border-primary/20"
+                    : "text-muted-foreground hover:text-foreground border border-transparent",
+                )}
+                aria-pressed={sentimentFilter === s}
+                title={`Show ${s === "all" ? "all" : s} articles`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -193,14 +302,18 @@ export default function NewsHubPage() {
               Retry
             </Button>
           </div>
-        ) : articles.length === 0 ? (
+        ) : filteredArticles.length === 0 ? (
           <div className="flex flex-1 items-center justify-center px-4 py-12">
-            <InlineEmptyState message="No articles in this window." />
+            <InlineEmptyState message={
+              sentimentFilter !== "all"
+                ? `No ${sentimentFilter} articles in this window.`
+                : "No articles in this window."
+            } />
           </div>
         ) : (
           <>
             <ul className="divide-y divide-border/40">
-              {articles.map((a) => (
+              {filteredArticles.map((a) => (
                 <li key={a.article_id}>
                   {/* P2-F: pass setClusterModalId so clicking "+N sim" opens the drawer */}
                   <ArticleRow article={a} onClusterClick={setClusterModalId} />
@@ -208,18 +321,28 @@ export default function NewsHubPage() {
               ))}
             </ul>
             {/* QA-iter1: explicit pagination so silent truncation at 50
-                articles is impossible. Shows count + Load-more when total>shown. */}
+                articles is impossible. Shows count + Load-more when total>shown.
+                FR-2.7: aria-busy + 1000-article cap to prevent unbounded growth. */}
             {data && (
               <div className="flex items-center justify-between border-t border-border/40 px-3 py-2 text-[10px]">
                 <span className="font-mono tabular-nums text-muted-foreground">
-                  Showing {articles.length} of {data.total}
+                  Showing {filteredArticles.length}
+                  {sentimentFilter !== "all" && ` ${sentimentFilter}`}
+                  {" "}of {data.total}
                 </span>
-                {data.total > articles.length && (
+                {/* FR-2.7: if total loaded >= 1000, show cap message instead of button */}
+                {articles.length >= 1000 ? (
+                  <p className="py-0 font-mono text-[11px] text-muted-foreground">
+                    Showing {articles.length.toLocaleString()} articles. Use filters to narrow results.
+                  </p>
+                ) : data.total > articles.length && (
                   <Button
                     density="compact"
                     variant="outline"
                     onClick={() => setPageSize((n) => n + 50)}
                     disabled={isFetching}
+                    // FR-2.7: aria-busy signals screen readers that content is loading
+                    aria-busy={isFetching}
                   >
                     {isFetching ? "Loading…" : "Load 50 more"}
                   </Button>
@@ -257,14 +380,11 @@ function ArticleRow({
       ? "text-muted-foreground/60 bg-muted/20"
       : "text-muted-foreground bg-muted/20";
 
-  const sentimentIcon =
-    a.sentiment === "positive" ? (
-      <TrendingUp className="h-3 w-3 text-positive" aria-label="Positive sentiment" strokeWidth={1.5} />
-    ) : a.sentiment === "negative" ? (
-      <TrendingDown className="h-3 w-3 text-negative" aria-label="Negative sentiment" strokeWidth={1.5} />
-    ) : a.sentiment === "mixed" ? (
-      <Zap className="h-3 w-3 text-warning" aria-label="Mixed sentiment" strokeWidth={1.5} />
-    ) : null;
+  // FR-2.3+2.4 (CRIT-002): derive sentiment from score when S6 hasn't set it.
+  // WHY here (not just in the filter): the row renders the badge unconditionally;
+  // derivation must happen at render time so the badge reflects the same value
+  // used by the sentiment filter (single source of truth).
+  const derivedSentiment = deriveSentiment(a.sentiment, a.display_relevance_score);
 
   // LIGHT tier: dim per existing convention (PRD-0027 OQ-6 → opacity 0.6).
   const isDim = a.routing_tier === "LIGHT";
@@ -281,9 +401,11 @@ function ArticleRow({
       // it before activation. Composed with the article title.
       aria-label={`${a.title ?? "(untitled)"}${a.primary_entity_symbol ? `, ${a.primary_entity_symbol}` : ""} (opens in new tab)`}
       className={cn(
-        // WHY py-1 (was py-1.5): single-line rows need less vertical padding.
-        // 4px top + 4px bottom = 8px total vert padding + 16px line = 24px row.
-        "block px-3 py-1 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
+        // FR-2.1 (HIGH-001): py-1 → py-1.5 for 28px row height.
+        // 6px top + 6px bottom = 12px total vert padding + 16px line = 28px row.
+        // WHY 28px (not 24px): density test showed 24px clipped descenders on
+        // lowercase letters like "g/y/p"; 28px is the minimum safe row height.
+        "block px-3 py-1.5 transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
         isDim && "opacity-60",
       )}
     >
@@ -300,13 +422,32 @@ function ArticleRow({
           {a.routing_tier ?? "—"}
         </span>
 
-        {/* Sentiment + primary entity */}
-        <span className="shrink-0">{sentimentIcon}</span>
-        {a.primary_entity_symbol && (
+        {/* FR-2.3+2.4 (CRIT-002): SignalBadge replaces icon-only sentiment.
+            derivedSentiment is null when both explicit sentiment and score are
+            unavailable — SignalBadge renders nothing in that case. */}
+        <span className="shrink-0">
+          <SignalBadge sentiment={derivedSentiment} />
+        </span>
+
+        {/* FR-2.2 (CRIT-001): primary entity as a Link to /intelligence/[id].
+            When primary_entity_id is present, render a clickable Link so traders
+            can pivot to the entity graph. Clicking must NOT follow the outer <a>
+            href (article URL), so we use e.stopPropagation(). */}
+        {a.primary_entity_id ? (
+          <Link
+            href={`/intelligence/${a.primary_entity_id}`}
+            className="shrink-0 font-mono text-[10px] tabular-nums text-primary hover:underline"
+            onClick={(e) => e.stopPropagation()}
+            title={`View entity: ${a.primary_entity_symbol ?? a.primary_entity_id}`}
+          >
+            {a.primary_entity_symbol ?? a.primary_entity_id}
+          </Link>
+        ) : a.primary_entity_symbol ? (
+          // No entity ID but we have a symbol — render plain text.
           <span className="shrink-0 font-mono text-[10px] tabular-nums text-primary">
             {a.primary_entity_symbol}
           </span>
-        )}
+        ) : null}
 
         {/* Title — fills remaining horizontal space, truncates at right cluster */}
         <span className="flex-1 truncate text-[11px] leading-snug text-foreground">
@@ -326,10 +467,12 @@ function ArticleRow({
           </span>
         )}
 
-        {/* Relevance score badge — only when > 0 */}
+        {/* FR-2.7 (LOW-003): relevance score with tabular-nums for column alignment.
+            WHY Math.round (not toFixed(0)): Math.round avoids ".0" artifacts and
+            returns an integer type which is safe to coerce for aria-label. */}
         {a.display_relevance_score > 0 && (
           <span className="shrink-0 rounded-[2px] bg-muted/40 px-1 font-mono text-[9px] tabular-nums text-muted-foreground">
-            {(a.display_relevance_score * 100).toFixed(0)}
+            <span className="font-mono tabular-nums">{Math.round(a.display_relevance_score * 100)}</span>
           </span>
         )}
 
