@@ -490,6 +490,51 @@ async def update_thread(thread_id: str, request: Request) -> Any:
     return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
 
 
+# ── Notification preferences (W1-BACKEND / MED-022 / CRIT-004) ───────────────
+#
+# Proxied to S1 Portfolio service at /api/v1/users/me/notification-preferences.
+# Both endpoints forward the X-Internal-JWT so S1's InternalJWTMiddleware can
+# extract tenant_id from the verified RS256 JWT payload.
+
+
+@router.get("/users/me/notification-preferences")
+async def get_notification_preferences(request: Request) -> Any:
+    """Proxy GET /api/v1/users/me/notification-preferences → S1 Portfolio service.
+
+    Returns per-tenant notification toggle preferences. Defaults (all True) are
+    returned when no preferences have been written yet — no 404 risk.
+    """
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.get(
+        "/api/v1/users/me/notification-preferences",
+        headers=headers,
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
+@router.patch("/users/me/notification-preferences")
+async def update_notification_preferences(request: Request) -> Any:
+    """Proxy PATCH /api/v1/users/me/notification-preferences → S1 Portfolio service.
+
+    Partial update — only fields included in the JSON body are changed.
+    The upsert is idempotent so retrying on 5xx is safe (CRIT-006).
+    """
+    if getattr(request.state, "user", None) is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    body = await request.body()
+    headers = _auth_headers(request)
+    clients = _clients(request)
+    resp = await clients.portfolio.patch(
+        "/api/v1/users/me/notification-preferences",
+        content=body,
+        headers={"Content-Type": "application/json", **headers},
+    )
+    return Response(content=resp.content, status_code=resp.status_code, media_type="application/json")
+
+
 # ── Email preferences ─────────────────────────────────────────────────────────
 
 

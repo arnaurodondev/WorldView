@@ -10,6 +10,7 @@ from portfolio.api.routes.brokerage_connections import router as brokerage_conne
 from portfolio.api.routes.feedback import router as feedback_router
 from portfolio.api.routes.holding import router as holding_router
 from portfolio.api.routes.instrument import router as instrument_router
+from portfolio.api.routes.notification_preferences import router as notification_preferences_router
 from portfolio.api.routes.portfolio import router as portfolio_router
 from portfolio.api.routes.tenant import router as tenant_router
 from portfolio.api.routes.transaction import router as transaction_router
@@ -30,3 +31,5 @@ api_router.include_router(brokerage_connections_router)
 api_router.include_router(admin_router)
 # PLAN-0052 Wave D — feedback subsystem (12 endpoints under /api/v1/feedback)
 api_router.include_router(feedback_router, prefix="/feedback")
+# W1-BACKEND: notification preferences (MED-022 / CRIT-004)
+api_router.include_router(notification_preferences_router)
