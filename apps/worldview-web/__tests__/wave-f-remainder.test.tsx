@@ -174,8 +174,16 @@ describe("FundamentalSparkline — showAxis wiring (T-F-6-11, T-F-6-07)", () => 
 });
 
 // ── T-F-6-12: Instrument page skeleton section count ─────────────────────────
-
-describe("Instrument page loading skeleton — 9-section layout (T-F-6-12)", () => {
+//
+// PLAN-0090 NOTE: these three tests pin the OLD client-component page.tsx
+// skeleton (the 9-section grid that lived inside OverviewLayout). PLAN-0090's
+// Option B strategy explicitly deletes OverviewLayout and converts page.tsx
+// into a thin server component that hands off to InstrumentPageClient. The
+// "skeleton" no longer exists in the same form — each tab now owns its own
+// loading state, which is verified by per-tab tests in Wave B/C/D. Skipping
+// here documents intent; Wave E (T-E-02) removes this whole describe block
+// once the per-tab loading tests are in place.
+describe.skip("Instrument page loading skeleton — 9-section layout (T-F-6-12)", () => {
   it("renders multiple skeleton sections while overview is loading", async () => {
     // WHY dynamic import: the instrument page uses useParams (Next.js hook) which
     // requires the next/navigation mock to be active before the module is imported.
@@ -183,7 +191,12 @@ describe("Instrument page loading skeleton — 9-section layout (T-F-6-12)", () 
       "@/app/(app)/instruments/[entityId]/page"
     );
 
-    const { container } = render(<InstrumentDetailPage />, { wrapper: makeWrapper() });
+    // PLAN-0090: page.tsx is now a server component awaiting params; pass a
+    // type-satisfying stub. The describe block is .skip()-ed so this never
+    // runs — the assignment exists only to keep `tsc --noEmit` happy until
+    // Wave E removes the whole block.
+    const params = Promise.resolve({ entityId: "ins-001" });
+    const { container } = render(<InstrumentDetailPage params={params} />, { wrapper: makeWrapper() });
 
     // WHY count bg-muted elements: after T-D-4-01, Skeleton renders with static
     // rounded-[2px] bg-muted bars (no animate-pulse). The old skeleton had 3 elements;
@@ -201,7 +214,12 @@ describe("Instrument page loading skeleton — 9-section layout (T-F-6-12)", () 
       "@/app/(app)/instruments/[entityId]/page"
     );
 
-    const { container } = render(<InstrumentDetailPage />, { wrapper: makeWrapper() });
+    // PLAN-0090: page.tsx is now a server component awaiting params; pass a
+    // type-satisfying stub. The describe block is .skip()-ed so this never
+    // runs — the assignment exists only to keep `tsc --noEmit` happy until
+    // Wave E removes the whole block.
+    const params = Promise.resolve({ entityId: "ins-001" });
+    const { container } = render(<InstrumentDetailPage params={params} />, { wrapper: makeWrapper() });
 
     // WHY .grid: the new skeleton has a grid-cols-2 container for the section rows.
     // The old skeleton had no grid element at all.
@@ -216,7 +234,12 @@ describe("Instrument page loading skeleton — 9-section layout (T-F-6-12)", () 
       "@/app/(app)/instruments/[entityId]/page"
     );
 
-    const { container } = render(<InstrumentDetailPage />, { wrapper: makeWrapper() });
+    // PLAN-0090: page.tsx is now a server component awaiting params; pass a
+    // type-satisfying stub. The describe block is .skip()-ed so this never
+    // runs — the assignment exists only to keep `tsc --noEmit` happy until
+    // Wave E removes the whole block.
+    const params = Promise.resolve({ entityId: "ins-001" });
+    const { container } = render(<InstrumentDetailPage params={params} />, { wrapper: makeWrapper() });
 
     // WHY querySelectorAll: there may be multiple col-span-2 elements (chart, grid section)
     const colSpan2Elements = container.querySelectorAll(".col-span-2");

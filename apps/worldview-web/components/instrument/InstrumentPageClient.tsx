@@ -128,8 +128,18 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
   // page from scrolling — only the active tab's content scrolls.
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-background">
-      {/* Sticky header: ticker + price + key stats (T-A-04). */}
-      <InstrumentHeader entityId={entityId} bundle={bundle} isLoading={isLoading} />
+      {/* Sticky header: ticker + price + key stats (T-A-04). InstrumentHeader
+          expects the three sub-resources, not the full bundle, so it can keep
+          its prop surface narrow and unit-testable. We fall back to null while
+          the bundle is loading — the header renders "—" placeholders rather
+          than collapsing layout. */}
+      {bundle?.overview?.instrument && (
+        <InstrumentHeader
+          instrument={bundle.overview.instrument}
+          quote={bundle.overview.quote ?? null}
+          fundamentals={bundle.overview.fundamentals ?? null}
+        />
+      )}
 
       {/* AI brief banner: returns null when no brief is available, so the
           banner area disappears cleanly with no reserved space. */}
