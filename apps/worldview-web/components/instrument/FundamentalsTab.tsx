@@ -64,6 +64,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
 import { createGateway } from "@/lib/gateway";
 import { useAuth } from "@/hooks/useAuth";
+import { DEFAULT_STALE } from "@/lib/api/_client";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   formatRatio,
@@ -321,8 +322,9 @@ export function FundamentalsTab({
     queryKey: ["fundamentals", instrumentId],
     queryFn: () => createGateway(accessToken).getFundamentals(instrumentId),
     enabled: !!accessToken && !!instrumentId,
-    // WHY 5min stale: fundamentals update once/day; no need to refetch aggressively
-    staleTime: 5 * 60_000,
+    // WHY DEFAULT_STALE.fundamentals (1hr): quarterly data; rarely changes intra-day.
+    // Canonical stale window for fundamentals endpoints (HIGH-018 / FR-8.4).
+    staleTime: DEFAULT_STALE.fundamentals,
     placeholderData: initialData ?? undefined,
   });
 

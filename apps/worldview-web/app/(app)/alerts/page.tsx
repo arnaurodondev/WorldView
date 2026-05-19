@@ -50,6 +50,7 @@ import { useAuth } from "@/hooks/useAuth";
 // WHY qk: replaces inline ["news-relevant"] and ["news-top-today", {...}] literals
 // with factory methods so all call sites share a single key definition.
 import { qk } from "@/lib/query/keys";
+import { DEFAULT_STALE } from "@/lib/api/_client";
 import { cn } from "@/lib/utils";
 import type { Article } from "@/types/api";
 
@@ -467,8 +468,9 @@ function TopTodayTab({ accessToken }: TabProps) {
     // combos get separate buckets.
     queryKey: qk.news.topToday({ hours: 72, limit: 20 }),
     queryFn: () => createGateway(accessToken).getTopNews({ hours: 72, limit: 20 }),
-    refetchInterval: 5 * 60_000,
-    staleTime: 60_000,
+    refetchInterval: DEFAULT_STALE.news,
+    // WHY DEFAULT_STALE.news: canonical 5min stale window (HIGH-018 / FR-8.4).
+    staleTime: DEFAULT_STALE.news,
   });
 
   // WHY TopTodayTab uses Article type: getTopNews returns RankedArticle but

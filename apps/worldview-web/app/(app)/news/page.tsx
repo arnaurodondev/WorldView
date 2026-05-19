@@ -28,6 +28,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useApiClient } from "@/lib/api-client";
+import { DEFAULT_STALE } from "@/lib/api/_client";
 import { qk } from "@/lib/query/keys";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -93,8 +94,11 @@ export default function NewsHubPage() {
     // endpoint per S6 contract. Gating it on auth made signed-out users see
     // a permanent skeleton (this page lives under (app)/ so it's not visible
     // to them today, but the leak would surface in any future public mount).
-    staleTime: 60_000,
-    refetchInterval: 60_000,
+    // WHY DEFAULT_STALE.news (5min): canonical stale window for news endpoints.
+    // Prevents the same endpoint being fetched with different staleTime values
+    // by different components (HIGH-018 / FR-8.4).
+    staleTime: DEFAULT_STALE.news,
+    refetchInterval: DEFAULT_STALE.news,
   });
 
   const articles = data?.articles ?? [];

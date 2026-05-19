@@ -136,13 +136,47 @@ export function createInstrumentsApi(t: string | undefined) {
      * getBatchQuotes — prices for multiple instruments at once
      * Used by: Sidebar watchlist (30s refetch), Portfolio page, TopBar index tickers
      * Body: { instrument_ids: string[] } — field name matches BatchQuoteRequest Pydantic model
+     *
+     * WHY 404 fallback (INC-004 / FR-8.3): mirrors the getBatchOhlcvBars pattern.
+     * If the batch endpoint is missing (deployment drift or old backend), we fall back
+     * to per-instrument single-quote calls and merge results into the same
+     * BatchQuoteResponse shape. This means callers never need to handle "no batch"
+     * as a special case — the response shape is identical.
+     *
+     * WHY only 404: a missing endpoint is deployment drift; any other error (5xx, 401)
+     * should propagate so the caller can surface it to the user.
      */
-    getBatchQuotes(ids: string[]): Promise<BatchQuoteResponse> {
-      return apiFetch<BatchQuoteResponse>("/v1/quotes/batch", {
-        method: "POST",
-        body: { instrument_ids: ids },
-        token: t,
-      });
+    async getBatchQuotes(ids: string[]): Promise<BatchQuoteResponse> {
+      try {
+        return await apiFetch<BatchQuoteResponse>("/v1/quotes/batch", {
+          method: "POST",
+          body: { instrument_ids: ids },
+          token: t,
+        });
+      } catch (err) {
+        // WHY only 404: missing endpoint → degrade gracefully. Other errors propagate.
+        if (err instanceof GatewayError && err.status === 404) {
+          // WHY Promise.allSettled: a per-instrument fetch may 404 for an individual
+          // symbol (recently delisted) — we want the successes, not an all-or-nothing.
+          const settled = await Promise.allSettled(
+            ids.map((id) =>
+              apiFetch<Quote>(`/v1/quotes/${encodeURIComponent(id)}`, { token: t }),
+            ),
+          );
+          const quotes: BatchQuoteResponse = {};
+          settled.forEach((result, idx) => {
+            if (result.status === "fulfilled") {
+              // WHY index into ids: the settled array preserves the same order as ids.
+              const id = ids[idx];
+              if (id !== undefined) {
+                quotes[id] = result.value;
+              }
+            }
+          });
+          return quotes;
+        }
+        throw err;
+      }
     },
 
     /**
