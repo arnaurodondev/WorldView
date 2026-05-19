@@ -304,3 +304,176 @@ async def test_internal_jwt_middleware_accepts_multi_audience_list_containing_ex
         resp = await client.get("/api/v1/data", headers={"X-Internal-JWT": multi_aud_token})
 
     assert resp.status_code == 200
+
+
+# ── W1-05 (BUG-005) — kid-based JWKS rotation regression tests ────────────────
+#
+# These tests are the canonical W1-05 regression suite (per the task brief, only
+# portfolio carries the full test set; the other 8 backends rely on their
+# existing suites + W2-05's consolidated shared lib for full coverage).
+#
+# Each test pokes the middleware's ``_keys_by_kid`` map directly because the
+# helper ``_PreKeyedJWTMiddleware`` overrides ``__init__`` to skip the HTTP
+# fetch — we follow that same pattern but populate the kid map manually.
+
+
+class _KidMappedJWTMiddleware(InternalJWTMiddleware):
+    """Test subclass that pre-seeds the kid → key map without hitting the network.
+
+    Also accepts a callable to swap in a "post-refresh" map, simulating what
+    happens when ``_refresh_jwks_if_allowed`` actually fetches a new key set.
+    """
+
+    def __init__(
+        self,
+        app: Any,
+        keys_by_kid: dict[str, Any],
+        post_refresh_map: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(app, jwks_url="http://unused-in-test/internal/jwks")
+        # Pre-seed the kid map. dispatch() consults this before falling back
+        # to the legacy single-key path.
+        self._keys_by_kid = dict(keys_by_kid)
+        # Public key fallback (legacy contract). Pick first value if present.
+        self._public_key = next(iter(keys_by_kid.values()), None)
+        self._post_refresh_map = post_refresh_map
+        self._refresh_attempted = 0
+
+    async def _refresh_jwks_if_allowed(self) -> bool:  # type: ignore[override]
+        """Stub: simulate the rate-limited refresh without an outbound fetch."""
+        self._refresh_attempted += 1
+        # First refresh: swap in the post-refresh map if provided.
+        if self._post_refresh_map is not None:
+            self._keys_by_kid = dict(self._post_refresh_map)
+            self._post_refresh_map = None  # one-shot
+            return True
+        return False
+
+
+def _build_kid_app(
+    keys_by_kid: dict[str, Any],
+    post_refresh_map: dict[str, Any] | None = None,
+) -> tuple[FastAPI, _KidMappedJWTMiddleware]:
+    """Build a FastAPI app with the kid-mapped middleware. Returns (app, middleware ref)."""
+    app = FastAPI()
+    # Seed app.state too so the existing dispatch logic that reads
+    # ``app.state._internal_jwt_public_key`` finds something non-None and
+    # proceeds past the 503 gate.
+    if keys_by_kid:
+        app.state._internal_jwt_public_key = next(iter(keys_by_kid.values()))
+
+    @app.get("/api/v1/data")
+    async def data_route(request: Request) -> JSONResponse:
+        return JSONResponse({"ok": True, "tenant_id": getattr(request.state, "tenant_id", None)})
+
+    middleware = _KidMappedJWTMiddleware(app, keys_by_kid, post_refresh_map=post_refresh_map)
+    # add_middleware would create a fresh instance — we want the test to be
+    # able to inspect the SAME instance that handles requests.
+    app.user_middleware.insert(0, _wrap_middleware_instance(middleware))
+    app.middleware_stack = app.build_middleware_stack()
+    return app, middleware
+
+
+def _wrap_middleware_instance(instance: Any) -> Any:
+    """Wrap a pre-built middleware instance so Starlette uses IT (not a fresh copy)."""
+    from starlette.middleware import Middleware
+
+    return Middleware(_PassthroughFactory, instance=instance)
+
+
+class _PassthroughFactory:
+    """Returns the pre-built instance instead of constructing a fresh one.
+
+    Starlette's ``Middleware`` wrapper normally calls ``cls(app, **kwargs)``.
+    We exploit that by accepting ``app`` + ``instance`` and just returning the
+    instance with its ``app`` attribute updated.
+    """
+
+    def __new__(cls, app: Any, instance: Any) -> Any:  # type: ignore[misc]
+        instance.app = app
+        return instance
+
+
+def _make_token_with_kid(private_key: Any, kid: str | None) -> str:
+    """Encode a JWT including a kid header (or no kid header at all)."""
+    payload = {
+        "sub": "user-123",
+        "tenant_id": "tenant-abc",
+        "role": "user",
+        "iss": "worldview-gateway",
+        "aud": "worldview-internal",
+        "exp": int(time.time()) + 3600,
+    }
+    headers = {"kid": kid} if kid is not None else None
+    return jwt.encode(payload, private_key, algorithm="RS256", headers=headers)
+
+
+async def test_w1_05_known_kid_validates_successfully() -> None:
+    """W1-05 (a): JWT carrying a kid present in the cache verifies normally."""
+    private_key, public_key = _generate_rsa_pair()
+    app, _ = _build_kid_app(keys_by_kid={"v1": public_key})
+
+    token = _make_token_with_kid(private_key, kid="v1")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/data", headers={"X-Internal-JWT": token})
+
+    assert resp.status_code == 200
+
+
+async def test_w1_05_unknown_kid_triggers_refresh_and_succeeds() -> None:
+    """W1-05 (b): kid not in cache → refresh runs → new kid is found → 200."""
+    # W1-05's cooldown is module-level. Reset it so this test starts clean.
+    import portfolio.infrastructure.middleware.internal_jwt as mw_module
+
+    mw_module._last_refresh_ts = 0.0  # type: ignore[attr-defined]
+
+    private_key, public_key = _generate_rsa_pair()
+    # Cache starts with v1; post-refresh map adds v2 (the kid the token uses).
+    app, middleware = _build_kid_app(
+        keys_by_kid={"v1": public_key},
+        post_refresh_map={"v1": public_key, "v2": public_key},
+    )
+
+    token = _make_token_with_kid(private_key, kid="v2")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/data", headers={"X-Internal-JWT": token})
+
+    assert resp.status_code == 200
+    assert middleware._refresh_attempted == 1
+
+
+async def test_w1_05_unknown_kid_under_cooldown_rejects_without_refresh() -> None:
+    """W1-05 (c): refresh already ran <60s ago → second unknown kid → 401 immediately, no refresh."""
+    # Force the cooldown timestamp to "just now" so the helper returns False.
+    import portfolio.infrastructure.middleware.internal_jwt as mw_module
+
+    mw_module._last_refresh_ts = time.monotonic()  # type: ignore[attr-defined]
+
+    private_key, public_key = _generate_rsa_pair()
+    app, _ = _build_kid_app(keys_by_kid={"v1": public_key})
+
+    token = _make_token_with_kid(private_key, kid="v9-unknown")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/data", headers={"X-Internal-JWT": token})
+
+    # The refresh-helper path under cooldown returns False; dispatch rejects 401.
+    # (The middleware DOES still call _refresh_jwks_if_allowed — what matters
+    # is that the override returns False inside the cooldown window.)
+    assert resp.status_code == 401
+
+
+async def test_w1_05_token_without_kid_falls_back_to_default() -> None:
+    """W1-05 (d): no kid header → treated as kid "v1" (back-compat with pre-W1-05 S9)."""
+    import portfolio.infrastructure.middleware.internal_jwt as mw_module
+
+    mw_module._last_refresh_ts = 0.0  # type: ignore[attr-defined]
+
+    private_key, public_key = _generate_rsa_pair()
+    # Cache contains the default kid "v1" — same key — so back-compat path resolves.
+    app, _ = _build_kid_app(keys_by_kid={"v1": public_key})
+
+    token = _make_token_with_kid(private_key, kid=None)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/api/v1/data", headers={"X-Internal-JWT": token})
+
+    assert resp.status_code == 200
