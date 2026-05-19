@@ -126,14 +126,15 @@ export function useFeedbackSubmit() {
       validate(payload, isAuthenticated);
       return createGateway(accessToken).postFeedbackSubmission(payload);
     },
-    // WHY retry (CRIT-006 / FR-8.1): feedback submissions are idempotent on S1
-    // (intentional new entries per PRD). Retry only fires on transient 5xx/network
-    // failures. FeedbackValidationError (local) is re-thrown synchronously before
-    // the network call, so it never triggers retries — TanStack uses the error
-    // class to decide, and FeedbackValidationError is not a network/server error.
-    // Note: TanStack Query's default retry logic does NOT retry 4xx errors unless
-    // shouldRetry is customised. The default retryDelay / retry=3 here covers 5xx.
-    retry: 3,
+    // WHY retry only on 5xx/network (not validation): FeedbackValidationError is
+    // thrown before the network call and will never resolve on retry. GatewayError
+    // with status < 500 (4xx) is a deterministic rejection — no point retrying.
+    // Only transient 5xx/network failures benefit from exponential backoff.
+    retry: (count: number, err: Error) => {
+      if (err instanceof FeedbackValidationError) return false;
+      if (err instanceof GatewayError && err.status < 500) return false;
+      return count < 3;
+    },
     retryDelay: (attemptIndex: number) =>
       Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: () => {

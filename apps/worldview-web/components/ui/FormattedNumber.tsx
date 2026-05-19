@@ -58,7 +58,7 @@ export interface FormattedNumberProps extends ComponentPropsWithoutRef<"span"> {
    * Semantic color variant. Default inherits from parent context.
    * positive  → text-positive  (institutional green, ADR-F-15)
    * negative  → text-negative  (institutional red)
-   * amber     → text-amber-400 (warning / caution)
+   * amber     → text-warning (warning / caution)
    * muted     → text-muted-foreground (secondary label)
    * default   → inherit (no color override)
    */
@@ -70,7 +70,7 @@ export interface FormattedNumberProps extends ComponentPropsWithoutRef<"span"> {
 const COLOR_CLASSES: Record<ColorVariant, string> = {
   positive: "text-positive",
   negative: "text-negative",
-  amber: "text-amber-400",
+  amber: "text-warning",
   muted: "text-muted-foreground",
   default: "",
 };

@@ -14,7 +14,14 @@
 
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { PortfolioKPIStrip } from "@/components/portfolio/PortfolioKPIStrip";
+
+function wrap(children: ReactNode) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+}
 
 // Minimal happy-path props the tests can spread + override.
 const baseProps = {
@@ -29,7 +36,7 @@ const baseProps = {
 
 describe("PortfolioKPIStrip — Realized P&L tile", () => {
   it("renders the Realized P&L label and value when provided", () => {
-    render(<PortfolioKPIStrip {...baseProps} realizedPnl={1234} />);
+    render(<PortfolioKPIStrip {...baseProps} realizedPnl={1234} />, { wrapper: ({ children }) => wrap(children) });
     // Label
     expect(screen.getByText("Realized P&L")).toBeInTheDocument();
     // Value tile carries the data-testid for stable querying.
@@ -38,7 +45,7 @@ describe("PortfolioKPIStrip — Realized P&L tile", () => {
   });
 
   it("applies text-positive class when value is positive", () => {
-    render(<PortfolioKPIStrip {...baseProps} realizedPnl={500} />);
+    render(<PortfolioKPIStrip {...baseProps} realizedPnl={500} />, { wrapper: ({ children }) => wrap(children) });
     const tile = screen.getByTestId("kpi-realized-pnl");
     // The value <span> inherits the color class from the parent tile;
     // we look at the inner span explicitly.
@@ -46,13 +53,13 @@ describe("PortfolioKPIStrip — Realized P&L tile", () => {
   });
 
   it("applies text-negative class when value is negative", () => {
-    render(<PortfolioKPIStrip {...baseProps} realizedPnl={-200} />);
+    render(<PortfolioKPIStrip {...baseProps} realizedPnl={-200} />, { wrapper: ({ children }) => wrap(children) });
     const tile = screen.getByTestId("kpi-realized-pnl");
     expect(tile.innerHTML).toContain("text-negative");
   });
 
   it("renders em-dash when realizedPnl is null", () => {
-    render(<PortfolioKPIStrip {...baseProps} realizedPnl={null} />);
+    render(<PortfolioKPIStrip {...baseProps} realizedPnl={null} />, { wrapper: ({ children }) => wrap(children) });
     const tile = screen.getByTestId("kpi-realized-pnl");
     expect(tile.textContent).toContain("—");
   });
@@ -64,6 +71,7 @@ describe("PortfolioKPIStrip — Realized P&L tile", () => {
         realizedPnl={500}
         realizedPnlApprox
       />,
+      { wrapper: ({ children }) => wrap(children) },
     );
     const tile = screen.getByTestId("kpi-realized-pnl");
     expect(tile.textContent).toContain("(approx)");
@@ -80,6 +88,7 @@ describe("PortfolioKPIStrip — Realized P&L tile", () => {
         realizedPnlLongTerm={300}
         realizedPnlShortTerm={200}
       />,
+      { wrapper: ({ children }) => wrap(children) },
     );
     const tile = screen.getByTestId("kpi-realized-pnl");
     expect(tile.textContent).not.toContain("(approx)");

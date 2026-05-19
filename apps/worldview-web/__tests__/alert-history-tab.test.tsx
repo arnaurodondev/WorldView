@@ -15,7 +15,7 @@
  * This validates the pagination contract without requiring a real scroll event.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -53,6 +53,23 @@ vi.mock("@/lib/gateway", () => ({
     }
   },
 }));
+
+// jsdom does not provide IntersectionObserver. Stub it so the component's
+// useEffect sentinel wiring doesn't throw on mount during tests.
+beforeAll(() => {
+  if (typeof globalThis.IntersectionObserver === "undefined") {
+    class StubIntersectionObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+      takeRecords(): IntersectionObserverEntry[] { return []; }
+      readonly root = null;
+      readonly rootMargin = "";
+      readonly thresholds: readonly number[] = [];
+    }
+    globalThis.IntersectionObserver = StubIntersectionObserver as unknown as typeof IntersectionObserver;
+  }
+});
 
 function makeQueryClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -156,9 +173,10 @@ describe("AlertHistoryTab", () => {
       expect(firstCall?.[0]?.limit).toBe(50);
     });
 
-    // 50 rows rendered
-    expect(await screen.findByText(/TKR1/)).toBeInTheDocument();
-    expect(screen.getByText(/TKR50/)).toBeInTheDocument();
+    // 50 rows rendered — use getAllByText to handle multiple TKR1 occurrences
+    // (ticker appears in both cell text and aria-labels).
+    expect((await screen.findAllByText(/TKR1/)).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/TKR50/).length).toBeGreaterThan(0);
   });
 
   it("renders ack / snoozed status badges", async () => {
