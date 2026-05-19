@@ -40,12 +40,18 @@
 }
 
 /* ── Column group header: 9px, dimmer than leaf headers ── */
+/* FR-4.3: use design token color (not opacity) so the text is legible at all
+ * background colors and respects forced-colors / high-contrast mode.
+ * Explicit color token replaces opacity:0.55 (MED-011). */
 .terminal-ag-grid .ag-header-group-cell-label {
   font-size: 9px;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.10em;
-  opacity: 0.55;
+  color: hsl(var(--muted-foreground));
+}
+.terminal-ag-grid .ag-header-group-cell .ag-header-group-text {
+  color: hsl(var(--muted-foreground));
 }
 
 /* ── Pointer cursor: rows are clickable (navigate to instrument page) ── */
