@@ -25,6 +25,24 @@
 
 <!-- New plans are appended here by the /plan skill -->
 
+## Frontend Platform Hardening (PRD-frontend-platform)
+**Branch**: feat/frontend-platform-hardening
+**Status**: COMPLETE (2026-05-19)
+**Waves**: W0 (design system) → W1 (API hardening) → W2 (bundle) → W3 (dashboard) → W4 (news+intelligence) → W5 (screener) → W6 (chat) → W7 (alerts+portfolio) → W8 (settings)
+**Issues closed**: 9 CRIT / 18 HIGH / 24 MED / 17 LOW / 14 DS = 82 issues
+**Key fixes**:
+  - CRIT-001: News primary entity now links to /intelligence/[entity_id]
+  - CRIT-002: Sentiment badge with score-derived fallback (SignalBadge component)
+  - CRIT-003: Preferences retained in localStorage via PreferencesContext
+  - CRIT-004: All mocked settings pages wired or hidden (wire-or-hide pattern)
+  - CRIT-005: loading.tsx for all 13+ routes
+  - CRIT-006: Mutation retry (3x exponential) on all S1 mutations
+  - CRIT-007: Chart color constants migrated to --chart-* CSS tokens
+  - CRIT-008: SelectedEntityProvider resets on entity_id route change
+  - CRIT-009: MorningBriefCard staleTime 30min→12h + midnight UTC invalidation
+**Backend shipped**: S1 notification-preferences endpoint (migration 0018) + S9 proxy routes
+**New primitives**: FormattedNumber, SignalBadge, useCopyToClipboard, useKeyboardShortcuts, useFormattedTimestamp, sse-parser.ts, DEFAULT_STALE, DENSITY_CLASSES, GraphDepthContext
+
 ## QA Sessions
 
 | Date | Report | Scope | Result |

@@ -917,3 +917,44 @@ grep -n "INSERT INTO relation_evidence" services/knowledge-graph/src/ -r
 Any promotion INSERT without a confidence/density WHERE clause is vulnerable.
 
 **Reference**: E-3 (2026-05-10-ai-architecture-enhancement-roi-analysis.md).
+
+---
+
+## RED — Added from Frontend Platform Hardening (2026-05-19)
+
+### HR-057: Mocked UI Buttons That Pretend to Work
+**Signal**: Settings/action button that calls `console.log`, `alert`, or `toast("Coming soon")` without a real mutation
+**Risk**: User trust erosion; thesis committee discovers deception; beta users file "broken" tickets
+**Action**: Wire-or-hide. Never ship a button that doesn't do what it says.
+
+**Detection**:
+```bash
+grep -rn "Coming soon\|console\.log" apps/worldview-web/app/settings/ --include="*.tsx"
+```
+Any match in a settings page handler is a violation.
+
+---
+
+### HR-058: Settings Stored as Component-Local State Only
+**Signal**: Dropdown or toggle value lives only in `useState` with no persistence (localStorage, DB, URL param)
+**Risk**: User selection lost on every refresh; settings page appears to work but remembers nothing
+**Action**: Wire to `PreferencesContext` (localStorage) or backend API. Use URL params for filter state.
+
+**Detection**:
+```bash
+grep -n "useState" apps/worldview-web/app/settings/ -r --include="*.tsx"
+```
+Any `useState` holding a user-preference value without a corresponding `useEffect` persist call or context update is suspect.
+
+---
+
+### HR-059: Stale or Zero `staleTime` on Shared Endpoints
+**Signal**: `useQuery({ queryFn: getTopNews })` with no `staleTime`, or `staleTime: 0` on fundamentals/graph queries
+**Risk**: Same endpoint called multiple times per second across components; N×API rate-limit hit; duplicate renders
+**Action**: Import `DEFAULT_STALE` from `lib/api/_client.ts` and use the appropriate query key. Never leave staleTime as 0 unless the query must always be live (quote prices with explicit refetchInterval).
+
+**Detection**:
+```bash
+grep -n "useQuery\b" apps/worldview-web/ -r --include="*.tsx" | grep -v "staleTime"
+```
+Any `useQuery` call without `staleTime` on a non-price endpoint is a candidate for rate-limit exhaustion under concurrent component mounts.
