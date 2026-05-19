@@ -37,6 +37,12 @@ import { InstrumentHeader } from "@/components/instrument/header/InstrumentHeade
 import { AiBriefBanner } from "@/components/instrument/brief/AiBriefBanner";
 import { InstrumentTabs } from "@/components/instrument/tabs/InstrumentTabs";
 import { FinancialsTab } from "@/components/instrument/financials/FinancialsTab";
+// WHY direct import (no `next/dynamic`): IntelligenceTab itself is a thin
+// orchestrator; its heavy children (NewsColumn list, GraphColumn → sigma.js)
+// are the ones that need code-splitting and they already dynamic-import their
+// own dependencies. Loading the tab itself eagerly avoids a layout flash when
+// the analyst hits the Intelligence tab the first time.
+import { IntelligenceTab } from "@/components/instrument/intelligence/IntelligenceTab";
 
 // ── Public props ─────────────────────────────────────────────────────────────
 //
@@ -170,11 +176,11 @@ export function InstrumentPageClient({ entityId }: InstrumentPageClientProps) {
         {activeTab === "financials" && (
           <FinancialsTab instrumentId={bundle?.instrument_id ?? ""} />
         )}
-        {/* Placeholder for Wave D — replaced when Intelligence tab lands. */}
+        {/* Wave D: Intelligence tab (T-D-04) — 3-column orchestrator
+            (NewsColumn | GraphColumn | ContextPanel). All data fetching lives
+            inside the children, so this slot only needs the entityId. */}
         {activeTab === "intelligence" && (
-          <div className="flex-1 flex items-center justify-center text-[11px] text-muted-foreground">
-            Intelligence tab — coming in Wave D
-          </div>
+          <IntelligenceTab entityId={entityId} />
         )}
       </div>
     </div>
