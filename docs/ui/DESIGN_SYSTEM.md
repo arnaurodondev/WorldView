@@ -752,6 +752,282 @@ Both converters are stored in `converters: CoordinateConverter | null` state. Th
 
 ---
 
+## 8c. Instrument Detail Page (PRD-0088 / PLAN-0090) — 2026-05-19
+
+> **Added**: 2026-05-19 in PLAN-0090 T-E-04. Documents the ground-up redesign of
+> `/instruments/[entityId]` shipped across waves A–E.
+> **Spec**: `docs/specs/0088-instrument-detail-page-ground-up-redesign.md`
+> **Plan**: `docs/plans/0090-instrument-detail-page-redesign-plan.md`
+> **Supersedes**: the 9-section card pattern from PLAN-0041 (Fundamentals tab) and
+> the 4-tab layout from PLAN-0071 phase 6.5+. The legacy
+> `OverviewLayout` / `FundamentalsTab` / `IntelligenceTab` (old) /
+> `NewsTab` (old) components and 36 sibling files under `components/instrument/`
+> were **deleted in T-E-01** (40-file sweep) — verify with
+> `git log --diff-filter=D --name-only --since=2026-05-17 -- components/instrument/`
+> before re-introducing any of those names.
+
+### 8c.1 Why the Redesign Exists
+
+The previous instrument page hit ~30px effective row height (despite claiming
+22px), spent ~50% of the Fundamentals tab on section-card chrome, and split
+News + Intelligence into two tabs even though they answer the same question
+("what does the market think of this name right now?"). The redesign restores
+Bloomberg-grade density (≥40 data points above the fold on Quote tab) and
+collapses News into the Intelligence tab so the entity graph, the brief, and
+the news headlines render in one viewport.
+
+**Hard rules in this surface**:
+
+1. Every numeric value is `font-mono tabular-nums` (ADR-F-15). Null values
+   render as `—` (em-dash) in the same monospace face so columns never jitter.
+2. No off-palette colour utilities — `text-warning` (NOT `text-amber-400`).
+   Enforced by the no-off-palette-colors Vitest (Wave E gate; T-E-02).
+3. Cautionary state (e.g. P/E > 30) uses the semantic `text-warning` token,
+   which resolves to `#F59E0B` via `--warning`. Negative danger states use
+   `text-negative` (`#EF5350`).
+4. Every component file ≤ 200 lines (orchestrators ≤ 300). If you need more,
+   split into a hook + a sub-component.
+
+### 8c.2 Page Shell — Header + Brief + Tabs (Wave A)
+
+The page client (`InstrumentPageClient.tsx`, T-A-05) renders three sticky-stacked
+chrome rows above the active tab body:
+
+| Component | File | Height | Source task |
+|-----------|------|--------|-------------|
+| `InstrumentHeader` | `components/instrument/header/InstrumentHeader.tsx` | 36px sticky | T-A-04 |
+| `WeekRangeMini` | `components/instrument/header/WeekRangeMini.tsx` | 60×6px inline | T-A-04 |
+| `AiBriefBanner` | `components/instrument/brief/AiBriefBanner.tsx` | 24px collapsed / auto expanded | T-A-04 |
+| `InstrumentTabs` | `components/instrument/tabs/InstrumentTabs.tsx` | 32px | T-A-04 |
+
+**`InstrumentHeader`** — single 36px row, `position: sticky; top: 0; z-30;
+bg-background border-b border-border`. Left cluster: back chevron + ticker
+(13px mono semibold) + exchange badge + truncated company name. Right cluster:
+price + signed change + signed change% (colour by sign via `priceChangeClass`),
+then `CAP` / `VOL` / `P/E` label-value pairs (10px sans label + 11px mono
+value), then a `WeekRangeMini`, then a `LiveQuoteBadge` (freshness dot only —
+no second price). Props: `{ instrument, quote, fundamentals }`. Every sub
+value is rendered through the `formatPrice` / `formatPercentDirect` /
+`formatMarketCap` / `formatVolume` / `formatRatio` helpers in `lib/utils.ts`
+so the null-handling stays consistent.
+
+**`WeekRangeMini`** — 60px wide × 6px tall `bg-muted` track with a `bg-primary`
+(`#FFD60A`) fill positioned at `(price − low) / (high − low) × 100%`, clamped
+to `[0, 100]`. Used both inline in the header (without labels) and standalone
+in the Quote-tab MetricsTable row 19. The label-less variant is the canonical
+Bloomberg-style inline range indicator — no axis ticks, no numbers, the bar
+itself communicates position because the surrounding row already labels it
+"52W RANGE".
+
+**`AiBriefBanner`** — single-line collapsible banner between the tabbar and the
+tab body. Collapse state is persisted per session in `sessionStorage` under
+the key `wv:brief-collapsed:{entityId}`. Why `sessionStorage` (not `localStorage`):
+the choice is per-browser-tab/window, not per-user; opening a second
+instrument in a new tab should not inherit your collapse state. Banner is
+hidden entirely (return `null`) when the brief endpoint returns 404 or empty —
+**never** render an "unavailable" placeholder for the brief because that wastes
+the same vertical real estate the banner exists to economise on.
+
+**`InstrumentTabs`** — 3-tab underline control (QUOTE / FINANCIALS / INTELLIGENCE).
+Active tab carries a 2px `border-primary` bottom edge and `text-foreground`;
+inactive tabs use `text-muted-foreground`. Mounts a `HotkeyScope` that binds
+`Q` / `F` / `I` to the three tabs respectively. The scope auto-suspends inside
+text inputs (search, filters) so the chord set never collides with typing.
+
+### 8c.3 Shared Primitives (Wave A — T-A-01..03)
+
+Two primitives form the typographic backbone of every metric on the page:
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `MetricLabel` | `components/instrument/shared/MetricLabel.tsx` | 10px uppercase muted label (`text-[10px] uppercase tracking-wide text-muted-foreground`) |
+| `MetricValue` | `components/instrument/shared/MetricValue.tsx` | 11px IBM Plex Mono tabular-nums value with `color` prop |
+
+**`MetricValue` colour prop** maps to Tailwind utilities (not raw hex):
+
+| `color` value | Class | When to use |
+|---------------|-------|-------------|
+| `"positive"` | `text-positive` | Gains, ROE > 15%, margin in the green |
+| `"negative"` | `text-negative` | Losses, P/E > 50, ROE < 0 |
+| `"amber"` | `text-warning` | Cautionary thresholds (P/E 30–50, D/E 1.5–3) |
+| `"muted"` | `text-muted-foreground` | De-emphasised / inactive values |
+| `"default"` | `text-foreground` | Neutral body value (default) |
+
+Null / undefined `children` resolve to `—` in the same monospace face. This is
+the "absent data" placeholder — **not** a loading state (use shadcn `Skeleton`
+for loading). All Quote/Financials/Intelligence cells are built on these two
+primitives so the typography token is impossible to drift.
+
+Secondary primitives: `SectionDivider` (1px `bg-border/30` separator with
+optional label) and `DataTimestamp` ("Data as of {date}" footer, 10px muted).
+
+### 8c.4 Quote Tab (Wave B — T-B-01..05)
+
+`QuoteTab.tsx` (T-B-04) is a thin orchestrator that wires `useMetricsTableData`
+into two children:
+
+| Component | File | Source task |
+|-----------|------|-------------|
+| `OHLCVChart` | `components/instrument/chart/OHLCVChart.tsx` | T-B-01 — refactored to <180 lines; the `hasScrolledToRealTime` race that caused the chart to scroll back to 1985 on load was excised here |
+| `TimeframeToolbar` | `components/instrument/chart/TimeframeToolbar.tsx` | T-B-01 — 1D/1W/1M/6M/1Y/5Y |
+| `ChartToolbar` | `components/instrument/ChartToolbar.tsx` | KEEP (minor cleanup) |
+| `SessionStatsStrip` | `components/instrument/SessionStatsStrip.tsx` | T-B-01 — `O H L C VOL` strip in 22px row |
+| `MetricsTable` | `components/instrument/quote/metrics/MetricsTable.tsx` | T-B-03 |
+| `MetricRow` | `components/instrument/quote/metrics/MetricRow.tsx` | T-B-02 |
+| `MetricGroupDivider` | `components/instrument/quote/metrics/MetricGroupDivider.tsx` | T-B-02 |
+| `WeekRangeBar` | `components/instrument/quote/metrics/WeekRangeBar.tsx` | T-B-02 |
+| `AnalystMiniBar` | `components/instrument/quote/metrics/AnalystMiniBar.tsx` | T-B-02 |
+
+**`MetricsTable`** is the canonical right-sidebar data pattern for the instrument
+detail surface and **replaces the legacy 9-section card pattern** that
+PLAN-0041 shipped. It renders **26 data rows + 7 group dividers** in a fixed
+40%-width column on the Quote tab. Layout invariants per row:
+
+- Wrapper: `flex items-center justify-between h-[22px] px-3`
+- Label: 10px ALL CAPS muted (`MetricLabel`, `flex-1 truncate`)
+- Value: 11px mono via `MetricValue` with a colour token (see threshold rules
+  in PRD-0088 §6.4 / FR-10)
+
+Group dividers use `MetricGroupDivider` (a 1px `bg-border/30` rule with
+`mx-3 my-0.5`). Row 19 swaps the value cell for a `WeekRangeBar`; row 26 swaps
+it for an `AnalystMiniBar` (a 3-segment `[buy / hold / sell]` proportional bar
+plus a `28B · 10H · 2S` caption in 10px mono).
+
+**Colour thresholds (FR-10)** are encoded once in `useMetricsTableData.ts`
+and consumed by every row — never inline a threshold in JSX. Examples baked
+into the hook: P/E > 30 → `amber`, P/E > 50 → `negative`; D/E > 1.5 → `amber`,
+D/E > 3 → `negative`; Net Margin < 0 → `negative`, > 15% → `positive`.
+
+### 8c.5 Financials Tab (Wave C — T-C-01..04)
+
+`FinancialsTab.tsx` (T-C-03) orchestrates the four panels:
+
+| Component | File | Source task |
+|-----------|------|-------------|
+| `FlatMetricsGrid` | `components/instrument/financials/FlatMetricsGrid.tsx` | T-C-01 |
+| `MetricCell` | `components/instrument/financials/MetricCell.tsx` | T-C-01 |
+| `IncomeStatementTable` | `components/instrument/financials/IncomeStatementTable.tsx` | T-C-02 |
+| `EarningsBarChart` | `components/instrument/financials/EarningsBarChart.tsx` | T-C-02 |
+| `AnalystSidebar` | `components/instrument/financials/AnalystSidebar.tsx` | T-C-03 |
+
+**`FlatMetricsGrid`** — the redesign's most important density win. A `<dl>`
+laid out as `grid-cols-3 gap-x-6 gap-y-0` showing **45 metrics across 8 group
+headers** (VALUATION / PROFITABILITY / GROWTH / BALANCE SHEET / CASH FLOW /
+DIVIDENDS / OWNERSHIP / TECHNICALS). No section cards, no card borders, no
+section padding — just label/value pairs separated by a 1px divider with a
+10px ALL CAPS group label. Each cell is a `MetricCell` of 36px total height
+(14px label + 22px value, gap=0). This is the **3-col flat pattern** that
+replaces the old 9-section card layout; reuse it for any new "show N
+fundamentals" surface elsewhere in the app.
+
+`MetricCell` itself is a 2-line `<dt>/<dd>` pair that wraps `MetricLabel` + `MetricValue`
+so the typography stays locked. Threshold colouring uses the same `color`
+mapping as the Quote-tab MetricsTable.
+
+**`IncomeStatementTable`** — 4-year FY table (Revenue, Gross Profit, EBIT,
+Net Income, EPS), 22px rows, right-aligned `font-mono tabular-nums` cells.
+**`EarningsBarChart`** — 6–8 bars (actual EPS solid, estimate outlined; beat =
+`bg-positive`, miss = `bg-negative`), 80px tall, fiscal-year labels on the
+x-axis.
+
+**`AnalystSidebar`** (280px right column, sticky) — consensus block
+(stacked Buy/Hold/Sell mini bar with `28B · 10H · 2S` caption), target price
+(13px mono semibold) with high/low range, "Based on N analysts" tag, and a
+`DataTimestamp` footer. The 280px width is fixed across the whole page so the
+sidebar lines up visually with the right-edge containers on other tabs.
+
+### 8c.6 Intelligence Tab (Wave D — T-D-01..04)
+
+`IntelligenceTab.tsx` (T-D-04) is a 3-column flex layout that unifies news,
+graph, and entity context in a single viewport — replacing the old
+News+Intelligence two-tab split.
+
+| Column | Component | File | Source task |
+|--------|-----------|------|-------------|
+| Left (30%) | `NewsColumn` + `NewsFilters` + `CompactArticleRow` | `components/instrument/intelligence/news/` | T-D-02 |
+| Centre (45%) | `GraphColumn` + `GraphToolbar` + `EntityGraph` | `components/instrument/intelligence/graph/` + `components/instrument/EntityGraph.tsx` | T-D-01 + T-D-04 |
+| Right (25%) | `ContextPanel` + `NodeDetailCard` + `RelationsList` | `components/instrument/intelligence/context/` | T-D-03 |
+
+**`NewsColumn`** uses `useEntityNewsInfinite` (a `useInfiniteQuery` wrapper around
+`GET /v1/news/entity/{entityId}?limit=20&offset=N`). Each article renders as a
+28px `CompactArticleRow`:
+`[sentiment dot 6px] [relative time 10px mono] [source 10px truncate] [headline 11px truncate flex-1] [impact 10px mono muted]`.
+Sentiment dot colour follows FR-10 (`bg-positive` / `bg-negative` /
+`bg-muted-foreground`). Infinite scroll loads the next 20 on scroll-to-bottom.
+
+**`GraphColumn`** stacks an always-expanded AI brief card, a `GraphToolbar`
+(depth slider 1–3 + relationship-type multi-select + fullscreen), and the
+`EntityGraph` (Cytoscape/sigma.js). Depth-3 is wrapped in a **2000ms client
+timeout** (T-D-01) — if S9 stalls, the component shows a "Network timeout —
+try a lower depth" message instead of a blocking spinner. This was a frequent
+user-facing failure with the legacy graph.
+
+**`ContextPanel`** flips between two states based on the locally-held
+`selectedNodeId`:
+
+- **No node selected** → entity overview (description, health score, evidence
+  quality bars, contradictions cards when count > 0).
+- **Node selected** → `NodeDetailCard` (name, type badge, confidence score,
+  back button to deselect) + `RelationsList` (per-edge rows with type badge,
+  target name, italic evidence snippet truncated to 2 lines).
+
+Contradiction cards (`ContradictionCard.tsx`, kept from the legacy code with
+polish) anchor to the bottom of the column when `contradictions.length > 0`,
+using `bg-negative/5 border border-negative/20`.
+
+### 8c.7 Density Reference
+
+The redesign establishes two canonical data-row heights:
+
+| Pattern | Height | Used in |
+|---------|--------|---------|
+| `MetricRow` | **22px** | `MetricsTable` (Quote tab right column), threshold-coloured numeric rows on any future panel |
+| `CompactArticleRow` | **28px** | `NewsColumn` (Intelligence tab), any future article-list surface |
+
+Anywhere on the instrument detail surface that needs a new dense row should
+reuse one of these two heights — picking arbitrary intermediate values
+(24, 26, 30) reintroduces the jitter that the redesign eliminated.
+
+### 8c.8 Deleted Legacy Components
+
+The 40 files removed in T-E-01 (verify via
+`git show 58cbeec1 --stat | grep "^ apps/worldview-web/components/instrument"`):
+`InstrumentAISubheader`, `AnalystRail`, `PerformanceBar`, `OverviewLayout`,
+`OverviewSidebar`, `FundamentalsTab`, `FundamentalsMetricsGrid`,
+`InstrumentKeyMetrics`, `NewsTab`, `IntelligenceTab` (legacy),
+`InstrumentTopNews`, `OverviewInsiderStrip`, `FundamentalSparkline`,
+`InsiderTransactionsTable`, `AnalystConsensusStrip`, `RevenueTrendSparklines`,
+`IncomeStatementFY`, `AnalystTargetSparkline`, `MarketPositionPanel`,
+`PeerComparisonPanel`, `ShortInterestRow`, `FundamentalsTopNews`,
+`InstrumentBriefSection`, `IntelligenceSummarySection`, `IntelligenceFilters`,
+`GraphDetailSidebar`, `TechnicalSnapshot`, `OwnershipSnapshotPanel`,
+`SplitsDividendsPanel`, `EarningsHistoryChart`, `52WeekRangeBar`,
+`CompactInstrumentHeader`, `DrawingPalette`, `DrawingCanvas`, `CrosshairHUD`
++ supporting test files. Do not re-introduce any of those names — the
+redesign uses distinct file names on purpose so old grep paths fail loudly.
+
+### 8c.9 Wave E Gates (T-E-01..04)
+
+The Wave E validation gate enforces the architectural invariants documented
+above:
+
+| Gate | Task | Tool |
+|------|------|------|
+| Zero references to deleted component files | T-E-01 | `grep -r` sweep |
+| No off-palette utility classes (`text-amber-NNN`, `text-red-NNN`, etc.) | T-E-02 | Vitest: `__tests__/no-off-palette-colors.test.ts` |
+| All 29+ unit tests pass + 7 Playwright E2E tests pass | T-E-03 | `pnpm test` + `pnpm test:e2e` |
+| `pnpm tsc --noEmit` returns 0 errors | T-E-04 | `pnpm typecheck` |
+| `pnpm build` succeeds (catches missing `"use client"`, server-component violations `tsc` misses) | T-E-04 | `pnpm build` |
+| DESIGN_SYSTEM.md updated with the new component catalogue | T-E-04 | this section |
+
+**WHY a dedicated no-off-palette-colors test**: when a junior dev reaches for
+`text-amber-400` because it's the muscle-memory Tailwind colour, the value
+resolves to a hex that drifts from `--warning` (#F59E0B today but mutable).
+The test grep-fails the build the moment any off-palette utility lands.
+The sanctioned cautionary colour is **`text-warning`** — period.
+
+---
+
 ## 9. TanStack Query Conventions
 
 ### staleTime Per Data Type (set at hook level, not globally)

@@ -89,9 +89,14 @@ function formatHealthScore(score: number | null | undefined): string {
  */
 function healthTone(score: number | null | undefined): string {
   if (score == null) return "text-muted-foreground bg-muted";
-  if (score >= 0.75) return "text-emerald-300 bg-emerald-950/40";
-  if (score >= 0.5) return "text-amber-300 bg-amber-950/40";
-  return "text-red-300 bg-red-950/40";
+  // WHY semantic tokens (not raw Tailwind palette): the no-off-palette-colors
+  // Vitest + ESLint rule (PLAN-0071 P1-4) banned `text-amber-*` / `text-emerald-*`
+  // because those hex values drift from the --warning / --positive CSS variables
+  // every time the design system is retuned. text-positive / text-warning /
+  // text-negative resolve through globals.css → tailwind.config.ts.
+  if (score >= 0.75) return "text-positive bg-positive/15";
+  if (score >= 0.5) return "text-warning bg-warning/15";
+  return "text-negative bg-negative/15";
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
