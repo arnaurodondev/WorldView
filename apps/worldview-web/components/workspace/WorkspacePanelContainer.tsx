@@ -66,7 +66,24 @@ const EntityGraphPanel = dynamic(
     ),
   },
 );
-import { AlertsList } from "@/components/alerts/AlertsList";
+// WHY dynamic (not static): AlertsList is 895 lines and only renders when the
+// user adds an "alerts" panel to their workspace. Most workspaces have no alerts
+// panel — loading the chunk eagerly wastes bandwidth for those sessions.
+// ssr:false because AlertsList uses client-only query hooks. Skeleton matches
+// the 22px terminal row density used by the component itself.
+const AlertsList = dynamic(
+  () => import("@/components/alerts/AlertsList").then((m) => ({ default: m.AlertsList })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex flex-col gap-1 p-2">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Skeleton key={i} className="h-[22px] w-full rounded-[2px]" />
+        ))}
+      </div>
+    ),
+  },
+);
 import { WorkspaceScreenerWidget } from "./WorkspaceScreenerWidget";
 import { WorkspaceChatWidget } from "./WorkspaceChatWidget";
 import { WorkspaceWatchlistWidget } from "./WorkspaceWatchlistWidget";

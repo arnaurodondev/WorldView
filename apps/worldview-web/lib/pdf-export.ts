@@ -34,8 +34,13 @@
  * WHO USES IT: components/screener/ExportMenu.tsx
  */
 
-import { jsPDF } from "jspdf";
-import autoTable from "jspdf-autotable";
+// WHY no module-level jspdf / jspdf-autotable imports:
+// Even though pdf-export.ts is only loaded via `await import("@/lib/pdf-export")`
+// in ExportMenu (making it a separate chunk), moving the heavy deps inside the
+// function body means the chunk for pdf-export.ts itself is tiny until the user
+// actually triggers an export. The jspdf + autotable bundles (~600KB) are then
+// fetched as a third chunk only on first use — further splitting the critical
+// payload from the module infrastructure code.
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -59,20 +64,30 @@ export interface ExportToPdfOptions<T> {
  * exportToPdf — produces an A4 portrait PDF with an optional title and a
  * monospaced data table, then triggers download via jspdf's `save()`.
  *
- * WHY synchronous (no async):
- *   - jspdf 4.x is purely synchronous on the document construction path;
- *     `save()` is the only side-effect (anchor click). No need to expose
- *     a Promise that the caller would just `await` for nothing.
+ * WHY async (was sync in previous version):
+ *   - jspdf + jspdf-autotable are dynamic-imported inside this function so
+ *     they form a separate chunk from the pdf-export module itself. The caller
+ *     (ExportMenu) already `await`s this function after migrating from the
+ *     module-level static import pattern.
+ *   - The document construction path remains synchronous after the dynamic
+ *     imports resolve; the only change visible to callers is the Promise wrapper.
  *
  * WHY guard `typeof document`: same SSR-safety reason as csv-export.ts.
  */
-export function exportToPdf<T>({
+export async function exportToPdf<T>({
   rows,
   columns,
   filenameStem,
   title,
-}: ExportToPdfOptions<T>): void {
+}: ExportToPdfOptions<T>): Promise<void> {
   if (typeof document === "undefined") return;
+
+  // WHY dynamic imports inside the handler (not at module level):
+  // jspdf (~450KB) + jspdf-autotable (~150KB) together are ~600KB minified.
+  // Moving the imports here means the pdf-export module chunk itself stays tiny;
+  // the heavy deps are only fetched when the user actually triggers a PDF export.
+  const { jsPDF } = await import("jspdf");
+  const { default: autoTable } = await import("jspdf-autotable");
 
   // WHY a4 + portrait: see file-level WHY notes.
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });

@@ -38,7 +38,26 @@ import { useQuery } from "@tanstack/react-query";
 import { BellRing, Newspaper, TrendingUp } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertsList } from "@/components/alerts/AlertsList";
+// WHY dynamic (not static): AlertsList is 895 lines and only renders when the
+// "Alerts" tab (and then the "Active" sub-tab) is active. Loading it eagerly
+// would add its full JS to the alerts-page initial bundle even for users who
+// visit for the "News Feed" or "Top Today" tabs. ssr:false because AlertsList
+// uses client-only hooks (useQuery, useCallback). The skeleton height (22px rows)
+// matches AlertsList's terminal row density to avoid layout shift.
+import dynamic from "next/dynamic";
+const AlertsList = dynamic(
+  () => import("@/components/alerts/AlertsList").then((m) => ({ default: m.AlertsList })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex flex-col gap-1 p-2">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Skeleton key={i} className="h-[22px] w-full rounded-[2px]" />
+        ))}
+      </div>
+    ),
+  },
+);
 import { AlertHistoryTab } from "@/components/alerts/AlertHistoryTab";
 import { AlertRuleBuilder } from "@/components/alerts/AlertRuleBuilder";
 import { RuleManagerDialog } from "@/components/alerts/RuleManagerDialog";

@@ -50,7 +50,32 @@ import { useAuth } from "@/hooks/useAuth";
 import { qk } from "@/lib/query/keys";
 import { FundamentalsTab } from "@/components/instrument/FundamentalsTab";
 import { IntelligenceTab } from "@/components/instrument/IntelligenceTab";
-import { NewsTab } from "@/components/instrument/NewsTab";
+// WHY dynamic (not static): NewsTab is 835 lines and is only shown when the
+// analyst clicks the "News" tab. Loading it eagerly would add its full JS chunk
+// to the instrument page's initial bundle, which pays for every user even if
+// they never open the news tab. dynamic() splits it into a separate chunk that
+// is fetched only on first tab activation. ssr:false because NewsTab uses
+// client-only query hooks. The skeleton matches NewsTab's 22px row density so
+// there is no visible layout shift on first render.
+import dynamic from "next/dynamic";
+const NewsTab = dynamic(
+  () => import("@/components/instrument/NewsTab").then((m) => ({ default: m.NewsTab })),
+  {
+    ssr: false,
+    loading: () => (
+      // WHY divide-y divide-border: mirrors the border between news rows that
+      // NewsTab renders, so the skeleton looks structurally identical to the list.
+      <div className="flex flex-col gap-0 divide-y divide-border">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-3 px-3 py-1.5">
+            <Skeleton className="h-[10px] w-[60px] rounded-[2px]" />
+            <Skeleton className="h-[10px] flex-1 rounded-[2px]" />
+          </div>
+        ))}
+      </div>
+    ),
+  },
+);
 import { CompactInstrumentHeader } from "@/components/instrument/CompactInstrumentHeader";
 import { InstrumentAISubheader } from "@/components/instrument/InstrumentAISubheader";
 import { OverviewLayout } from "@/components/instrument/OverviewLayout";
@@ -363,7 +388,17 @@ export default function InstrumentDetailPage() {
                 <TabsTrigger variant="terminal" value="overview">Overview</TabsTrigger>
                 <TabsTrigger variant="terminal" value="fundamentals">Fundamentals</TabsTrigger>
                 {/* WHY no count badge: PLAN-0050 — NewsTab manages its own data fetch. */}
-                <TabsTrigger variant="terminal" value="news">News</TabsTrigger>
+                {/* WHY onMouseEnter prefetch: the dynamic() split means the JS chunk is
+                    fetched lazily. Triggering the import on hover gives a ~100–300ms head
+                    start over waiting until the click fires; on most connections the chunk
+                    will be ready by the time the click event resolves. */}
+                <TabsTrigger
+                  variant="terminal"
+                  value="news"
+                  onMouseEnter={() => { void import("@/components/instrument/NewsTab"); }}
+                >
+                  News
+                </TabsTrigger>
                 <TabsTrigger variant="terminal" value="intelligence">Intelligence</TabsTrigger>
               </TabsList>
 
