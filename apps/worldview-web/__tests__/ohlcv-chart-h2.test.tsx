@@ -195,7 +195,7 @@ function makeWrapper() {
 
 // ── Import under test ─────────────────────────────────────────────────────────
 
-import { OHLCVChart } from "@/components/instrument/OHLCVChart";
+import { OHLCVChart } from "@/components/instrument/chart/OHLCVChart";
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

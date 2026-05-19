@@ -163,8 +163,14 @@ export function useChartSeries({
         setConverters({ chart, series: handles.series });
         if (pendingScrollToRealTime.current) {
           pendingScrollToRealTime.current = false;
-          hasScrolledToRealTime.current = true;
+          // WHY assign flag AFTER scrollToRealTime (T-B-01 scroll-to-1985 fix):
+          // setting flag=true BEFORE the call created a race in which a later
+          // render observed flag=true but the scroll had not yet executed
+          // against the real bar dataset → viewport stuck at the oldest bar
+          // (e.g. 1985). Order swapped so the flag only records a scroll that
+          // actually ran.
           chart.timeScale().scrollToRealTime();
+          hasScrolledToRealTime.current = true;
         }
       } catch (err) {
         console.error("Failed to load chart library:", err);
@@ -248,8 +254,13 @@ export function useChartSeries({
     onVolumeProfileBuckets(computeVolumeProfile(formattedBars, 24));
 
     // Scroll to right edge on first load only (BP-376)
+    // WHY assign flag AFTER scrollToRealTime (T-B-01 scroll-to-1985 fix):
+    // the previous order set flag=true first, which on a fast re-render path
+    // caused a subsequent invocation to short-circuit even though the
+    // scroll-to-real-time had not yet executed against the loaded bars,
+    // leaving the chart viewport pinned to the oldest bar (e.g. 1985).
     if (formattedBars.length > 0 && !hasScrolledToRealTime.current) {
-      if (chartRef.current) { hasScrolledToRealTime.current = true; chartRef.current.timeScale().scrollToRealTime(); }
+      if (chartRef.current) { chartRef.current.timeScale().scrollToRealTime(); hasScrolledToRealTime.current = true; }
       else { pendingScrollToRealTime.current = true; }
     }
   // isChartReady in deps: re-fires after async init if bars arrived early (BP-450)

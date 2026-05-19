@@ -739,7 +739,7 @@ describe("indicator localStorage persistence", () => {
 
 // ── OHLCVChart integration tests ──────────────────────────────────────────────
 
-import { OHLCVChart } from "@/components/instrument/OHLCVChart";
+import { OHLCVChart } from "@/components/instrument/chart/OHLCVChart";
 
 describe("OHLCVChart — Wave C integration", () => {
   const wrapper = makeWrapper();
@@ -829,7 +829,7 @@ describe("OHLCVChart — Wave C integration", () => {
     });
 
     const { OHLCVChart: OHLCVChartWithError } = await import(
-      "@/components/instrument/OHLCVChart"
+      "@/components/instrument/chart/OHLCVChart"
     );
 
     render(<OHLCVChartWithError instrumentId="ins-001" />, { wrapper });

@@ -184,7 +184,7 @@ describe("dynamic import — OHLCVChart (lightweight-charts ~100KB)", () => {
   it("OHLCVChart named export resolves correctly", async () => {
     // WHY: OverviewLayout lazy-loads via .then(m => ({ default: m.OHLCVChart })).
     // If that named export doesn't exist, the loading fallback shows forever.
-    const mod = await import("@/components/instrument/OHLCVChart");
+    const mod = await import("@/components/instrument/chart/OHLCVChart");
     expect(mod.OHLCVChart).toBeDefined();
     expect(typeof mod.OHLCVChart).toBe("function");
   });
@@ -193,7 +193,7 @@ describe("dynamic import — OHLCVChart (lightweight-charts ~100KB)", () => {
     // WHY: the dynamic wrapper resolves and renders the chart container.
     // We use the mocked next/dynamic (synchronous in tests) so the component
     // renders immediately without async waits.
-    const { OHLCVChart } = await import("@/components/instrument/OHLCVChart");
+    const { OHLCVChart } = await import("@/components/instrument/chart/OHLCVChart");
 
     // WHY minimal props: OHLCVChart only needs instrumentId + optional initialBars.
     render(withQuery(<OHLCVChart instrumentId="ins-aapl" />));

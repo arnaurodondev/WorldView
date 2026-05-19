@@ -117,7 +117,9 @@ import type { OHLCVBar, Fundamentals, Instrument } from "@/types/api";
  * Shift), which would push the session-stats strip and news row downward.
  */
 const OHLCVChart = dynamic(
-  () => import("@/components/instrument/OHLCVChart").then((m) => ({ default: m.OHLCVChart })),
+  // PLAN-0090 T-B-01: OHLCVChart moved to chart/ subdirectory alongside the
+  // useChartSeries hook and TimeframeToolbar — one namespace per concern.
+  () => import("@/components/instrument/chart/OHLCVChart").then((m) => ({ default: m.OHLCVChart })),
   {
     ssr: false, // lightweight-charts requires browser DOM — SSR would crash
     loading: () => (

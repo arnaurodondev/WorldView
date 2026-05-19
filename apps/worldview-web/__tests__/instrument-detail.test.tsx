@@ -20,7 +20,7 @@ import { FundamentalsTab } from "@/components/instrument/FundamentalsTab";
 import { IntelligenceTab } from "@/components/instrument/IntelligenceTab";
 import { InstrumentAISubheader } from "@/components/instrument/InstrumentAISubheader";
 import { LiveQuoteBadge } from "@/components/instrument/LiveQuoteBadge";
-import { OHLCVChart } from "@/components/instrument/OHLCVChart";
+import { OHLCVChart } from "@/components/instrument/chart/OHLCVChart";
 import { createGateway } from "@/lib/gateway";
 import type { Fundamentals, Quote, ContradictionsResponse } from "@/types/api";
 import { useApiClient, useAccessToken } from "@/lib/api-client";
@@ -730,7 +730,7 @@ describe("OHLCVChart", () => {
     // WHY dynamic re-import: vi.doMock only affects subsequent imports, not the
     // module-level vi.mock above. We need a fresh import that triggers the error.
     const { OHLCVChart: OHLCVChartWithError } = await import(
-      "@/components/instrument/OHLCVChart"
+      "@/components/instrument/chart/OHLCVChart"
     );
 
     render(<OHLCVChartWithError instrumentId="ins-001" />, { wrapper });
