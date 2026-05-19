@@ -118,58 +118,13 @@ function makeWrapper() {
 
 // ── T-F-6-11 & T-F-6-07: FundamentalSparkline showAxis tests ─────────────────
 
-describe("FundamentalSparkline — showAxis wiring (T-F-6-11, T-F-6-07)", () => {
-  // WHY import inside describe: keeps module-level imports minimal and avoids
-  // polluting global scope with instrument-specific imports.
-  it("renders loading skeleton with correct height when showAxis=false (default)", async () => {
-    const { FundamentalSparkline } = await import(
-      "@/components/instrument/FundamentalSparkline"
-    );
-
-    const { container } = render(
-      <FundamentalSparkline instrumentId="ins-001" metric="pe_ratio" />,
-      { wrapper: makeWrapper() },
-    );
-
-    // WHY bg-muted: after T-D-4-01, Skeleton renders with rounded-[2px] bg-muted
-    // (static, no animation). Checking for .bg-muted confirms the skeleton is rendered.
-    expect(container.querySelector(".bg-muted")).not.toBeNull();
-  });
-
-  it("renders extra skeleton row when showAxis=true (loading state)", async () => {
-    const { FundamentalSparkline } = await import(
-      "@/components/instrument/FundamentalSparkline"
-    );
-
-    const { container } = render(
-      <FundamentalSparkline instrumentId="ins-001" metric="pe_ratio" showAxis />,
-      { wrapper: makeWrapper() },
-    );
-
-    // WHY 2 skeletons: showAxis=true renders a sparkline skeleton AND an x-axis
-    // skeleton row below it. The presence of at least 2 bg-muted elements
-    // confirms showAxis propagates into the loading state.
-    // After T-D-4-01 Skeleton is static (no animate-pulse); use .bg-muted instead.
-    const skeletons = container.querySelectorAll(".bg-muted");
-    // WHY >= 2: the loading state may render the sparkline + axis skeleton.
-    // We assert at least 2 to confirm the axis skeleton row is present.
-    expect(skeletons.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("renders without errors when showAxis=false", async () => {
-    const { FundamentalSparkline } = await import(
-      "@/components/instrument/FundamentalSparkline"
-    );
-
-    // WHY firstChild check: the simplest assertion that the component mounted without
-    // throwing. A component in error state throws before returning JSX, so this
-    // test failing == an uncaught render error.
-    const { container } = render(
-      <FundamentalSparkline instrumentId="ins-001" metric="revenue" showAxis={false} />,
-      { wrapper: makeWrapper() },
-    );
-
-    expect(container.firstChild).not.toBeNull();
+// FundamentalSparkline was deleted in PLAN-0090 T-E-01 (PRD-0088 §6.10 — replaced
+// by inline sparkline cells inside FinancialsTab MetricsTable). T-E-02 will add
+// the new sparkline coverage; until then this describe is a placeholder skip to
+// keep typecheck and vitest green without referencing the deleted module path.
+describe.skip("FundamentalSparkline — showAxis wiring (obsolete; see PLAN-0090 T-E-02)", () => {
+  it("placeholder until T-E-02 replaces the sparkline coverage", () => {
+    expect(true).toBe(true);
   });
 });
 

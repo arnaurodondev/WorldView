@@ -9,8 +9,24 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { IChartApi, ISeriesApi } from "lightweight-charts";
-import type { CoordinateConverter } from "@/components/instrument/DrawingCanvas";
 import { createAllChartSeries } from "@/components/instrument/chart/createChartSeries";
+
+/**
+ * CoordinateConverter — minimal surface needed for price↔pixel mapping.
+ *
+ * WHY INLINED HERE: PLAN-0090 T-E-01 deletes the legacy DrawingCanvas component
+ * (PRD-0088 removes the drawing-tools workflow), so the interface that used to
+ * live there is now defined locally. The struct is intentionally narrow — the
+ * remaining chart code only needs the two refs to wire indicators into the
+ * lightweight-charts series. If a future feature reintroduces price↔pixel math
+ * outside this hook, promote this back to a shared types module.
+ */
+export interface CoordinateConverter {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  chart: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  series: any;
+}
 import {
   computeRSI,
   computeMACD,
