@@ -18,6 +18,9 @@ dependencies = [
     "sse-starlette==2.0",
     "pyjwt[crypto]==2.8",
     "cryptography>=42.0,<43",
+    # PRD-0089 F2: in-process TTL cache for ticker→instrument_id resolution
+    # (see api_gateway/resolution.py). Pure-Python, no native deps.
+    "cachetools==5.3.3",
 ]
 
 [project.optional-dependencies]

@@ -6,13 +6,16 @@ Split from proxy.py (PLAN-0089 B-3).
 
 from __future__ import annotations
 
-import uuid as _uuid
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from api_gateway.clients import DownstreamError, get_map_layers, get_relevant_news
+from api_gateway.resolution import (
+    InstrumentNotFoundError,
+    resolve_security_id,
+)
 from api_gateway.routes.helpers import _auth_headers, _clients, _system_headers
 from api_gateway.schemas import InstrumentSearchResult
 from observability.logging import get_logger  # type: ignore[import-untyped]
@@ -43,11 +46,22 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
     """
     if getattr(request.state, "user", None) is None:
         raise HTTPException(status_code=401, detail="Authentication required")
-    # F-026: validate company_id is a UUID to prevent path traversal attacks.
+
+    # PRD-0089 F2: resolve_security_id accepts BOTH a UUID and a ticker.
+    # The legacy F-026 UUID-only guard is gone — the resolver validates
+    # the input shape (UUID regex or live ticker lookup) and raises
+    # InstrumentNotFoundError on miss, which we map to 404.
     try:
-        _uuid.UUID(company_id)
-    except ValueError:
-        raise HTTPException(status_code=422, detail="Invalid company_id — must be a UUID")  # noqa: B904
+        resolved = await resolve_security_id(
+            company_id,
+            clients=_clients(request),
+            headers=_auth_headers(request),
+        )
+    except InstrumentNotFoundError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Instrument not found: {e.identifier}",
+        ) from e
 
     from api_gateway.application.use_cases.company_overview import CompanyOverviewUseCase
 
@@ -59,8 +73,11 @@ async def company_overview(company_id: str, request: Request) -> dict[str, Any]:
         service_clients=_clients(request),
     )
     try:
+        # Downstream now always receives a canonical instrument_id UUID
+        # string (no ticker, no entity_id). The translation dance in
+        # clients.get_company_overview has been deleted.
         return await use_case.execute(
-            company_id=company_id,
+            company_id=str(resolved.instrument_id),
             make_headers=lambda: _auth_headers(request),
         )
     except DownstreamError as e:
@@ -86,11 +103,22 @@ async def instrument_page_bundle(instrument_id: str, request: Request) -> dict[s
     """
     if getattr(request.state, "user", None) is None:
         raise HTTPException(status_code=401, detail="Authentication required")
-    # F-026: validate instrument_id is a UUID to prevent path traversal attacks.
+
+    # PRD-0089 F2: ticker-friendly path — accept either a UUID or a
+    # ticker symbol. resolve_security_id canonicalises both to an
+    # instrument_id UUID so the use case + downstream legs always
+    # receive the right id shape.
     try:
-        _uuid.UUID(instrument_id)
-    except ValueError:
-        raise HTTPException(status_code=422, detail="Invalid instrument_id — must be a UUID")  # noqa: B904
+        resolved = await resolve_security_id(
+            instrument_id,
+            clients=_clients(request),
+            headers=_auth_headers(request),
+        )
+    except InstrumentNotFoundError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Instrument not found: {e.identifier}",
+        ) from e
 
     # PLAN-0089 B-2: delegates to InstrumentPageBundleUseCase (application layer).
     # The external behaviour is identical — the use case wraps get_instrument_page_bundle.
@@ -104,7 +132,7 @@ async def instrument_page_bundle(instrument_id: str, request: Request) -> dict[s
         service_clients=_clients(request),
     )
     return await use_case.execute(
-        instrument_id=instrument_id,
+        instrument_id=str(resolved.instrument_id),
         make_headers=lambda: _auth_headers(request),
     )
 
@@ -190,6 +218,22 @@ async def refresh_instrument_price(instrument_id: str, request: Request) -> Any:
 
     clients = _clients(request)
     headers = _auth_headers(request)
+
+    # PRD-0089 F2: accept either a UUID or ticker. Resolved id is used
+    # for cooldown keying so a ticker refresh and a UUID refresh share
+    # the same gate (preventing duplicate EODHD spend).
+    try:
+        resolved = await resolve_security_id(
+            instrument_id,
+            clients=clients,
+            headers=headers,
+        )
+    except InstrumentNotFoundError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Instrument not found: {e.identifier}",
+        ) from e
+    instrument_id = str(resolved.instrument_id)
 
     # ── Cooldown check via Valkey ─────────────────────────────────────────────
     valkey = getattr(request.app.state, "valkey", None)

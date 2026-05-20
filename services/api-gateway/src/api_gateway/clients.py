@@ -227,20 +227,12 @@ async def get_company_overview(
         # Use UTC-aware datetime (.date()) per project UTC-only convention (CLAUDE.md Rule 7).
         start_90d_ago = (datetime.now(tz=UTC) - timedelta(days=90)).date().isoformat()
 
-        # D-F1-007 (PLAN-0087, 2026-05-09): the frontend instrument page route
-        # is keyed on the KG entity_id (e.g. 11111111-...), not the
-        # market-data instrument_id (e.g. 01900000-...).  Calling
-        # ``/api/v1/instruments/lookup?id=<entity_id>`` returns 404 because
-        # market-data only knows its own UUID space, so EVERY downstream leg
-        # (overview/fundamentals/quote/ohlcv) returned null and the
-        # instrument page header rendered "—" for price/Δ/marketCap/PE.
-        # Fix: try id-based lookup first; on 404 fall back to resolving the
-        # entity_id → ticker via KG and retry by symbol.  When the ticker
-        # path succeeds, every other leg uses the RESOLVED market-data id.
-        # ADR-F-12 reaffirmed: entity_id ≠ instrument_id; the gateway owns
-        # the resolution rather than pushing it onto every downstream.
-        resolved_md_id: str = company_id
-        instrument_raw: dict[str, Any] = {}
+        # PRD-0089 F2: ``company_id`` is now guaranteed to be a canonical
+        # instrument_id UUID — the route handler resolves any ticker /
+        # alias / UUID input via ``resolve_security_id`` BEFORE calling
+        # this function. The old 70-LOC "try id, fall back to KG ticker,
+        # retry by symbol" dance is gone; we just look up the instrument
+        # by its known id and raise 404 on miss.
         try:
             instrument_raw = await _checked_get(
                 clients.market_data,
@@ -248,55 +240,23 @@ async def get_company_overview(
                 f"/api/v1/instruments/lookup?id={company_id}&extra_info=true",
                 headers=_h(),
             )
-        except Exception:
-            # Treat any failure (DownstreamError 404, parse error, network) as
-            # "not a market-data id" and try the entity_id → ticker fallback.
-            logger.info(
-                "company_overview_lookup_by_id_missed_falling_back_to_kg",
-                company_id=company_id,
-            )
-            try:
-                kg_entity_resp = await _checked_get(
-                    clients.knowledge_graph,
-                    "knowledge-graph",
-                    f"/api/v1/entities/{company_id}",
-                    headers=_h(),
-                )
-                ticker_for_lookup = kg_entity_resp.get("ticker") or ""
-                if isinstance(ticker_for_lookup, str) and ticker_for_lookup:
-                    instrument_raw = await _checked_get(
-                        clients.market_data,
-                        "market-data",
-                        f"/api/v1/instruments/lookup?symbol={ticker_for_lookup}&extra_info=true",
-                        headers=_h(),
-                    )
-            except Exception:
-                # KG miss too — the entity is genuinely unknown to both sides.
-                # Leave instrument_raw={} so downstream leg fanout returns nulls
-                # gracefully (the bundle composer turns this into a 200 with
-                # honest empty fields rather than a 404 page).
-                logger.warning(
-                    "company_overview_kg_fallback_failed",
-                    company_id=company_id,
-                    exc_info=True,
-                )
-
-        # Use the RESOLVED market-data UUID for the parallel legs (was
-        # silently using the input company_id, which could be the entity_id
-        # and would 404 the rest of the legs).
-        if isinstance(instrument_raw.get("id"), str):
-            resolved_md_id = str(instrument_raw["id"])
-        else:
-            # Both id-lookup AND ticker-fallback missed — instrument is
-            # genuinely unknown.  Raise DownstreamError(404) so the bundle
-            # composer's _safe_overview catches it and surfaces overview=null
-            # (preserving the existing "required leg failed" contract that
-            # tests rely on).  The frontend renders its 'not found' UI path.
+        except DownstreamError:
+            # The instrument is genuinely unknown to market-data. The
+            # bundle composer's _safe_overview catches the re-raised 404
+            # and surfaces overview=null so the frontend can render its
+            # InstrumentNotFound UI path.
+            raise
+        except Exception as exc:
+            # Network / parse error: surface as a 503-ish downstream error
+            # so the caller sees an honest failure rather than a silent
+            # empty bundle (the prior behaviour swallowed everything).
             raise DownstreamError(
                 "market-data",
-                404,
-                f"Instrument {company_id} not found via id or KG ticker fallback",
-            )
+                502,
+                f"instrument lookup failed for {company_id}: {exc}",
+            ) from exc
+
+        resolved_md_id: str = str(instrument_raw.get("id") or company_id)
 
         # Instrument metadata is required; the rest degrade gracefully to null.
         # Each call gets its own fresh JWT via _h() so parallel calls don't share JTIs.
@@ -311,35 +271,13 @@ async def get_company_overview(
             _safe(f"/api/v1/fundamentals/{resolved_md_id}"),
         )
 
-        # WHY KG entity_id lookup (not instrument_id): ADR-F-12 — KG entity_id ≠ instrument_id.
-        # The market-data service (S3) has no entity_id; entity linking lives in S7.
-        # We resolve instrument ticker → KG entity_id via the KG lookup endpoint so that
-        # briefing/graph/news endpoints on the instrument page receive the correct KG id.
-        # Falls back to company_id when the ticker isn't seeded in the KG.
-        ticker_symbol: str = instrument_raw.get("symbol", "")
-        kg_entity_id: str = company_id  # default: fall back to company_id (instrument_id)
-        if ticker_symbol:
-            try:
-                kg_resp = await _checked_get(
-                    clients.knowledge_graph,
-                    "knowledge-graph",
-                    "/api/v1/entities/lookup",
-                    headers=_h(),
-                    params={"ticker": ticker_symbol},
-                )
-                if kg_resp.get("entity_id"):
-                    kg_entity_id = str(kg_resp["entity_id"])
-            except Exception as e:
-                # T-A-1-03: KG lookup is best-effort (fall back to company_id), but
-                # silent failures hide integration issues.  Log at WARNING with enough
-                # context to diagnose the root cause without alarming the on-call.
-                logger.warning(
-                    "kg_lookup_failed",
-                    ticker=ticker_symbol,
-                    company_id=company_id,
-                    exc=str(e),
-                    exc_info=True,
-                )
+        # PRD-0089 F2: ADR-F-12 SUPERSEDED. Post-F2, ``canonical_entities.entity_id``
+        # equals ``instruments.id`` for every tradable security (M-017 invariant
+        # enforced in CI). The previous code did a separate KG lookup to map
+        # ticker→entity_id; that round-trip is now redundant — kg_entity_id IS
+        # the instrument_id. Kept the variable name for type-stability in the
+        # payload assembly below; will be dropped in F2 v1.1 cleanup (plan §6.4).
+        kg_entity_id: str = resolved_md_id
 
         # Extract name / currency / sector from the first company-profile record's data blob.
         profile_data: dict[str, Any] = {}
@@ -546,40 +484,30 @@ async def get_instrument_page_bundle(
             return None
 
     async def _compose() -> dict[str, Any]:
-        # Phase 1: overview composite. Sequential because Phase 2's news call
-        # needs the resolved entity_id from overview.instrument.entity_id.
-        overview_data = await _safe_overview()
-
-        # Read entity_id and resolved instrument_id from overview.
-        # instrument_id in the URL may be a KG entity_id; the overview resolves
-        # the authoritative market-data instrument_id via the instruments endpoint.
-        # Phase 2 calls require the market-data instrument_id, not the KG entity_id.
-        entity_id = instrument_id
-        resolved_md_id = instrument_id  # market-data instrument UUID
-        if overview_data and isinstance(overview_data.get("instrument"), dict):
-            inst = overview_data["instrument"]
-            resolved = inst.get("entity_id")
-            if isinstance(resolved, str) and resolved:
-                entity_id = resolved
-            md_id = inst.get("instrument_id")
-            if isinstance(md_id, str) and md_id:
-                resolved_md_id = md_id
-
-        # Phase 2: everything else in parallel. None on per-call failure.
-        # QA-iter1: insider path corrected to /insider-transactions-snapshot.
-        # market-data exposes the snapshot suffix; the un-suffixed path would
-        # 404 silently (the dedicated S9 proxy at routes/proxy.py rewrites
-        # the short path before calling S3).
-        fundamentals_data, technicals_data, insider_data, news_data = await asyncio.gather(
-            _safe_md(f"/api/v1/fundamentals/{resolved_md_id}"),
-            _safe_md(f"/api/v1/fundamentals/{resolved_md_id}/technicals-snapshot"),
-            _safe_md(f"/api/v1/fundamentals/{resolved_md_id}/insider-transactions-snapshot"),
-            _safe_nlp(f"/api/v1/news/entity/{entity_id}", params={"limit": 5}),
+        # PRD-0089 F2: ``instrument_id`` is now guaranteed-canonical
+        # (the route handler resolves any ticker / alias / UUID upstream
+        # via ``resolve_security_id``). The old two-phase dance read the
+        # resolved md_id back out of the overview payload before issuing
+        # the Phase-2 fan-out; that re-read is no longer necessary because
+        # M-017 guarantees ``entity_id == instrument_id`` for tradable
+        # securities, and the incoming ``instrument_id`` is already the
+        # canonical UUID for both the market-data row and the KG entity.
+        #
+        # All 5 calls now fly in parallel — the prior Phase 1 / Phase 2
+        # sequential split was only there to bridge the two id namespaces.
+        overview_data, fundamentals_data, technicals_data, insider_data, news_data = await asyncio.gather(
+            _safe_overview(),
+            _safe_md(f"/api/v1/fundamentals/{instrument_id}"),
+            _safe_md(f"/api/v1/fundamentals/{instrument_id}/technicals-snapshot"),
+            _safe_md(f"/api/v1/fundamentals/{instrument_id}/insider-transactions-snapshot"),
+            _safe_nlp(f"/api/v1/news/entity/{instrument_id}", params={"limit": 5}),
         )
 
         return {
             "instrument_id": instrument_id,
-            "entity_id": entity_id,
+            # v1: still emit entity_id for frontend backwards-compat
+            # (PRD-0089 F2 plan §6.4 — drop in v1.1 cleanup).
+            "entity_id": instrument_id,
             "overview": overview_data,
             "fundamentals": fundamentals_data,
             "technicals": technicals_data,
