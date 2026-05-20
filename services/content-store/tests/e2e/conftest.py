@@ -47,6 +47,26 @@ _E2E_DB_URL = os.getenv(
 
 _E2E_ADMIN_TOKEN = "e2e-admin-token"  # noqa: S105
 
+
+def _make_e2e_system_jwt() -> str:
+    """Generate a HS256 JWT accepted by InternalJWTMiddleware in skip_verification mode."""
+    import time
+
+    import jwt as _jwt
+
+    payload = {
+        "iss": "worldview-gateway",
+        "sub": "e2e-system-user",
+        "tenant_id": "e2e-tenant",
+        "role": "system",
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 3600,
+    }
+    return _jwt.encode(payload, "e2e-secret", algorithm="HS256")
+
+
+_INTERNAL_JWT = _make_e2e_system_jwt()
+
 # ── DB availability probe (run once per session) ───────────────────────────────
 
 _DB_AVAILABLE: bool | None = None
@@ -179,7 +199,9 @@ async def e2e_app(e2e_session_factory: async_sessionmaker[AsyncSession]) -> Fast
 async def e2e_client(e2e_app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
     """AsyncClient using ASGI transport backed by the e2e app."""
     transport = ASGITransport(app=e2e_app)
-    async with AsyncClient(transport=transport, base_url="http://test", timeout=30.0) as ac:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", timeout=30.0, headers={"X-Internal-JWT": _INTERNAL_JWT}
+    ) as ac:
         yield ac
 
 

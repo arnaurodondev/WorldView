@@ -752,6 +752,282 @@ Both converters are stored in `converters: CoordinateConverter | null` state. Th
 
 ---
 
+## 8c. Instrument Detail Page (PRD-0088 / PLAN-0090) — 2026-05-19
+
+> **Added**: 2026-05-19 in PLAN-0090 T-E-04. Documents the ground-up redesign of
+> `/instruments/[entityId]` shipped across waves A–E.
+> **Spec**: `docs/specs/0088-instrument-detail-page-ground-up-redesign.md`
+> **Plan**: `docs/plans/0090-instrument-detail-page-redesign-plan.md`
+> **Supersedes**: the 9-section card pattern from PLAN-0041 (Fundamentals tab) and
+> the 4-tab layout from PLAN-0071 phase 6.5+. The legacy
+> `OverviewLayout` / `FundamentalsTab` / `IntelligenceTab` (old) /
+> `NewsTab` (old) components and 36 sibling files under `components/instrument/`
+> were **deleted in T-E-01** (40-file sweep) — verify with
+> `git log --diff-filter=D --name-only --since=2026-05-17 -- components/instrument/`
+> before re-introducing any of those names.
+
+### 8c.1 Why the Redesign Exists
+
+The previous instrument page hit ~30px effective row height (despite claiming
+22px), spent ~50% of the Fundamentals tab on section-card chrome, and split
+News + Intelligence into two tabs even though they answer the same question
+("what does the market think of this name right now?"). The redesign restores
+Bloomberg-grade density (≥40 data points above the fold on Quote tab) and
+collapses News into the Intelligence tab so the entity graph, the brief, and
+the news headlines render in one viewport.
+
+**Hard rules in this surface**:
+
+1. Every numeric value is `font-mono tabular-nums` (ADR-F-15). Null values
+   render as `—` (em-dash) in the same monospace face so columns never jitter.
+2. No off-palette colour utilities — `text-warning` (NOT `text-amber-400`).
+   Enforced by the no-off-palette-colors Vitest (Wave E gate; T-E-02).
+3. Cautionary state (e.g. P/E > 30) uses the semantic `text-warning` token,
+   which resolves to `#F59E0B` via `--warning`. Negative danger states use
+   `text-negative` (`#EF5350`).
+4. Every component file ≤ 200 lines (orchestrators ≤ 300). If you need more,
+   split into a hook + a sub-component.
+
+### 8c.2 Page Shell — Header + Brief + Tabs (Wave A)
+
+The page client (`InstrumentPageClient.tsx`, T-A-05) renders three sticky-stacked
+chrome rows above the active tab body:
+
+| Component | File | Height | Source task |
+|-----------|------|--------|-------------|
+| `InstrumentHeader` | `components/instrument/header/InstrumentHeader.tsx` | 36px sticky | T-A-04 |
+| `WeekRangeMini` | `components/instrument/header/WeekRangeMini.tsx` | 60×6px inline | T-A-04 |
+| `AiBriefBanner` | `components/instrument/brief/AiBriefBanner.tsx` | 24px collapsed / auto expanded | T-A-04 |
+| `InstrumentTabs` | `components/instrument/tabs/InstrumentTabs.tsx` | 32px | T-A-04 |
+
+**`InstrumentHeader`** — single 36px row, `position: sticky; top: 0; z-30;
+bg-background border-b border-border`. Left cluster: back chevron + ticker
+(13px mono semibold) + exchange badge + truncated company name. Right cluster:
+price + signed change + signed change% (colour by sign via `priceChangeClass`),
+then `CAP` / `VOL` / `P/E` label-value pairs (10px sans label + 11px mono
+value), then a `WeekRangeMini`, then a `LiveQuoteBadge` (freshness dot only —
+no second price). Props: `{ instrument, quote, fundamentals }`. Every sub
+value is rendered through the `formatPrice` / `formatPercentDirect` /
+`formatMarketCap` / `formatVolume` / `formatRatio` helpers in `lib/utils.ts`
+so the null-handling stays consistent.
+
+**`WeekRangeMini`** — 60px wide × 6px tall `bg-muted` track with a `bg-primary`
+(`#FFD60A`) fill positioned at `(price − low) / (high − low) × 100%`, clamped
+to `[0, 100]`. Used both inline in the header (without labels) and standalone
+in the Quote-tab MetricsTable row 19. The label-less variant is the canonical
+Bloomberg-style inline range indicator — no axis ticks, no numbers, the bar
+itself communicates position because the surrounding row already labels it
+"52W RANGE".
+
+**`AiBriefBanner`** — single-line collapsible banner between the tabbar and the
+tab body. Collapse state is persisted per session in `sessionStorage` under
+the key `wv:brief-collapsed:{entityId}`. Why `sessionStorage` (not `localStorage`):
+the choice is per-browser-tab/window, not per-user; opening a second
+instrument in a new tab should not inherit your collapse state. Banner is
+hidden entirely (return `null`) when the brief endpoint returns 404 or empty —
+**never** render an "unavailable" placeholder for the brief because that wastes
+the same vertical real estate the banner exists to economise on.
+
+**`InstrumentTabs`** — 3-tab underline control (QUOTE / FINANCIALS / INTELLIGENCE).
+Active tab carries a 2px `border-primary` bottom edge and `text-foreground`;
+inactive tabs use `text-muted-foreground`. Mounts a `HotkeyScope` that binds
+`Q` / `F` / `I` to the three tabs respectively. The scope auto-suspends inside
+text inputs (search, filters) so the chord set never collides with typing.
+
+### 8c.3 Shared Primitives (Wave A — T-A-01..03)
+
+Two primitives form the typographic backbone of every metric on the page:
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `MetricLabel` | `components/instrument/shared/MetricLabel.tsx` | 10px uppercase muted label (`text-[10px] uppercase tracking-wide text-muted-foreground`) |
+| `MetricValue` | `components/instrument/shared/MetricValue.tsx` | 11px IBM Plex Mono tabular-nums value with `color` prop |
+
+**`MetricValue` colour prop** maps to Tailwind utilities (not raw hex):
+
+| `color` value | Class | When to use |
+|---------------|-------|-------------|
+| `"positive"` | `text-positive` | Gains, ROE > 15%, margin in the green |
+| `"negative"` | `text-negative` | Losses, P/E > 50, ROE < 0 |
+| `"amber"` | `text-warning` | Cautionary thresholds (P/E 30–50, D/E 1.5–3) |
+| `"muted"` | `text-muted-foreground` | De-emphasised / inactive values |
+| `"default"` | `text-foreground` | Neutral body value (default) |
+
+Null / undefined `children` resolve to `—` in the same monospace face. This is
+the "absent data" placeholder — **not** a loading state (use shadcn `Skeleton`
+for loading). All Quote/Financials/Intelligence cells are built on these two
+primitives so the typography token is impossible to drift.
+
+Secondary primitives: `SectionDivider` (1px `bg-border/30` separator with
+optional label) and `DataTimestamp` ("Data as of {date}" footer, 10px muted).
+
+### 8c.4 Quote Tab (Wave B — T-B-01..05)
+
+`QuoteTab.tsx` (T-B-04) is a thin orchestrator that wires `useMetricsTableData`
+into two children:
+
+| Component | File | Source task |
+|-----------|------|-------------|
+| `OHLCVChart` | `components/instrument/chart/OHLCVChart.tsx` | T-B-01 — refactored to <180 lines; the `hasScrolledToRealTime` race that caused the chart to scroll back to 1985 on load was excised here |
+| `TimeframeToolbar` | `components/instrument/chart/TimeframeToolbar.tsx` | T-B-01 — 1D/1W/1M/6M/1Y/5Y |
+| `ChartToolbar` | `components/instrument/ChartToolbar.tsx` | KEEP (minor cleanup) |
+| `SessionStatsStrip` | `components/instrument/SessionStatsStrip.tsx` | T-B-01 — `O H L C VOL` strip in 22px row |
+| `MetricsTable` | `components/instrument/quote/metrics/MetricsTable.tsx` | T-B-03 |
+| `MetricRow` | `components/instrument/quote/metrics/MetricRow.tsx` | T-B-02 |
+| `MetricGroupDivider` | `components/instrument/quote/metrics/MetricGroupDivider.tsx` | T-B-02 |
+| `WeekRangeBar` | `components/instrument/quote/metrics/WeekRangeBar.tsx` | T-B-02 |
+| `AnalystMiniBar` | `components/instrument/quote/metrics/AnalystMiniBar.tsx` | T-B-02 |
+
+**`MetricsTable`** is the canonical right-sidebar data pattern for the instrument
+detail surface and **replaces the legacy 9-section card pattern** that
+PLAN-0041 shipped. It renders **26 data rows + 7 group dividers** in a fixed
+40%-width column on the Quote tab. Layout invariants per row:
+
+- Wrapper: `flex items-center justify-between h-[22px] px-3`
+- Label: 10px ALL CAPS muted (`MetricLabel`, `flex-1 truncate`)
+- Value: 11px mono via `MetricValue` with a colour token (see threshold rules
+  in PRD-0088 §6.4 / FR-10)
+
+Group dividers use `MetricGroupDivider` (a 1px `bg-border/30` rule with
+`mx-3 my-0.5`). Row 19 swaps the value cell for a `WeekRangeBar`; row 26 swaps
+it for an `AnalystMiniBar` (a 3-segment `[buy / hold / sell]` proportional bar
+plus a `28B · 10H · 2S` caption in 10px mono).
+
+**Colour thresholds (FR-10)** are encoded once in `useMetricsTableData.ts`
+and consumed by every row — never inline a threshold in JSX. Examples baked
+into the hook: P/E > 30 → `amber`, P/E > 50 → `negative`; D/E > 1.5 → `amber`,
+D/E > 3 → `negative`; Net Margin < 0 → `negative`, > 15% → `positive`.
+
+### 8c.5 Financials Tab (Wave C — T-C-01..04)
+
+`FinancialsTab.tsx` (T-C-03) orchestrates the four panels:
+
+| Component | File | Source task |
+|-----------|------|-------------|
+| `FlatMetricsGrid` | `components/instrument/financials/FlatMetricsGrid.tsx` | T-C-01 |
+| `MetricCell` | `components/instrument/financials/MetricCell.tsx` | T-C-01 |
+| `IncomeStatementTable` | `components/instrument/financials/IncomeStatementTable.tsx` | T-C-02 |
+| `EarningsBarChart` | `components/instrument/financials/EarningsBarChart.tsx` | T-C-02 |
+| `AnalystSidebar` | `components/instrument/financials/AnalystSidebar.tsx` | T-C-03 |
+
+**`FlatMetricsGrid`** — the redesign's most important density win. A `<dl>`
+laid out as `grid-cols-3 gap-x-6 gap-y-0` showing **45 metrics across 8 group
+headers** (VALUATION / PROFITABILITY / GROWTH / BALANCE SHEET / CASH FLOW /
+DIVIDENDS / OWNERSHIP / TECHNICALS). No section cards, no card borders, no
+section padding — just label/value pairs separated by a 1px divider with a
+10px ALL CAPS group label. Each cell is a `MetricCell` of 36px total height
+(14px label + 22px value, gap=0). This is the **3-col flat pattern** that
+replaces the old 9-section card layout; reuse it for any new "show N
+fundamentals" surface elsewhere in the app.
+
+`MetricCell` itself is a 2-line `<dt>/<dd>` pair that wraps `MetricLabel` + `MetricValue`
+so the typography stays locked. Threshold colouring uses the same `color`
+mapping as the Quote-tab MetricsTable.
+
+**`IncomeStatementTable`** — 4-year FY table (Revenue, Gross Profit, EBIT,
+Net Income, EPS), 22px rows, right-aligned `font-mono tabular-nums` cells.
+**`EarningsBarChart`** — 6–8 bars (actual EPS solid, estimate outlined; beat =
+`bg-positive`, miss = `bg-negative`), 80px tall, fiscal-year labels on the
+x-axis.
+
+**`AnalystSidebar`** (280px right column, sticky) — consensus block
+(stacked Buy/Hold/Sell mini bar with `28B · 10H · 2S` caption), target price
+(13px mono semibold) with high/low range, "Based on N analysts" tag, and a
+`DataTimestamp` footer. The 280px width is fixed across the whole page so the
+sidebar lines up visually with the right-edge containers on other tabs.
+
+### 8c.6 Intelligence Tab (Wave D — T-D-01..04)
+
+`IntelligenceTab.tsx` (T-D-04) is a 3-column flex layout that unifies news,
+graph, and entity context in a single viewport — replacing the old
+News+Intelligence two-tab split.
+
+| Column | Component | File | Source task |
+|--------|-----------|------|-------------|
+| Left (30%) | `NewsColumn` + `NewsFilters` + `CompactArticleRow` | `components/instrument/intelligence/news/` | T-D-02 |
+| Centre (45%) | `GraphColumn` + `GraphToolbar` + `EntityGraph` | `components/instrument/intelligence/graph/` + `components/instrument/EntityGraph.tsx` | T-D-01 + T-D-04 |
+| Right (25%) | `ContextPanel` + `NodeDetailCard` + `RelationsList` | `components/instrument/intelligence/context/` | T-D-03 |
+
+**`NewsColumn`** uses `useEntityNewsInfinite` (a `useInfiniteQuery` wrapper around
+`GET /v1/news/entity/{entityId}?limit=20&offset=N`). Each article renders as a
+28px `CompactArticleRow`:
+`[sentiment dot 6px] [relative time 10px mono] [source 10px truncate] [headline 11px truncate flex-1] [impact 10px mono muted]`.
+Sentiment dot colour follows FR-10 (`bg-positive` / `bg-negative` /
+`bg-muted-foreground`). Infinite scroll loads the next 20 on scroll-to-bottom.
+
+**`GraphColumn`** stacks an always-expanded AI brief card, a `GraphToolbar`
+(depth slider 1–3 + relationship-type multi-select + fullscreen), and the
+`EntityGraph` (Cytoscape/sigma.js). Depth-3 is wrapped in a **2000ms client
+timeout** (T-D-01) — if S9 stalls, the component shows a "Network timeout —
+try a lower depth" message instead of a blocking spinner. This was a frequent
+user-facing failure with the legacy graph.
+
+**`ContextPanel`** flips between two states based on the locally-held
+`selectedNodeId`:
+
+- **No node selected** → entity overview (description, health score, evidence
+  quality bars, contradictions cards when count > 0).
+- **Node selected** → `NodeDetailCard` (name, type badge, confidence score,
+  back button to deselect) + `RelationsList` (per-edge rows with type badge,
+  target name, italic evidence snippet truncated to 2 lines).
+
+Contradiction cards (`ContradictionCard.tsx`, kept from the legacy code with
+polish) anchor to the bottom of the column when `contradictions.length > 0`,
+using `bg-negative/5 border border-negative/20`.
+
+### 8c.7 Density Reference
+
+The redesign establishes two canonical data-row heights:
+
+| Pattern | Height | Used in |
+|---------|--------|---------|
+| `MetricRow` | **22px** | `MetricsTable` (Quote tab right column), threshold-coloured numeric rows on any future panel |
+| `CompactArticleRow` | **28px** | `NewsColumn` (Intelligence tab), any future article-list surface |
+
+Anywhere on the instrument detail surface that needs a new dense row should
+reuse one of these two heights — picking arbitrary intermediate values
+(24, 26, 30) reintroduces the jitter that the redesign eliminated.
+
+### 8c.8 Deleted Legacy Components
+
+The 40 files removed in T-E-01 (verify via
+`git show 58cbeec1 --stat | grep "^ apps/worldview-web/components/instrument"`):
+`InstrumentAISubheader`, `AnalystRail`, `PerformanceBar`, `OverviewLayout`,
+`OverviewSidebar`, `FundamentalsTab`, `FundamentalsMetricsGrid`,
+`InstrumentKeyMetrics`, `NewsTab`, `IntelligenceTab` (legacy),
+`InstrumentTopNews`, `OverviewInsiderStrip`, `FundamentalSparkline`,
+`InsiderTransactionsTable`, `AnalystConsensusStrip`, `RevenueTrendSparklines`,
+`IncomeStatementFY`, `AnalystTargetSparkline`, `MarketPositionPanel`,
+`PeerComparisonPanel`, `ShortInterestRow`, `FundamentalsTopNews`,
+`InstrumentBriefSection`, `IntelligenceSummarySection`, `IntelligenceFilters`,
+`GraphDetailSidebar`, `TechnicalSnapshot`, `OwnershipSnapshotPanel`,
+`SplitsDividendsPanel`, `EarningsHistoryChart`, `52WeekRangeBar`,
+`CompactInstrumentHeader`, `DrawingPalette`, `DrawingCanvas`, `CrosshairHUD`
++ supporting test files. Do not re-introduce any of those names — the
+redesign uses distinct file names on purpose so old grep paths fail loudly.
+
+### 8c.9 Wave E Gates (T-E-01..04)
+
+The Wave E validation gate enforces the architectural invariants documented
+above:
+
+| Gate | Task | Tool |
+|------|------|------|
+| Zero references to deleted component files | T-E-01 | `grep -r` sweep |
+| No off-palette utility classes (`text-amber-NNN`, `text-red-NNN`, etc.) | T-E-02 | Vitest: `__tests__/no-off-palette-colors.test.ts` |
+| All 29+ unit tests pass + 7 Playwright E2E tests pass | T-E-03 | `pnpm test` + `pnpm test:e2e` |
+| `pnpm tsc --noEmit` returns 0 errors | T-E-04 | `pnpm typecheck` |
+| `pnpm build` succeeds (catches missing `"use client"`, server-component violations `tsc` misses) | T-E-04 | `pnpm build` |
+| DESIGN_SYSTEM.md updated with the new component catalogue | T-E-04 | this section |
+
+**WHY a dedicated no-off-palette-colors test**: when a junior dev reaches for
+`text-amber-400` because it's the muscle-memory Tailwind colour, the value
+resolves to a hex that drifts from `--warning` (#F59E0B today but mutable).
+The test grep-fails the build the moment any off-palette utility lands.
+The sanctioned cautionary colour is **`text-warning`** — period.
+
+---
+
 ## 9. TanStack Query Conventions
 
 ### staleTime Per Data Type (set at hook level, not globally)
@@ -998,3 +1274,304 @@ Test mocks must export the SeriesDefinition string sentinels and an `addSeries: 
 | `comfortable` | h-10 px-5 text-sm | h-10 px-3 text-sm |
 
 Default kept on `default` to preserve all existing call sites; new code opts into `compact` for institutional 22px-row contexts.
+
+---
+
+
+## 13. Tailwind Config Reference
+
+The Tailwind configuration (`tailwind.config.ts`) maps the CSS variables from `app/globals.css`
+into Tailwind utility classes. Additional tokens added beyond the shadcn/ui defaults:
+
+### 13.1 Financial Domain Tokens
+
+These tokens have no equivalent in standard Tailwind. They are defined in `globals.css` and
+consumed as Tailwind utilities:
+
+| Utility | CSS Variable | Purpose |
+|---------|-------------|---------|
+| `text-positive` / `bg-positive` | `--positive` | Price up, portfolio gains (#26A69A teal) |
+| `text-negative` / `bg-negative` | `--negative` | Price down, losses (#EF5350 muted red) |
+| `text-warning` / `bg-warning` | `--warning` | Medium severity alerts (#F59E0B amber) |
+| `bg-surface-2` | `--surface-2` | Third elevation level (alias for `--muted`, #18181B) |
+| `bg-surface-3` | `--surface-3` | Fourth elevation level, borders (#27272A) |
+
+### 13.2 Custom Animations
+
+Defined in `tailwind.config.ts` `keyframes` / `animation` blocks:
+
+| Class | Duration | Use |
+|-------|---------|-----|
+| `animate-flash-in` | 150ms ease-out | FlashOverlay entrance (urgent CRITICAL alerts) |
+| `animate-skeleton-pulse` | 2s infinite | Loading skeleton shimmer (slower than Tailwind default — less distracting for finance users) |
+| `animate-accordion-down` | 200ms | shadcn/ui Accordion expand |
+| `animate-accordion-up` | 200ms | shadcn/ui Accordion collapse |
+
+### 13.3 Border Radius — Terminal Sharp
+
+All three Tailwind radius levels (`rounded-lg`, `rounded-md`, `rounded-sm`) map to the same
+`--radius` value (2px). This is intentional: terminal/finance UIs use uniformly sharp corners.
+The shadcn/ui default 6px / 4px / 2px consumer-app scale does not apply here.
+
+---
+
+## 14. Package-Level Policy
+
+### 14.1 Whitelisted Third-Party Libraries
+
+These are the only third-party UI/utility libraries approved for use. Any addition requires
+an ADR and `pnpm audit` showing 0 CVEs:
+
+| Library | Purpose | CVE policy |
+|---------|---------|-----------|
+| shadcn/ui (Radix UI primitives) | All UI components | clean |
+| AG Grid Community | Data-heavy screener/portfolio tables only | clean |
+| sigma.js + graphology | Knowledge graph visualisation only | clean |
+| lightweight-charts | OHLCV candlestick charts | clean |
+| recharts | Portfolio donut/bar charts (code-split) | clean |
+| write-excel-file | Excel export (replaces SheetJS — CVEs) | clean |
+| jspdf + jspdf-autotable | PDF export | clean (4.x+ only; 2.x/3.x had CVEs) |
+| papaparse | CSV parsing/generation | clean |
+
+### 14.2 Banned Patterns
+
+| Pattern | Reason | Alternative |
+|---------|--------|------------|
+| `localStorage` for auth tokens | XSS risk | React state (AuthContext) |
+| `sessionStorage` for auth tokens | XSS risk | React state (AuthContext) |
+| Direct backend URL construction | Bypasses S9 gateway | `/api/*` rewrites |
+| `Math.random()` for security values | Not cryptographically secure | `crypto.getRandomValues()` |
+| Hardcoded hex colors | Breaks theme tokens | Tailwind CSS variables |
+| Tailwind `slate-950` or `blue-500` | Wrong palette | Terminal Dark tokens |
+| `any` TypeScript type | Loses type safety | Proper interface/type |
+| `useState+useEffect` for API calls | Bypasses TanStack Query | `useQuery` / `useMutation` |
+| Importing `infrastructure/` in domain | Architecture violation | Use cases / ports |
+
+## 15. Shared Primitives (W0 — Frontend Platform Hardening)
+
+> Added: 2026-05-19 (W0 of frontend platform hardening PRD).
+> These primitives are the single canonical implementation for concerns
+> that were previously scattered across 3–20+ ad-hoc call sites.
+
+### 15.1 `<FormattedNumber>` — universal numeric display
+
+**Path**: `components/ui/FormattedNumber.tsx`
+
+**Purpose**: Enforces `font-mono tabular-nums slashed-zero` on every number rendered
+to the user. Replaces 20+ inline numeric renders that forgot these classes.
+
+**Props**:
+| Prop | Type | Description |
+|------|------|-------------|
+| `value` | `number \| null \| undefined` | The value to render |
+| `format` | `"currency" \| "percent" \| "ratio" \| "volume" \| "compact" \| "integer"` | Formatting mode |
+| `decimals?` | `number` | Override decimal places (percent/ratio only) |
+| `color?` | `"positive" \| "negative" \| "amber" \| "muted" \| "default"` | Semantic color |
+
+**Null/undefined behaviour**: renders `—` in `text-muted-foreground/50` so missing values
+are visually distinct from zero without breaking column alignment.
+
+**Usage**:
+```tsx
+// Always font-mono + tabular-nums — ADR-F-15 enforced
+<FormattedNumber value={price} format="currency" />
+<FormattedNumber value={change} format="percent" color="positive" />
+<FormattedNumber value={null} format="volume" />   {/* → "—" */}
+```
+
+**When to use vs raw number**: always use `<FormattedNumber>` for values
+rendered to the user in table cells, card metrics, and badges. Raw format
+functions from `lib/format.ts` are appropriate when you need a string for
+an `aria-label` or `title` attribute.
+
+### 15.2 `<SignalBadge>` — market sentiment indicator
+
+**Path**: `components/ui/SignalBadge.tsx`
+
+**Purpose**: Renders icon + text label for sentiment signals. Replaces icon-only
+renders that failed color-blind accessibility (WCAG 1.4.1).
+
+**Props**:
+| Prop | Type | Description |
+|------|------|-------------|
+| `sentiment` | `"bullish" \| "bearish" \| "neutral" \| null \| undefined` | Signal direction |
+| `className?` | `string` | Extra classes on the container |
+
+**Sentiment values and rendering**:
+| Sentiment | Icon | Label | Color |
+|-----------|------|-------|-------|
+| `bullish` | `TrendingUp` | `BULLISH` | `text-positive` |
+| `bearish` | `TrendingDown` | `BEARISH` | `text-negative` |
+| `neutral` | `Minus` | `NEUTRAL` | `text-muted-foreground` |
+| `null` | — | nothing | — |
+
+**Usage**:
+```tsx
+<SignalBadge sentiment="bullish" />   // → green TrendingUp + "BULLISH"
+<SignalBadge sentiment={null} />      // → renders nothing (no DOM node)
+```
+
+**Used by**: `ArticleCard`, news page article rows, S6 signals panel.
+**Replaces**: inline icon renders at `news/page.tsx:256-263` and `ArticleCard.tsx:102-110`.
+
+### 15.3 Hooks
+
+#### `useCopyToClipboard`
+
+**Path**: `lib/hooks/useCopyToClipboard.ts`
+
+Returns `{ copy: (text: string) => Promise<void>; copied: boolean }`.
+
+Prefers the Clipboard API; falls back to `execCommand("copy")` for older WebKit
+and in-app browsers. `copied` stays `true` for 2000ms after a successful write.
+
+**Replaces**: duplicate clipboard logic in `AliasPill`, `MarkdownContent`, `DataTable`.
+
+#### `useKeyboardShortcuts`
+
+**Path**: `lib/hooks/useKeyboardShortcuts.ts`
+
+```ts
+useKeyboardShortcuts({
+  "ctrl+k": () => openSearch(),
+  "cmd+k":  () => openSearch(),  // both platform variants
+  "escape": () => closeModal(),
+});
+```
+
+Key format: `"modifier+key"` (lowercase). Modifiers: `ctrl`, `cmd`, `shift`, `alt`.
+Does NOT fire inside `input`, `textarea`, `select`, or `contenteditable` elements.
+Does NOT handle sequence chords (g+d) — use `react-hotkeys-hook` for those.
+
+**Replaces**: inline `keydown` listeners in `GlobalSearch`, `QuickEditPopover`, `FlashOverlay`.
+
+#### `useFormattedTimestamp`
+
+**Path**: `lib/hooks/useFormattedTimestamp.ts`
+
+```ts
+const label = useFormattedTimestamp("2026-05-19T14:32:00Z", "relative"); // "2h ago"
+const label = useFormattedTimestamp(someDate, "absolute"); // "May 19, 2026, 14:32"
+const label = useFormattedTimestamp(null, "short"); // "—"
+```
+
+Format modes (per DESIGN_SYSTEM §6.4):
+- `"relative"` — "just now", "Nm ago", "Nh ago", "Nd ago", "Mon DD" (default)
+- `"absolute"` — "May 19, 2026, 14:32" (detail view headers)
+- `"short"` — "May 19, 2026" (table rows)
+
+Returns `"—"` for null/undefined/invalid input.
+
+### 15.4 `lib/sse-parser.ts` — SSE line parser
+
+**Path**: `lib/sse-parser.ts`
+
+Shared parser for `text/event-stream` line-by-line parsing. Extracted to prevent
+protocol drift between `useChatStream` and `ActionConfirmModal` (MED-013).
+
+```ts
+import { parseSSELine } from "@/lib/sse-parser";
+import type { SSEEvent } from "@/lib/sse-parser";
+
+const event = parseSSELine("event: tool_call");
+// → { type: "tool_call", data: "tool_call" }
+
+const event = parseSSELine("data: {\"text\": \"hello\"}");
+// → { type: "message", data: "{\"text\": \"hello\"}" }
+
+parseSSELine("")          // → null (blank line — event block terminator)
+parseSSELine(": ping")    // → null (keep-alive comment)
+parseSSELine("no-colon")  // → null (bare field name, ignored)
+```
+
+### 15.5 `DEFAULT_STALE` — canonical staleTime map
+
+**Path**: `lib/api/_client.ts` (exported alongside `apiFetch`)
+
+Single source of truth for per-domain TanStack Query staleTime values (HIGH-018, FR-8.4).
+Import from `@/lib/api/_client` and use in `useQuery` calls.
+
+| Key | Value (ms) | Rationale |
+|-----|-----------|-----------|
+| `news` | 300,000 (5 min) | Articles update frequently, not per-second |
+| `fundamentals` | 3,600,000 (1 hr) | Quarterly data; rarely changes intra-day |
+| `entityGraph` | 60,000 (1 min) | KG enrichment runs continuously |
+| `quotes` | 15,000 (15 sec) | Matches S3 Valkey quote cache TTL |
+| `screener` | 30,000 (30 sec) | Filter results shift as prices move |
+| `screenerFields` | 21,600,000 (6 hr) | Field definitions almost never change |
+| `portfolio` | 60,000 (1 min) | Updated on every transaction |
+| `alerts` | 15,000 (15 sec) | Alert status must be nearly real-time |
+
+```ts
+import { DEFAULT_STALE } from "@/lib/api/_client";
+useQuery({ queryKey: qk.news.top(), queryFn: ..., staleTime: DEFAULT_STALE.news });
+```
+
+### 15.6 `--topbar-height` CSS variable
+
+Defined in `app/globals.css` as `--topbar-height: 44px` (`:root` and `.dark`).
+
+Reference via Tailwind arbitrary value: `h-[var(--topbar-height)]` or in plain CSS:
+```css
+height: var(--topbar-height);
+```
+
+Used by the `(app)/layout.tsx` shell to size the top chrome. Components that
+position content relative to the topbar (e.g. `calc(100vh - 36px)` in dashboard
+page) should use this variable instead of a hardcoded pixel value (MED-002).
+
+### 15.7 Entity-graph node type tokens
+
+Defined in `app/globals.css` (`:root` and `.dark`). Reference as:
+```js
+`hsl(var(--entity-type-person-fill))`   // deep teal — person nodes
+`hsl(var(--entity-type-event-fill))`    // deep amber — event nodes
+`hsl(var(--entity-type-topic-fill))`    // deep blue — topic nodes
+`hsl(var(--entity-type-default-fill))`  // neutral grey — unknown/default
+// Stroke variants: --entity-type-{person,event,topic,default}-stroke
+```
+
+Replaces hardcoded hex constants in `EntityGraphPanel.tsx:11-14` (MED-018, DS-004).
+
+### 15.8 `DENSITY_CLASSES` — visual density reference
+
+**Path**: `lib/ui-constants.ts`
+
+Canonical Tailwind class strings for every UI surface density level (DS-012, FR-10.6).
+
+| Surface | Class string | Height |
+|---------|-------------|--------|
+| `tableRow` | `h-[22px] px-2 py-0.5 text-[11px]` | 22px |
+| `articleRow` | `px-3 py-1.5 text-[11px]` | 28px (py-1.5) |
+| `tabBar` | `h-8 px-3 text-[11px]` | 32px |
+| `headerTopbar` | `px-3 text-[12px]` | via `--topbar-height` |
+| `banner` | `h-6 px-2 text-[10px] rounded-[2px]` | 24px |
+| `sidebarItem` | `px-2 py-1.5 text-[11px] rounded-[2px]` | 28px |
+| `cardDefault` | `p-3 text-[12px] rounded-[2px]` | n/a |
+| `buttonDefault` | `h-9 px-3 text-[12px] rounded-[2px]` | 36px |
+| `buttonCompact` | `h-7 px-2 text-[11px] rounded-[2px]` | 28px |
+| `badge` | `px-1.5 py-0.5 text-[10px] rounded-full` | n/a |
+
+### 15.9 Typography exception: `text-[9px]`
+
+> **Amended ADR-F-15** (OQ-003 resolution, 2026-05-19):
+
+`text-[9px]` is permitted **ONLY** for non-data secondary metadata labels such as:
+- Timestamps in ultra-compact list items
+- Counts (e.g. "3 results")
+- Category labels in chart legends and graph control hints
+
+**Financial data values** (prices, percentages, ratios, volumes) **MUST** use
+`text-[10px]` minimum. Using 9px for a price or P&L percentage is a typography
+error — even in the most compact contexts.
+
+Chart axis tick labels (x/y) were already permitted at 9px (§3.2 exception table
+added 2026-04-23). This amendment extends the exception to the categories listed
+above while reaffirming that financial data values are excluded.
+
+> **Note on `--topbar-height` in globals.css vs DESIGN_SYSTEM.md §2.1**:
+> The CSS file currently has `44px` (from an earlier wave) while DESIGN_SYSTEM.md §2.1
+> states `36px` (PRD-0031). This discrepancy should be resolved in W3 (Dashboard fixes).
+> W0 adds the chart/entity tokens without touching the topbar value to avoid
+> unintended layout breakage.
+

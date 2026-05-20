@@ -75,14 +75,14 @@ def test_upgrade_seeds_eight_canonical_entities(conn: sa.engine.Connection) -> N
     rows = {row[0]: (row[1], row[2]) for row in result.fetchall()}
     # Exactly the 8 names declared in the migration body.
     assert set(rows.keys()) == set(_EXPECTED_CANONICALS.keys()), (
-        f"PLAN-0087 canonical roster drift: got {set(rows.keys())}, "
-        f"expected {set(_EXPECTED_CANONICALS.keys())}"
+        f"PLAN-0087 canonical roster drift: got {set(rows.keys())}, " f"expected {set(_EXPECTED_CANONICALS.keys())}"
     )
     # And each row's (entity_type, ticker) matches the migration declaration.
     for name, (etype, ticker) in _EXPECTED_CANONICALS.items():
-        assert rows[name] == (etype, ticker), (
-            f"PLAN-0087 canonical {name!r}: got {rows[name]}, expected {(etype, ticker)}"
-        )
+        assert rows[name] == (
+            etype,
+            ticker,
+        ), f"PLAN-0087 canonical {name!r}: got {rows[name]}, expected {(etype, ticker)}"
 
 
 def test_upgrade_seeds_aliases_for_each_canonical(conn: sa.engine.Connection) -> None:
@@ -92,9 +92,7 @@ def test_upgrade_seeds_aliases_for_each_canonical(conn: sa.engine.Connection) ->
         text("SELECT COUNT(*) FROM entity_aliases WHERE source = :s"),
         {"s": "seed:PLAN-0087"},
     ).scalar_one()
-    assert total >= _MIN_EXPECTED_ALIASES, (
-        f"expected ≥{_MIN_EXPECTED_ALIASES} PLAN-0087 aliases, got {total}"
-    )
+    assert total >= _MIN_EXPECTED_ALIASES, f"expected ≥{_MIN_EXPECTED_ALIASES} PLAN-0087 aliases, got {total}"
 
     # Every PLAN-0087 canonical has at least one alias attached.
     bare_canonicals = conn.execute(
@@ -110,9 +108,7 @@ def test_upgrade_seeds_aliases_for_each_canonical(conn: sa.engine.Connection) ->
         ),
         {"ss": _SEED_SOURCE},
     ).fetchall()
-    assert bare_canonicals == [], (
-        f"PLAN-0087 canonicals missing aliases: {[r[0] for r in bare_canonicals]}"
-    )
+    assert bare_canonicals == [], f"PLAN-0087 canonicals missing aliases: {[r[0] for r in bare_canonicals]}"
 
 
 def test_openai_is_organization_with_no_ticker(conn: sa.engine.Connection) -> None:
@@ -235,12 +231,12 @@ def test_re_running_upgrade_body_is_idempotent(conn: sa.engine.Connection) -> No
         text("SELECT COUNT(*) FROM entity_aliases WHERE source = 'seed:PLAN-0087'"),
     ).scalar_one()
 
-    assert canonical_count_after == canonical_count_before, (
-        "re-applying 0038 changed canonical row count — ON CONFLICT broken"
-    )
-    assert alias_count_after == alias_count_before, (
-        "re-applying 0038 changed alias row count — ON CONFLICT (partial-unique) broken"
-    )
+    assert (
+        canonical_count_after == canonical_count_before
+    ), "re-applying 0038 changed canonical row count — ON CONFLICT broken"
+    assert (
+        alias_count_after == alias_count_before
+    ), "re-applying 0038 changed alias row count — ON CONFLICT (partial-unique) broken"
 
     # Roll back the test's writes so the session-scoped fixture remains clean.
     conn.rollback()
@@ -266,9 +262,9 @@ def test_downgrade_purges_canonicals_and_aliases(conn: sa.engine.Connection) -> 
         text("SELECT COUNT(*) FROM entity_aliases WHERE source = 'seed:PLAN-0087'"),
     ).scalar_one()
     assert canonicals_before == 8, "fixture precondition: 8 PLAN-0087 canonicals expected"
-    assert aliases_before >= _MIN_EXPECTED_ALIASES, (
-        f"fixture precondition: ≥{_MIN_EXPECTED_ALIASES} PLAN-0087 aliases expected"
-    )
+    assert (
+        aliases_before >= _MIN_EXPECTED_ALIASES
+    ), f"fixture precondition: ≥{_MIN_EXPECTED_ALIASES} PLAN-0087 aliases expected"
 
     # Run the downgrade SQL (mirrors the migration's downgrade() body).
     conn.execute(text("DELETE FROM entity_aliases WHERE source = 'seed:PLAN-0087'"))
@@ -292,15 +288,10 @@ def test_downgrade_purges_canonicals_and_aliases(conn: sa.engine.Connection) -> 
     # which is `F-CRIT-10` — the baseline canonical seed.  If our downgrade
     # accidentally widened the WHERE clause, this count would drop.
     other_source_canonicals = conn.execute(
-        text(
-            "SELECT COUNT(*) FROM canonical_entities "
-            "WHERE metadata->>'seed_source' = 'F-CRIT-10'"
-        ),
+        text("SELECT COUNT(*) FROM canonical_entities " "WHERE metadata->>'seed_source' = 'F-CRIT-10'"),
     ).scalar_one()
     # Baseline non-zero — proves we did not nuke unrelated rows.
-    assert other_source_canonicals > 0, (
-        "F-CRIT-10 canonicals missing — downgrade WHERE clause too broad"
-    )
+    assert other_source_canonicals > 0, "F-CRIT-10 canonicals missing — downgrade WHERE clause too broad"
 
     conn.rollback()
 

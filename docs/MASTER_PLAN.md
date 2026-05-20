@@ -1,6 +1,6 @@
 # Worldview -- Master Plan
 
-> **Version**: 2.2 | **Date**: 2026-03-27
+> **Version**: 2.3 | **Date**: 2026-05-17
 > **Status**: Active | **Owner**: Arnau Rodon
 > **Single source of truth** for the entire platform architecture.
 
@@ -62,13 +62,13 @@ Worldview is a **thesis-grade market intelligence platform** that fuses structur
 
 ```
                          ┌──────────────────────┐
-                         │   Web Frontend (UI)   │
-                         │  React + Vite  :5173  │
+                         │   worldview-web (UI)  │
+                         │  Next.js 15  :3001    │
                          └──────────┬───────────┘
                                     │
                          ┌──────────▼───────────┐
                          │  S9 · API Gateway     │
-                         │  FastAPI + Valkey :8000│
+                         │  FastAPI + Valkey :8000 │
                          └──┬──┬──┬──┬──┬──┬────┘
               ┌─────────────┘  │  │  │  │  └──────────────┐
               ▼     ▼          ▼  ▼  ▼                    ▼
@@ -132,7 +132,7 @@ Each service has: detailed doc at `docs/services/<name>.md` and agent context at
 
 ## 4. Shared Libraries
 
-Six shared Python packages in `libs/`, installable via `pip install -e libs/<name>`.
+Eight shared Python packages in `libs/`, installable via `pip install -e libs/<name>`.
 
 | Library | Package | Purpose | Key Exports |
 |---------|---------|---------|-------------|
@@ -142,6 +142,8 @@ Six shared Python packages in `libs/`, installable via `pip install -e libs/<nam
 | **storage** | `storage` | S3/MinIO abstraction | `build_object_storage()`, `ObjectStorage` protocol |
 | **observability** | `observability` | Logging, metrics, tracing, health | `configure_logging()`, `get_logger()`, `add_prometheus_middleware()` |
 | **ml-clients** | `ml_clients` | ML model protocols + adapters | `EmbeddingClient`, `NERClient`, `ExtractionClient` |
+| **prompts** | `prompts` | LLM prompt templates | Managed prompt strings for S6/S7/S8 workers |
+| **tools** | `tools` | LLM tool manifest + capability registry | `capability_manifest.yaml`, `ToolRegistry` (R29) |
 
 **Hard rules**: `confluent-kafka` via `messaging` only (never `aiokafka`). MinIO via `storage.factory` only. Logging via `observability.logging` only.
 
@@ -297,7 +299,7 @@ Primary model: relational adjacency-list (`relations` table, hash-partitioned 8x
 
 ### 9.1 LLM Provider Fallback Chain
 
-Ollama (local, 10s) --> Groq (5s) --> OpenRouter (10s) --> OpenAI (10s). Negative cache (60s) prevents retry storms.
+DeepInfra (primary, 15s) --> Groq (5s) --> OpenRouter (10s) --> Ollama (local fallback). Negative cache (60s) prevents retry storms. GLiNER NER runs exclusively on local Ollama. Embeddings use DeepInfra `BAAI/bge-large-en-v1.5` (1024-dim) with Ollama as fallback when `DEEPINFRA_API_KEY` is absent.
 
 ### 9.2 Retrieval Pipeline
 
@@ -464,13 +466,13 @@ Active PRD: `docs/specs/0014-PRD-v1-final.md`. S4 and S5 are complete (PLAN-0001
 | S10 Alert Service (consumers, WebSocket, dedup, REST API, M7 pipeline test) | ✅ |
 | S9 API Gateway (routing, composition, rate limiting) | 🔄 |
 
-### Phase 3: RAG/Chatbot + Frontend ⏳
+### Phase 3: RAG/Chatbot + Frontend 🔄
 
 | Milestone | Status |
 |-----------|--------|
-| S8 RAG/Chat (hybrid retrieval, LLM fallback, SSE, citations) | ⏳ |
-| Frontend (charts, fundamentals, news, signals, chatbot) | ⏳ |
-| Evaluation harness (retrieval recall, groundedness, citations) | ⏳ |
+| S8 RAG/Chat (hybrid retrieval, LLM fallback, SSE, citations) | 🔄 In-progress |
+| Frontend `worldview-web` (PLAN-0028 complete — Next.js 15, all 9 pages, Vitest + Playwright) | ✅ |
+| Evaluation harness (retrieval recall, groundedness, citations) | 🔄 In-progress |
 | Security hardening (prompt injection tests, tenant isolation E2E) | ⏳ |
 
 ### Blocking Prerequisites (PRD 0014 Section 1.4)

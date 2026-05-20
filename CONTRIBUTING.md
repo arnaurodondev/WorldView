@@ -18,34 +18,62 @@ For AI contributors, also read:
 ### Prerequisites
 
 - Python 3.12+ (`pyenv` recommended)
-- Docker Desktop with Compose plugin
-- `pnpm` for frontend (`npm install -g pnpm`)
-- A clone of the private `worldview-gitops` repo next to this one (for env files and secrets)
+- Docker Desktop 4.x+ with Compose plugin (v2)
+- Node.js 20+ and `pnpm` (`npm install -g pnpm`)
+- 16 GB RAM recommended (40+ Docker containers)
+- ~20 GB free disk space (images + volumes)
 
-### First-time setup
+### Quick start (no API keys required)
+
+The platform runs in "dev mode" with bundled sample data. No external API keys are needed
+for a basic local setup — the `make seed` step loads pre-generated fixtures and `Dev Login`
+bypasses authentication.
 
 ```bash
-# 1. Install Python dependencies (creates .venv312/)
+# 1. Clone the repository
+git clone <repo-url> worldview && cd worldview
+
+# 2. Bootstrap Python venvs and git hooks
 ./scripts/bootstrap.sh
 
-# 2. Copy dev env files from the private worldview-gitops repo
-# (must have worldview-gitops cloned alongside this repo)
-cd ../worldview-gitops && ./scripts/setup-dev.sh && cd ../worldview
+# 3. Create per-service env files from the bundled examples
+#    Each service has configs/dev.local.env.example — copy to docker.env
+for svc in services/*/configs; do
+  [ -f "$svc/dev.local.env.example" ] && cp "$svc/dev.local.env.example" "$svc/docker.env"
+done
 
-# 3. Fetch external API keys (EODHD, Polymarket, OIDC credentials)
-make fetch-secrets
-
-# 4. Start the full dev stack
+# 4. Start the full dev stack (~5–10 min first run, image builds)
 make dev
 
-# 5. Seed sample data (instruments, entities, articles)
+# 5. Load sample data (instruments, articles, entities, portfolio)
 make seed
+
+# 6. Open the frontend — click "Dev Login"
+open http://localhost:3001
 ```
+
+### Using external API keys (optional)
+
+For live market data and full NLP/LLM pipelines, set the following keys in each
+service's `services/<name>/configs/docker.env` file:
+
+| Service | Variable | Where to get it | Notes |
+|---------|----------|----------------|-------|
+| market-ingestion, market-data | `MARKET_INGESTION_EODHD_API_KEY` | [eodhd.com](https://eodhd.com) — free 20 req/day tier | Without this, only seeded demo data is available |
+| nlp-pipeline, knowledge-graph, rag-chat | `DEEPINFRA_API_KEY` | [deepinfra.com](https://deepinfra.com) — free $1 credit | Powers embeddings, NER, and LLM inference; Ollama fallback is used if not set |
+| api-gateway | `ZITADEL_DOMAIN`, `ZITADEL_CLIENT_ID` | [zitadel.com](https://zitadel.com) — free cloud tier | Not needed for local dev — use Dev Login instead |
+| portfolio | `SNAPTRADE_CONSUMER_KEY`, `SNAPTRADE_CLIENT_ID` | [snaptrade.com](https://snaptrade.com) — free developer account | Enables brokerage account connectivity via OAuth. **User broker credentials are never handled by worldview** — users authenticate directly with their broker through SnapTrade's OAuth flow outside this platform |
+
+After editing env files, restart only the affected container:
+```bash
+docker compose -f infra/compose/docker-compose.yml restart nlp-pipeline
+```
+No Docker image rebuild needed for configuration changes.
 
 ### Dev Login (no Zitadel required)
 
-When the Zitadel OIDC service is not running locally, the frontend login page
-automatically shows a **Dev Login** button. The API Gateway (`GET /v1/auth/dev-login`)
+When the Zitadel OIDC service is not configured locally, the frontend login page
+automatically shows a **Dev Login** button. The API Gateway (`POST /v1/auth/dev-login`)
 issues a test JWT valid for local development without any external auth service.
 
 For full Zitadel auth development:
@@ -56,20 +84,12 @@ docker compose -f infra/compose/docker-compose.zitadel.yml up -d
 
 ### Environment Variables
 
-All service configuration is in the private `worldview-gitops` repo under `env/dev/<service>.env`.
-The `setup-dev.sh` script copies these to `services/<service>/configs/docker.env`.
+Each service reads its config from `services/<name>/configs/docker.env`. All variables
+follow the pattern `<SERVICE_UPPER>_<VARIABLE>` (e.g., `NLP_PIPELINE_GLINER_THRESHOLD`).
+See each service's `src/<package>/config.py` for the full variable list and defaults.
 
-**Tuning without rebuilding Docker images**: Almost all thresholds, model IDs, and processing
-parameters are exposed as environment variables. Edit the relevant `env/dev/<service>.env` file
-in worldview-gitops and restart the affected container:
-
-```bash
-# Example: change NLP pipeline GLiNER threshold
-# Edit worldview-gitops/env/dev/nlp-pipeline.env: NLP_PIPELINE_GLINER_THRESHOLD=0.40
-docker compose -f infra/compose/docker-compose.yml restart nlp-pipeline
-```
-
-No Docker image rebuild needed for configuration changes.
+The `configs/dev.local.env.example` file in each service directory lists required
+variables without values — copy it to `docker.env` as a starting point.
 
 ## AI-Assisted Workflow (Recommended)
 

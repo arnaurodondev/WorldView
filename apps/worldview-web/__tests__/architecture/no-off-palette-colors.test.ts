@@ -49,12 +49,12 @@ const ALLOWED_FILES = new Set<string>([
   // are the design tokens for graph rendering; the file is the single source
   // and never references retired Bloomberg-Dark / Midnight-Pro palette.
   "lib/entity-types.ts",
-  // OHLCVChart MA200 line — lightweight-charts requires hex literals on
+  // createChartSeries MA200 line — lightweight-charts requires hex literals on
   // series config (cannot resolve CSS variables). The retired #0EA5E9 stays
   // as the canonical MA200 line colour by convention (blue distinguishes
   // from MA50 yellow). When lightweight-charts grows token support this
   // entry should move out of the allowlist.
-  "components/instrument/OHLCVChart.tsx",
+  "components/instrument/chart/createChartSeries.ts",
 ]);
 
 // Retired Bloomberg-Dark / Midnight-Pro hex codes (must never appear in code).

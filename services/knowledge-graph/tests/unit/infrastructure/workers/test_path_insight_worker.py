@@ -102,7 +102,7 @@ class TestPathInsightWorker:
         job = _make_job()
         entity_id = job.entity_id  # type: ignore[attr-defined]
 
-        session_factory, session = _make_session_factory()
+        session_factory, _session = _make_session_factory()
         path_discovery = AsyncMock()
         path_discovery.find_paths_for_anchor = AsyncMock(return_value=[])
         scorer = MagicMock()
@@ -128,7 +128,7 @@ class TestPathInsightWorker:
 
         job = _make_job()
 
-        session_factory, session = _make_session_factory()
+        session_factory, _session = _make_session_factory()
         path_discovery = AsyncMock()
         path_discovery.find_paths_for_anchor = AsyncMock(side_effect=RuntimeError("AGE error"))
 
@@ -167,7 +167,7 @@ class TestPathInsightWorker:
         job = _make_job()
         raw_paths = [_make_raw_path(2)]
 
-        session_factory, session = _make_session_factory()
+        session_factory, _session = _make_session_factory()
         path_discovery = AsyncMock()
         path_discovery.find_paths_for_anchor = AsyncMock(return_value=raw_paths)
 
@@ -213,7 +213,7 @@ class TestPathInsightWorker:
         # Create 60 distinct raw paths (2-hop, different entity IDs)
         raw_paths = [_make_raw_path(2) for _ in range(60)]
 
-        session_factory, session = _make_session_factory()
+        session_factory, _session = _make_session_factory()
         path_discovery = AsyncMock()
         path_discovery.find_paths_for_anchor = AsyncMock(return_value=raw_paths)
         scorer = PathScorer()
@@ -252,7 +252,7 @@ class TestPathInsightWorker:
         from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
 
         claimed_batch_sizes: list = []
-        session_factory, session = _make_session_factory()
+        session_factory, _session = _make_session_factory()
 
         class _FakeJobRepo:
             async def claim_batch(self, instance_uuid: UUID, batch_size: int = 10) -> list:
@@ -345,7 +345,7 @@ class TestPathInsightWorker:
         from knowledge_graph.infrastructure.workers.path_insight_worker import PathInsightWorker
 
         reclaim_called: list = []
-        session_factory, session = _make_session_factory()
+        session_factory, _session = _make_session_factory()
 
         class _FakeJobRepo:
             async def reclaim_stuck(self, timeout_seconds: int = 600) -> int:

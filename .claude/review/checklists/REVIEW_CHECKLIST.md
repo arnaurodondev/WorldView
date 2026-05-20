@@ -243,6 +243,20 @@ Mark N/A for pure backend changes.
 - [ ] Gateway client is mocked at the `gatewayClient` boundary (not `fetch`)
 - [ ] E2E test added for new pages (smoke + data flow)
 
+### 10i. Frontend Mutations
+- [ ] Every `useMutation` has `retry: 3` and `retryDelay` exponential backoff
+- [ ] Server-side idempotency confirmed before enabling retry (unique constraints, idempotency_keys table, or upsert)
+- [ ] Every new route has `loading.tsx` with route-appropriate skeleton + `error.tsx` with reset + back-to-dashboard
+
+### 10j. Frontend Numerics & Design Tokens
+- [ ] Every numeric value rendered to user uses `<FormattedNumber>` or explicit `font-mono tabular-nums` classes
+- [ ] No hardcoded `#hex` colors outside `globals.css` token definitions — use `hsl(var(--token-name))`
+- [ ] No hardcoded chart color constants (`COLOR_POSITIVE`, `COLOR_NEGATIVE`) — reference `--chart-positive`, `--chart-negative` CSS tokens
+
+### 10k. Frontend Settings Pages
+- [ ] Any new settings page is either: (a) fully wired to a backend endpoint, or (b) returns `notFound()` and hidden from sidebar nav
+- [ ] No `console.log + toast("Coming soon")` patterns in settings pages
+
 ---
 
 ## Scoring

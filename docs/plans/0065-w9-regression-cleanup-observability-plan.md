@@ -6,7 +6,7 @@
 > **Estimate**: 1.5 dev-days (PRD §15) — confirmed achievable; the four BP-302/F-VISUAL-002/F-E8/F-D4 code fixes are **already merged** in commit `f27e266b` (verified 2026-05-03 against current `main`/`feat/content-ingestion-wave-a1`). The remaining work is operational (redeploy + verify) and net-new (Sentry / UptimeRobot / status page).
 > **Author**: `/plan` skill, 2026-05-03; revised 2026-05-03 per audit `docs/audits/2026-05-03-revise-plan-0065-w9.md` (3 BLOCKING + 6 IMPORTANT + 3 NICE-TO-HAVE applied; 2 NICE-TO-HAVE deferred to §15 Follow-ups).
 > **Status**: completed (Wave A complete 2026-05-04; Wave B complete 2026-05-04; Wave C complete 2026-05-04; Wave D complete 2026-05-04; Wave E complete 2026-05-04).
-> **Revision 2 changes** (2026-05-04): Wire `init_sentry()` into **all 10 backend services** (S1–S10), not just S9/S6/S8; add Sentry issue-alert email notification to `arnaurodondev@gmail.com`; add Grafana error-observability dashboard; expand worldview-gitops env var coverage to all 10 service `.env` files and `values.yaml`; zero deferrals. See T-C-05 (new), T-E-03 (new), T-E-04 (new).
+> **Revision 2 changes** (2026-05-04): Wire `init_sentry()` into **all 10 backend services** (S1–S10), not just S9/S6/S8; add Sentry issue-alert email notification to `ops-alerts@your-domain.com`; add Grafana error-observability dashboard; expand worldview-gitops env var coverage to all 10 service `.env` files and `values.yaml`; zero deferrals. See T-C-05 (new), T-E-03 (new), T-E-04 (new).
 
 ---
 
@@ -1243,7 +1243,7 @@ For `__tests__/status-uptime-route.test.ts` (Route Handler — guards the securi
 
 ---
 
-##### T-E-04: Configure Sentry issue-alert email notification to arnaurodondev@gmail.com — rev-2 NEW
+##### T-E-04: Configure Sentry issue-alert email notification to ops-alerts@your-domain.com — rev-2 NEW
 
 **Type**: config (manual external action, documented in runbook)
 **depends_on**: T-C-01 (Sentry project created and DSN captured), T-E-01 (Sentry account confirmed working)
@@ -1258,32 +1258,32 @@ For `__tests__/status-uptime-route.test.ts` (Route Handler — guards the securi
 **What to build** — configure the following in the Sentry SaaS UI (free-tier project settings → Alerts):
 
 **Alert Rule 1 — New Issue Created**:
-- Name: `"New issue — email arnaurodondev"`
+- Name: `"New issue — email ops-alerts"`
 - Trigger: "A new issue is created" (fires once per new fingerprint, not on every occurrence)
-- Action: Send email to `arnaurodondev@gmail.com`
+- Action: Send email to `ops-alerts@your-domain.com`
 - All environments: yes (including prod and staging if Sentry is wired there)
 - Frequency: maximum 1 email per issue (Sentry deduplicates by fingerprint — this does not spam)
 - **Why**: first time a new exception class appears, you want to know immediately. The `before_send` rate-limiter means Sentry only sees ≤10 events/fingerprint/hour anyway — the deduplicated alert will not spam.
 
 **Alert Rule 2 — Issue Regression**:
-- Name: `"Regression — email arnaurodondev"`
+- Name: `"Regression — email ops-alerts"`
 - Trigger: "An issue that has been resolved is seen again" (regression)
-- Action: Send email to `arnaurodondev@gmail.com`
+- Action: Send email to `ops-alerts@your-domain.com`
 - **Why**: a previously-fixed bug reappearing is high-signal.
 
 **Alert Rule 3 — High Volume (spike)**:
-- Name: `"Error spike — email arnaurodondev"`
+- Name: `"Error spike — email ops-alerts"`
 - Trigger: "An issue occurs more than 50 times in 1 hour"
-- Action: Send email to `arnaurodondev@gmail.com`
+- Action: Send email to `ops-alerts@your-domain.com`
 - **Why**: complements the new-issue alert for cases where a known error suddenly spikes (e.g. a config change makes an existing error much more frequent).
 
 **Alert Rule 4 — Monthly quota 80%** (already in plan; confirm it is set):
 - Name: `"Sentry quota 80%"`
 - Trigger: Monthly event usage > 80%
-- Action: Email `arnaurodondev@gmail.com`
+- Action: Email `ops-alerts@your-domain.com`
 - Located in: Organisation settings → Subscription → Usage alerts (not in the project alert rules)
 
-**Email used**: `arnaurodondev@gmail.com` — current personal dev address. The runbook notes this should be updated to a company support/ops email when one is created (future: e.g. `ops@meshx.io`).
+**Email used**: `ops-alerts@your-domain.com` — current personal dev address. The runbook notes this should be updated to a company support/ops email when one is created (future: e.g. `ops@meshx.io`).
 
 **WhatsApp / additional channels**: not configured for MVP (Sentry free tier supports email and limited Slack; Slack channel not yet set up for worldview ops). Document as a follow-up in the runbook.
 
@@ -1295,7 +1295,7 @@ For `__tests__/status-uptime-route.test.ts` (Route Handler — guards the securi
 
 **Acceptance criteria**:
 - [ ] All 4 alert rules configured in Sentry SaaS UI and confirmed active (each rule shows "Active" status in the Alerts list).
-- [ ] Test Rule 1: trigger a synthetic exception via the dev-tools Sentry test route (T-D-02); confirm a "New Issue" email arrives at `arnaurodondev@gmail.com` within 5 min. Screenshot.
+- [ ] Test Rule 1: trigger a synthetic exception via the dev-tools Sentry test route (T-D-02); confirm a "New Issue" email arrives at `ops-alerts@your-domain.com` within 5 min. Screenshot.
 - [ ] Runbook committed with exact UI paths.
 - [ ] Runbook notes the email-update procedure for when a company ops email is ready.
 - [ ] No hard-coded email addresses in the codebase (alert destination is configured only in Sentry UI, not in code or env vars).
@@ -1370,7 +1370,7 @@ This is a clarification (not a scope change), so it qualifies for a single-line 
 7. **Status page live**: navigate to `/status` and confirm 30-day uptime visible; verify in browser DevTools that `UPTIMEROBOT_READONLY_API_KEY` does NOT appear in any client-side network request, response, or JS bundle. Screenshot.
 8. **Grafana dashboard live**: open `Error Observability` dashboard in Grafana; confirm all 4 panels load with data (may be near-zero if the system is healthy — the panel loading without error is the acceptance criterion). Screenshot.
 9. **Sentry alert rules active**: open Sentry → Project → Alerts → Issue Alerts; confirm 4 alert rules are listed and Active. Screenshot.
-10. **Sentry email delivery test**: trigger a synthetic exception via dev-tools route (step 5); confirm "New Issue" alert email arrives at `arnaurodondev@gmail.com` within 5 min. Screenshot.
+10. **Sentry email delivery test**: trigger a synthetic exception via dev-tools route (step 5); confirm "New Issue" alert email arrives at `ops-alerts@your-domain.com` within 5 min. Screenshot.
 11. **UptimeRobot delivery**: review email inbox for the test-alert from T-E-01. Confirm received. Screenshot.
 12. **Sentry quota usage alert**: in Sentry org settings, confirm the 80% monthly events alert is active. Screenshot.
 
@@ -1418,7 +1418,7 @@ This is a clarification (not a scope change), so it qualifies for a single-line 
 | **Kafka topic changes** | none | W9 only resets one consumer-group offset (operational) |
 | **New env vars** | 10 (6 backend Sentry + 1 frontend DSN + 2 ops [`UPTIMEROBOT_MONITOR_ID`, `STATUS_PAGE_URL`] + 1 server-only proxy key [`UPTIMEROBOT_READONLY_API_KEY`]); added to all 10 service `.env` files in worldview-gitops `env/dev/` and all 10 `values.yaml`. | All documented in T-C-06 + T-D-03 + T-E-01 + T-E-02 |
 | **Grafana dashboard** | New `infra/grafana/dashboards/error-observability.json` — Loki-based; 4 panels | T-E-03 |
-| **Sentry alert rules** | 4 rules → email `arnaurodondev@gmail.com`; no code change; Sentry SaaS UI only | T-E-04 |
+| **Sentry alert rules** | 4 rules → email `ops-alerts@your-domain.com`; no code change; Sentry SaaS UI only | T-E-04 |
 | **Documentation** | 6 doc files updated/created | Listed per task |
 | **Architecture invariants** | preserved (no domain layer touched, no cross-service DB access added) | Verified by 95-test architecture suite at every wave gate |
 | **Free-tier dependency cost** | $0 (Sentry free 5K events/month, UptimeRobot free 50 monitors, custom status page is in-tree) | PRD §10 confirms |

@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from portfolio.domain.entities.alert_preference import AlertPreference, EntitySuppression
     from portfolio.domain.entities.brokerage_connection import BrokerageConnection
     from portfolio.domain.entities.brokerage_sync_error import BrokerageTransactionSyncError
+    from portfolio.domain.entities.notification_preferences import NotificationPreferences
     from portfolio.domain.entities.portfolio_value_snapshot import PortfolioValueSnapshot
     from portfolio.domain.entities.watchlist import Watchlist
     from portfolio.domain.entities.watchlist_member import WatchlistMember
@@ -494,4 +495,25 @@ class PortfolioValueSnapshotRepository(ABC):
     @abstractmethod
     async def get_latest(self, portfolio_id: UUID) -> PortfolioValueSnapshot | None:
         """Return the most recent snapshot for the portfolio, or None if none exist."""
+        ...
+
+
+class NotificationPreferencesRepository(ABC):
+    """CRUD port for per-tenant notification preferences.
+
+    Uses upsert semantics — callers should never need to check whether a row
+    exists before calling ``upsert``.  ``get`` returns ``None`` when no row has
+    been written yet; use cases convert that into a defaults object.
+
+    W1-BACKEND: added to support MED-022 / CRIT-004 notification preferences.
+    """
+
+    @abstractmethod
+    async def get(self, tenant_id: UUID) -> NotificationPreferences | None:
+        """Return the stored preferences for the tenant, or None if defaults apply."""
+        ...
+
+    @abstractmethod
+    async def upsert(self, prefs: NotificationPreferences) -> None:
+        """Insert or overwrite the preferences row for the tenant (idempotent)."""
         ...

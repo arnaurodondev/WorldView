@@ -297,6 +297,7 @@ export default function PortfolioPage() {
           const realizedPnl = useFifo ? fifo!.total_realized : kpi.realizedPnl;
           return (
             <PortfolioKPIStrip
+              portfolioId={activePortfolioId}
               totalValue={kpi.totalValue}
               dayPnl={kpi.dayPnl}
               unrealisedPnl={kpi.unrealisedPnl}

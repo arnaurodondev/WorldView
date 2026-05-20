@@ -8,9 +8,11 @@
  * per-route page content. Same SR-visible behaviour, different DOM shape.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({ push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() })),
@@ -18,7 +20,15 @@ vi.mock("next/navigation", () => ({
   useSearchParams: vi.fn(() => new URLSearchParams()),
   useParams: vi.fn(() => ({})),
   redirect: vi.fn(),
+  // WHY notFound: settings/security page calls notFound() when
+  // NEXT_PUBLIC_ENABLE_SECURITY is not set — the mock must export it.
+  notFound: vi.fn(() => { throw new Error("NEXT_NOT_FOUND"); }),
 }));
+
+function wrap(children: ReactNode) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
+}
 
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: vi.fn(() => ({
@@ -34,6 +44,17 @@ vi.mock("@/hooks/useAuth", () => ({
     },
     setTokens: vi.fn(),
     logout: vi.fn(),
+  })),
+}));
+
+// WHY gateway mock: SettingsNotificationsPage calls getNotificationPreferences.
+// Without a mock, the query is in loading state during synchronous render
+// and shows skeletons instead of switches. Returning null simulates "no prefs
+// row yet" — the page falls back to DEFAULT_PREFS and renders all switches.
+vi.mock("@/lib/gateway", () => ({
+  createGateway: vi.fn(() => ({
+    getNotificationPreferences: vi.fn().mockResolvedValue(null),
+    updateNotificationPreferences: vi.fn().mockResolvedValue({}),
   })),
 }));
 
@@ -68,7 +89,8 @@ describe("SettingsLayout", () => {
     expect(screen.getByRole("link", { name: /notifications/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /appearance/i })).toBeInTheDocument();
     // New routes added in I-3:
-    expect(screen.getByRole("link", { name: /security/i })).toBeInTheDocument();
+    // WHY no security assertion: Security link is hidden when
+    // NEXT_PUBLIC_ENABLE_SECURITY is not "true" (test env has it unset).
     expect(screen.getByRole("link", { name: /data/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /integrations/i })).toBeInTheDocument();
   });
@@ -100,15 +122,23 @@ describe("SettingsProfilePage", () => {
 });
 
 describe("SettingsNotificationsPage", () => {
-  it("renders notification preference switches", () => {
-    render(<SettingsNotificationsPage />);
-    const switches = screen.getAllByRole("switch");
-    expect(switches.length).toBeGreaterThan(0);
+  it("renders notification preference switches", async () => {
+    render(<SettingsNotificationsPage />, { wrapper: ({ children }) => wrap(children) });
+    // WHY waitFor: the page shows skeletons during the prefs query; switches
+    // appear once the query resolves (mocked to return null → defaults render).
+    await waitFor(() => {
+      const switches = screen.getAllByRole("switch");
+      expect(switches.length).toBeGreaterThan(0);
+    });
   });
 
-  it("renders the 'Coming soon' notice", () => {
-    render(<SettingsNotificationsPage />);
-    expect(screen.getByText(/coming soon/i)).toBeInTheDocument();
+  it("renders the notification preferences description", async () => {
+    // WHY updated: W8 replaced the 'coming soon' placeholder with real switches.
+    // The description text confirms the form is fully wired to the API.
+    render(<SettingsNotificationsPage />, { wrapper: ({ children }) => wrap(children) });
+    await waitFor(() => {
+      expect(screen.getByText(/changes are saved immediately/i)).toBeInTheDocument();
+    });
   });
 });
 
@@ -130,6 +160,16 @@ describe("SettingsAppearancePage", () => {
 // real (mocked-state) controls — MFA toggle, password form, sessions list,
 // audit log. We assert on the substantive content.
 describe("SettingsSecurityPage", () => {
+  // WHY set env var: security page calls notFound() unless
+  // NEXT_PUBLIC_ENABLE_SECURITY="true". These tests verify the page content
+  // so they must enable the feature flag for the duration of each test.
+  beforeEach(() => {
+    process.env.NEXT_PUBLIC_ENABLE_SECURITY = "true";
+  });
+  afterEach(() => {
+    delete process.env.NEXT_PUBLIC_ENABLE_SECURITY;
+  });
+
   it("renders the two-factor authentication card", () => {
     render(<SettingsSecurityPage />);
     // The phrase appears in both the heading and body copy; assert presence

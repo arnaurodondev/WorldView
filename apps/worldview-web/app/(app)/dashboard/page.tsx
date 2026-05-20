@@ -119,7 +119,7 @@ export default function DashboardPage() {
     <div
       className="grid grid-cols-1 md:grid-cols-6 lg:grid-cols-12 gap-3 overflow-auto bg-background p-3"
       style={{
-        height: "calc(100vh - 36px)",
+        height: "calc(100vh - var(--topbar-height))",
         // WHY the responsive gridTemplateRows is applied via inline style only
         // at >= lg: at smaller breakpoints the cells dictate their own height
         // via natural content + h-auto, and a fixed-row template would clip

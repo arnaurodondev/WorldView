@@ -140,6 +140,12 @@ export function WorkspaceChatWidget() {
       const reader = stream.getReader();
       readerRef.current = reader;
       const decoder = new TextDecoder();
+      // WHY carry buffer (MED-013 — WorkspaceChatWidget): chunk boundaries do not
+      // align with SSE line boundaries. Without a buffer, a chunk may end mid-line
+      // (e.g. "data: {\"tok" | "en\":\"hello\"}") and the split produces two broken
+      // fragments. We keep the incomplete trailing fragment in `sseBuffer` and
+      // prepend it to the next chunk, so every line we process is complete.
+      let sseBuffer = "";
 
       // Read SSE chunks and append tokens to the AI message
       let done = false;
@@ -149,9 +155,10 @@ export function WorkspaceChatWidget() {
         if (result.value) {
           // WHY TextDecoder: ReadableStream yields Uint8Array; we need the text.
           // streaming=true so we can keep accumulating; mark false when done.
-          const chunk = decoder.decode(result.value, { stream: true });
+          sseBuffer += decoder.decode(result.value, { stream: true });
           // Parse SSE format: "data: {token}\n\n"
-          const lines = chunk.split("\n");
+          const lines = sseBuffer.split("\n");
+          sseBuffer = lines.pop() ?? ""; // keep incomplete last line for next chunk
           for (const line of lines) {
             if (line.startsWith("data: ")) {
               const payload = line.slice(6).trim();

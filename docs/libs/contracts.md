@@ -1,186 +1,199 @@
 # Contracts Library
 
-> **Package**: `contracts` · **Path**: `libs/contracts/`
+> **Package**: `contracts` · **Path**: `libs/contracts/` · **Version**: 2025.6.0
 > **Purpose**: Canonical data models and schema versions. Single source of truth for
-> the shape of data flowing between services. Zero external dependencies.
+> the shape of data flowing between services. Zero runtime external dependencies
+> (only `structlog` and optional `pyarrow`).
 
 ---
 
-## Where Contracts Fit
+## Purpose
 
-Every event passing between services travels through a shared canonical shape:
+`contracts` defines **what data looks like** as it crosses service boundaries.
+Every Kafka event, every claim-check pointer, every cross-service API payload
+uses a model defined here. Without this library, each service would define its
+own `Article` or `OHLCVBar` dataclass and they would inevitably drift.
 
+`infra/kafka/schemas/*.avsc` defines **how data is encoded on the wire** (Avro).
+`contracts` defines **what it means in Python**. The two must be kept in sync —
+`scripts/gen-contracts.sh` validates this.
+
+---
+
+## Installation
+
+```toml
+# In a service's pyproject.toml:
+[project]
+dependencies = ["contracts"]
+
+# With optional Parquet I/O:
+dependencies = ["contracts[parquet]"]
 ```
-External API / Provider
-        ↓
-  Market Ingestion (S2)  ───►  MinIO (claim-check pointer)
-        ↓ Kafka event                ↓
-  Market Data (S3)  ◄──────►  contracts.CanonicalOHLCVBar
-        ↓ Kafka event
-  NLP Pipeline (S5)  ◄─────►  contracts.CanonicalArticle
-        ↓ Kafka event
-  Intelligence (S6)  ◄─────►  contracts.CanonicalSentiment
-```
 
-`contracts` defines **what the data looks like** (field names, types, defaults).
-`infra/kafka/schemas/` defines **how it is encoded on the wire** (Avro).
-The two must be kept in sync. `scripts/gen-contracts.sh` validates this.
+```bash
+pip install -e "libs/contracts"
+pip install -e "libs/contracts[parquet]"   # adds pyarrow
+```
 
 ---
 
 ## Public API
 
-### Shared Enums
+### Shared Enums (`contracts.enums`)
 
-| Enum | Values | Used By | Purpose |
-|------|--------|---------|---------|
-| `ContentSourceType` | eodhd, sec_edgar, finnhub, newsapi, manual | S4, S5 | Content source discriminator in Kafka events |
-| `IngestionTaskStatus` | pending, claimed, running, succeeded, retry, failed | S2, S4 | Scheduler-worker task lifecycle states |
-
-Import from `contracts.enums` or the package root:
 ```python
 from contracts.enums import ContentSourceType, IngestionTaskStatus
-from contracts import IngestionTaskStatus  # also works
+# or from the package root:
+from contracts import ContentSourceType, IngestionTaskStatus
 ```
 
-Services re-export from their domain layer for internal use (e.g. `market_ingestion.domain.enums`).
+| Enum | Values | Used by |
+|------|--------|---------|
+| `ContentSourceType` | `eodhd`, `sec_edgar`, `finnhub`, `newsapi`, `manual` | S4 (producer), S5 (consumer) |
+| `IngestionTaskStatus` | `pending`, `claimed`, `running`, `succeeded`, `retry`, `failed` | S2, S4 scheduler-worker lifecycle |
 
-### Canonical Models
+### Canonical Market Data Models (`contracts.canonical`)
 
-**Market data (OHLCV, quotes, fundamentals):**
+All models are frozen dataclasses with `from_dict(cls, d)` and `to_dict(self)`.
 
-| Class | Purpose | Version |
-|-------|---------|---------|
-| `CanonicalOHLCVBar` | Open-high-low-close-volume bar | v1 |
-| `CanonicalQuote` | Real-time / delayed quote snapshot | v1 |
-| `CanonicalFundamentals` | Company fundamentals snapshot (18 sections) | v1 |
+**Core market data:**
 
-**Extended market data (new in waves 01–03, EXT-02–EXT-08):**
+| Class | Topic / use | Key fields |
+|-------|-------------|------------|
+| `CanonicalOHLCVBar` | S2→S3 via claim-check | `symbol`, `exchange`, `date`, `open/high/low/close`, `volume`, `adjusted_close`, `timeframe` |
+| `CanonicalQuote` | S3 Valkey cache | `symbol`, `price`, `bid`, `ask`, `volume`, `timestamp` |
+| `CanonicalFundamentals` | S2→S3 via claim-check | 18 sections (General, Highlights, Valuation, Technicals, …) |
 
-| Class | Purpose | Version |
-|-------|---------|---------|
-| `CanonicalEarningsEvent` | Earnings announcement event | v1 |
-| `CanonicalEconomicEvent` | Economic calendar event (inflation, GDP, etc.) | v1 |
-| `CanonicalMacroIndicator` | Macro indicator snapshot (GDP, inflation rate, unemployment) | v1 |
-| `CanonicalNewsSentiment` | News article with sentiment analysis | v1 |
-| `CanonicalInsiderTransaction` | Insider trading transaction | v1 |
-| `CanonicalYieldPoint` | Yield curve point (maturity + rate) | v1 |
-| `CanonicalMarketCapPoint` | Historical market cap data point | v1 |
+**Extended market data:**
 
-**NLP pipeline (sentiment, entities):**
+| Class | Purpose |
+|-------|---------|
+| `CanonicalEarningsEvent` | Earnings announcement with date, EPS, revenue |
+| `CanonicalEconomicEvent` | Economic calendar event (CPI, GDP, NFP, …) |
+| `CanonicalMacroIndicator` | Macro indicator snapshot (GDP growth rate, inflation, unemployment) |
+| `CanonicalNewsSentiment` | News article with provider-computed sentiment |
+| `CanonicalInsiderTransaction` | Insider trading transaction (form type, shares, price) |
+| `CanonicalYieldPoint` | Yield curve point (maturity, rate) |
+| `CanonicalMarketCapPoint` | Historical market cap data point |
+| `CanonicalInstrumentDiscovered` | Trigger event when S3 first observes a new instrument. Fields: `event_id`, `occurred_at`, `instrument_id`, `symbol`, `exchange`, `entity_id`, `correlation_id`. |
 
-| Class | Purpose | Version |
-|-------|---------|---------|
-| `CanonicalArticle` | Normalised news/content article | v1 |
-| `CanonicalEntity` | Knowledge-graph entity (NER output) | v1 |
-| `CanonicalSentiment` | Sentiment analysis result | v1 |
-| `CanonicalDailySentiment` | Aggregated daily sentiment signal | v1 |
+**NLP / intelligence pipeline:**
 
-**Ingestion pipeline events (new in Wave 05):**
+| Class | Topic | Producer → Consumer |
+|-------|-------|---------------------|
+| `CanonicalArticle` | (S5 silver MinIO payload) | S5 → S6 |
+| `CanonicalEntity` | NER output record | S6 |
+| `CanonicalSentiment` | Article sentiment result | S6 |
+| `CanonicalDailySentiment` | Aggregated daily sentiment | S6 |
 
-| Model | Avro schema | Producer | Consumer | Version constant |
-|-------|-------------|----------|---------|-----------------|
-| `CanonicalRawArticleEvent` | `content.article.raw.v1.avsc` | S4 | S5 | `RAW_ARTICLE_SCHEMA_VERSION` |
-| `CanonicalStoredArticleEvent` | `content.article.stored.v1.avsc` | S5 | S6 | `STORED_ARTICLE_SCHEMA_VERSION` |
-| `CanonicalEnrichedArticleEvent` | `nlp.article.enriched.v1.avsc` | S6 | S7 | `ENRICHED_ARTICLE_SCHEMA_VERSION` |
-| `CanonicalSignalEvent` | `nlp.signal.detected.v1.avsc` | S6 | S10 | `SIGNAL_SCHEMA_VERSION` |
-| `CanonicalWatchlistEvent` | `portfolio.watchlist.updated.v1.avsc` | S1 | S10 | `WATCHLIST_EVENT_SCHEMA_VERSION` |
+**Ingestion pipeline events (`contracts.canonical.ingestion`):**
 
-### Schema Versions
+| Class | Avro topic | Producer | Consumer |
+|-------|-----------|----------|---------|
+| `CanonicalRawArticleEvent` | `content.article.raw.v1` | S4 | S5 |
+| `CanonicalStoredArticleEvent` | `content.article.stored.v1` | S5 | S6 |
+| `CanonicalEnrichedArticleEvent` | `nlp.article.enriched.v1` | S6 | S7 |
+| `CanonicalSignalEvent` | `nlp.signal.detected.v1` | S6 | S10 |
+| `CanonicalWatchlistEvent` | `portfolio.watchlist.updated.v1` | S1 | S10 |
+
+**Price resolution (`contracts.canonical.price_snapshot`):**
+
+| Class | Purpose |
+|-------|---------|
+| `PriceSnapshot` | Resolved, sourced, and freshness-classified price for one instrument. Stored in Valkey by market-data; consumed by S9 for frontend price requests. Fields: `instrument_id`, `symbol`, `exchange`, `price` (Decimal), `price_change`, `price_change_pct`, `source` (`PriceSource`), `freshness_status` (`FreshnessStatus`). |
+| `PriceSource` | StrEnum — `FRESH_QUOTE`, `BULK_QUOTE`, `INTRADAY_5M_CLOSE`, `INTRADAY_1H_CLOSE`, `DAILY_CLOSE`, `STALE_SNAPSHOT`, `UNAVAILABLE` |
+| `FreshnessStatus` | StrEnum — `LIVE`, `RECENT`, `DELAYED`, `STALE`, `UNAVAILABLE` |
+
+### Cross-Service Event Models (`contracts.events`)
+
+Typed mirrors of Avro schemas for events that are purely cross-service triggers
+(never stored as their own DB entity in the producer service).
+
+**Knowledge Graph events (`contracts.events.kg`):**
+
+| Class | Topic | `dirty_reason` / notes |
+|-------|-------|------------------------|
+| `CanonicalEntityCanonicalCreated` | `entity.canonical.created.v1` | Fields: `entity_id`, `canonical_name`, `entity_type`, `provisional_queue_id`, `alias_texts` |
+| `CanonicalEntityDirtied` | `entity.dirtied.v1` | `dirty_reason`: `new_evidence`, `new_relation`, `alias_added`, `profile_updated` |
+| `CanonicalGraphStateChanged` | `graph.state.changed.v1` | Topology change; consumers use for cache invalidation |
+| `CanonicalEntityNarrativeGenerated` | `entity.narrative.generated.v1` | Triggers immediate narrative embedding refresh |
+| `CanonicalProvisionalQueued` | `entity.provisional.queued.v1` | New provisional entity discovered by S6 |
+| `CanonicalRelationTypeProposed` | `intelligence.temporal_event.v1` | Relation type proposed by extraction |
+
+**NLP events (`contracts.events.nlp`):**
+
+| Class | Topic | Notes |
+|-------|-------|-------|
+| `CanonicalNlpArticleEnriched` | `nlp.article.enriched.v1` | Full enrichment trigger. Carries `raw_relations_json`, `raw_events_json`, `raw_claims_json` as JSON-encoded strings. Use `encode_raw_array()` / `decode_raw_array()` helpers. |
+| `CanonicalDocumentReady` | `content.article.stored.v1` (subset) | Document ready for NLP |
+
+**Content events (`contracts.events.content`):**
+
+| Class | Topic | Notes |
+|-------|-------|-------|
+| `CanonicalDocumentDeleted` | — | Content deletion notification |
+
+**Alert events (`contracts.events.alert`):**
+
+| Class | Topic | Notes |
+|-------|-------|-------|
+| `CanonicalAlertCreated` | `alert.created.v1` | User-initiated alert rule persisted. Fields: `alert_id`, `user_id`, `tenant_id`, `entity_id`, `condition`, `threshold`, `severity`, `source`. |
+
+### Trust Authority (`contracts.trust`)
 
 ```python
-# Market data
-from contracts.versions import OHLCV_SCHEMA_VERSION                   # 1
-from contracts.versions import QUOTE_SCHEMA_VERSION                   # 1
-from contracts.versions import FUNDAMENTAL_SCHEMA_VERSION             # 1
-
-# Extended market data (waves 01–03)
-from contracts.versions import EARNINGS_EVENT_SCHEMA_VERSION          # 1
-from contracts.versions import ECONOMIC_EVENT_SCHEMA_VERSION          # 1
-from contracts.versions import MACRO_INDICATOR_SCHEMA_VERSION         # 1
-from contracts.versions import NEWS_SENTIMENT_SCHEMA_VERSION          # 1
-from contracts.versions import INSIDER_TRANSACTION_SCHEMA_VERSION     # 1
-from contracts.versions import YIELD_CURVE_SCHEMA_VERSION             # 1
-from contracts.versions import MARKET_CAP_SCHEMA_VERSION              # 1
-
-# NLP pipeline
-from contracts.versions import ARTICLE_SCHEMA_VERSION                 # 1
-from contracts.versions import ENTITY_SCHEMA_VERSION                  # 1
-from contracts.versions import SENTIMENT_SCHEMA_VERSION               # 1
-from contracts.versions import DAILY_SENTIMENT_SCHEMA_VERSION         # 1
-
-# Pointer event
-from contracts.versions import MARKET_DATASET_FETCHED_SCHEMA_VERSION  # 1
-
-# Ingestion pipeline events (Wave 05)
-from contracts.versions import RAW_ARTICLE_SCHEMA_VERSION             # 1
-from contracts.versions import STORED_ARTICLE_SCHEMA_VERSION          # 1
-from contracts.versions import ENRICHED_ARTICLE_SCHEMA_VERSION        # 1
-from contracts.versions import SIGNAL_SCHEMA_VERSION                  # 1
-from contracts.versions import WATCHLIST_EVENT_SCHEMA_VERSION         # 1
+from contracts import SOURCE_AUTHORITY  # dict[str, float]
+from contracts.trust import SOURCE_AUTHORITY
 ```
 
----
+Maps source type strings to authority scores (0.0–1.0) used for retrieval ranking.
+Examples: `sec_10k → 1.00`, `eodhd_news → 0.65`, `social → 0.30`, `default → 0.50`.
 
-### Ingestion Event Models
+### Schema Version Constants (`contracts.versions`)
 
-Five new frozen dataclasses in `contracts.canonical.ingestion` cover the S4→S5→S6→S7/S10 event chain.
+```python
+from contracts.versions import (
+    OHLCV_SCHEMA_VERSION,               # 1
+    QUOTE_SCHEMA_VERSION,               # 1
+    FUNDAMENTAL_SCHEMA_VERSION,         # 1
+    ARTICLE_SCHEMA_VERSION,             # 1
+    ENTITY_SCHEMA_VERSION,              # 1
+    SENTIMENT_SCHEMA_VERSION,           # 1
+    MARKET_DATASET_FETCHED_SCHEMA_VERSION,  # 1
+    RAW_ARTICLE_SCHEMA_VERSION,         # 1
+    STORED_ARTICLE_SCHEMA_VERSION,      # 1
+    ENRICHED_ARTICLE_SCHEMA_VERSION,    # 1
+    SIGNAL_SCHEMA_VERSION,              # 1
+    WATCHLIST_EVENT_SCHEMA_VERSION,     # 1
+)
+```
 
-**`article_id` field naming**: Both `CanonicalStoredArticleEvent` and `CanonicalEnrichedArticleEvent` use `article_id` (not `doc_id`) to match the Avro schema field name exactly. In `content_store_db` the column is `doc_id`, but the event field is `article_id` for schema backward compatibility. Do NOT rename to `doc_id`.
-
-**`CanonicalEnrichedArticleEvent.embedding_model` default mismatch**: The Avro schema default is `"all-MiniLM-L6-v2"` (preserved for backward compatibility with early consumers). The active production model is `bge-large-en-v1.5`. Always read the actual `embedding_model` value from the event payload — never assume the default is the current model.
-
-**`CanonicalWatchlistEvent` event_type values**: There are exactly two valid values:
-- `"watchlist.item_added"` — entity added to watchlist
-- `"watchlist.item_deleted"` — entity removed from watchlist
-
-`"watchlist.item_removed"` was deprecated in Wave 01 (T-F-001) and is a bug if it appears. The test `test_watchlist_event_type_deleted_not_removed` is a regression guard for this.
-
-**`tuple` vs `list` for collection fields**: `source_article_ids` (on `CanonicalSignalEvent`) and `entity_ids_affected` (on `CanonicalWatchlistEvent`) are stored internally as `tuple` because these are frozen dataclasses — mutable containers like `list` would allow accidental mutation via aliasing. `to_dict()` converts them back to `list` for Avro array compatibility.
-
-**How to bump a schema version (step-by-step):**
-
-1. Add the new field(s) to the dataclass **with a default value** — never remove
-   or rename existing fields.
-2. Increment the corresponding `*_SCHEMA_VERSION` constant.
-3. Update the Avro `.avsc` file in `infra/kafka/schemas/` to add the field with
-   a `"default"` key — Avro requires defaults for forward compatibility.
-4. Run `scripts/gen-contracts.sh` to validate Python ↔ Avro parity.
-5. Update the `schema_version` field default in the dataclass `__post_init__`
-   or `field(default=N)` to the new version.
-6. Update `docs/libs/contracts.md` model table to reflect the new version.
-7. Consumers reading older events (version `N-1`) must handle the missing field
-   gracefully (the Avro default fills it in automatically during deserialization).
-
-> **Never**: remove a field, rename a field, or change a field's type.
-> These are breaking changes that require a new topic (`*.v2`).
-
-### Parsing Utilities
+### Parsing Utilities (`contracts.parsing`)
 
 | Function | Purpose |
 |----------|---------|
-| `parse_ohlcv_from_jsonl(path)` | Parses JSONL file → `list[CanonicalOHLCVBar]` |
-| `parse_ohlcv_from_json(path)` | Parses JSON array file → `list[CanonicalOHLCVBar]` |
-| `parse_ohlcv_from_parquet(path)` | Parses Parquet file → `list[CanonicalOHLCVBar]` (requires `pyarrow`) |
-| `to_parquet(bars, path)` | Writes canonical bars to Parquet (requires `pyarrow`) |
-| `to_jsonl(bars, path)` | Writes canonical bars to JSONL |
+| `parse_ohlcv_from_jsonl(path)` | Parse JSONL file → `list[CanonicalOHLCVBar]` |
+| `parse_ohlcv_from_json(path)` | Parse JSON array file → `list[CanonicalOHLCVBar]` |
+| `parse_ohlcv_from_parquet(path)` | Parse Parquet file → `list[CanonicalOHLCVBar]` (requires `pyarrow`) |
+| `to_parquet(bars, path)` | Write canonical bars to Parquet (requires `pyarrow`) |
+| `to_jsonl(bars, path)` | Write canonical bars to JSONL |
 
-Parquet support is optional — install with `pip install contracts[parquet]`.
+### NLP Article Enrichment Helpers (`contracts.events.nlp.article_enriched`)
+
+| Function | Purpose |
+|----------|---------|
+| `encode_raw_array(items)` | Encode `list[dict] | None` → JSON string for Avro transport. Returns `None` for empty/None input. |
+| `decode_raw_array(blob)` | Decode JSON string → `list[dict]`. Returns `[]` on None, malformed, or oversized (>16 MB) input. Logs a warning instead of raising. |
 
 ---
 
 ## Model Anatomy
 
-All canonical models are **frozen dataclasses** with:
-
-- Type-annotated fields matching the Avro schema
-- A `from_dict(cls, d)` classmethod (for deserialization)
-- A `to_dict(self)` method (for serialization)
-- An `AvroDictable` protocol compliance
+All canonical models follow this pattern:
 
 ```python
 from dataclasses import dataclass, field
-from datetime import datetime
 
 @dataclass(frozen=True)
 class CanonicalOHLCVBar:
@@ -194,9 +207,8 @@ class CanonicalOHLCVBar:
     volume: int
     adjusted_close: float | None = None
     source: str = ""
-    provider: str = ""          # added in wave-01 for legacy consumer parity
-    timeframe: str = "1d"       # added in wave-01 for legacy consumer parity
-    fetched_at: datetime | None = None  # added in wave-01 for legacy consumer parity
+    timeframe: str = "1d"
+    fetched_at: datetime | None = None
     schema_version: int = field(default=1, init=False)
 
     @classmethod
@@ -207,59 +219,138 @@ class CanonicalOHLCVBar:
         ...
 ```
 
-### float vs Decimal
-
-All price and numeric fields use `float` (Python `float64`, ~15 significant
-digits). The legacy codebase used `Decimal` — this was intentionally simplified.
-Float64 precision is adequate for OHLCV financial data; downstream services
-that require exact decimal arithmetic (e.g., order books) should apply their
-own Decimal conversion.
+- **`frozen=True`** — immutable after creation; no accidental mutation through aliasing.
+- **`from_dict` / `to_dict`** — explicit serialization boundary; no magic.
+- **`schema_version`** — auto-set; used for monitoring, not consumer branching.
+- **`float` for prices** — deliberate choice; `float64` gives ~15 significant digits,
+  adequate for OHLCV data. `Decimal` would break Avro serialization.
 
 ---
 
-## Guidelines
+## Usage Examples
 
-1. **Runtime dependency**: `structlog` is required (used by `parsing.py`).
-   `pyarrow` is optional — add the `[parquet]` extra for Parquet I/O.
-2. **Frozen**: All models are immutable once created.
-3. **Versioned**: Every model carries a `schema_version` field that is
-   auto-populated from `contracts.versions`.
-4. **Backwards-compatible changes only**: Add fields with defaults. Never
-   remove or rename fields — create a new version instead.
-5. **AvroDictable compliance**: Every canonical model's `to_dict()` output must
-   be accepted by `fastavro.validate(schema, output)` with no exception. Run
-   the contract tests in `libs/contracts/tests/` after every model change.
+```python
+# Consuming a stored article event from Kafka:
+from contracts.canonical.ingestion import CanonicalStoredArticleEvent
+
+raw_dict = deserialize_confluent_avro(schema, raw_bytes)
+event = CanonicalStoredArticleEvent.from_dict(raw_dict)
+print(event.article_id)    # NOTE: field is "article_id", not "doc_id" (Avro compat)
+
+# Building an enriched article event to publish:
+from contracts.events.nlp.article_enriched import CanonicalNlpArticleEnriched, encode_raw_array
+
+event = CanonicalNlpArticleEnriched(
+    event_id=new_ulid(),
+    occurred_at=to_iso8601(utc_now()),
+    doc_id=str(doc_id),
+    source_type="eodhd_news",
+    routing_tier="standard",
+    routing_score=0.72,
+    section_count=3,
+    chunk_count=12,
+    mention_count=8,
+    raw_relations_json=encode_raw_array(relations),
+    raw_events_json=encode_raw_array(events),
+    raw_claims_json=encode_raw_array(claims),
+)
+payload = event.to_dict()   # Avro-ready dict
+
+# Trust-weighted ranking:
+from contracts import SOURCE_AUTHORITY
+weight = SOURCE_AUTHORITY.get(source_type, SOURCE_AUTHORITY["default"])  # 0.50 fallback
+```
+
+---
+
+## Architecture Notes
+
+### Why frozen dataclasses, not Pydantic?
+
+Frozen dataclasses have zero runtime overhead for field access, no validation
+cost, and no dependency on pydantic. `contracts` is imported by every service
+including minimal workers — pulling in pydantic here would add it to every service
+context even when it is not otherwise needed. Pydantic lives in service-level
+`pyproject.toml` only.
+
+### `article_id` vs `doc_id`
+
+`CanonicalStoredArticleEvent` and `CanonicalEnrichedArticleEvent` use the field
+name `article_id` (not `doc_id`) to match the Avro schema exactly. In
+`content_store_db` the column is `doc_id`, but the event field was named
+`article_id` for backward compatibility with early consumers. Do NOT rename it.
+
+### `tuple` vs `list` for collection fields
+
+`source_article_ids` (on `CanonicalSignalEvent`) and `entity_ids_affected` (on
+`CanonicalWatchlistEvent`) are stored as `tuple` internally because frozen
+dataclasses must not contain mutable containers. `to_dict()` converts them back
+to `list` for Avro array compatibility.
+
+### `CanonicalWatchlistEvent.event_type`
+
+Valid values: `"watchlist.item_added"` and `"watchlist.item_deleted"`.
+The value `"watchlist.item_removed"` was deprecated in Wave 01 (T-F-001) — it
+is a bug if it appears.
+
+---
+
+## How to Bump a Schema Version
+
+1. Add the new field(s) to the dataclass **with a default value** (never remove or rename).
+2. Increment the `*_SCHEMA_VERSION` constant in `contracts/versions.py`.
+3. Update the Avro `.avsc` file in `infra/kafka/schemas/` — add the field with a `"default"` key.
+4. Run `scripts/gen-contracts.sh` to validate Python ↔ Avro parity.
+5. Update `docs/libs/contracts.md` model table.
+
+> **Never**: remove a field, rename a field, or change a field's type. These
+> are breaking changes that require a new topic (e.g. `*.v2`).
+
+---
+
+## Configuration
+
+`contracts` has no configuration and reads no environment variables. All models
+are statically defined.
+
+---
+
+## Extension Points
+
+- **New canonical model**: create `contracts/canonical/<domain>.py`, add to
+  `contracts/__init__.py`, create matching `.avsc` in `infra/kafka/schemas/`.
+- **New cross-service event**: create `contracts/events/<domain>/<event_name>.py`.
+  Not all events need a canonical Python model — only those consumed by services
+  that benefit from typed deserialization.
+- **New trust authority entry**: add to `contracts/trust/__init__.py`.
+
+---
+
+## Testing
+
+```bash
+cd libs/contracts
+python -m pytest tests/ -v
+```
+
+**Test coverage:**
+- Round-trip `from_dict → to_dict` for all models (11+ canonical models).
+- Avro schema alignment using `fastavro.validate` against `infra/kafka/schemas/`.
+- `from_dict` handles missing optional fields gracefully (uses field defaults).
+- `CanonicalWatchlistEvent` regression: `event_type` must be `item_deleted` not `item_removed`.
+- `decode_raw_array` handles `None`, malformed JSON, oversized blobs.
 
 ---
 
 ## Common Pitfalls
 
-1. **Removing or renaming a field** — this breaks every consumer that reads
-   old events from Kafka (topics are retained; old messages never disappear).
-   Always add new fields with defaults instead.
-2. **Forgetting to update the Avro schema** — the Python dataclass and the
-   `.avsc` file diverge silently. Run `scripts/gen-contracts.sh` every time.
-3. **Comparing `schema_version` in consumer logic** — don't branch on version
-   numbers in business logic. Avro defaults handle missing fields automatically.
-   Version numbers are for monitoring and alerting, not routing.
-4. **Using `Decimal` for price fields** — all price fields use `float`. The
-   decision was deliberate (see Model Anatomy). Introducing `Decimal` here would
-   break Avro serialization and require custom serializers.
-5. **Forgetting `frozen=True`** — if you add a mutable dataclass to this library
-   it will be accidentally mutated somewhere in a pipeline. All canonical models
-6. **Using `list` for `source_article_ids` or `entity_ids_affected`** — these fields
-   are `tuple` internally (frozen dataclass constraint). `to_dict()` converts to `list`
-   for Avro array serialization. Don't try to mutate them after construction and don't
-   assign a `list` directly to these fields in the constructor.
-   must be `frozen=True`.
-
----
-
-## Testing Strategy
-
-- **Unit**: Round-trip `from_dict → to_dict` for every model (11+ canonical models), edge cases
-  (missing optional fields, extra keys ignored).
-- **Contract tests**: Validate that `to_dict()` output matches the Avro
-  schema in `infra/kafka/schemas/` using `fastavro.validate` (all pointer and canonical schemas).
-- **Field additions**: When adding a new canonical model, ensure `from_dict` gracefully
-  handles missing fields (use field defaults), and `to_dict` produces valid Avro JSON.
+1. **Removing or renaming a field** — Kafka topics retain old messages. Old consumers
+   will break. Add fields with defaults; create `*.v2` topics for breaking changes.
+2. **Forgetting to update the Avro schema** — Python dataclass and `.avsc` silently
+   diverge. Run `scripts/gen-contracts.sh` every time.
+3. **Using `Decimal` for price fields** — all price fields use `float`. Introducing
+   `Decimal` breaks Avro serialization and requires custom serializers.
+4. **`frozen=True` missing** — without it, mutable dataclasses are accidentally
+   mutated somewhere in a pipeline.
+5. **Branching on `schema_version` in business logic** — don't. Avro defaults handle
+   missing fields automatically. Version numbers are for monitoring, not routing.

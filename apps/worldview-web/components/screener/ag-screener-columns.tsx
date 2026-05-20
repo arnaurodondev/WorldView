@@ -184,10 +184,27 @@ function VolumeCellRenderer() {
   );
 }
 
-// Sparkline needs the sparklines map — built via factory closure so callers
-// don't have to thread it through cellRendererParams.
-function createSparklineCellRenderer(sparklines: Record<string, OHLCVBar[]>) {
+// Sparkline needs the sparklines map and a suppressed flag — built via factory
+// closure so callers don't have to thread them through cellRendererParams.
+//
+// WHY suppressed parameter (FR-4.5 / DS-013): when >200 rows are loaded, we skip
+// fetching sparkline data to avoid hammering S9 with 200+ OHLCV requests. Previously
+// this left an empty flat grey line in the cell. Now we render an em-dash — consistent
+// with every other "data not available" cell in the screener (price, beta, P/E all
+// use "—"). The dash signals "intentionally not shown" vs the flat line which looks
+// like broken data.
+function createSparklineCellRenderer(
+  sparklines: Record<string, OHLCVBar[]>,
+  suppressed: boolean,
+) {
   function SparklineCellRenderer({ data }: ICellRendererParams<ScreenerResult>) {
+    // When suppressed (>200 rows), show an em-dash instead of an empty chart.
+    // The dash communicates "intentionally omitted" rather than "no data" (flat line).
+    if (suppressed) {
+      return (
+        <span className="font-mono text-[10px] text-muted-foreground/50">—</span>
+      );
+    }
     return (
       <MiniChart
         bars={sparklines[data?.instrument_id ?? ""]}
@@ -204,9 +221,13 @@ function createSparklineCellRenderer(sparklines: Record<string, OHLCVBar[]>) {
 /**
  * createAgScreenerColumns — build the AG Grid ColDef list for the screener.
  *
- * @param sparklines  Map from instrument_id → 30d OHLCV bars.
- *                    Pass {} when the sparkline column is hidden or suppressed
- *                    (>200 rows). Same contract as the TanStack factory.
+ * @param sparklines   Map from instrument_id → 30d OHLCV bars.
+ *                     Pass {} when the sparkline column is hidden or suppressed
+ *                     (>200 rows). Same contract as the TanStack factory.
+ * @param suppressed   When true (>200 rows loaded), the sparkline cell renders
+ *                     an em-dash instead of a flat grey line. Communicates
+ *                     "intentionally omitted" rather than "data missing"
+ *                     (FR-4.5 / DS-013).
  *
  * Column layout:
  *   TICKER (pinned-left) | NAME | SECTOR | [Price: PRICE CHG%] |
@@ -215,6 +236,7 @@ function createSparklineCellRenderer(sparklines: Record<string, OHLCVBar[]>) {
  */
 export function createAgScreenerColumns(
   sparklines: Record<string, OHLCVBar[]>,
+  suppressed = false,
 ): (ColDef<ScreenerResult> | ColGroupDef<ScreenerResult>)[] {
   return [
     // ── TICKER — pinned left, not movable ────────────────────────────────────
@@ -357,7 +379,9 @@ export function createAgScreenerColumns(
       sortable: false,
       resizable: false,
       width: SCREENER_AG_COL_WIDTHS.sparkline,
-      cellRenderer: createSparklineCellRenderer(sparklines),
+      // Pass suppressed flag so the renderer shows "—" instead of an empty flat
+      // line when >200 rows are loaded (FR-4.5 / DS-013).
+      cellRenderer: createSparklineCellRenderer(sparklines, suppressed),
     } satisfies ColDef<ScreenerResult>,
   ];
 }

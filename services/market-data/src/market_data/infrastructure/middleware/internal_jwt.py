@@ -12,6 +12,7 @@ PRD-0025 §6.5 (InternalJWTMiddleware spec).
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from typing import TYPE_CHECKING, Any, cast
 
@@ -41,6 +42,18 @@ _SKIP_PREFIXES: tuple[str, ...] = ("/health", "/metrics", "/readyz")
 
 _JWKS_REFRESH_INTERVAL_SECONDS = 3600  # 1 hour
 
+# ── W1-05 (BUG-005) — module-level refresh-on-miss rate limit ─────────────────
+# Backends must re-fetch JWKS when an incoming JWT carries a ``kid`` not in the
+# in-memory cache (so S9 key rotation propagates without restart). To prevent a
+# malicious or buggy peer from amplifying every request into an outbound JWKS
+# fetch (DoS the gateway), we enforce a per-process cooldown: at most one
+# refresh per 60 seconds across ALL middleware instances in the process.
+# Module-level state intentional — concurrent requests share the rate limit.
+_refresh_lock = threading.Lock()
+_last_refresh_ts: float = 0.0
+_REFRESH_COOLDOWN_SECONDS = 60
+_DEFAULT_KID = "v1"  # fallback when token header omits kid (pre-W1-05 S9 / legacy tests)
+
 
 class InternalJWTMiddleware(BaseHTTPMiddleware):
     """Validate ``X-Internal-JWT`` (RS256) on every non-health S1 request.
@@ -68,6 +81,9 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._jwks_url = jwks_url
         self._public_key: RSAPublicKey | None = None
+        # W1-05: kid → public key map populated by _fetch_public_key.
+        # ``_public_key`` is kept for back-compat with tests that monkey-patch it.
+        self._keys_by_kid: dict[str, Any] = {}
         self._refresh_task: asyncio.Task | None = None
         self._skip_verification = skip_verification
         self._service_name = service_name
@@ -129,7 +145,15 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 logger.warning("internal_jwt_public_key_refresh_failed", error=str(exc))  # type: ignore[no-any-return]
 
     async def _fetch_public_key(self) -> RSAPublicKey:
-        """Fetch JWKS from S9 and extract the first RSA public key."""
+        """Fetch JWKS from S9 and populate ``self._keys_by_kid``.
+
+        W1-05: returns the first key (back-compat with the legacy single-key
+        contract) and also fills ``self._keys_by_kid`` so ``dispatch`` can
+        resolve any kid present in the JWKS (current key + grace-window
+        previous keys). Entries without a ``kid`` field default to ``"v1"``
+        so backends still verify against a pre-W1-05 S9 during the rollout
+        window.
+        """
         import httpx
         from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey as _RSAPublicKey
         from jwt.algorithms import RSAAlgorithm
@@ -143,12 +167,56 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
         if not keys:
             raise ValueError(f"No keys in JWKS response from {self._jwks_url}")
 
-        # Use the first key; real implementations match by kid
-        key_data = keys[0]
-        pub_key = RSAAlgorithm.from_jwk(key_data)
-        if not isinstance(pub_key, _RSAPublicKey):
-            raise TypeError("Expected RSA public key from JWKS")
-        return pub_key
+        new_map: dict[str, Any] = {}
+        first_key: RSAPublicKey | None = None
+        for key_data in keys:
+            try:
+                pub_key = RSAAlgorithm.from_jwk(key_data)
+            except Exception:  # noqa: S112 — skip malformed entries, keep good ones
+                continue
+            if not isinstance(pub_key, _RSAPublicKey):
+                continue
+            kid = key_data.get("kid") or _DEFAULT_KID
+            new_map[kid] = pub_key
+            if first_key is None:
+                first_key = pub_key
+        if first_key is None:
+            raise TypeError("No usable RSA public keys in JWKS response")
+        # Atomic swap under the GIL.
+        self._keys_by_kid = new_map
+        return first_key
+
+    async def _refresh_jwks_if_allowed(self) -> bool:
+        """W1-05: refresh JWKS on kid-miss, rate-limited to 1 fetch / 60 s / process.
+
+        Returns ``True`` if a refresh actually ran (caller should retry the
+        kid lookup), ``False`` if the cooldown is still active (caller should
+        reject the request without retrying). Defense against DoS amplification.
+        """
+        global _last_refresh_ts  # — module-level cooldown is intentional
+        now = time.monotonic()
+        with _refresh_lock:
+            if now - _last_refresh_ts < _REFRESH_COOLDOWN_SECONDS:
+                return False
+            # Reserve the cooldown slot BEFORE the await so concurrent
+            # requests don't all see "cooldown elapsed" and stampede.
+            _last_refresh_ts = now
+        try:
+            new_key = await self._fetch_public_key()
+            self._public_key = new_key
+            if hasattr(self, "app") and hasattr(self.app, "state"):
+                self.app.state._internal_jwt_public_key = new_key
+            logger.info(  # type: ignore[no-any-return]
+                "internal_jwt_jwks_refreshed_on_kid_miss",
+                known_kids=list(self._keys_by_kid.keys()),
+            )
+            return True
+        except Exception as exc:  # — fault-tolerant refresh
+            logger.warning(  # type: ignore[no-any-return]
+                "internal_jwt_jwks_refresh_on_miss_failed",
+                error=str(exc),
+            )
+            return False
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         path = request.url.path
@@ -217,13 +285,46 @@ class InternalJWTMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
             )
 
+        # W1-05 (BUG-005): resolve the public key by ``kid`` from the JWT
+        # header so S9 can rotate signing keys without restarting backends.
+        # If the kid is not in our cache, attempt one rate-limited refresh
+        # and retry the lookup. If still missing, reject with 401 (the kid
+        # was never valid OR rotation grace window expired).
+        # Fallback chain: kid lookup → legacy single-key path (back-compat
+        # with tests that monkey-patch ``self._public_key`` without
+        # populating ``_keys_by_kid``).
+        verification_key = public_key
+        try:
+            token_kid = jwt.get_unverified_header(token).get("kid") or _DEFAULT_KID
+        except jwt.DecodeError:
+            token_kid = _DEFAULT_KID
+        if self._keys_by_kid:
+            mapped = self._keys_by_kid.get(token_kid)
+            if mapped is None:
+                refreshed = await self._refresh_jwks_if_allowed()
+                if refreshed:
+                    mapped = self._keys_by_kid.get(token_kid)
+                if mapped is None:
+                    logger.warning(  # type: ignore[no-any-return]
+                        "internal_jwt_unknown_kid",
+                        token_kid=token_kid,
+                        known_kids=list(self._keys_by_kid.keys()),
+                        refreshed=refreshed,
+                    )
+                    return Response(
+                        content='{"detail":"Invalid internal JWT"}',
+                        status_code=401,
+                        media_type="application/json",
+                    )
+            verification_key = mapped
+
         try:
             # F-015: pass issuer= to jwt.decode so PyJWT validates iss internally.
             # This is more robust than a manual payload.get("iss") check because
             # PyJWT raises InvalidIssuerError before we touch the payload at all.
             payload = jwt.decode(
                 token,
-                public_key,
+                verification_key,
                 algorithms=["RS256"],
                 issuer="worldview-gateway",
                 audience="worldview-internal",

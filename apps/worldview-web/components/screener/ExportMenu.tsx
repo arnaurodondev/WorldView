@@ -132,7 +132,9 @@ export function ExportMenu<T>({
       header: c.header,
       accessor: c.accessor,
     }));
-    exportToPdf({ rows, columns: pdfColumns, filenameStem: stem, title: pdfTitle });
+    // WHY await: exportToPdf is now async (it dynamic-imports jspdf + autotable
+    // inside the function body so those heavy deps form a separate chunk).
+    await exportToPdf({ rows, columns: pdfColumns, filenameStem: stem, title: pdfTitle });
   }
 
   return (

@@ -16,7 +16,7 @@ worldview/
 ├── services/        # 10 FastAPI microservices (S1–S10) + intelligence-migrations (DDL owner for intelligence_db)
 ├── apps/
 │   └── worldview-web/    # Next.js 15 App Router + shadcn/ui + TypeScript web application
-├── libs/            # 6 shared Python packages (messaging, storage, contracts, observability, common, ml-clients)
+├── libs/            # 8 shared Python packages (messaging, storage, contracts, observability, common, ml-clients, prompts, tools)
 ├── infra/           # Docker Compose, Kafka schemas, Postgres init, MinIO init
 ├── scripts/         # Bootstrap, lint, test, schema generation scripts
 ├── docs/            # All documentation (MASTER_PLAN, per-service, per-lib, workflows, ui)
@@ -201,7 +201,7 @@ Full test reference: `docs/testing/TEST_GUIDE.md`
 | NLP Pipeline | S6 | 8006 | 8006 | `make run` |
 | Knowledge Graph | S7 | 8007 | 8007 | `make run` |
 | RAG/Chat | S8 | 8008 | 8008 | `make run` |
-| API Gateway | S9 | 8090 | 8080 | `make run` |
+| API Gateway | S9 | 8000 | 8000 | `make run` |
 | Alert | S10 | 8010 | 8010 | `make run` |
 | intelligence-migrations | — | none | none | one-shot init container |
 
@@ -213,7 +213,7 @@ Dev tool UIs (started by `make dev`):
 | API Gateway | http://localhost:8000 | S9 REST entrypoint |
 | MailHog | http://localhost:8025 | Email preview (alert emails) |
 | pgweb | http://localhost:8091 | Postgres browser |
-| Kafka UI | http://localhost:8092 | Topic/consumer group browser |
+| Kafka UI | http://localhost:8092 | Topic/consumer group browser (dev only, `make dev`) |
 | MinIO Console | http://localhost:7481 | Object storage browser |
 | Grafana | http://localhost:3000 | Metrics dashboard (after `make monitoring`) |
 | Prometheus | http://localhost:9090 | Metrics scrape (after `make monitoring`) |

@@ -131,7 +131,9 @@ function Sparkline({ values, width = 60, height = 16 }: { values: number[]; widt
  * All chips share the same dimensions so the title row width is stable
  * across markets.
  */
-const CATEGORY_CHIP_CLASS = "bg-muted text-muted-foreground text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0";
+// WHY rounded-[2px] (not bare `rounded`): design system mandates 2px radius
+// everywhere — bare `rounded` gives 4px which is consumer-app scale, not terminal density.
+const CATEGORY_CHIP_CLASS = "bg-muted text-muted-foreground text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-[2px] shrink-0";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 

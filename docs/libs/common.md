@@ -1,25 +1,49 @@
 # Common Library
 
-> **Package**: `common` · **Path**: `libs/common/`
-> **Purpose**: Lightweight shared utilities — time helpers, ID generation,
-> type aliases. Zero or near-zero dependencies.
+> **Package**: `common` · **Path**: `libs/common/` · **Version**: 2025.6.0
+> **Purpose**: Lightweight shared utilities — time helpers, ID generation, and
+> type aliases. Zero or near-zero dependencies. Every service and library may
+> import it freely.
 
 ---
 
-## Design Philosophy
+## Purpose
 
-`common` is the **foundation layer**: every service and library may import it, so it
-must never introduce its own service-level dependencies. Three rules govern every
-addition to this library:
+`common` is the **foundation layer**: because every other service and library
+can depend on it, it must never itself introduce heavyweight dependencies (no
+pydantic, no SQLAlchemy, no httpx). It solves three concrete problems:
 
-1. **Zero heavy deps** — permitted external dependencies are `python-ulid` and `uuid6`.
-   No pydantic, no SQLAlchemy, no httpx.
-2. **UTC everywhere** — naive datetimes are silent bugs. Every time-returning
-   function here produces timezone-aware UTC. Callers that supply naive datetimes
-   get a `ValueError`.
-3. **Type safety at zero runtime cost** — `NewType` wrappers for domain IDs mean
-   the type-checker will catch `UserId` passed where `TenantId` is expected, at no
-   performance cost (they compile to identity functions at runtime).
+1. **Safe timestamps** — naive `datetime` objects are silent bugs (wrong timezone
+   assumptions silently corrupt time-series data). Every time-returning function
+   here enforces UTC-aware datetimes.
+2. **Correct ID generation** — different ID types are appropriate in different
+   contexts (UUIDv7 for new entity PKs, ULID for Kafka event IDs, UUIDv4 for
+   legacy services). `common.ids` provides the right function for each case and
+   wraps third-party ID libraries so services never import them directly.
+3. **Type-safe domain IDs** — `NewType` wrappers for `TenantId`, `EntityId`, etc.
+   mean mypy will catch cases where an `EntityId` is passed where a `TenantId` is
+   expected. Zero runtime overhead — they compile to identity functions.
+
+---
+
+## Installation
+
+```toml
+# In a service's pyproject.toml:
+[project]
+dependencies = ["common"]
+
+# For development:
+[project.optional-dependencies]
+dev = ["common[dev]"]
+```
+
+```bash
+# Editable install for local development:
+pip install -e "libs/common[dev]"
+```
+
+Dependencies: `python-ulid>=3.0,<4`, `uuid6>=2024.1,<2025`. Python 3.11–3.12.
 
 ---
 
@@ -27,143 +51,170 @@ addition to this library:
 
 ### Time Utilities (`common.time`)
 
-| Function | Purpose |
-|----------|---------|
-| `utc_now()` | `datetime.now(timezone.utc)` — canonical "current time" |
-| `ensure_utc(dt)` | Converts / asserts a datetime is UTC; raises `ValueError` if naive |
-| `to_iso8601(dt)` | Formats to `YYYY-MM-DDTHH:MM:SS.ffffffZ` |
-| `from_iso8601(s)` | Parses ISO-8601 string → UTC datetime |
-| `parse_bar_date(s)` | Parses `YYYY-MM-DD` date strings (OHLCV bars) |
-| `parse_bar_datetime(s)` | Parses `YYYY-MM-DD HH:MM:SS` date-time strings |
+| Function | Signature | Returns | Description |
+|----------|-----------|---------|-------------|
+| `utc_now` | `() -> datetime` | `datetime` (UTC, aware) | Canonical "current time". Equivalent to `datetime.now(UTC)`. |
+| `ensure_utc` | `(dt: datetime) -> datetime` | `datetime` (UTC, aware) | Converts / asserts a datetime is UTC. Raises `ValueError` if naive. |
+| `to_iso8601` | `(dt: datetime) -> str` | `str` | Formats to `YYYY-MM-DDTHH:MM:SS.ffffffZ`. Calls `ensure_utc` first. |
+| `from_iso8601` | `(s: str) -> datetime` | `datetime` (UTC, aware) | Parses ISO-8601 string (both `Z` and `+00:00` suffixes accepted). |
+| `parse_bar_date` | `(s: str) -> datetime` | `datetime` (UTC midnight) | Parses `YYYY-MM-DD` date strings to UTC midnight. Used for OHLCV bars. |
+| `parse_bar_datetime` | `(s: str) -> datetime` | `datetime` (UTC) | Parses `YYYY-MM-DD HH:MM:SS` strings to UTC datetime. |
 
 ### ID Generation (`common.ids`)
 
-| Function | Purpose |
-|----------|---------|
-| `new_uuid()` | `uuid.uuid4()` — returns `UUID` object (UUIDv4, backwards-compatible) |
-| `new_uuid_str()` | `str(uuid.uuid4())` — returns string (UUIDv4) |
-| `new_uuid7()` | RFC 9562 UUIDv7 — time-sortable, returns `UUID` object |
-| `new_uuid7_str()` | RFC 9562 UUIDv7 — time-sortable, returns hyphenated string |
-| `new_ulid()` | Time-sortable ULID — for Kafka event IDs |
+| Function | Signature | Returns | When to use |
+|----------|-----------|---------|------------|
+| `new_uuid7` | `() -> UUID` | `UUID` (UUIDv7) | New entity PKs in ingestion pipeline (S4–S10). Time-sortable; PRD-mandated. |
+| `new_uuid7_str` | `() -> str` | `str` | Same as `new_uuid7()` but as a hyphenated string (for Avro payloads, JSON). |
+| `new_ulid` | `() -> str` | `str` | Kafka event IDs. Lexicographically sortable by design. |
+| `new_uuid` | `() -> UUID` | `UUID` (UUIDv4) | Backwards-compatible ID for portfolio and market-ingestion services that already have UUIDv4 rows in production. |
+| `new_uuid_str` | `() -> str` | `str` | Same as `new_uuid()` but as a string. |
+| `uuid5_from_parts` | `(*parts: str) -> str` | `str` (UUID5, hyphenated) | Deterministic UUID from ordered string parts. Used for idempotent Kafka replay — same inputs always produce the same UUID, so `ON CONFLICT DO NOTHING` prevents duplicate rows. Uses the RFC 4122 DNS namespace UUID as the stable worldview namespace. |
 
-**When to use which ID function:**
+**ID selection flowchart:**
 
-| Use case | Function | Rationale |
-|----------|----------|-----------|
-| New entity primary keys (S4–S10) | `new_uuid7()` | Time-sortable; PRD-mandated for ingestion pipeline |
-| Kafka event IDs | `new_ulid()` | Lexicographically sortable by design |
-| Existing service entities (portfolio, market-ingestion) | `new_uuid()` | Backwards-compatible; changing would break existing DB rows |
-| DB outbox/DLQ record IDs | `new_uuid7()` | FK-compatible + time-ordered |
-
-**UUID type decision flowchart:**
-
-```mermaid
-flowchart TD
-    A[Need a new ID?] --> B{Is it a Kafka event ID?}
-    B -->|Yes| C[new_ulid\nlexicographically sortable]
-    B -->|No| D{Is it in portfolio or market-ingestion\nwith existing UUIDv4 rows in prod?}
-    D -->|Yes| E[new_uuid\nUUIDv4 - backwards compatible]
-    D -->|No| F{Is it a new entity in the ingestion pipeline\nS4 / S5 / S6 / S7 / S10?}
-    F -->|Yes| G[new_uuid7\nUUIDv7 - time-sortable, PRD-mandated]
-    F -->|No| H[new_uuid7\ndefault for all new services]
+```
+Need a new ID?
+├── Kafka event ID?             → new_ulid()
+├── New entity in S4–S10?       → new_uuid7()
+├── Portfolio / market-ingestion (existing UUIDv4 rows)?  → new_uuid()
+└── Deterministic / idempotent key?  → uuid5_from_parts(*parts)
 ```
 
 ### Type Aliases (`common.types`)
 
-| Alias | Definition | Why `NewType` and not a plain alias |
-|-------|------------|-------------------------------------|
-| `TenantId` | `NewType("TenantId", UUID)` | Prevents passing `UserId` where `TenantId` expected |
-| `UserId` | `NewType("UserId", UUID)` | ↑ |
-| `InstrumentId` | `NewType("InstrumentId", UUID)` | ↑ |
-| `TransactionId` | `NewType("TransactionId", UUID)` | ↑ |
-| `EventId` | `NewType("EventId", str)` | Prevents bare `str` leaking into event ID slots |
-| `TopicName` | `NewType("TopicName", str)` | Makes topic names opaque; prevents arbitrary string injection |
-| `JsonDict` | `dict[str, Any]` | Plain alias — no domain meaning, just a readability shorthand |
-| `DocumentId` | `NewType("DocumentId", UUID)` | Canonical document ID — S5 creates, S6 enriches, S7 produces evidence for |
-| `EntityId` | `NewType("EntityId", UUID)` | Canonical entity ID — S6 resolves, S7 graphs, S10 fans out on |
-| `UrlHash` | `NewType("UrlHash", str)` | SHA-256 hex digest of a normalised URL — S4 computes, S5 checks for dedup |
-| `MinIOKey` | `NewType("MinIOKey", str)` | MinIO object key — S4 writes bronze, S5 reads bronze + writes silver, S6 reads silver |
+All domain IDs are `NewType` wrappers — they are identity functions at runtime but
+distinct types to mypy. Passing a `UserId` where a `TenantId` is expected is a
+compile-time error, not a runtime one.
 
-`NewType` creates a **distinct type at the type-checker level but is an identity
-function at runtime**. Mypy strict mode will reject `UserId(user_uuid)` passed
-where `TenantId` is required, catching a whole class of ID-confusion bugs for free.
+| Alias | Underlying type | Cross-service usage |
+|-------|-----------------|---------------------|
+| `TenantId` | `UUID` | Auth boundary — S1, S9 |
+| `UserId` | `UUID` | Auth boundary — S1, S9 |
+| `InstrumentId` | `UUID` | Market-data instrument PK — S2, S3, S9 |
+| `TransactionId` | `UUID` | Portfolio transaction PK — S1 |
+| `EventId` | `str` | Kafka event envelope ID — all services |
+| `TopicName` | `str` | Prevents raw strings in topic routing — messaging lib |
+| `DocumentId` | `UUID` | Content pipeline doc ID — S4, S5, S6, S7 |
+| `EntityId` | `UUID` | Knowledge graph entity ID — S6, S7, S10 |
+| `UrlHash` | `str` | SHA-256 hex of a normalised URL — S4 (compute), S5 (dedup) |
+| `MinIOKey` | `str` | MinIO object key — S4 (bronze), S5 (silver), S6 (reads silver) |
+| `JsonDict` | `dict[str, Any]` | Plain alias — readability shorthand, no domain meaning |
 
-Only types referenced by **two or more services** live in `common.types`. Service-local
-IDs (`SourceId`, `SectionId`, `ChunkId`, `RelationId`, `AlertId`, etc.) belong in
-each service's own domain layer.
+**Rule**: only types referenced by **two or more services** live in `common.types`.
+Service-local IDs (`SourceId`, `SectionId`, `AlertId`, etc.) belong in each
+service's own domain layer.
 
 ---
 
-## Usage
+## Usage Examples
 
 ```python
 # All public symbols are re-exported from the package root:
-from common import utc_now, to_iso8601, new_uuid, new_uuid7, TenantId
-from common import DocumentId, EntityId, UrlHash, MinIOKey
+from common import utc_now, to_iso8601, new_uuid7, new_ulid, uuid5_from_parts
+from common import TenantId, EntityId, DocumentId, UrlHash, MinIOKey
 
-# Or from sub-modules directly:
-from common.time import utc_now, to_iso8601
-from common.ids import new_uuid, new_uuid_str, new_ulid, new_uuid7, new_uuid7_str
-from common.types import TenantId, DocumentId, EntityId, UrlHash, MinIOKey
+# --- Time ---
+now = utc_now()                    # datetime(2026, 5, 17, 10, 30, tzinfo=UTC)
+iso = to_iso8601(now)              # "2026-05-17T10:30:00.000000Z"
+dt  = from_iso8601(iso)            # round-trips cleanly
 
-now = utc_now()
-event_time = to_iso8601(now)
-tenant = TenantId(new_uuid())
-
-# Ingestion pipeline usage:
+# --- IDs: new entity in ingestion pipeline ---
 doc_id: DocumentId = DocumentId(new_uuid7())
 entity_id: EntityId = EntityId(new_uuid7())
-url_hash: UrlHash = UrlHash("a3f1...")   # sha256 hex digest
-minio_key: MinIOKey = MinIOKey("bronze/2026/03/23/abc123.json")
+
+# --- IDs: Kafka event ---
+event_id = new_ulid()              # "01JBMHZ6Q3..." — lexicographically sortable
+
+# --- IDs: deterministic / idempotent (avoids duplicate rows on Kafka replay) ---
+stable_id = uuid5_from_parts(str(doc_id), str(entity_id), "new_evidence")
+# Same three inputs always → same UUID5 string → ON CONFLICT DO NOTHING is safe
+
+# --- Type safety ---
+# mypy error: Argument of type "UserId" cannot be assigned to "TenantId"
+# tenant: TenantId = UserId(new_uuid7())   # ← mypy rejects this
 ```
 
 ---
 
-## Guidelines
+## Architecture Notes
 
-1. **No heavy dependencies** — this library must remain lightweight.
-   Allowed: `python-ulid`, `uuid6`. Not allowed: `pydantic`, `sqlalchemy`, etc.
-2. **All datetimes are UTC** — `utc_now()` is the only way to get "now".
-   Never call `datetime.now()` without `timezone.utc`. The mypy config enforces
-   `--disallow-untyped-defs`; adding `ensure_utc()` calls at service boundaries
-   is the safety net for data arriving from external sources.
-3. **NewType usage** — type aliases like `TenantId` are `NewType` wrappers;
-   they provide type-checker safety at zero runtime cost.
-4. **No business logic** — this library must not contain domain rules. If you
-   find yourself adding a function that makes decisions, it belongs in a service
-   or in `libs/contracts`.
+### Why UUIDv7 (not UUIDv4) for entity PKs?
+
+UUIDv7 embeds a millisecond-precision Unix timestamp in the top 48 bits and is
+monotonically increasing within the same millisecond. This makes UUID-ordered
+B-tree scans equivalent to time-ordered scans — no need for a separate
+`created_at` index on ingestion tables. UUIDv4 is random, producing random B-tree
+insertions that cause page splits and table bloat under high-insert workloads.
+
+### Why ULID (not UUIDv7) for Kafka event IDs?
+
+ULIDs are lexicographically sortable as plain strings (no UUID parsing required),
+which simplifies log analysis and event deduplication queries that operate on
+string prefixes. They carry the same timestamp resolution as UUIDv7.
+
+### Why `NewType` (not just `TypeAlias`)?
+
+`TypeAlias = UUID` is transparent to mypy — it will accept a `UUID` anywhere a
+`TypeAlias` is expected. `NewType("TenantId", UUID)` is opaque to mypy — it
+requires an explicit `TenantId(uuid_value)` cast at construction sites, making all
+accidental type crossings visible at static analysis time without any runtime cost.
+
+### Why not add pydantic / SQLAlchemy to `common`?
+
+`common` is imported by every service and every other shared library. Adding a
+heavyweight dependency here forces it into every context, including unit tests and
+lightweight scripts. The dependency graph must remain a DAG, and `common` is the
+root node.
+
+---
+
+## Configuration
+
+`common` has no configuration. It does not read environment variables. No
+pydantic-settings models.
+
+---
+
+## Extension Points
+
+- **New time helpers**: add to `common/time.py` and export from `common/__init__.py`.
+  Must always work with UTC-aware datetimes.
+- **New ID types**: add to `common/ids.py` only if the function abstracts a
+  third-party library that could change. Do not add business logic.
+- **New type aliases**: add to `common/types.py` only if the type is used by
+  **two or more services**. Service-local types belong in the service domain layer.
+
+---
+
+## Testing
+
+```bash
+cd libs/common
+python -m pytest tests/ -v
+```
+
+**What the tests cover:**
+- Round-trip `to_iso8601(from_iso8601(s)) == s`
+- `ensure_utc` raises on naive datetimes
+- `parse_bar_date` and `parse_bar_datetime` edge cases
+- ULID lexicographic ordering
+- `uuid5_from_parts` stability (same inputs → same output; reordered inputs → different output)
 
 ---
 
 ## Common Pitfalls
 
-1. **Calling `datetime.now()` directly** — produces a naive datetime silently
-   accepted by SQLAlchemy but rejected by `ensure_utc()`. Always use `utc_now()`.
-2. **Using `str` instead of typed IDs in function signatures** — defeats the
-   purpose of `NewType`. Accept `TenantId`, not `str`, in your use-case constructors.
-3. **Comparing ULIDs as strings vs UUIDs as UUIDs** — `new_ulid()` returns a
-   `str`; `new_uuid()` returns a `UUID`. Never mix them in the same field without
-   explicit conversion.
-4. **Adding `pydantic` as a dependency to `common`** — once pydantic is here,
-   every service that imports `common` in a minimal environment will drag in
-   pydantic. Keep it in service-level `pyproject.toml` only.
-5. **Calling `uuid6.uuid7()` directly in service code** — bypasses the library's
-   abstraction, adds a raw external dependency to service code, and makes future
-   migrations (e.g., stdlib UUIDv7 in Python 3.14) a multi-service change instead
-   of a single-library update. Always use `common.ids.new_uuid7()`.
-6. **Defining `DocumentId` or `EntityId` locally in service code** — duplicate
-   `NewType` aliases break cross-service type safety; mypy will not catch mismatched
-   IDs at service boundaries. Always import from `common.types`.
-7. **Using `new_uuid7()` in portfolio or market-ingestion** — these services have
-   UUIDv4 primary keys in production. Switching ID functions without a migration
-   will produce rows that cannot be joined with existing data.
-8. **Using `new_uuid()` (UUIDv4) for new ingestion pipeline entities** — violates
-   the PRD mandate; UUIDv4 is not time-sortable and requires a separate `created_at`
-   index for ordered queries.
-
----
-
-## Testing Strategy
-
-- **Unit**: Round-trip `to_iso8601(from_iso8601(s)) == s`, `ensure_utc` raises
-  on naive datetimes, `parse_bar_date` edge cases, ULID ordering.
+1. **`datetime.now()` without `timezone.utc`** — produces a naive datetime.
+   SQLAlchemy silently accepts it; `ensure_utc()` will raise at service boundaries.
+   Always use `utc_now()`.
+2. **Accepting `str` instead of typed IDs** — defeats `NewType`. Function signatures
+   should accept `TenantId`, not `str`.
+3. **`new_uuid7()` in portfolio or market-ingestion** — those services have existing
+   UUIDv4 rows in production. Mixing ID types breaks JOIN queries without a migration.
+4. **Calling `uuid6.uuid7()` directly in service code** — bypasses the abstraction.
+   When Python stdlib adds UUIDv7 (planned for 3.14+), the migration becomes a
+   single-library change instead of a multi-service change.
+5. **Defining `DocumentId` or `EntityId` locally** — duplicate `NewType` aliases
+   from separate `NewType()` calls are distinct types even with the same name. mypy
+   will not catch mismatches at service boundaries.

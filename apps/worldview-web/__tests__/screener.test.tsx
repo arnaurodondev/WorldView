@@ -24,7 +24,7 @@
  * DESIGN REFERENCE: PRD-0031 §7 Screener, Wave 3
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -442,6 +442,12 @@ describe("ScreenerPage — column sort", () => {
 // new structure renders correctly without regressing existing behaviour.
 
 describe("ScreenerPage — Wave B filter sections (PLAN-0051)", () => {
+  // WHY set env: Leverage + some Technical/News sections are gated behind
+  // NEXT_PUBLIC_ENABLE_PENDING_METRICS (FR-4.4). Tests that assert those
+  // sections exist must enable the flag so the sections render.
+  beforeEach(() => { process.env.NEXT_PUBLIC_ENABLE_PENDING_METRICS = "true"; });
+  afterEach(() => { delete process.env.NEXT_PUBLIC_ENABLE_PENDING_METRICS; });
+
   it("renders all six filter sections after the panel is opened", async () => {
     const user = userEvent.setup();
     render(<ScreenerPage />, { wrapper: makeWrapper() });

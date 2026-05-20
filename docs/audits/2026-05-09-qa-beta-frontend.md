@@ -21,7 +21,7 @@ Two serious chart bugs survive (one regression of a pre-existing fix, one struct
 ## 1. Chart bugs (top priority — `OHLCVChart.tsx` + helpers)
 
 The chart implementation lives in
-`/Users/arnaurodon/Projects/University/final_thesis/worldview/apps/worldview-web/components/instrument/OHLCVChart.tsx`
+`apps/worldview-web/components/instrument/OHLCVChart.tsx`
 (1282 lines, **35 hook call-sites**, 14 `useRef`-held series handles, dynamic `import("lightweight-charts")`).
 Sibling components: `CrosshairHUD.tsx`, `ChartToolbar.tsx`, `DrawingPalette.tsx`, `DrawingCanvas.tsx`, `VolumeProfileOverlay.tsx`.
 
@@ -274,11 +274,11 @@ I did NOT find any new tabular-nums gaps beyond pass-2 audit (which closed Funda
 ## 7. Files inspected
 
 Primary read in full:
-- `/Users/arnaurodon/Projects/University/final_thesis/worldview/apps/worldview-web/components/instrument/OHLCVChart.tsx` (1282 lines)
-- `/Users/arnaurodon/Projects/University/final_thesis/worldview/apps/worldview-web/components/instrument/CrosshairHUD.tsx` (145 lines)
-- `/Users/arnaurodon/Projects/University/final_thesis/worldview/apps/worldview-web/components/shell/FlashOverlay.tsx` (relevant section, 85-200)
-- `/Users/arnaurodon/Projects/University/final_thesis/worldview/apps/worldview-web/lib/api/instruments.ts` (relevant section, 60-180)
-- `/Users/arnaurodon/Projects/University/final_thesis/worldview/apps/worldview-web/app/(app)/instruments/[entityId]/page.tsx` (60-170)
+- `apps/worldview-web/components/instrument/OHLCVChart.tsx` (1282 lines)
+- `apps/worldview-web/components/instrument/CrosshairHUD.tsx` (145 lines)
+- `apps/worldview-web/components/shell/FlashOverlay.tsx` (relevant section, 85-200)
+- `apps/worldview-web/lib/api/instruments.ts` (relevant section, 60-180)
+- `apps/worldview-web/app/(app)/instruments/[entityId]/page.tsx` (60-170)
 
 Cross-cutting greps:
 - console.log/warn/error guarded vs unguarded

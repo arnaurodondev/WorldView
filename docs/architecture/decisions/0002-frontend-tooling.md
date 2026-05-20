@@ -1,6 +1,7 @@
 # ADR-0002: Frontend Tooling — Vite + React + pnpm
 
-> **Status**: Accepted · **Date**: 2026-02-28 · **Author**: Arnau Rodon
+> **Status**: Superseded by Next.js 15 migration (2026-04-17) — `apps/worldview-web/` is the production frontend (Next.js 15 App Router + shadcn/ui). The `apps/frontend/` Vite+React app is no longer active. See `docs/apps/worldview-web.md` and `docs/ui/frontend-migration.md`.
+> **Original Date**: 2026-02-28 · **Author**: Arnau Rodon
 
 ## Context
 

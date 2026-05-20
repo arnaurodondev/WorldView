@@ -335,22 +335,44 @@ export interface FundamentalsTimeseriesResponse {
 // All fields are nullable — newly-listed stocks or missing EODHD data can yield
 // null for any field.
 
+// WHY PascalCase keys (not snake_case): the S9 endpoints
+//   GET /v1/fundamentals/{id}/technicals
+//   GET /v1/fundamentals/{id}/share-statistics
+// return EODHD section data VERBATIM inside `records[0].data` (no rename layer
+// on the backend). Live response audit 2026-05-19 confirmed: keys are `Beta`,
+// `50DayMA`, `52WeekHigh`, `ShortPercent`, `PercentInsiders`, etc. Typing these
+// as snake_case (the previous shape) made `technicals?.short_percent` /
+// `shareStats?.percent_institutions` always return undefined → "—" in
+// MetricsTable + FlatMetricsGrid for ~14 rows. PLAN-0090 audit fix.
 export interface TechnicalsData {
-  beta: number | null;
-  "52_week_high": number | null;
-  "52_week_low": number | null;
-  "50_day_ma": number | null;
-  "200_day_ma": number | null;
-  shares_short: number | null;
-  short_ratio: number | null;
-  short_percent: number | null;
+  Beta: number | null;
+  "52WeekHigh": number | null;
+  "52WeekLow": number | null;
+  "50DayMA": number | null;
+  "200DayMA": number | null;
+  SharesShort: number | null;
+  SharesShortPriorMonth?: number | null;
+  ShortRatio: number | null;
+  // WHY decimal form (0.0092 = 0.92%): EODHD returns ShortPercent as a decimal
+  // (unlike Percent* fields in ShareStatisticsData which are raw percent
+  // numbers). Confirmed against live response for MSFT 2026-05-19.
+  ShortPercent: number | null;
 }
 
 export interface ShareStatisticsData {
-  shares_outstanding: number | null;
-  shares_float: number | null;
-  percent_insiders: number | null;
-  percent_institutions: number | null;
+  SharesOutstanding: number | null;
+  SharesFloat: number | null;
+  // WHY raw percent (1.64 = 1.64%, 65.35 = 65.35%) — NOT decimal:
+  // EODHD's share_statistics section returns percent ownership as the
+  // already-multiplied magnitude. Callers MUST divide by 100 before passing
+  // to formatPercent (which itself multiplies by 100). Verified live 2026-05-19.
+  PercentInsiders: number | null;
+  PercentInstitutions: number | null;
+  ShortRatio?: number | null;
+  SharesShort?: number | null;
+  ShortPercentFloat?: number | null;
+  ShortPercentOutstanding?: number | null;
+  SharesShortPriorMonth?: number | null;
 }
 
 export interface InsiderTransaction {
@@ -2097,4 +2119,47 @@ export interface ConcentrationResponse {
   positions_count: number;
   top_positions: TopPositionItem[];
   prices_stale: boolean;
+}
+
+// ── Notification Preferences (MED-022 / FR-6.3) ─────────────────────────────
+
+/**
+ * NotificationPreferences — per-user notification toggle state.
+ *
+ * Returned by GET /v1/users/me/notification-preferences and PATCH of the same
+ * route (upsert semantics — the backend creates the row on first PATCH).
+ *
+ * All alert flags default to `true` server-side on first creation so new users
+ * opt in automatically. The PATCH payload only needs to send the fields to
+ * change — omitted fields are preserved (partial update).
+ *
+ * NOTE: the trailing `updated_at` is an ISO-8601 UTC string; the frontend
+ * displays it as "Last updated: <relative time>" in the settings panel.
+ */
+export interface NotificationPreferences {
+  /** Price alert notifications — e.g. "AAPL crossed $200 threshold". */
+  price_alerts: boolean;
+  /** News alert notifications — breaking headlines for watchlist entities. */
+  news_alerts: boolean;
+  /** Movers alert notifications — top gainers / losers above a threshold. */
+  movers_alerts: boolean;
+  /** Contradiction alert notifications — KG-detected conflicting signals. */
+  contradiction_alerts: boolean;
+  /** UTC ISO-8601 timestamp of the last PATCH. Null when never updated. */
+  updated_at: string | null;
+}
+
+/**
+ * UpdateNotificationPreferencesPayload — partial PATCH body.
+ *
+ * Only fields that need to change are required — the backend merges them
+ * into the existing row (upsert). Sending an empty object {} is valid and
+ * returns the current preferences unchanged (useful for a "GET via PATCH"
+ * fallback pattern).
+ */
+export interface UpdateNotificationPreferencesPayload {
+  price_alerts?: boolean;
+  news_alerts?: boolean;
+  movers_alerts?: boolean;
+  contradiction_alerts?: boolean;
 }

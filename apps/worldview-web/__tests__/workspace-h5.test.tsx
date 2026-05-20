@@ -133,7 +133,7 @@ vi.mock("@/lib/gateway", () => ({
 
 // ── Heavy panel component mocks ────────────────────────────────────────────────
 // WHY: same reason as workspace.test.tsx — Canvas/WebGL not available in jsdom.
-vi.mock("@/components/instrument/OHLCVChart", () => ({
+vi.mock("@/components/instrument/chart/OHLCVChart", () => ({
   OHLCVChart: () => <div data-testid="ohlcv-chart-mock">Chart</div>,
 }));
 vi.mock("@/components/instrument/EntityGraphPanel", () => ({

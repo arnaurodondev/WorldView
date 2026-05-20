@@ -629,7 +629,7 @@ SELECT COUNT(*) FROM intelligence_db.public.provisional_entity_queue;
 
 ## 8. Key file paths surfaced (absolute)
 
-- `/Users/arnaurodon/Projects/University/final_thesis/worldview/services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/relation_evidence.py:112` — D-P3-007 origin (UndefinedTableError query).
+- `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/relation_evidence.py:112` — D-P3-007 origin (UndefinedTableError query).
 - `services/knowledge-graph/src/knowledge_graph/infrastructure/messaging/consumers/enriched_consumer.py:250,269` — silent-commit-on-error logic (F-DPH-011).
 - `services/knowledge-graph/src/knowledge_graph/application/blocks/canonicalization.py:125` — second-stage failure path after relation_type_registry lookup is poisoned by aborted txn.
 - `services/knowledge-graph/src/knowledge_graph/infrastructure/intelligence_db/repositories/relation_type_registry.py:31` — re-issue point for aborted txn.

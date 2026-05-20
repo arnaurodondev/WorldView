@@ -394,39 +394,33 @@ class TestGetEntityGraph:
 
 class TestTraverseGraph:
     async def test_executor_traverse_graph_rejects_disallowed_cypher_pattern(self) -> None:
-        """A cypher_pattern with no allowlisted rel types must be rejected (sanitized to None)."""
-        from rag_chat.application.pipeline.tool_executor import ToolExecutor
+        """A cypher_pattern with no allowlisted rel types must be rejected (sanitized to None).
 
-        executor_instance = ToolExecutor(
-            registry=_make_registry_with_all_tools(),
-            s3=_make_s3_port(),
-        )
+        PLAN-0089 C-1: _sanitize_cypher_pattern moved to IntelligenceHandler.
+        """
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
+
+        handler = IntelligenceHandler()
         # Pattern with completely unknown relationship type
-        sanitized = executor_instance._sanitize_cypher_pattern("[:DROP_ALL|:HACK]")
+        sanitized = handler._sanitize_cypher_pattern("[:DROP_ALL|:HACK]")
         assert sanitized is None
 
     async def test_executor_traverse_graph_allows_known_rel_types(self) -> None:
         """A pattern with an allowlisted rel type must pass through."""
-        from rag_chat.application.pipeline.tool_executor import ToolExecutor
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
 
-        executor_instance = ToolExecutor(
-            registry=_make_registry_with_all_tools(),
-            s3=_make_s3_port(),
-        )
-        sanitized = executor_instance._sanitize_cypher_pattern("[:INVESTS_IN]")
+        handler = IntelligenceHandler()
+        sanitized = handler._sanitize_cypher_pattern("[:INVESTS_IN]")
         assert sanitized is not None
         assert "INVESTS_IN" in sanitized
 
     async def test_executor_traverse_graph_partial_allowlist(self) -> None:
         """Mixed pattern — only allowlisted types survive; unknown types are stripped."""
-        from rag_chat.application.pipeline.tool_executor import ToolExecutor
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
 
-        executor_instance = ToolExecutor(
-            registry=_make_registry_with_all_tools(),
-            s3=_make_s3_port(),
-        )
+        handler = IntelligenceHandler()
         # INVESTS_IN is allowlisted; HACK_DB is not
-        sanitized = executor_instance._sanitize_cypher_pattern("[:INVESTS_IN|:HACK_DB]")
+        sanitized = handler._sanitize_cypher_pattern("[:INVESTS_IN|:HACK_DB]")
         assert sanitized is not None
         assert "INVESTS_IN" in sanitized
         assert "HACK_DB" not in sanitized
@@ -775,7 +769,13 @@ class TestGetPortfolioContext:
 
 class TestToolExecutorFactory:
     def test_factory_creates_per_request_executor(self) -> None:
-        """for_request() must return a ToolExecutor with auth context bound."""
+        """for_request() must return a ToolExecutor with auth context bound.
+
+        PLAN-0089 C-1: auth context (user_id, tenant_id, jwt) is now held in the
+        per-domain handlers (AlertsHandler, PortfolioHandler, NewsHandler).
+        We verify the executor is of the right type and that the alerts handler
+        (accessible via _alerts_handler) received the correct user context.
+        """
         from rag_chat.application.pipeline.tool_executor import ToolExecutor, ToolExecutorFactory
 
         factory = ToolExecutorFactory(
@@ -789,13 +789,17 @@ class TestToolExecutorFactory:
             internal_jwt="test-jwt",
         )
         assert isinstance(executor, ToolExecutor)
-        assert executor._user_id == _FAKE_USER_ID
-        assert executor._tenant_id == _FAKE_TENANT_ID
-        assert executor._internal_jwt == "test-jwt"
+        # Auth context is propagated to AlertsHandler
+        assert executor._alerts_handler._user_id == _FAKE_USER_ID
+        assert executor._alerts_handler._tenant_id == _FAKE_TENANT_ID
 
     def test_factory_binds_entity_context(self) -> None:
-        """for_request() must pass entity_context through to the ToolExecutor."""
-        from rag_chat.application.pipeline.tool_executor import EntityContext, ToolExecutorFactory
+        """for_request() must pass entity_context through to the domain handlers.
+
+        PLAN-0089 C-1: entity_context is now held in IntelligenceHandler,
+        NarrativeHandler, and NewsHandler (not directly on ToolExecutor).
+        """
+        from rag_chat.application.pipeline.tool_executor import EntityContext, ToolExecutor, ToolExecutorFactory
 
         ctx = EntityContext(entity_id=_FAKE_ENTITY_ID, ticker="AAPL", name="Apple Inc.")
         factory = ToolExecutorFactory(
@@ -808,5 +812,13 @@ class TestToolExecutorFactory:
             internal_jwt=None,
             entity_context=ctx,
         )
-        assert executor._entity_context == ctx
-        assert executor._entity_context.entity_id == _FAKE_ENTITY_ID
+        assert isinstance(executor, ToolExecutor)
+        # entity_context propagated to IntelligenceHandler (index 1) and NarrativeHandler (index 2)
+        from rag_chat.application.pipeline.handlers.intelligence import IntelligenceHandler
+        from rag_chat.application.pipeline.handlers.narrative import NarrativeHandler
+
+        intel_handler = next(h for h in executor._handlers if isinstance(h, IntelligenceHandler))
+        narrative_handler = next(h for h in executor._handlers if isinstance(h, NarrativeHandler))
+        assert intel_handler._entity_context == ctx
+        assert narrative_handler._entity_context == ctx
+        assert narrative_handler._entity_context.entity_id == _FAKE_ENTITY_ID

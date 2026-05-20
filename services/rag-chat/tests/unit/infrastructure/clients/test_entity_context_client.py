@@ -142,9 +142,10 @@ async def test_timeout_enforced_returns_empty_context(
     """BP-235: timeout on either endpoint returns is_empty=True — never raises."""
     entity_id = uuid4()
 
-    # Both endpoints time out (intelligence + graph, plus any retries).
-    # Register multiple so the retry attempt is also handled.
-    for _ in range(4):  # enough for both calls + retry attempts
+    # Both endpoints time out. _get_with_retry only retries on HTTP 5xx —
+    # TimeoutException is caught and returns {} immediately (no retry). So
+    # exactly 2 mocks are needed: one per endpoint (intelligence + graph).
+    for _ in range(2):
         httpx_mock.add_exception(httpx.TimeoutException("timed out"))
 
     client = EntityContextClient(base_url=_BASE)

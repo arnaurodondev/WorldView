@@ -104,13 +104,39 @@ def _make_executor(
     user_id: UUID | None = _FAKE_USER_ID,
     tenant_id: UUID | None = _FAKE_TENANT_ID,
 ) -> Any:
-    """Build a ToolExecutor with the given ports and auth context."""
+    """Build a ToolExecutor with the given ports and auth context (kept for backwards compat)."""
     from rag_chat.application.pipeline.tool_executor import ToolExecutor
 
     return ToolExecutor(
         registry=_make_registry(),
         s3=s3 or _make_s3_port(),
         s3_brief=s3_brief,
+        brief_archive=brief_archive,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        timeout=5.0,
+    )
+
+
+def _make_market_handler(
+    s3: AsyncMock | None = None,
+    s3_brief: AsyncMock | None = None,
+) -> Any:
+    """Build a MarketHandler directly (PLAN-0089 C-1: handler split)."""
+    from rag_chat.application.pipeline.handlers.market import MarketHandler
+
+    return MarketHandler(s3=s3 or _make_s3_port(), s3_brief=s3_brief, timeout=5.0)
+
+
+def _make_news_handler(
+    brief_archive: AsyncMock | None = None,
+    user_id: UUID | None = _FAKE_USER_ID,
+    tenant_id: UUID | None = _FAKE_TENANT_ID,
+) -> Any:
+    """Build a NewsHandler directly (PLAN-0089 C-1: handler split)."""
+    from rag_chat.application.pipeline.handlers.news import NewsHandler
+
+    return NewsHandler(
         brief_archive=brief_archive,
         user_id=user_id,
         tenant_id=tenant_id,
@@ -153,23 +179,23 @@ def _make_brief_record(
 
 
 class TestGetMorningBrief:
-    """Tests for _handle_get_morning_brief."""
+    """Tests for _handle_get_morning_brief (now on NewsHandler)."""
 
     @pytest.mark.asyncio
     async def test_missing_port_returns_empty(self) -> None:
         """(b) When brief_archive is None, returns empty list without error."""
-        executor = _make_executor(brief_archive=None)
+        handler = _make_news_handler(brief_archive=None)
         block = _make_tool_use_block("get_morning_brief")
-        result = await executor._handle_get_morning_brief(block)
+        result = await handler._handle_get_morning_brief(block)
         assert result == []
 
     @pytest.mark.asyncio
     async def test_missing_auth_context_returns_empty(self) -> None:
         """(d) When user_id is None, returns empty list (anonymous session guard)."""
         archive = _make_brief_archive_port()
-        executor = _make_executor(brief_archive=archive, user_id=None)
+        handler = _make_news_handler(brief_archive=archive, user_id=None)
         block = _make_tool_use_block("get_morning_brief")
-        result = await executor._handle_get_morning_brief(block)
+        result = await handler._handle_get_morning_brief(block)
         assert result == []
         # Should NOT have called get_latest (auth guard fires first)
         archive.get_latest.assert_not_called()
@@ -178,18 +204,18 @@ class TestGetMorningBrief:
     async def test_missing_tenant_id_returns_empty(self) -> None:
         """(d) When tenant_id is None, returns empty list."""
         archive = _make_brief_archive_port()
-        executor = _make_executor(brief_archive=archive, tenant_id=None)
+        handler = _make_news_handler(brief_archive=archive, tenant_id=None)
         block = _make_tool_use_block("get_morning_brief")
-        result = await executor._handle_get_morning_brief(block)
+        result = await handler._handle_get_morning_brief(block)
         assert result == []
 
     @pytest.mark.asyncio
     async def test_upstream_returns_empty_records_returns_empty(self) -> None:
         """(c) Upstream returns [] (no brief) → returns empty list."""
         archive = _make_brief_archive_port(records=[])
-        executor = _make_executor(brief_archive=archive)
+        handler = _make_news_handler(brief_archive=archive)
         block = _make_tool_use_block("get_morning_brief")
-        result = await executor._handle_get_morning_brief(block)
+        result = await handler._handle_get_morning_brief(block)
         assert result == []
 
     @pytest.mark.asyncio
@@ -197,9 +223,9 @@ class TestGetMorningBrief:
         """(a) Happy path: upstream returns a brief → single RetrievedItem returned."""
         brief = _make_brief_record()
         archive = _make_brief_archive_port(records=[brief])
-        executor = _make_executor(brief_archive=archive)
+        handler = _make_news_handler(brief_archive=archive)
         block = _make_tool_use_block("get_morning_brief")
-        result = await executor._handle_get_morning_brief(block)
+        result = await handler._handle_get_morning_brief(block)
 
         assert len(result) == 1
         item = result[0]
@@ -227,9 +253,9 @@ class TestGetMorningBrief:
             ]
         )
         archive = _make_brief_archive_port(records=[brief])
-        executor = _make_executor(brief_archive=archive)
+        handler = _make_news_handler(brief_archive=archive)
         block = _make_tool_use_block("get_morning_brief")
-        result = await executor._handle_get_morning_brief(block)
+        result = await handler._handle_get_morning_brief(block)
 
         assert len(result) == 1
         text = result[0].text
@@ -242,9 +268,9 @@ class TestGetMorningBrief:
         """(c) Upstream raises exception → returns empty list (R9 degradation)."""
         archive = _make_brief_archive_port()
         archive.get_latest.side_effect = RuntimeError("DB connection failed")
-        executor = _make_executor(brief_archive=archive)
+        handler = _make_news_handler(brief_archive=archive)
         block = _make_tool_use_block("get_morning_brief")
-        result = await executor._handle_get_morning_brief(block)
+        result = await handler._handle_get_morning_brief(block)
         assert result == []
 
 
@@ -252,22 +278,21 @@ class TestGetMorningBrief:
 
 
 class TestCompareEntities:
-    """Tests for _handle_compare_entities."""
+    """Tests for _handle_compare_entities (now on MarketHandler)."""
 
     @pytest.mark.asyncio
     async def test_missing_port_returns_empty(self) -> None:
         """(b) When s3 is not providing find_instrument_by_ticker — actually tests s3 None path.
 
-        Since s3 is required in ToolExecutor, we test the missing port by having
+        Since s3 is required in MarketHandler, we test the missing port by having
         find_instrument_by_ticker return None for all tickers.
         """
         # We test the actual 'missing port' case by using an s3 mock that always
         # returns None for instrument lookup, resulting in "not found" for all tickers.
         s3 = _make_s3_port()
         s3.find_instrument_by_ticker.return_value = None
-        executor = _make_executor(s3=s3)
-        block = _make_tool_use_block("compare_entities")
-        result = await executor._handle_compare_entities(block, entity_tickers=["AAPL", "MSFT"])
+        handler = _make_market_handler(s3=s3)
+        result = await handler._handle_compare_entities(entity_tickers=["AAPL", "MSFT"])
         # Not found tickers produce a result with "data unavailable" text
         assert len(result) == 1
         assert "unavailable" in result[0].text.lower() or "comparison" in result[0].text.lower()
@@ -275,25 +300,22 @@ class TestCompareEntities:
     @pytest.mark.asyncio
     async def test_too_few_tickers_returns_empty(self) -> None:
         """(f) Too few tickers (< 2) → returns empty list."""
-        executor = _make_executor()
-        block = _make_tool_use_block("compare_entities")
-        result = await executor._handle_compare_entities(block, entity_tickers=["AAPL"])
+        handler = _make_market_handler()
+        result = await handler._handle_compare_entities(entity_tickers=["AAPL"])
         assert result == []
 
     @pytest.mark.asyncio
     async def test_too_many_tickers_returns_empty(self) -> None:
         """(g) Too many tickers (> 4) → returns empty list."""
-        executor = _make_executor()
-        block = _make_tool_use_block("compare_entities")
-        result = await executor._handle_compare_entities(block, entity_tickers=["AAPL", "MSFT", "NVDA", "AMD", "INTC"])
+        handler = _make_market_handler()
+        result = await handler._handle_compare_entities(entity_tickers=["AAPL", "MSFT", "NVDA", "AMD", "INTC"])
         assert result == []
 
     @pytest.mark.asyncio
     async def test_none_tickers_returns_empty(self) -> None:
         """(f) None tickers (treated as empty list) → returns empty list."""
-        executor = _make_executor()
-        block = _make_tool_use_block("compare_entities")
-        result = await executor._handle_compare_entities(block, entity_tickers=None)
+        handler = _make_market_handler()
+        result = await handler._handle_compare_entities(entity_tickers=None)
         assert result == []
 
     @pytest.mark.asyncio
@@ -307,9 +329,8 @@ class TestCompareEntities:
             "revenue": "395B",
         }
         s3.get_quote.return_value = {"price": 189.50}
-        executor = _make_executor(s3=s3)
-        block = _make_tool_use_block("compare_entities")
-        result = await executor._handle_compare_entities(block, entity_tickers=["AAPL", "MSFT"])
+        handler = _make_market_handler(s3=s3)
+        result = await handler._handle_compare_entities(entity_tickers=["AAPL", "MSFT"])
 
         assert len(result) == 1
         item = result[0]
@@ -331,9 +352,8 @@ class TestCompareEntities:
         """
         s3 = _make_s3_port()
         s3.find_instrument_by_ticker.side_effect = TimeoutError("timeout")
-        executor = _make_executor(s3=s3)
-        block = _make_tool_use_block("compare_entities")
-        result = await executor._handle_compare_entities(block, entity_tickers=["AAPL", "MSFT"])
+        handler = _make_market_handler(s3=s3)
+        result = await handler._handle_compare_entities(entity_tickers=["AAPL", "MSFT"])
         # Outer gather catches the per-ticker exceptions; comparison text is produced
         # with "unavailable" sections for each ticker (R9 graceful degradation).
         assert len(result) == 1
@@ -344,23 +364,21 @@ class TestCompareEntities:
 
 
 class TestScreenUniverse:
-    """Tests for _handle_screen_universe."""
+    """Tests for _handle_screen_universe (now on MarketHandler)."""
 
     @pytest.mark.asyncio
     async def test_missing_port_returns_empty(self) -> None:
         """(b) When s3_brief is None, returns empty list."""
-        executor = _make_executor(s3_brief=None)
-        block = _make_tool_use_block("screen_universe")
-        result = await executor._handle_screen_universe(block, sector="Technology")
+        handler = _make_market_handler(s3_brief=None)
+        result = await handler._handle_screen_universe(sector="Technology")
         assert result == []
 
     @pytest.mark.asyncio
     async def test_upstream_returns_empty_dict_returns_empty(self) -> None:
         """(c) Upstream returns {} → returns empty list (R9 degradation)."""
         s3_brief = _make_s3_brief_port(screen_result={})
-        executor = _make_executor(s3_brief=s3_brief)
-        block = _make_tool_use_block("screen_universe")
-        result = await executor._handle_screen_universe(block)
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_screen_universe()
         assert result == []
 
     @pytest.mark.asyncio
@@ -374,9 +392,8 @@ class TestScreenUniverse:
                 ]
             }
         )
-        executor = _make_executor(s3_brief=s3_brief)
-        block = _make_tool_use_block("screen_universe")
-        result = await executor._handle_screen_universe(block, sector="Technology", limit=20)
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_screen_universe(sector="Technology", limit=20)
 
         assert len(result) == 1
         item = result[0]
@@ -398,18 +415,16 @@ class TestScreenUniverse:
         """(c) Upstream raises exception → returns empty list (R9 degradation)."""
         s3_brief = _make_s3_brief_port()
         s3_brief.screen_instruments.side_effect = RuntimeError("S9 unavailable")
-        executor = _make_executor(s3_brief=s3_brief)
-        block = _make_tool_use_block("screen_universe")
-        result = await executor._handle_screen_universe(block)
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_screen_universe()
         assert result == []
 
     @pytest.mark.asyncio
     async def test_limit_is_clamped_to_100(self) -> None:
         """limit > 100 is clamped to 100 before forwarding to S9."""
         s3_brief = _make_s3_brief_port(screen_result={"instruments": [{"ticker": "AAPL"}]})
-        executor = _make_executor(s3_brief=s3_brief)
-        block = _make_tool_use_block("screen_universe")
-        await executor._handle_screen_universe(block, limit=9999)
+        handler = _make_market_handler(s3_brief=s3_brief)
+        await handler._handle_screen_universe(limit=9999)
         call_args = s3_brief.screen_instruments.call_args[0][0]
         assert call_args["limit"] == 100
 
@@ -418,23 +433,21 @@ class TestScreenUniverse:
 
 
 class TestGetMarketMovers:
-    """Tests for _handle_get_market_movers."""
+    """Tests for _handle_get_market_movers (now on MarketHandler)."""
 
     @pytest.mark.asyncio
     async def test_missing_port_returns_empty(self) -> None:
         """(b) When s3_brief is None, returns empty list."""
-        executor = _make_executor(s3_brief=None)
-        block = _make_tool_use_block("get_market_movers")
-        result = await executor._handle_get_market_movers(block)
+        handler = _make_market_handler(s3_brief=None)
+        result = await handler._handle_get_market_movers()
         assert result == []
 
     @pytest.mark.asyncio
     async def test_upstream_returns_empty_dict_returns_empty(self) -> None:
         """(c) Upstream returns {} → returns empty list."""
         s3_brief = _make_s3_brief_port(movers_result={})
-        executor = _make_executor(s3_brief=s3_brief)
-        block = _make_tool_use_block("get_market_movers")
-        result = await executor._handle_get_market_movers(block)
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_get_market_movers()
         assert result == []
 
     @pytest.mark.asyncio
@@ -448,9 +461,8 @@ class TestGetMarketMovers:
                 ]
             }
         )
-        executor = _make_executor(s3_brief=s3_brief)
-        block = _make_tool_use_block("get_market_movers")
-        result = await executor._handle_get_market_movers(block, mover_type="gainers", limit=10, period="1d")
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_get_market_movers(mover_type="gainers", limit=10, period="1d")
 
         assert len(result) == 1
         item = result[0]
@@ -471,9 +483,8 @@ class TestGetMarketMovers:
     async def test_invalid_mover_type_defaults_to_gainers(self) -> None:
         """Invalid mover_type is sanitized to 'gainers' before forwarding to port."""
         s3_brief = _make_s3_brief_port(movers_result={"movers": [{"ticker": "AAPL", "change_percent": 1.5}]})
-        executor = _make_executor(s3_brief=s3_brief)
-        block = _make_tool_use_block("get_market_movers")
-        await executor._handle_get_market_movers(block, mover_type="INVALID_TYPE")
+        handler = _make_market_handler(s3_brief=s3_brief)
+        await handler._handle_get_market_movers(mover_type="INVALID_TYPE")
         s3_brief.get_top_movers.assert_awaited_once()
         call_kwargs = s3_brief.get_top_movers.call_args[1]
         assert call_kwargs["mover_type"] == "gainers"
@@ -483,9 +494,8 @@ class TestGetMarketMovers:
         """(c) Upstream raises exception → returns empty list (R9 degradation)."""
         s3_brief = _make_s3_brief_port()
         s3_brief.get_top_movers.side_effect = TimeoutError("timeout")
-        executor = _make_executor(s3_brief=s3_brief)
-        block = _make_tool_use_block("get_market_movers")
-        result = await executor._handle_get_market_movers(block)
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_get_market_movers()
         assert result == []
 
 
@@ -493,23 +503,21 @@ class TestGetMarketMovers:
 
 
 class TestGetEconomicCalendar:
-    """Tests for _handle_get_economic_calendar."""
+    """Tests for _handle_get_economic_calendar (now on MarketHandler)."""
 
     @pytest.mark.asyncio
     async def test_missing_port_returns_empty(self) -> None:
         """(b) When s3_brief is None, returns empty list."""
-        executor = _make_executor(s3_brief=None)
-        block = _make_tool_use_block("get_economic_calendar")
-        result = await executor._handle_get_economic_calendar(block)
+        handler = _make_market_handler(s3_brief=None)
+        result = await handler._handle_get_economic_calendar()
         assert result == []
 
     @pytest.mark.asyncio
     async def test_upstream_returns_empty_list_returns_empty(self) -> None:
         """(c) Upstream returns [] → returns empty list."""
         s3_brief = _make_s3_brief_port(economic_result=[])
-        executor = _make_executor(s3_brief=s3_brief)
-        block = _make_tool_use_block("get_economic_calendar")
-        result = await executor._handle_get_economic_calendar(block)
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_get_economic_calendar()
         assert result == []
 
     @pytest.mark.asyncio
@@ -533,11 +541,8 @@ class TestGetEconomicCalendar:
                 },
             ]
         )
-        executor = _make_executor(s3_brief=s3_brief)
-        block = _make_tool_use_block("get_economic_calendar")
-        result = await executor._handle_get_economic_calendar(
-            block, from_date="2026-05-01", to_date="2026-05-31", region="US"
-        )
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_get_economic_calendar(from_date="2026-05-01", to_date="2026-05-31", region="US")
 
         assert len(result) == 1
         item = result[0]
@@ -559,9 +564,8 @@ class TestGetEconomicCalendar:
         """(c) Upstream raises exception → returns empty list (R9 degradation)."""
         s3_brief = _make_s3_brief_port()
         s3_brief.get_economic_calendar.side_effect = RuntimeError("S9 unavailable")
-        executor = _make_executor(s3_brief=s3_brief)
-        block = _make_tool_use_block("get_economic_calendar")
-        result = await executor._handle_get_economic_calendar(block)
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_get_economic_calendar()
         assert result == []
 
 
@@ -569,23 +573,21 @@ class TestGetEconomicCalendar:
 
 
 class TestGetEarningsCalendar:
-    """Tests for _handle_get_earnings_calendar."""
+    """Tests for _handle_get_earnings_calendar (now on MarketHandler)."""
 
     @pytest.mark.asyncio
     async def test_missing_port_returns_empty(self) -> None:
         """(b) When s3_brief is None, returns empty list."""
-        executor = _make_executor(s3_brief=None)
-        block = _make_tool_use_block("get_earnings_calendar")
-        result = await executor._handle_get_earnings_calendar(block)
+        handler = _make_market_handler(s3_brief=None)
+        result = await handler._handle_get_earnings_calendar()
         assert result == []
 
     @pytest.mark.asyncio
     async def test_upstream_returns_empty_list_returns_empty(self) -> None:
         """(c) Upstream returns [] → returns empty list."""
         s3_brief = _make_s3_brief_port(earnings_result=[])
-        executor = _make_executor(s3_brief=s3_brief)
-        block = _make_tool_use_block("get_earnings_calendar")
-        result = await executor._handle_get_earnings_calendar(block)
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_get_earnings_calendar()
         assert result == []
 
     @pytest.mark.asyncio
@@ -609,9 +611,8 @@ class TestGetEarningsCalendar:
                 },
             ]
         )
-        executor = _make_executor(s3_brief=s3_brief)
-        block = _make_tool_use_block("get_earnings_calendar")
-        result = await executor._handle_get_earnings_calendar(block, from_date="2026-05-01", to_date="2026-05-31")
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_get_earnings_calendar(from_date="2026-05-01", to_date="2026-05-31")
 
         assert len(result) == 1
         item = result[0]
@@ -633,7 +634,6 @@ class TestGetEarningsCalendar:
         """(c) Upstream raises exception → returns empty list (R9 degradation)."""
         s3_brief = _make_s3_brief_port()
         s3_brief.get_earnings_calendar.side_effect = RuntimeError("network error")
-        executor = _make_executor(s3_brief=s3_brief)
-        block = _make_tool_use_block("get_earnings_calendar")
-        result = await executor._handle_get_earnings_calendar(block)
+        handler = _make_market_handler(s3_brief=s3_brief)
+        result = await handler._handle_get_earnings_calendar()
         assert result == []

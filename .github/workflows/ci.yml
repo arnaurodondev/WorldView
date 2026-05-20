@@ -47,8 +47,10 @@ jobs:
           cache: pip
 
       # Pin versions so a new ruff/mypy release can't silently break CI.
+      # ruff must match .pre-commit-config.yaml rev (v0.4.0) exactly to ensure
+      # format output is identical and no phantom reformats occur in CI.
       - name: Install tools
-        run: python -m pip install "ruff>=0.4,<1" "mypy>=1.10,<2"
+        run: python -m pip install "ruff==0.4.0" "mypy>=1.10,<2"
 
       - name: Ruff check
         run: ruff check libs/ services/
@@ -200,7 +202,7 @@ jobs:
           cache: pip
 
       - name: Install pytest and yaml
-        run: python -m pip install "pytest>=8" "pytest-asyncio>=0.23" "pyyaml>=6" --quiet
+        run: python -m pip install "pytest>=8" "pytest-asyncio>=0.23" "pyyaml>=6" "structlog>=23" --quiet
 
       - name: Run architecture tests
         run: pytest tests/architecture -v --tb=short

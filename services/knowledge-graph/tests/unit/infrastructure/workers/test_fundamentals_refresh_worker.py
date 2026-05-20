@@ -160,7 +160,7 @@ class TestFundamentalsRefreshWorkerS3Failure:
         fundamentals_resp.json = MagicMock(return_value=fundamentals_data)
 
         def _route_get(url: str, **_kwargs: object) -> object:
-            if "/instruments/symbol/" in url:
+            if "/instruments/lookup" in url:
                 return instrument_resp
             return fundamentals_resp
 
@@ -206,7 +206,7 @@ class TestFundamentalsRefreshWorkerS3Failure:
         fundamentals_resp.json = MagicMock(return_value={"revenue_usd_millions": 390000.0, "price": 189.0})
 
         def _route_get(url: str, **_kwargs: object) -> object:
-            if "/instruments/symbol/" in url:
+            if "/instruments/lookup" in url:
                 return instrument_resp
             return fundamentals_resp
 
@@ -498,7 +498,7 @@ def _make_multi_entity_http(instrument_id: UUID) -> AsyncMock:
     not_found_resp.status_code = 404
 
     def _route(url: str, **_kwargs: object) -> object:
-        if "/instruments/symbol/" in url:
+        if "/instruments/lookup" in url:
             return instrument_resp
         if "/earnings" in url or "/company-profile" in url:
             return not_found_resp

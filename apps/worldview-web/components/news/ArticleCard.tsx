@@ -27,6 +27,7 @@
 import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { SignalBadge } from "@/components/ui/SignalBadge";
 import { cn, formatRelativeTime, safeExternalUrl } from "@/lib/utils";
 import type { Article, RankedArticle } from "@/types/api";
 
@@ -76,6 +77,32 @@ function getTickers(a: Article | RankedArticle): string[] {
   return 'tickers' in a ? a.tickers : [];
 }
 
+/**
+ * deriveSentiment — map article sentiment + score to SignalBadge vocabulary.
+ *
+ * WHY this function (FR-2.3, CRIT-002):
+ * S6 emits sentiment as "positive"/"negative"/"mixed"/null.
+ * SignalBadge only knows "bullish"/"bearish"/"neutral".
+ * For LIGHT-tier articles where sentiment is null, fall back to
+ * display_relevance_score thresholds so traders see a signal even when
+ * S6 hasn't scored the article yet.
+ */
+function deriveSentiment(
+  sentiment: "positive" | "negative" | "neutral" | "mixed" | null | undefined,
+  score: number | null | undefined,
+): "bullish" | "bearish" | "neutral" | null {
+  if (sentiment === "positive") return "bullish";
+  if (sentiment === "negative") return "bearish";
+  if (sentiment === "neutral") return "neutral";
+  // "mixed" = both directions, no net signal → neutral
+  if (sentiment === "mixed") return "neutral";
+  // No sentiment — derive from composite relevance score
+  if (score == null) return null;
+  if (score >= 0.7) return "bullish";
+  if (score <= 0.3) return "bearish";
+  return "neutral";
+}
+
 export function ArticleCard({ article }: ArticleCardProps) {
   // WHY isLightTier: LIGHT routing tier = low-relevance/low-signal article. De-emphasised
   // at 60% opacity so traders can focus on HIGH/STANDARD signal articles. The italic source
@@ -91,6 +118,16 @@ export function ArticleCard({ article }: ArticleCardProps) {
   const source = getSource(article);
   const summary = getSummary(article);
   const tickers = getTickers(article);
+
+  // FR-2.3+2.4 (CRIT-002): derive sentiment for SignalBadge from explicit field
+  // or display_relevance_score fallback. Both Article and RankedArticle have a
+  // sentiment field and display_relevance_score (though Article's score may be null).
+  const derivedSentiment = deriveSentiment(
+    // Both Article and RankedArticle have sentiment but Article lacks "mixed".
+    // The type union handles this gracefully: "mixed" only comes from RankedArticle.
+    article.sentiment as "positive" | "negative" | "neutral" | "mixed" | null,
+    article.display_relevance_score,
+  );
 
   // ── Relevance score badge styling ─────────────────────────────────────────────
   // WHY threshold-based colour (not sentiment-based): display_relevance_score is the
@@ -234,10 +271,13 @@ export function ArticleCard({ article }: ArticleCardProps) {
           )}
         </div>
 
-        {/* WHY ArticleImpactBadge removed: the top-row relevance score badge now
-            shows the composite signal (display_relevance_score) with threshold-based
-            colour. Keeping the bottom badge here was a duplicate of the same value,
-            which created visual noise and broke getByText("75") uniqueness in tests. */}
+        {/* FR-2.3+2.4 (CRIT-002): SignalBadge with score-derived sentiment.
+            WHY here (right side): keeps the signal aligned with the relevance badge
+            above in the top row. Left side is already occupied by tickers.
+            WHY not in title row: ArticleCard is used in wider contexts (News tab,
+            Dashboard feed) where the title row must stay focused on the headline.
+            Renders nothing when derivedSentiment is null (no data). */}
+        <SignalBadge sentiment={derivedSentiment} />
       </div>
     </article>
   );

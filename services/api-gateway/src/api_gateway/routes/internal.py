@@ -27,8 +27,17 @@ router = APIRouter(prefix="/internal")
 async def get_jwks(request: Request) -> JSONResponse:
     """Return the JWKS for S9's internal RS256 signing key.
 
-    Backend services fetch this endpoint at startup to verify X-Internal-JWT tokens.
-    Response is cached for 1 hour (``Cache-Control: public, max-age=3600``).
+    Backend services fetch this endpoint at startup AND on kid-miss to verify
+    X-Internal-JWT tokens. W1-05 (BUG-005): the response merges ``app.state
+    .internal_jwks`` (the current key) with up to 3 entries from
+    ``app.state.previous_jwks`` so backends mid-rotation can still resolve
+    JWTs signed under the outgoing kid. Operators populate ``previous_jwks``
+    when they rotate ``JWT_KEY_VERSION`` (manual hook in this task; W2-05 will
+    formalise the rotation worker).
+
+    Response is cached for 1 hour (``Cache-Control: public, max-age=3600``);
+    backends bypass the cache via refresh-on-miss so a kid that arrives before
+    the cached JWKS expires still triggers an explicit re-fetch.
     """
     jwks: dict[str, Any] | None = getattr(request.app.state, "internal_jwks", None)
     if jwks is None:
@@ -36,7 +45,15 @@ async def get_jwks(request: Request) -> JSONResponse:
             content={"detail": "JWKS not available — service not fully initialized"},
             status_code=503,
         )
-    return JSONResponse(content=jwks, headers={"Cache-Control": "public, max-age=3600"})
+    # Merge previous (grace-window) keys. Each entry is already in JWK shape
+    # (the operator builds it via build_jwks_response(...)["keys"][0]). We cap
+    # at 3 previous keys to bound the response size.
+    previous: list[dict[str, Any]] = getattr(request.app.state, "previous_jwks", []) or []
+    merged_keys: list[dict[str, Any]] = list(jwks.get("keys", []))
+    if previous:
+        merged_keys.extend(previous[:3])
+    response_body = {"keys": merged_keys}
+    return JSONResponse(content=response_body, headers={"Cache-Control": "public, max-age=3600"})
 
 
 # ── Service-account JWT minting (PLAN-0057 Wave A-1 / BP-303) ────────────────

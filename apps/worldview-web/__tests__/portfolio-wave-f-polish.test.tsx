@@ -124,7 +124,7 @@ beforeEach(() => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe("Wave F · F-P-012 · Day P&L skeleton vs $0", () => {
   it("renders a skeleton placeholder when dayPnl is null (quotes not loaded)", () => {
-    render(<PortfolioKPIStrip {...baseKpiProps} dayPnl={null} />);
+    render(<PortfolioKPIStrip {...baseKpiProps} dayPnl={null} />, { wrapper: ({ children }) => wrap(children) });
     // Skeleton has the dedicated test id we added in PortfolioKPIStrip.
     expect(screen.getByTestId("kpi-day-pnl-skeleton")).toBeInTheDocument();
     // Sanity: no "$0.00" string for the Day P&L tile when dayPnl is null.
@@ -133,7 +133,7 @@ describe("Wave F · F-P-012 · Day P&L skeleton vs $0", () => {
   });
 
   it("renders $0.00 (no skeleton) when dayPnl is genuinely zero", () => {
-    render(<PortfolioKPIStrip {...baseKpiProps} dayPnl={0} />);
+    render(<PortfolioKPIStrip {...baseKpiProps} dayPnl={0} />, { wrapper: ({ children }) => wrap(children) });
     // No skeleton — value is known and zero.
     expect(screen.queryByTestId("kpi-day-pnl-skeleton")).not.toBeInTheDocument();
     const tile = screen.getByTestId("kpi-day-pnl");
@@ -141,7 +141,7 @@ describe("Wave F · F-P-012 · Day P&L skeleton vs $0", () => {
   });
 
   it("renders the formatted positive value when dayPnl > 0", () => {
-    render(<PortfolioKPIStrip {...baseKpiProps} dayPnl={123.45} />);
+    render(<PortfolioKPIStrip {...baseKpiProps} dayPnl={123.45} />, { wrapper: ({ children }) => wrap(children) });
     expect(screen.queryByTestId("kpi-day-pnl-skeleton")).not.toBeInTheDocument();
     expect(screen.getByTestId("kpi-day-pnl").textContent).toContain("123.45");
   });

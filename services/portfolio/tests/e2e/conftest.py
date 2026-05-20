@@ -47,7 +47,7 @@ def _make_e2e_system_jwt() -> str:
     payload = {
         "iss": "worldview-gateway",
         "sub": "e2e-system-user",
-        "tenant_id": "",
+        "tenant_id": "e2e-tenant",
         "role": "system",
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600,

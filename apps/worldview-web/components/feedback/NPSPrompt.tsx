@@ -73,6 +73,13 @@ export function NPSPrompt({ open, onOpenChange, surface }: NPSPromptProps) {
         surface,
       });
     },
+    // WHY retry (CRIT-006 / FR-8.1): postNPS is safe to retry — a duplicate
+    // NPS response is an intentional new entry (one per quarter per design);
+    // retry only fires on transient 5xx / network failures before the first
+    // success reaches the server.
+    retry: 3,
+    retryDelay: (attemptIndex: number) =>
+      Math.min(1000 * 2 ** (attemptIndex - 1), 4000),
     onSuccess: () => {
       markSubmitted();
       // Reset local state for the next time the dialog mounts.

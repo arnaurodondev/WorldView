@@ -60,10 +60,10 @@ Worldview is a **market intelligence platform** that fuses structured financial 
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| LLM provider | Ollama (local) | Zero cost, privacy, reproducible |
+| LLM provider | DeepInfra (primary) + Ollama (GLiNER NER fallback) | DeepInfra for LLM/embeddings/extraction; Ollama for local NER only |
 | Data granularity | Daily OHLCV (not intraday) | Sufficient for thesis, lower API costs |
 | Multi-tenancy | Logical (shared DB, tenant_id filter) | Simpler than physical isolation for thesis scope |
-| Frontend framework | React + Vite + TanStack | Modern stack, good DX, TypeScript support |
+| Frontend framework | Next.js 15 App Router + shadcn/ui + TanStack Query | SSR, dark theme, finance-grade UI, type-safe |
 | Chat approach | RAG + Knowledge Graph hybrid | Demonstrates both retrieval paradigms |
 
 ## What This Platform Is NOT

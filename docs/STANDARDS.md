@@ -7,8 +7,10 @@
 
 > This document is **non-negotiable**. Every execution wave prompt references it as a mandatory
 > pre-read. When in doubt, follow this document. When this document conflicts with older code,
-> fix the older code. This document is the **single source of truth** for all platform standards,
-> rules, and automated enforcement gates. `RULES.md` is superseded by §12 of this document.
+> fix the older code. This document is the single source of truth for implementation patterns,
+> code structure, and automated enforcement. The canonical list of rules (R1–R34) lives in
+> `RULES.md` (root) — STANDARDS.md §12 summarises the rules current at version 2.0; the
+> complete and up-to-date list is always in `RULES.md`.
 
 ---
 

@@ -90,7 +90,8 @@ CREATE TABLE path_templates (
     ets_sector = json.dumps(["company", "company", "company"])
     rts_sector = json.dumps(["COMPETES_WITH|PARTNERS_WITH", "SUPPLIES_TO|DISTRIBUTES_FOR"])
 
-    op.execute(f"""
+    op.execute(
+        f"""
 INSERT INTO path_templates
     (template_id, template_name, entity_type_sequence, relation_type_sequence, description, enabled)
 VALUES
@@ -98,7 +99,8 @@ VALUES
     ('{_SEED_FINANCIAL_HOLDING}',    'financial_holding_chain', CAST('{ets_holding}' AS jsonb), CAST('{rts_holding}' AS jsonb), 'Financial holding with key executive',       TRUE),
     ('{_SEED_SECTOR_SUPPLY_CHAIN}',  'sector_supply_chain',     CAST('{ets_sector}'  AS jsonb), CAST('{rts_sector}'  AS jsonb), 'Sector-level supply chain',                  TRUE)
 ON CONFLICT (template_name) DO NOTHING
-""")
+"""
+    )
 
 
 def downgrade() -> None:

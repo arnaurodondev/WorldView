@@ -103,7 +103,7 @@ vi.mock("@/lib/gateway", () => ({
 }));
 
 // ── Canvas / WebGL mocks ───────────────────────────────────────────────────────
-vi.mock("@/components/instrument/OHLCVChart", () => ({
+vi.mock("@/components/instrument/chart/OHLCVChart", () => ({
   OHLCVChart: () => <div data-testid="ohlcv-chart-mock">Chart</div>,
 }));
 vi.mock("@/components/instrument/EntityGraphPanel", () => ({

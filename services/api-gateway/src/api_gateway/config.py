@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     internal_jwt_private_key: SecretStr  # never logged — SecretStr
     internal_jwt_public_key: str
 
+    # W1-05 (BUG-005): kid-based JWKS rotation. ``jwt_key_version`` is the
+    # ``kid`` stamped into every issued internal JWT header. When operators
+    # rotate the RSA key pair, they bump this value (e.g. "v1" → "v2") and
+    # push the new private key + previous public key (for the grace window)
+    # in the same deploy. Backends discover new kids via JWKS refresh-on-miss.
+    # ``jwks_grace_hours`` is advisory metadata for operators — the actual
+    # rotation hook is ``app.state.previous_jwks`` (operators append outgoing
+    # keys there for the grace window).
+    jwt_key_version: str = "v1"
+    jwks_grace_hours: int = 24
+
     # Frontend
     frontend_url: str = "http://localhost:5173"
     cookie_secure: bool = True  # False only in local dev (override via API_GATEWAY_COOKIE_SECURE=false)
@@ -52,6 +63,7 @@ class Settings(BaseSettings):
     knowledge_graph_url: str = "http://localhost:8007"
     rag_chat_url: str = "http://localhost:8008"
     alert_url: str = "http://localhost:8010"
+    alert_ws_url: str = "ws://localhost:8010"  # env: API_GATEWAY_ALERT_WS_URL
 
     # Rate limiting
     # WHY 300: authenticated users on the instrument detail page fire 4+ simultaneous

@@ -36,7 +36,6 @@ Idempotent: safe to run multiple times.
 
 from __future__ import annotations
 
-# ruff: noqa: S608  — all SQL strings in this file use literal constants from _ALIASES;
 #                     there is no user input at any point.
 from alembic import op
 

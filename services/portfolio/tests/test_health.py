@@ -38,10 +38,13 @@ async def test_readyz_ok(app, client) -> None:
 
 @pytest.mark.asyncio
 async def test_readyz_jwks_not_loaded(app, client) -> None:
-    """readyz returns 503 when JWKS public key is not yet loaded."""
+    """readyz returns 503 when JWKS public key is not yet loaded (and skip mode is off)."""
     # Ensure JWKS key is absent
     if hasattr(app.state, "_internal_jwt_public_key"):
         del app.state._internal_jwt_public_key
+    # Ensure skip_verification flag is NOT set (we're testing the non-skip path)
+    if hasattr(app.state, "_internal_jwt_skip_verification"):
+        del app.state._internal_jwt_skip_verification
 
     response = await client.get("/readyz")
     assert response.status_code == 503

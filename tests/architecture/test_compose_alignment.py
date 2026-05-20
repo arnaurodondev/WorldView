@@ -64,6 +64,10 @@ COMPOSE_BASELINE: dict[tuple[str, str], str] = {
     ("knowledge-graph", "narrative_refresh_consumer_main"): (
         "Add KG narrative-refresh consumer container — PLAN-0074 Wave H"
     ),
+    # content-store dedup consumer added; compose container follow-up plan
+    ("content-store", "stored_article_dedup_consumer_main"): (
+        "Add content-store stored-article dedup consumer container — follow-up plan"
+    ),
 }
 
 

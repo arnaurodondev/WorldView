@@ -155,6 +155,45 @@
     --panel-header-height: 32px;    /* compact panel headers — leaves more room for data */
     --topbar-height: 44px;          /* 4px tighter than old h-12 (48px); denser chrome */
     --cell-px: 8px;                 /* standard horizontal cell padding in data tables (px-2) */
+
+    /* ── Chart-specific sentiment tokens (W0 — FR-10.1) ─────────────────
+     * WHY separate from --positive/--negative: sparkline charts need explicit
+     * "chart variant" tokens so that future theme changes can target chart
+     * coloring independently from generic P&L text coloring.  Migrating the
+     * hardcoded constants in AnalystTargetSparkline / EarningsHistoryChart /
+     * RevenueTrendSparklines / OHLCVChart to `hsl(var(--chart-positive))`
+     * closes CRIT-007 / DS-002.
+     *
+     * WHY these values match --positive/--negative exactly:
+     * FR-10.1 specifies they should match the main tokens at first. Having
+     * separate variables keeps the ability to diverge (e.g. a slightly
+     * less-saturated green for chart fills vs text labels) without touching
+     * every chart component again. */
+    --chart-positive: 150 100% 41%;   /* matches --positive (#00D26A) */
+    --chart-negative: 350 100% 62%;   /* matches --negative (#FF3B5C) */
+    --chart-neutral: 240 4% 56%;      /* grey for flat / inconclusive signals */
+    --chart-ma-fast: 47 100% 52%;     /* fast MA line — yellow (Bloomberg amber) */
+    --chart-ma-slow: 217 91% 60%;     /* slow MA line — blue (replaces old #0EA5E9) */
+
+    /* ── Entity-graph node type tokens (W0 — FR-10.3) ────────────────────
+     * WHY tokens instead of hardcoded values in EntityGraphPanel:
+     * MED-018 / DS-004 — node colors are currently set as JS constants
+     * (#00897B person-fill, etc.) outside the token system.  Moving them
+     * here lets any future theme override target them in one place.
+     *
+     * Naming: fill = node background, stroke = node border.
+     * Values chosen to sit within the Terminal Dark palette — muted enough
+     * to not overpower the edge labels, distinct enough to distinguish
+     * entity types at a glance even for deuteranopes (shape + label
+     * already provide redundant coding per §6.11b). */
+    --entity-type-person-fill: 173 100% 32%;    /* deep teal — person nodes */
+    --entity-type-person-stroke: 173 80% 50%;   /* lighter teal border */
+    --entity-type-event-fill: 47 100% 40%;      /* deep amber — event nodes */
+    --entity-type-event-stroke: 47 90% 58%;     /* lighter amber border */
+    --entity-type-topic-fill: 217 80% 45%;      /* deep blue — topic nodes */
+    --entity-type-topic-stroke: 217 70% 62%;    /* lighter blue border */
+    --entity-type-default-fill: 240 4% 40%;     /* neutral grey — default / unknown */
+    --entity-type-default-stroke: 240 4% 58%;   /* lighter grey border */
   }
 
   /* .dark class re-applies same values — ensures shadcn/ui dark-mode variants work.
@@ -199,6 +238,20 @@
     --panel-header-height: 32px;
     --topbar-height: 44px;
     --cell-px: 8px;
+    /* W0: chart + entity-graph tokens — mirrored from :root */
+    --chart-positive: 150 100% 41%;
+    --chart-negative: 350 100% 62%;
+    --chart-neutral: 240 4% 56%;
+    --chart-ma-fast: 47 100% 52%;
+    --chart-ma-slow: 217 91% 60%;
+    --entity-type-person-fill: 173 100% 32%;
+    --entity-type-person-stroke: 173 80% 50%;
+    --entity-type-event-fill: 47 100% 40%;
+    --entity-type-event-stroke: 47 90% 58%;
+    --entity-type-topic-fill: 217 80% 45%;
+    --entity-type-topic-stroke: 217 70% 62%;
+    --entity-type-default-fill: 240 4% 40%;
+    --entity-type-default-stroke: 240 4% 58%;
   }
 }
 

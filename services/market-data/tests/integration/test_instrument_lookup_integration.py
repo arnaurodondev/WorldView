@@ -25,8 +25,10 @@ from market_data.infrastructure.eodhd.client import EodhHdClient
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 
+# Use a symbol unique to this test file to avoid contamination from
+# test_repositories.py which inserts AAPL/XNAS into the shared testcontainer DB.
 _ISIN = "US0378331005"
-_SYMBOL = "AAPL"
+_SYMBOL = "APLQ"
 _EXCHANGE = "US"
 
 
@@ -117,7 +119,7 @@ async def test_on_demand_eodhd_fallback_mocked(uow) -> None:
     """DB row exists but no description → EODHD called (mocked); source='eodhd_persisted'."""
     _sec, inst = await _seed_instrument(uow)
 
-    respx.get("https://eodhd.com/api/fundamentals/AAPL.US").mock(
+    respx.get(f"https://eodhd.com/api/fundamentals/{_SYMBOL}.{_EXCHANGE}").mock(
         return_value=Response(
             200,
             json={
@@ -156,7 +158,7 @@ async def test_on_demand_eodhd_429_propagates_rate_limit_live_db(uow) -> None:
 
     _sec, _inst = await _seed_instrument(uow)
 
-    respx.get("https://eodhd.com/api/fundamentals/AAPL.US").mock(
+    respx.get(f"https://eodhd.com/api/fundamentals/{_SYMBOL}.{_EXCHANGE}").mock(
         return_value=Response(429, text="Rate limit exceeded"),
     )
 

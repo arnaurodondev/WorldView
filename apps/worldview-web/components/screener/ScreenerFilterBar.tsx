@@ -345,16 +345,19 @@ export function ScreenerFilterBar({
                * Gross margin — BACKEND_PENDING per audit: only `gross_profit_ttm` and
                * `revenue_ttm` are extracted; the ratio is not stored. Disabled with badge
                * so the UI shows our intent without hitting an empty WHERE clause.
+               * FR-4.4: hidden unless NEXT_PUBLIC_ENABLE_PENDING_METRICS="true".
                */}
-              <RangeInput
-                label="Gross Margin"
-                hint="decimal"
-                disabled
-                disabledReason="Backend pending — gross_margin not derived in fundamental_metrics"
-                min={form.grossMarginMin} max={form.grossMarginMax}
-                onMin={(v) => patch({ grossMarginMin: v })}
-                onMax={(v) => patch({ grossMarginMax: v })}
-              />
+              {process.env.NEXT_PUBLIC_ENABLE_PENDING_METRICS === "true" && (
+                <RangeInput
+                  label="Gross Margin"
+                  hint="decimal"
+                  disabled
+                  disabledReason="Backend pending — gross_margin not derived in fundamental_metrics"
+                  min={form.grossMarginMin} max={form.grossMarginMax}
+                  onMin={(v) => patch({ grossMarginMin: v })}
+                  onMax={(v) => patch({ grossMarginMax: v })}
+                />
+              )}
               <RangeInput
                 label="Net Margin"
                 hint="decimal"
@@ -402,26 +405,31 @@ export function ScreenerFilterBar({
 
           {/* ── LEVERAGE SECTION ─────────────────────────────────────────── */}
           {/* Both filters are BACKEND_PENDING — see audit. Disabled inputs make this clear. */}
-          <Section title="Leverage" activeCount={leverageCount}>
-            <div className="flex flex-col gap-1.5">
-              <RangeInput
-                label="Debt/Equity"
-                disabled
-                disabledReason="Backend pending — ratio not derived"
-                min={form.debtEquityMin} max={form.debtEquityMax}
-                onMin={(v) => patch({ debtEquityMin: v })}
-                onMax={(v) => patch({ debtEquityMax: v })}
-              />
-              <RangeInput
-                label="Current Ratio"
-                disabled
-                disabledReason="Backend pending — ratio not derived"
-                min={form.currentRatioMin} max={form.currentRatioMax}
-                onMin={(v) => patch({ currentRatioMin: v })}
-                onMax={(v) => patch({ currentRatioMax: v })}
-              />
-            </div>
-          </Section>
+          {/* FR-4.4: entire Leverage section hidden unless NEXT_PUBLIC_ENABLE_PENDING_METRICS="true"
+           * because all its controls are backend-pending. Avoids confusing users with
+           * inputs that look interactive but always no-op. */}
+          {process.env.NEXT_PUBLIC_ENABLE_PENDING_METRICS === "true" && (
+            <Section title="Leverage" activeCount={leverageCount}>
+              <div className="flex flex-col gap-1.5">
+                <RangeInput
+                  label="Debt/Equity"
+                  disabled
+                  disabledReason="Backend pending — ratio not derived"
+                  min={form.debtEquityMin} max={form.debtEquityMax}
+                  onMin={(v) => patch({ debtEquityMin: v })}
+                  onMax={(v) => patch({ debtEquityMax: v })}
+                />
+                <RangeInput
+                  label="Current Ratio"
+                  disabled
+                  disabledReason="Backend pending — ratio not derived"
+                  min={form.currentRatioMin} max={form.currentRatioMax}
+                  onMin={(v) => patch({ currentRatioMin: v })}
+                  onMax={(v) => patch({ currentRatioMax: v })}
+                />
+              </div>
+            </Section>
+          )}
 
           {/* ── TECHNICAL SECTION ────────────────────────────────────────── */}
           {/*
@@ -595,15 +603,20 @@ export function ScreenerFilterBar({
               </div>
 
               {/* Controversy score range */}
-              <RangeInput
-                label="Controversy"
-                hint="0–1"
-                disabled
-                disabledReason="Backend pending — controversy score lives in S6 signals; needs composed S9 endpoint"
-                min={form.controversyMin} max={form.controversyMax}
-                onMin={(v) => patch({ controversyMin: v })}
-                onMax={(v) => patch({ controversyMax: v })}
-              />
+              {/* FR-4.4: hidden unless NEXT_PUBLIC_ENABLE_PENDING_METRICS="true".
+               * The controversy score is backend-pending (lives in S6 signals);
+               * showing a non-functional range input only confuses users. */}
+              {process.env.NEXT_PUBLIC_ENABLE_PENDING_METRICS === "true" && (
+                <RangeInput
+                  label="Controversy"
+                  hint="0–1"
+                  disabled
+                  disabledReason="Backend pending — controversy score lives in S6 signals; needs composed S9 endpoint"
+                  min={form.controversyMin} max={form.controversyMax}
+                  onMin={(v) => patch({ controversyMin: v })}
+                  onMax={(v) => patch({ controversyMax: v })}
+                />
+              )}
 
               {/* Recent earnings — discrete pill set */}
               <div className="flex items-center gap-2">

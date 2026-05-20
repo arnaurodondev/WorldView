@@ -271,11 +271,17 @@ Two tools differ from the rest: they interact with user-owned state rather than 
 
 ## LLM Provider Chain
 
-| Order | Provider | Model | Notes |
-|-------|----------|-------|-------|
-| 1 | DeepInfra | `deepseek-r1-distill-qwen-32b` | Primary (requires `DEEPINFRA_API_KEY`) |
-| 2 | OpenRouter | `deepseek/deepseek-r1-distill-qwen-32b` | Fallback (requires `OPENROUTER_API_KEY`) |
-| 3 | Ollama (local) | `deepseek-r1:32b` | Emergency fallback (always available) |
+| Order | Provider | Model (env var to override) | Notes |
+|-------|----------|------------------------------|-------|
+| 1 | DeepInfra | `Qwen/Qwen3-235B-A22B-Instruct-2507` (`RAG_CHAT_COMPLETION_MODEL`) | Primary (requires `RAG_CHAT_DEEPINFRA_API_KEY`) |
+| 2 | OpenRouter | `deepseek/deepseek-r1-distill-qwen-32b` (`RAG_CHAT_OPENROUTER_COMPLETION_MODEL`) | Fallback (requires `RAG_CHAT_OPENROUTER_API_KEY`) |
+| 3 | Ollama (local) | `deepseek-r1:32b` (`RAG_CHAT_OLLAMA_COMPLETION_MODEL`) | Emergency fallback |
+
+**Intent classification**: `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` via DeepInfra (`RAG_CHAT_DEEPINFRA_CLASSIFICATION_MODEL`); Ollama `qwen3:0.6b` fallback.
+
+**Reranker**: Cohere Rerank v2 (requires `RAG_CHAT_COHERE_API_KEY`); falls back to fusion_score ordering when absent. Ollama `bge-reranker-v2-m3` is a legacy option but no longer in the Ollama registry.
+
+**Embeddings**: Jina AI embeddings-v3 (1024-dim, requires `RAG_CHAT_JINA_API_KEY`) when available; falls back to S6/Ollama bge-large (7-13s on CPU).
 
 60-second negative cache per provider in Valkey on failure. `ProviderUnavailableError` raised if all fail.
 
@@ -400,20 +406,56 @@ services/rag-chat/src/rag_chat/
 
 ## Configuration
 
+All env vars use prefix `RAG_CHAT_`.
+
 | Env Var | Default | Required | Notes |
 |---------|---------|----------|-------|
-| `RAG_CHAT_RAG_DB_URL` | — | Yes | PostgreSQL write URL |
-| `RAG_CHAT_RAG_DB_URL_READ` | (same) | No | Read replica URL |
-| `RAG_CHAT_VALKEY_URL` | `redis://localhost:6379/0` | No | |
-| `RAG_CHAT_DEEPINFRA_API_KEY` | — | Yes | Primary LLM |
-| `RAG_CHAT_OPENROUTER_API_KEY` | — | No | Fallback LLM |
-| `RAG_CHAT_OLLAMA_BASE_URL` | `http://localhost:11434` | No | Emergency + local models |
-| `RAG_CHAT_OLLAMA_COMPLETION_MODEL` | `deepseek-r1:32b` | No | |
-| `RAG_CHAT_OLLAMA_CLASSIFICATION_MODEL` | `qwen3:0.6b` | No | |
-| `RAG_CHAT_OLLAMA_RERANKER_MODEL` | `bge-reranker-v2-m3` | No | |
-| `RAG_CHAT_S1_INTERNAL_TOKEN` | — | Yes | Portfolio service auth |
-| `RAG_CHAT_RATE_LIMIT_PER_TENANT` | `10` | No | Requests/minute |
-| `RAG_CHAT_UPSTREAM_TIMEOUT_SECONDS` | `5.0` | No | Per retrieval task |
+| `RAG_CHAT_DATABASE_URL` | — | Yes | PostgreSQL write URL (`postgresql+asyncpg://...`) |
+| `RAG_CHAT_DATABASE_URL_READ` | (same as write) | No | Read replica URL (R27) |
+| `RAG_CHAT_DB_POOL_SIZE` | `10` | No | Write pool size |
+| `RAG_CHAT_DB_MAX_OVERFLOW` | `20` | No | Write pool max overflow |
+| `RAG_CHAT_DB_POOL_SIZE_READ` | `20` | No | Read pool size |
+| `RAG_CHAT_DB_MAX_OVERFLOW_READ` | `30` | No | Read pool max overflow |
+| `RAG_CHAT_VALKEY_URL` | `redis://localhost:6379/0` | No | Valkey for caching, rate limiting, circuit breakers |
+| `RAG_CHAT_DEEPINFRA_API_KEY` | — | No | Primary LLM provider (strongly recommended) |
+| `RAG_CHAT_OPENROUTER_API_KEY` | — | No | Fallback LLM provider |
+| `RAG_CHAT_COHERE_API_KEY` | — | No | Reranker (Cohere Rerank v2); falls back to fusion_score when absent |
+| `RAG_CHAT_JINA_API_KEY` | — | No | Query embeddings (Jina v3 1024-dim, ~100-300ms); falls back to S6/Ollama bge-large when absent |
+| `RAG_CHAT_OLLAMA_BASE_URL` | `http://localhost:11434` | No | Ollama for GLiNER NER + emergency completion fallback |
+| `RAG_CHAT_OLLAMA_COMPLETION_MODEL` | `deepseek-r1:32b` | No | Ollama completion model (emergency fallback only) |
+| `RAG_CHAT_OLLAMA_CLASSIFICATION_MODEL` | `qwen3:0.6b` | No | Ollama intent classification model |
+| `RAG_CHAT_OLLAMA_RERANKER_MODEL` | `bge-reranker-v2-m3` | No | Ollama reranker (legacy — no longer in Ollama registry) |
+| `RAG_CHAT_COMPLETION_PROVIDER` | `deepinfra` | No | Primary provider: `deepinfra` |
+| `RAG_CHAT_COMPLETION_MODEL` | `Qwen/Qwen3-235B-A22B-Instruct-2507` | No | DeepInfra completion model ID |
+| `RAG_CHAT_OPENROUTER_COMPLETION_MODEL` | `deepseek/deepseek-r1-distill-qwen-32b` | No | OpenRouter fallback model ID |
+| `RAG_CHAT_DEEPINFRA_CLASSIFICATION_MODEL` | `meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo` | No | DeepInfra intent classification model |
+| `RAG_CHAT_API_GATEWAY_URL` | `http://api-gateway:8000` | No | S9 URL for JWKS fetch at startup |
+| `RAG_CHAT_INTERNAL_JWT_SKIP_VERIFICATION` | `false` | No | **Dev/test only** — skip RS256 JWT verification |
+| `RAG_CHAT_S1_BASE_URL` | `http://portfolio:8001` | No | S1 portfolio service URL |
+| `RAG_CHAT_S3_BASE_URL` | `http://market-data:8003` | No | S3 market data service URL |
+| `RAG_CHAT_S6_BASE_URL` | `http://nlp-pipeline:8006` | No | S6 NLP pipeline service URL |
+| `RAG_CHAT_S7_BASE_URL` | `http://knowledge-graph:8007` | No | S7 knowledge graph service URL |
+| `RAG_CHAT_KG_INTERNAL_BASE_URL` | `http://knowledge-graph:8007` | No | S7 URL for entity context calls (may route differently in production VPC) |
+| `RAG_CHAT_S1_INTERNAL_TOKEN` | `""` | No | Deprecated — no longer used (PRD-0025 RS256 JWT now propagated via middleware) |
+| `RAG_CHAT_RATE_LIMIT_PER_TENANT` | `10` | No | Requests per minute per `(tenant_id, user_id)` |
+| `RAG_CHAT_UPSTREAM_TIMEOUT_SECONDS` | `5.0` | No | Per retrieval task timeout |
+| `RAG_CHAT_CB_ENABLED` | `true` | No | Enable circuit breakers for retrieval sources |
+| `RAG_CHAT_CB_FAILURE_THRESHOLD` | `3` | No | Failures before circuit opens |
+| `RAG_CHAT_CB_FAILURE_WINDOW_SECONDS` | `120` | No | Failure counting window |
+| `RAG_CHAT_CB_COOL_DOWN_SECONDS` | `120` | No | Cooldown after circuit opens (10-3600s) |
+| `RAG_CHAT_CB_PROBE_TTL_SECONDS` | `5` | No | SETNX probe lock TTL for stampede prevention (1-30s) |
+| `RAG_CHAT_TRUST_W_SOURCE` | `0.4` | No | Trust formula weight for source authority |
+| `RAG_CHAT_TRUST_W_CORROBORATION` | `0.1` | No | Trust formula weight for corroboration factor |
+| `RAG_CHAT_TRUST_W_EXTRACTION` | `0.1` | No | Trust formula weight for extraction confidence |
+| `RAG_CHAT_CITATION_CRON_ENABLED` | `false` | No | Enable weekly citation accuracy cron (costs LLM tokens) |
+| `RAG_CHAT_CITATION_JUDGE_PROVIDER` | `deepinfra` | No | `deepinfra` or `ollama` |
+| `RAG_CHAT_CITATION_JUDGE_MODEL` | `meta-llama/Meta-Llama-3.1-8B-Instruct` | No | Model for citation accuracy scoring |
+| `RAG_CHAT_CITATION_MIN_SAMPLES` | `10` | No | Min messages required to emit gauge (1-500) |
+| `RAG_CHAT_CITATION_CALL_TIMEOUT_S` | `15.0` | No | Per-judge-call timeout (>0, ≤120s) |
+| `RAG_CHAT_CITATION_RUN_BUDGET_S` | `600.0` | No | Total wall-clock budget per cron run |
+| `RAG_CHAT_LOG_LEVEL` | `INFO` | No | structlog log level |
+| `RAG_CHAT_LOG_JSON` | `true` | No | JSON-structured logs |
+| `RAG_CHAT_OTLP_ENDPOINT` | `""` | No | OpenTelemetry collector endpoint |
 
 ---
 
@@ -628,13 +670,186 @@ market intelligence are not tenant-specific. Tenant isolation applies only to:
 
 ---
 
-## Local Run
+## Proposal Confirmation Endpoint (PLAN-0082)
+
+After the LLM emits a `create_alert` tool call, the pipeline emits a `pending_action` SSE
+event instead of executing immediately. The frontend shows a confirmation modal. On "Confirm"
+the frontend calls:
+
+```
+POST /api/v1/chat/proposals/{proposal_id}/confirm
+X-Internal-JWT: <user jwt>
+Content-Type: application/json
+
+{
+  "tool_name": "create_alert",
+  "entity_id": "<UUID>",
+  "condition": "price_below | price_above | volume_spike | percent_change",
+  "threshold": {"value": 200.0},
+  "severity": "low | medium | high | critical"
+}
+```
+
+Response: SSE stream with `action_executed` or `action_rejected` event.
+
+**Idempotency**: `_CONFIRMED_PROPOSALS` in-memory set prevents duplicate alert creation
+on retry. Returns 409 on replay. Single-instance only — move to Valkey for multi-replica.
+
+---
+
+## Briefing Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/internal/v1/briefings` | X-Internal-Token | Generate portfolio risk narrative for email digest |
+| GET | `/api/v1/briefings/morning` | X-Internal-JWT | Morning briefing (proxied via S9) |
+| GET | `/api/v1/briefings/instrument/{entity_id}` | X-Internal-JWT | Instrument briefing |
+
+**`POST /internal/v1/briefings`**: consumed by S10 email scheduler. Rate-limited to
+100/day per user. Uses `EMAIL_DEEP_BRIEF_PROMPT` system prompt. Returns `BriefingResponse`
+(see API Surface section).
+
+---
+
+## Internal Retrieval Endpoint (PLAN-0063)
+
+```
+POST /v1/internal/retrieve
+X-Internal-JWT: <system jwt>
+
+{"query_text": "...", "top_k": 20, "query_embedding": [...]}
+```
+
+Read-only retrieval for the eval harness. Runs steps 0/3/4/5 (no fusion, no rerank, no LLM).
+When `query_embedding` is set, HyDE+embedder are bypassed (deterministic for CI).
+Returns: `{intent, candidates: [{chunk_id, doc_id, rank, score, item_type, source_type, snippet}]}`.
+
+---
+
+## How to Run Locally
+
+### Option A — Full Docker Compose (Recommended)
+
+```bash
+make dev    # starts all services including rag-chat on port 8008
+```
+
+### Option B — Standalone (Requires DeepInfra Key)
 
 ```bash
 cd services/rag-chat
-cp configs/dev.local.env.example .env
-# Edit .env: set RAG_CHAT_DEEPINFRA_API_KEY and RAG_CHAT_RAG_DB_URL
-make run       # API on port 8008
-make test      # unit tests
+
+cat > .env << 'EOF'
+RAG_CHAT_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/rag_db
+RAG_CHAT_VALKEY_URL=redis://localhost:6379/0
+RAG_CHAT_DEEPINFRA_API_KEY=<your-deepinfra-key>
+RAG_CHAT_INTERNAL_JWT_SKIP_VERIFICATION=true   # no Zitadel required
+RAG_CHAT_S1_BASE_URL=http://localhost:8001
+RAG_CHAT_S3_BASE_URL=http://localhost:8003
+RAG_CHAT_S6_BASE_URL=http://localhost:8006
+RAG_CHAT_S7_BASE_URL=http://localhost:8007
+EOF
+
+# Migrate
+alembic upgrade head
+
+# Run
+make run    # uvicorn on port 8008
+```
+
+### Minimal Dev Without External Services
+
+Without DeepInfra, the service falls back to local Ollama for completions. The
+pipeline degrades gracefully — all tool calls still execute but LLM responses come
+from the local model:
+
+```bash
+# Ensure Ollama is running with deepseek-r1:32b model
+ollama pull deepseek-r1:32b
+
+# Set RAG_CHAT_DEEPINFRA_API_KEY to empty (falls back to Ollama)
+```
+
+---
+
+## How to Run Tests
+
+```bash
+cd services/rag-chat
+
+# Unit tests (fast, no external deps)
+python -m pytest tests/unit/ -m unit -v
+
+# Integration tests (require rag_db + Valkey)
+python -m pytest tests/integration/ -m integration -v
+
+# Full suite
+python -m pytest tests/ -v
+
+# Lint + types
 make lint
 ```
+
+**After editing code**: always rebuild the container before declaring done, since
+the production container has old code until rebuilt:
+
+```bash
+docker compose build rag-chat && docker compose up -d rag-chat
+```
+
+---
+
+## Common Pitfalls
+
+- **`ToolExecutorFactory` must be wired in `app.py` lifespan** — not auto-instantiated.
+  Forgetting this causes `AttributeError` at first chat request.
+
+- **`ToolUseBlock.id` (not `.tool_use_id`)** — use `.id` when building `ToolCallProvenance`.
+
+- **UoW must be released before the tool loop** — holding it open across tool I/O causes
+  connection pool exhaustion under load. Re-acquire for the final persist step.
+
+- **All-tools-failed guard**: if all tools return `error`/`empty`, the orchestrator MUST
+  NOT invoke the second LLM turn — it short-circuits to a fallback answer.
+
+- **`RAG_CHAT_CYPHER_ENABLED` is REMOVED** — `traverse_graph` is always available but
+  always guarded by `_ALLOWED_CYPHER_REL_TYPES` allowlist.
+
+- **`bleach` required** as a dependency for HTML stripping in `InputValidator`.
+
+- **Rate limit is per `(tenant_id, user_id)`** — not per `tenant_id` alone.
+
+- **SSE stream cleanup**: on client disconnect, `asyncio.CancelledError` is raised —
+  clean up any open `httpx` connections.
+
+- **Thread ownership check in use case layer** (not just route) — never bypass this.
+
+- **`fusion_score = score × recency_score × trust_weight`** — deviation > 1e-9 is a
+  programming error. Construct `RetrievedItem` via `create()` factory.
+
+---
+
+## Runbook
+
+### Check Provider Health
+
+```bash
+curl http://localhost:8008/api/v1/providers/status
+```
+
+### Check LLM Cost Usage
+
+```bash
+curl http://localhost:8008/internal/v1/llm-costs?period=2026-05 \
+  -H "X-Internal-JWT: <system-jwt>"
+```
+
+### Circuit Breaker State
+
+The `rag_circuit_breaker_open` gauge (label: `source`) shows 1 when a retrieval
+source is tripped. To reset manually, delete the Valkey key `rag:cb:state:{source}`.
+
+### Disable Citation Cron
+
+Set `RAG_CHAT_CITATION_CRON_ENABLED=false` (default). Enable only when you want
+weekly citation accuracy scoring (consumes LLM tokens).
