@@ -68,7 +68,7 @@ const SelectTrigger = React.forwardRef<
     ref={ref}
     className={cn(
       // Base layout: flex row, vertically centred, full-width by default
-      "flex h-9 w-full items-center justify-between rounded-[2px]",
+      "flex h-[36px] w-full items-center justify-between rounded-[2px]",
       // Visual style: matches Input component (border-border, bg-muted)
       "border border-border bg-muted px-3 py-2 text-sm",
       // Text: foreground colour so selected value is readable

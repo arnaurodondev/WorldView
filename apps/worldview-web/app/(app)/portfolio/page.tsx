@@ -214,7 +214,7 @@ export default function PortfolioPage() {
     return (
       // WHY p-3 space-y-3: terminal density — 12px padding, 12px gaps.
       <div className="flex flex-col h-full min-h-0 space-y-3 p-3">
-        <div className="flex h-9 items-center justify-between">
+        <div className="flex h-[36px] items-center justify-between">
           <Skeleton className="h-4 w-24" />
           <Skeleton className="h-7 w-36" />
         </div>
@@ -230,7 +230,7 @@ export default function PortfolioPage() {
             </div>
           ))}
         </div>
-        <Skeleton className="h-9 w-80" />
+        <Skeleton className="h-[36px] w-80" />
         {/* F-P-020: row skeletons use h-[22px] to match the real holdings
             row height token. */}
         <div className="space-y-px">
@@ -333,7 +333,7 @@ export default function PortfolioPage() {
             when the tab content grows. WHY bg-card: the tab bar is page
             chrome — keeps it tonally aligned with the KPI strip and
             page header above. */}
-        <TabsList className="shrink-0 h-9 px-2 border-b border-border rounded-none bg-card justify-start gap-0">
+        <TabsList className="shrink-0 h-[36px] px-2 border-b border-border rounded-none bg-card justify-start gap-0">
           <TabsTrigger
             value="holdings"
             className="h-7 px-3 text-[11px] font-mono data-[state=active]:text-primary data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none"

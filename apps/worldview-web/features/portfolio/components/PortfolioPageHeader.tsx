@@ -70,12 +70,12 @@ export function PortfolioPageHeader({
   return (
     <>
       {/* ── Page header ─────────────────────────────────────────────────── */}
-      {/* WHY h-9 shrink-0: 36px header is the terminal standard. shrink-0
+      {/* WHY h-[36px] shrink-0: 36px header is the terminal standard. shrink-0
           prevents flexbox from compressing the header to make room for tab
           content. WHY bg-card: the page is bg-background (#09090B); the
           header needs the panel tone (#111113) to read as the chrome row
           at the top of the workspace. */}
-      <div className="flex h-9 shrink-0 items-center border-b border-border px-3 gap-3 bg-card">
+      <div className="flex h-[36px] shrink-0 items-center border-b border-border px-3 gap-3 bg-card">
         <h1 className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
           Portfolio
         </h1>

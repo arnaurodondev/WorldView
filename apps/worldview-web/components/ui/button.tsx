@@ -54,7 +54,7 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
-        default: "h-9 px-4 py-2",
+        default: "h-[36px] px-4 py-2",
         // WHY rounded-[2px] on sm + lg: size variants used to override rounded-md (6px).
         // Now all sizes must explicitly use 2px to stay consistent with the radius system.
         sm: "h-8 rounded-[2px] px-3 text-xs",

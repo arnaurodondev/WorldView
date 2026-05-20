@@ -160,7 +160,7 @@ export function WatchlistPanel() {
                   right: dropdownPos.right,
                   zIndex: 9999,      // above all sidebar elements including z-50 drag handle
                 }}
-                className="min-w-[160px] max-h-[240px] overflow-y-auto border border-border bg-card shadow-md"
+                className="min-w-[160px] max-h-[240px] overflow-y-auto border border-border bg-card "
               >
                 {watchlistsData.map((wl) => (
                   <button

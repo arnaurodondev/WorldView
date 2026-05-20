@@ -56,7 +56,7 @@ function CreateWatchlistInput({
   }
 
   return (
-    <div className="flex h-9 items-center gap-1 px-2">
+    <div className="flex h-[36px] items-center gap-1 px-2">
       <input
         ref={inputRef}
         value={name}
@@ -207,7 +207,7 @@ export function WatchlistTabBar({
   }
 
   return (
-    <div className="flex h-9 items-center gap-0 border-b border-border overflow-x-auto shrink-0">
+    <div className="flex h-[36px] items-center gap-0 border-b border-border overflow-x-auto shrink-0">
       {watchlists.map((wl) => (
         <div
           key={wl.watchlist_id}

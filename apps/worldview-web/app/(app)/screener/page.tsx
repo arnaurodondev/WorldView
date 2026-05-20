@@ -294,7 +294,7 @@ export default function ScreenerPage() {
     <div className="flex flex-col h-full min-h-0 bg-background">
 
       {/* ── Toolbar ─────────────────────────────────────────────────────── */}
-      <div className="flex h-9 shrink-0 items-center border-b border-border px-3 gap-2 bg-background">
+      <div className="flex h-[36px] shrink-0 items-center border-b border-border px-3 gap-2 bg-background">
         {/* Density bundle 2026-05-09: keep at text-[11px] (already at terminal
             density baseline) — no further reduction without breaking legibility. */}
         {/* WHY font-mono (not font-sans): all page header labels use IBM Plex Mono

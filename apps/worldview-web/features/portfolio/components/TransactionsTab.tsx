@@ -63,7 +63,7 @@ export function TransactionsTab({
           information next to the data it explains. */}
       <div className="shrink-0 border-b border-border">
         {/* Header row — always visible, click to expand/collapse */}
-        <div className="flex h-9 items-center gap-1.5 px-3">
+        <div className="flex h-[36px] items-center gap-1.5 px-3">
           <button
             onClick={() => setBrokeragesSectionExpanded((v) => !v)}
             aria-expanded={brokeragesSectionExpanded}

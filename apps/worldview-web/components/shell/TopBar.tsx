@@ -144,7 +144,7 @@ export function TopBar({
   return (
     // WHY h-8 (32px): PLAN-0071 Phase 6.5 further reduces to 32px following
     // bloomberg-terminal reference. Minimum feasible: h-7 avatar + 2px top/bottom
-    // margin = 32px. PRD-0031 §4.1 originally reduced from 44px to 36px (h-9);
+    // margin = 32px. PRD-0031 §4.1 originally reduced from 44px to 36px (h-[36px]);
     // Phase 6.5 takes the next step to 32px (h-8) for maximum data-display vertical
     // space recovery while remaining WCAG-compliant (h-7 avatar = 28px touch target +
     // surrounding 4px padding satisfies the 32px minimum for pointer-based devices).

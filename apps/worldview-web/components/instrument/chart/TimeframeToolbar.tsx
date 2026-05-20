@@ -129,7 +129,7 @@ export function TimeframeToolbar({
 
         {/* Compare input popover — floats below the toolbar button */}
         {showCompareInput && (
-          <div className="absolute top-full left-0 z-20 mt-0.5 flex items-center gap-1 rounded-[2px] border border-border bg-card px-2 py-1 shadow-md">
+          <div className="absolute top-full left-0 z-20 mt-0.5 flex items-center gap-1 rounded-[2px] border border-border bg-card px-2 py-1 ">
             <input
               type="text"
               aria-label="Enter ticker to compare"

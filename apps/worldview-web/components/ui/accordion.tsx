@@ -44,7 +44,7 @@ const AccordionTrigger = React.forwardRef<
         // WHY py-4 + text-sm: comfortable vertical rhythm; chevron sized 14px
         // to match the muted text weight rather than competing with copy.
         "flex flex-1 items-center justify-between py-4 text-sm font-medium",
-        "text-foreground transition-all hover:text-primary",
+        "text-foreground transition-color-only duration-100 hover:text-primary",
         "[&[data-state=open]>svg]:rotate-180",
         className,
       )}

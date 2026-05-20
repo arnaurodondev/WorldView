@@ -157,7 +157,7 @@ export function HotkeyCheatSheet() {
         role="dialog"
         aria-label="Keyboard shortcuts"
         aria-modal="true"
-        className="mt-12 w-full max-w-2xl overflow-hidden rounded-[2px] border border-border bg-card text-foreground shadow-xl"
+        className="mt-12 w-full max-w-2xl overflow-hidden rounded-[2px] border border-border bg-card text-foreground "
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

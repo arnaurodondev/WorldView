@@ -73,7 +73,7 @@ export function Calendar({ className, classNames, showOutsideDays = true, ...pro
         // day is the cell; day_button is the clickable element inside it.
         day: "relative p-0 text-center",
         day_button: cn(
-          "h-9 w-9 text-[11px] font-mono rounded-[2px] transition-colors",
+          "h-[36px] w-9 text-[11px] font-mono rounded-[2px] transition-colors",
           "hover:bg-muted/40 hover:text-foreground",
           "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
         ),

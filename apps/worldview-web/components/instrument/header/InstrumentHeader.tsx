@@ -61,8 +61,8 @@ export function InstrumentHeader({ instrument, quote, fundamentals }: Instrument
   return (
     // WHY sticky top-0 z-30: the header must stay pinned during scroll.
     // z-30 sits above tab content (z-10) but below modal overlays (z-50).
-    // h-9 = 36px exactly (Tailwind: 9 × 4px = 36px) per spec §6.4.
-    <header className="sticky top-0 z-30 flex h-9 items-center gap-4 border-b border-border bg-background px-3">
+    // h-[36px] = 36px exactly (Tailwind: 9 × 4px = 36px) per spec §6.4.
+    <header className="sticky top-0 z-30 flex h-[36px] items-center gap-4 border-b border-border bg-background px-3">
       {/* ── Left cluster: back button + ticker + exchange + company name ── */}
       <button
         type="button"

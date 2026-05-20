@@ -90,7 +90,7 @@ const MAX_SIDEBAR_WIDTH = 340;
  * h-7 (28px) rows + 14px icons match the bloomberg-terminal reference density
  * (feremabraz/bloomberg-terminal). The collapsed 40px rail gives 14px icon +
  * 2×13px padding = minimum usable width. 48px was proportioned for 18px icons
- * at h-9 (36px) rows; 40px is the correct tight-rail for the new 14px icon size.
+ * at h-[36px] (36px) rows; 40px is the correct tight-rail for the new 14px icon size.
  */
 const COLLAPSED_WIDTH = 40;
 
@@ -229,8 +229,8 @@ export function CollapsibleSidebar({
               aria-current={isActive ? "page" : undefined}
               aria-label={label}
               className={cn(
-                // WHY h-7 (28px, was h-9 36px): PLAN-0071 Phase 6.5 terminal density
-                // sprint. bloomberg-terminal reference uses h-6/h-7 nav rows; h-9 was
+                // WHY h-7 (28px, was h-[36px] 36px): PLAN-0071 Phase 6.5 terminal density
+                // sprint. bloomberg-terminal reference uses h-6/h-7 nav rows; h-[36px] was
                 // proportioned for desktop apps with large click targets. 28px is the
                 // minimum for comfortable nav in a terminal context.
                 // WHY px-2.5 gap-1.5 (was px-3 gap-2): tighter padding/gap matches

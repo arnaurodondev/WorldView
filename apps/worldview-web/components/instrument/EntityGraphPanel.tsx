@@ -520,7 +520,7 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
           fixed/sticky elements; z-20 is sufficient and avoids z-index wars. */}
       {nodeTooltip && (
         <div
-          className="pointer-events-none absolute z-20 rounded-[2px] border border-border/50 bg-card px-2.5 py-1.5 shadow-lg"
+          className="pointer-events-none absolute z-20 rounded-[2px] border border-border/50 bg-card px-2.5 py-1.5 "
           style={{ left: nodeTooltip.x, top: nodeTooltip.y }}
           role="tooltip"
         >
@@ -546,7 +546,7 @@ export function EntityGraphPanel({ entityId, centerLabel }: EntityGraphPanelProp
           (snake_case from the NLP pipeline). Human-readable display uses spaces. */}
       {edgeTooltip && (
         <div
-          className="pointer-events-none absolute z-20 rounded-[2px] border border-border/50 bg-card px-2.5 py-1.5 shadow-lg"
+          className="pointer-events-none absolute z-20 rounded-[2px] border border-border/50 bg-card px-2.5 py-1.5 "
           style={{ left: edgeTooltip.x, top: edgeTooltip.y }}
           role="tooltip"
         >

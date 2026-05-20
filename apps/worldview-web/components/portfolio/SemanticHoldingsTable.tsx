@@ -372,7 +372,7 @@ export function SemanticHoldingsTable({
           useContextMenuActions hook. Click-outside closes via document listener. */}
       {ctxMenu && ctxGroups.length > 0 && (
         <div
-          className="fixed z-50 min-w-[160px] overflow-hidden rounded-[2px] border border-border bg-card py-1 shadow-md"
+          className="fixed z-50 min-w-[160px] overflow-hidden rounded-[2px] border border-border bg-card py-1 "
           style={{ top: ctxMenu.y, left: ctxMenu.x }}
           // Stop propagation so the document click listener doesn't immediately close the menu.
           onClick={(e) => e.stopPropagation()}

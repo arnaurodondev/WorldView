@@ -57,7 +57,7 @@ const CommandInput = React.forwardRef<
     <CommandPrimitive.Input
       ref={ref}
       className={cn(
-        "flex h-9 w-full rounded-[2px] bg-transparent py-3 text-sm outline-none",
+        "flex h-[36px] w-full rounded-[2px] bg-transparent py-3 text-sm outline-none",
         // PLAN-0059 W0 F-VISUAL-027: explicit tokens (was opacity-50)
         "placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:text-[hsl(var(--disabled-foreground))]",
         className,

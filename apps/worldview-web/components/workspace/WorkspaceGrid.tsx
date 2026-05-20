@@ -135,7 +135,7 @@ function AddPanelTray({ isOpen, onClose }: AddPanelTrayProps) {
       data-testid="add-panel-tray"
       className={[
         "fixed right-0 top-0 z-50 h-full w-[200px]",
-        "border-l border-border/50 bg-card shadow-xl",
+        "border-l border-border/50 bg-card ",
         "transition-transform duration-200",
         isOpen ? "translate-x-0" : "translate-x-full",
       ].join(" ")}

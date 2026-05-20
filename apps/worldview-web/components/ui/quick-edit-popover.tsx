@@ -130,7 +130,7 @@ export function QuickEditPopover({
   );
 
   const heightClass =
-    density === "compact" ? "h-7 text-[11px]" : density === "comfortable" ? "h-10 text-[13px]" : "h-9 text-[12px]";
+    density === "compact" ? "h-7 text-[11px]" : density === "comfortable" ? "h-10 text-[13px]" : "h-[36px] text-[12px]";
 
   return (
     <Popover open={open} onOpenChange={setOpen}>

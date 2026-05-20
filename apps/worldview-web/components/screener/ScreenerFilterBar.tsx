@@ -157,7 +157,7 @@ export function ScreenerFilterBar({
   return (
     <div className="shrink-0">
       {/* ── Header row with result count + filter toggle ───────────────── */}
-      <div className="flex h-9 items-center justify-between border-b border-border px-2">
+      <div className="flex h-[36px] items-center justify-between border-b border-border px-2">
         <div className="flex items-center gap-2">
           {/* WHY font-mono: ADR-F-15 — section labels use IBM Plex Mono */}
           <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground font-mono">
@@ -224,7 +224,7 @@ export function ScreenerFilterBar({
       >
         <div className="overflow-hidden min-h-0">
           {/* ── Top row: search / sector / cap tier (always-visible primary filters) ── */}
-          <div className="flex h-9 items-center gap-2 px-2 bg-background border-b border-border/60">
+          <div className="flex h-[36px] items-center gap-2 px-2 bg-background border-b border-border/60">
             <label htmlFor="screener-search" className="sr-only">
               Search instruments by name or ticker
             </label>
@@ -694,7 +694,7 @@ export function ScreenerFilterBar({
           </Section>
 
           {/* ── BOTTOM TOOLBAR ──────────────────────────────────────────── */}
-          <div className="flex h-9 items-center gap-2 px-2 bg-background">
+          <div className="flex h-[36px] items-center gap-2 px-2 bg-background">
             <button
               aria-label="Apply filters"
               className="h-7 px-3 text-[10px] font-mono uppercase tracking-[0.06em] bg-primary/10 border border-primary/60 text-primary rounded-[2px] hover:bg-primary/20 transition-colors"
