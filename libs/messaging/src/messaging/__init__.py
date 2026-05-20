@@ -26,6 +26,9 @@ Outbox dispatcher:
     BaseOutboxDispatcher, DispatcherConfig, DeliveryResult, OutboxRecordProtocol,
     OutboxRepositoryProtocol, UnitOfWorkWithOutboxProtocol, run_dispatcher
 
+Maintenance:
+    ProcessedEventsCleanupWorker — retention enforcement for ``processed_events``
+
 Valkey:
     ValkeyClient, ValkeyConfig, create_valkey_client, create_valkey_client_from_url
 
@@ -62,6 +65,9 @@ from messaging.kafka.dispatcher.base import (
     OutboxRepositoryProtocol,
     UnitOfWorkWithOutboxProtocol,
     run_dispatcher,
+)
+from messaging.kafka.maintenance.processed_events_cleanup import (
+    ProcessedEventsCleanupWorker,
 )
 from messaging.kafka.producer import (
     KafkaEventValueSerializer,
@@ -120,6 +126,7 @@ __all__ = [
     "OutboxRecordProtocol",
     "OutboxRepositoryProtocol",
     "OutboxStatus",
+    "ProcessedEventsCleanupWorker",
     "RateLimitedError",
     "RetryableError",
     "SchemaRegistryConfig",

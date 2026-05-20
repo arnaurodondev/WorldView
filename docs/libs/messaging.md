@@ -304,6 +304,45 @@ async with pg_advisory_lock(session, "market-ingestion:eodhd-scheduler") as acqu
   acquired, `False` otherwise. Uses `pg_try_advisory_lock` (non-blocking).
   Automatically releases on context exit.
 
+### `processed_events` Retention (`messaging.kafka.maintenance`)
+
+The Kafka consumer base class writes every successfully processed event id
+into a service-local ``processed_events`` table so that re-delivery
+(operator-driven offset rewinds, rebalance replays) is dropped via
+``is_duplicate()``. Without retention this table grows monotonically.
+
+`ProcessedEventsCleanupWorker` enforces a configurable retention window
+(default 30 days, default batch size 10 000 rows) with a batched, non-blocking
+DELETE using `FOR UPDATE SKIP LOCKED` so the live consumer is never blocked.
+
+```python
+from messaging import ProcessedEventsCleanupWorker
+
+worker = ProcessedEventsCleanupWorker(
+    service_name="content-store",
+    retention_days=30,   # default; override per service
+    batch_size=10_000,   # default; override on resource-constrained DBs
+)
+
+async with write_session_factory() as session:
+    deleted = await worker.run_once(session)
+```
+
+**Wiring guidance**:
+- Invoke `run_once()` daily (e.g. 02:00 UTC) via your service's existing
+  scheduler, or via a dedicated standalone entry point (`*_cleanup_main.py`)
+  per R22.
+- Use the **write** session factory — the worker issues DELETE statements.
+- Schema assumption: a `processed_events` table with `event_id` PRIMARY KEY
+  and `processed_at TIMESTAMPTZ`. Today only S5 content-store materialises
+  this table; other services use Valkey-backed dedup
+  (`ValkeyDedupConsumer`) and require no cleanup.
+
+**Safety note**: `processed_events` is belt-and-suspenders against operator
+offset rewinds — the consumer offset itself is the primary at-least-once
+guarantee. The 30-day default is comfortably longer than any plausible
+rewind window.
+
 ### EODHD Quota Service (`messaging.eodhd_quota`)
 
 Prevents per-replica over-consumption of the shared monthly EODHD credit budget.
