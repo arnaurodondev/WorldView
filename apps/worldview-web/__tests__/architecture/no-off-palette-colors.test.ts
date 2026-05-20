@@ -195,3 +195,148 @@ describe("architecture: no off-palette colors / radii / currency in source", () 
     expect(offences).toEqual([]);
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────
+// PRD-0089 F1 — Bloomberg-grade visual contract lockdown
+//
+// The 8 forbidden patterns below back the terminal-grade design system. They
+// land here as `describe.skip()` because the codebase has ~300 violations at
+// the start of F1; the migration PRs C → G clean them up mechanically, and
+// PR-G removes the `.skip` so the lockdown becomes enforced.
+//
+// Each constant is exported as documentation: per-page agents can grep for
+// the symbol and understand what's off-limits without rereading the plan.
+//
+// SCOPE — same SCAN_ROOTS as the existing check.
+// ────────────────────────────────────────────────────────────────────────
+
+// Pattern 1+2: sharp-corners contract. Any rounded-{sm,md,lg,xl,2xl,3xl} or
+// explicit rounded-[Npx] with N>0 is forbidden. `rounded-none` and
+// `rounded-full` are allowed (dots, avatars).
+const F1_FORBIDDEN_ROUNDED = /\brounded-(?:sm|md|lg|xl|2xl|3xl)\b/;
+// Note: existing FORBIDDEN_RADIUS already covers rounded-[Npx] for N≥3.
+// Sub-2px micro-indicators (rounded-[1px]) intentionally allowed.
+
+// Pattern 3: typography ceiling. Body 11px max in narrative; 14px hero only.
+// `text-sm` (14px) and `text-base` (16px) inside data rows are banned;
+// `text-lg`+ everywhere are banned (page primaries are 14px even for hero).
+// Allowlist will be added after PR-G cleanup measures the surviving ≤10 sites.
+const F1_FORBIDDEN_TEXT_SIZE =
+  /\btext-(?:sm|base|lg|xl|2xl|3xl|4xl|5xl|6xl|7xl)\b/;
+
+// Pattern 4: zero shadows on Terminal Dark.
+const F1_FORBIDDEN_SHADOW = /\bshadow-(?:sm|md|lg|xl|2xl|inner)\b/;
+
+// Pattern 5: focus-ring tier mismatch. `ring-2` on a `role="row"` element
+// breaks the 3-tier focus contract (table rows must be Tier-1 hairline).
+// The regex is intentionally line-local: same-line role="row" with ring-2.
+const F1_FORBIDDEN_ROW_RING2 = /\bring-2\b[^"]*role=["']row["']/;
+
+// Pattern 6: ban `transition-all` / `transition-transform` / `transition-shadow`.
+// Must use the named tokens `transition-color-only` (Tier-1) or
+// `transition-color-and-opacity` (Tier-2) introduced in PR-A's tailwind diff.
+const F1_FORBIDDEN_TRANSITION = /\btransition-(?:all|transform|shadow)\b/;
+
+// Pattern 7: Tier-2 ceiling 200ms — anything ≥300ms banned in arbitrary
+// utilities. Reserved long durations belong to T3 indicators which use
+// keyframes (animate-* utilities), not duration-*.
+const F1_FORBIDDEN_DURATION =
+  /\bduration-(?:300|500|700|1000)\b/;
+
+// Pattern 8: spacing ceiling 16px (gap-4). Anything larger is consumer-app
+// generosity and rejected.
+const F1_FORBIDDEN_GAP = /\bgap-(?:6|8|10|12)\b/;
+
+const F1_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
+  { name: "rounded-{sm|md|lg|xl|2xl|3xl}", pattern: F1_FORBIDDEN_ROUNDED },
+  {
+    name: "text-{sm|base|lg|xl|...}",
+    pattern: F1_FORBIDDEN_TEXT_SIZE,
+  },
+  { name: "shadow-{sm|md|lg|xl|2xl|inner}", pattern: F1_FORBIDDEN_SHADOW },
+  { name: "ring-2 on role=row", pattern: F1_FORBIDDEN_ROW_RING2 },
+  {
+    name: "transition-{all|transform|shadow}",
+    pattern: F1_FORBIDDEN_TRANSITION,
+  },
+  { name: "duration-{300|500|700|1000}", pattern: F1_FORBIDDEN_DURATION },
+  { name: "gap-{6|8|10|12}", pattern: F1_FORBIDDEN_GAP },
+];
+
+// Files explicitly allowed to keep certain patterns (filled in PR-G after
+// measuring surviving violations). Format: relative path.
+const F1_ALLOWED_FILES = new Set<string>([]);
+
+function findF1Offences(): { pattern: string; file: string; line: number; text: string }[] {
+  const offences: { pattern: string; file: string; line: number; text: string }[] = [];
+  for (const root of SCAN_ROOTS) {
+    let files: string[];
+    try {
+      files = walk(root);
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      const rel = file;
+      if (F1_ALLOWED_FILES.has(rel)) continue;
+      const raw = readFileSync(file, "utf-8");
+      const stripped = stripComments(raw);
+      const rawLines = raw.split("\n");
+      const strippedLines = stripped.split("\n");
+      for (let i = 0; i < strippedLines.length; i++) {
+        const codeLine = strippedLines[i] ?? "";
+        if (codeLine.trim().length === 0) continue;
+        for (const { name, pattern } of F1_PATTERNS) {
+          if (pattern.test(codeLine)) {
+            offences.push({
+              pattern: name,
+              file: rel,
+              line: i + 1,
+              text: (rawLines[i] ?? "").trim(),
+            });
+          }
+        }
+      }
+    }
+  }
+  return offences;
+}
+
+// PR-G will switch `.skip` to `.only` momentarily for verification, then to
+// the bare describe block to lock it in.
+describe.skip("PRD-0089 F1 lockdown: terminal-grade visual contract", () => {
+  it("has zero violations of the 7 forbidden patterns post-cleanup", () => {
+    const offences = findF1Offences();
+    if (offences.length > 0) {
+      const byPattern = new Map<string, number>();
+      for (const o of offences) {
+        byPattern.set(o.pattern, (byPattern.get(o.pattern) ?? 0) + 1);
+      }
+      const summary = [...byPattern.entries()]
+        .map(([p, n]) => `  ${p}: ${n}`)
+        .join("\n");
+      const detail = offences
+        .slice(0, 50)
+        .map((o) => `${o.file}:${o.line}  [${o.pattern}]  ${o.text}`)
+        .join("\n");
+      throw new Error(
+        `Found ${offences.length} F1-lockdown offences:\n${summary}\n\nFirst 50:\n${detail}`,
+      );
+    }
+    expect(offences).toEqual([]);
+  });
+});
+
+// Export the constants so other tests (animation-policy, data-table-grid-scope)
+// can reuse the same regex catalogue.
+export {
+  F1_ALLOWED_FILES,
+  F1_FORBIDDEN_DURATION,
+  F1_FORBIDDEN_GAP,
+  F1_FORBIDDEN_ROUNDED,
+  F1_FORBIDDEN_ROW_RING2,
+  F1_FORBIDDEN_SHADOW,
+  F1_FORBIDDEN_TEXT_SIZE,
+  F1_FORBIDDEN_TRANSITION,
+  F1_PATTERNS,
+};

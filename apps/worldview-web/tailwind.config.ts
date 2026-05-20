@@ -88,17 +88,31 @@ const config: Config = {
         // nested panels, tertiary backgrounds). Defined in globals.css.
         "surface-2": "hsl(var(--surface-2))",
         "surface-3": "hsl(var(--surface-3))",
+
+        // PRD-0089 F1: cell-grid border tokens for data-table-grid surfaces.
+        // border-strong is the visible inner cell line (Bloomberg "STAT" panels
+        // use a comparable shade); border-subtle is the row divider.  Components
+        // never reach for hardcoded #37373B / #1E1E22 — they use these utilities.
+        "border-strong": "hsl(var(--border-strong))",
+        "border-subtle": "hsl(var(--border-subtle))",
       },
       borderRadius: {
-        // WHY all three map to --radius (2px): The old scale subtracted 2px/4px from
-        // a 6px base, giving lg=6px, md=4px, sm=2px. Now --radius is 0.125rem (2px).
-        // Subtracting from 2px yields 0px or negative, which breaks border-radius.
-        // Solution: collapse all three to the same 2px value — terminal UIs should
-        // be consistently sharp; the three-step rounding scale was a consumer-app
-        // pattern that no longer applies here. All panel corners are uniformly sharp.
-        lg: "var(--radius)",   /* 2px */
-        md: "var(--radius)",   /* 2px */
-        sm: "var(--radius)",   /* 2px */
+        // PRD-0089 F1: every alias collapses to 0 except `full` (dots/avatars).
+        // Why explicitly map sm/md/lg/xl/2xl/3xl instead of just leaving them
+        // out: Tailwind's `extend` is ADDITIVE — unspecified keys fall back to
+        // framework defaults (sm=2px through 3xl=24px). To enforce the
+        // sharp-corner contract even before PRs C-G strip the class strings,
+        // every alias must explicitly resolve to 0 at the utility level.
+        // Bloomberg / Refinitiv / IBKR TWS / Eikon panels: all 0px radius.
+        none: "0",
+        sm: "0",
+        DEFAULT: "0",
+        md: "0",
+        lg: "0",
+        xl: "0",
+        "2xl": "0",
+        "3xl": "0",
+        full: "9999px",
       },
       fontFamily: {
         // IBM Plex Sans for UI labels and prose — loaded via next/font/google
@@ -133,6 +147,47 @@ const config: Config = {
         "accordion-up": "accordion-up 0.2s ease-out",
         "flash-in": "flash-in 0.15s ease-out",
         "skeleton-pulse": "skeleton-pulse 2s ease-in-out infinite",
+      },
+      // PRD-0089 F1: zero shadows on Terminal Dark.
+      // Why map every Tailwind shadow alias to "none": components that still
+      // reference shadow-sm / shadow-md / shadow-lg should compile (class
+      // strings remain valid) but render no elevation. Bloomberg/Eikon panels
+      // never use box-shadow for chrome — only 1px borders. Eliminates the
+      // dead-code documentation lie of "shadows are reset in globals.css"
+      // (that runtime reset still exists for defense-in-depth, but now the
+      // Tailwind utility itself emits `box-shadow: none`).
+      boxShadow: {
+        none: "none",
+        sm: "none",
+        DEFAULT: "none",
+        md: "none",
+        lg: "none",
+        xl: "none",
+        "2xl": "none",
+        inner: "none",
+      },
+      // PRD-0089 F1 NFR-6: named transition tokens. Tier-1 (affordance) and
+      // Tier-2 (chrome state) live here. Components MUST use these instead
+      // of `transition-all` (banned by post-F1 arch-test lockdown) because
+      // `transition-all` accidentally animates layout properties (width,
+      // height, max-h) which produces Tier-0 violations.
+      transitionProperty: {
+        // Tier-1: color/border-color only — for row hover, button hover,
+        // focus-ring intro. Ceiling 100ms (see transitionDuration below).
+        "color-only": "color, background-color, border-color, fill, stroke",
+        // Tier-2: chrome state — adds opacity for popover/dropdown fade-in.
+        // Ceiling 200ms.
+        "color-and-opacity":
+          "color, background-color, border-color, opacity",
+      },
+      transitionDuration: {
+        // Explicit ms tokens reinforcing the 4-tier animation policy.
+        // 75/100 = Tier-1; 150/200 = Tier-2. Anything ≥300ms blocked by
+        // the no-off-palette-colors arch-test post-F1 lockdown.
+        "75": "75ms",
+        "100": "100ms",
+        "150": "150ms",
+        "200": "200ms",
       },
     },
   },
