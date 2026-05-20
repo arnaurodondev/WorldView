@@ -17,13 +17,16 @@ Security notes:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import httpx
 import jwt as pyjwt
+from sqlalchemy import text
 
 from observability import get_logger  # type: ignore[import-untyped]
 from portfolio.application.ports.brokerage_client import SnapTradeUser
@@ -73,6 +76,67 @@ _TYPE_MAP: dict[str, tuple[TransactionType, TransactionDirection]] = {
     "DIV": (TransactionType.DIVIDEND, TransactionDirection.INFLOW),
     "DIVIDEND": (TransactionType.DIVIDEND, TransactionDirection.INFLOW),
 }
+
+
+# ── BUG-003 / TASK-W1-03 ─────────────────────────────────────────────────────
+#
+# Per-connection advisory lock helpers. Two worker replicas can otherwise iterate
+# the same active ``BrokerageConnection`` concurrently and double-record
+# activities before the snapshot upsert at the end of ``_sync_connection``
+# stabilises — visible to the user as inflated holdings for 5-60s, or
+# permanently if the snapshot fetch fails after the partial replay.
+#
+# We use ``pg_try_advisory_xact_lock`` (non-blocking, auto-released on
+# COMMIT/ROLLBACK) keyed off a deterministic 63-bit int derived from the
+# connection UUID. ``hashlib.blake2b`` is used instead of Python's built-in
+# ``hash()`` because the latter is randomised per process (PYTHONHASHSEED),
+# which would defeat cross-replica coordination.
+#
+# Scoping: the lock must be held INSIDE the same Postgres transaction that
+# performs the writes. The simplest minimal-refactor approach (which preserves
+# BP-057's "no SnapTrade calls while a write UoW is open" rule for the
+# inner work-UoWs) is to open ONE outermost "lock UoW" at the start of
+# ``_sync_connection`` whose only job is to hold the advisory lock for the
+# duration of the per-connection sync. The lock UoW is never committed —
+# ``__aexit__`` rolls it back which releases the xact-scoped lock cleanly.
+
+
+def _connection_lock_key(connection_id: UUID) -> int:
+    """Derive a deterministic 63-bit positive int from a connection UUID.
+
+    PostgreSQL bigint is signed 64-bit; we mask to 63 bits to guarantee a
+    positive value (some PG clients log negative advisory keys oddly). The
+    use of blake2b — not ``hash()`` — is required: built-in ``hash()`` is
+    randomised across processes when ``PYTHONHASHSEED`` is not set, which
+    would cause two replicas to derive DIFFERENT lock keys for the same
+    connection and the advisory lock would not coordinate them.
+    """
+    digest = hashlib.blake2b(str(connection_id).encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big") & 0x7FFF_FFFF_FFFF_FFFF
+
+
+async def _try_acquire_connection_lock(uow: SqlAlchemyUnitOfWork, connection_id: UUID) -> bool:  # type: ignore[type-arg]
+    """Attempt non-blocking advisory lock for ``connection_id`` on ``uow``'s txn.
+
+    Returns ``True`` if acquired, ``False`` if another worker already holds it.
+    The lock is automatically released when ``uow``'s transaction ends
+    (commit OR rollback) — callers do not need to release it explicitly.
+
+    Lives as a module-level helper (not a UoW method) because the lock is a
+    worker-specific concern; adding it to the UoW would leak infrastructure
+    detail into every other call site that doesn't need it.
+    """
+    lock_key = _connection_lock_key(connection_id)
+    # Access the underlying session via the private attribute. The UoW does not
+    # expose a public ``session`` accessor and we'd rather not widen the
+    # public interface for this single use case.
+    session = uow._session  # intentional: see comment above
+    assert session is not None, "UoW must be entered before acquiring a lock"
+    result = await session.execute(
+        text("SELECT pg_try_advisory_xact_lock(:key)"),
+        {"key": lock_key},
+    )
+    return bool(result.scalar())
 
 
 def _system_jwt_headers() -> dict[str, str]:
@@ -211,6 +275,37 @@ class BrokerageTransactionSyncWorker:
 
         Opens a fresh UoW per connection to keep transactions short (BP-057).
         Always passes snaptrade_cipher so encrypted secrets are decrypted (R-001).
+
+        BUG-003 / TASK-W1-03: per-connection advisory lock — if another worker
+        replica is already syncing the same ``connection.id`` we return
+        immediately and let the next cycle pick it up. This is non-blocking
+        (``pg_try_advisory_xact_lock``) so two replicas never queue or
+        double-count holdings during the snapshot-upsert reconciliation window.
+        """
+        # ── Per-connection advisory lock ─────────────────────────────────────
+        # The outer UoW exists only to hold the xact-scoped lock for the
+        # duration of this method. We deliberately do NOT call ``commit()`` on
+        # it: ``__aexit__`` will rollback (no writes were issued on this UoW
+        # anyway) which releases the lock cleanly.
+        async with SqlAlchemyUnitOfWork(  # type: ignore[call-arg]
+            self._session_factory,
+            snaptrade_cipher=self._cipher,
+        ) as lock_uow:
+            acquired = await _try_acquire_connection_lock(lock_uow, connection.id)
+            if not acquired:
+                logger.info(  # type: ignore[no-any-return]
+                    "brokerage_sync_skipped_lock_held",
+                    connection_id=str(connection.id),
+                )
+                return
+            await self._do_sync_connection(connection)
+
+    async def _do_sync_connection(self, connection: BrokerageConnection) -> None:
+        """Inner per-connection sync — runs under the caller's advisory lock.
+
+        Extracted from ``_sync_connection`` so the lock-scoping context manager
+        stays compact and the existing sync semantics (multiple inner UoWs,
+        BP-057 ordering) remain unchanged inside this method.
         """
         # Determine date range
         today = datetime.now(tz=UTC).date()

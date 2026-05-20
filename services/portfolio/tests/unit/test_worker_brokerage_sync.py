@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
@@ -294,7 +295,11 @@ async def test_sync_connection_api_error_marks_connection_error() -> None:
         mock_ctx.__aexit__ = AsyncMock(return_value=False)
         mock_uow_cls.return_value = mock_ctx
 
-        await worker._sync_connection(conn)
+        # Call the inner sync entry point directly so this test exercises the
+        # API-error path independently of the per-connection advisory lock
+        # (BUG-003 / TASK-W1-03). Lock acquisition is covered by dedicated
+        # tests further down.
+        await worker._do_sync_connection(conn)
 
     updated = uow.brokerage_connections._store[CONNECTION_ID]
     assert updated.status == ConnectionStatus.ERROR
@@ -381,7 +386,10 @@ async def test_sync_worker_uses_history_days_for_initial_cursor() -> None:
         mock_ctx.__aexit__ = AsyncMock(return_value=False)
         mock_uow_cls.return_value = mock_ctx
 
-        await worker._sync_connection(conn)
+        # Call the inner sync entry point directly so this test exercises the
+        # cursor-derivation logic independently of the per-connection advisory
+        # lock (BUG-003 / TASK-W1-03).
+        await worker._do_sync_connection(conn)
 
     assert len(captured_start) == 1
     expected_start = datetime.now(tz=UTC).date() - timedelta(days=history_days)
@@ -635,3 +643,224 @@ async def test_resolve_instrument_passes_through_lookup_result() -> None:
     assert result is seeded
     # No DB upsert side-effect (a side-effect of the deleted S3-fallback branch).
     assert uow.instruments._store == {}
+
+
+# ── BUG-003 / TASK-W1-03 — per-connection advisory lock ──────────────────────
+#
+# These tests exercise the new ``_try_acquire_connection_lock`` helper and the
+# control flow in ``_sync_connection`` that gates the per-connection sync on
+# lock acquisition. Because ``FakeUnitOfWork`` does not own a real
+# ``AsyncSession``, we patch the helper itself rather than mocking the
+# ``session.execute`` call — this keeps the tests focused on the workflow
+# decision (does the inner sync run? does the early-return fire?) without
+# coupling to the SQL string.
+#
+# Lock-key derivation is unit-tested directly (deterministic across processes).
+
+
+def test_connection_lock_key_is_deterministic_across_calls() -> None:
+    """Same UUID → same lock key, every time, regardless of call site."""
+    from portfolio.workers.brokerage_sync_worker import _connection_lock_key
+
+    conn_id = uuid4()
+    key_a = _connection_lock_key(conn_id)
+    key_b = _connection_lock_key(conn_id)
+    assert key_a == key_b
+    # 63-bit positive: never negative, never overflows Postgres bigint.
+    assert 0 <= key_a <= 0x7FFF_FFFF_FFFF_FFFF
+
+
+def test_connection_lock_key_differs_per_connection() -> None:
+    """Distinct UUIDs → distinct lock keys (different connections never collide)."""
+    from portfolio.workers.brokerage_sync_worker import _connection_lock_key
+
+    key_a = _connection_lock_key(uuid4())
+    key_b = _connection_lock_key(uuid4())
+    assert key_a != key_b
+
+
+async def test_sync_connection_serialises_concurrent_same_connection_calls() -> None:
+    """Two concurrent _sync_connection calls for the SAME connection: exactly one runs.
+
+    Simulates two worker replicas racing for the same ``BrokerageConnection``.
+    The advisory lock helper returns True on the first acquisition and False
+    thereafter (mocking the "another replica holds the xact-scoped lock"
+    outcome). The losing call must short-circuit before invoking the inner
+    sync work — verified by asserting that ``_do_sync_connection`` was called
+    exactly once.
+
+    Acceptance criterion (BACKEND-PLAN.md TASK-W1-03):
+        "Two concurrent sync calls for the same connection → exactly one
+         executes; the other returns immediately."
+    """
+    from unittest.mock import AsyncMock, patch
+
+    uow = FakeUnitOfWork()
+    worker, _ = _make_worker(uow)
+    conn = _make_connection()
+
+    # The lock helper is stateful in the real world (Postgres holds the lock
+    # for whoever called first). We model that with a one-shot True/False
+    # sequence so the first concurrent task "wins" the lock and the second
+    # is told "already held".
+    acquire_calls = 0
+    acquire_lock = asyncio.Lock()
+
+    async def fake_try_acquire(lock_uow: object, connection_id: object) -> bool:
+        nonlocal acquire_calls
+        async with acquire_lock:
+            acquire_calls += 1
+            return acquire_calls == 1
+
+    do_sync_called = 0
+    do_sync_started = asyncio.Event()
+    do_sync_can_finish = asyncio.Event()
+
+    async def fake_do_sync(connection: object) -> None:
+        nonlocal do_sync_called
+        do_sync_called += 1
+        # Signal that the inner sync has started so the second task races in
+        # while the first is still "working". Then block until the test
+        # releases us so the lock-held window is wide enough to be observable.
+        do_sync_started.set()
+        await do_sync_can_finish.wait()
+
+    with (
+        patch(
+            "portfolio.workers.brokerage_sync_worker.SqlAlchemyUnitOfWork",
+        ) as mock_uow_cls,
+        patch(
+            "portfolio.workers.brokerage_sync_worker._try_acquire_connection_lock",
+            new=fake_try_acquire,
+        ),
+        patch.object(worker, "_do_sync_connection", new=fake_do_sync),
+    ):
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=uow)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_uow_cls.return_value = mock_ctx
+
+        # Kick off two concurrent syncs for the SAME connection_id.
+        task_a = asyncio.create_task(worker._sync_connection(conn))
+        # Wait until the first task is inside _do_sync_connection (lock held)
+        # before launching the second so the race is deterministic.
+        await do_sync_started.wait()
+        task_b = asyncio.create_task(worker._sync_connection(conn))
+
+        # Let the first task complete its work. The second should already have
+        # returned (lock-held path is synchronous after the helper returns
+        # False — no awaits between the helper call and the early return).
+        do_sync_can_finish.set()
+        await asyncio.gather(task_a, task_b)
+
+    assert do_sync_called == 1, "Exactly one concurrent caller should run the sync body"
+    # Both calls attempted the lock — the second was rejected.
+    assert acquire_calls == 2
+
+
+async def test_sync_connection_different_connections_run_in_parallel() -> None:
+    """Different connection_ids hold INDEPENDENT locks → both complete successfully.
+
+    The advisory key is derived from connection_id (verified by
+    ``test_connection_lock_key_differs_per_connection``), so two distinct
+    connections never collide. Both concurrent invocations must call
+    ``_do_sync_connection`` exactly once.
+
+    Acceptance criterion (BACKEND-PLAN.md TASK-W1-03):
+        "Different connections in parallel still proceed concurrently."
+    """
+    from unittest.mock import AsyncMock, patch
+
+    uow = FakeUnitOfWork()
+    worker, _ = _make_worker(uow)
+
+    conn_a = _make_connection()
+    # Override id so conn_b is a distinct connection.
+    conn_b = _make_connection()
+    conn_b.id = uuid4()
+
+    # Per-connection lock state: each connection's first acquisition wins.
+    acquired_set: set[object] = set()
+    acquire_lock = asyncio.Lock()
+
+    async def fake_try_acquire(lock_uow: object, connection_id: object) -> bool:
+        async with acquire_lock:
+            if connection_id in acquired_set:
+                return False  # would only happen on same-connection race
+            acquired_set.add(connection_id)
+            return True
+
+    do_sync_started = asyncio.Event()
+    do_sync_can_finish = asyncio.Event()
+    completed_for: list[object] = []
+
+    async def fake_do_sync(connection: object) -> None:
+        do_sync_started.set()
+        await do_sync_can_finish.wait()
+        completed_for.append(connection.id)  # type: ignore[attr-defined]
+
+    with (
+        patch(
+            "portfolio.workers.brokerage_sync_worker.SqlAlchemyUnitOfWork",
+        ) as mock_uow_cls,
+        patch(
+            "portfolio.workers.brokerage_sync_worker._try_acquire_connection_lock",
+            new=fake_try_acquire,
+        ),
+        patch.object(worker, "_do_sync_connection", new=fake_do_sync),
+    ):
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=uow)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_uow_cls.return_value = mock_ctx
+
+        task_a = asyncio.create_task(worker._sync_connection(conn_a))
+        await do_sync_started.wait()  # task_a is inside fake_do_sync
+        task_b = asyncio.create_task(worker._sync_connection(conn_b))
+
+        do_sync_can_finish.set()
+        await asyncio.gather(task_a, task_b)
+
+    # Both connections completed their sync work — neither was locked out.
+    assert sorted(str(x) for x in completed_for) == sorted([str(conn_a.id), str(conn_b.id)])
+
+
+async def test_sync_connection_returns_early_when_lock_unavailable() -> None:
+    """Lock helper returns False → no inner sync work, no SnapTrade calls.
+
+    Direct single-task variant for clarity: verifies the early-return path
+    in isolation without the concurrency machinery of the parallel test.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    uow = FakeUnitOfWork()
+    worker, _ = _make_worker(uow)
+    conn = _make_connection()
+
+    async def always_fail(lock_uow: object, connection_id: object) -> bool:
+        return False
+
+    do_sync_called = 0
+
+    async def spy_do_sync(connection: object) -> None:
+        nonlocal do_sync_called
+        do_sync_called += 1
+
+    with (
+        patch(
+            "portfolio.workers.brokerage_sync_worker.SqlAlchemyUnitOfWork",
+        ) as mock_uow_cls,
+        patch(
+            "portfolio.workers.brokerage_sync_worker._try_acquire_connection_lock",
+            new=always_fail,
+        ),
+        patch.object(worker, "_do_sync_connection", new=spy_do_sync),
+    ):
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=uow)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_uow_cls.return_value = mock_ctx
+
+        await worker._sync_connection(conn)
+
+    assert do_sync_called == 0
