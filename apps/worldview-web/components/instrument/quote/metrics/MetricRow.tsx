@@ -18,8 +18,10 @@
 
 // WHY no "use client": pure display — props only, no hooks or browser APIs.
 
-import { MetricLabel } from "@/components/instrument/shared/MetricLabel";
-import { MetricValue } from "@/components/instrument/shared/MetricValue";
+// PRD-0089 F1: primitives promoted from instrument/shared/ to a top-level
+// `components/primitives/` folder so cross-page agents (F2+) can reuse them.
+import { MetricLabel } from "@/components/primitives/MetricLabel";
+import { MetricValue } from "@/components/primitives/MetricValue";
 
 // WHY export the colour enum here: MetricsTable threshold-colours each cell
 // (e.g. "PE > 50 → red"); centralising the union keeps callers exhaustive.

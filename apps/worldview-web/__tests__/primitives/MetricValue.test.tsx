@@ -17,7 +17,7 @@
 
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { MetricValue } from "@/components/instrument/shared/MetricValue";
+import { MetricValue } from "@/components/primitives/MetricValue";
 
 describe("MetricValue", () => {
   it("renders the em-dash placeholder when children is null", () => {

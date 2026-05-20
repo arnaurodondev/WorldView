@@ -1,5 +1,6 @@
 /**
- * components/instrument/shared/MetricValue.tsx — formatted numeric metric value
+ * components/primitives/MetricValue.tsx — formatted numeric metric value
+ * (PRD-0089 F1: promoted from instrument/shared/ to cross-page primitives)
  *
  * WHY THIS EXISTS: every numeric value on the instrument page must share one
  * typography token (PRD-0088 §6.11: 11px IBM Plex Mono + tabular-nums) and one

@@ -13,7 +13,7 @@
  *      end: caller passes "—" → DOM shows "—".
  *
  * WHY NOT test MetricValue directly: that primitive has its own test
- * (`components/instrument/shared/__tests__/MetricValue.test.tsx`) which
+ * (`__tests__/primitives/MetricValue.test.tsx`) which
  * pins the null → "—" behaviour at the source. This file tests the
  * concrete cell as wired into the financials grid — a separate seam.
  *

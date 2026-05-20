@@ -1,5 +1,6 @@
 /**
- * components/instrument/shared/DataTimestamp.tsx — "Data as of …" footer
+ * components/primitives/DataTimestamp.tsx — "Data as of …" footer
+ * (PRD-0089 F1: promoted from instrument/shared/ to cross-page primitives)
  *
  * WHY THIS EXISTS: every data panel surfaces freshness so analysts can trust
  * (or distrust) the values. Centralises formatting and null-handling so
